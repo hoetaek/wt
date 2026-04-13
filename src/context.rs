@@ -77,6 +77,12 @@ pub mod mock {
         available_commands: Vec<String>,
     }
 
+    impl Default for MockRunner {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl MockRunner {
         pub fn new() -> Self {
             Self {
@@ -123,6 +129,12 @@ pub mod mock {
         input_responses: RefCell<VecDeque<String>>,
         pub steps: RefCell<Vec<String>>,
         pub warnings: RefCell<Vec<String>>,
+    }
+
+    impl Default for MockUi {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl MockUi {

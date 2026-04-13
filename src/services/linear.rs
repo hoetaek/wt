@@ -1,5 +1,5 @@
 use crate::context::CommandRunner;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -46,7 +46,7 @@ impl<'a> LinearService<'a> {
             .runner
             .run("linear", &["issue", "view", identifier, "--json"], self.cwd)?;
         if !out.success {
-            bail!("Failed to fetch issue {}", identifier);
+            bail!("Failed to fetch issue {identifier}");
         }
         let issue: Issue = serde_json::from_str(&out.stdout)?;
         Ok(issue)
@@ -56,8 +56,15 @@ impl<'a> LinearService<'a> {
         let out = self.runner.run(
             "linear",
             &[
-                "issue", "list", "--state", "backlog", "--state", "unstarted", "--state",
-                "started", "--json",
+                "issue",
+                "list",
+                "--state",
+                "backlog",
+                "--state",
+                "unstarted",
+                "--state",
+                "started",
+                "--json",
             ],
             self.cwd,
         )?;
@@ -75,7 +82,7 @@ impl<'a> LinearService<'a> {
             self.cwd,
         )?;
         if !out.success {
-            bail!("Failed to update issue {} to {}", identifier, state);
+            bail!("Failed to update issue {identifier} to {state}");
         }
         Ok(())
     }

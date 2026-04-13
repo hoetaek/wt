@@ -15,7 +15,7 @@ fn main() {
         if let Some(WtError::Cancelled) = e.downcast_ref::<WtError>() {
             process::exit(0);
         }
-        eprintln!("\x1b[31mERROR:\x1b[0m {:#}", e);
+        eprintln!("\x1b[31mERROR:\x1b[0m {e:#}");
         process::exit(1);
     }
 }
@@ -29,7 +29,12 @@ fn try_main() -> Result<()> {
 
     let config = Config::load(&repo_root)?;
 
-    let ctx = Ctx::new(repo_root, config, Box::new(RealRunner), Box::new(TerminalUi));
+    let ctx = Ctx::new(
+        repo_root,
+        config,
+        Box::new(RealRunner),
+        Box::new(TerminalUi),
+    );
 
     wt::dispatch(&ctx, &cli.command)
 }

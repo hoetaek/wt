@@ -1,5 +1,5 @@
 use crate::context::{CmdOutput, CommandRunner};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
 pub struct WorktreeEntry {
@@ -50,12 +50,7 @@ impl<'a> GitService<'a> {
         Ok(())
     }
 
-    pub fn worktree_add_new_branch(
-        &self,
-        path: &Path,
-        branch: &str,
-        base: &str,
-    ) -> Result<()> {
+    pub fn worktree_add_new_branch(&self, path: &Path, branch: &str, base: &str) -> Result<()> {
         self.git(&[
             "worktree",
             "add",
@@ -87,7 +82,7 @@ impl<'a> GitService<'a> {
                 "show-ref",
                 "--verify",
                 "--quiet",
-                &format!("refs/heads/{}", branch),
+                &format!("refs/heads/{branch}"),
             ],
             self.cwd,
         )?;
@@ -101,7 +96,7 @@ impl<'a> GitService<'a> {
                 "show-ref",
                 "--verify",
                 "--quiet",
-                &format!("refs/remotes/origin/{}", branch),
+                &format!("refs/remotes/origin/{branch}"),
             ],
             self.cwd,
         )?;
@@ -117,10 +112,34 @@ impl<'a> GitService<'a> {
         Ok(())
     }
 
+    pub fn list_local_branches(&self) -> Result<Vec<String>> {
+        let out = self.git(&["branch", "--format=%(refname:short)"])?;
+        Ok(out.stdout.lines().map(String::from).collect())
+    }
+
+    pub fn fetch_branch(&self, branch: &str) -> Result<()> {
+        self.git(&["fetch", "origin", branch])?;
+        Ok(())
+    }
+
+    pub fn set_upstream(&self, branch: &str, remote_ref: &str, cwd: &Path) -> Result<()> {
+        self.runner
+            .run(
+                "git",
+                &["branch", "--set-upstream-to", remote_ref, branch],
+                Some(cwd),
+            )
+            .ok();
+        Ok(())
+    }
+
     /// Find the worktree path where a branch is already checked out.
     pub fn checked_out_path(&self, branch: &str) -> Result<Option<PathBuf>> {
         let entries = self.worktree_list()?;
-        Ok(entries.into_iter().find(|e| e.branch == branch).map(|e| e.path))
+        Ok(entries
+            .into_iter()
+            .find(|e| e.branch == branch)
+            .map(|e| e.path))
     }
 
     fn git(&self, args: &[&str]) -> Result<CmdOutput> {

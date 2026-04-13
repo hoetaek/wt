@@ -41,35 +41,21 @@ pub struct HerdConfig {
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(default)]
+#[derive(Default)]
 pub struct WorkspaceConfig {
     pub command: String,
     pub tabs: Vec<String>,
     pub colors: HashMap<String, String>,
 }
 
-impl Default for WorkspaceConfig {
-    fn default() -> Self {
-        Self {
-            command: String::new(),
-            tabs: Vec::new(),
-            colors: HashMap::new(),
-        }
-    }
-}
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(default)]
+#[derive(Default)]
 pub struct TestConfig {
     pub commands: Vec<TestCommand>,
 }
 
-impl Default for TestConfig {
-    fn default() -> Self {
-        Self {
-            commands: Vec::new(),
-        }
-    }
-}
 
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct TestCommand {

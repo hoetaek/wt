@@ -20,12 +20,16 @@ impl WorktreeNames {
         let path = Self::build_path(branch, parent_dir, repo_name);
         let workspace = Self::build_workspace_name(branch, title);
         let site = site_template.map(|_| Self::build_site_name(branch, repo_name));
-        Self { path, workspace, site }
+        Self {
+            path,
+            workspace,
+            site,
+        }
     }
 
     fn build_path(branch: &str, parent_dir: &Path, repo_name: &str) -> PathBuf {
         let sanitized = branch.replace('/', "-");
-        parent_dir.join(format!("{}-{}", repo_name, sanitized))
+        parent_dir.join(format!("{repo_name}-{sanitized}"))
     }
 
     pub fn build_workspace_name(branch: &str, title: Option<&str>) -> String {
@@ -55,7 +59,7 @@ impl WorktreeNames {
         };
 
         if let Some(tech_id) = Self::extract_tech_id(branch) {
-            return format!("{}-{}", repo_name, tech_id);
+            return format!("{repo_name}-{tech_id}");
         }
 
         let ascii: String = name
@@ -65,7 +69,7 @@ impl WorktreeNames {
         let re = Regex::new(r"-{2,}").unwrap();
         let collapsed = re.replace_all(&ascii, "-");
         let trimmed = collapsed.trim_matches('-');
-        format!("{}-{}", repo_name, trimmed)
+        format!("{repo_name}-{trimmed}")
     }
 
     pub fn extract_tech_id(branch: &str) -> Option<String> {
