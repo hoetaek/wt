@@ -307,15 +307,15 @@ fn run_post_ready(
     mode: &str,
     vars: &HashMap<String, String>,
 ) -> Result<()> {
-    let send_cmd = match post.send.get(mode) {
-        Some(cmd) => template::render(cmd, vars),
-        None => return Ok(()),
+    let commands = match post.send.get(mode) {
+        Some(cmds) if !cmds.is_empty() => cmds,
+        _ => return Ok(()),
     };
 
     let cmux = CmuxService::new(ctx.runner.as_ref());
     let timeout_secs = post.timeout.unwrap_or(15);
 
-    // Find the target surface (first surface of first pane if not specified)
+    // Find the target surface
     let panes = cmux.list_panes(ws_handle)?;
     let pane = match panes.first() {
         Some(p) => p,
@@ -335,19 +335,35 @@ fn run_post_ready(
         None => return Ok(()),
     };
 
-    ctx.ui.print_step(&format!(
-        "Waiting for '{}' ({}s timeout)...",
-        post.wait_for, timeout_secs
-    ));
+    for (i, cmd_template) in commands.iter().enumerate() {
+        let rendered = template::render(cmd_template, vars);
 
-    for _ in 0..timeout_secs {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        if let Ok(screen) = cmux.read_screen(&surface, ws_handle) {
-            if screen.contains(&post.wait_for) {
-                cmux.send(&surface, ws_handle, &send_cmd)?;
-                ctx.ui.print_step("Post-ready command sent");
-                return Ok(());
+        ctx.ui.print_step(&format!(
+            "Waiting for '{}' ({}s timeout)...",
+            post.wait_for, timeout_secs
+        ));
+
+        let mut sent = false;
+        for _ in 0..timeout_secs {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if let Ok(screen) = cmux.read_screen(&surface, ws_handle) {
+                if screen.contains(&post.wait_for) {
+                    cmux.send(&surface, ws_handle, &rendered)?;
+                    ctx.ui
+                        .print_step(&format!("Command {}/{} sent", i + 1, commands.len()));
+                    sent = true;
+                    break;
+                }
             }
+        }
+
+        if !sent {
+            ctx.ui.print_warning(&format!(
+                "Timeout waiting for prompt — skipping remaining commands ({}/{})",
+                i + 1,
+                commands.len()
+            ));
+            return Ok(());
         }
     }
 
