@@ -17,12 +17,16 @@ pub fn run_setup(
     names: &WorktreeNames,
     title: Option<&str>,
     mode: &str,
+    extra_vars: Option<&HashMap<String, String>>,
 ) -> Result<()> {
     copy_files(ctx, wt_path)?;
     link_files(ctx, wt_path)?;
     copy_claude_files(ctx, wt_path)?;
 
-    let template_vars = build_template_vars(ctx, names, title);
+    let mut template_vars = build_template_vars(ctx, names, title);
+    if let Some(extra) = extra_vars {
+        template_vars.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
     let mut site_name: Option<String> = None;
 
     if let Some(ref herd_config) = ctx.config.herd {
@@ -72,7 +76,7 @@ pub fn run_setup(
     // post_ready: wait for prompt in first surface, then send mode-specific command
     if let (Some(handle), Some(ws_config)) = (&ws_handle, &ctx.config.workspace) {
         if let Some(ref post) = ws_config.post_ready {
-            run_post_ready(ctx, handle, post, mode)?;
+            run_post_ready(ctx, handle, post, mode, &template_vars)?;
         }
     }
 
@@ -301,9 +305,10 @@ fn run_post_ready(
     ws_handle: &str,
     post: &crate::config::PostReadyConfig,
     mode: &str,
+    vars: &HashMap<String, String>,
 ) -> Result<()> {
     let send_cmd = match post.send.get(mode) {
-        Some(cmd) => cmd.clone(),
+        Some(cmd) => template::render(cmd, vars),
         None => return Ok(()),
     };
 

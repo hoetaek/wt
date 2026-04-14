@@ -57,7 +57,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<
                 "Branch already checked out at: {}",
                 existing.display()
             ));
-            setup::run_setup(ctx, existing, &names, Some(&title), "issue")?;
+            setup::run_setup(ctx, existing, &names, Some(&title), "issue", None)?;
             return Ok(());
         }
     }
@@ -83,7 +83,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<
                 }
             }
             1 => {
-                setup::run_setup(ctx, &names.path, &names, Some(&title), "issue")?;
+                setup::run_setup(ctx, &names.path, &names, Some(&title), "issue", None)?;
                 return Ok(());
             }
             _ => return Err(WtError::Cancelled.into()),
@@ -105,7 +105,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<
     }
 
     // 6. Setup
-    setup::run_setup(ctx, &names.path, &names, Some(&title), "issue")?;
+    setup::run_setup(ctx, &names.path, &names, Some(&title), "issue", None)?;
 
     Ok(())
 }
