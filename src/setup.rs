@@ -35,7 +35,9 @@ pub fn run_setup(
             let name = template::render(&herd_config.site_name, &template_vars);
             ctx.ui
                 .print_step(&format!("Registering Herd site: {name}.test"));
-            herd.link(&name, wt_path, herd_config.secure.unwrap_or(true))?;
+            if let Err(e) = herd.link(&name, wt_path, herd_config.secure.unwrap_or(true)) {
+                ctx.ui.print_warning(&format!("Herd link failed: {e}"));
+            }
 
             substitute_env(wt_path, &ctx.config, &template_vars)?;
             site_name = Some(name);
@@ -246,15 +248,18 @@ fn install_deps(ctx: &Ctx, wt_path: &Path) -> Result<()> {
     if applicable.is_empty() {
         return Ok(());
     }
-    ctx.ui.print_step("Installing dependencies...");
 
-    let warnings = Arc::new(Mutex::new(Vec::new()));
+    for dep in &applicable {
+        ctx.ui.print_dim(&format!("  ⏳ {}", dep.run));
+    }
+
+    let results = Arc::new(Mutex::new(Vec::new()));
 
     std::thread::scope(|s| {
         let handles: Vec<_> = applicable
             .iter()
             .map(|dep| {
-                let warnings = Arc::clone(&warnings);
+                let results = Arc::clone(&results);
                 let run_str = &dep.run;
                 s.spawn(move || {
                     let needs_shell =
@@ -270,17 +275,26 @@ fn install_deps(ctx: &Ctx, wt_path: &Path) -> Result<()> {
                         }
                     };
                     match out {
-                        Ok(o) if !o.success => {
-                            warnings
-                                .lock()
-                                .unwrap()
-                                .push(format!("Dependency command failed: {run_str}"));
+                        Ok(o) if o.success => {
+                            results.lock().unwrap().push((
+                                run_str.to_string(),
+                                true,
+                                String::new(),
+                            ));
+                        }
+                        Ok(o) => {
+                            results.lock().unwrap().push((
+                                run_str.to_string(),
+                                false,
+                                o.stderr.clone(),
+                            ));
                         }
                         Err(e) => {
-                            warnings
-                                .lock()
-                                .unwrap()
-                                .push(format!("Dependency command error: {run_str}: {e}"));
+                            results.lock().unwrap().push((
+                                run_str.to_string(),
+                                false,
+                                e.to_string(),
+                            ));
                         }
                         _ => {}
                     }
@@ -293,8 +307,15 @@ fn install_deps(ctx: &Ctx, wt_path: &Path) -> Result<()> {
         }
     });
 
-    for w in warnings.lock().unwrap().iter() {
-        ctx.ui.print_warning(w);
+    for (cmd, success, err) in results.lock().unwrap().iter() {
+        if *success {
+            ctx.ui.print_dim(&format!("  ✓ {cmd}"));
+        } else {
+            ctx.ui.print_warning(&format!("  ✗ {cmd}"));
+            if !err.is_empty() {
+                ctx.ui.print_dim(&format!("    {err}"));
+            }
+        }
     }
 
     Ok(())

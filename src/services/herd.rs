@@ -20,8 +20,10 @@ impl<'a> HerdService<'a> {
         if secure {
             args.push("--secure");
         }
-        // herd link can fail for various reasons, we don't treat it as fatal
-        let _ = self.runner.run("herd", &args, Some(cwd));
+        let out = self.runner.run("herd", &args, Some(cwd))?;
+        if !out.success && !out.stderr.is_empty() {
+            anyhow::bail!("{}", out.stderr);
+        }
         Ok(())
     }
 

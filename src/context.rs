@@ -26,6 +26,7 @@ pub trait UserInterface: Send + Sync {
     fn confirm(&self, prompt: &str, default: bool) -> Result<bool>;
     fn input(&self, prompt: &str, default: Option<&str>) -> Result<String>;
     fn print_step(&self, msg: &str);
+    fn print_dim(&self, msg: &str);
     fn print_warning(&self, msg: &str);
     fn print_error(&self, msg: &str);
 }
@@ -212,6 +213,8 @@ pub mod mock {
         fn print_warning(&self, msg: &str) {
             self.warnings.lock().unwrap().push(msg.into());
         }
+
+        fn print_dim(&self, _msg: &str) {}
 
         fn print_error(&self, _msg: &str) {}
     }

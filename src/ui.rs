@@ -45,6 +45,10 @@ impl UserInterface for TerminalUi {
         println!("{} {}", style("==>").green(), msg);
     }
 
+    fn print_dim(&self, msg: &str) {
+        println!("{}", style(msg).dim());
+    }
+
     fn print_warning(&self, msg: &str) {
         eprintln!("{} {}", style("WARNING:").yellow(), msg);
     }
