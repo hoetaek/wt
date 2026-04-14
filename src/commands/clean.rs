@@ -18,10 +18,7 @@ pub fn run(ctx: &Ctx) -> Result<()> {
         return Ok(());
     }
 
-    let items: Vec<String> = additional
-        .iter()
-        .map(|e| format!("{} [{}]", e.path.display(), e.branch))
-        .collect();
+    let items: Vec<String> = additional.iter().map(|e| e.branch.clone()).collect();
 
     let selected = ctx
         .ui
@@ -94,6 +91,16 @@ pub fn run(ctx: &Ctx) -> Result<()> {
                 }
             }
         }
+    }
+
+    // Summary
+    let remaining = git.worktree_list()?;
+    let remaining_count = remaining.iter().filter(|e| e.path != ctx.repo_root).count();
+    if remaining_count == 0 {
+        ctx.ui.print_step("All additional worktrees removed");
+    } else {
+        ctx.ui
+            .print_step(&format!("{remaining_count} worktree(s) remaining"));
     }
 
     Ok(())

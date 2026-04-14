@@ -18,10 +18,7 @@ pub fn run(ctx: &Ctx) -> Result<()> {
         return Err(anyhow::anyhow!("No additional worktrees found"));
     }
 
-    let items: Vec<String> = additional
-        .iter()
-        .map(|e| format!("{} [{}]", e.path.display(), e.branch))
-        .collect();
+    let items: Vec<String> = additional.iter().map(|e| e.branch.clone()).collect();
 
     let idx = ctx.ui.select("Select a worktree to open", &items)?;
     let entry = &additional[idx];

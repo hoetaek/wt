@@ -37,6 +37,7 @@ pub struct DepCommand {
 pub struct HerdConfig {
     pub site_name: String,
     pub secure: Option<bool>,
+    pub open_browser: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -46,8 +47,16 @@ pub struct WorkspaceConfig {
     pub command: String,
     pub tabs: Vec<String>,
     pub colors: HashMap<String, String>,
+    pub post_ready: Option<PostReadyConfig>,
 }
 
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct PostReadyConfig {
+    pub wait_for: String,
+    pub send: String,
+    pub surface: Option<String>,
+    pub timeout: Option<u64>,
+}
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(default)]
@@ -55,7 +64,6 @@ pub struct WorkspaceConfig {
 pub struct TestConfig {
     pub commands: Vec<TestCommand>,
 }
-
 
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct TestCommand {
@@ -65,11 +73,19 @@ pub struct TestCommand {
 }
 
 impl Config {
+    /// Load config with fallback: .local/.wt.toml → .wt.toml → default
     pub fn load(repo_root: &Path) -> anyhow::Result<Self> {
-        let path = repo_root.join(".wt.toml");
-        if !path.exists() {
+        let local_path = repo_root.join(".local/.wt.toml");
+        let root_path = repo_root.join(".wt.toml");
+
+        let path = if local_path.exists() {
+            local_path
+        } else if root_path.exists() {
+            root_path
+        } else {
             return Ok(Config::default());
-        }
+        };
+
         let content = std::fs::read_to_string(&path)?;
         let config: Config = toml::from_str(&content)?;
         Ok(config)

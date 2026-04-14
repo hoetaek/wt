@@ -12,7 +12,7 @@ pub struct CmdOutput {
 }
 
 /// Trait for running external commands. Injected into Ctx for testability.
-pub trait CommandRunner {
+pub trait CommandRunner: Send + Sync {
     fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput>;
 
     /// Check if a command exists on PATH.
@@ -20,7 +20,7 @@ pub trait CommandRunner {
 }
 
 /// Trait for user interaction. Injected into Ctx for testability.
-pub trait UserInterface {
+pub trait UserInterface: Send + Sync {
     fn select(&self, prompt: &str, items: &[String]) -> Result<usize>;
     fn multi_select(&self, prompt: &str, items: &[String]) -> Result<Vec<usize>>;
     fn confirm(&self, prompt: &str, default: bool) -> Result<bool>;
@@ -68,12 +68,12 @@ impl Ctx {
 #[cfg(test)]
 pub mod mock {
     use super::*;
-    use std::cell::RefCell;
     use std::collections::VecDeque;
+    use std::sync::Mutex;
 
     pub struct MockRunner {
-        responses: RefCell<VecDeque<CmdOutput>>,
-        pub calls: RefCell<Vec<(String, Vec<String>)>>,
+        responses: Mutex<VecDeque<CmdOutput>>,
+        pub calls: Mutex<Vec<(String, Vec<String>)>>,
         available_commands: Vec<String>,
     }
 
@@ -86,14 +86,14 @@ pub mod mock {
     impl MockRunner {
         pub fn new() -> Self {
             Self {
-                responses: RefCell::new(VecDeque::new()),
-                calls: RefCell::new(Vec::new()),
+                responses: Mutex::new(VecDeque::new()),
+                calls: Mutex::new(Vec::new()),
                 available_commands: Vec::new(),
             }
         }
 
         pub fn add_response(&mut self, stdout: &str, success: bool) {
-            self.responses.borrow_mut().push_back(CmdOutput {
+            self.responses.lock().unwrap().push_back(CmdOutput {
                 stdout: stdout.into(),
                 stderr: String::new(),
                 success,
@@ -107,12 +107,13 @@ pub mod mock {
 
     impl CommandRunner for MockRunner {
         fn run(&self, cmd: &str, args: &[&str], _cwd: Option<&Path>) -> Result<CmdOutput> {
-            self.calls.borrow_mut().push((
+            self.calls.lock().unwrap().push((
                 cmd.to_string(),
                 args.iter().map(|s| s.to_string()).collect(),
             ));
             self.responses
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("MockRunner: no more responses queued"))
         }
@@ -123,12 +124,12 @@ pub mod mock {
     }
 
     pub struct MockUi {
-        select_responses: RefCell<VecDeque<usize>>,
-        multi_select_responses: RefCell<VecDeque<Vec<usize>>>,
-        confirm_responses: RefCell<VecDeque<bool>>,
-        input_responses: RefCell<VecDeque<String>>,
-        pub steps: RefCell<Vec<String>>,
-        pub warnings: RefCell<Vec<String>>,
+        select_responses: Mutex<VecDeque<usize>>,
+        multi_select_responses: Mutex<VecDeque<Vec<usize>>>,
+        confirm_responses: Mutex<VecDeque<bool>>,
+        input_responses: Mutex<VecDeque<String>>,
+        pub steps: Mutex<Vec<String>>,
+        pub warnings: Mutex<Vec<String>>,
     }
 
     impl Default for MockUi {
@@ -140,69 +141,76 @@ pub mod mock {
     impl MockUi {
         pub fn new() -> Self {
             Self {
-                select_responses: RefCell::new(VecDeque::new()),
-                multi_select_responses: RefCell::new(VecDeque::new()),
-                confirm_responses: RefCell::new(VecDeque::new()),
-                input_responses: RefCell::new(VecDeque::new()),
-                steps: RefCell::new(Vec::new()),
-                warnings: RefCell::new(Vec::new()),
+                select_responses: Mutex::new(VecDeque::new()),
+                multi_select_responses: Mutex::new(VecDeque::new()),
+                confirm_responses: Mutex::new(VecDeque::new()),
+                input_responses: Mutex::new(VecDeque::new()),
+                steps: Mutex::new(Vec::new()),
+                warnings: Mutex::new(Vec::new()),
             }
         }
 
         pub fn add_select(&mut self, index: usize) {
-            self.select_responses.borrow_mut().push_back(index);
+            self.select_responses.lock().unwrap().push_back(index);
         }
 
         #[allow(dead_code)]
         pub fn add_multi_select(&mut self, indices: Vec<usize>) {
-            self.multi_select_responses.borrow_mut().push_back(indices);
+            self.multi_select_responses
+                .lock()
+                .unwrap()
+                .push_back(indices);
         }
 
         pub fn add_confirm(&mut self, value: bool) {
-            self.confirm_responses.borrow_mut().push_back(value);
+            self.confirm_responses.lock().unwrap().push_back(value);
         }
 
         pub fn add_input(&mut self, value: &str) {
-            self.input_responses.borrow_mut().push_back(value.into());
+            self.input_responses.lock().unwrap().push_back(value.into());
         }
     }
 
     impl UserInterface for MockUi {
         fn select(&self, _prompt: &str, _items: &[String]) -> Result<usize> {
             self.select_responses
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("MockUi: no select response"))
         }
 
         fn multi_select(&self, _prompt: &str, _items: &[String]) -> Result<Vec<usize>> {
             self.multi_select_responses
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("MockUi: no multi_select response"))
         }
 
         fn confirm(&self, _prompt: &str, _default: bool) -> Result<bool> {
             self.confirm_responses
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("MockUi: no confirm response"))
         }
 
         fn input(&self, _prompt: &str, default: Option<&str>) -> Result<String> {
             self.input_responses
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .pop_front()
                 .or_else(|| default.map(String::from))
                 .ok_or_else(|| anyhow::anyhow!("MockUi: no input response"))
         }
 
         fn print_step(&self, msg: &str) {
-            self.steps.borrow_mut().push(msg.into());
+            self.steps.lock().unwrap().push(msg.into());
         }
 
         fn print_warning(&self, msg: &str) {
-            self.warnings.borrow_mut().push(msg.into());
+            self.warnings.lock().unwrap().push(msg.into());
         }
 
         fn print_error(&self, _msg: &str) {}
@@ -227,7 +235,7 @@ mod tests {
         let r2 = runner.run("git", &["diff"], None).unwrap();
         assert!(!r2.success);
 
-        let calls = runner.calls.borrow();
+        let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].0, "git");
         assert_eq!(calls[1].1, vec!["diff"]);

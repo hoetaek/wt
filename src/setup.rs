@@ -8,6 +8,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 /// Run the full setup sequence on a newly created worktree.
 pub fn run_setup(
@@ -22,16 +23,18 @@ pub fn run_setup(
     copy_claude_files(ctx, wt_path)?;
 
     let template_vars = build_template_vars(ctx, names, title);
+    let mut site_name: Option<String> = None;
 
     if let Some(ref herd_config) = ctx.config.herd {
         let herd = HerdService::new(ctx.runner.as_ref());
         if herd.is_available() {
-            let site_name = template::render(&herd_config.site_name, &template_vars);
+            let name = template::render(&herd_config.site_name, &template_vars);
             ctx.ui
-                .print_step(&format!("Registering Herd site: {site_name}.test"));
-            herd.link(&site_name, wt_path, herd_config.secure.unwrap_or(true))?;
+                .print_step(&format!("Registering Herd site: {name}.test"));
+            herd.link(&name, wt_path, herd_config.secure.unwrap_or(true))?;
 
             substitute_env(wt_path, &ctx.config, &template_vars)?;
+            site_name = Some(name);
         }
     }
 
@@ -43,12 +46,35 @@ pub fn run_setup(
         .and_then(|ws| ws.colors.get(mode))
         .cloned()
         .unwrap_or_default();
-    open_workspace(ctx, wt_path, names, &ws_color)?;
+    let ws_handle = open_workspace(ctx, wt_path, names, &ws_color)?;
 
     install_deps(ctx, wt_path)?;
+
+    // Open browser after deps (site may need built assets)
+    if let Some(ref site) = site_name {
+        if ctx
+            .config
+            .herd
+            .as_ref()
+            .and_then(|h| h.open_browser)
+            .unwrap_or(false)
+        {
+            ctx.runner
+                .run("open", &[&format!("https://{site}.test")], None)
+                .ok();
+        }
+    }
+
+    // post_ready: wait for prompt in first surface, then send command
+    if let (Some(handle), Some(ws_config)) = (&ws_handle, &ctx.config.workspace) {
+        if let Some(ref post) = ws_config.post_ready {
+            run_post_ready(ctx, handle, post)?;
+        }
+    }
+
     run_background_tests(ctx, wt_path)?;
 
-    print_summary(ctx, wt_path, names);
+    print_summary(ctx, wt_path, names, site_name.as_deref());
 
     Ok(())
 }
@@ -148,12 +174,17 @@ fn substitute_env(wt_path: &Path, config: &Config, vars: &HashMap<String, String
     Ok(())
 }
 
-fn open_workspace(ctx: &Ctx, wt_path: &Path, names: &WorktreeNames, color: &str) -> Result<()> {
+fn open_workspace(
+    ctx: &Ctx,
+    wt_path: &Path,
+    names: &WorktreeNames,
+    color: &str,
+) -> Result<Option<String>> {
     let cmux = CmuxService::new(ctx.runner.as_ref());
     if !cmux.is_available() {
         ctx.ui
             .print_step(&format!("Worktree path: {}", wt_path.display()));
-        return Ok(());
+        return Ok(None);
     }
 
     let ws_config = match &ctx.config.workspace {
@@ -161,7 +192,7 @@ fn open_workspace(ctx: &Ctx, wt_path: &Path, names: &WorktreeNames, color: &str)
         None => {
             ctx.ui
                 .print_step(&format!("Worktree path: {}", wt_path.display()));
-            return Ok(());
+            return Ok(None);
         }
     };
 
@@ -182,31 +213,112 @@ fn open_workspace(ctx: &Ctx, wt_path: &Path, names: &WorktreeNames, color: &str)
         }
     }
 
-    Ok(())
+    Ok(Some(ws_handle))
 }
 
 fn install_deps(ctx: &Ctx, wt_path: &Path) -> Result<()> {
-    if ctx.config.setup.deps.is_empty() {
+    let applicable: Vec<_> = ctx
+        .config
+        .setup
+        .deps
+        .iter()
+        .filter(|dep| {
+            dep.if_exists
+                .as_ref()
+                .map_or(true, |f| wt_path.join(f).exists())
+        })
+        .collect();
+
+    if applicable.is_empty() {
         return Ok(());
     }
     ctx.ui.print_step("Installing dependencies...");
 
-    for dep in &ctx.config.setup.deps {
-        if let Some(ref check_file) = dep.if_exists {
-            if !wt_path.join(check_file).exists() {
-                continue;
-            }
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+
+    std::thread::scope(|s| {
+        let handles: Vec<_> = applicable
+            .iter()
+            .map(|dep| {
+                let warnings = Arc::clone(&warnings);
+                let run_str = &dep.run;
+                s.spawn(move || {
+                    let parts: Vec<&str> = run_str.split_whitespace().collect();
+                    if let Some((cmd, args)) = parts.split_first() {
+                        let out = ctx.runner.run(cmd, args, Some(wt_path));
+                        match out {
+                            Ok(o) if !o.success => {
+                                warnings
+                                    .lock()
+                                    .unwrap()
+                                    .push(format!("Dependency command failed: {run_str}"));
+                            }
+                            Err(e) => {
+                                warnings
+                                    .lock()
+                                    .unwrap()
+                                    .push(format!("Dependency command error: {run_str}: {e}"));
+                            }
+                            _ => {}
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().ok();
         }
-        let parts: Vec<&str> = dep.run.split_whitespace().collect();
-        if let Some((cmd, args)) = parts.split_first() {
-            let out = ctx.runner.run(cmd, args, Some(wt_path))?;
-            if !out.success {
-                ctx.ui
-                    .print_warning(&format!("Dependency command failed: {}", dep.run));
+    });
+
+    for w in warnings.lock().unwrap().iter() {
+        ctx.ui.print_warning(w);
+    }
+
+    Ok(())
+}
+
+fn run_post_ready(ctx: &Ctx, ws_handle: &str, post: &crate::config::PostReadyConfig) -> Result<()> {
+    let cmux = CmuxService::new(ctx.runner.as_ref());
+    let timeout_secs = post.timeout.unwrap_or(15);
+
+    // Find the target surface (first surface of first pane if not specified)
+    let panes = cmux.list_panes(ws_handle)?;
+    let pane = match panes.first() {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    let surfaces = cmux.list_pane_surfaces(pane, ws_handle)?;
+    let surface = match post.surface.as_deref() {
+        Some(name) => surfaces
+            .iter()
+            .find(|s| s.contains(name))
+            .cloned()
+            .or_else(|| surfaces.first().cloned()),
+        None => surfaces.first().cloned(),
+    };
+    let surface = match surface {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    ctx.ui.print_step(&format!(
+        "Waiting for '{}' ({}s timeout)...",
+        post.wait_for, timeout_secs
+    ));
+
+    for _ in 0..timeout_secs {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if let Ok(screen) = cmux.read_screen(&surface, ws_handle) {
+            if screen.contains(&post.wait_for) {
+                cmux.send(&surface, ws_handle, &post.send)?;
+                ctx.ui.print_step("Post-ready command sent");
+                return Ok(());
             }
         }
     }
 
+    ctx.ui.print_warning("Post-ready timeout — skipped");
     Ok(())
 }
 
@@ -242,10 +354,10 @@ fn run_background_tests(ctx: &Ctx, wt_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn print_summary(ctx: &Ctx, wt_path: &Path, names: &WorktreeNames) {
+fn print_summary(ctx: &Ctx, wt_path: &Path, _names: &WorktreeNames, site_name: Option<&str>) {
     ctx.ui.print_step("Done!");
     ctx.ui.print_step(&format!("  Path: {}", wt_path.display()));
-    if let Some(ref site) = names.site {
+    if let Some(site) = site_name {
         ctx.ui.print_step(&format!("  Site: https://{site}.test"));
     }
 }

@@ -24,12 +24,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
 
         let items: Vec<String> = prs
             .iter()
-            .map(|p| {
-                format!(
-                    "#{} | {} | {} → {}",
-                    p.number, p.title, p.head_ref_name, p.base_ref_name
-                )
-            })
+            .map(|p| format!("#{} {}", p.number, p.title))
             .collect();
 
         let idx = ctx.ui.select("Select a PR", &items)?;
@@ -95,16 +90,19 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
     }
 
     // 4. Fetch and create worktree from remote branch
-    ctx.ui.print_step(&format!(
-        "Fetching and creating worktree for {branch_name}"
-    ));
+    ctx.ui
+        .print_step(&format!("Fetching and creating worktree for {branch_name}"));
     git.fetch_branch(&branch_name)?;
 
-    let remote_ref = format!("origin/{branch_name}");
-    git.worktree_add_new_branch(&names.path, &branch_name, &remote_ref)?;
-
-    // Set upstream
-    git.set_upstream(&branch_name, &remote_ref, &names.path)?;
+    if git.local_branch_exists(&branch_name)? {
+        ctx.ui
+            .print_step(&format!("Reusing existing local branch: {branch_name}"));
+        git.worktree_add(&names.path, &branch_name)?;
+    } else {
+        let remote_ref = format!("origin/{branch_name}");
+        git.worktree_add_new_branch(&names.path, &branch_name, &remote_ref)?;
+        git.set_upstream(&branch_name, &remote_ref, &names.path)?;
+    }
 
     // 5. Setup
     setup::run_setup(ctx, &names.path, &names, Some(&title), "pr")?;

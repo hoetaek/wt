@@ -288,7 +288,7 @@ branch refs/heads/main
         let git = GitService::new(&runner, None);
         assert!(git.local_branch_exists("main").unwrap());
 
-        let calls = runner.calls.borrow();
+        let calls = runner.calls.lock().unwrap();
         assert_eq!(
             calls[0].1,
             vec!["show-ref", "--verify", "--quiet", "refs/heads/main"]

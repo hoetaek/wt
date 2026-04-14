@@ -7,7 +7,11 @@ pub struct TerminalUi;
 
 impl UserInterface for TerminalUi {
     fn select(&self, prompt: &str, items: &[String]) -> Result<usize> {
-        let selection = Select::new().with_prompt(prompt).items(items).interact()?;
+        let selection = Select::new()
+            .with_prompt(prompt)
+            .items(items)
+            .max_length(10)
+            .interact()?;
         Ok(selection)
     }
 
@@ -15,6 +19,7 @@ impl UserInterface for TerminalUi {
         let selections = MultiSelect::new()
             .with_prompt(prompt)
             .items(items)
+            .max_length(10)
             .interact()?;
         Ok(selections)
     }

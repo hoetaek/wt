@@ -164,7 +164,7 @@ mod tests {
         let svc = CmuxService::new(&runner);
         svc.send("surface:0", "workspace:1", "lazygit\n").unwrap();
 
-        let calls = runner.calls.borrow();
+        let calls = runner.calls.lock().unwrap();
         assert_eq!(calls[0].1[5], "lazygit\n");
     }
 }

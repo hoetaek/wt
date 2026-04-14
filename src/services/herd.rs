@@ -45,7 +45,7 @@ mod tests {
         svc.link("hapjeong-tech-680", Path::new("/tmp"), true)
             .unwrap();
 
-        let calls = runner.calls.borrow();
+        let calls = runner.calls.lock().unwrap();
         assert_eq!(calls[0].1, vec!["link", "hapjeong-tech-680", "--secure"]);
     }
 
@@ -58,7 +58,7 @@ mod tests {
         svc.link("hapjeong-tech-680", Path::new("/tmp"), false)
             .unwrap();
 
-        let calls = runner.calls.borrow();
+        let calls = runner.calls.lock().unwrap();
         assert_eq!(calls[0].1, vec!["link", "hapjeong-tech-680"]);
     }
 
