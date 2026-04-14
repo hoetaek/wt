@@ -241,7 +241,7 @@ fn install_deps(ctx: &Ctx, wt_path: &Path) -> Result<()> {
         .filter(|dep| {
             dep.if_exists
                 .as_ref()
-                .map_or(true, |f| wt_path.join(f).exists())
+                .is_none_or(|f| wt_path.join(f).exists())
         })
         .collect();
 
@@ -296,7 +296,6 @@ fn install_deps(ctx: &Ctx, wt_path: &Path) -> Result<()> {
                                 e.to_string(),
                             ));
                         }
-                        _ => {}
                     }
                 })
             })

@@ -78,7 +78,8 @@ pub fn run(ctx: &Ctx) -> Result<()> {
         if del_result.success {
             ctx.ui.print_step("  Branch deleted");
         } else {
-            ctx.ui.print_warning("  Not fully merged, force deleting...");
+            ctx.ui
+                .print_warning("  Not fully merged, force deleting...");
             git.branch_delete_force(branch)?;
             ctx.ui.print_step("  Branch force deleted");
         }
