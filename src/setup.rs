@@ -65,10 +65,10 @@ pub fn run_setup(
         }
     }
 
-    // post_ready: wait for prompt in first surface, then send command
+    // post_ready: wait for prompt in first surface, then send mode-specific command
     if let (Some(handle), Some(ws_config)) = (&ws_handle, &ctx.config.workspace) {
         if let Some(ref post) = ws_config.post_ready {
-            run_post_ready(ctx, handle, post)?;
+            run_post_ready(ctx, handle, post, mode)?;
         }
     }
 
@@ -286,7 +286,17 @@ fn install_deps(ctx: &Ctx, wt_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn run_post_ready(ctx: &Ctx, ws_handle: &str, post: &crate::config::PostReadyConfig) -> Result<()> {
+fn run_post_ready(
+    ctx: &Ctx,
+    ws_handle: &str,
+    post: &crate::config::PostReadyConfig,
+    mode: &str,
+) -> Result<()> {
+    let send_cmd = match post.send.get(mode) {
+        Some(cmd) => cmd.clone(),
+        None => return Ok(()),
+    };
+
     let cmux = CmuxService::new(ctx.runner.as_ref());
     let timeout_secs = post.timeout.unwrap_or(15);
 
@@ -319,7 +329,7 @@ fn run_post_ready(ctx: &Ctx, ws_handle: &str, post: &crate::config::PostReadyCon
         std::thread::sleep(std::time::Duration::from_secs(1));
         if let Ok(screen) = cmux.read_screen(&surface, ws_handle) {
             if screen.contains(&post.wait_for) {
-                cmux.send(&surface, ws_handle, &post.send)?;
+                cmux.send(&surface, ws_handle, &send_cmd)?;
                 ctx.ui.print_step("Post-ready command sent");
                 return Ok(());
             }

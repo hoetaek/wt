@@ -53,7 +53,7 @@ pub struct WorkspaceConfig {
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct PostReadyConfig {
     pub wait_for: String,
-    pub send: String,
+    pub send: HashMap<String, String>,
     pub surface: Option<String>,
     pub timeout: Option<u64>,
 }
@@ -233,13 +233,18 @@ tabs = []
 
 [workspace.post_ready]
 wait_for = "❯"
-send = "/start\n"
 timeout = 10
+
+[workspace.post_ready.send]
+issue = "/start\n"
+pr = "/conventional-review\n"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         let post = config.workspace.unwrap().post_ready.unwrap();
         assert_eq!(post.wait_for, "❯");
-        assert_eq!(post.send, "/start\n");
+        assert_eq!(post.send.get("issue").unwrap(), "/start\n");
+        assert_eq!(post.send.get("pr").unwrap(), "/conventional-review\n");
+        assert!(post.send.get("new").is_none());
         assert_eq!(post.timeout, Some(10));
     }
 
