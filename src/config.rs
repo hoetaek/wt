@@ -38,6 +38,7 @@ pub struct HerdConfig {
     pub site_name: String,
     pub secure: Option<bool>,
     pub open_browser: Option<bool>,
+    pub browser: Option<String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]

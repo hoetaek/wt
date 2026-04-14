@@ -59,9 +59,13 @@ pub fn run_setup(
             .and_then(|h| h.open_browser)
             .unwrap_or(false)
         {
-            ctx.runner
-                .run("open", &[&format!("https://{site}.test")], None)
-                .ok();
+            let url = format!("https://{site}.test");
+            let browser = ctx.config.herd.as_ref().and_then(|h| h.browser.as_deref());
+            if let Some(app) = browser {
+                ctx.runner.run("open", &["-a", app, &url], None).ok();
+            } else {
+                ctx.runner.run("open", &[&url], None).ok();
+            }
         }
     }
 
