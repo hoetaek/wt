@@ -365,6 +365,31 @@ fn run_post_ready(
         ));
 
         let mut sent = false;
+
+        // After sending the previous command, wait for screen to change
+        // before polling for the next prompt (avoids matching stale ❯)
+        if i > 0 {
+            let stale_screen = cmux.read_screen(&surface, ws_handle).unwrap_or_default();
+            let mut screen_changed = false;
+            for _ in 0..timeout_secs {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if let Ok(current) = cmux.read_screen(&surface, ws_handle) {
+                    if current != stale_screen {
+                        screen_changed = true;
+                        break;
+                    }
+                }
+            }
+            if !screen_changed {
+                ctx.ui.print_warning(&format!(
+                    "Screen unchanged — skipping remaining commands ({}/{})",
+                    i + 1,
+                    commands.len()
+                ));
+                return Ok(());
+            }
+        }
+
         for _ in 0..timeout_secs {
             std::thread::sleep(std::time::Duration::from_secs(1));
             if let Ok(screen) = cmux.read_screen(&surface, ws_handle) {
