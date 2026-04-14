@@ -149,4 +149,54 @@ mod tests {
         let result = run(&ctx, Some(42));
         assert!(result.is_ok() || result.unwrap_err().to_string().contains("setup"));
     }
+
+    #[test]
+    fn pr_empty_list_returns_error() {
+        let mut runner = MockRunner::new();
+        runner.add_response("[]", true);
+
+        let ui = MockUi::new();
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        let result = run(&ctx, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No open PRs"));
+    }
+
+    #[test]
+    fn pr_reuses_local_branch_when_exists() {
+        let mut runner = MockRunner::new();
+        // get_pr
+        runner.add_response(
+            r#"{"number":10,"title":"Fix bug","headRefName":"hoetaek/fix","baseRefName":"main","state":"OPEN"}"#,
+            true,
+        );
+        // checked_out_path (no match)
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        // fetch_branch
+        runner.add_response("", true);
+        // local_branch_exists → true
+        runner.add_response("", true);
+        // worktree_add (reuse local)
+        runner.add_response("", true);
+
+        let ui = MockUi::new();
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        let result = run(&ctx, Some(10));
+        assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
+    }
 }

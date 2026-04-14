@@ -133,4 +133,57 @@ mod tests {
         let result = run(&ctx);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn clean_with_empty_selection_returns_ok() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/test-repo-feature\nHEAD def\nbranch refs/heads/hoetaek/feature\n\n",
+            true,
+        );
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![]);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        assert!(run(&ctx).is_ok());
+    }
+
+    #[test]
+    fn clean_removes_worktree_and_deletes_branch() {
+        let mut runner = MockRunner::new();
+        // worktree list
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/test-repo-feature\nHEAD def\nbranch refs/heads/hoetaek/feature\n\n",
+            true,
+        );
+        // worktree remove (success)
+        runner.add_response("", true);
+        // branch delete (success)
+        runner.add_response("", true);
+        // worktree list for summary
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+        ui.add_confirm(true); // delete branch
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        assert!(run(&ctx).is_ok());
+    }
 }

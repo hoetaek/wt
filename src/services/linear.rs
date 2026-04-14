@@ -133,4 +133,33 @@ mod tests {
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].assignee.as_ref().unwrap().display_name, "hoetaek");
     }
+
+    #[test]
+    fn list_issues_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response("error", false);
+        let svc = LinearService::new(&runner, None);
+        assert!(svc.list_issues().is_err());
+    }
+
+    #[test]
+    fn update_status_success() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        let svc = LinearService::new(&runner, None);
+        svc.update_status("TECH-1", "In Progress").unwrap();
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["issue", "update", "TECH-1", "--state", "In Progress"]
+        );
+    }
+
+    #[test]
+    fn update_status_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", false);
+        let svc = LinearService::new(&runner, None);
+        assert!(svc.update_status("TECH-1", "Done").is_err());
+    }
 }

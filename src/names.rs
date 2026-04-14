@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 pub struct WorktreeNames {
     pub path: PathBuf,
+    pub branch: String,
     pub workspace: String,
     pub site: Option<String>,
 }
@@ -22,6 +23,7 @@ impl WorktreeNames {
         let site = site_template.map(|_| Self::build_site_name(branch, repo_name));
         Self {
             path,
+            branch: branch.to_string(),
             workspace,
             site,
         }

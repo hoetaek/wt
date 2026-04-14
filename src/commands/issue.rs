@@ -215,4 +215,88 @@ mod tests {
         // It may fail at setup::run_setup due to filesystem ops — that's OK for unit test
         assert!(result.is_ok() || result.unwrap_err().to_string().contains("setup"));
     }
+
+    #[test]
+    fn issue_no_branch_name_returns_error() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"TECH-100","title":"Test issue","branchName":null}"#,
+            true,
+        );
+
+        let ui = MockUi::new();
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        let result = run(&ctx, Some(100), &None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No branch name"));
+    }
+
+    #[test]
+    fn issue_local_branch_exists_reuses_it() {
+        let mut runner = MockRunner::new();
+        // get_issue
+        runner.add_response(
+            r#"{"identifier":"TECH-1","title":"Test","branchName":"hoetaek/tech-1-test"}"#,
+            true,
+        );
+        // checked_out_path (worktree list — no match)
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        // fetch
+        runner.add_response("", true);
+        // local_branch_exists → true
+        runner.add_response("", true);
+        // worktree_add (not -b)
+        runner.add_response("", true);
+
+        let ui = MockUi::new();
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        let result = run(&ctx, Some(1), &None);
+        assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn issue_base_conflict_with_existing_branch() {
+        let mut runner = MockRunner::new();
+        // get_issue
+        runner.add_response(
+            r#"{"identifier":"TECH-1","title":"Test","branchName":"hoetaek/tech-1-test"}"#,
+            true,
+        );
+        // checked_out_path
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        // fetch
+        runner.add_response("", true);
+        // local_branch_exists → true
+        runner.add_response("", true);
+
+        let ui = MockUi::new();
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        let result = run(&ctx, Some(1), &Some("main".into()));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already exists"));
+    }
 }

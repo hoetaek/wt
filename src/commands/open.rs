@@ -98,4 +98,61 @@ mod tests {
 
         assert!(try_fetch_linear_title(&ctx, "hoetaek/my-feature").is_none());
     }
+
+    #[test]
+    fn open_with_no_worktrees_returns_error() {
+        use crate::config::Config;
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+        use std::path::PathBuf;
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            "worktree /tmp/repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+
+        let ui = MockUi::new();
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        let result = run(&ctx);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No additional worktrees")
+        );
+    }
+
+    #[test]
+    fn open_without_cmux_prints_path() {
+        use crate::config::Config;
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+        use std::path::PathBuf;
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            "worktree /tmp/repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/repo-feature\nHEAD def\nbranch refs/heads/hoetaek/feature\n\n",
+            true,
+        );
+
+        let mut ui = MockUi::new();
+        ui.add_select(0);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        assert!(run(&ctx).is_ok());
+    }
 }

@@ -149,7 +149,7 @@ fn build_template_vars(
     if let Some(t) = title {
         vars.insert("issue_title".into(), t.into());
     }
-    if let Some(tech_id) = WorktreeNames::extract_tech_id(&names.workspace) {
+    if let Some(tech_id) = WorktreeNames::extract_tech_id(&names.branch) {
         vars.insert("tech_id".into(), tech_id);
     }
     vars
@@ -243,24 +243,32 @@ fn install_deps(ctx: &Ctx, wt_path: &Path) -> Result<()> {
                 let warnings = Arc::clone(&warnings);
                 let run_str = &dep.run;
                 s.spawn(move || {
-                    let parts: Vec<&str> = run_str.split_whitespace().collect();
-                    if let Some((cmd, args)) = parts.split_first() {
-                        let out = ctx.runner.run(cmd, args, Some(wt_path));
-                        match out {
-                            Ok(o) if !o.success => {
-                                warnings
-                                    .lock()
-                                    .unwrap()
-                                    .push(format!("Dependency command failed: {run_str}"));
-                            }
-                            Err(e) => {
-                                warnings
-                                    .lock()
-                                    .unwrap()
-                                    .push(format!("Dependency command error: {run_str}: {e}"));
-                            }
-                            _ => {}
+                    let needs_shell =
+                        run_str.contains("&&") || run_str.contains("||") || run_str.contains("|");
+                    let out = if needs_shell {
+                        ctx.runner.run("sh", &["-c", run_str], Some(wt_path))
+                    } else {
+                        let parts: Vec<&str> = run_str.split_whitespace().collect();
+                        if let Some((cmd, args)) = parts.split_first() {
+                            ctx.runner.run(cmd, args, Some(wt_path))
+                        } else {
+                            return;
                         }
+                    };
+                    match out {
+                        Ok(o) if !o.success => {
+                            warnings
+                                .lock()
+                                .unwrap()
+                                .push(format!("Dependency command failed: {run_str}"));
+                        }
+                        Err(e) => {
+                            warnings
+                                .lock()
+                                .unwrap()
+                                .push(format!("Dependency command error: {run_str}: {e}"));
+                        }
+                        _ => {}
                     }
                 })
             })
@@ -339,15 +347,23 @@ fn run_background_tests(ctx: &Ctx, wt_path: &Path) -> Result<()> {
                 continue;
             }
         }
-        let parts: Vec<&str> = test_cmd.run.split_whitespace().collect();
-        if let Some((cmd, args)) = parts.split_first() {
-            let out = ctx.runner.run(cmd, args, Some(wt_path))?;
-            let label = test_cmd.label.as_deref().unwrap_or("test");
-            if out.success {
-                ctx.ui.print_step(&format!("{label}: PASSED"));
+        let run_str = &test_cmd.run;
+        let needs_shell = run_str.contains("&&") || run_str.contains("||") || run_str.contains("|");
+        let out = if needs_shell {
+            ctx.runner.run("sh", &["-c", run_str], Some(wt_path))?
+        } else {
+            let parts: Vec<&str> = run_str.split_whitespace().collect();
+            if let Some((cmd, args)) = parts.split_first() {
+                ctx.runner.run(cmd, args, Some(wt_path))?
             } else {
-                ctx.ui.print_warning(&format!("{label}: FAILED"));
+                continue;
             }
+        };
+        let label = test_cmd.label.as_deref().unwrap_or("test");
+        if out.success {
+            ctx.ui.print_step(&format!("{label}: PASSED"));
+        } else {
+            ctx.ui.print_warning(&format!("{label}: FAILED"));
         }
     }
 
@@ -374,6 +390,7 @@ mod tests {
 
         let names = WorktreeNames {
             path: PathBuf::from("/tmp/hapjeong-hoetaek-tech-680"),
+            branch: "hoetaek/tech-680-c11s09-위키".into(),
             workspace: "위키 에디터 (C11S09)".into(),
             site: Some("hapjeong-tech-680".into()),
         };
@@ -419,6 +436,87 @@ mod tests {
         assert!(result.contains("APP_URL=https://new.test"));
         assert!(result.contains("APP_NAME=New Name"));
         assert!(!result.contains("http://old"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn build_template_vars_extracts_tech_id_from_branch() {
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+        use std::path::PathBuf;
+
+        let names = WorktreeNames {
+            path: PathBuf::from("/tmp/repo-feature"),
+            branch: "hoetaek/tech-663-c11s03-test".into(),
+            workspace: "feat: 위키 읽기 페이지".into(),
+            site: None,
+        };
+
+        let ctx = Ctx::new(
+            PathBuf::from("/home/dev/repo"),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let vars = build_template_vars(&ctx, &names, None);
+        assert_eq!(vars.get("tech_id").unwrap(), "tech-663");
+    }
+
+    #[test]
+    fn build_template_vars_without_title() {
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+        use std::path::PathBuf;
+
+        let names = WorktreeNames {
+            path: PathBuf::from("/tmp/repo-feature"),
+            branch: "hoetaek/my-feature".into(),
+            workspace: "my feature".into(),
+            site: None,
+        };
+
+        let ctx = Ctx::new(
+            PathBuf::from("/home/dev/repo"),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let vars = build_template_vars(&ctx, &names, None);
+        assert_eq!(vars.get("repo").unwrap(), "repo");
+        assert!(vars.get("issue_title").is_none());
+        assert!(vars.get("site_name").is_none());
+        assert!(vars.get("tech_id").is_none());
+    }
+
+    #[test]
+    fn substitute_env_noop_when_no_env_file() {
+        let dir = std::env::temp_dir().join("wt-test-no-env");
+        fs::create_dir_all(&dir).ok();
+
+        let mut config = Config::default();
+        config.setup.env.insert("KEY".into(), "value".into());
+
+        let vars = HashMap::new();
+        assert!(substitute_env(&dir, &config, &vars).is_ok());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn substitute_env_noop_when_env_map_empty() {
+        let dir = std::env::temp_dir().join("wt-test-empty-env-map");
+        fs::create_dir_all(&dir).ok();
+        fs::write(dir.join(".env"), "KEY=value\n").unwrap();
+
+        let config = Config::default();
+        let vars = HashMap::new();
+        substitute_env(&dir, &config, &vars).unwrap();
+
+        let result = fs::read_to_string(dir.join(".env")).unwrap();
+        assert_eq!(result, "KEY=value\n");
 
         fs::remove_dir_all(&dir).ok();
     }

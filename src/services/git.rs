@@ -294,4 +294,85 @@ branch refs/heads/main
             vec!["show-ref", "--verify", "--quiet", "refs/heads/main"]
         );
     }
+
+    #[test]
+    fn remote_branch_exists_checks_exit_code() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        let git = GitService::new(&runner, None);
+        assert!(git.remote_branch_exists("feature").unwrap());
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "show-ref",
+                "--verify",
+                "--quiet",
+                "refs/remotes/origin/feature"
+            ]
+        );
+    }
+
+    #[test]
+    fn fetch_runs_git_fetch_origin() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        let git = GitService::new(&runner, None);
+        git.fetch().unwrap();
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["fetch", "origin"]);
+    }
+
+    #[test]
+    fn fetch_branch_runs_git_fetch_origin_branch() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        let git = GitService::new(&runner, None);
+        git.fetch_branch("hoetaek/feature").unwrap();
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["fetch", "origin", "hoetaek/feature"]);
+    }
+
+    #[test]
+    fn list_local_branches_parses_output() {
+        let mut runner = MockRunner::new();
+        runner.add_response("main\ndevelop\nfeature", true);
+        let git = GitService::new(&runner, None);
+        let branches = git.list_local_branches().unwrap();
+        assert_eq!(branches, vec!["main", "develop", "feature"]);
+    }
+
+    #[test]
+    fn worktree_add_passes_correct_args() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        let git = GitService::new(&runner, None);
+        git.worktree_add(std::path::Path::new("/tmp/wt"), "main")
+            .unwrap();
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["worktree", "add", "/tmp/wt", "main"]);
+    }
+
+    #[test]
+    fn worktree_add_new_branch_passes_correct_args() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        let git = GitService::new(&runner, None);
+        git.worktree_add_new_branch(std::path::Path::new("/tmp/wt"), "feature", "main")
+            .unwrap();
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["worktree", "add", "-b", "feature", "/tmp/wt", "main"]
+        );
+    }
+
+    #[test]
+    fn branch_delete_returns_cmd_output() {
+        let mut runner = MockRunner::new();
+        runner.add_response("Deleted branch feature", true);
+        let git = GitService::new(&runner, None);
+        let out = git.branch_delete("feature").unwrap();
+        assert!(out.success);
+    }
 }

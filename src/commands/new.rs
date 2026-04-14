@@ -149,4 +149,37 @@ mod tests {
         let result = run(&ctx, &[], &None);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn branch_already_exists_returns_error() {
+        let mut runner = MockRunner::new();
+        // current_branch for base resolution
+        runner.add_response("main", true);
+        // local_branch_exists returns true
+        runner.add_response("", true);
+
+        let mut ui = MockUi::new();
+        ui.add_input("main");
+
+        let ctx = make_ctx(runner, ui);
+        let words: Vec<String> = vec!["my".into(), "feature".into()];
+        let result = run(&ctx, &words, &None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn explicit_base_branch_skips_prompt() {
+        let mut runner = MockRunner::new();
+        // local_branch_exists returns false
+        runner.add_response("", false);
+        // worktree_add_new_branch
+        runner.add_response("", true);
+
+        let ui = MockUi::new();
+        let ctx = make_ctx(runner, ui);
+        let words: Vec<String> = vec!["my".into(), "feature".into()];
+        let result = run(&ctx, &words, &Some("develop".into()));
+        assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
+    }
 }

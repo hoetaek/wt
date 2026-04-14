@@ -103,4 +103,12 @@ mod tests {
         let svc = GithubService::new(&runner, None);
         assert!(svc.get_pr(999).is_err());
     }
+
+    #[test]
+    fn list_prs_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response("error", false);
+        let svc = GithubService::new(&runner, None);
+        assert!(svc.list_prs().is_err());
+    }
 }

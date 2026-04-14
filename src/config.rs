@@ -172,4 +172,86 @@ copy = [".env"]
         assert!(config.herd.is_none());
         assert!(config.workspace.is_none());
     }
+
+    #[test]
+    fn local_config_takes_precedence() {
+        let dir = std::env::temp_dir().join("wt-test-local-precedence");
+        std::fs::create_dir_all(dir.join(".local")).ok();
+
+        // Root config
+        std::fs::write(
+            dir.join(".wt.toml"),
+            r#"
+[herd]
+site_name = "root"
+"#,
+        )
+        .unwrap();
+
+        // Local config (should win)
+        std::fs::write(
+            dir.join(".local/.wt.toml"),
+            r#"
+[herd]
+site_name = "local"
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load(&dir).unwrap();
+        assert_eq!(config.herd.unwrap().site_name, "local");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn falls_back_to_root_config() {
+        let dir = std::env::temp_dir().join("wt-test-root-fallback");
+        std::fs::create_dir_all(&dir).ok();
+
+        std::fs::write(
+            dir.join(".wt.toml"),
+            r#"
+[herd]
+site_name = "root"
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load(&dir).unwrap();
+        assert_eq!(config.herd.unwrap().site_name, "root");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn parses_post_ready_config() {
+        let toml_str = r#"
+[workspace]
+command = "bash"
+tabs = []
+
+[workspace.post_ready]
+wait_for = "❯"
+send = "/start\n"
+timeout = 10
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let post = config.workspace.unwrap().post_ready.unwrap();
+        assert_eq!(post.wait_for, "❯");
+        assert_eq!(post.send, "/start\n");
+        assert_eq!(post.timeout, Some(10));
+    }
+
+    #[test]
+    fn parses_open_browser_config() {
+        let toml_str = r#"
+[herd]
+site_name = "test"
+open_browser = true
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let herd = config.herd.unwrap();
+        assert_eq!(herd.open_browser, Some(true));
+    }
 }
