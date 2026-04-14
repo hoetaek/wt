@@ -64,10 +64,8 @@ pub fn run(ctx: &Ctx) -> Result<()> {
             if !remove_result.stderr.is_empty() {
                 ctx.ui.print_warning(&format!("  {}", remove_result.stderr));
             }
-            if ctx.ui.confirm("  Force remove?", false)? {
-                git.worktree_remove_force(wt_path).ok();
-                ctx.ui.print_step("  Force removed");
-            }
+            git.worktree_remove_force(wt_path).ok();
+            ctx.ui.print_step("  Force removed");
         }
 
         // Clean up leftover directory
@@ -76,20 +74,13 @@ pub fn run(ctx: &Ctx) -> Result<()> {
         }
 
         // Delete local branch
-        if ctx
-            .ui
-            .confirm(&format!("  Delete branch '{branch}'?"), false)?
-        {
-            let del_result = git.branch_delete(branch)?;
-            if del_result.success {
-                ctx.ui.print_step("  Branch deleted");
-            } else {
-                ctx.ui.print_warning("  Not fully merged");
-                if ctx.ui.confirm("  Force delete?", false)? {
-                    git.branch_delete_force(branch)?;
-                    ctx.ui.print_step("  Branch force deleted");
-                }
-            }
+        let del_result = git.branch_delete(branch)?;
+        if del_result.success {
+            ctx.ui.print_step("  Branch deleted");
+        } else {
+            ctx.ui.print_warning("  Not fully merged, force deleting...");
+            git.branch_delete_force(branch)?;
+            ctx.ui.print_step("  Branch force deleted");
         }
     }
 
@@ -175,7 +166,6 @@ mod tests {
 
         let mut ui = MockUi::new();
         ui.add_multi_select(vec![0]);
-        ui.add_confirm(true); // delete branch
 
         let ctx = Ctx::new(
             PathBuf::from("/tmp/test-repo"),
