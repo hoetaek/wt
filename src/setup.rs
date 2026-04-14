@@ -167,7 +167,13 @@ fn substitute_env(wt_path: &Path, config: &Config, vars: &HashMap<String, String
     for (key, template_val) in &config.setup.env {
         let rendered = template::render(template_val, vars);
         lines.retain(|l| !l.starts_with(&format!("{key}=")));
-        lines.push(format!("{key}={rendered}"));
+        // Quote values that contain spaces or special chars
+        if rendered.contains(' ') || rendered.contains('"') || rendered.contains('\'') {
+            let escaped = rendered.replace('"', "\\\"");
+            lines.push(format!("{key}=\"{escaped}\""));
+        } else {
+            lines.push(format!("{key}={rendered}"));
+        }
     }
 
     fs::write(&env_path, lines.join("\n") + "\n")?;
@@ -444,7 +450,7 @@ mod tests {
         let result = fs::read_to_string(dir.join(".env")).unwrap();
         assert!(result.contains("OTHER=keep"));
         assert!(result.contains("APP_URL=https://new.test"));
-        assert!(result.contains("APP_NAME=New Name"));
+        assert!(result.contains(r#"APP_NAME="New Name""#));
         assert!(!result.contains("http://old"));
 
         fs::remove_dir_all(&dir).ok();
