@@ -12,11 +12,11 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
 
     // 1. Resolve PR
-    let (pr_number, title, branch_name) = if let Some(num) = number {
+    let (pr_number, title, branch_name, base_branch) = if let Some(num) = number {
         let pr = github.get_pr(num)?;
         ctx.ui
             .print_step(&format!("PR #{}: {} ({})", pr.number, pr.title, pr.state));
-        (pr.number, pr.title, pr.head_ref_name)
+        (pr.number, pr.title, pr.head_ref_name, pr.base_ref_name)
     } else {
         let prs = github.list_prs()?;
         if prs.is_empty() {
@@ -38,6 +38,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
             selected.number,
             selected.title.clone(),
             selected.head_ref_name.clone(),
+            selected.base_ref_name.clone(),
         )
     };
 
@@ -49,7 +50,11 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
         ctx.config.herd.as_ref().map(|h| h.site_name.as_str()),
     );
 
-    let extra_vars: HashMap<String, String> = [("pr_number".into(), pr_number.to_string())].into();
+    let extra_vars: HashMap<String, String> = [
+        ("pr_number".into(), pr_number.to_string()),
+        ("base_branch".into(), base_branch),
+    ]
+    .into();
 
     // 2. Check if branch is already checked out
     let existing_path = git.checked_out_path(&branch_name)?;
