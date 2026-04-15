@@ -1,13 +1,13 @@
 use crate::context::UserInterface;
 use anyhow::Result;
 use console::style;
-use dialoguer::{Confirm, Input, MultiSelect, Select};
+use dialoguer::{Confirm, FuzzySelect, Input, MultiSelect};
 
 pub struct TerminalUi;
 
 impl UserInterface for TerminalUi {
     fn select(&self, prompt: &str, items: &[String]) -> Result<usize> {
-        let selection = Select::new()
+        let selection = FuzzySelect::new()
             .with_prompt(prompt)
             .items(items)
             .max_length(10)
