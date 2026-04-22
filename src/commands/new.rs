@@ -77,6 +77,7 @@ pub fn run(ctx: &Ctx, name_words: &[String], base_raw: &Option<String>) -> Resul
     ctx.ui
         .print_step(&format!("Creating new branch from {base}"));
     git.worktree_add_new_branch(&names.path, &branch_name, &base)?;
+    git.set_branch_parent(&branch_name, &base).ok();
 
     setup::run_setup(ctx, &names.path, &names, None, "new", None)?;
 

@@ -162,6 +162,7 @@ fn create_worktree(
     ctx.ui
         .print_step(&format!("Creating new branch from {base}"));
     git.worktree_add_new_branch(wt_path, branch_name, &base)?;
+    git.set_branch_parent(branch_name, &base).ok();
     Ok(CreateType::New)
 }
 

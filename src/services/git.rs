@@ -62,6 +62,11 @@ impl<'a> GitService<'a> {
         Ok(())
     }
 
+    pub fn set_branch_parent(&self, branch: &str, parent: &str) -> Result<()> {
+        self.git(&["config", &format!("branch.{branch}.parentbranch"), parent])?;
+        Ok(())
+    }
+
     pub fn worktree_remove(&self, path: &Path) -> Result<CmdOutput> {
         self.runner.run(
             "git",
