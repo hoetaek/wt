@@ -121,7 +121,7 @@ secure = true
 
 [workspace]
 command = "claudep"
-tabs = ["lazygit", "yazi"]
+tabs = ["lazygit"]
 colors = { issue = "Red", pr = "Green" }
 
 [test]
@@ -146,7 +146,7 @@ commands = [
 
         let ws = config.workspace.unwrap();
         assert_eq!(ws.command, "claudep");
-        assert_eq!(ws.tabs, vec!["lazygit", "yazi"]);
+        assert_eq!(ws.tabs, vec!["lazygit"]);
         assert_eq!(ws.colors.get("issue").unwrap(), "Red");
 
         let test = config.test.unwrap();
