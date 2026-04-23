@@ -64,6 +64,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
                 "Branch already checked out at: {}",
                 existing.display()
             ));
+            git.set_branch_parent(&branch_name, &base_branch).ok();
             setup::run_setup(ctx, existing, &names, Some(&title), "pr", Some(&extra_vars))?;
             return Ok(());
         }
@@ -90,6 +91,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
                 }
             }
             1 => {
+                git.set_branch_parent(&branch_name, &base_branch).ok();
                 setup::run_setup(
                     ctx,
                     &names.path,

@@ -63,6 +63,26 @@ impl<'a> GitService<'a> {
     }
 
     pub fn set_branch_parent(&self, branch: &str, parent: &str) -> Result<()> {
+        if !self.local_branch_exists(parent)? {
+            if self.remote_branch_exists(parent)? {
+                self.git(&[
+                    "branch",
+                    "--track",
+                    parent,
+                    &format!("origin/{parent}"),
+                ])?;
+            } else {
+                self.fetch_branch(parent).ok();
+                if self.remote_branch_exists(parent)? {
+                    self.git(&[
+                        "branch",
+                        "--track",
+                        parent,
+                        &format!("origin/{parent}"),
+                    ])?;
+                }
+            }
+        }
         self.git(&["config", &format!("branch.{branch}.parentbranch"), parent])?;
         Ok(())
     }
