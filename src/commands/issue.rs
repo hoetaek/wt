@@ -142,6 +142,9 @@ fn create_worktree(
         ctx.ui
             .print_step(&format!("Tracking remote branch: origin/{branch_name}"));
         git.worktree_add_new_branch(wt_path, branch_name, &format!("origin/{branch_name}"))?;
+        let branches = git.list_local_branches()?;
+        let idx = ctx.ui.select("Select parent branch", &branches)?;
+        git.set_branch_parent(branch_name, &branches[idx]).ok();
         return Ok(CreateType::Remote);
     }
 

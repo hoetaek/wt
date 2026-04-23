@@ -52,7 +52,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
 
     let extra_vars: HashMap<String, String> = [
         ("pr_number".into(), pr_number.to_string()),
-        ("base_branch".into(), base_branch),
+        ("base_branch".into(), base_branch.clone()),
     ]
     .into();
 
@@ -119,6 +119,8 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
         git.set_upstream(&branch_name, &remote_ref, &names.path)?;
     }
 
+    git.set_branch_parent(&branch_name, &base_branch).ok();
+
     // 5. Setup
     setup::run_setup(
         ctx,
@@ -158,6 +160,8 @@ mod tests {
         // worktree_add_new_branch
         runner.add_response("", true);
         // set upstream
+        runner.add_response("", true);
+        // set_branch_parent
         runner.add_response("", true);
 
         let ui = MockUi::new();
@@ -208,6 +212,8 @@ mod tests {
         // local_branch_exists → true
         runner.add_response("", true);
         // worktree_add (reuse local)
+        runner.add_response("", true);
+        // set_branch_parent
         runner.add_response("", true);
 
         let ui = MockUi::new();
