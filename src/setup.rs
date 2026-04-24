@@ -24,7 +24,6 @@ pub fn run_setup(
 ) -> Result<()> {
     copy_files(ctx, wt_path)?;
     link_files(ctx, wt_path)?;
-    copy_claude_files(ctx, wt_path)?;
 
     let mut template_vars = build_template_vars(ctx, names, title);
     if let Some(extra) = extra_vars {
@@ -113,7 +112,15 @@ fn copy_files(ctx: &Ctx, wt_path: &Path) -> Result<()> {
         let src = ctx.repo_root.join(file);
         if src.exists() {
             let real_src = fs::canonicalize(&src).unwrap_or(src.clone());
-            fs::copy(&real_src, wt_path.join(file))?;
+            let dest = wt_path.join(file);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            if real_src.is_dir() {
+                copy_dir_recursive(&real_src, &dest)?;
+            } else {
+                fs::copy(&real_src, &dest)?;
+            }
         }
     }
     Ok(())
@@ -125,26 +132,11 @@ fn link_files(ctx: &Ctx, wt_path: &Path) -> Result<()> {
         if src.exists() {
             let real_src = fs::canonicalize(&src).unwrap_or(src);
             let dest = wt_path.join(file);
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&real_src, &dest).ok();
-        }
-    }
-    Ok(())
-}
-
-fn copy_claude_files(ctx: &Ctx, wt_path: &Path) -> Result<()> {
-    for item in &ctx.config.worktree.claude_copy {
-        let src = ctx.repo_root.join(".claude").join(item);
-        if src.exists() {
-            let dest = wt_path.join(".claude").join(item);
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent)?;
             }
-            if src.is_dir() {
-                copy_dir_recursive(&src, &dest)?;
-            } else {
-                fs::copy(&src, &dest)?;
-            }
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&real_src, &dest).ok();
         }
     }
     Ok(())
@@ -530,6 +522,107 @@ mod tests {
     use super::*;
 
     #[test]
+    fn copy_files_copies_nested_file_into_parent_dirs() {
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+
+        let repo = std::env::temp_dir().join("wt-test-copy-nested-file-repo");
+        let wt = std::env::temp_dir().join("wt-test-copy-nested-file-worktree");
+        fs::create_dir_all(repo.join(".claude")).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(repo.join(".claude/settings.local.json"), "{\"a\":1}\n").unwrap();
+
+        let mut config = Config::default();
+        config.worktree.copy = vec![".claude/settings.local.json".into()];
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        copy_files(&ctx, &wt).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(wt.join(".claude/settings.local.json")).unwrap(),
+            "{\"a\":1}\n"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
+    fn copy_files_copies_directories_recursively() {
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+
+        let repo = std::env::temp_dir().join("wt-test-copy-dir-repo");
+        let wt = std::env::temp_dir().join("wt-test-copy-dir-worktree");
+        fs::create_dir_all(repo.join(".claude/hooks/nested")).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(repo.join(".claude/hooks/pre-commit"), "hook\n").unwrap();
+        fs::write(repo.join(".claude/hooks/nested/config.txt"), "nested\n").unwrap();
+
+        let mut config = Config::default();
+        config.worktree.copy = vec![".claude/hooks".into()];
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        copy_files(&ctx, &wt).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(wt.join(".claude/hooks/pre-commit")).unwrap(),
+            "hook\n"
+        );
+        assert_eq!(
+            fs::read_to_string(wt.join(".claude/hooks/nested/config.txt")).unwrap(),
+            "nested\n"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
+    fn link_files_creates_parent_dirs_for_nested_destinations() {
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+
+        let repo = std::env::temp_dir().join("wt-test-link-nested-repo");
+        let wt = std::env::temp_dir().join("wt-test-link-nested-worktree");
+        fs::create_dir_all(repo.join(".config")).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(repo.join(".config/tool.toml"), "name = \"wt\"\n").unwrap();
+
+        let mut config = Config::default();
+        config.worktree.link = vec![".config/tool.toml".into()];
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        link_files(&ctx, &wt).unwrap();
+
+        let dest = wt.join(".config/tool.toml");
+        assert!(dest.exists());
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "name = \"wt\"\n");
+        assert_eq!(fs::read_link(&dest).unwrap(), fs::canonicalize(repo.join(".config/tool.toml")).unwrap());
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
     fn build_template_vars_includes_all_fields() {
         use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
@@ -671,7 +764,7 @@ mod tests {
     #[test]
     fn post_ready_sends_commands_sequentially() {
         use crate::config::PostReadyConfig;
-        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::mock::MockRunner;
         use std::sync::Arc;
 
         let mut runner = MockRunner::new();
@@ -687,7 +780,6 @@ mod tests {
         runner.add_response("", true);
 
         let runner = Arc::new(runner);
-        let ui = MockUi::new();
 
         let post = PostReadyConfig {
             wait_for: "❯".into(),
@@ -707,7 +799,6 @@ mod tests {
         // Call the function directly with runner ref
         let cmux = CmuxService::new(runner.as_ref());
         let commands = post.send.get("pr").unwrap();
-        let timeout_secs = post.timeout.unwrap_or(15);
 
         for cmd_template in commands {
             let rendered = template::render(cmd_template, &vars);
@@ -767,8 +858,7 @@ mod tests {
 
     #[test]
     fn post_ready_timeout_skips_remaining() {
-        use crate::config::PostReadyConfig;
-        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::mock::MockRunner;
         use std::sync::Arc;
 
         let mut runner = MockRunner::new();
@@ -780,7 +870,6 @@ mod tests {
         runner.add_response("loading...", true);
 
         let runner = Arc::new(runner);
-        let ui = MockUi::new();
 
         // Call run_post_ready directly — need Ctx with Arc runner
         // Instead, test the timeout logic via CmuxService directly

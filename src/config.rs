@@ -13,11 +13,10 @@ pub struct Config {
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct WorktreeConfig {
     pub copy: Vec<String>,
     pub link: Vec<String>,
-    pub claude_copy: Vec<String>,
     pub claude_local_context: Option<String>,
 }
 
@@ -103,9 +102,8 @@ mod tests {
     fn parses_full_config() {
         let toml_str = r#"
 [worktree]
-copy = [".env", "CLAUDE.local.md"]
+copy = [".env", "CLAUDE.local.md", ".claude/settings.local.json"]
 link = [".local"]
-claude_copy = ["settings.local.json", "hooks"]
 claude_local_context = "\n## env\n- parent: `{{parent_branch}}`\n"
 
 [setup]
@@ -135,7 +133,7 @@ commands = [
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
 
-        assert_eq!(config.worktree.copy, vec![".env", "CLAUDE.local.md"]);
+        assert_eq!(config.worktree.copy, vec![".env", "CLAUDE.local.md", ".claude/settings.local.json"]);
         assert_eq!(config.worktree.link, vec![".local"]);
         assert!(config.worktree.claude_local_context.is_some());
         assert!(config.worktree.claude_local_context.unwrap().contains("{{parent_branch}}"));
@@ -169,6 +167,21 @@ commands = [
     }
 
     #[test]
+    fn parses_explicit_claude_paths_in_copy() {
+        let toml_str = r#"
+[worktree]
+copy = [".env", ".claude/settings.local.json", ".claude/hooks"]
+link = [".local"]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.worktree.copy,
+            vec![".env", ".claude/settings.local.json", ".claude/hooks"]
+        );
+        assert_eq!(config.worktree.link, vec![".local"]);
+    }
+
+    #[test]
     fn partial_config_fills_defaults() {
         let toml_str = r#"
 [worktree]
@@ -179,6 +192,17 @@ copy = [".env"]
         assert!(config.worktree.link.is_empty());
         assert!(config.herd.is_none());
         assert!(config.workspace.is_none());
+    }
+
+    #[test]
+    fn rejects_legacy_claude_copy_field() {
+        let toml_str = r#"
+[worktree]
+copy = [".env"]
+claude_copy = ["settings.local.json"]
+"#;
+        let err = toml::from_str::<Config>(toml_str).unwrap_err();
+        assert!(err.to_string().contains("claude_copy"));
     }
 
     #[test]
