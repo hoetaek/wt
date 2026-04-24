@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use crate::config::Config;
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
@@ -65,8 +67,9 @@ pub fn run_setup(
             let panes = cmux.list_panes(handle)?;
             if let Some(pane) = panes.first() {
                 for tab_cmd in &ws_config.post_deps_tabs {
+                    let rendered = template::render(tab_cmd, &template_vars);
                     let surface = cmux.new_surface(pane, handle)?;
-                    cmux.send(&surface, handle, &format!("{tab_cmd}\n"))?;
+                    cmux.send(&surface, handle, &format!("{rendered}\n"))?;
                 }
             }
         }
@@ -178,6 +181,10 @@ fn build_template_vars(
     if let Some(tech_id) = WorktreeNames::extract_tech_id(&names.branch) {
         vars.insert("tech_id".into(), tech_id);
     }
+    let mut hasher = std::hash::DefaultHasher::new();
+    names.branch.hash(&mut hasher);
+    let port = 5001 + (hasher.finish() % 4999) as u32;
+    vars.insert("vite_port".into(), port.to_string());
     vars
 }
 
