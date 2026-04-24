@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
 use crate::services::cmux::CmuxService;
+use crate::services::git::GitService;
 use crate::services::herd::HerdService;
 use crate::template;
 use anyhow::Result;
@@ -53,6 +54,8 @@ pub fn run_setup(
         .cloned()
         .unwrap_or_default();
     let ws_handle = open_workspace(ctx, wt_path, names, &ws_color)?;
+
+    inject_claude_local_context(ctx, wt_path, names, site_name.as_deref(), ws_handle.as_deref())?;
 
     install_deps(ctx, wt_path)?;
 
@@ -468,6 +471,45 @@ fn run_background_tests(ctx: &Ctx, wt_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn inject_claude_local_context(
+    ctx: &Ctx,
+    wt_path: &Path,
+    names: &WorktreeNames,
+    site_name: Option<&str>,
+    ws_handle: Option<&str>,
+) -> Result<()> {
+    let tmpl = match ctx.config.worktree.claude_local_context {
+        Some(ref t) => t,
+        None => return Ok(()),
+    };
+
+    let claude_local = wt_path.join("CLAUDE.local.md");
+    if !claude_local.exists() {
+        return Ok(());
+    }
+
+    let git = GitService::new(ctx.runner.as_ref(), Some(wt_path));
+    let parent = git.get_branch_parent(&names.branch).unwrap_or(None);
+
+    let mut vars = HashMap::new();
+    if let Some(p) = parent {
+        vars.insert("parent_branch".into(), p);
+    }
+    if let Some(site) = site_name {
+        vars.insert("site_url".into(), format!("https://{site}.test"));
+    }
+    if let Some(ws) = ws_handle {
+        vars.insert("workspace".into(), ws.into());
+    }
+
+    let rendered = template::render(tmpl, &vars);
+
+    let mut content = fs::read_to_string(&claude_local)?;
+    content.push_str(&rendered);
+    fs::write(&claude_local, content)?;
+    Ok(())
+}
+
 fn print_summary(ctx: &Ctx, wt_path: &Path, _names: &WorktreeNames, site_name: Option<&str>) {
     ctx.ui.print_step("Done!");
     ctx.ui.print_step(&format!("  Path: {}", wt_path.display()));
@@ -746,5 +788,156 @@ mod tests {
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 3); // list_panes + list_pane_surfaces + read_screen
+    }
+
+    #[test]
+    fn inject_claude_local_context_appends_rendered_template() {
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+        use std::path::PathBuf;
+
+        let dir = std::env::temp_dir().join("wt-test-inject-context");
+        fs::create_dir_all(&dir).ok();
+        fs::write(dir.join("CLAUDE.local.md"), "# Existing content\n").unwrap();
+
+        let mut runner = MockRunner::new();
+        // get_branch_parent: git config --get
+        runner.add_response("develop", true);
+
+        let mut config = Config::default();
+        config.worktree.claude_local_context = Some(
+            "\n## env\n- parent: `{{parent_branch}}`\n- site: {{site_url}}\n- ws: `{{workspace}}`\n".into(),
+        );
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            config,
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+
+        let names = WorktreeNames {
+            path: dir.clone(),
+            branch: "hoetaek/tech-680-feature".into(),
+            workspace: "feature".into(),
+            site: Some("hapjeong-tech-680".into()),
+        };
+
+        inject_claude_local_context(&ctx, &dir, &names, Some("hapjeong-tech-680"), Some("workspace:3")).unwrap();
+
+        let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
+        assert!(result.starts_with("# Existing content\n"));
+        assert!(result.contains("- parent: `develop`"));
+        assert!(result.contains("- site: https://hapjeong-tech-680.test"));
+        assert!(result.contains("- ws: `workspace:3`"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn inject_claude_local_context_noop_without_config() {
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+        use std::path::PathBuf;
+
+        let dir = std::env::temp_dir().join("wt-test-inject-no-config");
+        fs::create_dir_all(&dir).ok();
+        fs::write(dir.join("CLAUDE.local.md"), "original\n").unwrap();
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let names = WorktreeNames {
+            path: dir.clone(),
+            branch: "hoetaek/feature".into(),
+            workspace: "feature".into(),
+            site: None,
+        };
+
+        inject_claude_local_context(&ctx, &dir, &names, None, None).unwrap();
+
+        let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
+        assert_eq!(result, "original\n");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn inject_claude_local_context_noop_without_file() {
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+        use std::path::PathBuf;
+
+        let dir = std::env::temp_dir().join("wt-test-inject-no-file");
+        fs::create_dir_all(&dir).ok();
+        // No CLAUDE.local.md
+
+        let mut config = Config::default();
+        config.worktree.claude_local_context = Some("## env\n".into());
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let names = WorktreeNames {
+            path: dir.clone(),
+            branch: "hoetaek/feature".into(),
+            workspace: "feature".into(),
+            site: None,
+        };
+
+        assert!(inject_claude_local_context(&ctx, &dir, &names, None, None).is_ok());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn inject_claude_local_context_handles_missing_vars() {
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+        use std::path::PathBuf;
+
+        let dir = std::env::temp_dir().join("wt-test-inject-partial");
+        fs::create_dir_all(&dir).ok();
+        fs::write(dir.join("CLAUDE.local.md"), "# test\n").unwrap();
+
+        let mut runner = MockRunner::new();
+        // get_branch_parent: not found
+        runner.add_response("", false);
+
+        let mut config = Config::default();
+        config.worktree.claude_local_context =
+            Some("\n## env\n- parent: `{{parent_branch}}`\n- ws: `{{workspace}}`\n".into());
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            config,
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+
+        let names = WorktreeNames {
+            path: dir.clone(),
+            branch: "hoetaek/feature".into(),
+            workspace: "feature".into(),
+            site: None,
+        };
+
+        // No site, no workspace handle, no parent
+        inject_claude_local_context(&ctx, &dir, &names, None, None).unwrap();
+
+        let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
+        // Unknown vars are left as-is by template::render
+        assert!(result.contains("{{parent_branch}}"));
+        assert!(result.contains("{{workspace}}"));
+
+        fs::remove_dir_all(&dir).ok();
     }
 }

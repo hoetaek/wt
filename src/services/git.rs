@@ -87,6 +87,19 @@ impl<'a> GitService<'a> {
         Ok(())
     }
 
+    pub fn get_branch_parent(&self, branch: &str) -> Result<Option<String>> {
+        let out = self.runner.run(
+            "git",
+            &["config", "--get", &format!("branch.{branch}.parentbranch")],
+            self.cwd,
+        )?;
+        if out.success && !out.stdout.is_empty() {
+            Ok(Some(out.stdout))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn worktree_remove(&self, path: &Path) -> Result<CmdOutput> {
         self.runner.run(
             "git",
@@ -399,5 +412,28 @@ branch refs/heads/main
         let git = GitService::new(&runner, None);
         let out = git.branch_delete("feature").unwrap();
         assert!(out.success);
+    }
+
+    #[test]
+    fn get_branch_parent_returns_value() {
+        let mut runner = MockRunner::new();
+        runner.add_response("develop", true);
+        let git = GitService::new(&runner, None);
+        let parent = git.get_branch_parent("hoetaek/tech-680").unwrap();
+        assert_eq!(parent, Some("develop".into()));
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["config", "--get", "branch.hoetaek/tech-680.parentbranch"]
+        );
+    }
+
+    #[test]
+    fn get_branch_parent_returns_none_when_missing() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", false);
+        let git = GitService::new(&runner, None);
+        let parent = git.get_branch_parent("hoetaek/feature").unwrap();
+        assert!(parent.is_none());
     }
 }

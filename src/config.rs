@@ -18,6 +18,7 @@ pub struct WorktreeConfig {
     pub copy: Vec<String>,
     pub link: Vec<String>,
     pub claude_copy: Vec<String>,
+    pub claude_local_context: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -105,6 +106,7 @@ mod tests {
 copy = [".env", "CLAUDE.local.md"]
 link = [".local"]
 claude_copy = ["settings.local.json", "hooks"]
+claude_local_context = "\n## env\n- parent: `{{parent_branch}}`\n"
 
 [setup]
 deps = [
@@ -135,6 +137,8 @@ commands = [
 
         assert_eq!(config.worktree.copy, vec![".env", "CLAUDE.local.md"]);
         assert_eq!(config.worktree.link, vec![".local"]);
+        assert!(config.worktree.claude_local_context.is_some());
+        assert!(config.worktree.claude_local_context.unwrap().contains("{{parent_branch}}"));
         assert_eq!(config.setup.deps.len(), 2);
         assert_eq!(config.setup.deps[0].run, "composer install");
         assert_eq!(
