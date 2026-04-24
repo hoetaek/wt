@@ -57,6 +57,11 @@ pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<
     // 2. Check if branch is already checked out elsewhere
     let existing_path = git.checked_out_path(&branch_name)?;
     if let Some(ref existing) = existing_path {
+        if *existing == ctx.repo_root {
+            ctx.ui
+                .print_warning("이미 이 브랜치에 있습니다. 다른 브랜치로 전환 후 다시 시도하세요.");
+            return Ok(());
+        }
         if *existing != names.path {
             ctx.ui.print_step(&format!(
                 "Branch already checked out at: {}",
