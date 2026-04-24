@@ -47,6 +47,7 @@ pub struct HerdConfig {
 pub struct WorkspaceConfig {
     pub command: String,
     pub tabs: Vec<String>,
+    pub post_deps_tabs: Vec<String>,
     pub colors: HashMap<String, String>,
     pub post_ready: Option<PostReadyConfig>,
 }
@@ -122,6 +123,7 @@ secure = true
 [workspace]
 command = "claudep"
 tabs = ["lazygit"]
+post_deps_tabs = ["npm run dev"]
 colors = { issue = "Red", pr = "Green" }
 
 [test]
@@ -147,6 +149,7 @@ commands = [
         let ws = config.workspace.unwrap();
         assert_eq!(ws.command, "claudep");
         assert_eq!(ws.tabs, vec!["lazygit"]);
+        assert_eq!(ws.post_deps_tabs, vec!["npm run dev"]);
         assert_eq!(ws.colors.get("issue").unwrap(), "Red");
 
         let test = config.test.unwrap();

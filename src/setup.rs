@@ -56,6 +56,19 @@ pub fn run_setup(
 
     install_deps(ctx, wt_path)?;
 
+    if let (Some(handle), Some(ws_config)) = (&ws_handle, &ctx.config.workspace) {
+        if !ws_config.post_deps_tabs.is_empty() {
+            let cmux = CmuxService::new(ctx.runner.as_ref());
+            let panes = cmux.list_panes(handle)?;
+            if let Some(pane) = panes.first() {
+                for tab_cmd in &ws_config.post_deps_tabs {
+                    let surface = cmux.new_surface(pane, handle)?;
+                    cmux.send(&surface, handle, &format!("{tab_cmd}\n"))?;
+                }
+            }
+        }
+    }
+
     // Open browser after deps (site may need built assets)
     if let Some(ref site) = site_name {
         if ctx

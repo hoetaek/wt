@@ -10,7 +10,7 @@ impl UserInterface for TerminalUi {
         let selection = FuzzySelect::new()
             .with_prompt(prompt)
             .items(items)
-            .max_length(10)
+            .max_length(20)
             .interact()?;
         Ok(selection)
     }
@@ -19,7 +19,7 @@ impl UserInterface for TerminalUi {
         let selections = MultiSelect::new()
             .with_prompt(prompt)
             .items(items)
-            .max_length(10)
+            .max_length(20)
             .interact()?;
         Ok(selections)
     }

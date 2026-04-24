@@ -27,7 +27,12 @@ pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<
 
         let items: Vec<String> = issues
             .iter()
-            .map(|i| format!("{} {}", i.identifier, i.title))
+            .map(|i| {
+                let assignee = i.assignee.as_ref()
+                    .map(|a| a.display_name.as_str())
+                    .unwrap_or("-");
+                format!("{} {} [{}]", i.identifier, i.title, assignee)
+            })
             .collect();
 
         let idx = ctx.ui.select("Select an issue", &items)?;
