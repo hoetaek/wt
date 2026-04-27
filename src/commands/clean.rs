@@ -1,3 +1,4 @@
+use crate::commands::issue::build_provider;
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
 use crate::services::git::GitService;
@@ -50,6 +51,13 @@ pub fn run(ctx: &Ctx) -> Result<()> {
             if herd.unlink(&site_name)? {
                 ctx.ui
                     .print_step(&format!("  Herd: {site_name}.test unlinked"));
+            }
+        }
+
+        // Issue provider cleanup hook
+        if let Ok(provider) = build_provider(ctx) {
+            if let Err(e) = provider.on_clean(&entry.branch, &entry.branch) {
+                ctx.ui.print_warning(&format!("  Issue cleanup: {e}"));
             }
         }
 
