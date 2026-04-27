@@ -9,7 +9,7 @@ use anyhow::{Result, bail};
 
 pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<()> {
     let linear = LinearService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
-    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
     // 1. Resolve issue
     let (identifier, title, branch_name) = if let Some(num) = number {
@@ -59,7 +59,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<
     // 2. Check if branch is already checked out elsewhere
     let existing_path = git.checked_out_path(&branch_name)?;
     if let Some(ref existing) = existing_path {
-        if *existing == ctx.repo_root {
+        if *existing == ctx.invocation_root {
             ctx.ui
                 .print_warning("이미 이 브랜치에 있습니다. 다른 브랜치로 전환 후 다시 시도하세요.");
             return Ok(());
@@ -241,6 +241,7 @@ mod tests {
 
         let ctx = Ctx::new(
             PathBuf::from("/tmp/test-repo"),
+            PathBuf::from("/tmp/test-repo"),
             Config::default(),
             Box::new(runner),
             Box::new(ui),
@@ -263,6 +264,7 @@ mod tests {
 
         let ui = MockUi::new();
         let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
             PathBuf::from("/tmp/test-repo"),
             Config::default(),
             Box::new(runner),
@@ -296,6 +298,7 @@ mod tests {
 
         let ui = MockUi::new();
         let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
             PathBuf::from("/tmp/test-repo"),
             Config::default(),
             Box::new(runner),
@@ -350,6 +353,7 @@ mod tests {
         ui.add_input("main");
 
         let ctx = Ctx::new(
+            repo_root.clone(),
             repo_root,
             Config::default(),
             Box::new(SharedRunner {
@@ -364,7 +368,7 @@ mod tests {
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
             .iter()
-            .find(|(cmd, args)| {
+            .find(|(cmd, args, _)| {
                 cmd == "git"
                     && args.len() >= 6
                     && args[0] == "worktree"
@@ -380,6 +384,82 @@ mod tests {
                 .as_ref()
         );
         assert!(!worktree_add_call.1[4].contains("hapjeong-tech-670-feature-hoetaek-tech-672"));
+
+        std::fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn issue_default_base_prompt_uses_invocation_root_for_current_branch() {
+        let temp = std::env::temp_dir().join(format!(
+            "wt-issue-invocation-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo_root = temp.join("hapjeong");
+        let invocation_root = temp.join("hapjeong-hoetaek-tech-670");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        std::fs::create_dir_all(&invocation_root).unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"hoetaek/tech-672-nested-worktree-bug"}"#,
+            true,
+        );
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response(
+            "hoetaek/tech-670-위키-에디터는-문서에-분류x로-분류를-지정할-수-있다",
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", true);
+
+        let runner = Arc::new(runner);
+        let ui = MockUi::new();
+        let ctx = Ctx::new(
+            repo_root,
+            invocation_root.clone(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        let result = run(&ctx, Some(672), &None);
+        assert!(result.is_ok());
+
+        let calls = runner.calls.lock().unwrap();
+        let current_branch_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git" && args == &vec!["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()]
+            })
+            .expect("expected git current branch call");
+        assert_eq!(current_branch_call.2.as_deref(), Some(invocation_root.as_path()));
+
+        let worktree_add_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .expect("expected git worktree add -b call");
+        assert_eq!(
+            worktree_add_call.1[5],
+            "hoetaek/tech-670-위키-에디터는-문서에-분류x로-분류를-지정할-수-있다"
+        );
 
         std::fs::remove_dir_all(&temp).ok();
     }
@@ -404,6 +484,7 @@ mod tests {
 
         let ui = MockUi::new();
         let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
             PathBuf::from("/tmp/test-repo"),
             Config::default(),
             Box::new(runner),

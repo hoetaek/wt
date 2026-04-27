@@ -117,6 +117,7 @@ mod tests {
         let ui = MockUi::new();
         let ctx = Ctx::new(
             PathBuf::from("/tmp/test-repo"),
+            PathBuf::from("/tmp/test-repo"),
             Config::default(),
             Box::new(runner),
             Box::new(ui),
@@ -138,6 +139,7 @@ mod tests {
         ui.add_multi_select(vec![]);
 
         let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
             PathBuf::from("/tmp/test-repo"),
             Config::default(),
             Box::new(runner),
@@ -169,6 +171,7 @@ mod tests {
         ui.add_multi_select(vec![0]);
 
         let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
             PathBuf::from("/tmp/test-repo"),
             Config::default(),
             Box::new(runner),

@@ -34,6 +34,7 @@ pub trait UserInterface: Send + Sync {
 /// Context object carrying all side-effect handles.
 pub struct Ctx {
     pub repo_root: PathBuf,
+    pub invocation_root: PathBuf,
     pub parent_dir: PathBuf,
     pub repo_name: String,
     pub config: Config,
@@ -44,6 +45,7 @@ pub struct Ctx {
 impl Ctx {
     pub fn new(
         repo_root: PathBuf,
+        invocation_root: PathBuf,
         config: Config,
         runner: Box<dyn CommandRunner>,
         ui: Box<dyn UserInterface>,
@@ -56,6 +58,7 @@ impl Ctx {
             .into_owned();
         Self {
             repo_root,
+            invocation_root,
             parent_dir,
             repo_name,
             config,
@@ -74,7 +77,7 @@ pub mod mock {
 
     pub struct MockRunner {
         responses: Mutex<VecDeque<CmdOutput>>,
-        pub calls: Mutex<Vec<(String, Vec<String>)>>,
+        pub calls: Mutex<Vec<(String, Vec<String>, Option<PathBuf>)>>,
         available_commands: Vec<String>,
     }
 
@@ -107,10 +110,11 @@ pub mod mock {
     }
 
     impl CommandRunner for MockRunner {
-        fn run(&self, cmd: &str, args: &[&str], _cwd: Option<&Path>) -> Result<CmdOutput> {
+        fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
             self.calls.lock().unwrap().push((
                 cmd.to_string(),
                 args.iter().map(|s| s.to_string()).collect(),
+                cwd.map(Path::to_path_buf),
             ));
             self.responses
                 .lock()
@@ -243,6 +247,7 @@ mod tests {
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].0, "git");
+        assert_eq!(calls[0].2, None);
         assert_eq!(calls[1].1, vec!["diff"]);
     }
 
@@ -264,12 +269,35 @@ mod tests {
     }
 
     #[test]
+    fn ctx_keeps_canonical_and_invocation_roots_separately() {
+        let temp = TempDir::new().unwrap();
+        let repo_root = temp.path().join("hapjeong");
+        let invocation_root = temp.path().join("hapjeong-hoetaek-tech-670");
+        fs::create_dir(&repo_root).unwrap();
+        fs::create_dir(&invocation_root).unwrap();
+
+        let ctx = Ctx::new(
+            repo_root.clone(),
+            invocation_root.clone(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        assert_eq!(ctx.repo_root, repo_root);
+        assert_eq!(ctx.invocation_root, invocation_root);
+        assert_eq!(ctx.repo_name, "hapjeong");
+        assert_eq!(ctx.parent_dir, temp.path());
+    }
+
+    #[test]
     fn derives_repo_name_from_canonical_root() {
         let temp = TempDir::new().unwrap();
         let repo_root = temp.path().join("hapjeong");
         fs::create_dir(&repo_root).unwrap();
 
         let ctx = Ctx::new(
+            repo_root.clone(),
             repo_root.clone(),
             Config::default(),
             Box::new(MockRunner::new()),
@@ -284,6 +312,7 @@ mod tests {
     #[test]
     fn ctx_derives_parent_and_name() {
         let ctx = Ctx::new(
+            PathBuf::from("/home/dev/projects/hapjeong"),
             PathBuf::from("/home/dev/projects/hapjeong"),
             Config::default(),
             Box::new(MockRunner::new()),

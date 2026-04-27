@@ -25,12 +25,14 @@ fn try_main() -> Result<()> {
     let runner = RealRunner;
 
     let git = GitService::new(&runner, None);
+    let invocation_root = git.repo_root()?;
     let repo_root = git.canonical_repo_root()?;
 
     let config = Config::load(&repo_root)?;
 
     let ctx = Ctx::new(
         repo_root,
+        invocation_root,
         config,
         Box::new(RealRunner),
         Box::new(TerminalUi),

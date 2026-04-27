@@ -32,7 +32,7 @@ pub fn run(ctx: &Ctx, name_words: &[String], base_raw: &Option<String>) -> Resul
     }
 
     let branch_name = format!("hoetaek/{kebab}");
-    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
     let names = WorktreeNames::new(
         &branch_name,
@@ -107,12 +107,34 @@ fn resolve_base_branch(ctx: &Ctx, git: &GitService, mode: &BaseMode) -> Result<S
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
-    use std::path::PathBuf;
+    use crate::context::{CommandRunner, Ctx};
+    use anyhow::Result;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    struct SharedRunner {
+        inner: Arc<MockRunner>,
+    }
+
+    impl CommandRunner for SharedRunner {
+        fn run(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            cwd: Option<&Path>,
+        ) -> Result<crate::context::CmdOutput> {
+            self.inner.run(cmd, args, cwd)
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            self.inner.has_command(cmd)
+        }
+    }
 
     fn make_ctx(runner: MockRunner, ui: MockUi) -> Ctx {
         Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
             PathBuf::from("/tmp/test-repo"),
             Config::default(),
             Box::new(runner),
@@ -149,6 +171,53 @@ mod tests {
 
         let result = run(&ctx, &[], &None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn new_default_base_prompt_uses_invocation_root_for_current_branch() {
+        let repo_root = PathBuf::from("/tmp/hapjeong");
+        let invocation_root = PathBuf::from("/tmp/hapjeong-hoetaek-tech-670");
+        let mut runner = MockRunner::new();
+        runner.add_response("hoetaek/tech-670-current", true);
+        runner.add_response("", false);
+        runner.add_response("", true);
+
+        let runner = Arc::new(runner);
+        let ui = MockUi::new();
+        let ctx = Ctx::new(
+            repo_root,
+            invocation_root.clone(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        let words: Vec<String> = vec!["my".into(), "feature".into()];
+        let result = run(&ctx, &words, &None);
+        assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
+
+        let calls = runner.calls.lock().unwrap();
+        let current_branch_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git" && args == &vec!["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()]
+            })
+            .expect("expected git current branch call");
+        assert_eq!(current_branch_call.2.as_deref(), Some(invocation_root.as_path()));
+
+        let worktree_add_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .expect("expected git worktree add -b call");
+        assert_eq!(worktree_add_call.1[5], "hoetaek/tech-670-current");
     }
 
     #[test]

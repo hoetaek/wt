@@ -543,6 +543,7 @@ mod tests {
 
         let ctx = Ctx::new(
             repo.clone(),
+            repo.clone(),
             config,
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
@@ -575,6 +576,7 @@ mod tests {
         config.worktree.copy = vec![".claude/hooks".into()];
 
         let ctx = Ctx::new(
+            repo.clone(),
             repo.clone(),
             config,
             Box::new(MockRunner::new()),
@@ -612,6 +614,7 @@ mod tests {
 
         let ctx = Ctx::new(
             repo.clone(),
+            repo.clone(),
             config,
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
@@ -645,6 +648,7 @@ mod tests {
         };
 
         let ctx = Ctx::new(
+            PathBuf::from("/home/dev/hapjeong"),
             PathBuf::from("/home/dev/hapjeong"),
             Config::default(),
             Box::new(MockRunner::new()),
@@ -704,6 +708,7 @@ mod tests {
 
         let ctx = Ctx::new(
             PathBuf::from("/home/dev/repo"),
+            PathBuf::from("/home/dev/repo"),
             Config::default(),
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
@@ -727,6 +732,7 @@ mod tests {
         };
 
         let ctx = Ctx::new(
+            PathBuf::from("/home/dev/repo"),
             PathBuf::from("/home/dev/repo"),
             Config::default(),
             Box::new(MockRunner::new()),
@@ -825,8 +831,8 @@ mod tests {
         // Verify the send calls contain rendered templates
         let send_calls: Vec<_> = calls
             .iter()
-            .filter(|(cmd, _)| cmd == "cmux" && !cmd.is_empty())
-            .filter(|(_, args)| args.first().is_some_and(|a| a == "send"))
+            .filter(|(cmd, _, _)| cmd == "cmux" && !cmd.is_empty())
+            .filter(|(_, args, _)| args.first().is_some_and(|a| a == "send"))
             .collect();
         assert_eq!(send_calls.len(), 2);
         assert_eq!(send_calls[0].1.last().unwrap(), "/conventional-review 42\n");
@@ -846,6 +852,7 @@ mod tests {
         let runner = MockRunner::new();
         let ui = MockUi::new();
         let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
             PathBuf::from("/tmp/repo"),
             Config::default(),
             Box::new(runner),
@@ -916,6 +923,7 @@ mod tests {
 
         let ctx = Ctx::new(
             PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
             config,
             Box::new(runner),
             Box::new(MockUi::new()),
@@ -958,6 +966,7 @@ mod tests {
 
         let ctx = Ctx::new(
             PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
             Config::default(),
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
@@ -992,6 +1001,7 @@ mod tests {
         config.worktree.claude_local_context = Some("## env\n".into());
 
         let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
             PathBuf::from("/tmp/repo"),
             config,
             Box::new(MockRunner::new()),
@@ -1029,6 +1039,7 @@ mod tests {
             Some("\n## env\n- parent: `{{parent_branch}}`\n- ws: `{{workspace}}`\n".into());
 
         let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
             PathBuf::from("/tmp/repo"),
             config,
             Box::new(runner),
