@@ -1,10 +1,13 @@
 use crate::cli::BaseMode;
 use crate::config::Config;
+use crate::config::IssueProviderType;
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::names::WorktreeNames;
 use crate::services::git::{CreateType, GitService};
-use crate::services::linear::LinearService;
+use crate::services::issues::IssueProvider;
+use crate::services::issues::github::GithubIssueProvider;
+use crate::services::issues::linear::LinearIssueProvider;
 use crate::setup;
 use anyhow::{Result, bail};
 
@@ -14,45 +17,37 @@ pub fn run(
     base_raw: &Option<String>,
     parallel: bool,
 ) -> Result<()> {
-    let linear = LinearService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
+    let provider = build_provider(ctx)?;
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
     // 1. Resolve issue
-    let (identifier, title, branch_name) = if let Some(num) = number {
-        let id = format!("TECH-{num}");
-        let issue = linear.get_issue(&id)?;
-        let branch = issue.branch_name.ok_or_else(|| WtError::NoBranchName {
-            identifier: id.clone(),
-        })?;
-        (issue.identifier, issue.title, branch)
+    let (identifier, title) = if let Some(num) = number {
+        let issue = provider.get_issue(&num.to_string())?;
+        (issue.identifier, issue.title)
     } else {
-        let issues = linear.list_issues()?;
+        let issues = provider.list_issues()?;
         if issues.is_empty() {
             bail!("No issues found");
         }
 
-        let items: Vec<String> = issues
-            .iter()
-            .map(|i| {
-                let assignee = i
-                    .assignee
-                    .as_ref()
-                    .map(|a| a.display_name.as_str())
-                    .unwrap_or("-");
-                format!("{} {} [{}]", i.identifier, i.title, assignee)
-            })
-            .collect();
-
+        let items: Vec<String> = issues.iter().map(|i| i.display.clone()).collect();
         let idx = ctx.ui.select("Select an issue", &items)?;
         let selected = &issues[idx];
-        let issue = linear.get_issue(&selected.identifier)?;
-        let branch = issue.branch_name.ok_or_else(|| WtError::NoBranchName {
-            identifier: selected.identifier.clone(),
-        })?;
-        (issue.identifier, issue.title, branch)
+        (selected.identifier.clone(), selected.title.clone())
     };
 
     ctx.ui.print_step(&format!("{identifier}: {title}"));
+
+    // Resolve base for ensure_branch
+    let base_mode = BaseMode::from_raw(base_raw);
+    let base_for_ensure = match &base_mode {
+        BaseMode::Explicit(b) => Some(b.as_str()),
+        _ => None,
+    };
+
+    // Ensure branch exists (provider-specific: Linear reads, GH may create)
+    let raw_id = identifier.trim_start_matches('#');
+    let branch_name = provider.ensure_branch(raw_id, base_for_ensure)?;
 
     if parallel {
         return run_parallel(ctx, &identifier, &title, &branch_name, base_raw);
@@ -115,11 +110,9 @@ pub fn run(
     git.fetch()?;
     let create_type = create_worktree(ctx, &git, &branch_name, &names.path, base_raw)?;
 
-    // 5. Update Linear status for new branches
+    // 5. Update issue status for new branches
     if create_type == CreateType::New {
-        ctx.ui
-            .print_step("Updating Linear issue status: In Progress");
-        if let Err(e) = linear.update_status(&identifier, "In Progress") {
+        if let Err(e) = provider.on_start(raw_id) {
             ctx.ui
                 .print_warning(&format!("Failed to update issue status: {e}"));
         }
@@ -231,6 +224,28 @@ fn run_parallel(
     Ok(())
 }
 
+pub fn build_provider<'a>(ctx: &'a Ctx) -> Result<Box<dyn IssueProvider + 'a>> {
+    let issues_config = ctx
+        .config
+        .issues
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!(
+            "No [issues] section in .wt.toml. Set provider = \"linear\" or \"github\""
+        ))?;
+    match issues_config.provider {
+        IssueProviderType::Linear => Ok(Box::new(
+            LinearIssueProvider::new(ctx.runner.as_ref(), Some(&ctx.repo_root)),
+        )),
+        IssueProviderType::Github => Ok(Box::new(
+            GithubIssueProvider::new(
+                ctx.runner.as_ref(),
+                Some(&ctx.repo_root),
+                issues_config.gh_user.clone(),
+            ),
+        )),
+    }
+}
+
 fn create_worktree(
     ctx: &Ctx,
     git: &GitService,
@@ -293,12 +308,21 @@ fn create_worktree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, IssuesConfig, IssueProviderType};
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
     use anyhow::Result;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+
+    fn linear_config() -> Config {
+        let mut config = Config::default();
+        config.issues = Some(IssuesConfig {
+            provider: IssueProviderType::Linear,
+            gh_user: None,
+        });
+        config
+    }
 
     struct SharedRunner {
         inner: Arc<MockRunner>,
@@ -322,7 +346,12 @@ mod tests {
     #[test]
     fn issue_with_number_fetches_and_resolves() {
         let mut runner = MockRunner::new();
-        // get_issue
+        // get_issue (provider.get_issue)
+        runner.add_response(
+            r#"{"identifier":"TECH-680","title":"C11S09. 위키 에디터","branchName":"hoetaek/tech-680-c11s09"}"#,
+            true,
+        );
+        // get_issue (provider.ensure_branch internally calls get_issue again)
         runner.add_response(
             r#"{"identifier":"TECH-680","title":"C11S09. 위키 에디터","branchName":"hoetaek/tech-680-c11s09"}"#,
             true,
@@ -342,7 +371,7 @@ mod tests {
         runner.add_response("main", true);
         // worktree_add_new_branch
         runner.add_response("", true);
-        // update_status
+        // on_start (update_status)
         runner.add_response("", true);
 
         let mut ui = MockUi::new();
@@ -351,7 +380,7 @@ mod tests {
         let ctx = Ctx::new(
             PathBuf::from("/tmp/test-repo"),
             PathBuf::from("/tmp/test-repo"),
-            Config::default(),
+            linear_config(),
             Box::new(runner),
             Box::new(ui),
         );
@@ -366,6 +395,12 @@ mod tests {
     #[test]
     fn issue_no_branch_name_returns_error() {
         let mut runner = MockRunner::new();
+        // get_issue (provider.get_issue)
+        runner.add_response(
+            r#"{"identifier":"TECH-100","title":"Test issue","branchName":null}"#,
+            true,
+        );
+        // get_issue (provider.ensure_branch internally calls get_issue again)
         runner.add_response(
             r#"{"identifier":"TECH-100","title":"Test issue","branchName":null}"#,
             true,
@@ -375,7 +410,7 @@ mod tests {
         let ctx = Ctx::new(
             PathBuf::from("/tmp/test-repo"),
             PathBuf::from("/tmp/test-repo"),
-            Config::default(),
+            linear_config(),
             Box::new(runner),
             Box::new(ui),
         );
@@ -388,7 +423,12 @@ mod tests {
     #[test]
     fn issue_local_branch_exists_reuses_it() {
         let mut runner = MockRunner::new();
-        // get_issue
+        // get_issue (provider.get_issue)
+        runner.add_response(
+            r#"{"identifier":"TECH-1","title":"Test","branchName":"hoetaek/tech-1-test"}"#,
+            true,
+        );
+        // get_issue (provider.ensure_branch internally calls get_issue again)
         runner.add_response(
             r#"{"identifier":"TECH-1","title":"Test","branchName":"hoetaek/tech-1-test"}"#,
             true,
@@ -409,7 +449,7 @@ mod tests {
         let ctx = Ctx::new(
             PathBuf::from("/tmp/test-repo"),
             PathBuf::from("/tmp/test-repo"),
-            Config::default(),
+            linear_config(),
             Box::new(runner),
             Box::new(ui),
         );
@@ -433,7 +473,12 @@ mod tests {
         std::fs::create_dir_all(&repo_root).unwrap();
 
         let mut runner = MockRunner::new();
-        // get_issue
+        // get_issue (provider.get_issue)
+        runner.add_response(
+            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"hoetaek/tech-672-nested-worktree-bug"}"#,
+            true,
+        );
+        // get_issue (provider.ensure_branch internally calls get_issue again)
         runner.add_response(
             r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"hoetaek/tech-672-nested-worktree-bug"}"#,
             true,
@@ -453,7 +498,7 @@ mod tests {
         runner.add_response("main", true);
         // worktree_add_new_branch
         runner.add_response("", true);
-        // update_status
+        // on_start (update_status)
         runner.add_response("", true);
 
         let runner = Arc::new(runner);
@@ -464,7 +509,7 @@ mod tests {
         let ctx = Ctx::new(
             repo_root.clone(),
             repo_root,
-            Config::default(),
+            linear_config(),
             Box::new(SharedRunner {
                 inner: Arc::clone(&runner),
             }),
@@ -513,22 +558,35 @@ mod tests {
         std::fs::create_dir_all(&invocation_root).unwrap();
 
         let mut runner = MockRunner::new();
+        // get_issue (provider.get_issue)
         runner.add_response(
             r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"hoetaek/tech-672-nested-worktree-bug"}"#,
             true,
         );
+        // get_issue (provider.ensure_branch internally calls get_issue again)
+        runner.add_response(
+            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"hoetaek/tech-672-nested-worktree-bug"}"#,
+            true,
+        );
+        // checked_out_path (worktree list)
         runner.add_response(
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        // fetch
         runner.add_response("", true);
+        // local_branch_exists
         runner.add_response("", false);
+        // remote_branch_exists
         runner.add_response("", false);
+        // current_branch (for base prompt) — uses invocation_root
         runner.add_response(
             "hoetaek/tech-670-위키-에디터는-문서에-분류x로-분류를-지정할-수-있다",
             true,
         );
+        // worktree_add_new_branch
         runner.add_response("", true);
+        // on_start (update_status)
         runner.add_response("", true);
 
         let runner = Arc::new(runner);
@@ -536,7 +594,7 @@ mod tests {
         let ctx = Ctx::new(
             repo_root,
             invocation_root.clone(),
-            Config::default(),
+            linear_config(),
             Box::new(SharedRunner {
                 inner: Arc::clone(&runner),
             }),
@@ -576,7 +634,12 @@ mod tests {
     #[test]
     fn issue_base_conflict_with_existing_branch() {
         let mut runner = MockRunner::new();
-        // get_issue
+        // get_issue (provider.get_issue)
+        runner.add_response(
+            r#"{"identifier":"TECH-1","title":"Test","branchName":"hoetaek/tech-1-test"}"#,
+            true,
+        );
+        // get_issue (provider.ensure_branch internally calls get_issue again)
         runner.add_response(
             r#"{"identifier":"TECH-1","title":"Test","branchName":"hoetaek/tech-1-test"}"#,
             true,
@@ -595,7 +658,7 @@ mod tests {
         let ctx = Ctx::new(
             PathBuf::from("/tmp/test-repo"),
             PathBuf::from("/tmp/test-repo"),
-            Config::default(),
+            linear_config(),
             Box::new(runner),
             Box::new(ui),
         );
