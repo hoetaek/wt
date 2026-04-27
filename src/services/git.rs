@@ -30,6 +30,33 @@ impl<'a> GitService<'a> {
         Ok(PathBuf::from(out.stdout))
     }
 
+    pub fn canonical_repo_root(&self) -> Result<PathBuf> {
+        let current_root = self.repo_root()?;
+        let git_dir = self.git_dir()?;
+        let git_common_dir = self.git_common_dir()?;
+
+        if git_dir == git_common_dir {
+            return Ok(current_root);
+        }
+
+        git_common_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| {
+                anyhow::anyhow!("git common dir has no parent: {}", git_common_dir.display())
+            })
+    }
+
+    fn git_dir(&self) -> Result<PathBuf> {
+        let out = self.git(&["rev-parse", "--path-format=absolute", "--git-dir"])?;
+        Ok(PathBuf::from(out.stdout))
+    }
+
+    fn git_common_dir(&self) -> Result<PathBuf> {
+        let out = self.git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+        Ok(PathBuf::from(out.stdout))
+    }
+
     pub fn current_branch(&self) -> Result<String> {
         let out = self.git(&["rev-parse", "--abbrev-ref", "HEAD"])?;
         Ok(out.stdout)
@@ -65,21 +92,11 @@ impl<'a> GitService<'a> {
     pub fn set_branch_parent(&self, branch: &str, parent: &str) -> Result<()> {
         if !self.local_branch_exists(parent)? {
             if self.remote_branch_exists(parent)? {
-                self.git(&[
-                    "branch",
-                    "--track",
-                    parent,
-                    &format!("origin/{parent}"),
-                ])?;
+                self.git(&["branch", "--track", parent, &format!("origin/{parent}")])?;
             } else {
                 self.fetch_branch(parent).ok();
                 if self.remote_branch_exists(parent)? {
-                    self.git(&[
-                        "branch",
-                        "--track",
-                        parent,
-                        &format!("origin/{parent}"),
-                    ])?;
+                    self.git(&["branch", "--track", parent, &format!("origin/{parent}")])?;
                 }
             }
         }
@@ -268,6 +285,59 @@ detached
         let git = GitService::new(&runner, None);
         let root = git.repo_root().unwrap();
         assert_eq!(root, PathBuf::from("/home/dev/hapjeong"));
+    }
+
+    #[test]
+    fn canonical_repo_root_returns_primary_worktree_when_called_inside_linked_worktree() {
+        let mut runner = MockRunner::new();
+        runner.add_response("/home/dev/hapjeong/.claude/worktrees/wt-tech-670", true);
+        runner.add_response("/home/dev/hapjeong/.git/worktrees/wt-tech-670", true);
+        runner.add_response("/home/dev/hapjeong/.git", true);
+
+        let cwd = PathBuf::from("/home/dev/hapjeong/.claude/worktrees/wt-tech-670");
+        let git = GitService::new(&runner, Some(cwd.as_path()));
+
+        assert_eq!(
+            git.canonical_repo_root().unwrap(),
+            PathBuf::from("/home/dev/hapjeong")
+        );
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["rev-parse", "--show-toplevel"]);
+        assert_eq!(
+            calls[1].1,
+            vec!["rev-parse", "--path-format=absolute", "--git-dir"]
+        );
+        assert_eq!(
+            calls[2].1,
+            vec!["rev-parse", "--path-format=absolute", "--git-common-dir"]
+        );
+    }
+
+    #[test]
+    fn canonical_repo_root_returns_current_root_for_primary_checkout() {
+        let mut runner = MockRunner::new();
+        runner.add_response("/home/dev/hapjeong", true);
+        runner.add_response("/home/dev/hapjeong/.git", true);
+        runner.add_response("/home/dev/hapjeong/.git", true);
+
+        let git = GitService::new(&runner, None);
+
+        assert_eq!(
+            git.canonical_repo_root().unwrap(),
+            PathBuf::from("/home/dev/hapjeong")
+        );
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["rev-parse", "--show-toplevel"]);
+        assert_eq!(
+            calls[1].1,
+            vec!["rev-parse", "--path-format=absolute", "--git-dir"]
+        );
+        assert_eq!(
+            calls[2].1,
+            vec!["rev-parse", "--path-format=absolute", "--git-common-dir"]
+        );
     }
 
     #[test]

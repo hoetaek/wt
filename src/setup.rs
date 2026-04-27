@@ -56,7 +56,13 @@ pub fn run_setup(
         .unwrap_or_default();
     let ws_handle = open_workspace(ctx, wt_path, names, &ws_color)?;
 
-    inject_claude_local_context(ctx, wt_path, names, site_name.as_deref(), ws_handle.as_deref())?;
+    inject_claude_local_context(
+        ctx,
+        wt_path,
+        names,
+        site_name.as_deref(),
+        ws_handle.as_deref(),
+    )?;
 
     install_deps(ctx, wt_path)?;
 
@@ -616,7 +622,10 @@ mod tests {
         let dest = wt.join(".config/tool.toml");
         assert!(dest.exists());
         assert_eq!(fs::read_to_string(&dest).unwrap(), "name = \"wt\"\n");
-        assert_eq!(fs::read_link(&dest).unwrap(), fs::canonicalize(repo.join(".config/tool.toml")).unwrap());
+        assert_eq!(
+            fs::read_link(&dest).unwrap(),
+            fs::canonicalize(repo.join(".config/tool.toml")).unwrap()
+        );
 
         fs::remove_dir_all(&repo).ok();
         fs::remove_dir_all(&wt).ok();
@@ -726,9 +735,9 @@ mod tests {
 
         let vars = build_template_vars(&ctx, &names, None);
         assert_eq!(vars.get("repo").unwrap(), "repo");
-        assert!(vars.get("issue_title").is_none());
-        assert!(vars.get("site_name").is_none());
-        assert!(vars.get("tech_id").is_none());
+        assert!(!vars.contains_key("issue_title"));
+        assert!(!vars.contains_key("site_name"));
+        assert!(!vars.contains_key("tech_id"));
     }
 
     #[test]
@@ -817,7 +826,7 @@ mod tests {
         let send_calls: Vec<_> = calls
             .iter()
             .filter(|(cmd, _)| cmd == "cmux" && !cmd.is_empty())
-            .filter(|(_, args)| args.first().map_or(false, |a| a == "send"))
+            .filter(|(_, args)| args.first().is_some_and(|a| a == "send"))
             .collect();
         assert_eq!(send_calls.len(), 2);
         assert_eq!(send_calls[0].1.last().unwrap(), "/conventional-review 42\n");
@@ -919,7 +928,14 @@ mod tests {
             site: Some("hapjeong-tech-680".into()),
         };
 
-        inject_claude_local_context(&ctx, &dir, &names, Some("hapjeong-tech-680"), Some("workspace:3")).unwrap();
+        inject_claude_local_context(
+            &ctx,
+            &dir,
+            &names,
+            Some("hapjeong-tech-680"),
+            Some("workspace:3"),
+        )
+        .unwrap();
 
         let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
         assert!(result.starts_with("# Existing content\n"));

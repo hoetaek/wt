@@ -184,6 +184,19 @@ mod tests {
     }
 
     #[test]
+    fn site_name_uses_canonical_repo_prefix_for_nested_worktree_branch() {
+        let names = WorktreeNames::new(
+            "hoetaek/tech-672-nested-worktree-bug",
+            Path::new("hapjeong"),
+            "hapjeong",
+            None,
+            Some("{{repo}}-{{tech_id}}"),
+        );
+
+        assert_eq!(names.site.as_deref(), Some("hapjeong-tech-672"));
+    }
+
+    #[test]
     fn new_without_herd_config() {
         let names = WorktreeNames::new(
             "hoetaek/my-feature",

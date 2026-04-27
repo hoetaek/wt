@@ -25,7 +25,7 @@ fn try_main() -> Result<()> {
     let runner = RealRunner;
 
     let git = GitService::new(&runner, None);
-    let repo_root = git.repo_root()?;
+    let repo_root = git.canonical_repo_root()?;
 
     let config = Config::load(&repo_root)?;
 

@@ -224,6 +224,8 @@ pub mod mock {
 mod tests {
     use super::mock::*;
     use super::*;
+    use assert_fs::TempDir;
+    use std::fs;
 
     #[test]
     fn mock_runner_records_calls_and_returns_responses() {
@@ -259,6 +261,24 @@ mod tests {
         let items = vec!["a".into(), "b".into(), "c".into()];
         assert_eq!(ui.select("pick", &items).unwrap(), 2);
         assert!(ui.confirm("ok?", false).unwrap());
+    }
+
+    #[test]
+    fn derives_repo_name_from_canonical_root() {
+        let temp = TempDir::new().unwrap();
+        let repo_root = temp.path().join("hapjeong");
+        fs::create_dir(&repo_root).unwrap();
+
+        let ctx = Ctx::new(
+            repo_root.clone(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        assert_eq!(ctx.repo_root, repo_root);
+        assert_eq!(ctx.repo_name, "hapjeong");
+        assert_eq!(ctx.parent_dir, temp.path());
     }
 
     #[test]

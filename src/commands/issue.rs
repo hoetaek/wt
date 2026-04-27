@@ -28,7 +28,9 @@ pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<
         let items: Vec<String> = issues
             .iter()
             .map(|i| {
-                let assignee = i.assignee.as_ref()
+                let assignee = i
+                    .assignee
+                    .as_ref()
                     .map(|a| a.display_name.as_str())
                     .unwrap_or("-");
                 format!("{} {} [{}]", i.identifier, i.title, assignee)
@@ -183,9 +185,30 @@ fn create_worktree(
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
-    use std::path::PathBuf;
+    use crate::context::{CommandRunner, Ctx};
+    use anyhow::Result;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    struct SharedRunner {
+        inner: Arc<MockRunner>,
+    }
+
+    impl CommandRunner for SharedRunner {
+        fn run(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            cwd: Option<&Path>,
+        ) -> Result<crate::context::CmdOutput> {
+            self.inner.run(cmd, args, cwd)
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            self.inner.has_command(cmd)
+        }
+    }
 
     #[test]
     fn issue_with_number_fetches_and_resolves() {
@@ -281,6 +304,84 @@ mod tests {
 
         let result = run(&ctx, Some(1), &None);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn issue_uses_canonical_repo_name_when_invoked_from_worktree() {
+        let unique = format!(
+            "wt-issue-canonical-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let temp = std::env::temp_dir().join(unique);
+        let repo_root = temp.join("hapjeong");
+        std::fs::create_dir_all(&repo_root).unwrap();
+
+        let mut runner = MockRunner::new();
+        // get_issue
+        runner.add_response(
+            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"hoetaek/tech-672-nested-worktree-bug"}"#,
+            true,
+        );
+        // checked_out_path (worktree list — no branch match)
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        // fetch
+        runner.add_response("", true);
+        // local_branch_exists
+        runner.add_response("", false);
+        // remote_branch_exists
+        runner.add_response("", false);
+        // current_branch (for base prompt)
+        runner.add_response("main", true);
+        // worktree_add_new_branch
+        runner.add_response("", true);
+        // update_status
+        runner.add_response("", true);
+
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_input("main");
+
+        let ctx = Ctx::new(
+            repo_root,
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        let result = run(&ctx, Some(672), &None);
+        assert!(result.is_ok());
+
+        let calls = runner.calls.lock().unwrap();
+        let worktree_add_call = calls
+            .iter()
+            .find(|(cmd, args)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .expect("expected git worktree add -b call");
+
+        assert_eq!(
+            worktree_add_call.1[4],
+            temp.join("hapjeong-hoetaek-tech-672-nested-worktree-bug")
+                .to_string_lossy()
+                .as_ref()
+        );
+        assert!(!worktree_add_call.1[4].contains("hapjeong-tech-670-feature-hoetaek-tech-672"));
+
+        std::fs::remove_dir_all(&temp).ok();
     }
 
     #[test]

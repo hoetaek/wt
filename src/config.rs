@@ -133,10 +133,19 @@ commands = [
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
 
-        assert_eq!(config.worktree.copy, vec![".env", "CLAUDE.local.md", ".claude/settings.local.json"]);
+        assert_eq!(
+            config.worktree.copy,
+            vec![".env", "CLAUDE.local.md", ".claude/settings.local.json"]
+        );
         assert_eq!(config.worktree.link, vec![".local"]);
         assert!(config.worktree.claude_local_context.is_some());
-        assert!(config.worktree.claude_local_context.unwrap().contains("{{parent_branch}}"));
+        assert!(
+            config
+                .worktree
+                .claude_local_context
+                .unwrap()
+                .contains("{{parent_branch}}")
+        );
         assert_eq!(config.setup.deps.len(), 2);
         assert_eq!(config.setup.deps[0].run, "composer install");
         assert_eq!(
@@ -280,7 +289,7 @@ pr = ["/conventional-review {{pr_number}}\n", "/codex:review --background\n"]
             post.send.get("pr").unwrap()[1],
             "/codex:review --background\n"
         );
-        assert!(post.send.get("new").is_none());
+        assert!(!post.send.contains_key("new"));
         assert_eq!(post.timeout, Some(10));
     }
 
