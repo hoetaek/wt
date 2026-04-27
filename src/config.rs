@@ -10,6 +10,7 @@ pub struct Config {
     pub herd: Option<HerdConfig>,
     pub workspace: Option<WorkspaceConfig>,
     pub test: Option<TestConfig>,
+    pub issues: Option<IssuesConfig>,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -79,6 +80,19 @@ pub struct TestCommand {
     pub run: String,
     pub if_exists: Option<String>,
     pub label: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct IssuesConfig {
+    pub provider: IssueProviderType,
+    pub gh_user: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum IssueProviderType {
+    Linear,
+    Github,
 }
 
 impl Config {
@@ -381,5 +395,40 @@ open_browser = true
         let config: Config = toml::from_str(toml_str).unwrap();
         let herd = config.herd.unwrap();
         assert_eq!(herd.open_browser, Some(true));
+    }
+
+    #[test]
+    fn parses_issues_config_github() {
+        let toml_str = r#"
+[issues]
+provider = "github"
+gh_user = "hoetaek"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let issues = config.issues.unwrap();
+        assert_eq!(issues.provider, IssueProviderType::Github);
+        assert_eq!(issues.gh_user.as_deref(), Some("hoetaek"));
+    }
+
+    #[test]
+    fn parses_issues_config_linear() {
+        let toml_str = r#"
+[issues]
+provider = "linear"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let issues = config.issues.unwrap();
+        assert_eq!(issues.provider, IssueProviderType::Linear);
+        assert!(issues.gh_user.is_none());
+    }
+
+    #[test]
+    fn issues_section_optional() {
+        let toml_str = r#"
+[worktree]
+copy = [".env"]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.issues.is_none());
     }
 }
