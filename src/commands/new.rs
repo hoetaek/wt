@@ -1,4 +1,5 @@
 use crate::cli::BaseMode;
+use crate::config::Config;
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::names::WorktreeNames;
@@ -6,7 +7,12 @@ use crate::services::git::GitService;
 use crate::setup;
 use anyhow::{Result, bail};
 
-pub fn run(ctx: &Ctx, name_words: &[String], base_raw: &Option<String>) -> Result<()> {
+pub fn run(
+    ctx: &Ctx,
+    name_words: &[String],
+    base_raw: &Option<String>,
+    parallel: bool,
+) -> Result<()> {
     if name_words.is_empty() {
         bail!("Usage: wt new <branch-name-text>");
     }
@@ -33,6 +39,12 @@ pub fn run(ctx: &Ctx, name_words: &[String], base_raw: &Option<String>) -> Resul
 
     let branch_name = format!("hoetaek/{kebab}");
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+
+    if parallel {
+        let base_mode = BaseMode::from_raw(base_raw);
+        let base = resolve_base_branch(ctx, &git, &base_mode)?;
+        return run_parallel(ctx, &branch_name, &base);
+    }
 
     let names = WorktreeNames::new(
         &branch_name,
@@ -79,8 +91,87 @@ pub fn run(ctx: &Ctx, name_words: &[String], base_raw: &Option<String>) -> Resul
     git.worktree_add_new_branch(&names.path, &branch_name, &base)?;
     git.set_branch_parent(&branch_name, &base).ok();
 
-    setup::run_setup(ctx, &names.path, &names, None, "new", None)?;
+    setup::run_setup(ctx, &names.path, &names, None, "new", None, None)?;
 
+    Ok(())
+}
+
+fn run_parallel(ctx: &Ctx, branch_name: &str, base: &str) -> Result<()> {
+    let variants = Config::load_variants(&ctx.repo_root)?;
+    if variants.is_empty() {
+        bail!("No variant configs found in .local/.wt.*.toml");
+    }
+
+    ctx.ui.print_step(&format!(
+        "Found {} variants: {}",
+        variants.len(),
+        variants
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+
+    for (variant_name, variant_config) in &variants {
+        let variant_branch = format!("{branch_name}-{variant_name}");
+
+        ctx.ui.print_step(&format!("Setting up variant: {variant_name}"));
+
+        let names = WorktreeNames::new(
+            &variant_branch,
+            &ctx.parent_dir,
+            &ctx.repo_name,
+            None,
+            variant_config.herd.as_ref().map(|h| h.site_name.as_str()),
+        );
+
+        if names.path.exists() {
+            ctx.ui
+                .print_warning(&format!("Worktree {} already exists.", names.path.display()));
+            let items = vec!["Delete and recreate".into(), "Skip".into(), "Abort all".into()];
+            let choice = ctx
+                .ui
+                .select(&format!("[{variant_name}] Worktree already exists"), &items)?;
+            match choice {
+                0 => {
+                    ctx.ui.print_step("Removing existing worktree...");
+                    git.worktree_remove_force(&names.path).ok();
+                    if names.path.exists() {
+                        std::fs::remove_dir_all(&names.path)?;
+                    }
+                }
+                1 => continue,
+                _ => return Err(WtError::Cancelled.into()),
+            }
+        }
+
+        if git.local_branch_exists(&variant_branch)? {
+            ctx.ui
+                .print_warning(&format!("Branch {variant_branch} already exists, removing..."));
+            git.worktree_remove_force(&names.path).ok();
+            ctx.runner
+                .run("git", &["branch", "-D", &variant_branch], Some(&ctx.repo_root))
+                .ok();
+        }
+
+        git.worktree_add_new_branch(&names.path, &variant_branch, base)?;
+        git.set_branch_parent(&variant_branch, base).ok();
+
+        setup::run_setup(
+            ctx,
+            &names.path,
+            &names,
+            None,
+            "new",
+            None,
+            Some(variant_config),
+        )?;
+    }
+
+    ctx.ui
+        .print_step(&format!("All {} variants created successfully", variants.len()));
     Ok(())
 }
 
@@ -169,7 +260,7 @@ mod tests {
         let ui = MockUi::new();
         let ctx = make_ctx(runner, ui);
 
-        let result = run(&ctx, &[], &None);
+        let result = run(&ctx, &[], &None, false);
         assert!(result.is_err());
     }
 
@@ -195,7 +286,7 @@ mod tests {
         );
 
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, &None);
+        let result = run(&ctx, &words, &None, false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
 
         let calls = runner.calls.lock().unwrap();
@@ -233,7 +324,7 @@ mod tests {
 
         let ctx = make_ctx(runner, ui);
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, &None);
+        let result = run(&ctx, &words, &None, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }
@@ -249,7 +340,7 @@ mod tests {
         let ui = MockUi::new();
         let ctx = make_ctx(runner, ui);
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, &Some("develop".into()));
+        let result = run(&ctx, &words, &Some("develop".into()), false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
     }
 }

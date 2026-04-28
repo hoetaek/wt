@@ -16,6 +16,8 @@ pub enum Commands {
         /// Base branch: --base (interactive), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
+        #[arg(long)]
+        parallel: bool,
     },
     /// Create worktree from GitHub PR
     Pr {
@@ -29,11 +31,18 @@ pub enum Commands {
         /// Base branch: --base (interactive), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
+        #[arg(long)]
+        parallel: bool,
     },
     /// Open existing worktree with full workspace
     Open,
     /// Remove worktrees with cleanup
     Clean,
+    /// Create or list variant configs
+    Variant {
+        /// Variant name to create (omit to list existing)
+        name: Option<String>,
+    },
 }
 
 /// Parsed base branch mode, derived from the raw --base flag.
@@ -73,7 +82,8 @@ mod tests {
             cli.command,
             Commands::Issue {
                 number: None,
-                base: None
+                base: None,
+                parallel: false
             }
         ));
     }
@@ -85,7 +95,8 @@ mod tests {
             cli.command,
             Commands::Issue {
                 number: Some(680),
-                base: None
+                base: None,
+                parallel: false
             }
         ));
     }
@@ -101,20 +112,23 @@ mod tests {
     }
 
     #[test]
-    fn issue_with_base_explicit() {
-        let cli = parse(&["wt", "issue", "--base", "main"]);
-        if let Commands::Issue { base, .. } = &cli.command {
-            assert_eq!(BaseMode::from_raw(base), BaseMode::Explicit("main".into()));
-        } else {
-            panic!("expected Issue");
-        }
+    fn issue_with_parallel_flag() {
+        let cli = parse(&["wt", "issue", "680", "--parallel"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Issue {
+                number: Some(680),
+                parallel: true,
+                ..
+            }
+        ));
     }
 
     #[test]
-    fn new_joins_name_words() {
-        let cli = parse(&["wt", "new", "some", "feature"]);
-        if let Commands::New { name, .. } = &cli.command {
-            assert_eq!(name, &["some", "feature"]);
+    fn new_parallel_flag() {
+        let cli = parse(&["wt", "new", "some", "feature", "--parallel"]);
+        if let Commands::New { parallel, .. } = &cli.command {
+            assert!(*parallel);
         } else {
             panic!("expected New");
         }

@@ -16,8 +16,15 @@ pub struct Config {
 #[serde(default, deny_unknown_fields)]
 pub struct WorktreeConfig {
     pub copy: Vec<String>,
+    pub copy_as: Vec<CopyAsEntry>,
     pub link: Vec<String>,
     pub claude_local_context: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct CopyAsEntry {
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -91,6 +98,31 @@ impl Config {
         let content = std::fs::read_to_string(&path)?;
         let config: Config = toml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Discover variant configs: .local/.wt.{name}.toml
+    pub fn load_variants(repo_root: &Path) -> anyhow::Result<Vec<(String, Self)>> {
+        let local_dir = repo_root.join(".local");
+        if !local_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let re = regex::Regex::new(r"^\.wt\.(.+)\.toml$").unwrap();
+        let mut variants = Vec::new();
+
+        for entry in std::fs::read_dir(&local_dir)? {
+            let entry = entry?;
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            if let Some(caps) = re.captures(&file_name) {
+                let variant_name = caps[1].to_string();
+                let content = std::fs::read_to_string(entry.path())?;
+                let config: Config = toml::from_str(&content)?;
+                variants.push((variant_name, config));
+            }
+        }
+
+        variants.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(variants)
     }
 }
 
@@ -263,6 +295,52 @@ site_name = "root"
         assert_eq!(config.herd.unwrap().site_name, "root");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_variants_discovers_wt_variant_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_dir = dir.path().join(".local");
+        std::fs::create_dir_all(&local_dir).unwrap();
+
+        std::fs::write(
+            local_dir.join(".wt.baseline.toml"),
+            "[worktree]\ncopy = [\".env\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            local_dir.join(".wt.tdd.toml"),
+            "[worktree]\ncopy = [\".env\", \"CLAUDE.local.md\"]\n",
+        )
+        .unwrap();
+        std::fs::write(local_dir.join(".wt.toml"), "[worktree]\ncopy = []\n").unwrap();
+
+        let variants = Config::load_variants(dir.path()).unwrap();
+        assert_eq!(variants.len(), 2);
+        assert_eq!(variants[0].0, "baseline");
+        assert_eq!(variants[1].0, "tdd");
+        assert_eq!(variants[0].1.worktree.copy, vec![".env".to_string()]);
+        assert_eq!(
+            variants[1].1.worktree.copy,
+            vec![".env".to_string(), "CLAUDE.local.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn load_variants_returns_empty_when_no_local_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let variants = Config::load_variants(dir.path()).unwrap();
+        assert!(variants.is_empty());
+    }
+
+    #[test]
+    fn load_variants_returns_empty_when_no_variant_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_dir = dir.path().join(".local");
+        std::fs::create_dir_all(&local_dir).unwrap();
+        std::fs::write(local_dir.join(".wt.toml"), "[worktree]\n").unwrap();
+        let variants = Config::load_variants(dir.path()).unwrap();
+        assert!(variants.is_empty());
     }
 
     #[test]

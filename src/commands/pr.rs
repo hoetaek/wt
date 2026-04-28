@@ -70,7 +70,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
                 existing.display()
             ));
             git.set_branch_parent(&branch_name, &base_branch).ok();
-            setup::run_setup(ctx, existing, &names, Some(&title), "pr", Some(&extra_vars))?;
+            setup::run_setup(ctx, existing, &names, Some(&title), "pr", Some(&extra_vars), None)?;
             return Ok(());
         }
     }
@@ -104,6 +104,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
                     Some(&title),
                     "pr",
                     Some(&extra_vars),
+                    None,
                 )?;
                 return Ok(());
             }
@@ -136,6 +137,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
         Some(&title),
         "pr",
         Some(&extra_vars),
+        None,
     )?;
 
     Ok(())

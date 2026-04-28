@@ -21,9 +21,12 @@ pub fn run_setup(
     title: Option<&str>,
     mode: &str,
     extra_vars: Option<&HashMap<String, String>>,
+    config_override: Option<&Config>,
 ) -> Result<()> {
-    copy_files(ctx, wt_path)?;
-    link_files(ctx, wt_path)?;
+    let config = config_override.unwrap_or(&ctx.config);
+
+    copy_files(ctx, config, wt_path)?;
+    link_files(ctx, config, wt_path)?;
 
     let mut template_vars = build_template_vars(ctx, names, title);
     if let Some(extra) = extra_vars {
@@ -31,7 +34,7 @@ pub fn run_setup(
     }
     let mut site_name: Option<String> = None;
 
-    if let Some(ref herd_config) = ctx.config.herd {
+    if let Some(ref herd_config) = config.herd {
         let herd = HerdService::new(ctx.runner.as_ref());
         if herd.is_available() {
             let name = template::render(&herd_config.site_name, &template_vars);
@@ -41,32 +44,32 @@ pub fn run_setup(
                 ctx.ui.print_warning(&format!("Herd link failed: {e}"));
             }
 
-            substitute_env(wt_path, &ctx.config, &template_vars)?;
+            substitute_env(wt_path, config, &template_vars)?;
             site_name = Some(name);
         }
     }
 
     // Workspace
-    let ws_color = ctx
-        .config
+    let ws_color = config
         .workspace
         .as_ref()
         .and_then(|ws| ws.colors.get(mode))
         .cloned()
         .unwrap_or_default();
-    let ws_handle = open_workspace(ctx, wt_path, names, &ws_color)?;
+    let ws_handle = open_workspace(ctx, config, wt_path, names, &ws_color)?;
 
     inject_claude_local_context(
         ctx,
+        config,
         wt_path,
         names,
         site_name.as_deref(),
         ws_handle.as_deref(),
     )?;
 
-    install_deps(ctx, wt_path)?;
+    install_deps(ctx, config, wt_path)?;
 
-    if let (Some(handle), Some(ws_config)) = (&ws_handle, &ctx.config.workspace) {
+    if let (Some(handle), Some(ws_config)) = (&ws_handle, &config.workspace) {
         if !ws_config.post_deps_tabs.is_empty() {
             let cmux = CmuxService::new(ctx.runner.as_ref());
             let panes = cmux.list_panes(handle)?;
@@ -82,15 +85,14 @@ pub fn run_setup(
 
     // Open browser after deps (site may need built assets)
     if let Some(ref site) = site_name {
-        if ctx
-            .config
+        if config
             .herd
             .as_ref()
             .and_then(|h| h.open_browser)
             .unwrap_or(false)
         {
             let url = format!("https://{site}.test");
-            let browser = ctx.config.herd.as_ref().and_then(|h| h.browser.as_deref());
+            let browser = config.herd.as_ref().and_then(|h| h.browser.as_deref());
             if let Some(app) = browser {
                 ctx.runner.run("open", &["-a", app, &url], None).ok();
             } else {
@@ -100,21 +102,21 @@ pub fn run_setup(
     }
 
     // post_ready: wait for prompt in first surface, then send mode-specific command
-    if let (Some(handle), Some(ws_config)) = (&ws_handle, &ctx.config.workspace) {
+    if let (Some(handle), Some(ws_config)) = (&ws_handle, &config.workspace) {
         if let Some(ref post) = ws_config.post_ready {
             run_post_ready(ctx, handle, post, mode, &template_vars)?;
         }
     }
 
-    run_background_tests(ctx, wt_path)?;
+    run_background_tests(ctx, config, wt_path)?;
 
     print_summary(ctx, wt_path, names, site_name.as_deref());
 
     Ok(())
 }
 
-fn copy_files(ctx: &Ctx, wt_path: &Path) -> Result<()> {
-    for file in &ctx.config.worktree.copy {
+fn copy_files(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
+    for file in &config.worktree.copy {
         let src = ctx.repo_root.join(file);
         if src.exists() {
             let real_src = fs::canonicalize(&src).unwrap_or(src.clone());
@@ -129,11 +131,26 @@ fn copy_files(ctx: &Ctx, wt_path: &Path) -> Result<()> {
             }
         }
     }
+    for entry in &config.worktree.copy_as {
+        let src = ctx.repo_root.join(&entry.from);
+        if src.exists() {
+            let real_src = fs::canonicalize(&src).unwrap_or(src.clone());
+            let dest = wt_path.join(&entry.to);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            if real_src.is_dir() {
+                copy_dir_recursive(&real_src, &dest)?;
+            } else {
+                fs::copy(&real_src, &dest)?;
+            }
+        }
+    }
     Ok(())
 }
 
-fn link_files(ctx: &Ctx, wt_path: &Path) -> Result<()> {
-    for file in &ctx.config.worktree.link {
+fn link_files(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
+    for file in &config.worktree.link {
         let src = ctx.repo_root.join(file);
         if src.exists() {
             let real_src = fs::canonicalize(&src).unwrap_or(src);
@@ -213,6 +230,7 @@ fn substitute_env(wt_path: &Path, config: &Config, vars: &HashMap<String, String
 
 fn open_workspace(
     ctx: &Ctx,
+    config: &Config,
     wt_path: &Path,
     names: &WorktreeNames,
     color: &str,
@@ -224,7 +242,7 @@ fn open_workspace(
         return Ok(None);
     }
 
-    let ws_config = match &ctx.config.workspace {
+    let ws_config = match &config.workspace {
         Some(ws) => ws,
         None => {
             ctx.ui
@@ -253,9 +271,8 @@ fn open_workspace(
     Ok(Some(ws_handle))
 }
 
-fn install_deps(ctx: &Ctx, wt_path: &Path) -> Result<()> {
-    let applicable: Vec<_> = ctx
-        .config
+fn install_deps(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
+    let applicable: Vec<_> = config
         .setup
         .deps
         .iter()
@@ -436,8 +453,8 @@ fn run_post_ready(
     Ok(())
 }
 
-fn run_background_tests(ctx: &Ctx, wt_path: &Path) -> Result<()> {
-    let test_config = match &ctx.config.test {
+fn run_background_tests(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
+    let test_config = match &config.test {
         Some(tc) => tc,
         None => return Ok(()),
     };
@@ -478,12 +495,13 @@ fn run_background_tests(ctx: &Ctx, wt_path: &Path) -> Result<()> {
 
 fn inject_claude_local_context(
     ctx: &Ctx,
+    config: &Config,
     wt_path: &Path,
     names: &WorktreeNames,
     site_name: Option<&str>,
     ws_handle: Option<&str>,
 ) -> Result<()> {
-    let tmpl = match ctx.config.worktree.claude_local_context {
+    let tmpl = match config.worktree.claude_local_context {
         Some(ref t) => t,
         None => return Ok(()),
     };
@@ -549,7 +567,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        copy_files(&ctx, &wt).unwrap();
+        copy_files(&ctx, &ctx.config, &wt).unwrap();
 
         assert_eq!(
             fs::read_to_string(wt.join(".claude/settings.local.json")).unwrap(),
@@ -583,7 +601,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        copy_files(&ctx, &wt).unwrap();
+        copy_files(&ctx, &ctx.config, &wt).unwrap();
 
         assert_eq!(
             fs::read_to_string(wt.join(".claude/hooks/pre-commit")).unwrap(),
@@ -620,7 +638,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        link_files(&ctx, &wt).unwrap();
+        link_files(&ctx, &ctx.config, &wt).unwrap();
 
         let dest = wt.join(".config/tool.toml");
         assert!(dest.exists());
@@ -938,6 +956,7 @@ mod tests {
 
         inject_claude_local_context(
             &ctx,
+            &ctx.config,
             &dir,
             &names,
             Some("hapjeong-tech-680"),
@@ -979,7 +998,7 @@ mod tests {
             site: None,
         };
 
-        inject_claude_local_context(&ctx, &dir, &names, None, None).unwrap();
+        inject_claude_local_context(&ctx, &ctx.config, &dir, &names, None, None).unwrap();
 
         let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
         assert_eq!(result, "original\n");
@@ -1015,7 +1034,7 @@ mod tests {
             site: None,
         };
 
-        assert!(inject_claude_local_context(&ctx, &dir, &names, None, None).is_ok());
+        assert!(inject_claude_local_context(&ctx, &ctx.config, &dir, &names, None, None).is_ok());
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -1054,7 +1073,7 @@ mod tests {
         };
 
         // No site, no workspace handle, no parent
-        inject_claude_local_context(&ctx, &dir, &names, None, None).unwrap();
+        inject_claude_local_context(&ctx, &ctx.config, &dir, &names, None, None).unwrap();
 
         let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
         // Unknown vars are left as-is by template::render

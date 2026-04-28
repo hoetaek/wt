@@ -1,4 +1,5 @@
 use crate::cli::BaseMode;
+use crate::config::Config;
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::names::WorktreeNames;
@@ -7,7 +8,12 @@ use crate::services::linear::LinearService;
 use crate::setup;
 use anyhow::{Result, bail};
 
-pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<()> {
+pub fn run(
+    ctx: &Ctx,
+    number: Option<u32>,
+    base_raw: &Option<String>,
+    parallel: bool,
+) -> Result<()> {
     let linear = LinearService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
@@ -48,6 +54,10 @@ pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<
 
     ctx.ui.print_step(&format!("{identifier}: {title}"));
 
+    if parallel {
+        return run_parallel(ctx, &identifier, &title, &branch_name, base_raw);
+    }
+
     let names = WorktreeNames::new(
         &branch_name,
         &ctx.parent_dir,
@@ -69,7 +79,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<
                 "Branch already checked out at: {}",
                 existing.display()
             ));
-            setup::run_setup(ctx, existing, &names, Some(&title), "issue", None)?;
+            setup::run_setup(ctx, existing, &names, Some(&title), "issue", None, None)?;
             return Ok(());
         }
     }
@@ -95,8 +105,7 @@ pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<
                 }
             }
             1 => {
-                setup::run_setup(ctx, &names.path, &names, Some(&title), "issue", None)?;
-                return Ok(());
+                setup::run_setup(ctx, &names.path, &names, Some(&title), "issue", None, None)?;
             }
             _ => return Err(WtError::Cancelled.into()),
         }
@@ -117,8 +126,108 @@ pub fn run(ctx: &Ctx, number: Option<u32>, base_raw: &Option<String>) -> Result<
     }
 
     // 6. Setup
-    setup::run_setup(ctx, &names.path, &names, Some(&title), "issue", None)?;
+    setup::run_setup(ctx, &names.path, &names, Some(&title), "issue", None, None)?;
 
+    Ok(())
+}
+
+fn run_parallel(
+    ctx: &Ctx,
+    _identifier: &str,
+    title: &str,
+    branch_name: &str,
+    base_raw: &Option<String>,
+) -> Result<()> {
+    let variants = Config::load_variants(&ctx.repo_root)?;
+    if variants.is_empty() {
+        bail!("No variant configs found in .local/.wt.*.toml");
+    }
+
+    ctx.ui.print_step(&format!(
+        "Found {} variants: {}",
+        variants.len(),
+        variants
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+
+    for (variant_name, variant_config) in &variants {
+        let variant_branch = format!("{branch_name}-{variant_name}");
+        let variant_title = format!("{title} [{variant_name}]");
+
+        ctx.ui.print_step(&format!("Setting up variant: {variant_name}"));
+
+        let names = WorktreeNames::new(
+            &variant_branch,
+            &ctx.parent_dir,
+            &ctx.repo_name,
+            Some(&variant_title),
+            variant_config.herd.as_ref().map(|h| h.site_name.as_str()),
+        );
+
+        if names.path.exists() {
+            ctx.ui
+                .print_warning(&format!("Worktree {} already exists.", names.path.display()));
+            let items = vec!["Delete and recreate".into(), "Skip".into(), "Abort all".into()];
+            let choice = ctx
+                .ui
+                .select(&format!("[{variant_name}] Worktree already exists"), &items)?;
+            match choice {
+                0 => {
+                    ctx.ui.print_step("Removing existing worktree...");
+                    git.worktree_remove_force(&names.path).ok();
+                    if names.path.exists() {
+                        std::fs::remove_dir_all(&names.path)?;
+                    }
+                }
+                1 => continue,
+                _ => return Err(WtError::Cancelled.into()),
+            }
+        }
+
+        let base_mode = BaseMode::from_raw(base_raw);
+        let base = match &base_mode {
+            BaseMode::Explicit(b) => b.clone(),
+            BaseMode::Interactive => {
+                let branches = git.list_local_branches()?;
+                let idx = ctx.ui.select("Select base branch", &branches)?;
+                branches[idx].clone()
+            }
+            BaseMode::Default => {
+                let current = git.current_branch()?;
+                ctx.ui.input("Base branch", Some(&current))?
+            }
+        };
+
+        if git.local_branch_exists(&variant_branch)? {
+            ctx.ui
+                .print_warning(&format!("Branch {variant_branch} already exists, removing..."));
+            git.worktree_remove_force(&names.path).ok();
+            ctx.runner
+                .run("git", &["branch", "-D", &variant_branch], Some(&ctx.repo_root))
+                .ok();
+        }
+
+        git.worktree_add_new_branch(&names.path, &variant_branch, &base)?;
+        git.set_branch_parent(&variant_branch, &base).ok();
+
+        setup::run_setup(
+            ctx,
+            &names.path,
+            &names,
+            Some(&variant_title),
+            "issue",
+            None,
+            Some(variant_config),
+        )?;
+    }
+
+    ctx.ui
+        .print_step(&format!("All {} variants created successfully", variants.len()));
     Ok(())
 }
 
@@ -248,7 +357,7 @@ mod tests {
         );
 
         // This will fail at setup (no real filesystem) but proves the flow up to worktree creation
-        let result = run(&ctx, Some(680), &None);
+        let result = run(&ctx, Some(680), &None, false);
         // We expect it to get past issue resolution and worktree creation
         // It may fail at setup::run_setup due to filesystem ops — that's OK for unit test
         assert!(result.is_ok() || result.unwrap_err().to_string().contains("setup"));
@@ -271,7 +380,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some(100), &None);
+        let result = run(&ctx, Some(100), &None, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No branch name"));
     }
@@ -305,7 +414,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some(1), &None);
+        let result = run(&ctx, Some(1), &None, false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
     }
 
@@ -362,7 +471,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some(672), &None);
+        let result = run(&ctx, Some(672), &None, false);
         assert!(result.is_ok());
 
         let calls = runner.calls.lock().unwrap();
@@ -434,7 +543,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some(672), &None);
+        let result = run(&ctx, Some(672), &None, false);
         assert!(result.is_ok());
 
         let calls = runner.calls.lock().unwrap();
@@ -491,7 +600,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some(1), &Some("main".into()));
+        let result = run(&ctx, Some(1), &Some("main".into()), false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }

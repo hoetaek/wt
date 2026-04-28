@@ -16,10 +16,19 @@ use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
     match command {
-        Commands::Issue { number, base } => commands::issue::run(ctx, *number, base),
+        Commands::Issue {
+            number,
+            base,
+            parallel,
+        } => commands::issue::run(ctx, *number, base, *parallel),
         Commands::Pr { number } => commands::pr::run(ctx, *number),
-        Commands::New { name, base } => commands::new::run(ctx, name, base),
+        Commands::New {
+            name,
+            base,
+            parallel,
+        } => commands::new::run(ctx, name, base, *parallel),
         Commands::Open => commands::open::run(ctx),
         Commands::Clean => commands::clean::run(ctx),
+        Commands::Variant { name } => commands::variant::run(ctx, name.as_deref()),
     }
 }
