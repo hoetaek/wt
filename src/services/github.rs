@@ -36,7 +36,8 @@ impl<'a> GithubService<'a> {
             self.cwd,
         )?;
         if !out.success {
-            bail!("Failed to fetch PR #{number}");
+            let detail = if out.stderr.is_empty() { &out.stdout } else { &out.stderr };
+            bail!("Failed to fetch PR #{number}: {detail}");
         }
         let pr: PullRequest = serde_json::from_str(&out.stdout)?;
         Ok(pr)
@@ -54,7 +55,8 @@ impl<'a> GithubService<'a> {
             self.cwd,
         )?;
         if !out.success {
-            bail!("Failed to fetch PR list");
+            let detail = if out.stderr.is_empty() { &out.stdout } else { &out.stderr };
+            bail!("Failed to fetch PR list: {detail}");
         }
         let prs: Vec<PullRequest> = serde_json::from_str(&out.stdout)?;
         Ok(prs)
