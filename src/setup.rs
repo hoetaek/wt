@@ -44,10 +44,12 @@ pub fn run_setup(
                 ctx.ui.print_warning(&format!("Herd link failed: {e}"));
             }
 
-            substitute_env(wt_path, config, &template_vars)?;
+            template_vars.insert("site_url".into(), format!("https://{name}.test"));
             site_name = Some(name);
         }
     }
+
+    substitute_env(wt_path, config, &template_vars)?;
 
     // Workspace
     let ws_color = config
@@ -63,7 +65,7 @@ pub fn run_setup(
         config,
         wt_path,
         names,
-        site_name.as_deref(),
+        &template_vars,
         ws_handle.as_deref(),
     )?;
 
@@ -101,6 +103,8 @@ pub fn run_setup(
         }
     }
 
+    open_workspace_url(ctx, config, &template_vars)?;
+
     // post_ready: wait for prompt in first surface, then send mode-specific command
     if let (Some(handle), Some(ws_config)) = (&ws_handle, &config.workspace) {
         if let Some(ref post) = ws_config.post_ready {
@@ -110,7 +114,7 @@ pub fn run_setup(
 
     run_background_tests(ctx, config, wt_path)?;
 
-    print_summary(ctx, wt_path, names, site_name.as_deref());
+    print_summary(ctx, wt_path, names, site_name.as_deref(), &template_vars);
 
     Ok(())
 }
@@ -179,7 +183,7 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-fn build_template_vars(
+pub(crate) fn build_template_vars(
     ctx: &Ctx,
     names: &WorktreeNames,
     title: Option<&str>,
@@ -199,32 +203,101 @@ fn build_template_vars(
     let mut hasher = std::hash::DefaultHasher::new();
     names.branch.hash(&mut hasher);
     let port = 5001 + (hasher.finish() % 4999) as u32;
+    let api_port = port + 10000;
     vars.insert("vite_port".into(), port.to_string());
+    vars.insert("api_port".into(), api_port.to_string());
+    vars.insert("site_url".into(), format!("http://127.0.0.1:{port}"));
+    vars.insert("api_url".into(), format!("http://127.0.0.1:{api_port}"));
     vars
 }
 
 fn substitute_env(wt_path: &Path, config: &Config, vars: &HashMap<String, String>) -> Result<()> {
-    let env_path = wt_path.join(".env");
-    if !env_path.exists() || config.setup.env.is_empty() {
+    if config.setup.env.is_empty() {
         return Ok(());
     }
 
-    let content = fs::read_to_string(&env_path)?;
-    let mut lines: Vec<String> = content.lines().map(String::from).collect();
+    let env_paths = collect_env_files(wt_path)?;
+    if env_paths.is_empty() {
+        return Ok(());
+    }
 
+    let root_env = wt_path.join(".env");
     for (key, template_val) in &config.setup.env {
-        let rendered = template::render(template_val, vars);
-        lines.retain(|l| !l.starts_with(&format!("{key}=")));
-        // Quote values that contain spaces or special chars
-        if rendered.contains(' ') || rendered.contains('"') || rendered.contains('\'') {
-            let escaped = rendered.replace('"', "\\\"");
-            lines.push(format!("{key}=\"{escaped}\""));
-        } else {
-            lines.push(format!("{key}={rendered}"));
+        let mut targets = Vec::new();
+        for env_path in &env_paths {
+            if env_file_has_key(env_path, key)? {
+                targets.push(env_path.clone());
+            }
+        }
+
+        if targets.is_empty() && root_env.exists() {
+            targets.push(root_env.clone());
+        }
+
+        for env_path in targets {
+            substitute_env_key(&env_path, key, template_val, vars)?;
         }
     }
 
+    Ok(())
+}
+
+fn env_file_has_key(env_path: &Path, key: &str) -> Result<bool> {
+    let content = fs::read_to_string(env_path)?;
+    Ok(content
+        .lines()
+        .any(|line| line.starts_with(&format!("{key}="))))
+}
+
+fn substitute_env_key(
+    env_path: &Path,
+    key: &str,
+    template_val: &str,
+    vars: &HashMap<String, String>,
+) -> Result<()> {
+    let content = fs::read_to_string(&env_path)?;
+    let mut lines: Vec<String> = content.lines().map(String::from).collect();
+
+    let rendered = template::render(template_val, vars);
+    lines.retain(|l| !l.starts_with(&format!("{key}=")));
+    // Quote values that contain spaces or special chars
+    if rendered.contains(' ') || rendered.contains('"') || rendered.contains('\'') {
+        let escaped = rendered.replace('"', "\\\"");
+        lines.push(format!("{key}=\"{escaped}\""));
+    } else {
+        lines.push(format!("{key}={rendered}"));
+    }
+
     fs::write(&env_path, lines.join("\n") + "\n")?;
+    Ok(())
+}
+
+fn collect_env_files(wt_path: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let mut paths = Vec::new();
+    collect_env_files_inner(wt_path, &mut paths)?;
+    paths.sort();
+    Ok(paths)
+}
+
+fn collect_env_files_inner(dir: &Path, paths: &mut Vec<std::path::PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+
+        if path.is_dir() {
+            if matches!(
+                file_name.as_ref(),
+                ".git" | "node_modules" | ".venv" | "venv" | "target"
+            ) {
+                continue;
+            }
+            collect_env_files_inner(&path, paths)?;
+        } else if file_name == ".env" || file_name.starts_with(".env.") {
+            paths.push(path);
+        }
+    }
     Ok(())
 }
 
@@ -372,6 +445,7 @@ fn run_post_ready(
 
     let cmux = CmuxService::new(ctx.runner.as_ref());
     let timeout_secs = post.timeout.unwrap_or(15);
+    let send_after_secs = post.send_after.unwrap_or(2);
 
     // Find the target surface
     let panes = cmux.list_panes(ws_handle)?;
@@ -395,6 +469,17 @@ fn run_post_ready(
 
     for (i, cmd_template) in commands.iter().enumerate() {
         let rendered = template::render(cmd_template, vars);
+
+        if post.wait_for.is_empty() {
+            ctx.ui.print_step(&format!(
+                "Waiting {send_after_secs}s before post-ready command..."
+            ));
+            std::thread::sleep(std::time::Duration::from_secs(send_after_secs));
+            cmux.send(&surface, ws_handle, &rendered)?;
+            ctx.ui
+                .print_step(&format!("Command {}/{} sent", i + 1, commands.len()));
+            continue;
+        }
 
         ctx.ui.print_step(&format!(
             "Waiting for '{}' ({}s timeout)...",
@@ -453,6 +538,33 @@ fn run_post_ready(
     Ok(())
 }
 
+pub(crate) fn open_workspace_url(
+    ctx: &Ctx,
+    config: &Config,
+    vars: &HashMap<String, String>,
+) -> Result<()> {
+    let ws = match &config.workspace {
+        Some(ws) => ws,
+        None => return Ok(()),
+    };
+    if !ws.open_browser.unwrap_or(true) {
+        return Ok(());
+    }
+    let url_template = match ws.open_url.as_deref() {
+        Some(url) if !url.is_empty() => url,
+        _ => return Ok(()),
+    };
+
+    let url = template::render(url_template, vars);
+    if let Some(browser) = ws.browser.as_deref() {
+        ctx.runner.run("open", &["-a", browser, &url], None).ok();
+    } else {
+        ctx.runner.run("open", &[&url], None).ok();
+    }
+
+    Ok(())
+}
+
 fn run_background_tests(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
     let test_config = match &config.test {
         Some(tc) => tc,
@@ -498,7 +610,7 @@ fn inject_claude_local_context(
     config: &Config,
     wt_path: &Path,
     names: &WorktreeNames,
-    site_name: Option<&str>,
+    template_vars: &HashMap<String, String>,
     ws_handle: Option<&str>,
 ) -> Result<()> {
     let tmpl = match config.worktree.claude_local_context {
@@ -514,12 +626,9 @@ fn inject_claude_local_context(
     let git = GitService::new(ctx.runner.as_ref(), Some(wt_path));
     let parent = git.get_branch_parent(&names.branch).unwrap_or(None);
 
-    let mut vars = HashMap::new();
+    let mut vars = template_vars.clone();
     if let Some(p) = parent {
         vars.insert("parent_branch".into(), p);
-    }
-    if let Some(site) = site_name {
-        vars.insert("site_url".into(), format!("https://{site}.test"));
     }
     if let Some(ws) = ws_handle {
         vars.insert("workspace".into(), ws.into());
@@ -533,11 +642,23 @@ fn inject_claude_local_context(
     Ok(())
 }
 
-fn print_summary(ctx: &Ctx, wt_path: &Path, _names: &WorktreeNames, site_name: Option<&str>) {
+fn print_summary(
+    ctx: &Ctx,
+    wt_path: &Path,
+    _names: &WorktreeNames,
+    site_name: Option<&str>,
+    vars: &HashMap<String, String>,
+) {
     ctx.ui.print_step("Done!");
     ctx.ui.print_step(&format!("  Path: {}", wt_path.display()));
+    if let Some(url) = vars.get("site_url") {
+        ctx.ui.print_step(&format!("  UI: {url}"));
+    }
+    if let Some(url) = vars.get("api_url") {
+        ctx.ui.print_step(&format!("  API: {url}"));
+    }
     if let Some(site) = site_name {
-        ctx.ui.print_step(&format!("  Site: https://{site}.test"));
+        ctx.ui.print_step(&format!("  Herd: https://{site}.test"));
     }
 }
 
@@ -547,8 +668,8 @@ mod tests {
 
     #[test]
     fn copy_files_copies_nested_file_into_parent_dirs() {
-        use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
 
         let repo = std::env::temp_dir().join("wt-test-copy-nested-file-repo");
         let wt = std::env::temp_dir().join("wt-test-copy-nested-file-worktree");
@@ -580,8 +701,8 @@ mod tests {
 
     #[test]
     fn copy_files_copies_directories_recursively() {
-        use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
 
         let repo = std::env::temp_dir().join("wt-test-copy-dir-repo");
         let wt = std::env::temp_dir().join("wt-test-copy-dir-worktree");
@@ -618,8 +739,8 @@ mod tests {
 
     #[test]
     fn link_files_creates_parent_dirs_for_nested_destinations() {
-        use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
 
         let repo = std::env::temp_dir().join("wt-test-link-nested-repo");
         let wt = std::env::temp_dir().join("wt-test-link-nested-worktree");
@@ -654,8 +775,8 @@ mod tests {
 
     #[test]
     fn build_template_vars_includes_all_fields() {
-        use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
         use std::path::PathBuf;
 
         let names = WorktreeNames {
@@ -677,6 +798,95 @@ mod tests {
         assert_eq!(vars.get("repo").unwrap(), "hapjeong");
         assert_eq!(vars.get("site_name").unwrap(), "hapjeong-tech-680");
         assert_eq!(vars.get("issue_title").unwrap(), "C11S09. 위키 에디터");
+        assert!(vars.contains_key("vite_port"));
+        assert!(vars.contains_key("api_port"));
+        assert_eq!(
+            vars.get("site_url").unwrap(),
+            &format!("http://127.0.0.1:{}", vars.get("vite_port").unwrap())
+        );
+        assert_eq!(
+            vars.get("api_url").unwrap(),
+            &format!("http://127.0.0.1:{}", vars.get("api_port").unwrap())
+        );
+        assert_eq!(
+            vars.get("api_port").unwrap().parse::<u32>().unwrap(),
+            vars.get("vite_port").unwrap().parse::<u32>().unwrap() + 10000
+        );
+    }
+
+    #[test]
+    fn run_setup_opens_workspace_url_without_herd() {
+        use crate::config::{Config, WorkspaceConfig};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let repo = std::env::temp_dir().join("wt-test-open-url-repo");
+        let wt = std::env::temp_dir().join("wt-test-open-url-worktree");
+        fs::create_dir_all(&repo).ok();
+        fs::create_dir_all(&wt).ok();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("pane:0", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let mut config = Config::default();
+        config.workspace = Some(WorkspaceConfig {
+            command: "codex --yolo".into(),
+            open_url: Some("{{site_url}}".into()),
+            open_browser: Some(true),
+            browser: Some("Google Chrome".into()),
+            ..WorkspaceConfig::default()
+        });
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: wt.clone(),
+            branch: "hoetaek/issue-1-test".into(),
+            workspace: "test".into(),
+            site: None,
+        };
+
+        run_setup(&ctx, &wt, &names, Some("GitHub Issue"), "issue", None, None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let open_call = calls
+            .iter()
+            .find(|(cmd, _, _)| cmd == "open")
+            .expect("expected open command");
+        assert_eq!(open_call.1[0], "-a");
+        assert_eq!(open_call.1[1], "Google Chrome");
+        assert!(open_call.1[2].starts_with("http://127.0.0.1:"));
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
     }
 
     #[test]
@@ -712,9 +922,106 @@ mod tests {
     }
 
     #[test]
-    fn build_template_vars_extracts_tech_id_from_branch() {
-        use crate::context::Ctx;
+    fn substitute_env_updates_nested_env_files() {
+        let dir = std::env::temp_dir().join("wt-test-nested-env-sub");
+        fs::create_dir_all(dir.join("istat_front")).ok();
+        fs::create_dir_all(dir.join("istat_back")).ok();
+        fs::write(
+            dir.join("istat_front/.env.development"),
+            "VITE_API_TARGET=http://old\nOTHER=keep\n",
+        )
+        .unwrap();
+        fs::write(dir.join("istat_back/.env"), "DJANGO_ENV=dev\n").unwrap();
+
+        let mut config = Config::default();
+        config
+            .setup
+            .env
+            .insert("VITE_API_TARGET".into(), "http://127.0.0.1:8000".into());
+        config.setup.env.insert("DJANGO_ENV".into(), "dev".into());
+
+        let vars = HashMap::new();
+        substitute_env(&dir, &config, &vars).unwrap();
+
+        let front = fs::read_to_string(dir.join("istat_front/.env.development")).unwrap();
+        let back = fs::read_to_string(dir.join("istat_back/.env")).unwrap();
+        assert!(front.contains("VITE_API_TARGET=http://127.0.0.1:8000"));
+        assert!(front.contains("OTHER=keep"));
+        assert!(!front.contains("DJANGO_ENV="));
+        assert!(back.contains("DJANGO_ENV=dev"));
+        assert!(!back.contains("VITE_API_TARGET="));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn substitute_env_appends_missing_keys_to_root_env_only() {
+        let dir = std::env::temp_dir().join("wt-test-env-append-root");
+        fs::create_dir_all(dir.join("nested")).ok();
+        fs::write(dir.join(".env"), "EXISTING=value\n").unwrap();
+        fs::write(dir.join("nested/.env"), "NESTED=value\n").unwrap();
+
+        let mut config = Config::default();
+        config
+            .setup
+            .env
+            .insert("NEW_KEY".into(), "new-value".into());
+
+        let vars = HashMap::new();
+        substitute_env(&dir, &config, &vars).unwrap();
+
+        let root = fs::read_to_string(dir.join(".env")).unwrap();
+        let nested = fs::read_to_string(dir.join("nested/.env")).unwrap();
+        assert!(root.contains("NEW_KEY=new-value"));
+        assert!(!nested.contains("NEW_KEY="));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn run_setup_substitutes_env_without_herd() {
         use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
+
+        let repo = std::env::temp_dir().join("wt-test-no-herd-env-repo");
+        let wt = std::env::temp_dir().join("wt-test-no-herd-env-worktree");
+        fs::create_dir_all(&repo).ok();
+        fs::create_dir_all(&wt).ok();
+        fs::write(wt.join(".env"), "APP_NAME=old\n").unwrap();
+
+        let mut config = Config::default();
+        config
+            .setup
+            .env
+            .insert("APP_NAME".into(), "{{issue_title}}".into());
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: wt.clone(),
+            branch: "hoetaek/issue-1-test".into(),
+            workspace: "test".into(),
+            site: None,
+        };
+
+        run_setup(&ctx, &wt, &names, Some("GitHub Issue"), "issue", None, None).unwrap();
+
+        let env = fs::read_to_string(wt.join(".env")).unwrap();
+        assert!(env.contains(r#"APP_NAME="GitHub Issue""#));
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
+    fn build_template_vars_extracts_tech_id_from_branch() {
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
         use std::path::PathBuf;
 
         let names = WorktreeNames {
@@ -738,8 +1045,8 @@ mod tests {
 
     #[test]
     fn build_template_vars_without_title() {
-        use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
         use std::path::PathBuf;
 
         let names = WorktreeNames {
@@ -825,6 +1132,7 @@ mod tests {
             )]),
             surface: None,
             timeout: Some(5),
+            send_after: None,
         };
 
         let vars = HashMap::from([("pr_number".into(), "42".into())]);
@@ -863,8 +1171,8 @@ mod tests {
     #[test]
     fn post_ready_skips_unknown_mode() {
         use crate::config::PostReadyConfig;
-        use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
         use std::path::PathBuf;
 
         let runner = MockRunner::new();
@@ -882,6 +1190,7 @@ mod tests {
             send: HashMap::from([("pr".into(), vec!["/review\n".into()])]),
             surface: None,
             timeout: Some(5),
+            send_after: None,
         };
 
         let vars = HashMap::new();
@@ -921,9 +1230,66 @@ mod tests {
     }
 
     #[test]
-    fn inject_claude_local_context_appends_rendered_template() {
-        use crate::context::Ctx;
+    fn post_ready_sends_without_prompt_when_wait_for_empty() {
+        use crate::config::PostReadyConfig;
         use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let mut runner = MockRunner::new();
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+        let ui = MockUi::new();
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        let post = PostReadyConfig {
+            wait_for: "".into(),
+            send: HashMap::from([("issue".into(), vec!["start\n".into()])]),
+            surface: None,
+            timeout: Some(5),
+            send_after: Some(0),
+        };
+
+        run_post_ready(&ctx, "workspace:1", &post, "issue", &HashMap::new()).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let send_call = calls
+            .iter()
+            .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send"))
+            .expect("expected cmux send call");
+        assert_eq!(send_call.1.last().unwrap(), "start\n");
+    }
+
+    #[test]
+    fn inject_claude_local_context_appends_rendered_template() {
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
         use std::path::PathBuf;
 
         let dir = std::env::temp_dir().join("wt-test-inject-context");
@@ -953,13 +1319,15 @@ mod tests {
             workspace: "feature".into(),
             site: Some("hapjeong-tech-680".into()),
         };
+        let mut vars = build_template_vars(&ctx, &names, Some("feature"));
+        vars.insert("site_url".into(), "https://hapjeong-tech-680.test".into());
 
         inject_claude_local_context(
             &ctx,
             &ctx.config,
             &dir,
             &names,
-            Some("hapjeong-tech-680"),
+            &vars,
             Some("workspace:3"),
         )
         .unwrap();
@@ -975,8 +1343,8 @@ mod tests {
 
     #[test]
     fn inject_claude_local_context_noop_without_config() {
-        use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
         use std::path::PathBuf;
 
         let dir = std::env::temp_dir().join("wt-test-inject-no-config");
@@ -998,7 +1366,8 @@ mod tests {
             site: None,
         };
 
-        inject_claude_local_context(&ctx, &ctx.config, &dir, &names, None, None).unwrap();
+        inject_claude_local_context(&ctx, &ctx.config, &dir, &names, &HashMap::new(), None)
+            .unwrap();
 
         let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
         assert_eq!(result, "original\n");
@@ -1008,8 +1377,8 @@ mod tests {
 
     #[test]
     fn inject_claude_local_context_noop_without_file() {
-        use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
         use std::path::PathBuf;
 
         let dir = std::env::temp_dir().join("wt-test-inject-no-file");
@@ -1034,15 +1403,18 @@ mod tests {
             site: None,
         };
 
-        assert!(inject_claude_local_context(&ctx, &ctx.config, &dir, &names, None, None).is_ok());
+        assert!(
+            inject_claude_local_context(&ctx, &ctx.config, &dir, &names, &HashMap::new(), None)
+                .is_ok()
+        );
 
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn inject_claude_local_context_handles_missing_vars() {
-        use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::Ctx;
         use std::path::PathBuf;
 
         let dir = std::env::temp_dir().join("wt-test-inject-partial");
@@ -1073,7 +1445,8 @@ mod tests {
         };
 
         // No site, no workspace handle, no parent
-        inject_claude_local_context(&ctx, &ctx.config, &dir, &names, None, None).unwrap();
+        inject_claude_local_context(&ctx, &ctx.config, &dir, &names, &HashMap::new(), None)
+            .unwrap();
 
         let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
         // Unknown vars are left as-is by template::render

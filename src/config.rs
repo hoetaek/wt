@@ -58,6 +58,9 @@ pub struct WorkspaceConfig {
     pub post_deps_tabs: Vec<String>,
     pub colors: HashMap<String, String>,
     pub post_ready: Option<PostReadyConfig>,
+    pub open_url: Option<String>,
+    pub open_browser: Option<bool>,
+    pub browser: Option<String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -66,6 +69,7 @@ pub struct PostReadyConfig {
     pub send: HashMap<String, Vec<String>>,
     pub surface: Option<String>,
     pub timeout: Option<u64>,
+    pub send_after: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -171,6 +175,9 @@ command = "claudep"
 tabs = ["lazygit"]
 post_deps_tabs = ["npm run dev"]
 colors = { issue = "Red", pr = "Green" }
+open_url = "{{site_url}}"
+open_browser = true
+browser = "Google Chrome"
 
 [test]
 commands = [
@@ -208,6 +215,9 @@ commands = [
         assert_eq!(ws.tabs, vec!["lazygit"]);
         assert_eq!(ws.post_deps_tabs, vec!["npm run dev"]);
         assert_eq!(ws.colors.get("issue").unwrap(), "Red");
+        assert_eq!(ws.open_url.as_deref(), Some("{{site_url}}"));
+        assert_eq!(ws.open_browser, Some(true));
+        assert_eq!(ws.browser.as_deref(), Some("Google Chrome"));
 
         let test = config.test.unwrap();
         assert_eq!(test.commands[0].label.as_deref(), Some("PHP"));
@@ -367,15 +377,20 @@ tabs = []
 [workspace.post_ready]
 wait_for = "❯"
 timeout = 10
+send_after = 2
 
 [workspace.post_ready.send]
-issue = ["/start\n"]
+issue = ["start 스킬을 사용해서 현재 GitHub 이슈를 읽고 작업 계획을 세운 뒤 바로 시작해줘.\n"]
 pr = ["/conventional-review {{pr_number}}\n", "/codex:review --background\n"]
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         let post = config.workspace.unwrap().post_ready.unwrap();
         assert_eq!(post.wait_for, "❯");
-        assert_eq!(post.send.get("issue").unwrap(), &vec!["/start\n"]);
+        assert_eq!(post.send_after, Some(2));
+        assert_eq!(
+            post.send.get("issue").unwrap(),
+            &vec!["start 스킬을 사용해서 현재 GitHub 이슈를 읽고 작업 계획을 세운 뒤 바로 시작해줘.\n"]
+        );
         assert_eq!(post.send.get("pr").unwrap().len(), 2);
         assert_eq!(
             post.send.get("pr").unwrap()[1],

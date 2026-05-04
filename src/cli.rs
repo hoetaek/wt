@@ -9,9 +9,9 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, PartialEq)]
 pub enum Commands {
-    /// Create worktree from Linear issue
+    /// Create worktree from configured issue provider
     Issue {
-        /// Issue number (e.g. 680 → TECH-680)
+        /// Issue number
         number: Option<u32>,
         /// Base branch: --base (interactive), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]

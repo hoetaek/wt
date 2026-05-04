@@ -1,7 +1,8 @@
-use anyhow::{Result, bail};
 use crate::context::CommandRunner;
 use crate::services::issues::{IssueInfo, IssueListItem, IssueProvider};
+use anyhow::{bail, Result};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::path::Path;
 
 #[derive(Debug, Deserialize)]
@@ -17,8 +18,28 @@ pub struct GithubIssueProvider<'a> {
 }
 
 impl<'a> GithubIssueProvider<'a> {
-    pub fn new(runner: &'a dyn CommandRunner, cwd: Option<&'a Path>, gh_user: Option<String>) -> Self {
-        Self { runner, cwd, gh_user }
+    pub fn new(
+        runner: &'a dyn CommandRunner,
+        cwd: Option<&'a Path>,
+        gh_user: Option<String>,
+    ) -> Self {
+        Self {
+            runner,
+            cwd,
+            gh_user,
+        }
+    }
+
+    fn fetch_issue_list(&self, extra_args: &[&str]) -> Result<Vec<GhIssue>> {
+        let mut args = vec!["issue", "list", "--json", "number,title", "--state", "open"];
+        args.extend_from_slice(extra_args);
+
+        let out = self.runner.run("gh", &args, self.cwd)?;
+        if !out.success {
+            bail!("Failed to fetch issue list");
+        }
+
+        Ok(serde_json::from_str(&out.stdout)?)
     }
 }
 
@@ -34,11 +55,9 @@ impl IssueProvider for GithubIssueProvider<'_> {
         }
         let gh_issue: GhIssue = serde_json::from_str(&out.stdout)?;
 
-        let list_out = self.runner.run(
-            "gh",
-            &["issue", "develop", "--list", id],
-            self.cwd,
-        )?;
+        let list_out = self
+            .runner
+            .run("gh", &["issue", "develop", "--list", id], self.cwd)?;
         let branch_name = list_out
             .stdout
             .lines()
@@ -55,17 +74,25 @@ impl IssueProvider for GithubIssueProvider<'_> {
     }
 
     fn list_issues(&self) -> Result<Vec<IssueListItem>> {
-        let mut args = vec!["issue", "list", "--json", "number,title", "--state", "open"];
-        let gh_user_str;
-        if let Some(ref user) = self.gh_user {
-            gh_user_str = user.clone();
-            args.extend_from_slice(&["-a", &gh_user_str]);
-        }
-        let out = self.runner.run("gh", &args, self.cwd)?;
-        if !out.success {
-            bail!("Failed to fetch issue list");
-        }
-        let issues: Vec<GhIssue> = serde_json::from_str(&out.stdout)?;
+        let issues = if let Some(ref user) = self.gh_user {
+            let mut seen = HashSet::new();
+            let mut combined = Vec::new();
+
+            for issue in self
+                .fetch_issue_list(&["-a", user.as_str()])?
+                .into_iter()
+                .chain(self.fetch_issue_list(&["-A", user.as_str()])?)
+            {
+                if seen.insert(issue.number) {
+                    combined.push(issue);
+                }
+            }
+
+            combined
+        } else {
+            self.fetch_issue_list(&[])?
+        };
+
         Ok(issues
             .into_iter()
             .map(|i| IssueListItem {
@@ -77,11 +104,9 @@ impl IssueProvider for GithubIssueProvider<'_> {
     }
 
     fn ensure_branch(&self, id: &str, base: Option<&str>) -> Result<String> {
-        let list_out = self.runner.run(
-            "gh",
-            &["issue", "develop", "--list", id],
-            self.cwd,
-        )?;
+        let list_out = self
+            .runner
+            .run("gh", &["issue", "develop", "--list", id], self.cwd)?;
         if let Some(branch) = list_out
             .stdout
             .lines()
@@ -155,15 +180,24 @@ mod tests {
             r#"[{"number":1,"title":"Issue 1"},{"number":2,"title":"Issue 2"}]"#,
             true,
         );
+        runner.add_response(
+            r#"[{"number":2,"title":"Issue 2"},{"number":3,"title":"Issue 3"}]"#,
+            true,
+        );
 
         let provider = GithubIssueProvider::new(&runner, None, Some("hoetaek".into()));
         let items = provider.list_issues().unwrap();
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 3);
         assert_eq!(items[0].display, "#1 Issue 1");
+        assert_eq!(items[1].display, "#2 Issue 2");
+        assert_eq!(items[2].display, "#3 Issue 3");
 
         let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
         assert!(calls[0].1.contains(&"-a".to_string()));
         assert!(calls[0].1.contains(&"hoetaek".to_string()));
+        assert!(calls[1].1.contains(&"-A".to_string()));
+        assert!(calls[1].1.contains(&"hoetaek".to_string()));
     }
 
     #[test]
@@ -216,7 +250,10 @@ mod tests {
 
         let calls = runner.calls.lock().unwrap();
         let create_call = &calls[1];
-        assert_eq!(create_call.1, vec!["issue", "develop", "--base", "develop", "42"]);
+        assert_eq!(
+            create_call.1,
+            vec!["issue", "develop", "--base", "develop", "42"]
+        );
     }
 
     #[test]

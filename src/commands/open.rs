@@ -3,6 +3,7 @@ use crate::names::WorktreeNames;
 use crate::services::cmux::CmuxService;
 use crate::services::git::GitService;
 use crate::services::linear::LinearService;
+use crate::{setup, template};
 use anyhow::Result;
 
 pub fn run(ctx: &Ctx) -> Result<()> {
@@ -33,6 +34,7 @@ pub fn run(ctx: &Ctx) -> Result<()> {
         title.as_deref(),
         ctx.config.herd.as_ref().map(|h| h.site_name.as_str()),
     );
+    let template_vars = setup::build_template_vars(ctx, &names, title.as_deref());
 
     // Open workspace
     let cmux = CmuxService::new(ctx.runner.as_ref());
@@ -58,7 +60,14 @@ pub fn run(ctx: &Ctx) -> Result<()> {
                 let surface = cmux.new_surface(pane, &ws_handle)?;
                 cmux.send(&surface, &ws_handle, &format!("{tab_cmd}\n"))?;
             }
+            for tab_cmd in &ws_config.post_deps_tabs {
+                let rendered = template::render(tab_cmd, &template_vars);
+                let surface = cmux.new_surface(pane, &ws_handle)?;
+                cmux.send(&surface, &ws_handle, &format!("{rendered}\n"))?;
+            }
         }
+
+        setup::open_workspace_url(ctx, &ctx.config, &template_vars)?;
     } else {
         ctx.ui
             .print_step(&format!("Worktree path: {}", entry.path.display()));
@@ -157,5 +166,82 @@ mod tests {
         );
 
         assert!(run(&ctx).is_ok());
+    }
+
+    #[test]
+    fn open_starts_post_deps_tabs_and_opens_workspace_url() {
+        use crate::config::{Config, WorkspaceConfig};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            "worktree /tmp/repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/repo-feature\nHEAD def\nbranch refs/heads/hoetaek/feature\n\n",
+            true,
+        );
+        runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:1", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_select(0);
+
+        let mut config = Config::default();
+        config.workspace = Some(WorkspaceConfig {
+            command: "codex --yolo".into(),
+            post_deps_tabs: vec!["echo {{site_url}} {{api_url}}".into()],
+            open_url: Some("{{site_url}}".into()),
+            open_browser: Some(true),
+            ..WorkspaceConfig::default()
+        });
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(&ctx).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let send_call = calls
+            .iter()
+            .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send"))
+            .expect("expected post deps command to be sent");
+        let sent = send_call.1.last().unwrap();
+        assert!(sent.starts_with("echo http://127.0.0.1:"));
+        assert!(!sent.contains("{{site_url}}"));
+        assert!(!sent.contains("{{api_url}}"));
+
+        let open_call = calls
+            .iter()
+            .find(|(cmd, _, _)| cmd == "open")
+            .expect("expected open command");
+        assert!(open_call.1[0].starts_with("http://127.0.0.1:"));
     }
 }

@@ -171,6 +171,15 @@ fn generate_toml(name: &str, base: &Config) -> String {
             if !colors.is_empty() {
                 s.push_str(&format!("colors = {{ {} }}\n", colors.join(", ")));
             }
+            if let Some(ref open_url) = ws.open_url {
+                s.push_str(&format!("open_url = \"{}\"\n", open_url));
+            }
+            if let Some(open_browser) = ws.open_browser {
+                s.push_str(&format!("open_browser = {open_browser}\n"));
+            }
+            if let Some(ref browser) = ws.browser {
+                s.push_str(&format!("browser = \"{}\"\n", browser));
+            }
 
             if let Some(ref post) = ws.post_ready {
                 s.push_str(&format!(
@@ -180,9 +189,12 @@ fn generate_toml(name: &str, base: &Config) -> String {
                 if let Some(timeout) = post.timeout {
                     s.push_str(&format!("timeout = {timeout}\n"));
                 }
+                if let Some(send_after) = post.send_after {
+                    s.push_str(&format!("send_after = {send_after}\n"));
+                }
                 s.push_str("\n[workspace.post_ready.send]\n");
-                s.push_str(&format!("issue = [\"/start\\n\"]\n"));
-                s.push_str(&format!("new = [\"/start\\n\"]\n"));
+                s.push_str("issue = [\"start 스킬을 사용해서 현재 GitHub 이슈를 읽고 작업 계획을 세운 뒤 바로 시작해줘.\\n\"]\n");
+                s.push_str("new = [\"start 스킬을 사용해서 현재 작업 컨텍스트를 확인하고 작업 계획을 세운 뒤 바로 시작해줘.\\n\"]\n");
             }
 
             s
