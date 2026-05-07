@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use crate::config::Config;
+use crate::config::{AgentConfig, Config};
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
 use crate::services::cmux::CmuxService;
@@ -105,11 +105,8 @@ pub fn run_setup(
 
     open_workspace_url(ctx, config, &template_vars)?;
 
-    // post_ready: wait for prompt in first surface, then send mode-specific command
-    if let (Some(handle), Some(ws_config)) = (&ws_handle, &config.workspace) {
-        if let Some(ref post) = ws_config.post_ready {
-            run_post_ready(ctx, handle, post, mode, &template_vars)?;
-        }
+    if let (Some(handle), Some(agent)) = (&ws_handle, &config.agent) {
+        bootstrap_agent(ctx, handle, agent, mode, &template_vars)?;
     }
 
     run_background_tests(ctx, config, wt_path)?;
@@ -327,7 +324,11 @@ fn open_workspace(
     ctx.ui
         .print_step(&format!("Opening cmux workspace: {}", names.workspace));
 
-    let ws_handle = cmux.new_workspace(wt_path, &names.workspace, &ws_config.command)?;
+    let command = match &config.agent {
+        Some(agent) => agent.command_line()?.unwrap_or_default(),
+        None => String::new(),
+    };
+    let ws_handle = cmux.new_workspace(wt_path, &names.workspace, &command)?;
 
     if !color.is_empty() {
         cmux.set_color(&ws_handle, color)?;
@@ -431,71 +432,41 @@ fn install_deps(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn run_post_ready(
+fn bootstrap_agent(
     ctx: &Ctx,
     ws_handle: &str,
-    post: &crate::config::PostReadyConfig,
+    agent: &AgentConfig,
     mode: &str,
     vars: &HashMap<String, String>,
 ) -> Result<()> {
-    let commands = match post.send.get(mode) {
-        Some(cmds) if !cmds.is_empty() => cmds,
+    let prompts = match agent.prompt.get(mode) {
+        Some(prompts) if !prompts.is_empty() => prompts,
         _ => return Ok(()),
     };
 
     let cmux = CmuxService::new(ctx.runner.as_ref());
-    let timeout_secs = post.timeout.unwrap_or(15);
-    let send_after_secs = post.send_after.unwrap_or(2);
-
-    // Find the target surface
     let panes = cmux.list_panes(ws_handle)?;
     let pane = match panes.first() {
-        Some(p) => p,
+        Some(pane) => pane,
         None => return Ok(()),
     };
     let surfaces = cmux.list_pane_surfaces(pane, ws_handle)?;
-    let surface = match post.surface.as_deref() {
-        Some(name) => surfaces
-            .iter()
-            .find(|s| s.contains(name))
-            .cloned()
-            .or_else(|| surfaces.first().cloned()),
-        None => surfaces.first().cloned(),
-    };
-    let surface = match surface {
-        Some(s) => s,
+    let surface = match surfaces.first() {
+        Some(surface) => surface,
         None => return Ok(()),
     };
 
-    for (i, cmd_template) in commands.iter().enumerate() {
-        let rendered = template::render(cmd_template, vars);
+    let ready_marker = agent.effective_ready();
 
-        if post.wait_for.is_empty() {
-            ctx.ui.print_step(&format!(
-                "Waiting {send_after_secs}s before post-ready command..."
-            ));
-            std::thread::sleep(std::time::Duration::from_secs(send_after_secs));
-            cmux.send(&surface, ws_handle, &rendered)?;
-            ctx.ui
-                .print_step(&format!("Command {}/{} sent", i + 1, commands.len()));
-            continue;
-        }
-
-        ctx.ui.print_step(&format!(
-            "Waiting for '{}' ({}s timeout)...",
-            post.wait_for, timeout_secs
-        ));
-
-        let mut sent = false;
-
-        // After sending the previous command, wait for screen to change
-        // before polling for the next prompt (avoids matching stale ❯)
+    for (i, prompt_template) in prompts.iter().enumerate() {
         if i > 0 {
-            let stale_screen = cmux.read_screen(&surface, ws_handle).unwrap_or_default();
+            let stale_screen = cmux.read_screen(surface, ws_handle).unwrap_or_default();
             let mut screen_changed = false;
-            for _ in 0..timeout_secs {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                if let Ok(current) = cmux.read_screen(&surface, ws_handle) {
+            for attempt in 0..agent.timeout {
+                if attempt > 0 {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+                if let Ok(current) = cmux.read_screen(surface, ws_handle) {
                     if current != stale_screen {
                         screen_changed = true;
                         break;
@@ -504,35 +475,54 @@ fn run_post_ready(
             }
             if !screen_changed {
                 ctx.ui.print_warning(&format!(
-                    "Screen unchanged — skipping remaining commands ({}/{})",
+                    "Screen unchanged — skipping remaining prompts ({}/{})",
                     i + 1,
-                    commands.len()
+                    prompts.len()
                 ));
                 return Ok(());
             }
         }
 
-        for _ in 0..timeout_secs {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            if let Ok(screen) = cmux.read_screen(&surface, ws_handle) {
-                if screen.contains(&post.wait_for) {
-                    cmux.send(&surface, ws_handle, &rendered)?;
-                    ctx.ui
-                        .print_step(&format!("Command {}/{} sent", i + 1, commands.len()));
-                    sent = true;
-                    break;
+        if let Some(marker) = &ready_marker {
+            ctx.ui.print_step(&format!(
+                "Waiting for agent ready marker '{}' ({}s timeout)...",
+                marker, agent.timeout
+            ));
+
+            let mut ready = false;
+            for attempt in 0..agent.timeout {
+                if attempt > 0 {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+                if let Ok(screen) = cmux.read_screen(surface, ws_handle) {
+                    if screen.contains(marker) {
+                        ready = true;
+                        break;
+                    }
                 }
             }
+
+            if !ready {
+                ctx.ui.print_warning(&format!(
+                    "Timeout waiting for agent ready marker — skipping remaining prompts ({}/{})",
+                    i + 1,
+                    prompts.len()
+                ));
+                return Ok(());
+            }
+        } else if agent.send_after > 0 {
+            ctx.ui.print_step(&format!(
+                "Waiting {}s before agent prompt...",
+                agent.send_after
+            ));
+            std::thread::sleep(std::time::Duration::from_secs(agent.send_after));
         }
 
-        if !sent {
-            ctx.ui.print_warning(&format!(
-                "Timeout waiting for prompt — skipping remaining commands ({}/{})",
-                i + 1,
-                commands.len()
-            ));
-            return Ok(());
-        }
+        let rendered = template::render(prompt_template, vars);
+        let prompt = agent.apply_submit_suffix(rendered);
+        cmux.send(surface, ws_handle, &prompt)?;
+        ctx.ui
+            .print_step(&format!("Agent prompt {}/{} sent", i + 1, prompts.len()));
     }
 
     Ok(())
@@ -668,8 +658,8 @@ mod tests {
 
     #[test]
     fn copy_files_copies_nested_file_into_parent_dirs() {
-        use crate::context::mock::{MockRunner, MockUi};
         use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
 
         let repo = std::env::temp_dir().join("wt-test-copy-nested-file-repo");
         let wt = std::env::temp_dir().join("wt-test-copy-nested-file-worktree");
@@ -701,8 +691,8 @@ mod tests {
 
     #[test]
     fn copy_files_copies_directories_recursively() {
-        use crate::context::mock::{MockRunner, MockUi};
         use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
 
         let repo = std::env::temp_dir().join("wt-test-copy-dir-repo");
         let wt = std::env::temp_dir().join("wt-test-copy-dir-worktree");
@@ -739,8 +729,8 @@ mod tests {
 
     #[test]
     fn link_files_creates_parent_dirs_for_nested_destinations() {
-        use crate::context::mock::{MockRunner, MockUi};
         use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
 
         let repo = std::env::temp_dir().join("wt-test-link-nested-repo");
         let wt = std::env::temp_dir().join("wt-test-link-nested-worktree");
@@ -775,13 +765,13 @@ mod tests {
 
     #[test]
     fn build_template_vars_includes_all_fields() {
-        use crate::context::mock::{MockRunner, MockUi};
         use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
         use std::path::PathBuf;
 
         let names = WorktreeNames {
-            path: PathBuf::from("/tmp/hapjeong-hoetaek-tech-680"),
-            branch: "hoetaek/tech-680-c11s09-위키".into(),
+            path: PathBuf::from("/tmp/hapjeong-alice-tech-680"),
+            branch: "alice/tech-680-c11s09-위키".into(),
             workspace: "위키 에디터 (C11S09)".into(),
             site: Some("hapjeong-tech-680".into()),
         };
@@ -851,7 +841,6 @@ mod tests {
 
         let mut config = Config::default();
         config.workspace = Some(WorkspaceConfig {
-            command: "codex --yolo".into(),
             open_url: Some("{{site_url}}".into()),
             open_browser: Some(true),
             browser: Some("Google Chrome".into()),
@@ -869,7 +858,7 @@ mod tests {
         );
         let names = WorktreeNames {
             path: wt.clone(),
-            branch: "hoetaek/issue-1-test".into(),
+            branch: "alice/issue-1-test".into(),
             workspace: "test".into(),
             site: None,
         };
@@ -980,8 +969,8 @@ mod tests {
 
     #[test]
     fn run_setup_substitutes_env_without_herd() {
-        use crate::context::mock::{MockRunner, MockUi};
         use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
 
         let repo = std::env::temp_dir().join("wt-test-no-herd-env-repo");
         let wt = std::env::temp_dir().join("wt-test-no-herd-env-worktree");
@@ -1004,7 +993,7 @@ mod tests {
         );
         let names = WorktreeNames {
             path: wt.clone(),
-            branch: "hoetaek/issue-1-test".into(),
+            branch: "alice/issue-1-test".into(),
             workspace: "test".into(),
             site: None,
         };
@@ -1020,13 +1009,13 @@ mod tests {
 
     #[test]
     fn build_template_vars_extracts_tech_id_from_branch() {
-        use crate::context::mock::{MockRunner, MockUi};
         use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
         use std::path::PathBuf;
 
         let names = WorktreeNames {
             path: PathBuf::from("/tmp/repo-feature"),
-            branch: "hoetaek/tech-663-c11s03-test".into(),
+            branch: "alice/tech-663-c11s03-test".into(),
             workspace: "feat: 위키 읽기 페이지".into(),
             site: None,
         };
@@ -1045,13 +1034,13 @@ mod tests {
 
     #[test]
     fn build_template_vars_without_title() {
-        use crate::context::mock::{MockRunner, MockUi};
         use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
         use std::path::PathBuf;
 
         let names = WorktreeNames {
             path: PathBuf::from("/tmp/repo-feature"),
-            branch: "hoetaek/my-feature".into(),
+            branch: "alice/my-feature".into(),
             workspace: "my feature".into(),
             site: None,
         };
@@ -1102,136 +1091,92 @@ mod tests {
     }
 
     #[test]
-    fn post_ready_sends_commands_sequentially() {
-        use crate::config::PostReadyConfig;
-        use crate::context::mock::MockRunner;
+    fn run_setup_opens_workspace_with_agent_command() {
+        use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode, WorkspaceConfig};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::Path;
         use std::sync::Arc;
 
-        let mut runner = MockRunner::new();
-        // First iteration: list_panes, list_pane_surfaces, read_screen, send
-        runner.add_response("pane:0", true);
-        runner.add_response("surface:0", true);
-        runner.add_response("some output ❯", true);
-        runner.add_response("", true);
-        // Second iteration: list_panes, list_pane_surfaces, read_screen, send
-        runner.add_response("pane:0", true);
-        runner.add_response("surface:0", true);
-        runner.add_response("some output ❯", true);
-        runner.add_response("", true);
-
-        let runner = Arc::new(runner);
-
-        let post = PostReadyConfig {
-            wait_for: "❯".into(),
-            send: HashMap::from([(
-                "pr".into(),
-                vec![
-                    "/conventional-review {{pr_number}}\n".into(),
-                    "/codex:review --background\n".into(),
-                ],
-            )]),
-            surface: None,
-            timeout: Some(5),
-            send_after: None,
-        };
-
-        let vars = HashMap::from([("pr_number".into(), "42".into())]);
-
-        // Call the function directly with runner ref
-        let cmux = CmuxService::new(runner.as_ref());
-        let commands = post.send.get("pr").unwrap();
-
-        for cmd_template in commands {
-            let rendered = template::render(cmd_template, &vars);
-            // Simulate: read_screen finds prompt, then send
-            let panes = cmux.list_panes("ws:1").unwrap();
-            let pane = panes.first().unwrap();
-            let surfaces = cmux.list_pane_surfaces(pane, "ws:1").unwrap();
-            let surface = surfaces.first().unwrap();
-            let screen = cmux.read_screen(surface, "ws:1").unwrap();
-            assert!(screen.contains(&post.wait_for));
-            cmux.send(surface, "ws:1", &rendered).unwrap();
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
         }
 
-        let calls = runner.calls.lock().unwrap();
-        // Verify the send calls contain rendered templates
-        let send_calls: Vec<_> = calls
-            .iter()
-            .filter(|(cmd, _, _)| cmd == "cmux" && !cmd.is_empty())
-            .filter(|(_, args, _)| args.first().is_some_and(|a| a == "send"))
-            .collect();
-        assert_eq!(send_calls.len(), 2);
-        assert_eq!(send_calls[0].1.last().unwrap(), "/conventional-review 42\n");
-        assert_eq!(
-            send_calls[1].1.last().unwrap(),
-            "/codex:review --background\n"
-        );
-    }
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
 
-    #[test]
-    fn post_ready_skips_unknown_mode() {
-        use crate::config::PostReadyConfig;
-        use crate::context::mock::{MockRunner, MockUi};
-        use crate::context::Ctx;
-        use std::path::PathBuf;
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
 
-        let runner = MockRunner::new();
-        let ui = MockUi::new();
-        let ctx = Ctx::new(
-            PathBuf::from("/tmp/repo"),
-            PathBuf::from("/tmp/repo"),
-            Config::default(),
-            Box::new(runner),
-            Box::new(ui),
-        );
-
-        let post = PostReadyConfig {
-            wait_for: "❯".into(),
-            send: HashMap::from([("pr".into(), vec!["/review\n".into()])]),
-            surface: None,
-            timeout: Some(5),
-            send_after: None,
-        };
-
-        let vars = HashMap::new();
-        // "issue" mode has no entry — should return Ok without calling cmux
-        run_post_ready(&ctx, "workspace:1", &post, "issue", &vars).unwrap();
-        // No cmux calls should have been made (function returns early)
-    }
-
-    #[test]
-    fn post_ready_timeout_skips_remaining() {
-        use crate::context::mock::MockRunner;
-        use std::sync::Arc;
+        let repo = std::env::temp_dir().join("wt-test-agent-command-repo");
+        let wt = std::env::temp_dir().join("wt-test-agent-command-worktree");
+        fs::create_dir_all(&repo).ok();
+        fs::create_dir_all(&wt).ok();
 
         let mut runner = MockRunner::new();
-        // list_panes
+        runner.add_command("cmux");
+        runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
-        // list_pane_surfaces
-        runner.add_response("surface:0", true);
-        // read_screen — no prompt (timeout after 1 attempt with timeout=1)
-        runner.add_response("loading...", true);
-
         let runner = Arc::new(runner);
 
-        // Call run_post_ready directly — need Ctx with Arc runner
-        // Instead, test the timeout logic via CmuxService directly
-        let cmux = CmuxService::new(runner.as_ref());
-        let panes = cmux.list_panes("ws:1").unwrap();
-        let pane = panes.first().unwrap();
-        let surfaces = cmux.list_pane_surfaces(pane, "ws:1").unwrap();
-        let surface = surfaces.first().unwrap();
-        let screen = cmux.read_screen(surface, "ws:1").unwrap();
-        // Prompt not found — timeout scenario
-        assert!(!screen.contains("❯"));
+        let mut config = Config::default();
+        config.workspace = Some(WorkspaceConfig::default());
+        config.agent = Some(AgentConfig {
+            cli: AgentCli::Codex,
+            args: vec!["--model".into(), "gpt-5.5".into()],
+            command: None,
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 15,
+            send_after: 3,
+            prompt: HashMap::new(),
+        });
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: wt.clone(),
+            branch: "alice/issue-1-test".into(),
+            workspace: "test".into(),
+            site: None,
+        };
+
+        run_setup(&ctx, &wt, &names, None, "new", None, None).unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 3); // list_panes + list_pane_surfaces + read_screen
+        let workspace_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "cmux" && args.first().is_some_and(|a| a == "new-workspace")
+            })
+            .expect("expected new-workspace call");
+        let command_arg = workspace_call
+            .1
+            .iter()
+            .position(|arg| arg == "--command")
+            .and_then(|idx| workspace_call.1.get(idx + 1))
+            .unwrap();
+        assert_eq!(command_arg, "codex --model gpt-5.5");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
     }
 
     #[test]
-    fn post_ready_sends_without_prompt_when_wait_for_empty() {
-        use crate::config::PostReadyConfig;
+    fn bootstrap_agent_waits_for_codex_ready_and_sends_carriage_return() {
+        use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode};
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
         use anyhow::Result;
@@ -1255,9 +1200,10 @@ mod tests {
         let mut runner = MockRunner::new();
         runner.add_response("pane:0", true);
         runner.add_response("surface:0", true);
+        runner.add_response("ready ›", true);
         runner.add_response("", true);
         let runner = Arc::new(runner);
-        let ui = MockUi::new();
+
         let ctx = Ctx::new(
             PathBuf::from("/tmp/repo"),
             PathBuf::from("/tmp/repo"),
@@ -1265,31 +1211,38 @@ mod tests {
             Box::new(SharedRunner {
                 inner: Arc::clone(&runner),
             }),
-            Box::new(ui),
+            Box::new(MockUi::new()),
         );
 
-        let post = PostReadyConfig {
-            wait_for: "".into(),
-            send: HashMap::from([("issue".into(), vec!["start\n".into()])]),
-            surface: None,
-            timeout: Some(5),
-            send_after: Some(0),
+        let agent = AgentConfig {
+            cli: AgentCli::Codex,
+            args: Vec::new(),
+            command: None,
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 1,
+            send_after: 0,
+            prompt: HashMap::from([("issue".into(), vec!["start {{api_url}}".into()])]),
         };
+        let vars = HashMap::from([("api_url".into(), "http://127.0.0.1:15001".into())]);
 
-        run_post_ready(&ctx, "workspace:1", &post, "issue", &HashMap::new()).unwrap();
+        bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &vars).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let send_call = calls
             .iter()
             .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send"))
             .expect("expected cmux send call");
-        assert_eq!(send_call.1.last().unwrap(), "start\n");
+        assert_eq!(
+            send_call.1.last().unwrap(),
+            "start http://127.0.0.1:15001\r"
+        );
     }
 
     #[test]
     fn inject_claude_local_context_appends_rendered_template() {
-        use crate::context::mock::{MockRunner, MockUi};
         use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
         use std::path::PathBuf;
 
         let dir = std::env::temp_dir().join("wt-test-inject-context");
@@ -1315,22 +1268,15 @@ mod tests {
 
         let names = WorktreeNames {
             path: dir.clone(),
-            branch: "hoetaek/tech-680-feature".into(),
+            branch: "alice/tech-680-feature".into(),
             workspace: "feature".into(),
             site: Some("hapjeong-tech-680".into()),
         };
         let mut vars = build_template_vars(&ctx, &names, Some("feature"));
         vars.insert("site_url".into(), "https://hapjeong-tech-680.test".into());
 
-        inject_claude_local_context(
-            &ctx,
-            &ctx.config,
-            &dir,
-            &names,
-            &vars,
-            Some("workspace:3"),
-        )
-        .unwrap();
+        inject_claude_local_context(&ctx, &ctx.config, &dir, &names, &vars, Some("workspace:3"))
+            .unwrap();
 
         let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
         assert!(result.starts_with("# Existing content\n"));
@@ -1343,8 +1289,8 @@ mod tests {
 
     #[test]
     fn inject_claude_local_context_noop_without_config() {
-        use crate::context::mock::{MockRunner, MockUi};
         use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
         use std::path::PathBuf;
 
         let dir = std::env::temp_dir().join("wt-test-inject-no-config");
@@ -1361,7 +1307,7 @@ mod tests {
 
         let names = WorktreeNames {
             path: dir.clone(),
-            branch: "hoetaek/feature".into(),
+            branch: "alice/feature".into(),
             workspace: "feature".into(),
             site: None,
         };
@@ -1377,8 +1323,8 @@ mod tests {
 
     #[test]
     fn inject_claude_local_context_noop_without_file() {
-        use crate::context::mock::{MockRunner, MockUi};
         use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
         use std::path::PathBuf;
 
         let dir = std::env::temp_dir().join("wt-test-inject-no-file");
@@ -1398,7 +1344,7 @@ mod tests {
 
         let names = WorktreeNames {
             path: dir.clone(),
-            branch: "hoetaek/feature".into(),
+            branch: "alice/feature".into(),
             workspace: "feature".into(),
             site: None,
         };
@@ -1413,8 +1359,8 @@ mod tests {
 
     #[test]
     fn inject_claude_local_context_handles_missing_vars() {
-        use crate::context::mock::{MockRunner, MockUi};
         use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
         use std::path::PathBuf;
 
         let dir = std::env::temp_dir().join("wt-test-inject-partial");
@@ -1439,7 +1385,7 @@ mod tests {
 
         let names = WorktreeNames {
             path: dir.clone(),
-            branch: "hoetaek/feature".into(),
+            branch: "alice/feature".into(),
             workspace: "feature".into(),
             site: None,
         };

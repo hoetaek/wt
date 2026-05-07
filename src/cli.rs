@@ -43,6 +43,47 @@ pub enum Commands {
         /// Variant name to create (omit to list existing)
         name: Option<String>,
     },
+    /// Create a wt config file
+    Init {
+        #[arg(long, conflicts_with = "shared")]
+        local: bool,
+        #[arg(long)]
+        shared: bool,
+        #[arg(long, value_enum)]
+        agent: Option<InitAgent>,
+        #[arg(long = "agent-arg", allow_hyphen_values = true)]
+        agent_args: Vec<String>,
+        #[arg(long)]
+        agent_command: Option<String>,
+        #[arg(long, value_enum)]
+        issue_provider: Option<InitIssueProvider>,
+        #[arg(long)]
+        gh_user: Option<String>,
+        #[arg(long, conflicts_with = "no_prompts")]
+        prompts: bool,
+        #[arg(long)]
+        no_prompts: bool,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, PartialEq)]
+pub enum InitAgent {
+    Codex,
+    Claude,
+    Gemini,
+    Custom,
+    None,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, PartialEq)]
+pub enum InitIssueProvider {
+    Github,
+    Linear,
+    None,
 }
 
 /// Parsed base branch mode, derived from the raw --base flag.
@@ -150,6 +191,60 @@ mod tests {
     fn open_subcommand() {
         let cli = parse(&["wt", "open"]);
         assert!(matches!(cli.command, Commands::Open));
+    }
+
+    #[test]
+    fn init_local_codex_yes() {
+        let cli = parse(&["wt", "init", "--local", "--agent", "codex", "--yes"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Init {
+                local: true,
+                shared: false,
+                agent: Some(InitAgent::Codex),
+                yes: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn init_parses_agent_args_and_prompts() {
+        let cli = parse(&[
+            "wt",
+            "init",
+            "--shared",
+            "--agent",
+            "gemini",
+            "--agent-arg",
+            "--model=gemini-pro",
+            "--issue-provider",
+            "github",
+            "--gh-user",
+            "alice",
+            "--prompts",
+            "--force",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Commands::Init {
+                shared: true,
+                agent: Some(InitAgent::Gemini),
+                issue_provider: Some(InitIssueProvider::Github),
+                prompts: true,
+                force: true,
+                ..
+            }
+        ));
+        if let Commands::Init {
+            agent_args,
+            gh_user,
+            ..
+        } = cli.command
+        {
+            assert_eq!(agent_args, vec!["--model=gemini-pro"]);
+            assert_eq!(gh_user.as_deref(), Some("alice"));
+        }
     }
 
     #[test]

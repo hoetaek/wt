@@ -159,7 +159,6 @@ pub mod mock {
             self.select_responses.lock().unwrap().push_back(index);
         }
 
-        #[allow(dead_code)]
         pub fn add_multi_select(&mut self, indices: Vec<usize>) {
             self.multi_select_responses
                 .lock()
@@ -272,7 +271,7 @@ mod tests {
     fn ctx_keeps_canonical_and_invocation_roots_separately() {
         let temp = TempDir::new().unwrap();
         let repo_root = temp.path().join("hapjeong");
-        let invocation_root = temp.path().join("hapjeong-hoetaek-tech-670");
+        let invocation_root = temp.path().join("hapjeong-alice-tech-670");
         fs::create_dir(&repo_root).unwrap();
         fs::create_dir(&invocation_root).unwrap();
 

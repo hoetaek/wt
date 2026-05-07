@@ -30,5 +30,33 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Open => commands::open::run(ctx),
         Commands::Clean => commands::clean::run(ctx),
         Commands::Variant { name } => commands::variant::run(ctx, name.as_deref()),
+        Commands::Init {
+            local,
+            shared,
+            agent,
+            agent_args,
+            agent_command,
+            issue_provider,
+            gh_user,
+            prompts,
+            no_prompts,
+            yes,
+            force,
+        } => commands::init::run(
+            ctx,
+            commands::init::InitOptions {
+                local: *local,
+                shared: *shared,
+                agent: agent.clone(),
+                agent_args: agent_args.clone(),
+                agent_command: agent_command.clone(),
+                issue_provider: issue_provider.clone(),
+                gh_user: gh_user.clone(),
+                prompts: *prompts,
+                no_prompts: *no_prompts,
+                yes: *yes,
+                force: *force,
+            },
+        ),
     }
 }

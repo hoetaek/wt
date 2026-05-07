@@ -70,7 +70,15 @@ pub fn run(ctx: &Ctx, number: Option<u32>) -> Result<()> {
                 existing.display()
             ));
             git.set_branch_parent(&branch_name, &base_branch).ok();
-            setup::run_setup(ctx, existing, &names, Some(&title), "pr", Some(&extra_vars), None)?;
+            setup::run_setup(
+                ctx,
+                existing,
+                &names,
+                Some(&title),
+                "pr",
+                Some(&extra_vars),
+                None,
+            )?;
             return Ok(());
         }
     }
@@ -156,7 +164,7 @@ mod tests {
         let mut runner = MockRunner::new();
         // get_pr
         runner.add_response(
-            r#"{"number":42,"title":"Add feature","headRefName":"hoetaek/feature","baseRefName":"main","state":"OPEN"}"#,
+            r#"{"number":42,"title":"Add feature","headRefName":"alice/feature","baseRefName":"main","state":"OPEN"}"#,
             true,
         );
         // checked_out_path (worktree list)
@@ -210,7 +218,7 @@ mod tests {
         let mut runner = MockRunner::new();
         // get_pr
         runner.add_response(
-            r#"{"number":10,"title":"Fix bug","headRefName":"hoetaek/fix","baseRefName":"main","state":"OPEN"}"#,
+            r#"{"number":10,"title":"Fix bug","headRefName":"alice/fix","baseRefName":"main","state":"OPEN"}"#,
             true,
         );
         // checked_out_path (no match)

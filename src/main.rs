@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use std::process;
 
-use wt::cli::Cli;
+use wt::cli::{Cli, Commands};
 use wt::config::Config;
 use wt::context::Ctx;
 use wt::error::WtError;
@@ -28,7 +28,11 @@ fn try_main() -> Result<()> {
     let invocation_root = git.repo_root()?;
     let repo_root = git.canonical_repo_root()?;
 
-    let config = Config::load(&repo_root)?;
+    let config = if matches!(cli.command, Commands::Init { .. }) {
+        Config::default()
+    } else {
+        Config::load(&repo_root)?
+    };
 
     let ctx = Ctx::new(
         repo_root,

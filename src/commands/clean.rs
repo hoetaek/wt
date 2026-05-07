@@ -139,7 +139,7 @@ mod tests {
     fn clean_with_empty_selection_returns_ok() {
         let mut runner = MockRunner::new();
         runner.add_response(
-            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/test-repo-feature\nHEAD def\nbranch refs/heads/hoetaek/feature\n\n",
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/test-repo-feature\nHEAD def\nbranch refs/heads/alice/feature\n\n",
             true,
         );
 
@@ -162,7 +162,7 @@ mod tests {
         let mut runner = MockRunner::new();
         // worktree list
         runner.add_response(
-            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/test-repo-feature\nHEAD def\nbranch refs/heads/hoetaek/feature\n\n",
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/test-repo-feature\nHEAD def\nbranch refs/heads/alice/feature\n\n",
             true,
         );
         // worktree remove (success)

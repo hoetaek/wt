@@ -152,7 +152,8 @@ fn run_parallel(
         let variant_branch = format!("{branch_name}-{variant_name}");
         let variant_title = format!("{title} [{variant_name}]");
 
-        ctx.ui.print_step(&format!("Setting up variant: {variant_name}"));
+        ctx.ui
+            .print_step(&format!("Setting up variant: {variant_name}"));
 
         let names = WorktreeNames::new(
             &variant_branch,
@@ -163,9 +164,15 @@ fn run_parallel(
         );
 
         if names.path.exists() {
-            ctx.ui
-                .print_warning(&format!("Worktree {} already exists.", names.path.display()));
-            let items = vec!["Delete and recreate".into(), "Skip".into(), "Abort all".into()];
+            ctx.ui.print_warning(&format!(
+                "Worktree {} already exists.",
+                names.path.display()
+            ));
+            let items = vec![
+                "Delete and recreate".into(),
+                "Skip".into(),
+                "Abort all".into(),
+            ];
             let choice = ctx
                 .ui
                 .select(&format!("[{variant_name}] Worktree already exists"), &items)?;
@@ -197,11 +204,16 @@ fn run_parallel(
         };
 
         if git.local_branch_exists(&variant_branch)? {
-            ctx.ui
-                .print_warning(&format!("Branch {variant_branch} already exists, removing..."));
+            ctx.ui.print_warning(&format!(
+                "Branch {variant_branch} already exists, removing..."
+            ));
             git.worktree_remove_force(&names.path).ok();
             ctx.runner
-                .run("git", &["branch", "-D", &variant_branch], Some(&ctx.repo_root))
+                .run(
+                    "git",
+                    &["branch", "-D", &variant_branch],
+                    Some(&ctx.repo_root),
+                )
                 .ok();
         }
 
@@ -219,30 +231,27 @@ fn run_parallel(
         )?;
     }
 
-    ctx.ui
-        .print_step(&format!("All {} variants created successfully", variants.len()));
+    ctx.ui.print_step(&format!(
+        "All {} variants created successfully",
+        variants.len()
+    ));
     Ok(())
 }
 
 pub fn build_provider<'a>(ctx: &'a Ctx) -> Result<Box<dyn IssueProvider + 'a>> {
-    let issues_config = ctx
-        .config
-        .issues
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!(
-            "No [issues] section in .wt.toml. Set provider = \"linear\" or \"github\""
-        ))?;
+    let issues_config = ctx.config.issues.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("No [issues] section in .wt.toml. Set provider = \"linear\" or \"github\"")
+    })?;
     match issues_config.provider {
-        IssueProviderType::Linear => Ok(Box::new(
-            LinearIssueProvider::new(ctx.runner.as_ref(), Some(&ctx.repo_root)),
-        )),
-        IssueProviderType::Github => Ok(Box::new(
-            GithubIssueProvider::new(
-                ctx.runner.as_ref(),
-                Some(&ctx.repo_root),
-                issues_config.gh_user.clone(),
-            ),
-        )),
+        IssueProviderType::Linear => Ok(Box::new(LinearIssueProvider::new(
+            ctx.runner.as_ref(),
+            Some(&ctx.repo_root),
+        ))),
+        IssueProviderType::Github => Ok(Box::new(GithubIssueProvider::new(
+            ctx.runner.as_ref(),
+            Some(&ctx.repo_root),
+            issues_config.gh_user.clone(),
+        ))),
     }
 }
 
@@ -308,7 +317,7 @@ fn create_worktree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, IssuesConfig, IssueProviderType};
+    use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
     use anyhow::Result;
@@ -348,12 +357,12 @@ mod tests {
         let mut runner = MockRunner::new();
         // get_issue (provider.get_issue)
         runner.add_response(
-            r#"{"identifier":"TECH-680","title":"C11S09. 위키 에디터","branchName":"hoetaek/tech-680-c11s09"}"#,
+            r#"{"identifier":"TECH-680","title":"C11S09. 위키 에디터","branchName":"alice/tech-680-c11s09"}"#,
             true,
         );
         // get_issue (provider.ensure_branch internally calls get_issue again)
         runner.add_response(
-            r#"{"identifier":"TECH-680","title":"C11S09. 위키 에디터","branchName":"hoetaek/tech-680-c11s09"}"#,
+            r#"{"identifier":"TECH-680","title":"C11S09. 위키 에디터","branchName":"alice/tech-680-c11s09"}"#,
             true,
         );
         // checked_out_path (worktree list)
@@ -425,12 +434,12 @@ mod tests {
         let mut runner = MockRunner::new();
         // get_issue (provider.get_issue)
         runner.add_response(
-            r#"{"identifier":"TECH-1","title":"Test","branchName":"hoetaek/tech-1-test"}"#,
+            r#"{"identifier":"TECH-1","title":"Test","branchName":"alice/tech-1-test"}"#,
             true,
         );
         // get_issue (provider.ensure_branch internally calls get_issue again)
         runner.add_response(
-            r#"{"identifier":"TECH-1","title":"Test","branchName":"hoetaek/tech-1-test"}"#,
+            r#"{"identifier":"TECH-1","title":"Test","branchName":"alice/tech-1-test"}"#,
             true,
         );
         // checked_out_path (worktree list — no match)
@@ -475,12 +484,12 @@ mod tests {
         let mut runner = MockRunner::new();
         // get_issue (provider.get_issue)
         runner.add_response(
-            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"hoetaek/tech-672-nested-worktree-bug"}"#,
+            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"alice/tech-672-nested-worktree-bug"}"#,
             true,
         );
         // get_issue (provider.ensure_branch internally calls get_issue again)
         runner.add_response(
-            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"hoetaek/tech-672-nested-worktree-bug"}"#,
+            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"alice/tech-672-nested-worktree-bug"}"#,
             true,
         );
         // checked_out_path (worktree list — no branch match)
@@ -533,11 +542,11 @@ mod tests {
 
         assert_eq!(
             worktree_add_call.1[4],
-            temp.join("hapjeong-hoetaek-tech-672-nested-worktree-bug")
+            temp.join("hapjeong-alice-tech-672-nested-worktree-bug")
                 .to_string_lossy()
                 .as_ref()
         );
-        assert!(!worktree_add_call.1[4].contains("hapjeong-tech-670-feature-hoetaek-tech-672"));
+        assert!(!worktree_add_call.1[4].contains("hapjeong-tech-670-feature-alice-tech-672"));
 
         std::fs::remove_dir_all(&temp).ok();
     }
@@ -553,19 +562,19 @@ mod tests {
                 .as_nanos()
         ));
         let repo_root = temp.join("hapjeong");
-        let invocation_root = temp.join("hapjeong-hoetaek-tech-670");
+        let invocation_root = temp.join("hapjeong-alice-tech-670");
         std::fs::create_dir_all(&repo_root).unwrap();
         std::fs::create_dir_all(&invocation_root).unwrap();
 
         let mut runner = MockRunner::new();
         // get_issue (provider.get_issue)
         runner.add_response(
-            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"hoetaek/tech-672-nested-worktree-bug"}"#,
+            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"alice/tech-672-nested-worktree-bug"}"#,
             true,
         );
         // get_issue (provider.ensure_branch internally calls get_issue again)
         runner.add_response(
-            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"hoetaek/tech-672-nested-worktree-bug"}"#,
+            r#"{"identifier":"TECH-672","title":"C11S09 nested worktree bug","branchName":"alice/tech-672-nested-worktree-bug"}"#,
             true,
         );
         // checked_out_path (worktree list)
@@ -581,7 +590,7 @@ mod tests {
         runner.add_response("", false);
         // current_branch (for base prompt) — uses invocation_root
         runner.add_response(
-            "hoetaek/tech-670-위키-에디터는-문서에-분류x로-분류를-지정할-수-있다",
+            "alice/tech-670-위키-에디터는-문서에-분류x로-분류를-지정할-수-있다",
             true,
         );
         // worktree_add_new_branch
@@ -608,10 +617,19 @@ mod tests {
         let current_branch_call = calls
             .iter()
             .find(|(cmd, args, _)| {
-                cmd == "git" && args == &vec!["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()]
+                cmd == "git"
+                    && args
+                        == &vec![
+                            "rev-parse".to_string(),
+                            "--abbrev-ref".to_string(),
+                            "HEAD".to_string(),
+                        ]
             })
             .expect("expected git current branch call");
-        assert_eq!(current_branch_call.2.as_deref(), Some(invocation_root.as_path()));
+        assert_eq!(
+            current_branch_call.2.as_deref(),
+            Some(invocation_root.as_path())
+        );
 
         let worktree_add_call = calls
             .iter()
@@ -625,7 +643,7 @@ mod tests {
             .expect("expected git worktree add -b call");
         assert_eq!(
             worktree_add_call.1[5],
-            "hoetaek/tech-670-위키-에디터는-문서에-분류x로-분류를-지정할-수-있다"
+            "alice/tech-670-위키-에디터는-문서에-분류x로-분류를-지정할-수-있다"
         );
 
         std::fs::remove_dir_all(&temp).ok();
@@ -636,12 +654,12 @@ mod tests {
         let mut runner = MockRunner::new();
         // get_issue (provider.get_issue)
         runner.add_response(
-            r#"{"identifier":"TECH-1","title":"Test","branchName":"hoetaek/tech-1-test"}"#,
+            r#"{"identifier":"TECH-1","title":"Test","branchName":"alice/tech-1-test"}"#,
             true,
         );
         // get_issue (provider.ensure_branch internally calls get_issue again)
         runner.add_response(
-            r#"{"identifier":"TECH-1","title":"Test","branchName":"hoetaek/tech-1-test"}"#,
+            r#"{"identifier":"TECH-1","title":"Test","branchName":"alice/tech-1-test"}"#,
             true,
         );
         // checked_out_path
