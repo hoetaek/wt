@@ -37,7 +37,7 @@ pub fn run(
         bail!("Failed to create valid branch name from input");
     }
 
-    let branch_name = format!("hoetaek/{kebab}");
+    let branch_name = kebab;
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
     if parallel {
@@ -117,7 +117,8 @@ fn run_parallel(ctx: &Ctx, branch_name: &str, base: &str) -> Result<()> {
     for (variant_name, variant_config) in &variants {
         let variant_branch = format!("{branch_name}-{variant_name}");
 
-        ctx.ui.print_step(&format!("Setting up variant: {variant_name}"));
+        ctx.ui
+            .print_step(&format!("Setting up variant: {variant_name}"));
 
         let names = WorktreeNames::new(
             &variant_branch,
@@ -128,9 +129,15 @@ fn run_parallel(ctx: &Ctx, branch_name: &str, base: &str) -> Result<()> {
         );
 
         if names.path.exists() {
-            ctx.ui
-                .print_warning(&format!("Worktree {} already exists.", names.path.display()));
-            let items = vec!["Delete and recreate".into(), "Skip".into(), "Abort all".into()];
+            ctx.ui.print_warning(&format!(
+                "Worktree {} already exists.",
+                names.path.display()
+            ));
+            let items = vec![
+                "Delete and recreate".into(),
+                "Skip".into(),
+                "Abort all".into(),
+            ];
             let choice = ctx
                 .ui
                 .select(&format!("[{variant_name}] Worktree already exists"), &items)?;
@@ -148,11 +155,16 @@ fn run_parallel(ctx: &Ctx, branch_name: &str, base: &str) -> Result<()> {
         }
 
         if git.local_branch_exists(&variant_branch)? {
-            ctx.ui
-                .print_warning(&format!("Branch {variant_branch} already exists, removing..."));
+            ctx.ui.print_warning(&format!(
+                "Branch {variant_branch} already exists, removing..."
+            ));
             git.worktree_remove_force(&names.path).ok();
             ctx.runner
-                .run("git", &["branch", "-D", &variant_branch], Some(&ctx.repo_root))
+                .run(
+                    "git",
+                    &["branch", "-D", &variant_branch],
+                    Some(&ctx.repo_root),
+                )
                 .ok();
         }
 
@@ -170,8 +182,10 @@ fn run_parallel(ctx: &Ctx, branch_name: &str, base: &str) -> Result<()> {
         )?;
     }
 
-    ctx.ui
-        .print_step(&format!("All {} variants created successfully", variants.len()));
+    ctx.ui.print_step(&format!(
+        "All {} variants created successfully",
+        variants.len()
+    ));
     Ok(())
 }
 
@@ -267,9 +281,9 @@ mod tests {
     #[test]
     fn new_default_base_prompt_uses_invocation_root_for_current_branch() {
         let repo_root = PathBuf::from("/tmp/hapjeong");
-        let invocation_root = PathBuf::from("/tmp/hapjeong-hoetaek-tech-670");
+        let invocation_root = PathBuf::from("/tmp/hapjeong-alice-tech-670");
         let mut runner = MockRunner::new();
-        runner.add_response("hoetaek/tech-670-current", true);
+        runner.add_response("alice/tech-670-current", true);
         runner.add_response("", false);
         runner.add_response("", true);
 
@@ -293,10 +307,19 @@ mod tests {
         let current_branch_call = calls
             .iter()
             .find(|(cmd, args, _)| {
-                cmd == "git" && args == &vec!["rev-parse".to_string(), "--abbrev-ref".to_string(), "HEAD".to_string()]
+                cmd == "git"
+                    && args
+                        == &vec![
+                            "rev-parse".to_string(),
+                            "--abbrev-ref".to_string(),
+                            "HEAD".to_string(),
+                        ]
             })
             .expect("expected git current branch call");
-        assert_eq!(current_branch_call.2.as_deref(), Some(invocation_root.as_path()));
+        assert_eq!(
+            current_branch_call.2.as_deref(),
+            Some(invocation_root.as_path())
+        );
 
         let worktree_add_call = calls
             .iter()
@@ -308,7 +331,7 @@ mod tests {
                     && args[2] == "-b"
             })
             .expect("expected git worktree add -b call");
-        assert_eq!(worktree_add_call.1[5], "hoetaek/tech-670-current");
+        assert_eq!(worktree_add_call.1[5], "alice/tech-670-current");
     }
 
     #[test]
@@ -342,5 +365,47 @@ mod tests {
         let words: Vec<String> = vec!["my".into(), "feature".into()];
         let result = run(&ctx, &words, &Some("develop".into()), false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn new_uses_unprefixed_branch_name_by_default() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        // local_branch_exists returns false
+        runner.add_response("", false);
+        // worktree_add_new_branch
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().join("repo"),
+            repo.path().join("repo"),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(
+            &ctx,
+            &["my".into(), "feature".into()],
+            &Some("develop".into()),
+            false,
+        )
+        .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let worktree_add_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .expect("expected git worktree add -b call");
+        assert_eq!(worktree_add_call.1[3], "my-feature");
     }
 }

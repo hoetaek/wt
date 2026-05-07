@@ -91,20 +91,20 @@ mod tests {
     #[test]
     fn path_replaces_slash_with_hyphen() {
         let p = WorktreeNames::build_path(
-            "hoetaek/tech-680-feature",
+            "alice/tech-680-feature",
             Path::new("/home/dev/projects"),
             "hapjeong",
         );
         assert_eq!(
             p,
-            PathBuf::from("/home/dev/projects/hapjeong-hoetaek-tech-680-feature")
+            PathBuf::from("/home/dev/projects/hapjeong-alice-tech-680-feature")
         );
     }
 
     #[test]
     fn workspace_name_from_title_moves_chapter_prefix() {
         let name = WorktreeNames::build_workspace_name(
-            "hoetaek/tech-680-c11s09-위키",
+            "alice/tech-680-c11s09-위키",
             Some("C11S09. 위키 에디터는 문서 제목의 유효성 검사를 받을 수 있다"),
         );
         assert_eq!(
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn workspace_name_from_title_without_chapter_prefix() {
         let name = WorktreeNames::build_workspace_name(
-            "hoetaek/tech-680-feature",
+            "alice/tech-680-feature",
             Some("Add user authentication"),
         );
         assert_eq!(name, "Add user authentication");
@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn workspace_name_from_branch_strips_user_prefix() {
-        let name = WorktreeNames::build_workspace_name("hoetaek/tech-680-위키-에디터", None);
+        let name = WorktreeNames::build_workspace_name("alice/tech-680-위키-에디터", None);
         assert_eq!(name, "tech 680 위키 에디터");
     }
 
@@ -136,40 +136,39 @@ mod tests {
 
     #[test]
     fn site_name_extracts_tech_id() {
-        let name =
-            WorktreeNames::build_site_name("hoetaek/tech-680-c11s09-위키-에디터", "hapjeong");
+        let name = WorktreeNames::build_site_name("alice/tech-680-c11s09-위키-에디터", "hapjeong");
         assert_eq!(name, "hapjeong-tech-680");
     }
 
     #[test]
     fn site_name_strips_non_ascii() {
-        let name = WorktreeNames::build_site_name("hoetaek/my-feature-위키", "hapjeong");
+        let name = WorktreeNames::build_site_name("alice/my-feature-위키", "hapjeong");
         assert_eq!(name, "hapjeong-my-feature");
     }
 
     #[test]
     fn site_name_collapses_consecutive_hyphens() {
-        let name = WorktreeNames::build_site_name("hoetaek/a--b---c", "hapjeong");
+        let name = WorktreeNames::build_site_name("alice/a--b---c", "hapjeong");
         assert_eq!(name, "hapjeong-a-b-c");
     }
 
     #[test]
     fn extracts_tech_id_from_branch() {
         assert_eq!(
-            WorktreeNames::extract_tech_id("hoetaek/tech-680-c11s09-위키"),
+            WorktreeNames::extract_tech_id("alice/tech-680-c11s09-위키"),
             Some("tech-680".into())
         );
     }
 
     #[test]
     fn no_tech_id_returns_none() {
-        assert_eq!(WorktreeNames::extract_tech_id("hoetaek/my-feature"), None);
+        assert_eq!(WorktreeNames::extract_tech_id("alice/my-feature"), None);
     }
 
     #[test]
     fn new_builds_all_names_with_herd() {
         let names = WorktreeNames::new(
-            "hoetaek/tech-680-c11s09-위키",
+            "alice/tech-680-c11s09-위키",
             Path::new("/home/dev/projects"),
             "hapjeong",
             Some("C11S09. 위키 에디터"),
@@ -177,7 +176,7 @@ mod tests {
         );
         assert_eq!(
             names.path,
-            PathBuf::from("/home/dev/projects/hapjeong-hoetaek-tech-680-c11s09-위키")
+            PathBuf::from("/home/dev/projects/hapjeong-alice-tech-680-c11s09-위키")
         );
         assert_eq!(names.workspace, "위키 에디터 (C11S09)");
         assert_eq!(names.site.as_deref(), Some("hapjeong-tech-680"));
@@ -186,7 +185,7 @@ mod tests {
     #[test]
     fn site_name_uses_canonical_repo_prefix_for_nested_worktree_branch() {
         let names = WorktreeNames::new(
-            "hoetaek/tech-672-nested-worktree-bug",
+            "alice/tech-672-nested-worktree-bug",
             Path::new("hapjeong"),
             "hapjeong",
             None,
@@ -198,14 +197,8 @@ mod tests {
 
     #[test]
     fn new_without_herd_config() {
-        let names = WorktreeNames::new(
-            "hoetaek/my-feature",
-            Path::new("/tmp"),
-            "myrepo",
-            None,
-            None,
-        );
-        assert_eq!(names.path, PathBuf::from("/tmp/myrepo-hoetaek-my-feature"));
+        let names = WorktreeNames::new("alice/my-feature", Path::new("/tmp"), "myrepo", None, None);
+        assert_eq!(names.path, PathBuf::from("/tmp/myrepo-alice-my-feature"));
         assert_eq!(names.workspace, "my feature");
         assert!(names.site.is_none());
     }

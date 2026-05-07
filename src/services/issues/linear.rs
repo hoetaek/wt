@@ -1,7 +1,7 @@
-use anyhow::Result;
 use crate::context::CommandRunner;
 use crate::services::issues::{IssueInfo, IssueListItem, IssueProvider};
 use crate::services::linear::LinearService;
+use anyhow::Result;
 use std::path::Path;
 
 pub struct LinearIssueProvider<'a> {
@@ -78,21 +78,21 @@ mod tests {
     fn get_issue_normalizes_numeric_id_to_tech_prefix() {
         let mut runner = MockRunner::new();
         runner.add_response(
-            r#"{"identifier":"TECH-680","title":"위키 에디터","branchName":"hoetaek/tech-680-위키"}"#,
+            r#"{"identifier":"TECH-680","title":"위키 에디터","branchName":"alice/tech-680-위키"}"#,
             true,
         );
         let provider = LinearIssueProvider::new(&runner, None);
         let issue = provider.get_issue("680").unwrap();
         assert_eq!(issue.identifier, "TECH-680");
         assert_eq!(issue.title, "위키 에디터");
-        assert_eq!(issue.branch_name.as_deref(), Some("hoetaek/tech-680-위키"));
+        assert_eq!(issue.branch_name.as_deref(), Some("alice/tech-680-위키"));
     }
 
     #[test]
     fn get_issue_passes_through_full_identifier() {
         let mut runner = MockRunner::new();
         runner.add_response(
-            r#"{"identifier":"TECH-680","title":"위키 에디터","branchName":"hoetaek/tech-680-위키"}"#,
+            r#"{"identifier":"TECH-680","title":"위키 에디터","branchName":"alice/tech-680-위키"}"#,
             true,
         );
         let provider = LinearIssueProvider::new(&runner, None);
@@ -104,7 +104,7 @@ mod tests {
     fn list_issues_maps_to_display_format() {
         let mut runner = MockRunner::new();
         runner.add_response(
-            r#"[{"identifier":"TECH-1","title":"Issue 1","state":{"name":"Started"},"assignee":{"displayName":"hoetaek"}}]"#,
+            r#"[{"identifier":"TECH-1","title":"Issue 1","state":{"name":"Started"},"assignee":{"displayName":"alice"}}]"#,
             true,
         );
         let provider = LinearIssueProvider::new(&runner, None);
@@ -112,19 +112,19 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].identifier, "TECH-1");
         assert!(items[0].display.contains("TECH-1"));
-        assert!(items[0].display.contains("hoetaek"));
+        assert!(items[0].display.contains("alice"));
     }
 
     #[test]
     fn ensure_branch_returns_branch_name() {
         let mut runner = MockRunner::new();
         runner.add_response(
-            r#"{"identifier":"TECH-680","title":"위키 에디터","branchName":"hoetaek/tech-680-위키"}"#,
+            r#"{"identifier":"TECH-680","title":"위키 에디터","branchName":"alice/tech-680-위키"}"#,
             true,
         );
         let provider = LinearIssueProvider::new(&runner, None);
         let branch = provider.ensure_branch("TECH-680", None).unwrap();
-        assert_eq!(branch, "hoetaek/tech-680-위키");
+        assert_eq!(branch, "alice/tech-680-위키");
     }
 
     #[test]
@@ -147,14 +147,17 @@ mod tests {
         let provider = LinearIssueProvider::new(&runner, None);
         provider.on_start("TECH-680").unwrap();
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls[0].1, vec!["issue", "update", "TECH-680", "--state", "In Progress"]);
+        assert_eq!(
+            calls[0].1,
+            vec!["issue", "update", "TECH-680", "--state", "In Progress"]
+        );
     }
 
     #[test]
     fn on_clean_is_noop() {
         let runner = MockRunner::new();
         let provider = LinearIssueProvider::new(&runner, None);
-        assert!(provider.on_clean("TECH-680", "hoetaek/tech-680").is_ok());
+        assert!(provider.on_clean("TECH-680", "alice/tech-680").is_ok());
         assert!(runner.calls.lock().unwrap().is_empty());
     }
 }

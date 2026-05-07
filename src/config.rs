@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -9,6 +9,7 @@ pub struct Config {
     pub setup: SetupConfig,
     pub herd: Option<HerdConfig>,
     pub workspace: Option<WorkspaceConfig>,
+    pub agent: Option<AgentConfig>,
     pub test: Option<TestConfig>,
     pub issues: Option<IssuesConfig>,
 }
@@ -33,6 +34,7 @@ pub struct CopyAsEntry {
 pub struct SetupConfig {
     pub deps: Vec<DepCommand>,
     pub env: HashMap<String, String>,
+    pub env_files: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -49,27 +51,164 @@ pub struct HerdConfig {
     pub browser: Option<String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
-#[serde(default)]
-#[derive(Default)]
+#[derive(Debug, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
 pub struct WorkspaceConfig {
-    pub command: String,
     pub tabs: Vec<String>,
     pub post_deps_tabs: Vec<String>,
     pub colors: HashMap<String, String>,
-    pub post_ready: Option<PostReadyConfig>,
     pub open_url: Option<String>,
     pub open_browser: Option<bool>,
     pub browser: Option<String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct PostReadyConfig {
-    pub wait_for: String,
-    pub send: HashMap<String, Vec<String>>,
-    pub surface: Option<String>,
-    pub timeout: Option<u64>,
-    pub send_after: Option<u64>,
+#[derive(Debug, Deserialize, PartialEq, Clone)]
+pub struct AgentConfig {
+    pub cli: AgentCli,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default = "default_agent_ready")]
+    pub ready: ReadyMode,
+    #[serde(default = "default_agent_submit")]
+    pub submit: SubmitMode,
+    #[serde(default = "default_agent_timeout")]
+    pub timeout: u64,
+    #[serde(default = "default_agent_send_after")]
+    pub send_after: u64,
+    #[serde(default)]
+    pub prompt: HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCli {
+    Codex,
+    Claude,
+    Gemini,
+    Custom,
+    None,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum ReadyMode {
+    Auto,
+    Marker(String),
+}
+
+impl<'de> Deserialize<'de> for ReadyMode {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value == "auto" {
+            Ok(ReadyMode::Auto)
+        } else {
+            Ok(ReadyMode::Marker(value))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmitMode {
+    Auto,
+    Newline,
+    CarriageReturn,
+    None,
+}
+
+fn default_agent_ready() -> ReadyMode {
+    ReadyMode::Auto
+}
+
+fn default_agent_submit() -> SubmitMode {
+    SubmitMode::Auto
+}
+
+fn default_agent_timeout() -> u64 {
+    15
+}
+
+fn default_agent_send_after() -> u64 {
+    3
+}
+
+impl AgentConfig {
+    pub fn command_line(&self) -> anyhow::Result<Option<String>> {
+        if self.cli == AgentCli::None {
+            return Ok(None);
+        }
+
+        if let Some(command) = &self.command {
+            return Ok(Some(command.clone()));
+        }
+
+        let base = match self.cli {
+            AgentCli::Codex => "codex",
+            AgentCli::Claude => "claude",
+            AgentCli::Gemini => "gemini",
+            AgentCli::Custom => anyhow::bail!("agent.command is required when agent.cli is custom"),
+            AgentCli::None => unreachable!(),
+        };
+
+        if self.args.is_empty() {
+            return Ok(Some(base.into()));
+        }
+
+        let args = self
+            .args
+            .iter()
+            .map(|arg| shell_escape_arg(arg))
+            .collect::<Vec<_>>()
+            .join(" ");
+        Ok(Some(format!("{base} {args}")))
+    }
+
+    pub fn effective_ready(&self) -> Option<String> {
+        match &self.ready {
+            ReadyMode::Marker(marker) => Some(marker.clone()),
+            ReadyMode::Auto => match self.cli {
+                AgentCli::Codex => Some("›".into()),
+                AgentCli::Claude => Some("❯".into()),
+                AgentCli::Gemini | AgentCli::Custom | AgentCli::None => None,
+            },
+        }
+    }
+
+    pub fn apply_submit_suffix(&self, mut prompt: String) -> String {
+        if prompt.ends_with('\n') || prompt.ends_with('\r') {
+            return prompt;
+        }
+
+        match self.submit {
+            SubmitMode::Auto => match self.cli {
+                AgentCli::Codex => prompt.push('\r'),
+                AgentCli::Claude | AgentCli::Gemini | AgentCli::Custom => prompt.push('\n'),
+                AgentCli::None => {}
+            },
+            SubmitMode::Newline => prompt.push('\n'),
+            SubmitMode::CarriageReturn => prompt.push('\r'),
+            SubmitMode::None => {}
+        }
+        prompt
+    }
+}
+
+fn shell_escape_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".into();
+    }
+
+    if arg.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '=' | '@' | '+')
+    }) {
+        return arg.into();
+    }
+
+    format!("'{}'", arg.replace('\'', "'\\''"))
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -142,6 +281,16 @@ impl Config {
         variants.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(variants)
     }
+
+    pub fn load_variant(repo_root: &Path, name: &str) -> anyhow::Result<Option<Self>> {
+        let path = repo_root.join(".local").join(format!(".wt.{name}.toml"));
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let content = std::fs::read_to_string(path)?;
+        Ok(Some(toml::from_str(&content)?))
+    }
 }
 
 #[cfg(test)]
@@ -166,18 +315,26 @@ deps = [
 APP_URL = "https://{{site_name}}.test"
 APP_NAME = "{{issue_title}}"
 
+[setup.env_files."frontend/.env.development"]
+VITE_API_TARGET = "{{api_url}}"
+
+[setup.env_files."backend/.env"]
+DJANGO_ENV = "dev"
+
 [herd]
 site_name = "{{repo}}-{{tech_id}}"
 secure = true
 
 [workspace]
-command = "claudep"
 tabs = ["lazygit"]
 post_deps_tabs = ["npm run dev"]
 colors = { issue = "Red", pr = "Green" }
 open_url = "{{site_url}}"
 open_browser = true
 browser = "Google Chrome"
+
+[agent]
+cli = "claude"
 
 [test]
 commands = [
@@ -205,19 +362,41 @@ commands = [
             config.setup.env.get("APP_URL").unwrap(),
             "https://{{site_name}}.test"
         );
+        assert_eq!(
+            config
+                .setup
+                .env_files
+                .get("frontend/.env.development")
+                .unwrap()
+                .get("VITE_API_TARGET")
+                .unwrap(),
+            "{{api_url}}"
+        );
+        assert_eq!(
+            config
+                .setup
+                .env_files
+                .get("backend/.env")
+                .unwrap()
+                .get("DJANGO_ENV")
+                .unwrap(),
+            "dev"
+        );
 
         let herd = config.herd.unwrap();
         assert_eq!(herd.site_name, "{{repo}}-{{tech_id}}");
         assert_eq!(herd.secure, Some(true));
 
         let ws = config.workspace.unwrap();
-        assert_eq!(ws.command, "claudep");
         assert_eq!(ws.tabs, vec!["lazygit"]);
         assert_eq!(ws.post_deps_tabs, vec!["npm run dev"]);
         assert_eq!(ws.colors.get("issue").unwrap(), "Red");
         assert_eq!(ws.open_url.as_deref(), Some("{{site_url}}"));
         assert_eq!(ws.open_browser, Some(true));
         assert_eq!(ws.browser.as_deref(), Some("Google Chrome"));
+
+        let agent = config.agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Claude);
 
         let test = config.test.unwrap();
         assert_eq!(test.commands[0].label.as_deref(), Some("PHP"));
@@ -368,10 +547,160 @@ site_name = "root"
     }
 
     #[test]
-    fn parses_post_ready_config() {
+    fn parses_agent_config_with_defaults() {
         let toml_str = r#"
+[agent]
+cli = "codex"
+args = ["--model", "gpt-5.5"]
+
+[agent.prompt]
+issue = ["start\n"]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let agent = config.agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Codex);
+        assert_eq!(agent.args, vec!["--model", "gpt-5.5"]);
+        assert_eq!(agent.command, None);
+        assert_eq!(agent.ready, ReadyMode::Auto);
+        assert_eq!(agent.submit, SubmitMode::Auto);
+        assert_eq!(agent.timeout, 15);
+        assert_eq!(agent.send_after, 3);
+        assert_eq!(agent.prompt.get("issue").unwrap(), &vec!["start\n"]);
+    }
+
+    #[test]
+    fn parses_agent_ready_marker_submit_and_gemini_cli() {
+        let toml_str = r#"
+[agent]
+cli = "gemini"
+ready = "CUSTOM"
+submit = "carriage_return"
+timeout = 22
+send_after = 4
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let agent = config.agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Gemini);
+        assert_eq!(agent.ready, ReadyMode::Marker("CUSTOM".into()));
+        assert_eq!(agent.submit, SubmitMode::CarriageReturn);
+        assert_eq!(agent.timeout, 22);
+        assert_eq!(agent.send_after, 4);
+    }
+
+    #[test]
+    fn agent_command_line_escapes_args_and_respects_override() {
+        let agent = AgentConfig {
+            cli: AgentCli::Codex,
+            args: vec!["--prompt".into(), "hello world".into(), "it's ok".into()],
+            command: None,
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 15,
+            send_after: 3,
+            prompt: HashMap::new(),
+        };
+        assert_eq!(
+            agent.command_line().unwrap(),
+            Some("codex --prompt 'hello world' 'it'\\''s ok'".into())
+        );
+
+        let override_agent = AgentConfig {
+            command: Some("env FOO=1 codex --model gpt-5.5".into()),
+            ..agent
+        };
+        assert_eq!(
+            override_agent.command_line().unwrap(),
+            Some("env FOO=1 codex --model gpt-5.5".into())
+        );
+    }
+
+    #[test]
+    fn agent_helpers_pick_ready_and_submit_by_cli() {
+        let codex = AgentConfig {
+            cli: AgentCli::Codex,
+            args: Vec::new(),
+            command: None,
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 15,
+            send_after: 3,
+            prompt: HashMap::new(),
+        };
+        let claude = AgentConfig {
+            cli: AgentCli::Claude,
+            ..codex.clone()
+        };
+        let gemini = AgentConfig {
+            cli: AgentCli::Gemini,
+            ..codex.clone()
+        };
+        let none = AgentConfig {
+            cli: AgentCli::None,
+            ..codex.clone()
+        };
+
+        assert_eq!(codex.effective_ready(), Some("›".into()));
+        assert_eq!(claude.effective_ready(), Some("❯".into()));
+        assert_eq!(gemini.effective_ready(), None);
+        assert_eq!(none.command_line().unwrap(), None);
+        assert_eq!(codex.apply_submit_suffix("go".into()), "go\r");
+        assert_eq!(claude.apply_submit_suffix("go".into()), "go\n");
+        assert_eq!(gemini.apply_submit_suffix("go".into()), "go\n");
+        assert_eq!(codex.apply_submit_suffix("go\n".into()), "go\n");
+    }
+
+    #[test]
+    fn agent_none_disables_command_even_with_override() {
+        let agent = AgentConfig {
+            cli: AgentCli::None,
+            args: Vec::new(),
+            command: Some("codex --model gpt-5.5".into()),
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 15,
+            send_after: 3,
+            prompt: HashMap::new(),
+        };
+
+        assert_eq!(agent.command_line().unwrap(), None);
+    }
+
+    #[test]
+    fn load_variant_returns_specific_config_or_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_dir = dir.path().join(".local");
+        std::fs::create_dir_all(&local_dir).unwrap();
+        std::fs::write(
+            local_dir.join(".wt.codex.toml"),
+            r#"
+[agent]
+cli = "codex"
+args = ["--model", "gpt-5.5"]
+"#,
+        )
+        .unwrap();
+
+        let variant = Config::load_variant(dir.path(), "codex").unwrap().unwrap();
+        assert_eq!(variant.agent.unwrap().cli, AgentCli::Codex);
+        assert!(
+            Config::load_variant(dir.path(), "missing")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rejects_legacy_workspace_command_and_post_ready() {
+        let command_toml = r#"
 [workspace]
 command = "bash"
+tabs = []
+"#;
+        let err = toml::from_str::<Config>(command_toml).unwrap_err();
+        assert!(err.to_string().contains("command"));
+
+        let post_ready_toml = r#"
+[workspace]
 tabs = []
 
 [workspace.post_ready]
@@ -383,21 +712,8 @@ send_after = 2
 issue = ["start 스킬을 사용해서 현재 GitHub 이슈를 읽고 작업 계획을 세운 뒤 바로 시작해줘.\n"]
 pr = ["/conventional-review {{pr_number}}\n", "/codex:review --background\n"]
 "#;
-        let config: Config = toml::from_str(toml_str).unwrap();
-        let post = config.workspace.unwrap().post_ready.unwrap();
-        assert_eq!(post.wait_for, "❯");
-        assert_eq!(post.send_after, Some(2));
-        assert_eq!(
-            post.send.get("issue").unwrap(),
-            &vec!["start 스킬을 사용해서 현재 GitHub 이슈를 읽고 작업 계획을 세운 뒤 바로 시작해줘.\n"]
-        );
-        assert_eq!(post.send.get("pr").unwrap().len(), 2);
-        assert_eq!(
-            post.send.get("pr").unwrap()[1],
-            "/codex:review --background\n"
-        );
-        assert!(!post.send.contains_key("new"));
-        assert_eq!(post.timeout, Some(10));
+        let err = toml::from_str::<Config>(post_ready_toml).unwrap_err();
+        assert!(err.to_string().contains("post_ready"));
     }
 
     #[test]
@@ -417,12 +733,12 @@ open_browser = true
         let toml_str = r#"
 [issues]
 provider = "github"
-gh_user = "hoetaek"
+gh_user = "alice"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         let issues = config.issues.unwrap();
         assert_eq!(issues.provider, IssueProviderType::Github);
-        assert_eq!(issues.gh_user.as_deref(), Some("hoetaek"));
+        assert_eq!(issues.gh_user.as_deref(), Some("alice"));
     }
 
     #[test]

@@ -36,7 +36,11 @@ impl<'a> GithubService<'a> {
             self.cwd,
         )?;
         if !out.success {
-            let detail = if out.stderr.is_empty() { &out.stdout } else { &out.stderr };
+            let detail = if out.stderr.is_empty() {
+                &out.stdout
+            } else {
+                &out.stderr
+            };
             bail!("Failed to fetch PR #{number}: {detail}");
         }
         let pr: PullRequest = serde_json::from_str(&out.stdout)?;
@@ -55,7 +59,11 @@ impl<'a> GithubService<'a> {
             self.cwd,
         )?;
         if !out.success {
-            let detail = if out.stderr.is_empty() { &out.stdout } else { &out.stderr };
+            let detail = if out.stderr.is_empty() {
+                &out.stdout
+            } else {
+                &out.stderr
+            };
             bail!("Failed to fetch PR list: {detail}");
         }
         let prs: Vec<PullRequest> = serde_json::from_str(&out.stdout)?;
@@ -72,14 +80,14 @@ mod tests {
     fn get_pr_parses_json() {
         let mut runner = MockRunner::new();
         runner.add_response(
-            r#"{"number":42,"title":"Add feature","headRefName":"hoetaek/feature","baseRefName":"main","state":"OPEN"}"#,
+            r#"{"number":42,"title":"Add feature","headRefName":"alice/feature","baseRefName":"main","state":"OPEN"}"#,
             true,
         );
 
         let svc = GithubService::new(&runner, None);
         let pr = svc.get_pr(42).unwrap();
         assert_eq!(pr.number, 42);
-        assert_eq!(pr.head_ref_name, "hoetaek/feature");
+        assert_eq!(pr.head_ref_name, "alice/feature");
         assert_eq!(pr.state, "OPEN");
     }
 

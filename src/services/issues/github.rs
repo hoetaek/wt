@@ -1,6 +1,6 @@
 use crate::context::CommandRunner;
 use crate::services::issues::{IssueInfo, IssueListItem, IssueProvider};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::Path;
@@ -152,13 +152,13 @@ mod tests {
     fn get_issue_parses_gh_json() {
         let mut runner = MockRunner::new();
         runner.add_response(r#"{"number":42,"title":"Add feature"}"#, true);
-        runner.add_response("42\thoetaek/42-add-feature\n", true);
+        runner.add_response("42\talice/42-add-feature\n", true);
 
         let provider = GithubIssueProvider::new(&runner, None, None);
         let issue = provider.get_issue("42").unwrap();
         assert_eq!(issue.identifier, "#42");
         assert_eq!(issue.title, "Add feature");
-        assert_eq!(issue.branch_name.as_deref(), Some("hoetaek/42-add-feature"));
+        assert_eq!(issue.branch_name.as_deref(), Some("alice/42-add-feature"));
     }
 
     #[test]
@@ -185,7 +185,7 @@ mod tests {
             true,
         );
 
-        let provider = GithubIssueProvider::new(&runner, None, Some("hoetaek".into()));
+        let provider = GithubIssueProvider::new(&runner, None, Some("alice".into()));
         let items = provider.list_issues().unwrap();
         assert_eq!(items.len(), 3);
         assert_eq!(items[0].display, "#1 Issue 1");
@@ -195,9 +195,9 @@ mod tests {
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
         assert!(calls[0].1.contains(&"-a".to_string()));
-        assert!(calls[0].1.contains(&"hoetaek".to_string()));
+        assert!(calls[0].1.contains(&"alice".to_string()));
         assert!(calls[1].1.contains(&"-A".to_string()));
-        assert!(calls[1].1.contains(&"hoetaek".to_string()));
+        assert!(calls[1].1.contains(&"alice".to_string()));
     }
 
     #[test]
@@ -216,22 +216,22 @@ mod tests {
     #[test]
     fn ensure_branch_returns_existing() {
         let mut runner = MockRunner::new();
-        runner.add_response("42\thoetaek/42-add-feature\n", true);
+        runner.add_response("42\talice/42-add-feature\n", true);
 
         let provider = GithubIssueProvider::new(&runner, None, None);
         let branch = provider.ensure_branch("42", None).unwrap();
-        assert_eq!(branch, "hoetaek/42-add-feature");
+        assert_eq!(branch, "alice/42-add-feature");
     }
 
     #[test]
     fn ensure_branch_creates_new_without_base() {
         let mut runner = MockRunner::new();
         runner.add_response("", true);
-        runner.add_response("hoetaek/42-add-feature", true);
+        runner.add_response("alice/42-add-feature", true);
 
         let provider = GithubIssueProvider::new(&runner, None, None);
         let branch = provider.ensure_branch("42", None).unwrap();
-        assert_eq!(branch, "hoetaek/42-add-feature");
+        assert_eq!(branch, "alice/42-add-feature");
 
         let calls = runner.calls.lock().unwrap();
         let create_call = &calls[1];
@@ -242,11 +242,11 @@ mod tests {
     fn ensure_branch_creates_new_with_base() {
         let mut runner = MockRunner::new();
         runner.add_response("", true);
-        runner.add_response("hoetaek/42-add-feature", true);
+        runner.add_response("alice/42-add-feature", true);
 
         let provider = GithubIssueProvider::new(&runner, None, None);
         let branch = provider.ensure_branch("42", Some("develop")).unwrap();
-        assert_eq!(branch, "hoetaek/42-add-feature");
+        assert_eq!(branch, "alice/42-add-feature");
 
         let calls = runner.calls.lock().unwrap();
         let create_call = &calls[1];
@@ -268,7 +268,7 @@ mod tests {
     fn on_clean_is_noop() {
         let runner = MockRunner::new();
         let provider = GithubIssueProvider::new(&runner, None, None);
-        assert!(provider.on_clean("42", "hoetaek/42-feature").is_ok());
+        assert!(provider.on_clean("42", "alice/42-feature").is_ok());
         assert!(runner.calls.lock().unwrap().is_empty());
     }
 }

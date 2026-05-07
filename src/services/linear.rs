@@ -97,7 +97,7 @@ mod tests {
     fn get_issue_parses_json() {
         let mut runner = MockRunner::new();
         runner.add_response(
-            r#"{"identifier":"TECH-680","title":"C11S09. 위키 에디터","branchName":"hoetaek/tech-680-c11s09-위키"}"#,
+            r#"{"identifier":"TECH-680","title":"C11S09. 위키 에디터","branchName":"alice/tech-680-c11s09-위키"}"#,
             true,
         );
 
@@ -107,7 +107,7 @@ mod tests {
         assert_eq!(issue.title, "C11S09. 위키 에디터");
         assert_eq!(
             issue.branch_name.as_deref(),
-            Some("hoetaek/tech-680-c11s09-위키")
+            Some("alice/tech-680-c11s09-위키")
         );
     }
 
@@ -124,14 +124,14 @@ mod tests {
     fn list_issues_parses_array() {
         let mut runner = MockRunner::new();
         runner.add_response(
-            r#"[{"identifier":"TECH-1","title":"Issue 1","state":{"name":"Started"},"assignee":{"displayName":"hoetaek"}}]"#,
+            r#"[{"identifier":"TECH-1","title":"Issue 1","state":{"name":"Started"},"assignee":{"displayName":"alice"}}]"#,
             true,
         );
 
         let svc = LinearService::new(&runner, None);
         let issues = svc.list_issues().unwrap();
         assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].assignee.as_ref().unwrap().display_name, "hoetaek");
+        assert_eq!(issues[0].assignee.as_ref().unwrap().display_name, "alice");
     }
 
     #[test]

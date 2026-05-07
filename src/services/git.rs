@@ -248,16 +248,16 @@ worktree /home/dev/hapjeong
 HEAD abc1234
 branch refs/heads/main
 
-worktree /home/dev/hapjeong-hoetaek-tech-680
+worktree /home/dev/hapjeong-alice-tech-680
 HEAD def5678
-branch refs/heads/hoetaek/tech-680-feature
+branch refs/heads/alice/tech-680-feature
 
 ";
         let entries = parse_worktree_list(input).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].path, PathBuf::from("/home/dev/hapjeong"));
         assert_eq!(entries[0].branch, "main");
-        assert_eq!(entries[1].branch, "hoetaek/tech-680-feature");
+        assert_eq!(entries[1].branch, "alice/tech-680-feature");
     }
 
     #[test]
@@ -357,18 +357,18 @@ worktree /home/dev/hapjeong
 HEAD abc
 branch refs/heads/main
 
-worktree /home/dev/hapjeong-hoetaek-tech-680
+worktree /home/dev/hapjeong-alice-tech-680
 HEAD def
-branch refs/heads/hoetaek/tech-680
+branch refs/heads/alice/tech-680
 
 ";
         runner.add_response(porcelain, true);
 
         let git = GitService::new(&runner, None);
-        let path = git.checked_out_path("hoetaek/tech-680").unwrap();
+        let path = git.checked_out_path("alice/tech-680").unwrap();
         assert_eq!(
             path,
-            Some(PathBuf::from("/home/dev/hapjeong-hoetaek-tech-680"))
+            Some(PathBuf::from("/home/dev/hapjeong-alice-tech-680"))
         );
     }
 
@@ -436,9 +436,9 @@ branch refs/heads/main
         let mut runner = MockRunner::new();
         runner.add_response("", true);
         let git = GitService::new(&runner, None);
-        git.fetch_branch("hoetaek/feature").unwrap();
+        git.fetch_branch("alice/feature").unwrap();
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls[0].1, vec!["fetch", "origin", "hoetaek/feature"]);
+        assert_eq!(calls[0].1, vec!["fetch", "origin", "alice/feature"]);
     }
 
     #[test]
@@ -489,12 +489,12 @@ branch refs/heads/main
         let mut runner = MockRunner::new();
         runner.add_response("develop", true);
         let git = GitService::new(&runner, None);
-        let parent = git.get_branch_parent("hoetaek/tech-680").unwrap();
+        let parent = git.get_branch_parent("alice/tech-680").unwrap();
         assert_eq!(parent, Some("develop".into()));
         let calls = runner.calls.lock().unwrap();
         assert_eq!(
             calls[0].1,
-            vec!["config", "--get", "branch.hoetaek/tech-680.parentbranch"]
+            vec!["config", "--get", "branch.alice/tech-680.parentbranch"]
         );
     }
 
@@ -503,7 +503,7 @@ branch refs/heads/main
         let mut runner = MockRunner::new();
         runner.add_response("", false);
         let git = GitService::new(&runner, None);
-        let parent = git.get_branch_parent("hoetaek/feature").unwrap();
+        let parent = git.get_branch_parent("alice/feature").unwrap();
         assert!(parent.is_none());
     }
 }

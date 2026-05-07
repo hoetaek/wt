@@ -39,11 +39,11 @@ mod tests {
     #[test]
     fn branch_exists_with_base_includes_branch() {
         let err = WtError::BranchExistsWithBase {
-            branch: "hoetaek/tech-680".into(),
+            branch: "alice/tech-680".into(),
         };
         assert_eq!(
             err.to_string(),
-            "Branch 'hoetaek/tech-680' already exists. --base is not applicable"
+            "Branch 'alice/tech-680' already exists. --base is not applicable"
         );
     }
 }
