@@ -34,6 +34,7 @@ pub struct CopyAsEntry {
 pub struct SetupConfig {
     pub deps: Vec<DepCommand>,
     pub env: HashMap<String, String>,
+    pub env_files: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -314,6 +315,12 @@ deps = [
 APP_URL = "https://{{site_name}}.test"
 APP_NAME = "{{issue_title}}"
 
+[setup.env_files."frontend/.env.development"]
+VITE_API_TARGET = "{{api_url}}"
+
+[setup.env_files."backend/.env"]
+DJANGO_ENV = "dev"
+
 [herd]
 site_name = "{{repo}}-{{tech_id}}"
 secure = true
@@ -354,6 +361,26 @@ commands = [
         assert_eq!(
             config.setup.env.get("APP_URL").unwrap(),
             "https://{{site_name}}.test"
+        );
+        assert_eq!(
+            config
+                .setup
+                .env_files
+                .get("frontend/.env.development")
+                .unwrap()
+                .get("VITE_API_TARGET")
+                .unwrap(),
+            "{{api_url}}"
+        );
+        assert_eq!(
+            config
+                .setup
+                .env_files
+                .get("backend/.env")
+                .unwrap()
+                .get("DJANGO_ENV")
+                .unwrap(),
+            "dev"
         );
 
         let herd = config.herd.unwrap();

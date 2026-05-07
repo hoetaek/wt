@@ -125,7 +125,10 @@ fn generate_toml(name: &str, base: &Config) -> String {
         })
         .unwrap_or_default();
 
-    let setup_section = if base.setup.deps.is_empty() {
+    let setup_section = if base.setup.deps.is_empty()
+        && base.setup.env.is_empty()
+        && base.setup.env_files.is_empty()
+    {
         String::new()
     } else {
         let deps: Vec<String> = base
@@ -155,8 +158,22 @@ fn generate_toml(name: &str, base: &Config) -> String {
         } else {
             format!("\n[setup.env]\n{}\n", env_lines.join("\n"))
         };
+        let env_files_section = base
+            .setup
+            .env_files
+            .iter()
+            .map(|(path, entries)| {
+                let lines = entries
+                    .iter()
+                    .map(|(k, v)| format!("{k} = {}", toml_quote(v)))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("\n[setup.env_files.{}]\n{}\n", toml_quote(path), lines)
+            })
+            .collect::<Vec<_>>()
+            .join("");
         format!(
-            "\n[setup]\ndeps = [\n{},\n]\n{env_section}",
+            "\n[setup]\ndeps = [\n{},\n]\n{env_section}{env_files_section}",
             deps.join(",\n")
         )
     };
@@ -538,22 +555,38 @@ cli = "codex"
     }
 
     #[test]
-    fn generated_toml_includes_agent_and_escapes_values() {
+    fn generate_toml_includes_env_files() {
         let mut config = Config::default();
-        config.workspace = Some(WorkspaceConfig {
-            tabs: vec!["echo \"tab\"".into()],
-            ..WorkspaceConfig::default()
-        });
-        config.agent = Some(AgentConfig {
-            cli: AgentCli::Codex,
-            args: vec!["--prompt".into(), "hello \"world\"".into()],
-            command: Some("env FOO=\"bar baz\" codex --model gpt-5.5".into()),
-            ready: ReadyMode::Marker("CUSTOM".into()),
-            submit: SubmitMode::CarriageReturn,
-            timeout: 22,
-            send_after: 4,
-            prompt: HashMap::from([("issue".into(), vec!["say \"hi\"\npath C:\\tmp".into()])]),
-        });
+        config.setup.env_files.insert(
+            "frontend/.env.development".into(),
+            HashMap::from([("VITE_API_TARGET".into(), "{{api_url}}".into())]),
+        );
+
+        let toml = generate_toml("frontend", &config);
+
+        assert!(toml.contains("[setup.env_files.\"frontend/.env.development\"]"));
+        assert!(toml.contains("VITE_API_TARGET = \"{{api_url}}\""));
+    }
+
+    #[test]
+    fn generated_toml_includes_agent_and_escapes_values() {
+        let config = Config {
+            workspace: Some(WorkspaceConfig {
+                tabs: vec!["echo \"tab\"".into()],
+                ..WorkspaceConfig::default()
+            }),
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                args: vec!["--prompt".into(), "hello \"world\"".into()],
+                command: Some("env FOO=\"bar baz\" codex --model gpt-5.5".into()),
+                ready: ReadyMode::Marker("CUSTOM".into()),
+                submit: SubmitMode::CarriageReturn,
+                timeout: 22,
+                send_after: 4,
+                prompt: HashMap::from([("issue".into(), vec!["say \"hi\"\npath C:\\tmp".into()])]),
+            }),
+            ..Config::default()
+        };
 
         let generated = generate_toml("codex", &config);
         assert!(!generated.contains("[workspace.post_ready]"));

@@ -209,41 +209,26 @@ pub(crate) fn build_template_vars(
 }
 
 fn substitute_env(wt_path: &Path, config: &Config, vars: &HashMap<String, String>) -> Result<()> {
-    if config.setup.env.is_empty() {
-        return Ok(());
-    }
-
-    let env_paths = collect_env_files(wt_path)?;
-    if env_paths.is_empty() {
-        return Ok(());
-    }
-
     let root_env = wt_path.join(".env");
-    for (key, template_val) in &config.setup.env {
-        let mut targets = Vec::new();
-        for env_path in &env_paths {
-            if env_file_has_key(env_path, key)? {
-                targets.push(env_path.clone());
-            }
+
+    if !config.setup.env.is_empty() && root_env.exists() {
+        for (key, template_val) in &config.setup.env {
+            substitute_env_key(&root_env, key, template_val, vars)?;
+        }
+    }
+
+    for (relative_path, entries) in &config.setup.env_files {
+        let env_path = wt_path.join(relative_path);
+        if !env_path.exists() {
+            continue;
         }
 
-        if targets.is_empty() && root_env.exists() {
-            targets.push(root_env.clone());
-        }
-
-        for env_path in targets {
+        for (key, template_val) in entries {
             substitute_env_key(&env_path, key, template_val, vars)?;
         }
     }
 
     Ok(())
-}
-
-fn env_file_has_key(env_path: &Path, key: &str) -> Result<bool> {
-    let content = fs::read_to_string(env_path)?;
-    Ok(content
-        .lines()
-        .any(|line| line.starts_with(&format!("{key}="))))
 }
 
 fn substitute_env_key(
@@ -252,7 +237,7 @@ fn substitute_env_key(
     template_val: &str,
     vars: &HashMap<String, String>,
 ) -> Result<()> {
-    let content = fs::read_to_string(&env_path)?;
+    let content = fs::read_to_string(env_path)?;
     let mut lines: Vec<String> = content.lines().map(String::from).collect();
 
     let rendered = template::render(template_val, vars);
@@ -265,36 +250,7 @@ fn substitute_env_key(
         lines.push(format!("{key}={rendered}"));
     }
 
-    fs::write(&env_path, lines.join("\n") + "\n")?;
-    Ok(())
-}
-
-fn collect_env_files(wt_path: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let mut paths = Vec::new();
-    collect_env_files_inner(wt_path, &mut paths)?;
-    paths.sort();
-    Ok(paths)
-}
-
-fn collect_env_files_inner(dir: &Path, paths: &mut Vec<std::path::PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-
-        if path.is_dir() {
-            if matches!(
-                file_name.as_ref(),
-                ".git" | "node_modules" | ".venv" | "venv" | "target"
-            ) {
-                continue;
-            }
-            collect_env_files_inner(&path, paths)?;
-        } else if file_name == ".env" || file_name.starts_with(".env.") {
-            paths.push(path);
-        }
-    }
+    fs::write(env_path, lines.join("\n") + "\n")?;
     Ok(())
 }
 
@@ -839,13 +795,15 @@ mod tests {
         runner.add_response("", true);
         let runner = Arc::new(runner);
 
-        let mut config = Config::default();
-        config.workspace = Some(WorkspaceConfig {
-            open_url: Some("{{site_url}}".into()),
-            open_browser: Some(true),
-            browser: Some("Google Chrome".into()),
-            ..WorkspaceConfig::default()
-        });
+        let config = Config {
+            workspace: Some(WorkspaceConfig {
+                open_url: Some("{{site_url}}".into()),
+                open_browser: Some(true),
+                browser: Some("Google Chrome".into()),
+                ..WorkspaceConfig::default()
+            }),
+            ..Config::default()
+        };
 
         let ctx = Ctx::new(
             repo.clone(),
@@ -911,18 +869,23 @@ mod tests {
     }
 
     #[test]
-    fn substitute_env_updates_nested_env_files() {
-        let dir = std::env::temp_dir().join("wt-test-nested-env-sub");
-        fs::create_dir_all(dir.join("istat_front")).ok();
-        fs::create_dir_all(dir.join("istat_back")).ok();
+    fn setup_env_does_not_update_nested_or_dotenv_variant_files() {
+        let dir = std::env::temp_dir().join("wt-test-env-root-only");
+        fs::create_dir_all(dir.join("frontend")).ok();
+        fs::create_dir_all(dir.join("backend")).ok();
+        fs::write(dir.join(".env"), "APP_URL=http://old\n").unwrap();
         fs::write(
-            dir.join("istat_front/.env.development"),
+            dir.join("frontend/.env.development"),
             "VITE_API_TARGET=http://old\nOTHER=keep\n",
         )
         .unwrap();
-        fs::write(dir.join("istat_back/.env"), "DJANGO_ENV=dev\n").unwrap();
+        fs::write(dir.join("backend/.env"), "DJANGO_ENV=old\n").unwrap();
 
         let mut config = Config::default();
+        config
+            .setup
+            .env
+            .insert("APP_URL".into(), "https://new.test".into());
         config
             .setup
             .env
@@ -932,13 +895,16 @@ mod tests {
         let vars = HashMap::new();
         substitute_env(&dir, &config, &vars).unwrap();
 
-        let front = fs::read_to_string(dir.join("istat_front/.env.development")).unwrap();
-        let back = fs::read_to_string(dir.join("istat_back/.env")).unwrap();
-        assert!(front.contains("VITE_API_TARGET=http://127.0.0.1:8000"));
+        let root = fs::read_to_string(dir.join(".env")).unwrap();
+        let front = fs::read_to_string(dir.join("frontend/.env.development")).unwrap();
+        let back = fs::read_to_string(dir.join("backend/.env")).unwrap();
+
+        assert!(root.contains("APP_URL=https://new.test"));
+        assert!(root.contains("VITE_API_TARGET=http://127.0.0.1:8000"));
+        assert!(root.contains("DJANGO_ENV=dev"));
+        assert!(front.contains("VITE_API_TARGET=http://old"));
         assert!(front.contains("OTHER=keep"));
-        assert!(!front.contains("DJANGO_ENV="));
-        assert!(back.contains("DJANGO_ENV=dev"));
-        assert!(!back.contains("VITE_API_TARGET="));
+        assert!(back.contains("DJANGO_ENV=old"));
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -963,6 +929,67 @@ mod tests {
         let nested = fs::read_to_string(dir.join("nested/.env")).unwrap();
         assert!(root.contains("NEW_KEY=new-value"));
         assert!(!nested.contains("NEW_KEY="));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn substitute_env_files_updates_configured_files_only() {
+        let dir = std::env::temp_dir().join("wt-test-env-files-targets");
+        fs::create_dir_all(dir.join("frontend")).ok();
+        fs::create_dir_all(dir.join("backend")).ok();
+        fs::write(dir.join(".env"), "APP_URL=http://old\n").unwrap();
+        fs::write(
+            dir.join("frontend/.env.development"),
+            "VITE_API_TARGET=http://old\nOTHER=keep\n",
+        )
+        .unwrap();
+        fs::write(dir.join("backend/.env"), "DJANGO_ENV=old\n").unwrap();
+
+        let mut config = Config::default();
+        config
+            .setup
+            .env
+            .insert("APP_URL".into(), "{{site_url}}".into());
+        config.setup.env_files.insert(
+            "frontend/.env.development".into(),
+            HashMap::from([("VITE_API_TARGET".into(), "{{api_url}}".into())]),
+        );
+
+        let vars = HashMap::from([
+            ("site_url".into(), "https://root.test".into()),
+            ("api_url".into(), "http://127.0.0.1:15001".into()),
+        ]);
+        substitute_env(&dir, &config, &vars).unwrap();
+
+        let root = fs::read_to_string(dir.join(".env")).unwrap();
+        let front = fs::read_to_string(dir.join("frontend/.env.development")).unwrap();
+        let back = fs::read_to_string(dir.join("backend/.env")).unwrap();
+
+        assert!(root.contains("APP_URL=https://root.test"));
+        assert!(front.contains("VITE_API_TARGET=http://127.0.0.1:15001"));
+        assert!(front.contains("OTHER=keep"));
+        assert!(back.contains("DJANGO_ENV=old"));
+        assert!(!back.contains("VITE_API_TARGET="));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn substitute_env_files_skips_missing_targets() {
+        let dir = std::env::temp_dir().join("wt-test-env-files-missing");
+        fs::create_dir_all(&dir).ok();
+
+        let mut config = Config::default();
+        config.setup.env_files.insert(
+            "frontend/.env.development".into(),
+            HashMap::from([("VITE_API_TARGET".into(), "{{api_url}}".into())]),
+        );
+
+        let vars = HashMap::from([("api_url".into(), "http://127.0.0.1:15001".into())]);
+        substitute_env(&dir, &config, &vars).unwrap();
+
+        assert!(!dir.join("frontend/.env.development").exists());
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -1124,18 +1151,20 @@ mod tests {
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
 
-        let mut config = Config::default();
-        config.workspace = Some(WorkspaceConfig::default());
-        config.agent = Some(AgentConfig {
-            cli: AgentCli::Codex,
-            args: vec!["--model".into(), "gpt-5.5".into()],
-            command: None,
-            ready: ReadyMode::Auto,
-            submit: SubmitMode::Auto,
-            timeout: 15,
-            send_after: 3,
-            prompt: HashMap::new(),
-        });
+        let config = Config {
+            workspace: Some(WorkspaceConfig::default()),
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                args: vec!["--model".into(), "gpt-5.5".into()],
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: HashMap::new(),
+            }),
+            ..Config::default()
+        };
 
         let ctx = Ctx::new(
             repo.clone(),
