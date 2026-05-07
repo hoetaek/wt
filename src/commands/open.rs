@@ -233,23 +233,25 @@ mod tests {
         let mut ui = MockUi::new();
         ui.add_select(0);
 
-        let mut config = Config::default();
-        config.workspace = Some(WorkspaceConfig {
-            post_deps_tabs: vec!["echo {{site_url}} {{api_url}}".into()],
-            open_url: Some("{{site_url}}".into()),
-            open_browser: Some(true),
-            ..WorkspaceConfig::default()
-        });
-        config.agent = Some(AgentConfig {
-            cli: AgentCli::Codex,
-            args: vec!["--model".into(), "gpt-5.5".into()],
-            command: None,
-            ready: ReadyMode::Auto,
-            submit: SubmitMode::Auto,
-            timeout: 15,
-            send_after: 3,
-            prompt: Default::default(),
-        });
+        let config = Config {
+            workspace: Some(WorkspaceConfig {
+                post_deps_tabs: vec!["echo {{site_url}} {{api_url}}".into()],
+                open_url: Some("{{site_url}}".into()),
+                open_browser: Some(true),
+                ..WorkspaceConfig::default()
+            }),
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                args: vec!["--model".into(), "gpt-5.5".into()],
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: Default::default(),
+            }),
+            ..Config::default()
+        };
 
         let ctx = Ctx::new(
             PathBuf::from("/tmp/repo"),
@@ -340,18 +342,20 @@ args = ["--model", "gpt-5.5"]
         let mut ui = MockUi::new();
         ui.add_select(0);
 
-        let mut root_config = Config::default();
-        root_config.workspace = Some(WorkspaceConfig::default());
-        root_config.agent = Some(AgentConfig {
-            cli: AgentCli::Claude,
-            args: Vec::new(),
-            command: None,
-            ready: ReadyMode::Auto,
-            submit: SubmitMode::Auto,
-            timeout: 15,
-            send_after: 3,
-            prompt: Default::default(),
-        });
+        let root_config = Config {
+            workspace: Some(WorkspaceConfig::default()),
+            agent: Some(AgentConfig {
+                cli: AgentCli::Claude,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: Default::default(),
+            }),
+            ..Config::default()
+        };
 
         let ctx = Ctx::new(
             repo.path().to_path_buf(),
@@ -425,18 +429,20 @@ args = ["--model", "gpt-5.5"]
         let mut ui = MockUi::new();
         ui.add_select(0);
 
-        let mut root_config = Config::default();
-        root_config.workspace = Some(WorkspaceConfig::default());
-        root_config.agent = Some(AgentConfig {
-            cli: AgentCli::Claude,
-            args: Vec::new(),
-            command: None,
-            ready: ReadyMode::Auto,
-            submit: SubmitMode::Auto,
-            timeout: 15,
-            send_after: 3,
-            prompt: Default::default(),
-        });
+        let root_config = Config {
+            workspace: Some(WorkspaceConfig::default()),
+            agent: Some(AgentConfig {
+                cli: AgentCli::Claude,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: Default::default(),
+            }),
+            ..Config::default()
+        };
 
         let ctx = Ctx::new(
             repo.path().to_path_buf(),

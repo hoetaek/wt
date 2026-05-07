@@ -75,9 +75,11 @@ pub mod mock {
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
+    pub type CommandCall = (String, Vec<String>, Option<PathBuf>);
+
     pub struct MockRunner {
         responses: Mutex<VecDeque<CmdOutput>>,
-        pub calls: Mutex<Vec<(String, Vec<String>, Option<PathBuf>)>>,
+        pub calls: Mutex<Vec<CommandCall>>,
         available_commands: Vec<String>,
     }
 

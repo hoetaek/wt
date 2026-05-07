@@ -325,12 +325,13 @@ mod tests {
     use std::sync::Arc;
 
     fn linear_config() -> Config {
-        let mut config = Config::default();
-        config.issues = Some(IssuesConfig {
-            provider: IssueProviderType::Linear,
-            gh_user: None,
-        });
-        config
+        Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            ..Config::default()
+        }
     }
 
     struct SharedRunner {
