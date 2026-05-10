@@ -42,7 +42,7 @@ pub enum Commands {
     },
     /// Start a ready-to-code workspace from an issue, PR, or branch name
     Start {
-        /// Issue number, pr:NUMBER, or branch name words
+        /// Issue number, issue ID, pr [NUMBER], or branch name words
         target: Vec<String>,
         /// Base branch: --base (interactive), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
@@ -402,6 +402,16 @@ mod tests {
         let cli = parse(&["wt", "start", "pr:42"]);
         if let Some(Commands::Start { target, .. }) = cli.command {
             assert_eq!(target, vec!["pr:42"]);
+        } else {
+            panic!("expected Start");
+        }
+    }
+
+    #[test]
+    fn start_with_split_pr_target() {
+        let cli = parse(&["wt", "start", "pr", "42"]);
+        if let Some(Commands::Start { target, .. }) = cli.command {
+            assert_eq!(target, vec!["pr", "42"]);
         } else {
             panic!("expected Start");
         }

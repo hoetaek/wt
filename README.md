@@ -68,12 +68,14 @@ Start a workspace from an issue:
 
 ```bash
 wt start 123
+wt start issue PROJ-123
 ```
 
 Start a workspace from a pull request:
 
 ```bash
-wt start pr:42
+wt start pr
+wt start pr 42
 ```
 
 Start a workspace from branch-name text:
