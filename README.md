@@ -208,11 +208,16 @@ wt profile
 
 ## Batches
 
-Batches start several issues with one profile:
+Batches split planning from execution. `prepare` snapshots issues and writes a
+batch file without creating worktrees:
 
 ```bash
-wt batch 123 456 789 --profile codex
+wt batch prepare 123 456 789
+wt batch prepare 123 456 789 --profile codex
 ```
+
+When `--profile` is omitted, the batch records `profile = "default"` and uses
+the current effective config at run time.
 
 Issue bodies are stored as markdown snapshots:
 
@@ -221,8 +226,21 @@ Issue bodies are stored as markdown snapshots:
 .local/batches/2026-05-09-001.toml
 ```
 
-The batch TOML records which snapshots were run with which profile instead of
-embedding long issue bodies.
+The batch TOML records the profile, base mode, overall batch status, and one
+`[[issues]]` table per issue. The double brackets are TOML's array-of-tables
+syntax, equivalent to an `issues: [...]` list in JSON.
+
+Run a prepared batch explicitly:
+
+```bash
+wt batch run .local/batches/2026-05-09-001.toml
+wt batch run latest
+```
+
+`run` executes only issue items with `status = "prepared"` or
+`status = "failed"`. Items marked `done` or `skipped` are left alone, so reruns
+can continue from the batch file's item status instead of checking a global
+issue state.
 
 ## Traefik Provider
 

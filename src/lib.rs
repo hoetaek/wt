@@ -12,7 +12,7 @@ pub mod ui;
 pub mod worktree_naming;
 
 use anyhow::Result;
-use cli::Commands;
+use cli::{BatchCommand, Commands};
 use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
@@ -24,11 +24,14 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             profile,
             parallel,
         } => commands::start::run(ctx, target, base, profile.as_deref(), *parallel),
-        Commands::Batch {
-            issues,
-            profile,
-            base,
-        } => commands::batch::run(ctx, issues, profile, base),
+        Commands::Batch { command } => match command {
+            BatchCommand::Prepare {
+                issues,
+                profile,
+                base,
+            } => commands::batch::prepare(ctx, issues, profile.as_deref(), base),
+            BatchCommand::Run { batch } => commands::batch::run(ctx, batch),
+        },
         Commands::List => commands::list::run(ctx),
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),

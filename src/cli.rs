@@ -54,16 +54,10 @@ pub enum Commands {
         #[arg(long)]
         parallel: bool,
     },
-    /// Run several issues with one profile
+    /// Prepare or run issue batches
     Batch {
-        /// Issue identifiers to snapshot and start
-        issues: Vec<String>,
-        /// Profile to use for all issues
-        #[arg(long)]
-        profile: String,
-        /// Base branch: --base (interactive), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
+        #[command(subcommand)]
+        command: BatchCommand,
     },
     /// Show worktree, branch, site, and setup state
     List,
@@ -148,6 +142,26 @@ pub enum InitSiteProvider {
     #[value(name = "docker_proxy", alias = "docker-proxy")]
     DockerProxy,
     Traefik,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum BatchCommand {
+    /// Snapshot issues and create a batch file without starting workspaces
+    Prepare {
+        /// Issue identifiers to snapshot
+        issues: Vec<String>,
+        /// Profile to use for all issues (defaults to current config)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Base branch: --base (interactive), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+    },
+    /// Run prepared or failed items from a batch file
+    Run {
+        /// Batch TOML path, or "latest" for the newest local batch
+        batch: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
@@ -318,23 +332,54 @@ mod tests {
     }
 
     #[test]
-    fn batch_subcommand_requires_profile() {
+    fn batch_prepare_accepts_default_profile() {
+        let cli = parse(&["wt", "batch", "prepare", "PROJ-123", "PROJ-456"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Prepare {
+                    ref issues,
+                    profile: None,
+                    base: None,
+                }
+            }) if issues == &vec!["PROJ-123".to_string(), "PROJ-456".to_string()]
+        ));
+    }
+
+    #[test]
+    fn batch_prepare_accepts_profile_and_base() {
         let cli = parse(&[
             "wt",
             "batch",
+            "prepare",
             "PROJ-123",
-            "PROJ-456",
             "--profile",
             "codex-yolo",
+            "--base",
+            "main",
         ]);
         assert!(matches!(
             cli.command,
             Some(Commands::Batch {
-                ref issues,
-                ref profile,
-                base: None,
-            }) if issues == &vec!["PROJ-123".to_string(), "PROJ-456".to_string()]
+                command: BatchCommand::Prepare {
+                    ref issues,
+                    profile: Some(ref profile),
+                    base: Some(ref base),
+                }
+            }) if issues == &vec!["PROJ-123".to_string()]
                 && profile == "codex-yolo"
+                && base == "main"
+        ));
+    }
+
+    #[test]
+    fn batch_run_accepts_latest() {
+        let cli = parse(&["wt", "batch", "run", "latest"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Run { ref batch }
+            }) if batch == "latest"
         ));
     }
 

@@ -392,6 +392,9 @@ fn resolve_base_branch(ctx: &Ctx, git: &GitService, base_raw: &Option<String>) -
 
 fn load_selected_profiles(ctx: &Ctx, profile: Option<&str>) -> Result<Vec<(String, Config)>> {
     if let Some(profile) = profile {
+        if profile == "default" {
+            return Ok(vec![("default".into(), ctx.config.clone())]);
+        }
         let config = Config::load_profile(&ctx.repo_root, profile, &ctx.config)?
             .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))?;
         return Ok(vec![(profile.to_string(), config)]);
