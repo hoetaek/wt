@@ -372,7 +372,7 @@ fn resolve_prompts(ctx: &Ctx, options: &InitOptions) -> Result<bool> {
     if options.prompts || options.yes {
         return Ok(true);
     }
-    ctx.ui.confirm("Add default start prompts?", true)
+    ctx.ui.confirm("Add default profile prompts?", true)
 }
 
 fn build_profile(

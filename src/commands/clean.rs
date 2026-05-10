@@ -152,8 +152,27 @@ fn resolve_targets(
 fn worktree_matches(entry: &crate::services::git::WorktreeEntry, target: &str) -> bool {
     entry.branch == target
         || entry.branch.rsplit('/').next() == Some(target)
+        || branch_issue_matches(&entry.branch, target)
         || entry.path.to_string_lossy() == target
         || entry.path.file_name().and_then(|name| name.to_str()) == Some(target)
+}
+
+fn branch_issue_matches(branch: &str, target: &str) -> bool {
+    let target = target.trim_start_matches('#').to_ascii_lowercase();
+    if target.is_empty() {
+        return false;
+    }
+
+    let short = branch
+        .rsplit('/')
+        .next()
+        .unwrap_or(branch)
+        .to_ascii_lowercase();
+    if short == target || short.starts_with(&format!("{target}-")) {
+        return true;
+    }
+
+    short.contains(&format!("-{target}-")) || short.ends_with(&format!("-{target}"))
 }
 
 #[cfg(test)]
@@ -237,5 +256,17 @@ mod tests {
         );
 
         assert!(run(&ctx).is_ok());
+    }
+
+    #[test]
+    fn worktree_matches_issue_number_or_key() {
+        let entry = crate::services::git::WorktreeEntry {
+            path: "/tmp/sample-app-proj-123-fix-editor".into(),
+            branch: "alice/proj-123-fix-editor".into(),
+        };
+
+        assert!(worktree_matches(&entry, "123"));
+        assert!(worktree_matches(&entry, "PROJ-123"));
+        assert!(!worktree_matches(&entry, "12"));
     }
 }

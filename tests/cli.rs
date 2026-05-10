@@ -46,7 +46,9 @@ fn no_args_prints_help_successfully() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Usage: wt [OPTIONS] [COMMAND]"))
-        .stdout(predicate::str::contains("start"));
+        .stdout(predicate::str::contains("issue"))
+        .stdout(predicate::str::contains("pr"))
+        .stdout(predicate::str::contains("new"));
 }
 
 #[test]

@@ -67,21 +67,21 @@ wt init --local --agent codex --issue-provider github --yes
 Start a workspace from an issue:
 
 ```bash
-wt start 123
-wt start issue PROJ-123
+wt issue
+wt issue PROJ-123
 ```
 
 Start a workspace from a pull request:
 
 ```bash
-wt start pr
-wt start pr 42
+wt pr
+wt pr 42
 ```
 
 Start a workspace from branch-name text:
 
 ```bash
-wt start add profile docs
+wt new add profile docs
 ```
 
 Open an existing worktree with its configured workspace:
@@ -95,6 +95,7 @@ List and clean worktrees:
 ```bash
 wt list
 wt done
+wt done PROJ-123
 ```
 
 ## Configuration
@@ -136,15 +137,17 @@ default = "codex"
 `profile` describes how a workspace should run. Profiles are execution
 environments: agent CLI, args, prompt files, and agent-specific scaffold files.
 
-Set a default profile when most `wt start` runs should use one profile:
+Set a default profile when most `wt issue`, `wt pr`, and `wt new` runs should
+use one profile:
 
 ```toml
 [profiles]
 default = "codex"
 ```
 
-`wt start 123` then behaves like `wt start 123 --profile codex`. Explicit
-`--profile` still wins, and `--parallel` still starts every profile.
+`wt issue 123` then behaves like `wt issue 123 --profile codex`. Explicit
+`--profile` still wins, and `--parallel` still starts every profile for
+`wt issue` and `wt new`.
 
 Profiles live under `.local/profiles/<name>/`:
 

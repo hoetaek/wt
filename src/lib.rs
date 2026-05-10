@@ -18,12 +18,28 @@ use context::Ctx;
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
     match command {
         Commands::Version | Commands::Completion { .. } => Ok(()),
-        Commands::Start {
+        Commands::Issue {
             target,
             base,
             profile,
             parallel,
-        } => commands::start::run(ctx, target, base, profile.as_deref(), *parallel),
+        } => {
+            let profile = selected_profile(ctx, profile.as_deref(), *parallel);
+            commands::issue::run(ctx, target.as_deref(), base, profile.as_deref(), *parallel)
+        }
+        Commands::Pr { number, profile } => {
+            let profile = selected_profile(ctx, profile.as_deref(), false);
+            commands::pr::run(ctx, *number, profile.as_deref())
+        }
+        Commands::New {
+            name,
+            base,
+            profile,
+            parallel,
+        } => {
+            let profile = selected_profile(ctx, profile.as_deref(), *parallel);
+            commands::new::run(ctx, name, base, profile.as_deref(), *parallel)
+        }
         Commands::Batch { command } => match command {
             BatchCommand::Prepare {
                 issues,
@@ -69,4 +85,17 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             },
         ),
     }
+}
+
+fn selected_profile(ctx: &Ctx, explicit: Option<&str>, parallel: bool) -> Option<String> {
+    if let Some(profile) = explicit {
+        return Some(profile.to_string());
+    }
+    if parallel {
+        return None;
+    }
+    ctx.config
+        .profiles
+        .as_ref()
+        .and_then(|profiles| profiles.default.clone())
 }

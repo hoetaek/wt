@@ -4,10 +4,10 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "wt", version, about = "Git worktree workspace manager")]
 pub struct Cli {
-    /// Run as if wt was started in DIR
+    /// Run wt from DIR
     #[arg(short = 'C', long = "directory", global = true, value_name = "DIR")]
     pub directory: Option<PathBuf>,
-    /// Config file to load instead of .local/.wt.toml or .wt.toml
+    /// Config file to load for commands that read wt config
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
     /// Increase diagnostic output (-v, -vv)
@@ -23,7 +23,7 @@ pub struct Cli {
     #[arg(long = "no-color", global = true, conflicts_with = "color")]
     pub no_color: bool,
     /// Emit machine-readable JSON for supported commands
-    #[arg(long, global = true)]
+    #[arg(long, global = true, hide = true)]
     pub json: bool,
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -40,10 +40,10 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
-    /// Start a ready-to-code workspace from an issue, PR, or branch name
-    Start {
-        /// Issue number, issue ID, pr [NUMBER], or branch name words
-        target: Vec<String>,
+    /// Start a workspace from an issue
+    Issue {
+        /// Issue number or provider-specific key
+        target: Option<String>,
         /// Base branch: --base (interactive), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
@@ -51,7 +51,30 @@ pub enum Commands {
         #[arg(long)]
         profile: Option<String>,
         /// Start one workspace for each profile
+        #[arg(long, conflicts_with = "profile")]
+        parallel: bool,
+    },
+    /// Start a workspace from a pull request
+    Pr {
+        /// Pull request number (omit to select from the open PR list)
+        number: Option<u32>,
+        /// Profile to use for this workspace
         #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Start a workspace from branch-name text
+    New {
+        /// Branch name words
+        #[arg(required = true)]
+        name: Vec<String>,
+        /// Base branch: --base (interactive), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Profile to use for this workspace
+        #[arg(long)]
+        profile: Option<String>,
+        /// Start one workspace for each profile
+        #[arg(long, conflicts_with = "profile")]
         parallel: bool,
     },
     /// Prepare or run issue batches
@@ -68,7 +91,7 @@ pub enum Commands {
     },
     /// Finish worktrees with cleanup
     Done {
-        /// Branch or worktree directory names to finish
+        /// Branch, issue number/key, or worktree directory names to finish
         targets: Vec<String>,
     },
     /// Check configured providers and required local tools
@@ -80,28 +103,40 @@ pub enum Commands {
     },
     /// Create a wt config file
     Init {
+        /// Write private config to .local/.wt.toml
         #[arg(long, conflicts_with = "shared")]
         local: bool,
+        /// Write shared project config to .wt.toml
         #[arg(long)]
         shared: bool,
+        /// Agent profile to create
         #[arg(long, value_enum)]
         agent: Option<InitAgent>,
+        /// Extra argument for the generated agent command
         #[arg(long = "agent-arg", allow_hyphen_values = true)]
         agent_args: Vec<String>,
+        /// Override the generated agent command
         #[arg(long)]
         agent_command: Option<String>,
+        /// Issue provider to configure
         #[arg(long, value_enum)]
         issue_provider: Option<InitIssueProvider>,
+        /// Local site provider to configure
         #[arg(long, value_enum)]
         site_provider: Option<InitSiteProvider>,
+        /// GitHub user for issue list filtering
         #[arg(long)]
         gh_user: Option<String>,
+        /// Generate default profile prompts
         #[arg(long, conflicts_with = "no_prompts")]
         prompts: bool,
+        /// Skip default profile prompts
         #[arg(long)]
         no_prompts: bool,
+        /// Skip confirmation prompts
         #[arg(long)]
         yes: bool,
+        /// Overwrite existing config/default profile settings
         #[arg(long)]
         force: bool,
     },
@@ -149,8 +184,9 @@ pub enum BatchCommand {
     /// Snapshot issues and create a batch file without starting workspaces
     Prepare {
         /// Issue identifiers to snapshot
+        #[arg(required = true)]
         issues: Vec<String>,
-        /// Profile to use for all issues (defaults to current config)
+        /// Profile to use for all issues (defaults to [profiles].default or current config)
         #[arg(long)]
         profile: Option<String>,
         /// Base branch: --base (interactive), --base main (explicit)
@@ -268,66 +304,97 @@ mod tests {
     }
 
     #[test]
-    fn start_no_args() {
-        let cli = parse(&["wt", "start"]);
+    fn issue_no_args_starts_interactive_issue_flow() {
+        let cli = parse(&["wt", "issue"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Start {
-                ref target,
+            Some(Commands::Issue {
+                target: None,
                 base: None,
                 profile: None,
                 parallel: false
-            }) if target.is_empty()
+            })
         ));
     }
 
     #[test]
-    fn start_with_issue_number_target() {
-        let cli = parse(&["wt", "start", "680"]);
-        if let Some(Commands::Start {
+    fn issue_with_target() {
+        let cli = parse(&["wt", "issue", "PROJ-680"]);
+        if let Some(Commands::Issue {
             target,
             base,
             profile,
             parallel,
         }) = cli.command
         {
-            assert_eq!(target, vec!["680"]);
+            assert_eq!(target.as_deref(), Some("PROJ-680"));
             assert_eq!(base, None);
             assert_eq!(profile, None);
             assert!(!parallel);
         } else {
-            panic!("expected Start");
+            panic!("expected Issue");
         }
     }
 
     #[test]
-    fn start_with_base_interactive() {
-        let cli = parse(&["wt", "start", "--base"]);
-        if let Some(Commands::Start { base, .. }) = &cli.command {
+    fn issue_with_base_interactive() {
+        let cli = parse(&["wt", "issue", "--base"]);
+        if let Some(Commands::Issue { base, .. }) = &cli.command {
             assert_eq!(BaseMode::from_raw(base), BaseMode::Interactive);
         } else {
-            panic!("expected Start");
+            panic!("expected Issue");
         }
     }
 
     #[test]
-    fn start_with_parallel_flag() {
-        let cli = parse(&["wt", "start", "680", "--parallel"]);
+    fn issue_with_parallel_flag() {
+        let cli = parse(&["wt", "issue", "680", "--parallel"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Start { parallel: true, .. })
+            Some(Commands::Issue { parallel: true, .. })
         ));
     }
 
     #[test]
-    fn start_with_profile_flag() {
-        let cli = parse(&["wt", "start", "680", "--profile", "codex-yolo"]);
+    fn issue_with_profile_flag() {
+        let cli = parse(&["wt", "issue", "680", "--profile", "codex-yolo"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Start {
+            Some(Commands::Issue {
                 profile: Some(ref profile),
                 ..
             }) if profile == "codex-yolo"
+        ));
+    }
+
+    #[test]
+    fn issue_rejects_parallel_with_profile() {
+        let result =
+            Cli::try_parse_from(["wt", "issue", "680", "--parallel", "--profile", "codex"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn pr_no_args_starts_interactive_pr_flow() {
+        let cli = parse(&["wt", "pr"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Pr {
+                number: None,
+                profile: None
+            })
+        ));
+    }
+
+    #[test]
+    fn pr_with_number_and_profile() {
+        let cli = parse(&["wt", "pr", "42", "--profile", "codex"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Pr {
+                number: Some(42),
+                profile: Some(ref profile),
+            }) if profile == "codex"
         ));
     }
 
@@ -384,37 +451,59 @@ mod tests {
     }
 
     #[test]
-    fn start_with_branch_words() {
-        let cli = parse(&["wt", "start", "some", "feature", "--parallel"]);
-        if let Some(Commands::Start {
-            target, parallel, ..
-        }) = &cli.command
-        {
-            assert_eq!(target, &vec!["some".to_string(), "feature".to_string()]);
+    fn new_with_branch_words() {
+        let cli = parse(&["wt", "new", "some", "feature", "--parallel"]);
+        if let Some(Commands::New { name, parallel, .. }) = &cli.command {
+            assert_eq!(name, &vec!["some".to_string(), "feature".to_string()]);
             assert!(*parallel);
         } else {
-            panic!("expected Start");
+            panic!("expected New");
         }
     }
 
     #[test]
-    fn start_with_pr_target() {
-        let cli = parse(&["wt", "start", "pr:42"]);
-        if let Some(Commands::Start { target, .. }) = cli.command {
-            assert_eq!(target, vec!["pr:42"]);
-        } else {
-            panic!("expected Start");
-        }
+    fn new_with_base_and_profile() {
+        let cli = parse(&[
+            "wt",
+            "new",
+            "some",
+            "feature",
+            "--base",
+            "main",
+            "--profile",
+            "codex",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::New {
+                ref name,
+                base: Some(ref base),
+                profile: Some(ref profile),
+                parallel: false,
+            }) if name == &vec!["some".to_string(), "feature".to_string()]
+                && base == "main"
+                && profile == "codex"
+        ));
     }
 
     #[test]
-    fn start_with_split_pr_target() {
-        let cli = parse(&["wt", "start", "pr", "42"]);
-        if let Some(Commands::Start { target, .. }) = cli.command {
-            assert_eq!(target, vec!["pr", "42"]);
-        } else {
-            panic!("expected Start");
-        }
+    fn new_rejects_parallel_with_profile() {
+        let result = Cli::try_parse_from([
+            "wt",
+            "new",
+            "some",
+            "feature",
+            "--parallel",
+            "--profile",
+            "codex",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn start_subcommand_is_removed() {
+        let result = Cli::try_parse_from(["wt", "start"]);
+        assert!(result.is_err());
     }
 
     #[test]
