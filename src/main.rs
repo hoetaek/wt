@@ -34,7 +34,7 @@ fn try_main() -> Result<()> {
     };
 
     if cli.json && !supports_json(command) {
-        bail!("JSON output is supported for: wt version, wt doctor, wt profile");
+        bail!("JSON output is supported for: wt version, wt list, wt doctor, wt profile");
     }
 
     match command {

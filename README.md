@@ -218,8 +218,9 @@ wt batch prepare 123 456 789
 wt batch prepare 123 456 789 --profile codex
 ```
 
-When `--profile` is omitted, the batch records `profile = "default"` and uses
-the current effective config at run time.
+When `--profile` is omitted, the batch records the configured
+`[profiles].default` name. If no default profile is configured, it records
+`profile = "default"` and uses the current effective config at run time.
 
 Issue bodies are stored as markdown snapshots:
 

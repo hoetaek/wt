@@ -18,6 +18,13 @@ pub(crate) struct IssueSnapshotContext<'a> {
     pub(crate) content: &'a str,
 }
 
+pub(crate) struct PreparedIssueContext<'a> {
+    pub(crate) identifier: &'a str,
+    pub(crate) title: &'a str,
+    pub(crate) branch_name: Option<&'a str>,
+    pub(crate) snapshot: IssueSnapshotContext<'a>,
+}
+
 pub fn run(
     ctx: &Ctx,
     target: Option<&str>,
@@ -30,13 +37,12 @@ pub fn run(
 
 pub(crate) fn run_with_issue_snapshot(
     ctx: &Ctx,
-    target: Option<&str>,
     base_raw: &Option<String>,
     profile: Option<&str>,
     parallel: bool,
-    snapshot: IssueSnapshotContext<'_>,
+    prepared: PreparedIssueContext<'_>,
 ) -> Result<()> {
-    run_inner(ctx, target, base_raw, profile, parallel, Some(&snapshot))
+    run_inner(ctx, None, base_raw, profile, parallel, Some(&prepared))
 }
 
 fn run_inner(
@@ -45,16 +51,24 @@ fn run_inner(
     base_raw: &Option<String>,
     profile: Option<&str>,
     parallel: bool,
-    issue_snapshot: Option<&IssueSnapshotContext<'_>>,
+    prepared_issue: Option<&PreparedIssueContext<'_>>,
 ) -> Result<()> {
-    let provider = build_provider(ctx)?;
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
     // 1. Resolve issue
     let naming_enabled = ctx.config.worktree.naming.is_some();
-    let issue = if let Some(target) = target {
+    let issue = if let Some(prepared) = prepared_issue {
+        IssueInfo {
+            identifier: prepared.identifier.to_string(),
+            title: prepared.title.to_string(),
+            branch_name: prepared.branch_name.map(str::to_string),
+            body: None,
+        }
+    } else if let Some(target) = target {
+        let provider = build_provider(ctx)?;
         provider.get_issue(target.trim_start_matches('#'))?
     } else {
+        let provider = build_provider(ctx)?;
         let issues = provider.list_issues()?;
         if issues.is_empty() {
             bail!("No issues found");
@@ -77,6 +91,7 @@ fn run_inner(
     let identifier = issue.identifier;
     let title = issue.title;
     let suggested_branch = issue.branch_name;
+    let issue_snapshot = prepared_issue.map(|issue| &issue.snapshot);
 
     ctx.ui.print_step(&format!("{identifier}: {title}"));
 
@@ -91,11 +106,17 @@ fn run_inner(
 
     // Ensure branch exists (provider-specific: Linear reads, GH may create)
     let raw_id = identifier.trim_start_matches('#');
-    let branch_name = provider.ensure_branch(
-        raw_id,
-        base_for_ensure,
-        naming.as_ref().and_then(|n| n.branch.as_deref()),
-    )?;
+    let branch_name =
+        if let Some(prepared_branch) = prepared_issue.and_then(|issue| issue.branch_name) {
+            prepared_branch.to_string()
+        } else {
+            let provider = build_provider(ctx)?;
+            provider.ensure_branch(
+                raw_id,
+                base_for_ensure,
+                naming.as_ref().and_then(|n| n.branch.as_deref()),
+            )?
+        };
 
     if parallel || profile.is_some() {
         return run_profiles(
@@ -178,9 +199,11 @@ fn run_inner(
 
     // 5. Update issue status for new branches
     if create_type == CreateType::New {
-        if let Err(e) = provider.on_start(raw_id) {
-            ctx.ui
-                .print_warning(&format!("Failed to update issue status: {e}"));
+        if let Ok(provider) = build_provider(ctx) {
+            if let Err(e) = provider.on_start(raw_id) {
+                ctx.ui
+                    .print_warning(&format!("Failed to update issue status: {e}"));
+            }
         }
     }
 

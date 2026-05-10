@@ -27,7 +27,7 @@ pub fn prepare(
         bail!("Usage: wt batch prepare <issue>... [--profile <name>]");
     }
 
-    let profile = profile.unwrap_or(DEFAULT_PROFILE);
+    let profile = resolve_prepare_profile(ctx, profile);
     validate_profile(ctx, profile)?;
 
     let issue_snapshots = snapshot_issues(ctx, issues)?;
@@ -80,21 +80,7 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
         metadata.issues[idx].error.clear();
         write_batch_metadata(&batch_path, &metadata)?;
 
-        let snapshot_path = metadata.issues[idx].snapshot.clone();
-        let content = fs::read_to_string(ctx.repo_root.join(&snapshot_path))
-            .with_context(|| format!("Failed to read issue snapshot: {snapshot_path}"))?;
-        let source = metadata.issues[idx].source.clone();
-        let result = issue::run_with_issue_snapshot(
-            ctx,
-            Some(source.as_str()),
-            &base,
-            Some(metadata.profile.as_str()),
-            false,
-            issue::IssueSnapshotContext {
-                path: &snapshot_path,
-                content: &content,
-            },
-        );
+        let result = run_batch_issue(ctx, &metadata.issues[idx], &base, &metadata.profile);
 
         match result {
             Ok(()) => {
@@ -134,6 +120,10 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
     write_batch_metadata(&batch_path, &metadata)?;
     ctx.ui
         .print_step(&format!("Batch status: {}", metadata.status));
+
+    if metadata.status == STATUS_FAILED {
+        bail!("Batch failed: {}", batch_path.display());
+    }
 
     Ok(())
 }
@@ -175,8 +165,6 @@ struct BatchIssue {
     #[serde(default = "default_issue_status")]
     status: String,
     #[serde(default)]
-    workspace: String,
-    #[serde(default)]
     error: String,
 }
 
@@ -189,7 +177,6 @@ impl BatchIssue {
             branch: snapshot.branch,
             snapshot: snapshot.snapshot,
             status: STATUS_PREPARED.into(),
-            workspace: String::new(),
             error: String::new(),
         }
     }
@@ -201,6 +188,17 @@ fn default_batch_status() -> String {
 
 fn default_issue_status() -> String {
     STATUS_PREPARED.into()
+}
+
+fn resolve_prepare_profile<'a>(ctx: &'a Ctx, profile: Option<&'a str>) -> &'a str {
+    profile
+        .or_else(|| {
+            ctx.config
+                .profiles
+                .as_ref()
+                .and_then(|profiles| profiles.default.as_deref())
+        })
+        .unwrap_or(DEFAULT_PROFILE)
 }
 
 fn validate_profile(ctx: &Ctx, profile: &str) -> Result<()> {
@@ -252,6 +250,43 @@ fn snapshot_issues(ctx: &Ctx, issues: &[String]) -> Result<Vec<IssueSnapshot>> {
     Ok(snapshots)
 }
 
+fn run_batch_issue(
+    ctx: &Ctx,
+    batch_issue: &BatchIssue,
+    base: &Option<String>,
+    profile: &str,
+) -> Result<()> {
+    let snapshot_path = batch_issue.snapshot.clone();
+    let content = fs::read_to_string(ctx.repo_root.join(&snapshot_path))
+        .with_context(|| format!("Failed to read issue snapshot: {snapshot_path}"))?;
+    let branch_name = prepared_branch_name(batch_issue);
+
+    issue::run_with_issue_snapshot(
+        ctx,
+        base,
+        Some(profile),
+        false,
+        issue::PreparedIssueContext {
+            identifier: &batch_issue.id,
+            title: &batch_issue.title,
+            branch_name,
+            snapshot: issue::IssueSnapshotContext {
+                path: &snapshot_path,
+                content: &content,
+            },
+        },
+    )
+}
+
+fn prepared_branch_name(issue: &BatchIssue) -> Option<&str> {
+    let branch = issue.branch.trim();
+    if branch.is_empty() || branch == "-" {
+        None
+    } else {
+        Some(branch)
+    }
+}
+
 fn write_new_batch_metadata(ctx: &Ctx, batch: &BatchMetadata) -> Result<PathBuf> {
     let batches_dir = ctx.repo_root.join(".local/batches");
     fs::create_dir_all(&batches_dir)?;
@@ -294,7 +329,6 @@ fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
         content.push_str(&format!("branch = {}\n", toml_quote(&issue.branch)));
         content.push_str(&format!("snapshot = {}\n", toml_quote(&issue.snapshot)));
         content.push_str(&format!("status = {}\n", toml_quote(&issue.status)));
-        content.push_str(&format!("workspace = {}\n", toml_quote(&issue.workspace)));
         content.push_str(&format!("error = {}\n", toml_quote(&issue.error)));
     }
 
@@ -486,7 +520,7 @@ fn toml_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, IssueProviderType, IssuesConfig};
+    use crate::config::{Config, IssueProviderType, IssuesConfig, ProfilesConfig};
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
 
@@ -574,6 +608,47 @@ mod tests {
     }
 
     #[test]
+    fn prepare_uses_configured_default_profile_when_omitted() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            "[agent]\ncli = \"codex\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor","description":"Long issue body"}"#,
+            true,
+        );
+        let config = Config {
+            profiles: Some(ProfilesConfig {
+                default: Some("codex".into()),
+            }),
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            ..Config::default()
+        };
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+
+        prepare(&ctx, &["PROJ-123".into()], None, &None).unwrap();
+
+        let batch_path = latest_batch_path(&ctx).unwrap();
+        let content = std::fs::read_to_string(batch_path).unwrap();
+        assert!(content.contains("profile = \"codex\""));
+    }
+
+    #[test]
     fn batch_metadata_round_trips_status_fields() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("batch.toml");
@@ -591,7 +666,6 @@ mod tests {
                 branch: "alice/proj-123-fix-editor".into(),
                 snapshot: ".local/issues/PROJ-123.md".into(),
                 status: STATUS_DONE.into(),
-                workspace: "/tmp/worktree".into(),
                 error: String::new(),
             }],
         };
@@ -603,7 +677,6 @@ mod tests {
         assert_eq!(parsed.base.as_deref(), Some("main"));
         assert_eq!(parsed.status, STATUS_PARTIAL);
         assert_eq!(parsed.issues[0].status, STATUS_DONE);
-        assert_eq!(parsed.issues[0].workspace, "/tmp/worktree");
     }
 
     #[test]
@@ -635,7 +708,6 @@ mod tests {
             branch: String::new(),
             snapshot: ".local/issues/PROJ-123.md".into(),
             status: status.into(),
-            workspace: String::new(),
             error: String::new(),
         };
 
@@ -682,7 +754,100 @@ mod tests {
                 branch: "alice/proj-123-fix-editor".into(),
                 snapshot: ".local/issues/PROJ-123.md".into(),
                 status: STATUS_DONE.into(),
-                workspace: "/tmp/worktree".into(),
+                error: String::new(),
+            }],
+        };
+        write_batch_metadata(&batch_path, &batch).unwrap();
+
+        run(&ctx, batch_path.to_str().unwrap()).unwrap();
+
+        let updated = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(updated.status, STATUS_DONE);
+        assert_eq!(updated.issues[0].status, STATUS_DONE);
+    }
+
+    #[test]
+    fn run_marks_item_failed_and_errors_when_snapshot_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let batch_path = dir.path().join("batch.toml");
+        let batch = BatchMetadata {
+            profile: DEFAULT_PROFILE.into(),
+            base_mode: "default".into(),
+            base: None,
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            issues: vec![BatchIssue {
+                id: "PROJ-123".into(),
+                source: "123".into(),
+                title: "Fix editor".into(),
+                branch: "alice/proj-123-fix-editor".into(),
+                snapshot: ".local/issues/PROJ-123.md".into(),
+                status: STATUS_PREPARED.into(),
+                error: String::new(),
+            }],
+        };
+        write_batch_metadata(&batch_path, &batch).unwrap();
+
+        let result = run(&ctx, batch_path.to_str().unwrap());
+
+        assert!(result.is_err());
+        let updated = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(updated.status, STATUS_FAILED);
+        assert_eq!(updated.issues[0].status, STATUS_FAILED);
+        assert!(
+            updated.issues[0]
+                .error
+                .contains("Failed to read issue snapshot")
+        );
+    }
+
+    #[test]
+    fn run_uses_snapshot_metadata_without_issue_provider_when_branch_is_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let issues_dir = dir.path().join(".local/issues");
+        std::fs::create_dir_all(&issues_dir).unwrap();
+        std::fs::write(
+            issues_dir.join("PROJ-123.md"),
+            "# PROJ-123: Fix editor\n\nBody",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response("main", true); // current branch for default base
+        runner.add_response("", false); // profile branch does not exist
+        runner.add_response("", true); // worktree add
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // branch parent config
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let batch_path = dir.path().join("batch.toml");
+        let batch = BatchMetadata {
+            profile: DEFAULT_PROFILE.into(),
+            base_mode: "default".into(),
+            base: None,
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            issues: vec![BatchIssue {
+                id: "PROJ-123".into(),
+                source: "123".into(),
+                title: "Fix editor".into(),
+                branch: "alice/proj-123-fix-editor".into(),
+                snapshot: ".local/issues/PROJ-123.md".into(),
+                status: STATUS_PREPARED.into(),
                 error: String::new(),
             }],
         };
