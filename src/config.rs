@@ -1,0 +1,1414 @@
+use serde::{Deserialize, Deserializer};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct Config {
+    pub worktree: WorktreeConfig,
+    pub setup: SetupConfig,
+    pub profiles: Option<ProfilesConfig>,
+    pub herd: Option<HerdConfig>,
+    pub site: Option<SiteConfig>,
+    pub workspace: Option<WorkspaceConfig>,
+    pub agent: Option<AgentConfig>,
+    pub test: Option<TestConfig>,
+    pub issues: Option<IssuesConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProfilesConfig {
+    pub default: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorktreeConfig {
+    pub path: Option<String>,
+    pub copy: Vec<String>,
+    pub copy_as: Vec<CopyAsEntry>,
+    pub link: Vec<String>,
+    pub claude_local_context: Option<String>,
+    pub naming: Option<WorktreeNamingConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct CopyAsEntry {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct SetupConfig {
+    pub deps: Vec<DepCommand>,
+    pub env: HashMap<String, String>,
+    pub env_files: HashMap<String, HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DepCommand {
+    pub run: String,
+    pub if_exists: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct HerdConfig {
+    pub site_name: String,
+    pub secure: Option<bool>,
+    pub open_browser: Option<bool>,
+    pub browser: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct SiteConfig {
+    pub provider: SiteProvider,
+    pub name: Option<String>,
+    pub root: Option<String>,
+    pub secure: Option<bool>,
+    pub open_browser: Option<bool>,
+    pub browser: Option<String>,
+    pub url: Option<String>,
+    pub target: Option<String>,
+}
+
+impl Default for SiteConfig {
+    fn default() -> Self {
+        Self {
+            provider: SiteProvider::None,
+            name: None,
+            root: None,
+            secure: None,
+            open_browser: None,
+            browser: None,
+            url: None,
+            target: None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum SiteProvider {
+    #[default]
+    None,
+    Herd,
+    Valet,
+    DockerProxy,
+    Traefik,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspaceConfig {
+    pub tabs: Vec<String>,
+    pub post_deps_tabs: Vec<String>,
+    pub colors: HashMap<String, String>,
+    pub open_url: Option<String>,
+    pub open_browser: Option<bool>,
+    pub browser: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct AgentConfig {
+    pub cli: AgentCli,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default = "default_agent_ready")]
+    pub ready: ReadyMode,
+    #[serde(default = "default_agent_submit")]
+    pub submit: SubmitMode,
+    #[serde(default = "default_agent_timeout")]
+    pub timeout: u64,
+    #[serde(default = "default_agent_send_after")]
+    pub send_after: u64,
+    #[serde(default)]
+    pub prompt: HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCli {
+    Codex,
+    Claude,
+    Gemini,
+    None,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum ReadyMode {
+    Auto,
+    Marker(String),
+}
+
+impl<'de> Deserialize<'de> for ReadyMode {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value == "auto" {
+            Ok(ReadyMode::Auto)
+        } else {
+            Ok(ReadyMode::Marker(value))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmitMode {
+    Auto,
+    Newline,
+    CarriageReturn,
+    None,
+}
+
+fn default_agent_ready() -> ReadyMode {
+    ReadyMode::Auto
+}
+
+fn default_agent_submit() -> SubmitMode {
+    SubmitMode::Auto
+}
+
+fn default_agent_timeout() -> u64 {
+    15
+}
+
+fn default_agent_send_after() -> u64 {
+    3
+}
+
+impl AgentConfig {
+    pub fn command_line(&self) -> anyhow::Result<Option<String>> {
+        if self.cli == AgentCli::None {
+            return Ok(None);
+        }
+
+        if let Some(command) = &self.command {
+            return Ok(Some(command.clone()));
+        }
+
+        let base = match self.cli {
+            AgentCli::Codex => "codex",
+            AgentCli::Claude => "claude",
+            AgentCli::Gemini => "gemini",
+            AgentCli::None => unreachable!(),
+        };
+
+        if self.args.is_empty() {
+            return Ok(Some(base.into()));
+        }
+
+        let args = self
+            .args
+            .iter()
+            .map(|arg| shell_escape_arg(arg))
+            .collect::<Vec<_>>()
+            .join(" ");
+        Ok(Some(format!("{base} {args}")))
+    }
+
+    pub fn effective_ready(&self) -> Option<String> {
+        match &self.ready {
+            ReadyMode::Marker(marker) => Some(marker.clone()),
+            ReadyMode::Auto => match self.cli {
+                AgentCli::Codex => Some("›".into()),
+                AgentCli::Claude => Some("❯".into()),
+                AgentCli::Gemini | AgentCli::None => None,
+            },
+        }
+    }
+
+    pub fn apply_submit_suffix(&self, mut prompt: String) -> String {
+        if prompt.ends_with('\n') || prompt.ends_with('\r') {
+            return prompt;
+        }
+
+        match self.submit {
+            SubmitMode::Auto => match self.cli {
+                AgentCli::Codex => prompt.push('\r'),
+                AgentCli::Claude | AgentCli::Gemini => prompt.push('\n'),
+                AgentCli::None => {}
+            },
+            SubmitMode::Newline => prompt.push('\n'),
+            SubmitMode::CarriageReturn => prompt.push('\r'),
+            SubmitMode::None => {}
+        }
+        prompt
+    }
+}
+
+fn shell_escape_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".into();
+    }
+
+    if arg.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '=' | '@' | '+')
+    }) {
+        return arg.into();
+    }
+
+    format!("'{}'", arg.replace('\'', "'\\''"))
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default)]
+#[derive(Default)]
+pub struct TestConfig {
+    pub commands: Vec<TestCommand>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TestCommand {
+    pub run: String,
+    pub if_exists: Option<String>,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct IssuesConfig {
+    pub provider: IssueProviderType,
+    pub gh_user: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum IssueProviderType {
+    Linear,
+    Github,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorktreeNamingConfig {
+    pub command: String,
+    pub prompt: String,
+    pub branch: Option<String>,
+    pub workspace: Option<String>,
+}
+
+impl Default for WorktreeNamingConfig {
+    fn default() -> Self {
+        Self {
+            command: "claude -p".into(),
+            prompt: default_worktree_naming_prompt(),
+            branch: Some("{{branch_prefix}}{{issue_key_lower}}-{{english_slug}}".into()),
+            workspace: None,
+        }
+    }
+}
+
+fn default_worktree_naming_prompt() -> String {
+    r#"Generate concise English naming variables for a worktree issue.
+
+Issue identifier: {{issue_identifier}}
+Issue title: {{issue_title}}
+Suggested branch: {{suggested_branch}}
+
+Return only JSON with string values:
+{"english_slug":"..."}
+
+Rules:
+- english_slug: lowercase ASCII kebab-case, 3-8 words, no issue identifier.
+- Do not include markdown or extra text.
+"#
+    .into()
+}
+
+impl Config {
+    pub fn effective_site(&self) -> Option<SiteConfig> {
+        if let Some(site) = &self.site {
+            if site.provider == SiteProvider::None {
+                return None;
+            }
+            return Some(site.clone());
+        }
+
+        self.herd.as_ref().map(|herd| SiteConfig {
+            provider: SiteProvider::Herd,
+            name: Some(herd.site_name.clone()),
+            root: None,
+            secure: herd.secure,
+            open_browser: herd.open_browser,
+            browser: herd.browser.clone(),
+            url: None,
+            target: None,
+        })
+    }
+
+    pub fn has_site(&self) -> bool {
+        self.effective_site().is_some()
+    }
+
+    /// Load config with .wt.toml as the shared base and .local/.wt.toml as
+    /// the private override.
+    pub fn load(repo_root: &Path) -> anyhow::Result<Self> {
+        let (config, _) = Self::load_with_source(repo_root)?;
+        Ok(config)
+    }
+
+    pub fn load_with_source(repo_root: &Path) -> anyhow::Result<(Self, ConfigSource)> {
+        let local_path = repo_root.join(".local/.wt.toml");
+        let root_path = repo_root.join(".wt.toml");
+        let root_exists = root_path.exists();
+        let local_exists = local_path.exists();
+
+        match (root_exists, local_exists) {
+            (false, false) => Ok((Config::default(), ConfigSource::Default)),
+            (true, false) => {
+                let config = Self::load_file(&root_path)?;
+                Ok((config, ConfigSource::File(root_path)))
+            }
+            (false, true) => {
+                let config = Self::load_file(&local_path)?;
+                Ok((config, ConfigSource::File(local_path)))
+            }
+            (true, true) => {
+                let root = Self::load_file(&root_path)?;
+                let local = Self::load_file(&local_path)?;
+                Ok((
+                    merge_config(&root, local),
+                    ConfigSource::Files(vec![root_path, local_path]),
+                ))
+            }
+        }
+    }
+
+    pub fn load_file(path: &Path) -> anyhow::Result<Self> {
+        let content = std::fs::read_to_string(path)?;
+        let config: Config = toml::from_str(&content)?;
+        Ok(config)
+    }
+
+    /// Discover profile configs: .local/profiles/{name}/profile.toml
+    pub fn load_profiles(repo_root: &Path, base: &Self) -> anyhow::Result<Vec<(String, Self)>> {
+        let profiles_dir = repo_root.join(".local/profiles");
+        if !profiles_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut profiles = Vec::new();
+
+        for entry in std::fs::read_dir(&profiles_dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let profile_name = entry.file_name().to_string_lossy().into_owned();
+            let profile_toml = entry.path().join("profile.toml");
+            if profile_toml.exists() {
+                let config =
+                    Self::load_profile_from_dir(repo_root, &profile_name, &entry.path(), base)?;
+                profiles.push((profile_name, config));
+            }
+        }
+
+        profiles.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(profiles)
+    }
+
+    pub fn load_profile(repo_root: &Path, name: &str, base: &Self) -> anyhow::Result<Option<Self>> {
+        let profile_dir = repo_root.join(".local/profiles").join(name);
+        if !profile_dir.join("profile.toml").exists() {
+            return Ok(None);
+        }
+
+        Ok(Some(Self::load_profile_from_dir(
+            repo_root,
+            name,
+            &profile_dir,
+            base,
+        )?))
+    }
+
+    fn load_profile_from_dir(
+        repo_root: &Path,
+        name: &str,
+        profile_dir: &Path,
+        base: &Self,
+    ) -> anyhow::Result<Self> {
+        let profile_config = Self::load_file(&profile_dir.join("profile.toml"))?;
+        let mut config = merge_config(base, profile_config);
+        apply_profile_conventions(repo_root, name, profile_dir, &mut config)?;
+        Ok(config)
+    }
+}
+
+fn merge_config(base: &Config, profile: Config) -> Config {
+    let mut merged = base.clone();
+
+    if profile.worktree != WorktreeConfig::default() {
+        merge_worktree_config(&mut merged.worktree, profile.worktree);
+    }
+    if profile.setup != SetupConfig::default() {
+        merge_setup_config(&mut merged.setup, profile.setup);
+    }
+    if profile.profiles.is_some() {
+        merged.profiles = profile.profiles;
+    }
+    if profile.herd.is_some() {
+        merged.herd = profile.herd;
+        merged.site = None;
+    }
+    if profile.site.is_some() {
+        merged.site = profile.site;
+    }
+    if profile.workspace.is_some() {
+        merged.workspace = match (merged.workspace.take(), profile.workspace) {
+            (Some(mut base_workspace), Some(profile_workspace)) => {
+                merge_workspace_config(&mut base_workspace, profile_workspace);
+                Some(base_workspace)
+            }
+            (_, profile_workspace) => profile_workspace,
+        };
+    }
+    if profile.agent.is_some() {
+        merged.agent = profile.agent;
+    }
+    if profile.test.is_some() {
+        merged.test = profile.test;
+    }
+    if profile.issues.is_some() {
+        merged.issues = profile.issues;
+    }
+
+    merged
+}
+
+fn merge_worktree_config(base: &mut WorktreeConfig, profile: WorktreeConfig) {
+    if profile.path.is_some() {
+        base.path = profile.path;
+    }
+    extend_unique(&mut base.copy, profile.copy);
+    extend_copy_as_unique(&mut base.copy_as, profile.copy_as);
+    extend_unique(&mut base.link, profile.link);
+    if profile.claude_local_context.is_some() {
+        base.claude_local_context = profile.claude_local_context;
+    }
+    if profile.naming.is_some() {
+        base.naming = profile.naming;
+    }
+}
+
+fn merge_setup_config(base: &mut SetupConfig, profile: SetupConfig) {
+    base.deps.extend(profile.deps);
+    base.env.extend(profile.env);
+    for (path, entries) in profile.env_files {
+        base.env_files.entry(path).or_default().extend(entries);
+    }
+}
+
+fn merge_workspace_config(base: &mut WorkspaceConfig, profile: WorkspaceConfig) {
+    extend_unique(&mut base.tabs, profile.tabs);
+    extend_unique(&mut base.post_deps_tabs, profile.post_deps_tabs);
+    base.colors.extend(profile.colors);
+    if profile.open_url.is_some() {
+        base.open_url = profile.open_url;
+    }
+    if profile.open_browser.is_some() {
+        base.open_browser = profile.open_browser;
+    }
+    if profile.browser.is_some() {
+        base.browser = profile.browser;
+    }
+}
+
+fn extend_unique(target: &mut Vec<String>, additions: Vec<String>) {
+    for value in additions {
+        if !target.contains(&value) {
+            target.push(value);
+        }
+    }
+}
+
+fn extend_copy_as_unique(target: &mut Vec<CopyAsEntry>, additions: Vec<CopyAsEntry>) {
+    for value in additions {
+        if !target
+            .iter()
+            .any(|entry| entry.from == value.from && entry.to == value.to)
+        {
+            target.push(value);
+        }
+    }
+}
+
+fn apply_profile_conventions(
+    repo_root: &Path,
+    name: &str,
+    profile_dir: &Path,
+    config: &mut Config,
+) -> anyhow::Result<()> {
+    let agent_cli = config.agent.as_ref().map(|agent| agent.cli.clone());
+
+    if let Some(agent) = config.agent.as_mut() {
+        for mode in ["issue", "new", "pr"] {
+            let prompt_path = profile_dir.join("prompts").join(format!("{mode}.md"));
+            if prompt_path.exists() {
+                let prompt = std::fs::read_to_string(prompt_path)?;
+                agent.prompt.insert(mode.to_string(), vec![prompt]);
+            }
+        }
+    }
+
+    let profile_root = format!(".local/profiles/{name}");
+    match agent_cli {
+        Some(AgentCli::Codex) => {
+            push_copy_as_if_exists(
+                repo_root,
+                &mut config.worktree.copy_as,
+                &format!("{profile_root}/codex/AGENTS.override.md"),
+                "AGENTS.override.md",
+            );
+            push_copy_as_if_exists(
+                repo_root,
+                &mut config.worktree.copy_as,
+                &format!("{profile_root}/codex/skills"),
+                ".codex/skills",
+            );
+        }
+        Some(AgentCli::Claude) => {
+            push_copy_as_if_exists(
+                repo_root,
+                &mut config.worktree.copy_as,
+                &format!("{profile_root}/claude/CLAUDE.local.md"),
+                "CLAUDE.local.md",
+            );
+            push_copy_as_if_exists(
+                repo_root,
+                &mut config.worktree.copy_as,
+                &format!("{profile_root}/claude/agents"),
+                ".claude/agents",
+            );
+            push_copy_as_if_exists(
+                repo_root,
+                &mut config.worktree.copy_as,
+                &format!("{profile_root}/claude/commands"),
+                ".claude/commands",
+            );
+            push_copy_as_if_exists(
+                repo_root,
+                &mut config.worktree.copy_as,
+                &format!("{profile_root}/claude/skills"),
+                ".claude/skills",
+            );
+        }
+        Some(AgentCli::Gemini | AgentCli::None) | None => {}
+    }
+
+    Ok(())
+}
+
+fn push_copy_as_if_exists(repo_root: &Path, copy_as: &mut Vec<CopyAsEntry>, from: &str, to: &str) {
+    if !repo_root.join(from).exists() {
+        return;
+    }
+    if copy_as.iter().any(|entry| entry.to == to) {
+        return;
+    }
+    copy_as.push(CopyAsEntry {
+        from: from.into(),
+        to: to.into(),
+    });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigSource {
+    Default,
+    File(PathBuf),
+    Files(Vec<PathBuf>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_full_config() {
+        let toml_str = r#"
+[worktree]
+path = "$HOME/worktrees/{{default_name}}"
+copy = [".env", "CLAUDE.local.md", ".claude/settings.local.json"]
+link = [".local"]
+claude_local_context = "\n## env\n- parent: `{{parent_branch}}`\n"
+
+[setup]
+deps = [
+    { run = "composer install", if_exists = "composer.json" },
+    { run = "npm install", if_exists = "package.json" },
+]
+
+[setup.env]
+APP_URL = "https://{{site_name}}.test"
+APP_NAME = "{{issue_title}}"
+
+[setup.env_files."frontend/.env.development"]
+VITE_API_TARGET = "{{api_url}}"
+
+[setup.env_files."backend/.env"]
+DJANGO_ENV = "dev"
+
+[profiles]
+default = "codex"
+
+[herd]
+site_name = "{{repo}}-{{branch_slug}}"
+secure = true
+open_browser = true
+browser = "Google Chrome"
+
+[site]
+provider = "valet"
+name = "{{repo}}-{{branch_slug}}"
+root = "public"
+secure = true
+open_browser = true
+browser = "Safari"
+url = "https://{{site_name}}.test"
+target = "http://127.0.0.1:{{vite_port}}"
+
+[workspace]
+tabs = ["lazygit"]
+post_deps_tabs = ["npm run dev"]
+colors = { issue = "Red", pr = "Green" }
+open_url = "{{site_url}}"
+open_browser = true
+browser = "Google Chrome"
+
+[agent]
+cli = "claude"
+
+[test]
+commands = [
+    { run = "./vendor/bin/pest", if_exists = "vendor/bin/pest", label = "PHP" },
+]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(
+            config.worktree.copy,
+            vec![".env", "CLAUDE.local.md", ".claude/settings.local.json"]
+        );
+        assert_eq!(
+            config.worktree.path.as_deref(),
+            Some("$HOME/worktrees/{{default_name}}")
+        );
+        assert_eq!(config.worktree.link, vec![".local"]);
+        assert!(config.worktree.claude_local_context.is_some());
+        assert!(
+            config
+                .worktree
+                .claude_local_context
+                .unwrap()
+                .contains("{{parent_branch}}")
+        );
+        assert_eq!(config.setup.deps.len(), 2);
+        assert_eq!(config.setup.deps[0].run, "composer install");
+        assert_eq!(
+            config.setup.env.get("APP_URL").unwrap(),
+            "https://{{site_name}}.test"
+        );
+        assert_eq!(
+            config
+                .setup
+                .env_files
+                .get("frontend/.env.development")
+                .unwrap()
+                .get("VITE_API_TARGET")
+                .unwrap(),
+            "{{api_url}}"
+        );
+        assert_eq!(
+            config
+                .setup
+                .env_files
+                .get("backend/.env")
+                .unwrap()
+                .get("DJANGO_ENV")
+                .unwrap(),
+            "dev"
+        );
+        assert_eq!(config.profiles.unwrap().default.as_deref(), Some("codex"));
+
+        let herd = config.herd.unwrap();
+        assert_eq!(herd.site_name, "{{repo}}-{{branch_slug}}");
+        assert_eq!(herd.secure, Some(true));
+        assert_eq!(herd.browser.as_deref(), Some("Google Chrome"));
+
+        let site = config.site.unwrap();
+        assert_eq!(site.provider, SiteProvider::Valet);
+        assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
+        assert_eq!(site.root.as_deref(), Some("public"));
+        assert_eq!(site.secure, Some(true));
+        assert_eq!(site.open_browser, Some(true));
+        assert_eq!(site.browser.as_deref(), Some("Safari"));
+        assert_eq!(site.url.as_deref(), Some("https://{{site_name}}.test"));
+        assert_eq!(
+            site.target.as_deref(),
+            Some("http://127.0.0.1:{{vite_port}}")
+        );
+
+        let ws = config.workspace.unwrap();
+        assert_eq!(ws.tabs, vec!["lazygit"]);
+        assert_eq!(ws.post_deps_tabs, vec!["npm run dev"]);
+        assert_eq!(ws.colors.get("issue").unwrap(), "Red");
+        assert_eq!(ws.open_url.as_deref(), Some("{{site_url}}"));
+        assert_eq!(ws.open_browser, Some(true));
+        assert_eq!(ws.browser.as_deref(), Some("Google Chrome"));
+
+        let agent = config.agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Claude);
+
+        let test = config.test.unwrap();
+        assert_eq!(test.commands[0].label.as_deref(), Some("PHP"));
+    }
+
+    #[test]
+    fn missing_file_returns_default() {
+        let dir = std::env::temp_dir().join("wt-test-no-config");
+        std::fs::create_dir_all(&dir).ok();
+        let config = Config::load(&dir).unwrap();
+        assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn parses_explicit_claude_paths_in_copy() {
+        let toml_str = r#"
+[worktree]
+copy = [".env", ".claude/settings.local.json", ".claude/hooks"]
+link = [".local"]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.worktree.copy,
+            vec![".env", ".claude/settings.local.json", ".claude/hooks"]
+        );
+        assert_eq!(config.worktree.link, vec![".local"]);
+    }
+
+    #[test]
+    fn partial_config_fills_defaults() {
+        let toml_str = r#"
+[worktree]
+copy = [".env"]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.worktree.copy, vec![".env"]);
+        assert!(config.worktree.link.is_empty());
+        assert!(config.herd.is_none());
+        assert!(config.workspace.is_none());
+    }
+
+    #[test]
+    fn rejects_legacy_claude_copy_field() {
+        let toml_str = r#"
+[worktree]
+copy = [".env"]
+claude_copy = ["settings.local.json"]
+"#;
+        let err = toml::from_str::<Config>(toml_str).unwrap_err();
+        assert!(err.to_string().contains("claude_copy"));
+    }
+
+    #[test]
+    fn local_config_overrides_root_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".local")).ok();
+
+        std::fs::write(
+            dir.path().join(".wt.toml"),
+            r#"
+[issues]
+provider = "github"
+
+[site]
+provider = "herd"
+name = "root"
+
+[worktree]
+copy = [".env"]
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.path().join(".local/.wt.toml"),
+            r#"
+[profiles]
+default = "codex"
+
+[site]
+provider = "traefik"
+name = "{{repo}}-{{branch_slug}}.l"
+
+[worktree]
+copy = ["CLAUDE.local.md"]
+"#,
+        )
+        .unwrap();
+
+        let (config, source) = Config::load_with_source(dir.path()).unwrap();
+        assert!(matches!(source, ConfigSource::Files(paths) if paths.len() == 2));
+        assert_eq!(config.profiles.unwrap().default.as_deref(), Some("codex"));
+        assert_eq!(config.issues.unwrap().provider, IssueProviderType::Github);
+        let site = config.site.unwrap();
+        assert_eq!(site.provider, SiteProvider::Traefik);
+        assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}.l"));
+        assert_eq!(config.worktree.copy, vec![".env", "CLAUDE.local.md"]);
+    }
+
+    #[test]
+    fn falls_back_to_root_config() {
+        let dir = std::env::temp_dir().join("wt-test-root-fallback");
+        std::fs::create_dir_all(&dir).ok();
+
+        std::fs::write(
+            dir.join(".wt.toml"),
+            r#"
+[herd]
+site_name = "root"
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load(&dir).unwrap();
+        assert_eq!(config.herd.unwrap().site_name, "root");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_profiles_discovers_profile_toml_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let profiles_dir = dir.path().join(".local/profiles");
+        let baseline_dir = profiles_dir.join("baseline");
+        let tdd_dir = profiles_dir.join("tdd");
+        std::fs::create_dir_all(&baseline_dir).unwrap();
+        std::fs::create_dir_all(&tdd_dir).unwrap();
+
+        std::fs::write(
+            baseline_dir.join("profile.toml"),
+            "[worktree]\ncopy = [\".env\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tdd_dir.join("profile.toml"),
+            "[worktree]\ncopy = [\".env\", \"CLAUDE.local.md\"]\n",
+        )
+        .unwrap();
+
+        let profiles = Config::load_profiles(dir.path(), &Config::default()).unwrap();
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].0, "baseline");
+        assert_eq!(profiles[1].0, "tdd");
+        assert_eq!(profiles[0].1.worktree.copy, vec![".env".to_string()]);
+        assert_eq!(
+            profiles[1].1.worktree.copy,
+            vec![".env".to_string(), "CLAUDE.local.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn load_profiles_returns_empty_when_no_profiles_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let profiles = Config::load_profiles(dir.path(), &Config::default()).unwrap();
+        assert!(profiles.is_empty());
+    }
+
+    #[test]
+    fn load_profiles_returns_empty_when_no_profile_toml_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".local/profiles/empty")).unwrap();
+        let profiles = Config::load_profiles(dir.path(), &Config::default()).unwrap();
+        assert!(profiles.is_empty());
+    }
+
+    #[test]
+    fn parses_agent_config_with_defaults() {
+        let toml_str = r#"
+[agent]
+cli = "codex"
+args = ["--model", "gpt-5.5"]
+
+[agent.prompt]
+issue = ["start\n"]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let agent = config.agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Codex);
+        assert_eq!(agent.args, vec!["--model", "gpt-5.5"]);
+        assert_eq!(agent.command, None);
+        assert_eq!(agent.ready, ReadyMode::Auto);
+        assert_eq!(agent.submit, SubmitMode::Auto);
+        assert_eq!(agent.timeout, 15);
+        assert_eq!(agent.send_after, 3);
+        assert_eq!(agent.prompt.get("issue").unwrap(), &vec!["start\n"]);
+    }
+
+    #[test]
+    fn rejects_unknown_agent_fields() {
+        let toml_str = r#"
+[agent]
+driver = "codex"
+cli = "codex"
+"#;
+        let err = toml::from_str::<Config>(toml_str).unwrap_err();
+        assert!(err.to_string().contains("driver"));
+    }
+
+    #[test]
+    fn rejects_unknown_agent_cli() {
+        let toml_str = r#"
+[agent]
+cli = "other"
+command = "env CODEX_HOME=.codex codex"
+"#;
+        let err = toml::from_str::<Config>(toml_str).unwrap_err();
+        assert!(err.to_string().contains("other"));
+    }
+
+    #[test]
+    fn parses_agent_ready_marker_submit_and_gemini_cli() {
+        let toml_str = r#"
+[agent]
+cli = "gemini"
+ready = "READY_MARKER"
+submit = "carriage_return"
+timeout = 22
+send_after = 4
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let agent = config.agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Gemini);
+        assert_eq!(agent.ready, ReadyMode::Marker("READY_MARKER".into()));
+        assert_eq!(agent.submit, SubmitMode::CarriageReturn);
+        assert_eq!(agent.timeout, 22);
+        assert_eq!(agent.send_after, 4);
+    }
+
+    #[test]
+    fn agent_command_line_escapes_args_and_respects_override() {
+        let agent = AgentConfig {
+            cli: AgentCli::Codex,
+            args: vec!["--prompt".into(), "hello world".into(), "it's ok".into()],
+            command: None,
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 15,
+            send_after: 3,
+            prompt: HashMap::new(),
+        };
+        assert_eq!(
+            agent.command_line().unwrap(),
+            Some("codex --prompt 'hello world' 'it'\\''s ok'".into())
+        );
+
+        let override_agent = AgentConfig {
+            command: Some("env FOO=1 codex --model gpt-5.5".into()),
+            ..agent
+        };
+        assert_eq!(
+            override_agent.command_line().unwrap(),
+            Some("env FOO=1 codex --model gpt-5.5".into())
+        );
+    }
+
+    #[test]
+    fn agent_helpers_pick_ready_and_submit_by_cli() {
+        let codex = AgentConfig {
+            cli: AgentCli::Codex,
+            args: Vec::new(),
+            command: None,
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 15,
+            send_after: 3,
+            prompt: HashMap::new(),
+        };
+        let claude = AgentConfig {
+            cli: AgentCli::Claude,
+            ..codex.clone()
+        };
+        let gemini = AgentConfig {
+            cli: AgentCli::Gemini,
+            ..codex.clone()
+        };
+        let none = AgentConfig {
+            cli: AgentCli::None,
+            ..codex.clone()
+        };
+
+        assert_eq!(codex.effective_ready(), Some("›".into()));
+        assert_eq!(claude.effective_ready(), Some("❯".into()));
+        assert_eq!(gemini.effective_ready(), None);
+        assert_eq!(none.command_line().unwrap(), None);
+        assert_eq!(codex.apply_submit_suffix("go".into()), "go\r");
+        assert_eq!(claude.apply_submit_suffix("go".into()), "go\n");
+        assert_eq!(gemini.apply_submit_suffix("go".into()), "go\n");
+        assert_eq!(codex.apply_submit_suffix("go\n".into()), "go\n");
+    }
+
+    #[test]
+    fn agent_none_disables_command_even_with_override() {
+        let agent = AgentConfig {
+            cli: AgentCli::None,
+            args: Vec::new(),
+            command: Some("codex --model gpt-5.5".into()),
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 15,
+            send_after: 3,
+            prompt: HashMap::new(),
+        };
+
+        assert_eq!(agent.command_line().unwrap(), None);
+    }
+
+    #[test]
+    fn load_profile_returns_specific_config_or_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[agent]
+cli = "codex"
+args = ["--model", "gpt-5.5"]
+"#,
+        )
+        .unwrap();
+
+        let profile = Config::load_profile(dir.path(), "codex", &Config::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(profile.agent.unwrap().cli, AgentCli::Codex);
+        assert!(
+            Config::load_profile(dir.path(), "missing", &Config::default())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn load_profile_overlays_base_config_and_applies_conventions() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex-yolo");
+        std::fs::create_dir_all(profile_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(profile_dir.join("codex/skills")).unwrap();
+        std::fs::create_dir_all(profile_dir.join("claude")).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[agent]
+cli = "codex"
+args = ["--yolo"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(profile_dir.join("prompts/issue.md"), "handle issue\n").unwrap();
+        std::fs::write(
+            profile_dir.join("codex/AGENTS.override.md"),
+            "codex override\n",
+        )
+        .unwrap();
+        std::fs::write(profile_dir.join("codex/skills/README.md"), "skills\n").unwrap();
+        std::fs::write(profile_dir.join("claude/CLAUDE.local.md"), "claude\n").unwrap();
+
+        let mut base = Config::default();
+        base.worktree.copy = vec![".env".into()];
+        base.worktree.link = vec![".local".into()];
+        base.worktree.path = Some("worktrees/{{default_name}}".into());
+
+        let profile = Config::load_profile(dir.path(), "codex-yolo", &base)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(profile.worktree.copy, vec![".env"]);
+        assert_eq!(profile.worktree.link, vec![".local"]);
+        assert_eq!(
+            profile.worktree.path.as_deref(),
+            Some("worktrees/{{default_name}}")
+        );
+        let agent = profile.agent.unwrap();
+        assert_eq!(agent.args, vec!["--yolo"]);
+        assert_eq!(agent.prompt.get("issue").unwrap(), &vec!["handle issue\n"]);
+        assert!(profile.worktree.copy_as.iter().any(|entry| {
+            entry.from == ".local/profiles/codex-yolo/codex/AGENTS.override.md"
+                && entry.to == "AGENTS.override.md"
+        }));
+        assert!(profile.worktree.copy_as.iter().any(|entry| {
+            entry.from == ".local/profiles/codex-yolo/codex/skills" && entry.to == ".codex/skills"
+        }));
+        assert!(!profile.worktree.copy_as.iter().any(|entry| {
+            entry.from == ".local/profiles/codex-yolo/claude/CLAUDE.local.md"
+                && entry.to == "CLAUDE.local.md"
+        }));
+    }
+
+    #[test]
+    fn load_profile_merges_worktree_fields_without_dropping_base_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/alternate-path");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[worktree]
+path = "profiles/{{default_name}}"
+"#,
+        )
+        .unwrap();
+
+        let mut base = Config::default();
+        base.worktree.copy = vec![".env".into()];
+        base.worktree.link = vec![".local".into()];
+
+        let profile = Config::load_profile(dir.path(), "alternate-path", &base)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            profile.worktree.path.as_deref(),
+            Some("profiles/{{default_name}}")
+        );
+        assert_eq!(profile.worktree.copy, vec![".env"]);
+        assert_eq!(profile.worktree.link, vec![".local"]);
+    }
+
+    #[test]
+    fn load_profile_applies_claude_scaffold_only_for_claude_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/claude-plan");
+        std::fs::create_dir_all(profile_dir.join("codex")).unwrap();
+        std::fs::create_dir_all(profile_dir.join("claude/commands")).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[agent]
+cli = "claude"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            profile_dir.join("codex/AGENTS.override.md"),
+            "codex override\n",
+        )
+        .unwrap();
+        std::fs::write(profile_dir.join("claude/CLAUDE.local.md"), "claude\n").unwrap();
+        std::fs::write(profile_dir.join("claude/commands/start.md"), "start\n").unwrap();
+
+        let profile = Config::load_profile(dir.path(), "claude-plan", &Config::default())
+            .unwrap()
+            .unwrap();
+
+        assert!(profile.worktree.copy_as.iter().any(|entry| {
+            entry.from == ".local/profiles/claude-plan/claude/CLAUDE.local.md"
+                && entry.to == "CLAUDE.local.md"
+        }));
+        assert!(profile.worktree.copy_as.iter().any(|entry| {
+            entry.from == ".local/profiles/claude-plan/claude/commands"
+                && entry.to == ".claude/commands"
+        }));
+        assert!(!profile.worktree.copy_as.iter().any(|entry| {
+            entry.from == ".local/profiles/claude-plan/codex/AGENTS.override.md"
+                && entry.to == "AGENTS.override.md"
+        }));
+    }
+
+    #[test]
+    fn rejects_legacy_workspace_command_and_post_ready() {
+        let command_toml = r#"
+[workspace]
+command = "bash"
+tabs = []
+"#;
+        let err = toml::from_str::<Config>(command_toml).unwrap_err();
+        assert!(err.to_string().contains("command"));
+
+        let post_ready_toml = r#"
+[workspace]
+tabs = []
+
+[workspace.post_ready]
+wait_for = "❯"
+timeout = 10
+send_after = 2
+
+[workspace.post_ready.send]
+issue = ["start 스킬을 사용해서 현재 이슈/작업 컨텍스트를 확인하고 작업 계획을 세운 뒤 바로 시작해줘.\n"]
+pr = ["/conventional-review {{pr_number}}\n", "/codex:review --background\n"]
+"#;
+        let err = toml::from_str::<Config>(post_ready_toml).unwrap_err();
+        assert!(err.to_string().contains("post_ready"));
+    }
+
+    #[test]
+    fn parses_open_browser_config() {
+        let toml_str = r#"
+[herd]
+site_name = "test"
+open_browser = true
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let herd = config.herd.unwrap();
+        assert_eq!(herd.open_browser, Some(true));
+    }
+
+    #[test]
+    fn effective_site_prefers_site_over_legacy_herd() {
+        let toml_str = r#"
+[herd]
+site_name = "{{repo}}-{{branch_slug}}"
+
+[site]
+provider = "docker_proxy"
+name = "{{repo}}-{{branch_slug}}"
+secure = false
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let site = config.effective_site().unwrap();
+        assert_eq!(site.provider, SiteProvider::DockerProxy);
+        assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
+        assert_eq!(site.secure, Some(false));
+    }
+
+    #[test]
+    fn parses_traefik_site_provider() {
+        let toml_str = r#"
+[site]
+provider = "traefik"
+name = "istat-{{branch_slug}}.l"
+url = "https://{{site_name}}"
+target = "http://127.0.0.1:{{front_port}}"
+secure = true
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let site = config.site.unwrap();
+        assert_eq!(site.provider, SiteProvider::Traefik);
+        assert_eq!(site.name.as_deref(), Some("istat-{{branch_slug}}.l"));
+        assert_eq!(site.url.as_deref(), Some("https://{{site_name}}"));
+        assert_eq!(
+            site.target.as_deref(),
+            Some("http://127.0.0.1:{{front_port}}")
+        );
+        assert_eq!(site.secure, Some(true));
+    }
+
+    #[test]
+    fn effective_site_maps_legacy_herd() {
+        let toml_str = r#"
+[herd]
+site_name = "{{repo}}-{{branch_slug}}"
+secure = true
+open_browser = true
+browser = "Google Chrome"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let site = config.effective_site().unwrap();
+        assert_eq!(site.provider, SiteProvider::Herd);
+        assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
+        assert_eq!(site.secure, Some(true));
+        assert_eq!(site.open_browser, Some(true));
+        assert_eq!(site.browser.as_deref(), Some("Google Chrome"));
+    }
+
+    #[test]
+    fn site_provider_none_disables_effective_site() {
+        let toml_str = r#"
+[site]
+provider = "none"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.effective_site().is_none());
+        assert!(!config.has_site());
+    }
+
+    #[test]
+    fn parses_issues_config_github() {
+        let toml_str = r#"
+[issues]
+provider = "github"
+gh_user = "alice"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let issues = config.issues.unwrap();
+        assert_eq!(issues.provider, IssueProviderType::Github);
+        assert_eq!(issues.gh_user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn parses_issues_config_linear() {
+        let toml_str = r#"
+[issues]
+provider = "linear"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let issues = config.issues.unwrap();
+        assert_eq!(issues.provider, IssueProviderType::Linear);
+        assert!(issues.gh_user.is_none());
+    }
+
+    #[test]
+    fn parses_default_profile_config() {
+        let toml_str = r#"
+[profiles]
+default = "codex"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.profiles.unwrap().default.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn parses_worktree_naming_config_with_defaults() {
+        let toml_str = r#"
+[worktree.naming]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let naming = config.worktree.naming.unwrap();
+        assert_eq!(naming.command, "claude -p");
+        assert!(naming.prompt.contains("{{issue_title}}"));
+        assert_eq!(
+            naming.branch.as_deref(),
+            Some("{{branch_prefix}}{{issue_key_lower}}-{{english_slug}}")
+        );
+        assert!(naming.workspace.is_none());
+    }
+
+    #[test]
+    fn parses_worktree_naming_config_overrides() {
+        let toml_str = r#"
+[worktree.naming]
+command = "claude -p --model sonnet"
+prompt = "title={{issue_title}}"
+branch = "feat/{{issue_number}}-{{english_slug}}"
+workspace = "{{english_title}}"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let naming = config.worktree.naming.unwrap();
+        assert_eq!(naming.command, "claude -p --model sonnet");
+        assert_eq!(naming.prompt, "title={{issue_title}}");
+        assert_eq!(
+            naming.branch.as_deref(),
+            Some("feat/{{issue_number}}-{{english_slug}}")
+        );
+        assert_eq!(naming.workspace.as_deref(), Some("{{english_title}}"));
+    }
+
+    #[test]
+    fn issues_section_optional() {
+        let toml_str = r#"
+[worktree]
+copy = [".env"]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.issues.is_none());
+    }
+}

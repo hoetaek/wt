@@ -1,0 +1,43 @@
+[package]
+name = "wt"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+description = "Git worktree workspace manager"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hoetaek/wt"
+readme = "README.md"
+keywords = ["git", "worktree", "cli", "automation"]
+categories = ["command-line-utilities", "development-tools"]
+include = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "README.md",
+    "SECURITY.md",
+    "src/**",
+    "tests/**",
+]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+console = "0.16"
+dialoguer = { version = "0.12", features = ["fuzzy-select"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+shell-words = "1"
+toml = "1"
+thiserror = "2"
+
+[dev-dependencies]
+assert_cmd = "2"
+assert_fs = "1"
+predicates = "3"
+tempfile = "3"

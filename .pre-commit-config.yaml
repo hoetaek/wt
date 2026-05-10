@@ -1,0 +1,31 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        entry: cargo fmt --all --check
+        language: system
+        pass_filenames: false
+        files: ^(Cargo\.toml|Cargo\.lock|src/.*\.rs)$
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        pass_filenames: false
+        files: ^(Cargo\.toml|Cargo\.lock|src/.*\.rs)$
+
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --locked --all-features
+        language: system
+        pass_filenames: false
+        files: ^(Cargo\.toml|Cargo\.lock|src/.*\.rs)$
+        stages: [pre-push]
