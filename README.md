@@ -287,22 +287,22 @@ wt batch run latest
 can continue from the batch file's item status instead of checking a global
 issue state.
 
-## Traefik Provider
+## Site Provider Helpers
 
-The Traefik site provider is intended for local HTTPS routing on macOS. Inspect
-expected paths and defaults with:
+`site` commands inspect the configured local site provider. For
+`provider = "traefik"`, they also expose host-native Traefik setup helpers:
 
 ```bash
-wt traefik paths
-wt traefik example-launchd
-wt traefik doctor
+wt site doctor
+wt site paths
+wt site example-launchd
 ```
 
 The default LaunchDaemon label is `wt.traefik`. For managed machines or
 packaged installs, pass an organization-specific reverse-DNS label:
 
 ```bash
-wt traefik example-launchd --label com.example.wt-traefik
+wt site example-launchd --label com.example.wt-traefik
 ```
 
 ## Development

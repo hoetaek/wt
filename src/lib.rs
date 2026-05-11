@@ -44,7 +44,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Done { targets } => commands::done::run(ctx, targets),
         Commands::Doctor => commands::doctor::run(ctx),
         Commands::Profile { command } => commands::profile::run(ctx, command.as_ref()),
-        Commands::Traefik { command } => commands::traefik::run(ctx, command),
+        Commands::Site { command } => commands::site::run(ctx, command),
         Commands::Init {
             local,
             shared,

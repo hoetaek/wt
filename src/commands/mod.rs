@@ -9,4 +9,4 @@ pub mod new;
 pub mod open;
 pub mod pr;
 pub mod profile;
-pub mod traefik;
+pub mod site;

@@ -139,10 +139,10 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Inspect helper state for the Traefik site provider
-    Traefik {
+    /// Inspect and manage local site provider helpers
+    Site {
         #[command(subcommand)]
-        command: TraefikCommand,
+        command: SiteCommand,
     },
 }
 
@@ -214,12 +214,12 @@ pub enum BatchCommand {
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum TraefikCommand {
-    /// Check the host setup expected by provider = "traefik"
+pub enum SiteCommand {
+    /// Check the configured local site provider setup
     Doctor,
-    /// Print the paths and defaults used by wt's Traefik provider
+    /// Print provider-managed site paths and defaults
     Paths,
-    /// Print an example macOS LaunchDaemon plist for host-native Traefik
+    /// Print an example macOS LaunchDaemon plist for provider = "traefik"
     ExampleLaunchd {
         /// LaunchDaemon label to render
         #[arg(long, default_value = "wt.traefik")]
@@ -641,21 +641,21 @@ mod tests {
     }
 
     #[test]
-    fn traefik_doctor_subcommand() {
-        let cli = parse(&["wt", "traefik", "doctor"]);
+    fn site_doctor_subcommand() {
+        let cli = parse(&["wt", "site", "doctor"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Traefik {
-                command: TraefikCommand::Doctor
+            Some(Commands::Site {
+                command: SiteCommand::Doctor
             })
         ));
     }
 
     #[test]
-    fn traefik_example_launchd_accepts_overrides() {
+    fn site_example_launchd_accepts_overrides() {
         let cli = parse(&[
             "wt",
-            "traefik",
+            "site",
             "example-launchd",
             "--label",
             "dev.wt-traefik",
@@ -665,10 +665,16 @@ mod tests {
 
         assert!(matches!(
             cli.command,
-            Some(Commands::Traefik {
-                command: TraefikCommand::ExampleLaunchd { label, bind_ip }
+            Some(Commands::Site {
+                command: SiteCommand::ExampleLaunchd { label, bind_ip }
             }) if label == "dev.wt-traefik" && bind_ip == "127.0.0.3"
         ));
+    }
+
+    #[test]
+    fn traefik_subcommand_is_removed() {
+        let result = Cli::try_parse_from(["wt", "traefik", "doctor"]);
+        assert!(result.is_err());
     }
 
     #[test]

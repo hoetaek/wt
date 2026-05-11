@@ -1,4 +1,4 @@
-use crate::cli::TraefikCommand;
+use crate::cli::SiteCommand;
 use crate::config::SiteProvider;
 use crate::context::Ctx;
 use crate::services::traefik::TraefikService;
@@ -9,25 +9,50 @@ const DEFAULT_BIND_IP: &str = "127.0.0.2";
 const DEFAULT_LABEL: &str = "wt.traefik";
 const DOCTOR_HOST: &str = "wt-traefik-doctor.l";
 
-pub fn run(ctx: &Ctx, command: &TraefikCommand) -> Result<()> {
+pub fn run(ctx: &Ctx, command: &SiteCommand) -> Result<()> {
     match command {
-        TraefikCommand::Doctor => doctor(ctx),
-        TraefikCommand::Paths => paths(ctx),
-        TraefikCommand::ExampleLaunchd { label, bind_ip } => example_launchd(ctx, label, bind_ip),
+        SiteCommand::Doctor => doctor(ctx),
+        SiteCommand::Paths => paths(ctx),
+        SiteCommand::ExampleLaunchd { label, bind_ip } => example_launchd(ctx, label, bind_ip),
     }
 }
 
 fn doctor(ctx: &Ctx) -> Result<()> {
-    ctx.ui.print_step("Traefik doctor");
+    ctx.ui.print_step("Site doctor");
+
+    match active_site_provider(ctx) {
+        SiteProvider::None => {
+            ctx.ui.print_step("Site provider: none");
+            Ok(())
+        }
+        SiteProvider::DockerProxy => {
+            ctx.ui.print_step("Site provider: docker_proxy");
+            ok(ctx, "no local site CLI is required");
+            Ok(())
+        }
+        SiteProvider::Herd => provider_cli_doctor(ctx, "herd", "Herd CLI"),
+        SiteProvider::Valet => provider_cli_doctor(ctx, "valet", "Valet CLI"),
+        SiteProvider::Traefik => traefik_doctor(ctx),
+    }
+}
+
+fn provider_cli_doctor(ctx: &Ctx, command: &str, label: &str) -> Result<()> {
+    ctx.ui.print_step(&format!("Site provider: {command}"));
+    if ctx.runner.has_command(command) {
+        ok(ctx, &format!("{label} is on PATH"));
+        Ok(())
+    } else {
+        bail!("{label} is not on PATH");
+    }
+}
+
+fn traefik_doctor(ctx: &Ctx) -> Result<()> {
+    ctx.ui.print_step("Site provider: traefik");
 
     let mut failures = Vec::new();
     let mut warnings = Vec::new();
 
-    if ctx.config.site.as_ref().map(|site| &site.provider) == Some(&SiteProvider::Traefik) {
-        ok(ctx, "[site] provider is traefik");
-    } else {
-        warnings.push("[site] provider is not traefik in the active wt config".to_string());
-    }
+    ok(ctx, "[site] provider is traefik");
 
     if ctx.runner.has_command("traefik") {
         ok(ctx, "traefik is on PATH");
@@ -102,7 +127,9 @@ fn doctor(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-fn paths(_ctx: &Ctx) -> Result<()> {
+fn paths(ctx: &Ctx) -> Result<()> {
+    ensure_traefik_provider(ctx, "paths")?;
+
     let service = TraefikService::new();
     let sites_dir = service.sites_dir();
     let root_dir = sites_dir.parent().unwrap_or_else(|| Path::new("."));
@@ -122,6 +149,8 @@ fn paths(_ctx: &Ctx) -> Result<()> {
 }
 
 fn example_launchd(ctx: &Ctx, label: &str, bind_ip: &str) -> Result<()> {
+    ensure_traefik_provider(ctx, "example-launchd")?;
+
     let service = TraefikService::new();
     let sites_dir = service.sites_dir();
     let root_dir = sites_dir.parent().unwrap_or_else(|| Path::new("."));
@@ -134,6 +163,36 @@ fn example_launchd(ctx: &Ctx, label: &str, bind_ip: &str) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn ensure_traefik_provider(ctx: &Ctx, command: &str) -> Result<()> {
+    let provider = active_site_provider(ctx);
+    if provider == SiteProvider::Traefik {
+        return Ok(());
+    }
+
+    bail!(
+        "wt site {command} requires [site].provider = \"traefik\" (current: {})",
+        provider_name(&provider)
+    );
+}
+
+fn active_site_provider(ctx: &Ctx) -> SiteProvider {
+    ctx.config
+        .site
+        .as_ref()
+        .map(|site| site.provider.clone())
+        .unwrap_or_default()
+}
+
+fn provider_name(provider: &SiteProvider) -> &'static str {
+    match provider {
+        SiteProvider::None => "none",
+        SiteProvider::Herd => "herd",
+        SiteProvider::Valet => "valet",
+        SiteProvider::DockerProxy => "docker_proxy",
+        SiteProvider::Traefik => "traefik",
+    }
 }
 
 fn check_loopback_alias(ctx: &Ctx, bind_ip: &str) -> Result<bool> {
@@ -311,10 +370,25 @@ mod tests {
         runner.add_response("name: wt-traefik-doctor.l\nip_address: 127.0.0.2", true);
         runner.add_response("traefik 1 root TCP 127.0.0.2:443 (LISTEN)", true);
         runner.add_response("traefik 1 root TCP 127.0.0.2:80 (LISTEN)", true);
-        let ctx = test_ctx(runner, Config::default());
+        let config = Config {
+            site: Some(SiteConfig {
+                provider: SiteProvider::Traefik,
+                ..SiteConfig::default()
+            }),
+            ..Config::default()
+        };
+        let ctx = test_ctx(runner, config);
 
         let err = doctor(&ctx).unwrap_err().to_string();
         assert!(err.contains("required issue"));
+    }
+
+    #[test]
+    fn paths_requires_traefik_provider() {
+        let ctx = test_ctx(MockRunner::new(), Config::default());
+
+        let err = paths(&ctx).unwrap_err().to_string();
+        assert!(err.contains("requires [site].provider = \"traefik\""));
     }
 
     #[test]
