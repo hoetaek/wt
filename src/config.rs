@@ -29,7 +29,7 @@ pub struct WorktreeConfig {
     pub copy: Vec<String>,
     pub copy_as: Vec<CopyAsEntry>,
     pub link: Vec<String>,
-    pub claude_local_context: Option<String>,
+    pub inject_local_context: Option<String>,
     pub naming: Option<WorktreeNamingConfig>,
 }
 
@@ -490,8 +490,8 @@ fn merge_worktree_config(base: &mut WorktreeConfig, profile: WorktreeConfig) {
     extend_unique(&mut base.copy, profile.copy);
     extend_copy_as_unique(&mut base.copy_as, profile.copy_as);
     extend_unique(&mut base.link, profile.link);
-    if profile.claude_local_context.is_some() {
-        base.claude_local_context = profile.claude_local_context;
+    if profile.inject_local_context.is_some() {
+        base.inject_local_context = profile.inject_local_context;
     }
     if profile.naming.is_some() {
         base.naming = profile.naming;
@@ -637,7 +637,7 @@ mod tests {
 path = "$HOME/worktrees/{{default_name}}"
 copy = [".env", "CLAUDE.local.md", ".claude/settings.local.json"]
 link = [".local"]
-claude_local_context = "\n## env\n- parent: `{{parent_branch}}`\n"
+inject_local_context = "\n## env\n- parent: `{{parent_branch}}`\n"
 
 [setup]
 deps = [
@@ -701,11 +701,11 @@ commands = [
             Some("$HOME/worktrees/{{default_name}}")
         );
         assert_eq!(config.worktree.link, vec![".local"]);
-        assert!(config.worktree.claude_local_context.is_some());
+        assert!(config.worktree.inject_local_context.is_some());
         assert!(
             config
                 .worktree
-                .claude_local_context
+                .inject_local_context
                 .unwrap()
                 .contains("{{parent_branch}}")
         );
@@ -1248,6 +1248,17 @@ pr = ["/conventional-review {{pr_number}}\n", "/codex:review --background\n"]
 "#;
         let err = toml::from_str::<Config>(post_ready_toml).unwrap_err();
         assert!(err.to_string().contains("post_ready"));
+    }
+
+    #[test]
+    fn rejects_legacy_claude_local_context_field() {
+        let toml_str = r#"
+[worktree]
+claude_local_context = "legacy"
+"#;
+
+        let err = toml::from_str::<Config>(toml_str).unwrap_err();
+        assert!(err.to_string().contains("claude_local_context"));
     }
 
     #[test]

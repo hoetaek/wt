@@ -93,7 +93,7 @@ pub fn run_setup(
         .unwrap_or_default();
     let ws_handle = open_workspace(ctx, config, wt_path, names, &ws_color)?;
 
-    inject_claude_local_context(
+    inject_local_context(
         ctx,
         config,
         wt_path,
@@ -689,7 +689,7 @@ fn run_background_tests(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()
     Ok(())
 }
 
-fn inject_claude_local_context(
+fn inject_local_context(
     ctx: &Ctx,
     config: &Config,
     wt_path: &Path,
@@ -697,13 +697,16 @@ fn inject_claude_local_context(
     template_vars: &HashMap<String, String>,
     ws_handle: Option<&str>,
 ) -> Result<()> {
-    let tmpl = match config.worktree.claude_local_context {
+    let tmpl = match config.worktree.inject_local_context {
         Some(ref t) => t,
         None => return Ok(()),
     };
 
-    let claude_local = wt_path.join("CLAUDE.local.md");
-    if !claude_local.exists() {
+    let Some(context_file) = local_context_file(config) else {
+        return Ok(());
+    };
+    let context_path = wt_path.join(context_file);
+    if !context_path.exists() {
         return Ok(());
     }
 
@@ -720,10 +723,18 @@ fn inject_claude_local_context(
 
     let rendered = template::render(tmpl, &vars);
 
-    let mut content = fs::read_to_string(&claude_local)?;
+    let mut content = fs::read_to_string(&context_path)?;
     content.push_str(&rendered);
-    fs::write(&claude_local, content)?;
+    fs::write(&context_path, content)?;
     Ok(())
+}
+
+fn local_context_file(config: &Config) -> Option<&'static str> {
+    match config.agent.as_ref().map(|agent| &agent.cli) {
+        Some(AgentCli::Codex) => Some("AGENTS.override.md"),
+        Some(AgentCli::Claude) => Some("CLAUDE.local.md"),
+        Some(AgentCli::Gemini | AgentCli::None) | None => None,
+    }
 }
 
 fn print_summary(
@@ -753,6 +764,19 @@ fn print_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn agent_config(cli: AgentCli) -> AgentConfig {
+        AgentConfig {
+            cli,
+            args: Vec::new(),
+            command: None,
+            ready: crate::config::ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 30,
+            send_after: 2,
+            prompt: HashMap::new(),
+        }
+    }
 
     #[test]
     fn copy_files_copies_nested_file_into_parent_dirs() {
@@ -1652,7 +1676,7 @@ mod tests {
     }
 
     #[test]
-    fn inject_claude_local_context_appends_rendered_template() {
+    fn inject_local_context_appends_rendered_template() {
         use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
         use std::path::PathBuf;
@@ -1666,9 +1690,10 @@ mod tests {
         runner.add_response("develop", true);
 
         let mut config = Config::default();
-        config.worktree.claude_local_context = Some(
+        config.worktree.inject_local_context = Some(
             "\n## env\n- parent: `{{parent_branch}}`\n- site: {{site_url}}\n- ws: `{{workspace}}`\n".into(),
         );
+        config.agent = Some(agent_config(AgentCli::Claude));
 
         let ctx = Ctx::new(
             PathBuf::from("/tmp/repo"),
@@ -1687,8 +1712,7 @@ mod tests {
         let mut vars = build_template_vars(&ctx, &names, Some("feature"));
         vars.insert("site_url".into(), "https://sample-app-proj-680.test".into());
 
-        inject_claude_local_context(&ctx, &ctx.config, &dir, &names, &vars, Some("workspace:3"))
-            .unwrap();
+        inject_local_context(&ctx, &ctx.config, &dir, &names, &vars, Some("workspace:3")).unwrap();
 
         let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
         assert!(result.starts_with("# Existing content\n"));
@@ -1700,7 +1724,51 @@ mod tests {
     }
 
     #[test]
-    fn inject_claude_local_context_noop_without_config() {
+    fn inject_local_context_appends_to_codex_context_file() {
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+        use std::path::PathBuf;
+
+        let dir = std::env::temp_dir().join("wt-test-inject-codex-context");
+        fs::create_dir_all(&dir).ok();
+        fs::write(dir.join("AGENTS.override.md"), "# Codex\n").unwrap();
+        fs::write(dir.join("CLAUDE.local.md"), "# Claude\n").unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response("main", true);
+
+        let mut config = Config::default();
+        config.worktree.inject_local_context =
+            Some("\n## env\n- parent: `{{parent_branch}}`\n".into());
+        config.agent = Some(agent_config(AgentCli::Codex));
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            config,
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: dir.clone(),
+            branch: "alice/proj-680-feature".into(),
+            workspace: "feature".into(),
+            site: None,
+        };
+
+        inject_local_context(&ctx, &ctx.config, &dir, &names, &HashMap::new(), None).unwrap();
+
+        let codex_result = fs::read_to_string(dir.join("AGENTS.override.md")).unwrap();
+        let claude_result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
+        assert!(codex_result.starts_with("# Codex\n"));
+        assert!(codex_result.contains("- parent: `main`"));
+        assert_eq!(claude_result, "# Claude\n");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn inject_local_context_noop_without_config() {
         use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
         use std::path::PathBuf;
@@ -1724,8 +1792,7 @@ mod tests {
             site: None,
         };
 
-        inject_claude_local_context(&ctx, &ctx.config, &dir, &names, &HashMap::new(), None)
-            .unwrap();
+        inject_local_context(&ctx, &ctx.config, &dir, &names, &HashMap::new(), None).unwrap();
 
         let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
         assert_eq!(result, "original\n");
@@ -1734,7 +1801,7 @@ mod tests {
     }
 
     #[test]
-    fn inject_claude_local_context_noop_without_file() {
+    fn inject_local_context_noop_without_file() {
         use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
         use std::path::PathBuf;
@@ -1744,7 +1811,8 @@ mod tests {
         // No CLAUDE.local.md
 
         let mut config = Config::default();
-        config.worktree.claude_local_context = Some("## env\n".into());
+        config.worktree.inject_local_context = Some("## env\n".into());
+        config.agent = Some(agent_config(AgentCli::Claude));
 
         let ctx = Ctx::new(
             PathBuf::from("/tmp/repo"),
@@ -1762,15 +1830,14 @@ mod tests {
         };
 
         assert!(
-            inject_claude_local_context(&ctx, &ctx.config, &dir, &names, &HashMap::new(), None)
-                .is_ok()
+            inject_local_context(&ctx, &ctx.config, &dir, &names, &HashMap::new(), None).is_ok()
         );
 
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn inject_claude_local_context_handles_missing_vars() {
+    fn inject_local_context_handles_missing_vars() {
         use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
         use std::path::PathBuf;
@@ -1784,8 +1851,9 @@ mod tests {
         runner.add_response("", false);
 
         let mut config = Config::default();
-        config.worktree.claude_local_context =
+        config.worktree.inject_local_context =
             Some("\n## env\n- parent: `{{parent_branch}}`\n- ws: `{{workspace}}`\n".into());
+        config.agent = Some(agent_config(AgentCli::Claude));
 
         let ctx = Ctx::new(
             PathBuf::from("/tmp/repo"),
@@ -1803,8 +1871,7 @@ mod tests {
         };
 
         // No site, no workspace handle, no parent
-        inject_claude_local_context(&ctx, &ctx.config, &dir, &names, &HashMap::new(), None)
-            .unwrap();
+        inject_local_context(&ctx, &ctx.config, &dir, &names, &HashMap::new(), None).unwrap();
 
         let result = fs::read_to_string(dir.join("CLAUDE.local.md")).unwrap();
         // Unknown vars are left as-is by template::render

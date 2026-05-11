@@ -114,6 +114,12 @@ Example shared `.wt.toml`:
 ```toml
 [worktree]
 path = "../{{repo}}-{{branch_slug}}"
+inject_local_context = """
+## env
+- site: {{site_url}}
+- workspace: {{workspace}}
+- parent: {{parent_branch}}
+"""
 
 [issues]
 provider = "github"
@@ -124,6 +130,10 @@ provider = "none"
 [workspace]
 tabs = ["lazygit", "nvim"]
 ```
+
+`inject_local_context` is a rendered text block appended to the local agent
+context file in the worktree. Codex uses `AGENTS.override.md`; Claude uses
+`CLAUDE.local.md`. If the target file is not present, setup leaves it alone.
 
 Example private `.local/.wt.toml`:
 
