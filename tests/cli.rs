@@ -52,13 +52,23 @@ fn no_args_prints_help_successfully() {
 }
 
 #[test]
-fn completion_alias_generates_script() {
+fn completion_generates_script() {
+    Command::cargo_bin("wt")
+        .unwrap()
+        .args(["completion", "bash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("_wt"));
+}
+
+#[test]
+fn completions_alias_is_rejected() {
     Command::cargo_bin("wt")
         .unwrap()
         .args(["completions", "bash"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("_wt"));
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand"));
 }
 
 #[test]

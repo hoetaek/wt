@@ -159,6 +159,15 @@ args = ["--yolo"]
 Omitting `--profile` uses the effective config. `default` is not a profile
 name, so default behavior is not stored as `profile = "default"`.
 
+Explicit `--profile` has command-specific scope:
+
+- `wt issue --profile <name>` and `wt new --profile <name>` create profiled
+  worktrees. The branch and workspace names include the profile name so the
+  profiled run is separate from the unprofiled workspace.
+- `wt pr --profile <name>` applies the named profile config to the PR
+  worktree. It uses the PR branch name as-is because the branch already
+  exists.
+
 When prompt or scaffold files are needed, move the profile into a named
 directory and select it explicitly from config:
 
@@ -226,11 +235,17 @@ Convention-based files are loaded when present for the matching `agent.cli`:
   as `CLAUDE.local.md`, and `claude/agents/`, `claude/commands/`, and
   `claude/skills/` are copied to `.claude/`.
 
-Create or list profiles:
+Create a named profile scaffold:
 
 ```bash
-wt init --local --agent codex --yes
 wt profile create codex
+wt profile
+```
+
+Or promote inline `.local/.wt.toml` profile settings into a named profile:
+
+```bash
+wt init --local --agent codex --no-prompts --yes
 wt profile promote codex
 wt profile
 ```

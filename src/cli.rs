@@ -34,7 +34,6 @@ pub enum Commands {
     /// Print wt version
     Version,
     /// Generate shell completion script
-    #[command(alias = "completions")]
     Completion {
         /// Shell to generate completions for
         #[arg(value_enum)]
@@ -47,7 +46,7 @@ pub enum Commands {
         /// Base branch: --base (interactive), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Named profile from .local/profiles/<name>
+        /// Create a profiled issue worktree from .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         /// Start one workspace for each profile
@@ -58,7 +57,7 @@ pub enum Commands {
     Pr {
         /// Pull request number (omit to select from the open PR list)
         number: Option<u32>,
-        /// Named profile from .local/profiles/<name>
+        /// Apply config from .local/profiles/<name> to the PR worktree
         #[arg(long)]
         profile: Option<String>,
     },
@@ -70,7 +69,7 @@ pub enum Commands {
         /// Base branch: --base (interactive), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Named profile from .local/profiles/<name>
+        /// Create a profiled branch worktree from .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         /// Start one workspace for each profile
@@ -188,7 +187,7 @@ pub enum InitSiteProvider {
     None,
     Herd,
     Valet,
-    #[value(name = "docker_proxy", alias = "docker-proxy")]
+    #[value(name = "docker_proxy")]
     DockerProxy,
     Traefik,
 }
@@ -612,17 +611,21 @@ mod tests {
     }
 
     #[test]
-    fn init_accepts_docker_proxy_site_provider_aliases() {
-        for value in ["docker_proxy", "docker-proxy"] {
-            let cli = parse(&["wt", "init", "--site-provider", value]);
-            assert!(matches!(
-                cli.command,
-                Some(Commands::Init {
-                    site_provider: Some(InitSiteProvider::DockerProxy),
-                    ..
-                })
-            ));
-        }
+    fn init_accepts_docker_proxy_site_provider() {
+        let cli = parse(&["wt", "init", "--site-provider", "docker_proxy"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Init {
+                site_provider: Some(InitSiteProvider::DockerProxy),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn init_rejects_docker_proxy_kebab_alias() {
+        let result = Cli::try_parse_from(["wt", "init", "--site-provider", "docker-proxy"]);
+        assert!(result.is_err());
     }
 
     #[test]
