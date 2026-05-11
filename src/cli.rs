@@ -47,7 +47,7 @@ pub enum Commands {
         /// Base branch: --base (interactive), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Profile to use for this workspace
+        /// Named profile from .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         /// Start one workspace for each profile
@@ -58,7 +58,7 @@ pub enum Commands {
     Pr {
         /// Pull request number (omit to select from the open PR list)
         number: Option<u32>,
-        /// Profile to use for this workspace
+        /// Named profile from .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
     },
@@ -70,7 +70,7 @@ pub enum Commands {
         /// Base branch: --base (interactive), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Profile to use for this workspace
+        /// Named profile from .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         /// Start one workspace for each profile
@@ -96,10 +96,10 @@ pub enum Commands {
     },
     /// Check configured providers and required local tools
     Doctor,
-    /// Create or list profile configs
+    /// List or manage named profile configs
     Profile {
-        /// Profile name to create (omit to list existing)
-        name: Option<String>,
+        #[command(subcommand)]
+        command: Option<ProfileCommand>,
     },
     /// Create a wt config file
     Init {
@@ -109,7 +109,7 @@ pub enum Commands {
         /// Write shared project config to .wt.toml
         #[arg(long)]
         shared: bool,
-        /// Agent profile to create
+        /// Agent runtime for omitted --profile runs
         #[arg(long, value_enum)]
         agent: Option<InitAgent>,
         /// Extra argument for the generated agent command
@@ -127,16 +127,16 @@ pub enum Commands {
         /// GitHub user for issue list filtering
         #[arg(long)]
         gh_user: Option<String>,
-        /// Generate default profile prompts
+        /// Create a named profile with prompt scaffold
         #[arg(long, conflicts_with = "no_prompts")]
         prompts: bool,
-        /// Skip default profile prompts
+        /// Keep profile settings inline
         #[arg(long)]
         no_prompts: bool,
         /// Skip confirmation prompts
         #[arg(long)]
         yes: bool,
-        /// Overwrite existing config/default profile settings
+        /// Overwrite existing config/profile settings
         #[arg(long)]
         force: bool,
     },
@@ -144,6 +144,20 @@ pub enum Commands {
     Traefik {
         #[command(subcommand)]
         command: TraefikCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum ProfileCommand {
+    /// Create a named profile scaffold
+    Create {
+        /// New profile name
+        name: String,
+    },
+    /// Move inline [profile.*] settings into a named profile
+    Promote {
+        /// New profile name
+        name: String,
     },
 }
 
@@ -186,7 +200,7 @@ pub enum BatchCommand {
         /// Issue identifiers to snapshot
         #[arg(required = true)]
         issues: Vec<String>,
-        /// Profile to use for all issues (defaults to [profiles].default or current config)
+        /// Named profile from .local/profiles/<name> for all issues
         #[arg(long)]
         profile: Option<String>,
         /// Base branch: --base (interactive), --base main (explicit)

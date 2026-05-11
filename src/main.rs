@@ -6,7 +6,7 @@ use std::process;
 
 use wt::cli::{Cli, ColorMode, Commands};
 use wt::config::{Config, ConfigSource};
-use wt::context::{Ctx, OutputMode};
+use wt::context::{Ctx, CtxOptions, OutputMode};
 use wt::error::WtError;
 use wt::runner::RealRunner;
 use wt::services::git::GitService;
@@ -60,15 +60,15 @@ fn try_main() -> Result<()> {
     let repo_root = git.canonical_repo_root()?;
     let config_base = working_dir.as_deref().unwrap_or(&current_dir);
 
-    let (config, config_source) = if matches!(command, Commands::Init { .. }) {
-        (Config::default(), ConfigSource::Default)
+    let (base_config, config, config_source) = if matches!(command, Commands::Init { .. }) {
+        (Config::default(), Config::default(), ConfigSource::Default)
     } else if let Some(path) = cli.config.as_deref() {
         let path = resolve_path(config_base, path);
-        let config = Config::load_file(&path)
+        let (base_config, config) = Config::load_file_for_repo(&path, &repo_root)
             .with_context(|| format!("failed to load config: {}", path.display()))?;
-        (config, ConfigSource::File(path))
+        (base_config, config, ConfigSource::File(path))
     } else {
-        Config::load_with_source(&repo_root)?
+        Config::load_base_and_effective_with_source(&repo_root)?
     };
 
     let output_mode = if cli.json {
@@ -83,8 +83,11 @@ fn try_main() -> Result<()> {
         config,
         Box::new(RealRunner),
         Box::new(TerminalUi::new(cli.quiet)),
-        output_mode,
-        cli.verbose,
+        CtxOptions {
+            base_config,
+            output_mode,
+            verbosity: cli.verbose,
+        },
     );
 
     if cli.verbose > 0 && !ctx.is_json() {

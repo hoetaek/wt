@@ -193,15 +193,12 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
 
 fn load_selected_profiles(ctx: &Ctx, profile: Option<&str>) -> Result<Vec<(String, Config)>> {
     if let Some(profile) = profile {
-        if profile == "default" {
-            return Ok(vec![("default".into(), ctx.config.clone())]);
-        }
-        let config = Config::load_profile(&ctx.repo_root, profile, &ctx.config)?
+        let config = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
             .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))?;
         return Ok(vec![(profile.to_string(), config)]);
     }
 
-    let profiles = Config::load_profiles(&ctx.repo_root, &ctx.config)?;
+    let profiles = Config::load_profiles(&ctx.repo_root, &ctx.base_config)?;
     if profiles.is_empty() {
         bail!("No profile configs found in .local/profiles/*/profile.toml");
     }

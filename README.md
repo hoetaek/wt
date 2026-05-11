@@ -55,8 +55,7 @@ wt init --shared --agent codex --issue-provider github --yes
 ```
 
 This writes shared project settings to `.wt.toml`, creates
-`.local/profiles/codex/`, and stores your local default profile in
-`.local/.wt.toml`.
+`.local/.wt.toml`, and stores the default agent runtime inline.
 
 Or keep the config local to your checkout:
 
@@ -138,8 +137,10 @@ context file in the worktree. Codex uses `AGENTS.override.md`; Claude uses
 Example private `.local/.wt.toml`:
 
 ```toml
-[profiles]
-default = "codex"
+[profile.agent]
+cli = "codex"
+timeout = 30
+send_after = 2
 ```
 
 ## Profiles
@@ -147,17 +148,27 @@ default = "codex"
 `profile` describes how a workspace should run. Profiles are execution
 environments: agent CLI, args, prompt files, and agent-specific scaffold files.
 
-Set a default profile when most `wt issue`, `wt pr`, and `wt new` runs should
-use one profile:
+For small default behavior, keep settings inline in `.local/.wt.toml`:
 
 ```toml
-[profiles]
-default = "codex"
+[profile.agent]
+cli = "codex"
+args = ["--yolo"]
 ```
 
-`wt issue 123` then behaves like `wt issue 123 --profile codex`. Explicit
-`--profile` still wins, and `--parallel` still starts every profile for
-`wt issue` and `wt new`.
+Omitting `--profile` uses the effective config. `default` is not a profile
+name, so default behavior is not stored as `profile = "default"`.
+
+When prompt or scaffold files are needed, move the profile into a named
+directory and select it explicitly from config:
+
+```toml
+[profile]
+name = "codex"
+```
+
+`[profile] name = "codex"` and inline `[profile.agent]` settings are mutually
+exclusive. Use one representation at a time.
 
 Profiles live under `.local/profiles/<name>/`:
 
@@ -177,8 +188,10 @@ Profiles live under `.local/profiles/<name>/`:
     commands/
 ```
 
-`wt init --agent <agent>` creates the matching profile automatically. Use
-`wt profile <name>` when you want to add another profile later.
+Use `wt profile create <name>` to create a named profile scaffold. Use
+`wt profile promote <name>` to move inline `[profile.*]` settings from
+`.local/.wt.toml` into `.local/profiles/<name>/profile.toml` and replace them
+with `[profile] name = "<name>"`.
 
 The minimal `profile.toml` keeps runtime settings:
 
@@ -217,7 +230,8 @@ Create or list profiles:
 
 ```bash
 wt init --local --agent codex --yes
-wt profile codex
+wt profile create codex
+wt profile promote codex
 wt profile
 ```
 
@@ -231,9 +245,9 @@ wt batch prepare 123 456 789
 wt batch prepare 123 456 789 --profile codex
 ```
 
-When `--profile` is omitted, the batch records the configured
-`[profiles].default` name. If no default profile is configured, it records
-`profile = "default"` and uses the current effective config at run time.
+When `--profile` is omitted, the batch does not store a profile field and uses
+the effective config at run time. When `--profile <name>` is provided, the
+batch stores that named profile.
 
 Issue bodies are stored as markdown snapshots:
 
@@ -242,9 +256,9 @@ Issue bodies are stored as markdown snapshots:
 .local/batches/2026-05-09-001.toml
 ```
 
-The batch TOML records the profile, base mode, overall batch status, and one
-`[[issues]]` table per issue. The double brackets are TOML's array-of-tables
-syntax, equivalent to an `issues: [...]` list in JSON.
+The batch TOML records the optional profile, base mode, overall batch status,
+and one `[[issues]]` table per issue. The double brackets are TOML's
+array-of-tables syntax, equivalent to an `issues: [...]` list in JSON.
 
 Run a prepared batch explicitly:
 

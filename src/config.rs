@@ -1,25 +1,22 @@
+use anyhow::{Context, bail};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+pub const RESERVED_PROFILE_NAME: &str = "default";
+
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub worktree: WorktreeConfig,
     pub setup: SetupConfig,
-    pub profiles: Option<ProfilesConfig>,
+    pub profile: Option<ProfileConfig>,
     pub herd: Option<HerdConfig>,
     pub site: Option<SiteConfig>,
     pub workspace: Option<WorkspaceConfig>,
     pub agent: Option<AgentConfig>,
     pub test: Option<TestConfig>,
     pub issues: Option<IssuesConfig>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
-#[serde(default, deny_unknown_fields)]
-pub struct ProfilesConfig {
-    pub default: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
@@ -129,6 +126,88 @@ pub struct AgentConfig {
     pub send_after: u64,
     #[serde(default)]
     pub prompt: HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProfileConfig {
+    pub name: Option<String>,
+    pub worktree: WorktreeConfig,
+    pub setup: SetupConfig,
+    pub site: Option<SiteConfig>,
+    pub workspace: Option<WorkspaceConfig>,
+    pub agent: Option<AgentConfig>,
+    pub test: Option<TestConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+struct ProfileConfigRaw {
+    name: Option<String>,
+    worktree: WorktreeConfig,
+    setup: SetupConfig,
+    site: Option<SiteConfig>,
+    workspace: Option<WorkspaceConfig>,
+    agent: Option<AgentConfig>,
+    test: Option<TestConfig>,
+}
+
+impl<'de> Deserialize<'de> for ProfileConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = ProfileConfigRaw::deserialize(deserializer)?;
+        let profile = ProfileConfig {
+            name: raw.name,
+            worktree: raw.worktree,
+            setup: raw.setup,
+            site: raw.site,
+            workspace: raw.workspace,
+            agent: raw.agent,
+            test: raw.test,
+        };
+        profile
+            .validate()
+            .map_err(|err| serde::de::Error::custom(err.to_string()))?;
+        Ok(profile)
+    }
+}
+
+impl ProfileConfig {
+    pub fn has_inline_settings(&self) -> bool {
+        self.worktree != WorktreeConfig::default()
+            || self.setup != SetupConfig::default()
+            || self.site.is_some()
+            || self.workspace.is_some()
+            || self.agent.is_some()
+            || self.test.is_some()
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        if let Some(name) = self.name.as_deref() {
+            validate_profile_name(name)?;
+        }
+
+        if self.name.is_some() && self.has_inline_settings() {
+            bail!(
+                "[profile] name cannot be combined with inline [profile.agent], [profile.worktree], [profile.setup], [profile.workspace], [profile.site], or [profile.test] sections"
+            );
+        }
+
+        Ok(())
+    }
+
+    fn into_config(self) -> Config {
+        Config {
+            worktree: self.worktree,
+            setup: self.setup,
+            site: self.site,
+            workspace: self.workspace,
+            agent: self.agent,
+            test: self.test,
+            ..Config::default()
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
@@ -259,6 +338,26 @@ fn shell_escape_arg(arg: &str) -> String {
     format!("'{}'", arg.replace('\'', "'\\''"))
 }
 
+pub fn validate_profile_name(name: &str) -> anyhow::Result<()> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        bail!("Profile name cannot be empty");
+    }
+    if trimmed != name {
+        bail!("Profile name cannot contain leading or trailing whitespace: {name:?}");
+    }
+    if name == RESERVED_PROFILE_NAME {
+        bail!("'{RESERVED_PROFILE_NAME}' is reserved and cannot be used as a profile name");
+    }
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        bail!("Profile name must contain only ASCII letters, digits, '-' or '_': {name}");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(default)]
 #[derive(Default)]
@@ -356,35 +455,67 @@ impl Config {
     }
 
     pub fn load_with_source(repo_root: &Path) -> anyhow::Result<(Self, ConfigSource)> {
+        let (_, effective, source) = Self::load_base_and_effective_with_source(repo_root)?;
+        Ok((effective, source))
+    }
+
+    pub fn load_base_and_effective_with_source(
+        repo_root: &Path,
+    ) -> anyhow::Result<(Self, Self, ConfigSource)> {
         let local_path = repo_root.join(".local/.wt.toml");
         let root_path = repo_root.join(".wt.toml");
         let root_exists = root_path.exists();
         let local_exists = local_path.exists();
 
-        match (root_exists, local_exists) {
-            (false, false) => Ok((Config::default(), ConfigSource::Default)),
+        let (base, source) = match (root_exists, local_exists) {
+            (false, false) => (Config::default(), ConfigSource::Default),
             (true, false) => {
                 let config = Self::load_file(&root_path)?;
-                Ok((config, ConfigSource::File(root_path)))
+                (config, ConfigSource::File(root_path))
             }
             (false, true) => {
                 let config = Self::load_file(&local_path)?;
-                Ok((config, ConfigSource::File(local_path)))
+                (config, ConfigSource::File(local_path))
             }
             (true, true) => {
                 let root = Self::load_file(&root_path)?;
                 let local = Self::load_file(&local_path)?;
-                Ok((
+                (
                     merge_config(&root, local),
                     ConfigSource::Files(vec![root_path, local_path]),
-                ))
+                )
             }
-        }
+        };
+        let effective = Self::resolve_effective_profile(repo_root, base.clone())?;
+        Ok((base, effective, source))
     }
 
     pub fn load_file(path: &Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
+        Ok(config)
+    }
+
+    pub fn load_file_for_repo(path: &Path, repo_root: &Path) -> anyhow::Result<(Self, Self)> {
+        let base = Self::load_file(path)?;
+        let effective = Self::resolve_effective_profile(repo_root, base.clone())?;
+        Ok((base, effective))
+    }
+
+    pub fn resolve_effective_profile(repo_root: &Path, mut config: Self) -> anyhow::Result<Self> {
+        let Some(profile) = config.profile.take() else {
+            return Ok(config);
+        };
+
+        if let Some(name) = profile.name.as_deref() {
+            return Self::load_profile(repo_root, name, &config)?
+                .with_context(|| format!("Profile '{name}' not found"));
+        }
+
+        if profile.has_inline_settings() {
+            return Ok(merge_config(&config, profile.into_config()));
+        }
+
         Ok(config)
     }
 
@@ -405,6 +536,7 @@ impl Config {
             let profile_name = entry.file_name().to_string_lossy().into_owned();
             let profile_toml = entry.path().join("profile.toml");
             if profile_toml.exists() {
+                validate_profile_name(&profile_name)?;
                 let config =
                     Self::load_profile_from_dir(repo_root, &profile_name, &entry.path(), base)?;
                 profiles.push((profile_name, config));
@@ -416,6 +548,7 @@ impl Config {
     }
 
     pub fn load_profile(repo_root: &Path, name: &str, base: &Self) -> anyhow::Result<Option<Self>> {
+        validate_profile_name(name)?;
         let profile_dir = repo_root.join(".local/profiles").join(name);
         if !profile_dir.join("profile.toml").exists() {
             return Ok(None);
@@ -436,7 +569,14 @@ impl Config {
         base: &Self,
     ) -> anyhow::Result<Self> {
         let profile_config = Self::load_file(&profile_dir.join("profile.toml"))?;
+        if profile_config.profile.is_some() {
+            bail!(
+                "[profile] is only valid in .wt.toml files, not in {}",
+                profile_dir.join("profile.toml").display()
+            );
+        }
         let mut config = merge_config(base, profile_config);
+        config.profile = None;
         apply_profile_conventions(repo_root, name, profile_dir, &mut config)?;
         Ok(config)
     }
@@ -451,8 +591,8 @@ fn merge_config(base: &Config, profile: Config) -> Config {
     if profile.setup != SetupConfig::default() {
         merge_setup_config(&mut merged.setup, profile.setup);
     }
-    if profile.profiles.is_some() {
-        merged.profiles = profile.profiles;
+    if profile.profile.is_some() {
+        merged.profile = profile.profile;
     }
     if profile.herd.is_some() {
         merged.herd = profile.herd;
@@ -655,8 +795,8 @@ VITE_API_TARGET = "{{api_url}}"
 [setup.env_files."backend/.env"]
 DJANGO_ENV = "dev"
 
-[profiles]
-default = "codex"
+[profile]
+name = "codex"
 
 [herd]
 site_name = "{{repo}}-{{branch_slug}}"
@@ -735,7 +875,7 @@ commands = [
                 .unwrap(),
             "dev"
         );
-        assert_eq!(config.profiles.unwrap().default.as_deref(), Some("codex"));
+        assert_eq!(config.profile.unwrap().name.as_deref(), Some("codex"));
 
         let herd = config.herd.unwrap();
         assert_eq!(herd.site_name, "{{repo}}-{{branch_slug}}");
@@ -841,8 +981,8 @@ copy = [".env"]
         std::fs::write(
             dir.path().join(".local/.wt.toml"),
             r#"
-[profiles]
-default = "codex"
+[profile.agent]
+cli = "codex"
 
 [site]
 provider = "traefik"
@@ -856,7 +996,7 @@ copy = ["CLAUDE.local.md"]
 
         let (config, source) = Config::load_with_source(dir.path()).unwrap();
         assert!(matches!(source, ConfigSource::Files(paths) if paths.len() == 2));
-        assert_eq!(config.profiles.unwrap().default.as_deref(), Some("codex"));
+        assert_eq!(config.agent.unwrap().cli, AgentCli::Codex);
         assert_eq!(config.issues.unwrap().provider, IssueProviderType::Github);
         let site = config.site.unwrap();
         assert_eq!(site.provider, SiteProvider::Traefik);
@@ -928,6 +1068,82 @@ site_name = "root"
         std::fs::create_dir_all(dir.path().join(".local/profiles/empty")).unwrap();
         let profiles = Config::load_profiles(dir.path(), &Config::default()).unwrap();
         assert!(profiles.is_empty());
+    }
+
+    #[test]
+    fn load_with_source_applies_inline_profile_to_effective_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+        std::fs::write(
+            dir.path().join(".local/.wt.toml"),
+            r#"
+[profile.agent]
+cli = "codex"
+args = ["--yolo"]
+"#,
+        )
+        .unwrap();
+
+        let (base, effective, source) =
+            Config::load_base_and_effective_with_source(dir.path()).expect("config should load");
+
+        assert!(matches!(source, ConfigSource::File(_)));
+        assert!(base.profile.is_some());
+        let agent = effective.agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Codex);
+        assert_eq!(agent.args, vec!["--yolo"]);
+        assert!(effective.profile.is_none());
+    }
+
+    #[test]
+    fn load_with_source_resolves_named_profile_without_polluting_base_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".local/profiles/codex")).unwrap();
+        std::fs::write(
+            dir.path().join(".wt.toml"),
+            "[issues]\nprovider = \"github\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(".local/.wt.toml"),
+            "[profile]\nname = \"codex\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(".local/profiles/codex/profile.toml"),
+            "[agent]\ncli = \"codex\"\n",
+        )
+        .unwrap();
+
+        let (base, effective, _) =
+            Config::load_base_and_effective_with_source(dir.path()).expect("config should load");
+
+        assert_eq!(base.profile.unwrap().name.as_deref(), Some("codex"));
+        assert!(base.agent.is_none());
+        assert_eq!(effective.agent.unwrap().cli, AgentCli::Codex);
+        assert!(effective.profile.is_none());
+    }
+
+    #[test]
+    fn rejects_reserved_default_profile_name() {
+        let err = toml::from_str::<Config>("[profile]\nname = \"default\"\n").unwrap_err();
+        assert!(err.to_string().contains("reserved"));
+    }
+
+    #[test]
+    fn rejects_profile_name_combined_with_inline_profile_settings() {
+        let err = toml::from_str::<Config>(
+            r#"
+[profile]
+name = "codex"
+
+[profile.agent]
+cli = "codex"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("cannot be combined"));
     }
 
     #[test]
@@ -1368,13 +1584,13 @@ provider = "linear"
     }
 
     #[test]
-    fn parses_default_profile_config() {
+    fn parses_named_profile_selector_config() {
         let toml_str = r#"
-[profiles]
-default = "codex"
+[profile]
+name = "codex"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.profiles.unwrap().default.as_deref(), Some("codex"));
+        assert_eq!(config.profile.unwrap().name.as_deref(), Some("codex"));
     }
 
     #[test]

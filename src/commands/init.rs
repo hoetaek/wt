@@ -61,7 +61,7 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
 
     if target.kind == InitTargetKind::Shared {
         if let Some(profile) = &plan.profile {
-            validate_default_profile_update(ctx, &profile.name, options.force)?;
+            validate_local_profile_update(ctx, profile, options.force)?;
         }
     }
 
@@ -78,35 +78,37 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
 
     if let Some(profile) = &plan.profile {
         if target.kind == InitTargetKind::Shared {
-            write_default_profile(ctx, &profile.name, options.force)?;
+            write_local_profile(ctx, profile, options.force)?;
         }
 
-        let profile_toml = ctx
-            .repo_root
-            .join(".local/profiles")
-            .join(&profile.name)
-            .join("profile.toml");
-        if profile_toml.exists() {
-            ctx.ui.print_step(&format!(
-                "Profile '{}' already exists: {}",
-                profile.name,
-                profile_toml.display()
-            ));
-        } else {
-            let created = create_profile(
-                ctx,
-                ProfileCreateOptions {
-                    name: &profile.name,
-                    base_config: &plan.config_for_profile,
-                    agent: Some(profile.agent.clone()),
-                    include_prompts: profile.include_prompts,
-                },
-            )?;
-            ctx.ui.print_step(&format!(
-                "Created default profile '{}': {}",
-                created.name,
-                created.config_path.display()
-            ));
+        if profile.include_prompts {
+            let profile_toml = ctx
+                .repo_root
+                .join(".local/profiles")
+                .join(&profile.name)
+                .join("profile.toml");
+            if profile_toml.exists() {
+                ctx.ui.print_step(&format!(
+                    "Profile '{}' already exists: {}",
+                    profile.name,
+                    profile_toml.display()
+                ));
+            } else {
+                let created = create_profile(
+                    ctx,
+                    ProfileCreateOptions {
+                        name: &profile.name,
+                        base_config: &plan.config_for_profile,
+                        agent: Some(profile.agent.clone()),
+                        include_prompts: true,
+                    },
+                )?;
+                ctx.ui.print_step(&format!(
+                    "Created profile '{}': {}",
+                    created.name,
+                    created.config_path.display()
+                ));
+            }
         }
     }
 
@@ -160,6 +162,9 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target_kind: InitTargetKind) -> 
         None
     };
     let site_provider = resolve_site_provider(ctx, options)?;
+    if agent == InitAgent::None && options.prompts {
+        bail!("--prompts cannot be used when --agent none");
+    }
     let include_prompts = if agent == InitAgent::None {
         false
     } else {
@@ -206,8 +211,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target_kind: InitTargetKind) -> 
     }
 
     if let (InitTargetKind::Local, Some(profile)) = (target_kind, &profile) {
-        s.push_str("[profiles]\n");
-        s.push_str(&format!("default = {}\n\n", toml_quote(&profile.name)));
+        append_profile_selection(&mut s, profile);
     }
 
     append_optional_scaffold(&mut s);
@@ -218,7 +222,8 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target_kind: InitTargetKind) -> 
     s.push_str("# open_url = \"{{site_url}}\"\n");
     s.push_str("# open_browser = true\n\n");
 
-    let config_for_profile = toml::from_str::<Config>(&s)?;
+    let mut config_for_profile = toml::from_str::<Config>(&s)?;
+    config_for_profile.profile = None;
 
     Ok(InitPlan {
         content: s,
@@ -369,10 +374,13 @@ fn resolve_prompts(ctx: &Ctx, options: &InitOptions) -> Result<bool> {
     if options.no_prompts {
         return Ok(false);
     }
-    if options.prompts || options.yes {
+    if options.prompts {
         return Ok(true);
     }
-    ctx.ui.confirm("Add default profile prompts?", true)
+    if options.yes {
+        return Ok(false);
+    }
+    ctx.ui.confirm("Create named profile with prompts?", false)
 }
 
 fn build_profile(
@@ -402,6 +410,34 @@ fn build_profile(
     })
 }
 
+fn append_profile_selection(s: &mut String, profile: &InitProfile) {
+    if profile.include_prompts {
+        s.push_str("[profile]\n");
+        s.push_str(&format!("name = {}\n\n", toml_quote(&profile.name)));
+    } else {
+        append_inline_agent_section(s, &profile.agent);
+        s.push('\n');
+    }
+}
+
+fn append_inline_agent_section(s: &mut String, agent: &AgentConfig) {
+    s.push_str("[profile.agent]\n");
+    s.push_str(&format!(
+        "cli = {}\n",
+        toml_quote(agent_cli_name(&agent.cli))
+    ));
+    if !agent.args.is_empty() {
+        s.push_str(&format!("args = {}\n", toml_array(&agent.args)));
+    }
+    if let Some(command) = agent.command.as_deref() {
+        s.push_str(&format!("command = {}\n", toml_quote(command)));
+    }
+    s.push_str(&format!(
+        "timeout = {}\nsend_after = {}\n",
+        agent.timeout, agent.send_after
+    ));
+}
+
 fn init_agent_cli(agent: &InitAgent) -> AgentCli {
     match agent {
         InitAgent::Codex => AgentCli::Codex,
@@ -417,6 +453,15 @@ fn agent_name(agent: &InitAgent) -> &'static str {
         InitAgent::Claude => "claude",
         InitAgent::Gemini => "gemini",
         InitAgent::None => "none",
+    }
+}
+
+fn agent_cli_name(agent: &AgentCli) -> &'static str {
+    match agent {
+        AgentCli::Codex => "codex",
+        AgentCli::Claude => "claude",
+        AgentCli::Gemini => "gemini",
+        AgentCli::None => "none",
     }
 }
 
@@ -455,118 +500,99 @@ fn toml_quote(value: &str) -> String {
     out
 }
 
-fn validate_default_profile_update(ctx: &Ctx, profile: &str, force: bool) -> Result<()> {
+fn toml_array(values: &[String]) -> String {
+    let rendered = values
+        .iter()
+        .map(|value| toml_quote(value))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{rendered}]")
+}
+
+fn validate_local_profile_update(ctx: &Ctx, profile: &InitProfile, force: bool) -> Result<()> {
     let path = ctx.repo_root.join(".local/.wt.toml");
     if !path.exists() {
         return Ok(());
     }
 
     let content = std::fs::read_to_string(&path)?;
-    let config: Config = toml::from_str(&content)?;
-    if let Some(existing) = config
-        .profiles
-        .as_ref()
-        .and_then(|profiles| profiles.default.as_deref())
-    {
-        if existing != profile && !force {
-            bail!(
-                "Default profile already set to '{existing}' in {} (use --force to overwrite)",
-                path.display()
-            );
-        }
-    }
+    set_local_profile_content(&content, profile, force)?;
     Ok(())
 }
 
-fn write_default_profile(ctx: &Ctx, profile: &str, force: bool) -> Result<()> {
+fn write_local_profile(ctx: &Ctx, profile: &InitProfile, force: bool) -> Result<()> {
     let path = ctx.repo_root.join(".local/.wt.toml");
     let content = if path.exists() {
         std::fs::read_to_string(&path)?
     } else {
         String::new()
     };
-    let updated = set_default_profile_content(&content, profile, force)?;
+    let updated = set_local_profile_content(&content, profile, force)?;
     if updated != content {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&path, updated)?;
-        ctx.ui.print_step(&format!(
-            "Set default profile '{profile}': {}",
-            path.display()
-        ));
+        ctx.ui
+            .print_step(&format!("Updated local profile config: {}", path.display()));
     }
     Ok(())
 }
 
-fn set_default_profile_content(content: &str, profile: &str, force: bool) -> Result<String> {
+fn set_local_profile_content(content: &str, profile: &InitProfile, force: bool) -> Result<String> {
     if !content.trim().is_empty() {
         let config: Config = toml::from_str(content)?;
-        if let Some(existing) = config
-            .profiles
-            .as_ref()
-            .and_then(|profiles| profiles.default.as_deref())
-        {
-            if existing == profile {
+        if let Some(existing_profile) = config.profile.as_ref() {
+            if profile.include_prompts && existing_profile.name.as_deref() == Some(&profile.name) {
                 return Ok(content.to_string());
             }
             if !force {
-                bail!("Default profile already set to '{existing}'");
+                bail!("Local profile is already configured");
             }
         }
     }
 
-    let default_line = format!("default = {}", toml_quote(profile));
-    let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
-    let profiles_idx = lines.iter().position(|line| line.trim() == "[profiles]");
-
-    let Some(idx) = profiles_idx else {
-        let mut updated = content.to_string();
-        if !updated.is_empty() && !updated.ends_with('\n') {
-            updated.push('\n');
-        }
-        if !updated.is_empty() {
-            updated.push('\n');
-        }
-        updated.push_str("[profiles]\n");
-        updated.push_str(&default_line);
-        updated.push('\n');
-        toml::from_str::<Config>(&updated)?;
-        return Ok(updated);
-    };
-
-    let section_end = lines
-        .iter()
-        .enumerate()
-        .skip(idx + 1)
-        .find_map(|(line_idx, line)| {
-            let trimmed = line.trim();
-            (trimmed.starts_with('[') && trimmed.ends_with(']')).then_some(line_idx)
-        })
-        .unwrap_or(lines.len());
-
-    if let Some(default_idx) = lines
-        .iter()
-        .enumerate()
-        .skip(idx + 1)
-        .take(section_end.saturating_sub(idx + 1))
-        .find_map(|(line_idx, line)| {
-            let trimmed = line.trim_start();
-            trimmed
-                .strip_prefix("default")
-                .is_some_and(|rest| rest.trim_start().starts_with('='))
-                .then_some(line_idx)
-        })
-    {
-        lines[default_idx] = default_line;
-    } else {
-        lines.insert(idx + 1, default_line);
+    let mut updated = remove_profile_sections(content);
+    updated = updated.trim_end().to_string();
+    if !updated.is_empty() {
+        updated.push_str("\n\n");
     }
+    append_profile_selection(&mut updated, profile);
 
-    let mut updated = lines.join("\n");
-    updated.push('\n');
     toml::from_str::<Config>(&updated)?;
     Ok(updated)
+}
+
+fn remove_profile_sections(content: &str) -> String {
+    let mut lines = Vec::new();
+    let mut skipping_profile = false;
+
+    for line in content.lines() {
+        if let Some(header) = table_header(line) {
+            skipping_profile = header == "profile" || header.starts_with("profile.");
+            if skipping_profile {
+                continue;
+            }
+        }
+
+        if !skipping_profile {
+            lines.push(line.to_string());
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn table_header(line: &str) -> Option<&str> {
+    let trimmed = line
+        .trim()
+        .split_once('#')
+        .map_or_else(|| line.trim(), |(before, _)| before.trim_end());
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return None;
+    }
+    let header = trimmed.trim_start_matches('[').trim_end_matches(']');
+    (!header.starts_with('[') && !header.ends_with(']')).then_some(header)
 }
 
 #[cfg(test)]
@@ -623,18 +649,16 @@ mod tests {
         assert!(content.contains("# post_deps_tabs = [\"npm run dev\"]"));
         assert!(config.worktree.path.is_none());
         assert!(config.worktree.naming.is_none());
-        assert_eq!(config.profiles.unwrap().default.as_deref(), Some("codex"));
-        assert!(config.agent.is_none());
-        assert!(!content.contains("[agent]"));
-
-        let profile = read_profile_config(dir.path(), "codex");
+        let profile = config.profile.unwrap();
         let agent = profile.agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
+        assert!(config.agent.is_none());
+        assert!(!content.contains("[agent]"));
         assert!(agent.args.is_empty());
         assert!(!content.contains("args ="));
         assert!(
-            dir.path()
-                .join(".local/profiles/codex/prompts/issue.md")
+            !dir.path()
+                .join(".local/profiles/codex/profile.toml")
                 .exists()
         );
         assert!(!content.contains("현재 GitHub 이슈"));
@@ -675,7 +699,7 @@ mod tests {
         let content = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert!(config.agent.is_none());
-        assert!(config.profiles.is_none());
+        assert!(config.profile.is_none());
         assert!(!content.contains("현재 이슈/작업 컨텍스트"));
         assert!(!content.contains("현재 GitHub 이슈"));
         let issues = config.issues.unwrap();
@@ -685,7 +709,7 @@ mod tests {
         let local_content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
         let local_config: Config = toml::from_str(&local_content).unwrap();
         assert_eq!(
-            local_config.profiles.unwrap().default.as_deref(),
+            local_config.profile.unwrap().name.as_deref(),
             Some("gemini")
         );
         let profile = read_profile_config(dir.path(), "gemini");
@@ -700,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn init_github_without_user_omits_personal_gh_user() {
+    fn init_github_without_user_omits_gh_user() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -834,7 +858,7 @@ mod tests {
         ui.add_select(0); // no agent args
         ui.add_select(2); // no issue provider
         ui.add_select(0); // no site provider
-        ui.add_confirm(false); // no default prompts
+        ui.add_confirm(false); // keep profile inline
         ui.add_confirm(true); // create config
 
         let ctx = Ctx::new(
@@ -867,20 +891,15 @@ mod tests {
         let content = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert!(config.agent.is_none());
-        assert!(config.profiles.is_none());
+        assert!(config.profile.is_none());
         let local_content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
         let local_config: Config = toml::from_str(&local_content).unwrap();
-        assert_eq!(
-            local_config.profiles.unwrap().default.as_deref(),
-            Some("claude")
-        );
-        let profile = read_profile_config(dir.path(), "claude");
-        let agent = profile.agent.unwrap();
+        let agent = local_config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Claude);
         assert!(agent.prompt.is_empty());
         assert!(
             !dir.path()
-                .join(".local/profiles/claude/prompts/issue.md")
+                .join(".local/profiles/claude/profile.toml")
                 .exists()
         );
         assert!(config.issues.is_none());
@@ -896,7 +915,7 @@ mod tests {
         ui.add_input("--model gpt-5.5");
         ui.add_select(2); // no issue provider
         ui.add_select(0); // no site provider
-        ui.add_confirm(false); // no default prompts
+        ui.add_confirm(false); // keep profile inline
         ui.add_confirm(true); // create config
 
         let ctx = Ctx::new(
@@ -928,9 +947,7 @@ mod tests {
 
         let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
-        assert_eq!(config.profiles.unwrap().default.as_deref(), Some("codex"));
-        let profile = read_profile_config(dir.path(), "codex");
-        let agent = profile.agent.unwrap();
+        let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
         assert_eq!(agent.args, vec!["--model", "gpt-5.5"]);
     }
@@ -1029,7 +1046,7 @@ mod tests {
         ui.add_select(0); // no agent args
         ui.add_select(2); // no issue provider
         ui.add_select(0); // no site provider
-        ui.add_confirm(false); // no default prompts
+        ui.add_confirm(false); // keep profile inline
         ui.add_confirm(true); // create config
 
         let ctx = Ctx::new(
@@ -1060,8 +1077,8 @@ mod tests {
         .unwrap();
 
         let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
-        let profile = read_profile_config(dir.path(), "codex");
-        let agent = profile.agent.unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
         assert!(agent.args.is_empty());
         assert!(!content.contains("args ="));
@@ -1097,8 +1114,9 @@ mod tests {
         )
         .unwrap();
 
-        let profile = read_profile_config(dir.path(), "codex");
-        let agent = profile.agent.unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
         assert_eq!(
             agent.command.as_deref(),
@@ -1145,26 +1163,26 @@ mod tests {
     }
 
     #[test]
-    fn set_default_profile_content_adds_profiles_section() {
+    fn set_local_profile_content_adds_inline_profile_section() {
+        let profile = build_profile(&InitAgent::Codex, Vec::new(), None, false).unwrap();
         let updated =
-            set_default_profile_content("[workspace]\ntabs = []\n", "codex", false).unwrap();
+            set_local_profile_content("[workspace]\ntabs = []\n", &profile, false).unwrap();
         let config: Config = toml::from_str(&updated).unwrap();
-        assert_eq!(config.profiles.unwrap().default.as_deref(), Some("codex"));
+        assert_eq!(config.profile.unwrap().agent.unwrap().cli, AgentCli::Codex);
         assert!(updated.contains("[workspace]\ntabs = []"));
-        assert!(updated.contains("[profiles]\ndefault = \"codex\""));
+        assert!(updated.contains("[profile.agent]\ncli = \"codex\""));
     }
 
     #[test]
-    fn set_default_profile_content_rejects_conflict_without_force() {
-        let result =
-            set_default_profile_content("[profiles]\ndefault = \"claude\"\n", "codex", false);
+    fn set_local_profile_content_rejects_conflict_without_force() {
+        let profile = build_profile(&InitAgent::Codex, Vec::new(), None, true).unwrap();
+        let result = set_local_profile_content("[profile]\nname = \"claude\"\n", &profile, false);
         assert!(result.is_err());
 
         let updated =
-            set_default_profile_content("[profiles]\ndefault = \"claude\"\n", "codex", true)
-                .unwrap();
+            set_local_profile_content("[profile]\nname = \"claude\"\n", &profile, true).unwrap();
         let config: Config = toml::from_str(&updated).unwrap();
-        assert_eq!(config.profiles.unwrap().default.as_deref(), Some("codex"));
+        assert_eq!(config.profile.unwrap().name.as_deref(), Some("codex"));
     }
 
     #[test]
@@ -1262,8 +1280,11 @@ mod tests {
 
         let content = std::fs::read_to_string(local.join(".wt.toml")).unwrap();
         let config = toml::from_str::<Config>(&content).unwrap();
-        assert_eq!(config.profiles.unwrap().default.as_deref(), Some("claude"));
-        let profile = read_profile_config(dir.path(), "claude");
-        assert_eq!(profile.agent.unwrap().cli, AgentCli::Claude);
+        assert_eq!(config.profile.unwrap().agent.unwrap().cli, AgentCli::Claude);
+        assert!(
+            !dir.path()
+                .join(".local/profiles/claude/profile.toml")
+                .exists()
+        );
     }
 }

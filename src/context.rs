@@ -37,6 +37,23 @@ pub enum OutputMode {
     Json,
 }
 
+#[derive(Debug, Clone)]
+pub struct CtxOptions {
+    pub base_config: Config,
+    pub output_mode: OutputMode,
+    pub verbosity: u8,
+}
+
+impl Default for CtxOptions {
+    fn default() -> Self {
+        Self {
+            base_config: Config::default(),
+            output_mode: OutputMode::Text,
+            verbosity: 0,
+        }
+    }
+}
+
 /// Context object carrying all side-effect handles.
 pub struct Ctx {
     pub repo_root: PathBuf,
@@ -44,6 +61,7 @@ pub struct Ctx {
     pub parent_dir: PathBuf,
     pub repo_name: String,
     pub config: Config,
+    pub base_config: Config,
     pub runner: Box<dyn CommandRunner>,
     pub ui: Box<dyn UserInterface>,
     pub output_mode: OutputMode,
@@ -58,15 +76,12 @@ impl Ctx {
         runner: Box<dyn CommandRunner>,
         ui: Box<dyn UserInterface>,
     ) -> Self {
-        Self::new_with_options(
-            repo_root,
-            invocation_root,
-            config,
-            runner,
-            ui,
-            OutputMode::Text,
-            0,
-        )
+        let options = CtxOptions {
+            base_config: config.clone(),
+            output_mode: OutputMode::Text,
+            verbosity: 0,
+        };
+        Self::new_with_options(repo_root, invocation_root, config, runner, ui, options)
     }
 
     pub fn new_with_options(
@@ -75,8 +90,7 @@ impl Ctx {
         config: Config,
         runner: Box<dyn CommandRunner>,
         ui: Box<dyn UserInterface>,
-        output_mode: OutputMode,
-        verbosity: u8,
+        options: CtxOptions,
     ) -> Self {
         let parent_dir = repo_root.parent().unwrap_or(Path::new("/")).to_path_buf();
         let repo_name = repo_root
@@ -90,10 +104,11 @@ impl Ctx {
             parent_dir,
             repo_name,
             config,
+            base_config: options.base_config,
             runner,
             ui,
-            output_mode,
-            verbosity,
+            output_mode: options.output_mode,
+            verbosity: options.verbosity,
         }
     }
 

@@ -131,6 +131,8 @@ fn run_inner(
     }
 
     let names = issue_worktree_names(ctx, &branch_name, &title, naming.as_ref())?;
+    let snapshot_config =
+        issue_snapshot.map(|snapshot| profile_config_with_issue_snapshot(&ctx.config, snapshot));
 
     // 2. Check if branch is already checked out elsewhere
     let existing_path = git.checked_out_path(&branch_name)?;
@@ -152,7 +154,7 @@ fn run_inner(
                 Some(&title),
                 "issue",
                 naming.as_ref().map(|n| &n.vars),
-                None,
+                snapshot_config.as_ref(),
             )?;
             return Ok(());
         }
@@ -186,7 +188,7 @@ fn run_inner(
                     Some(&title),
                     "issue",
                     naming.as_ref().map(|n| &n.vars),
-                    None,
+                    snapshot_config.as_ref(),
                 )?;
             }
             _ => return Err(WtError::Cancelled.into()),
@@ -215,7 +217,7 @@ fn run_inner(
         Some(&title),
         "issue",
         naming.as_ref().map(|n| &n.vars),
-        None,
+        snapshot_config.as_ref(),
     )?;
 
     Ok(())
@@ -415,15 +417,12 @@ fn resolve_base_branch(ctx: &Ctx, git: &GitService, base_raw: &Option<String>) -
 
 fn load_selected_profiles(ctx: &Ctx, profile: Option<&str>) -> Result<Vec<(String, Config)>> {
     if let Some(profile) = profile {
-        if profile == "default" {
-            return Ok(vec![("default".into(), ctx.config.clone())]);
-        }
-        let config = Config::load_profile(&ctx.repo_root, profile, &ctx.config)?
+        let config = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
             .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))?;
         return Ok(vec![(profile.to_string(), config)]);
     }
 
-    let profiles = Config::load_profiles(&ctx.repo_root, &ctx.config)?;
+    let profiles = Config::load_profiles(&ctx.repo_root, &ctx.base_config)?;
     if profiles.is_empty() {
         bail!("No profile configs found in .local/profiles/*/profile.toml");
     }

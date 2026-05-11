@@ -1,6 +1,6 @@
 use crate::cli::BaseMode;
 use crate::commands::issue;
-use crate::config::Config;
+use crate::config::{Config, validate_profile_name};
 use crate::context::Ctx;
 use crate::error::WtError;
 use anyhow::{Context, Result, bail};
@@ -9,7 +9,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DEFAULT_PROFILE: &str = "default";
 const STATUS_PREPARED: &str = "prepared";
 const STATUS_RUNNING: &str = "running";
 const STATUS_DONE: &str = "done";
@@ -27,13 +26,12 @@ pub fn prepare(
         bail!("Usage: wt batch prepare <issue>... [--profile <name>]");
     }
 
-    let profile = resolve_prepare_profile(ctx, profile);
     validate_profile(ctx, profile)?;
 
     let issue_snapshots = snapshot_issues(ctx, issues)?;
     let now = current_utc_timestamp();
     let batch = BatchMetadata {
-        profile: profile.into(),
+        profile: profile.map(str::to_string),
         base_mode: base_mode_name(base).into(),
         base: explicit_base(base),
         status: STATUS_PREPARED.into(),
@@ -54,7 +52,7 @@ pub fn prepare(
 pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
     let batch_path = resolve_batch_path(ctx, batch)?;
     let mut metadata = read_batch_metadata(&batch_path)?;
-    validate_profile(ctx, &metadata.profile)?;
+    validate_profile(ctx, metadata.profile.as_deref())?;
 
     if metadata.issues.is_empty() {
         bail!("Batch has no issues: {}", batch_path.display());
@@ -80,7 +78,12 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
         metadata.issues[idx].error.clear();
         write_batch_metadata(&batch_path, &metadata)?;
 
-        let result = run_batch_issue(ctx, &metadata.issues[idx], &base, &metadata.profile);
+        let result = run_batch_issue(
+            ctx,
+            &metadata.issues[idx],
+            &base,
+            metadata.profile.as_deref(),
+        );
 
         match result {
             Ok(()) => {
@@ -139,7 +142,8 @@ struct IssueSnapshot {
 
 #[derive(Clone, Debug, Deserialize)]
 struct BatchMetadata {
-    profile: String,
+    #[serde(default)]
+    profile: Option<String>,
     base_mode: String,
     #[serde(default)]
     base: Option<String>,
@@ -190,23 +194,13 @@ fn default_issue_status() -> String {
     STATUS_PREPARED.into()
 }
 
-fn resolve_prepare_profile<'a>(ctx: &'a Ctx, profile: Option<&'a str>) -> &'a str {
-    profile
-        .or_else(|| {
-            ctx.config
-                .profiles
-                .as_ref()
-                .and_then(|profiles| profiles.default.as_deref())
-        })
-        .unwrap_or(DEFAULT_PROFILE)
-}
-
-fn validate_profile(ctx: &Ctx, profile: &str) -> Result<()> {
-    if profile == DEFAULT_PROFILE {
+fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
+    let Some(profile) = profile else {
         return Ok(());
-    }
+    };
 
-    if Config::load_profile(&ctx.repo_root, profile, &ctx.config)?.is_none() {
+    validate_profile_name(profile)?;
+    if Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?.is_none() {
         bail!("Profile '{profile}' not found");
     }
 
@@ -254,7 +248,7 @@ fn run_batch_issue(
     ctx: &Ctx,
     batch_issue: &BatchIssue,
     base: &Option<String>,
-    profile: &str,
+    profile: Option<&str>,
 ) -> Result<()> {
     let snapshot_path = batch_issue.snapshot.clone();
     let content = fs::read_to_string(ctx.repo_root.join(&snapshot_path))
@@ -264,7 +258,7 @@ fn run_batch_issue(
     issue::run_with_issue_snapshot(
         ctx,
         base,
-        Some(profile),
+        profile,
         false,
         issue::PreparedIssueContext {
             identifier: &batch_issue.id,
@@ -312,7 +306,9 @@ fn read_batch_metadata(path: &Path) -> Result<BatchMetadata> {
 
 fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
     let mut content = String::new();
-    content.push_str(&format!("profile = {}\n", toml_quote(&batch.profile)));
+    if let Some(profile) = batch.profile.as_deref() {
+        content.push_str(&format!("profile = {}\n", toml_quote(profile)));
+    }
     content.push_str(&format!("base_mode = {}\n", toml_quote(&batch.base_mode)));
     if let Some(base) = &batch.base {
         content.push_str(&format!("base = {}\n", toml_quote(base)));
@@ -520,7 +516,7 @@ fn toml_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, IssueProviderType, IssuesConfig, ProfilesConfig};
+    use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
 
@@ -572,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_writes_default_profile_batch_without_running() {
+    fn prepare_omits_profile_when_default_behavior_is_used() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -598,7 +594,7 @@ mod tests {
 
         let batch_path = latest_batch_path(&ctx).unwrap();
         let content = std::fs::read_to_string(batch_path).unwrap();
-        assert!(content.contains("profile = \"default\""));
+        assert!(!content.contains("profile ="));
         assert!(content.contains("status = \"prepared\""));
         assert!(content.contains("[[issues]]"));
         assert!(content.contains("id = \"PROJ-123\""));
@@ -608,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_uses_configured_default_profile_when_omitted() {
+    fn prepare_records_explicit_named_profile() {
         let dir = tempfile::tempdir().unwrap();
         let profile_dir = dir.path().join(".local/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
@@ -624,9 +620,6 @@ mod tests {
             true,
         );
         let config = Config {
-            profiles: Some(ProfilesConfig {
-                default: Some("codex".into()),
-            }),
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
                 gh_user: None,
@@ -641,7 +634,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        prepare(&ctx, &["PROJ-123".into()], None, &None).unwrap();
+        prepare(&ctx, &["PROJ-123".into()], Some("codex"), &None).unwrap();
 
         let batch_path = latest_batch_path(&ctx).unwrap();
         let content = std::fs::read_to_string(batch_path).unwrap();
@@ -653,7 +646,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("batch.toml");
         let batch = BatchMetadata {
-            profile: "codex-yolo".into(),
+            profile: Some("codex-yolo".into()),
             base_mode: "explicit".into(),
             base: Some("main".into()),
             status: STATUS_PARTIAL.into(),
@@ -673,7 +666,7 @@ mod tests {
         write_batch_metadata(&path, &batch).unwrap();
         let parsed = read_batch_metadata(&path).unwrap();
 
-        assert_eq!(parsed.profile, "codex-yolo");
+        assert_eq!(parsed.profile.as_deref(), Some("codex-yolo"));
         assert_eq!(parsed.base.as_deref(), Some("main"));
         assert_eq!(parsed.status, STATUS_PARTIAL);
         assert_eq!(parsed.issues[0].status, STATUS_DONE);
@@ -741,7 +734,7 @@ mod tests {
         );
         let batch_path = dir.path().join("batch.toml");
         let batch = BatchMetadata {
-            profile: DEFAULT_PROFILE.into(),
+            profile: None,
             base_mode: "default".into(),
             base: None,
             status: STATUS_PARTIAL.into(),
@@ -778,7 +771,7 @@ mod tests {
         );
         let batch_path = dir.path().join("batch.toml");
         let batch = BatchMetadata {
-            profile: DEFAULT_PROFILE.into(),
+            profile: None,
             base_mode: "default".into(),
             base: None,
             status: STATUS_PREPARED.into(),
@@ -821,8 +814,17 @@ mod tests {
         .unwrap();
 
         let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                dir.path().display()
+            ),
+            true,
+        ); // checked_out_path
+        runner.add_response("", true); // fetch
+        runner.add_response("", false); // branch does not exist locally
+        runner.add_response("", false); // branch does not exist remotely
         runner.add_response("main", true); // current branch for default base
-        runner.add_response("", false); // profile branch does not exist
         runner.add_response("", true); // worktree add
         runner.add_response("", true); // parent branch exists
         runner.add_response("", true); // branch parent config
@@ -835,7 +837,7 @@ mod tests {
         );
         let batch_path = dir.path().join("batch.toml");
         let batch = BatchMetadata {
-            profile: DEFAULT_PROFILE.into(),
+            profile: None,
             base_mode: "default".into(),
             base: None,
             status: STATUS_PREPARED.into(),

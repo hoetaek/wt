@@ -156,10 +156,7 @@ fn load_profile_config(ctx: &Ctx, profile: Option<&str>) -> Result<Option<Config
     let Some(profile) = profile else {
         return Ok(None);
     };
-    if profile == "default" {
-        return Ok(Some(ctx.config.clone()));
-    }
-    Config::load_profile(&ctx.repo_root, profile, &ctx.config)?
+    Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
         .map(Some)
         .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))
 }
