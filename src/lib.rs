@@ -39,7 +39,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             } => commands::batch::prepare(ctx, issues, profile.as_deref(), base),
             BatchCommand::Run { batch } => commands::batch::run(ctx, batch),
         },
-        Commands::List => commands::list::run(ctx),
+        Commands::List { wide } => commands::list::run(ctx, *wide),
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
         Commands::Doctor => commands::doctor::run(ctx),

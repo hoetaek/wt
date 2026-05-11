@@ -137,7 +137,7 @@ fn apply_color(color: ColorMode) {
 fn supports_json(command: &Commands) -> bool {
     matches!(
         command,
-        Commands::Version | Commands::List | Commands::Doctor | Commands::Profile { .. }
+        Commands::Version | Commands::List { .. } | Commands::Doctor | Commands::Profile { .. }
     )
 }
 

@@ -82,7 +82,11 @@ pub enum Commands {
         command: BatchCommand,
     },
     /// Show worktree, branch, site, and setup state
-    List,
+    List {
+        /// Do not truncate table columns to fit the terminal
+        #[arg(long)]
+        wide: bool,
+    },
     /// Open existing worktree with full workspace
     Open {
         /// Branch, issue number, or worktree directory name to open
@@ -522,7 +526,13 @@ mod tests {
     #[test]
     fn list_subcommand() {
         let cli = parse(&["wt", "list"]);
-        assert!(matches!(cli.command, Some(Commands::List)));
+        assert!(matches!(cli.command, Some(Commands::List { wide: false })));
+    }
+
+    #[test]
+    fn list_accepts_wide_flag() {
+        let cli = parse(&["wt", "list", "--wide"]);
+        assert!(matches!(cli.command, Some(Commands::List { wide: true })));
     }
 
     #[test]
