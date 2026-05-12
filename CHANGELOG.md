@@ -6,6 +6,12 @@ This project follows SemVer.
 
 ## Unreleased
 
+- Added interactive multi-select for `wt batch prepare` when no issue
+  identifiers are provided.
+- Added `wt stack prepare`, `wt stack run`, and `wt stack complete` for
+  ordered issue stacks where each issue branch is based on the previous
+  completed issue branch.
+
 ## 0.4.0
 
 - Changed config loading to merge `.wt.toml` as the shared base with

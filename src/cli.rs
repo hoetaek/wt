@@ -81,6 +81,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: BatchCommand,
     },
+    /// Prepare or run issue stacks
+    Stack {
+        #[command(subcommand)]
+        command: StackCommand,
+    },
     /// Show worktree, branch, site, and setup state
     List {
         /// Do not truncate table columns to fit the terminal
@@ -200,8 +205,7 @@ pub enum InitSiteProvider {
 pub enum BatchCommand {
     /// Snapshot issues and create a batch file without starting workspaces
     Prepare {
-        /// Issue identifiers to snapshot
-        #[arg(required = true)]
+        /// Issue identifiers to snapshot (omit to select interactively)
         issues: Vec<String>,
         /// Named profile from .local/profiles/<name> for all issues
         #[arg(long)]
@@ -214,6 +218,33 @@ pub enum BatchCommand {
     Run {
         /// Batch TOML path, or "latest" for the newest local batch
         batch: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum StackCommand {
+    /// Snapshot ordered issues and create a stack file without starting workspaces
+    Prepare {
+        /// Issue identifiers to snapshot in base-to-top order (omit to select interactively)
+        issues: Vec<String>,
+        /// Named profile from .local/profiles/<name> for all issues
+        #[arg(long)]
+        profile: Option<String>,
+        /// Base branch: --base (interactive), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+    },
+    /// Start the next prepared or failed item from a stack file
+    Run {
+        /// Stack TOML path, or "latest" for the newest local stack
+        stack: String,
+    },
+    /// Mark the running item in a stack as complete
+    Complete {
+        /// Stack TOML path, or "latest" for the newest local stack
+        stack: String,
+        /// Running issue identifier to complete
+        issue: Option<String>,
     },
 }
 
@@ -431,6 +462,21 @@ mod tests {
     }
 
     #[test]
+    fn batch_prepare_accepts_no_issue_args_for_interactive_selection() {
+        let cli = parse(&["wt", "batch", "prepare"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Prepare {
+                    ref issues,
+                    profile: None,
+                    base: None,
+                }
+            }) if issues.is_empty()
+        ));
+    }
+
+    #[test]
     fn batch_prepare_accepts_profile_and_base() {
         let cli = parse(&[
             "wt",
@@ -464,6 +510,73 @@ mod tests {
             Some(Commands::Batch {
                 command: BatchCommand::Run { ref batch }
             }) if batch == "latest"
+        ));
+    }
+
+    #[test]
+    fn stack_prepare_accepts_ordered_issues_profile_and_base() {
+        let cli = parse(&[
+            "wt",
+            "stack",
+            "prepare",
+            "PROJ-123",
+            "PROJ-456",
+            "--profile",
+            "codex",
+            "--base",
+            "main",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::Prepare {
+                    ref issues,
+                    profile: Some(ref profile),
+                    base: Some(ref base),
+                }
+            }) if issues == &vec!["PROJ-123".to_string(), "PROJ-456".to_string()]
+                && profile == "codex"
+                && base == "main"
+        ));
+    }
+
+    #[test]
+    fn stack_prepare_accepts_no_issue_args_for_interactive_selection() {
+        let cli = parse(&["wt", "stack", "prepare"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::Prepare {
+                    ref issues,
+                    profile: None,
+                    base: None,
+                }
+            }) if issues.is_empty()
+        ));
+    }
+
+    #[test]
+    fn stack_run_accepts_latest() {
+        let cli = parse(&["wt", "stack", "run", "latest"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::Run { ref stack }
+            }) if stack == "latest"
+        ));
+    }
+
+    #[test]
+    fn stack_complete_accepts_stack_and_issue() {
+        let cli = parse(&["wt", "stack", "complete", "latest", "PROJ-123"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::Complete {
+                    ref stack,
+                    issue: Some(ref issue),
+                }
+            }) if stack == "latest" && issue == "PROJ-123"
         ));
     }
 

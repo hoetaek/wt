@@ -2,7 +2,7 @@
 
 이 문서는 `wt` 코드베이스가 지켜야 할 UX 일관성 원칙을 정리한다.
 
-`wt`는 worktree, issue, pull request, profile, batch, agent runtime처럼 서로
+`wt`는 worktree, issue, pull request, profile, batch, stack, agent runtime처럼 서로
 다른 개념을 조합하는 도구다. 기능이 늘어날수록 사용자가 기억해야 할 규칙이 늘기
 쉽다. 그래서 `wt`의 UX는 기능 수보다 개념의 선명함을 우선한다.
 
@@ -37,7 +37,10 @@
 
 `batch`는 무엇들을 한꺼번에 실행할지에 대한 개념이다.
 
-이 둘이 섞이면 사용자는 batch가 실행환경인지, profile이 작업 묶음인지 다시 추론해야
+`stack`은 어떤 issue들을 어떤 순서의 branch parent 체인으로 쌓을지에 대한 개념이다.
+
+이 셋이 섞이면 사용자는 batch가 실행환경인지, stack이 단순 실행 목록인지,
+profile이 작업 묶음인지 다시 추론해야
 한다. 이런 혼동은 기능 추가보다 먼저 제거한다.
 
 ### Omission Means Default Behavior
@@ -86,6 +89,11 @@
 Batch가 어떤 issue를 준비했고, 어떤 issue가 끝났고, 어떤 issue가 실패했는지는 저장할
 가치가 있다. 반대로 내부 구현 편의를 위해 만든 가짜 이름이나 암묵적 상태를 저장하면
 나중에 사용자가 파일을 읽을 때 모델을 다시 배워야 한다.
+
+Stack이 어떤 issue를 어떤 parent 위에 쌓았는지도 저장할 가치가 있다. parent가 아직
+실행 전이라 확정되지 않았다면 가짜 값을 넣지 않고, 실행 시 확정된 branch를 기록한다.
+Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 명시적
+`complete` 신호를 기다리는 상태다. 완료를 추정해서 다음 item을 시작하지 않는다.
 
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 

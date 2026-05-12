@@ -83,6 +83,16 @@ Start a workspace from branch-name text:
 wt new add profile docs
 ```
 
+Prepare issue work in bulk:
+
+```bash
+wt batch prepare
+wt batch run latest
+wt stack prepare
+wt stack run latest
+wt stack complete latest PROJ-123
+```
+
 Open an existing worktree with its configured workspace:
 
 ```bash
@@ -256,9 +266,13 @@ Batches split planning from execution. `prepare` snapshots issues and writes a
 batch file without creating worktrees:
 
 ```bash
+wt batch prepare
 wt batch prepare 123 456 789
 wt batch prepare 123 456 789 --profile codex
 ```
+
+When issue identifiers are omitted, `prepare` opens the provider issue list and
+lets you select multiple issues interactively.
 
 When `--profile` is omitted, the batch does not store a profile field and uses
 the effective config at run time. When `--profile <name>` is provided, the
@@ -286,6 +300,50 @@ wt batch run latest
 `status = "failed"`. Items marked `done` or `skipped` are left alone, so reruns
 can continue from the batch file's item status instead of checking a global
 issue state.
+
+## Stacks
+
+Stacks are ordered issue work. `prepare` snapshots issues and writes a stack
+file without creating worktrees:
+
+```bash
+wt stack prepare
+wt stack prepare 123 456 789 --base main
+wt stack prepare 123 456 789 --base main --profile codex
+```
+
+When issue identifiers are omitted, `prepare` opens the provider issue list,
+lets you select multiple issues, then asks for the base-to-top order. When
+identifiers are provided, their argument order is the stack order.
+
+Start the next runnable stack item:
+
+```bash
+wt stack run .local/stacks/2026-05-12-001.toml
+wt stack run latest
+```
+
+`run` starts one prepared or failed item at a time and leaves it marked
+`running`. The first issue branch uses the stack base branch. Each following
+issue branch starts only after the previous item is completed, and uses that
+previous issue branch as its parent.
+
+When `run` starts an item, the agent prompt includes the completion command:
+
+```bash
+wt stack complete .local/stacks/2026-05-12-001.toml 123
+```
+
+`complete` marks the running item `done`. Run the stack again to start the next
+item:
+
+```bash
+wt stack complete latest 123
+wt stack run latest
+```
+
+The stack TOML records each issue's `parent`, branch, and status so reruns can
+continue from the stored state.
 
 ## Site Provider Helpers
 

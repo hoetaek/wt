@@ -1,5 +1,7 @@
 use crate::cli::BaseMode;
 use crate::commands::issue;
+use crate::commands::issue_selection;
+use crate::commands::issue_snapshot::{IssueSnapshot, snapshot_issues};
 use crate::config::{Config, validate_profile_name};
 use crate::context::Ctx;
 use crate::error::WtError;
@@ -22,13 +24,23 @@ pub fn prepare(
     profile: Option<&str>,
     base: &Option<String>,
 ) -> Result<()> {
-    if issues.is_empty() {
-        bail!("Usage: wt batch prepare <issue>... [--profile <name>]");
-    }
-
     validate_profile(ctx, profile)?;
 
-    let issue_snapshots = snapshot_issues(ctx, issues)?;
+    let selected_issues = if issues.is_empty() {
+        issue_selection::select_issues(ctx, "Select issues for batch")?
+            .into_iter()
+            .map(|issue| issue.identifier)
+            .collect::<Vec<_>>()
+    } else {
+        issues.to_vec()
+    };
+
+    if selected_issues.is_empty() {
+        ctx.ui.print_warning("No issues selected");
+        return Ok(());
+    }
+
+    let issue_snapshots = snapshot_issues(ctx, &selected_issues)?;
     let now = current_utc_timestamp();
     let batch = BatchMetadata {
         profile: profile.map(str::to_string),
@@ -131,15 +143,6 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Debug)]
-struct IssueSnapshot {
-    id: String,
-    source: String,
-    title: String,
-    branch: String,
-    snapshot: String,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 struct BatchMetadata {
     #[serde(default)]
@@ -207,43 +210,6 @@ fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn snapshot_issues(ctx: &Ctx, issues: &[String]) -> Result<Vec<IssueSnapshot>> {
-    let provider = issue::build_provider(ctx)?;
-    let issues_dir = ctx.repo_root.join(".local/issues");
-    fs::create_dir_all(&issues_dir)?;
-
-    let mut snapshots = Vec::new();
-    for source in issues {
-        let issue = provider.get_issue(source.trim_start_matches('#'))?;
-        let file_name = format!("{}.md", safe_file_stem(&issue.identifier));
-        let relative_path = format!(".local/issues/{file_name}");
-        let snapshot_path = ctx.repo_root.join(&relative_path);
-        let branch = issue.branch_name.as_deref().unwrap_or("-").to_string();
-        let body = issue.body.as_deref().unwrap_or("").trim();
-        let body_section = if body.is_empty() {
-            String::new()
-        } else {
-            format!("\n## Body\n\n{body}\n")
-        };
-        fs::write(
-            &snapshot_path,
-            format!(
-                "# {}: {}\n\n- Source: `{}`\n- Branch: `{}`\n{}",
-                issue.identifier, issue.title, source, branch, body_section
-            ),
-        )?;
-        snapshots.push(IssueSnapshot {
-            id: issue.identifier,
-            source: source.clone(),
-            title: issue.title,
-            branch,
-            snapshot: relative_path,
-        });
-    }
-
-    Ok(snapshots)
-}
-
 fn run_batch_issue(
     ctx: &Ctx,
     batch_issue: &BatchIssue,
@@ -270,6 +236,7 @@ fn run_batch_issue(
             },
         },
     )
+    .map(|_| ())
 }
 
 fn prepared_branch_name(issue: &BatchIssue) -> Option<&str> {
@@ -475,27 +442,6 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
     (year as i32, m as u32, d as u32)
 }
 
-fn safe_file_stem(value: &str) -> String {
-    let stem = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string();
-
-    if stem.is_empty() {
-        "issue".into()
-    } else {
-        stem
-    }
-}
-
 fn toml_quote(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
@@ -516,6 +462,7 @@ fn toml_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::issue_snapshot::safe_file_stem;
     use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
@@ -639,6 +586,43 @@ mod tests {
         let batch_path = latest_batch_path(&ctx).unwrap();
         let content = std::fs::read_to_string(batch_path).unwrap();
         assert!(content.contains("profile = \"codex\""));
+    }
+
+    #[test]
+    fn prepare_with_no_args_selects_issues_from_provider_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"[{"identifier":"PROJ-1","title":"Schema","state":{"name":"Todo"}},{"identifier":"PROJ-2","title":"API","state":{"name":"Todo"}}]"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"identifier":"PROJ-2","title":"API","branchName":"alice/proj-2-api","description":"API body"}"#,
+            true,
+        );
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![1]);
+        let config = Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            ..Config::default()
+        };
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        prepare(&ctx, &[], None, &None).unwrap();
+
+        let batch_path = latest_batch_path(&ctx).unwrap();
+        let content = std::fs::read_to_string(batch_path).unwrap();
+        assert!(content.contains("id = \"PROJ-2\""));
+        assert!(!content.contains("id = \"PROJ-1\""));
     }
 
     #[test]

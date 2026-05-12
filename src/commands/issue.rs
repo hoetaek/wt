@@ -12,6 +12,7 @@ use crate::setup;
 use crate::worktree_naming::{self, WorktreeNamingResult};
 use anyhow::{Result, bail};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub(crate) struct IssueSnapshotContext<'a> {
     pub(crate) path: &'a str,
@@ -25,6 +26,12 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) snapshot: IssueSnapshotContext<'a>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct IssueRunResult {
+    pub(crate) branch_name: String,
+    pub(crate) worktree_path: PathBuf,
+}
+
 pub fn run(
     ctx: &Ctx,
     target: Option<&str>,
@@ -32,7 +39,7 @@ pub fn run(
     profile: Option<&str>,
     parallel: bool,
 ) -> Result<()> {
-    run_inner(ctx, target, base_raw, profile, parallel, None)
+    run_inner(ctx, target, base_raw, profile, parallel, None).map(|_| ())
 }
 
 pub(crate) fn run_with_issue_snapshot(
@@ -41,7 +48,7 @@ pub(crate) fn run_with_issue_snapshot(
     profile: Option<&str>,
     parallel: bool,
     prepared: PreparedIssueContext<'_>,
-) -> Result<()> {
+) -> Result<IssueRunResult> {
     run_inner(ctx, None, base_raw, profile, parallel, Some(&prepared))
 }
 
@@ -52,7 +59,7 @@ fn run_inner(
     profile: Option<&str>,
     parallel: bool,
     prepared_issue: Option<&PreparedIssueContext<'_>>,
-) -> Result<()> {
+) -> Result<IssueRunResult> {
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
     // 1. Resolve issue
@@ -119,7 +126,7 @@ fn run_inner(
         };
 
     if parallel || profile.is_some() {
-        return run_profiles(
+        let results = run_profiles(
             ctx,
             &title,
             &branch_name,
@@ -127,7 +134,11 @@ fn run_inner(
             base_raw,
             profile,
             issue_snapshot,
-        );
+        )?;
+        return results
+            .into_iter()
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("No profile worktrees created"));
     }
 
     let names = issue_worktree_names(ctx, &branch_name, &title, naming.as_ref())?;
@@ -140,7 +151,10 @@ fn run_inner(
         if *existing == ctx.invocation_root {
             ctx.ui
                 .print_warning("이미 이 브랜치에 있습니다. 다른 브랜치로 전환 후 다시 시도하세요.");
-            return Ok(());
+            return Ok(IssueRunResult {
+                branch_name,
+                worktree_path: existing.clone(),
+            });
         }
         if *existing != names.path {
             ctx.ui.print_step(&format!(
@@ -156,7 +170,10 @@ fn run_inner(
                 naming.as_ref().map(|n| &n.vars),
                 snapshot_config.as_ref(),
             )?;
-            return Ok(());
+            return Ok(IssueRunResult {
+                branch_name,
+                worktree_path: existing.clone(),
+            });
         }
     }
 
@@ -190,6 +207,10 @@ fn run_inner(
                     naming.as_ref().map(|n| &n.vars),
                     snapshot_config.as_ref(),
                 )?;
+                return Ok(IssueRunResult {
+                    branch_name,
+                    worktree_path: names.path,
+                });
             }
             _ => return Err(WtError::Cancelled.into()),
         }
@@ -220,7 +241,10 @@ fn run_inner(
         snapshot_config.as_ref(),
     )?;
 
-    Ok(())
+    Ok(IssueRunResult {
+        branch_name,
+        worktree_path: names.path,
+    })
 }
 
 fn issue_worktree_names(
@@ -260,7 +284,7 @@ fn run_profiles(
     base_raw: &Option<String>,
     profile: Option<&str>,
     issue_snapshot: Option<&IssueSnapshotContext<'_>>,
-) -> Result<()> {
+) -> Result<Vec<IssueRunResult>> {
     let profiles = load_selected_profiles(ctx, profile)?;
 
     ctx.ui.print_step(&format!(
@@ -275,6 +299,7 @@ fn run_profiles(
 
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
     let base = resolve_base_branch(ctx, &git, base_raw)?;
+    let mut results = Vec::new();
 
     for (profile_name, profile_config) in &profiles {
         let snapshot_config = issue_snapshot
@@ -355,13 +380,17 @@ fn run_profiles(
             Some(&profile_extra_vars),
             Some(profile_config),
         )?;
+        results.push(IssueRunResult {
+            branch_name: profile_branch,
+            worktree_path: names.path,
+        });
     }
 
     ctx.ui.print_step(&format!(
         "All {} profiles created successfully",
         profiles.len()
     ));
-    Ok(())
+    Ok(results)
 }
 
 fn profile_template_vars(
