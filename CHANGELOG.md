@@ -10,7 +10,7 @@ This project follows SemVer.
   identifiers are provided.
 - Added `wt stack new` to create manual branch stacks from branch-name text
   without an issue provider.
-- Added `wt stack prepare`, `wt stack run`, and `wt stack complete` for
+- Added `wt stack issue`, `wt stack run`, and `wt stack complete` for
   ordered issue stacks where each issue branch is based on the previous
   completed issue branch.
 - Generalized stack state to canonical `[[items]]` entries so stack TOML can

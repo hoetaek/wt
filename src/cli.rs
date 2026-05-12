@@ -81,7 +81,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: BatchCommand,
     },
-    /// Prepare or run branch stacks
+    /// Create or run branch stacks
     Stack {
         #[command(subcommand)]
         command: StackCommand,
@@ -235,8 +235,8 @@ pub enum StackCommand {
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
     },
-    /// Snapshot ordered issues and create a stack file without starting workspaces
-    Prepare {
+    /// Create a stack file from issues without starting workspaces
+    Issue {
         /// Issue identifiers to snapshot in base-to-top order (omit to select interactively)
         issues: Vec<String>,
         /// Named profile from .local/profiles/<name> for all issues
@@ -526,11 +526,11 @@ mod tests {
     }
 
     #[test]
-    fn stack_prepare_accepts_ordered_issues_profile_and_base() {
+    fn stack_issue_accepts_ordered_issues_profile_and_base() {
         let cli = parse(&[
             "wt",
             "stack",
-            "prepare",
+            "issue",
             "PROJ-123",
             "PROJ-456",
             "--profile",
@@ -541,7 +541,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Stack {
-                command: StackCommand::Prepare {
+                command: StackCommand::Issue {
                     ref issues,
                     profile: Some(ref profile),
                     base: Some(ref base),
@@ -580,12 +580,12 @@ mod tests {
     }
 
     #[test]
-    fn stack_prepare_accepts_no_issue_args_for_interactive_selection() {
-        let cli = parse(&["wt", "stack", "prepare"]);
+    fn stack_issue_accepts_no_issue_args_for_interactive_selection() {
+        let cli = parse(&["wt", "stack", "issue"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Stack {
-                command: StackCommand::Prepare {
+                command: StackCommand::Issue {
                     ref issues,
                     profile: None,
                     base: None,

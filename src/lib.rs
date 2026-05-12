@@ -45,11 +45,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 profile,
                 base,
             } => commands::stack::new(ctx, items, profile.as_deref(), base),
-            StackCommand::Prepare {
+            StackCommand::Issue {
                 issues,
                 profile,
                 base,
-            } => commands::stack::prepare(ctx, issues, profile.as_deref(), base),
+            } => commands::stack::issue(ctx, issues, profile.as_deref(), base),
             StackCommand::Run { stack } => commands::stack::run(ctx, stack),
             StackCommand::Complete { stack, item } => {
                 commands::stack::complete(ctx, stack, item.as_deref())

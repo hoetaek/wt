@@ -48,7 +48,7 @@ pub fn new(
     Ok(())
 }
 
-pub fn prepare(
+pub fn issue(
     ctx: &Ctx,
     issues: &[String],
     profile: Option<&str>,
@@ -84,7 +84,7 @@ pub fn prepare(
     let stack_path = write_new_stack_metadata(ctx, &stack)?;
 
     ctx.ui
-        .print_step(&format!("Prepared stack: {}", stack_path.display()));
+        .print_step(&format!("Created stack: {}", stack_path.display()));
     Ok(())
 }
 
@@ -956,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_with_no_args_selects_and_reorders_issues() {
+    fn issue_with_no_args_selects_and_reorders_issues() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -989,7 +989,7 @@ mod tests {
             Box::new(ui),
         );
 
-        prepare(&ctx, &[], None, &Some("main".into())).unwrap();
+        issue(&ctx, &[], None, &Some("main".into())).unwrap();
 
         let stack_path = latest_stack_path(&ctx).unwrap();
         let stack = read_stack_metadata(&stack_path).unwrap();

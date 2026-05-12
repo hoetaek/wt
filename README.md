@@ -88,7 +88,7 @@ Prepare issue work in bulk:
 ```bash
 wt batch prepare
 wt batch run latest
-wt stack prepare
+wt stack issue
 wt stack run latest
 wt stack complete latest PROJ-123
 ```
@@ -312,21 +312,21 @@ Create a stack from branch-name text without creating worktrees:
 wt stack new "add schema" "wire API" --base main
 ```
 
-`prepare` snapshots provider issues and writes a stack file without creating
+`issue` snapshots provider issues and writes a stack file without creating
 worktrees:
 
 ```bash
-wt stack prepare
-wt stack prepare 123 456 789 --base main
-wt stack prepare 123 456 789 --base main --profile codex
+wt stack issue
+wt stack issue 123 456 789 --base main
+wt stack issue 123 456 789 --base main --profile codex
 ```
 
-When issue identifiers are omitted, `prepare` opens the provider issue list,
+When issue identifiers are omitted, `issue` opens the provider issue list,
 lets you select multiple issues, then asks for the base-to-top order. When
 identifiers are provided, their argument order is the stack order.
 
-Both `new` and `prepare` create stack TOML. `new` writes manual `kind = "new"`
-items from branch-name text. `prepare` writes `kind = "issue"` items from
+Both `new` and `issue` create stack TOML. `new` writes manual `kind = "new"`
+items from branch-name text. `issue` writes `kind = "issue"` items from
 provider issue snapshots.
 
 You can also edit stack TOML directly:
@@ -354,7 +354,7 @@ Build on the schema branch.
 """
 ```
 
-`[[items]]` is the canonical stack list. Issue-based `prepare` also writes
+`[[items]]` is the canonical stack list. Issue-based `issue` also writes
 `[[items]]` with `kind = "issue"` and a `snapshot` path. Older `[[issues]]`
 stack files are still readable for compatibility.
 
