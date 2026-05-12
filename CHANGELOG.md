@@ -8,6 +8,8 @@ This project follows SemVer.
 
 - Added interactive multi-select for `wt batch prepare` when no issue
   identifiers are provided.
+- Added `wt stack new` to create manual branch stacks from branch-name text
+  without an issue provider.
 - Added `wt stack prepare`, `wt stack run`, and `wt stack complete` for
   ordered issue stacks where each issue branch is based on the previous
   completed issue branch.

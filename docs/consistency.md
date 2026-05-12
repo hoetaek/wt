@@ -40,6 +40,10 @@
 `stack`은 어떤 작업 item들을 어떤 순서의 branch parent 체인으로 쌓을지에 대한
 개념이다.
 
+`wt stack new`와 `wt stack prepare`는 둘 다 stack 상태 파일을 만든다. 차이는 입력
+소스다. `new`는 branch-name text에서 직접 작성 item을 만들고, `prepare`는 provider
+issue snapshot에서 issue item을 만든다.
+
 이 셋이 섞이면 사용자는 batch가 실행환경인지, stack이 단순 실행 목록인지,
 profile이 작업 묶음인지 다시 추론해야
 한다. 이런 혼동은 기능 추가보다 먼저 제거한다.

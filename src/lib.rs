@@ -40,6 +40,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             BatchCommand::Run { batch } => commands::batch::run(ctx, batch),
         },
         Commands::Stack { command } => match command {
+            StackCommand::New {
+                items,
+                profile,
+                base,
+            } => commands::stack::new(ctx, items, profile.as_deref(), base),
             StackCommand::Prepare {
                 issues,
                 profile,

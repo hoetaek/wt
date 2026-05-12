@@ -1,13 +1,14 @@
 use crate::cli::BaseMode;
-use crate::commands::issue;
 use crate::commands::issue_selection::{self, SelectedIssue};
 use crate::commands::issue_snapshot::{IssueSnapshot, snapshot_issues};
+use crate::commands::{issue, new as new_command};
 use crate::config::{Config, validate_profile_name};
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::git::GitService;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,6 +19,34 @@ const STATUS_DONE: &str = "done";
 const STATUS_FAILED: &str = "failed";
 const STATUS_SKIPPED: &str = "skipped";
 const STATUS_PARTIAL: &str = "partial";
+
+pub fn new(
+    ctx: &Ctx,
+    items: &[String],
+    profile: Option<&str>,
+    base: &Option<String>,
+) -> Result<()> {
+    validate_profile(ctx, profile)?;
+    if items.is_empty() {
+        bail!("Usage: wt stack new <item>...");
+    }
+
+    let now = current_utc_timestamp();
+    let stack = StackMetadata {
+        profile: profile.map(str::to_string),
+        base_mode: base_mode_name(base).into(),
+        base: explicit_base(base),
+        status: STATUS_PREPARED.into(),
+        created_at: now.clone(),
+        updated_at: now,
+        items: stack_items_from_names(items, explicit_base(base))?,
+    };
+    let stack_path = write_new_stack_metadata(ctx, &stack)?;
+
+    ctx.ui
+        .print_step(&format!("Created stack: {}", stack_path.display()));
+    Ok(())
+}
 
 pub fn prepare(
     ctx: &Ctx,
@@ -408,6 +437,40 @@ fn stack_items_from_snapshots(
             StackItem::from_snapshot(snapshot, issue_parent)
         })
         .collect()
+}
+
+fn stack_items_from_names(
+    names: &[String],
+    initial_parent: Option<String>,
+) -> Result<Vec<StackItem>> {
+    let mut seen_branches = HashSet::new();
+    let mut parent = initial_parent;
+    let mut items = Vec::new();
+
+    for name in names {
+        let title = name.trim();
+        let branch = new_command::branch_name_from_words(&[title.to_string()])?;
+        if !seen_branches.insert(branch.clone()) {
+            bail!("Duplicate stack item branch: {branch}");
+        }
+
+        let item_parent = parent.clone();
+        parent = Some(branch.clone());
+        items.push(StackItem {
+            kind: "new".into(),
+            id: branch.clone(),
+            source: String::new(),
+            title: title.to_string(),
+            branch,
+            parent: item_parent,
+            snapshot: None,
+            body: String::new(),
+            status: STATUS_PREPARED.into(),
+            error: String::new(),
+        });
+    }
+
+    Ok(items)
 }
 
 fn default_stack_status() -> String {
@@ -839,6 +902,57 @@ mod tests {
         assert!(parse_order("1,2", 3).is_err());
         assert!(parse_order("1,1,2", 3).is_err());
         assert!(parse_order("1,2,4", 3).is_err());
+    }
+
+    #[test]
+    fn new_creates_manual_stack_items() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let items = vec!["Add schema".into(), "Wire API".into()];
+
+        new(&ctx, &items, None, &Some("main".into())).unwrap();
+
+        let stack_path = latest_stack_path(&ctx).unwrap();
+        let stack = read_stack_metadata(&stack_path).unwrap();
+        assert_eq!(stack.base_mode, "explicit");
+        assert_eq!(stack.base.as_deref(), Some("main"));
+        assert_eq!(stack.items.len(), 2);
+        assert_eq!(stack.items[0].kind(), "new");
+        assert_eq!(stack.items[0].id, "add-schema");
+        assert_eq!(stack.items[0].title, "Add schema");
+        assert_eq!(stack.items[0].branch, "add-schema");
+        assert_eq!(stack.items[0].parent.as_deref(), Some("main"));
+        assert!(stack.items[0].snapshot.is_none());
+        assert_eq!(stack.items[1].id, "wire-api");
+        assert_eq!(stack.items[1].parent.as_deref(), Some("add-schema"));
+
+        let content = std::fs::read_to_string(stack_path).unwrap();
+        assert!(content.contains("[[items]]"));
+        assert!(content.contains("kind = \"new\""));
+        assert!(!content.contains("snapshot ="));
+        assert!(!content.contains("[[issues]]"));
+    }
+
+    #[test]
+    fn new_rejects_duplicate_item_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let items = vec!["Add schema".into(), "add schema".into()];
+
+        let err = new(&ctx, &items, None, &None).unwrap_err();
+        assert!(err.to_string().contains("Duplicate stack item branch"));
     }
 
     #[test]

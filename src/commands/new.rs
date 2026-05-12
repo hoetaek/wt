@@ -18,27 +18,7 @@ pub fn run(
         bail!("Usage: wt new <branch-name-text>");
     }
 
-    let kebab: String = name_words
-        .join(" ")
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                ' '
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join("-");
-
-    if kebab.is_empty() {
-        bail!("Failed to create valid branch name from input");
-    }
-
-    let branch_name = kebab;
+    let branch_name = branch_name_from_words(name_words)?;
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
     if parallel || profile.is_some() {
@@ -97,6 +77,30 @@ pub fn run(
     setup::run_setup(ctx, &names.path, &names, None, "new", None, None)?;
 
     Ok(())
+}
+
+pub(crate) fn branch_name_from_words(name_words: &[String]) -> Result<String> {
+    let kebab: String = name_words
+        .join(" ")
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-");
+
+    if kebab.is_empty() {
+        bail!("Failed to create valid branch name from input");
+    }
+
+    Ok(kebab)
 }
 
 fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>) -> Result<()> {
@@ -266,21 +270,7 @@ mod tests {
     #[test]
     fn kebab_case_conversion() {
         let words: Vec<String> = vec!["Some".into(), "Feature".into(), "Name".into()];
-        let kebab: String = words
-            .join(" ")
-            .to_lowercase()
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' {
-                    c
-                } else {
-                    ' '
-                }
-            })
-            .collect::<String>()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join("-");
+        let kebab = branch_name_from_words(&words).unwrap();
         assert_eq!(kebab, "some-feature-name");
     }
 

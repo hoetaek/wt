@@ -223,6 +223,18 @@ pub enum BatchCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum StackCommand {
+    /// Create a stack file from branch-name text without starting workspaces
+    New {
+        /// Branch-name text items to create in base-to-top order
+        #[arg(required = true)]
+        items: Vec<String>,
+        /// Named profile from .local/profiles/<name> for all items
+        #[arg(long)]
+        profile: Option<String>,
+        /// Base branch: --base (interactive), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+    },
     /// Snapshot ordered issues and create a stack file without starting workspaces
     Prepare {
         /// Issue identifiers to snapshot in base-to-top order (omit to select interactively)
@@ -535,6 +547,33 @@ mod tests {
                     base: Some(ref base),
                 }
             }) if issues == &vec!["PROJ-123".to_string(), "PROJ-456".to_string()]
+                && profile == "codex"
+                && base == "main"
+        ));
+    }
+
+    #[test]
+    fn stack_new_accepts_items_profile_and_base() {
+        let cli = parse(&[
+            "wt",
+            "stack",
+            "new",
+            "add-schema",
+            "wire-api",
+            "--profile",
+            "codex",
+            "--base",
+            "main",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::New {
+                    ref items,
+                    profile: Some(ref profile),
+                    base: Some(ref base),
+                }
+            }) if items == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
                 && base == "main"
         ));

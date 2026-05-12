@@ -306,6 +306,12 @@ issue state.
 Stacks are ordered work where each item branch is based on the previous
 completed item branch.
 
+Create a stack from branch-name text without creating worktrees:
+
+```bash
+wt stack new "add schema" "wire API" --base main
+```
+
 `prepare` snapshots provider issues and writes a stack file without creating
 worktrees:
 
@@ -319,8 +325,11 @@ When issue identifiers are omitted, `prepare` opens the provider issue list,
 lets you select multiple issues, then asks for the base-to-top order. When
 identifiers are provided, their argument order is the stack order.
 
-You can also author stack TOML directly without a GitHub or Linear issue
-provider:
+Both `new` and `prepare` create stack TOML. `new` writes manual `kind = "new"`
+items from branch-name text. `prepare` writes `kind = "issue"` items from
+provider issue snapshots.
+
+You can also edit stack TOML directly:
 
 ```toml
 # .local/stacks/manual.toml
