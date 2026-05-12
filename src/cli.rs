@@ -81,7 +81,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: BatchCommand,
     },
-    /// Prepare or run issue stacks
+    /// Prepare or run branch stacks
     Stack {
         #[command(subcommand)]
         command: StackCommand,
@@ -243,8 +243,8 @@ pub enum StackCommand {
     Complete {
         /// Stack TOML path, or "latest" for the newest local stack
         stack: String,
-        /// Running issue identifier to complete
-        issue: Option<String>,
+        /// Running stack item identifier to complete
+        item: Option<String>,
     },
 }
 
@@ -567,16 +567,16 @@ mod tests {
     }
 
     #[test]
-    fn stack_complete_accepts_stack_and_issue() {
+    fn stack_complete_accepts_stack_and_item() {
         let cli = parse(&["wt", "stack", "complete", "latest", "PROJ-123"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Stack {
                 command: StackCommand::Complete {
                     ref stack,
-                    issue: Some(ref issue),
+                    item: Some(ref item),
                 }
-            }) if stack == "latest" && issue == "PROJ-123"
+            }) if stack == "latest" && item == "PROJ-123"
         ));
     }
 

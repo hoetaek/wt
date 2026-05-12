@@ -230,7 +230,10 @@ fn run_batch_issue(
             identifier: &batch_issue.id,
             title: &batch_issue.title,
             branch_name,
+            mode: "issue",
+            prompt_intro: "Use this issue snapshot before changing code.",
             snapshot: issue::IssueSnapshotContext {
+                path_label: "Snapshot path",
                 path: &snapshot_path,
                 content: &content,
             },

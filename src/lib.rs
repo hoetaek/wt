@@ -46,8 +46,8 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 base,
             } => commands::stack::prepare(ctx, issues, profile.as_deref(), base),
             StackCommand::Run { stack } => commands::stack::run(ctx, stack),
-            StackCommand::Complete { stack, issue } => {
-                commands::stack::complete(ctx, stack, issue.as_deref())
+            StackCommand::Complete { stack, item } => {
+                commands::stack::complete(ctx, stack, item.as_deref())
             }
         },
         Commands::List { wide } => commands::list::run(ctx, *wide),

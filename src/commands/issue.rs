@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub(crate) struct IssueSnapshotContext<'a> {
+    pub(crate) path_label: &'a str,
     pub(crate) path: &'a str,
     pub(crate) content: &'a str,
 }
@@ -23,6 +24,8 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) identifier: &'a str,
     pub(crate) title: &'a str,
     pub(crate) branch_name: Option<&'a str>,
+    pub(crate) mode: &'a str,
+    pub(crate) prompt_intro: &'a str,
     pub(crate) snapshot: IssueSnapshotContext<'a>,
 }
 
@@ -99,6 +102,10 @@ fn run_inner(
     let title = issue.title;
     let suggested_branch = issue.branch_name;
     let issue_snapshot = prepared_issue.map(|issue| &issue.snapshot);
+    let setup_mode = prepared_issue.map(|issue| issue.mode).unwrap_or("issue");
+    let prompt_intro = prepared_issue
+        .map(|issue| issue.prompt_intro)
+        .unwrap_or("Use this issue snapshot before changing code.");
 
     ctx.ui.print_step(&format!("{identifier}: {title}"));
 
@@ -133,7 +140,7 @@ fn run_inner(
             naming.as_ref(),
             base_raw,
             profile,
-            issue_snapshot,
+            prepared_issue,
         )?;
         return results
             .into_iter()
@@ -142,8 +149,9 @@ fn run_inner(
     }
 
     let names = issue_worktree_names(ctx, &branch_name, &title, naming.as_ref())?;
-    let snapshot_config =
-        issue_snapshot.map(|snapshot| profile_config_with_issue_snapshot(&ctx.config, snapshot));
+    let snapshot_config = issue_snapshot.map(|snapshot| {
+        profile_config_with_issue_snapshot(&ctx.config, snapshot, setup_mode, prompt_intro)
+    });
 
     // 2. Check if branch is already checked out elsewhere
     let existing_path = git.checked_out_path(&branch_name)?;
@@ -166,7 +174,7 @@ fn run_inner(
                 existing,
                 &names,
                 Some(&title),
-                "issue",
+                setup_mode,
                 naming.as_ref().map(|n| &n.vars),
                 snapshot_config.as_ref(),
             )?;
@@ -203,7 +211,7 @@ fn run_inner(
                     &names.path,
                     &names,
                     Some(&title),
-                    "issue",
+                    setup_mode,
                     naming.as_ref().map(|n| &n.vars),
                     snapshot_config.as_ref(),
                 )?;
@@ -236,7 +244,7 @@ fn run_inner(
         &names.path,
         &names,
         Some(&title),
-        "issue",
+        setup_mode,
         naming.as_ref().map(|n| &n.vars),
         snapshot_config.as_ref(),
     )?;
@@ -283,8 +291,13 @@ fn run_profiles(
     naming: Option<&WorktreeNamingResult>,
     base_raw: &Option<String>,
     profile: Option<&str>,
-    issue_snapshot: Option<&IssueSnapshotContext<'_>>,
+    prepared_issue: Option<&PreparedIssueContext<'_>>,
 ) -> Result<Vec<IssueRunResult>> {
+    let issue_snapshot = prepared_issue.map(|issue| &issue.snapshot);
+    let setup_mode = prepared_issue.map(|issue| issue.mode).unwrap_or("issue");
+    let prompt_intro = prepared_issue
+        .map(|issue| issue.prompt_intro)
+        .unwrap_or("Use this issue snapshot before changing code.");
     let profiles = load_selected_profiles(ctx, profile)?;
 
     ctx.ui.print_step(&format!(
@@ -302,8 +315,9 @@ fn run_profiles(
     let mut results = Vec::new();
 
     for (profile_name, profile_config) in &profiles {
-        let snapshot_config = issue_snapshot
-            .map(|snapshot| profile_config_with_issue_snapshot(profile_config, snapshot));
+        let snapshot_config = issue_snapshot.map(|snapshot| {
+            profile_config_with_issue_snapshot(profile_config, snapshot, setup_mode, prompt_intro)
+        });
         let profile_config = snapshot_config.as_ref().unwrap_or(profile_config);
         let profile_branch = format!("{branch_name}-{profile_name}");
         let profile_title = format!("{title} [{profile_name}]");
@@ -376,7 +390,7 @@ fn run_profiles(
             &names.path,
             &names,
             Some(&profile_title),
-            "issue",
+            setup_mode,
             Some(&profile_extra_vars),
             Some(profile_config),
         )?;
@@ -409,14 +423,16 @@ fn profile_template_vars(
 fn profile_config_with_issue_snapshot(
     config: &Config,
     snapshot: &IssueSnapshotContext<'_>,
+    mode: &str,
+    prompt_intro: &str,
 ) -> Config {
     let mut config = config.clone();
     if let Some(agent) = config.agent.as_mut() {
         let snapshot_prompt = format!(
-            "Use this issue snapshot before changing code.\n\nSnapshot path: `{}`\n\n{}",
-            snapshot.path, snapshot.content
+            "{}\n\n{}: `{}`\n\n{}",
+            prompt_intro, snapshot.path_label, snapshot.path, snapshot.content
         );
-        let prompts = agent.prompt.entry("issue".into()).or_default();
+        let prompts = agent.prompt.entry(mode.into()).or_default();
         if let Some(first_prompt) = prompts.first_mut() {
             *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
         } else {
@@ -597,11 +613,17 @@ mod tests {
             ..Config::default()
         };
         let snapshot = IssueSnapshotContext {
+            path_label: "Snapshot path",
             path: ".local/issues/PROJ-123.md",
             content: "# PROJ-123: Fix editor\n\nBody",
         };
 
-        let config = profile_config_with_issue_snapshot(&config, &snapshot);
+        let config = profile_config_with_issue_snapshot(
+            &config,
+            &snapshot,
+            "issue",
+            "Use this issue snapshot before changing code.",
+        );
 
         let mut agent = config.agent.unwrap();
         let prompts = agent.prompt.remove("issue").unwrap();
@@ -616,6 +638,47 @@ mod tests {
                     .unwrap()
         );
         assert_eq!(prompts[1], "Then run verification.");
+    }
+
+    #[test]
+    fn prepared_snapshot_context_uses_requested_setup_mode_prompt() {
+        let config = Config {
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: std::collections::HashMap::from([
+                    ("issue".into(), vec!["Issue prompt".into()]),
+                    ("new".into(), vec!["New branch prompt".into()]),
+                ]),
+            }),
+            ..Config::default()
+        };
+        let snapshot = IssueSnapshotContext {
+            path_label: "Stack item",
+            path: "stack:add-schema",
+            content: "# Add schema\n\n- Kind: `new`",
+        };
+
+        let config = profile_config_with_issue_snapshot(
+            &config,
+            &snapshot,
+            "new",
+            "Use this stack item before changing code.",
+        );
+
+        let mut agent = config.agent.unwrap();
+        let new_prompts = agent.prompt.remove("new").unwrap();
+        assert_eq!(new_prompts.len(), 1);
+        assert!(new_prompts[0].contains("Use this stack item before changing code."));
+        assert!(new_prompts[0].contains("Stack item: `stack:add-schema`"));
+        assert!(new_prompts[0].contains("# Add schema"));
+        assert!(new_prompts[0].contains("New branch prompt"));
+        assert_eq!(agent.prompt.remove("issue").unwrap(), vec!["Issue prompt"]);
     }
 
     #[test]

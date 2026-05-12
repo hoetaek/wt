@@ -303,8 +303,11 @@ issue state.
 
 ## Stacks
 
-Stacks are ordered issue work. `prepare` snapshots issues and writes a stack
-file without creating worktrees:
+Stacks are ordered work where each item branch is based on the previous
+completed item branch.
+
+`prepare` snapshots provider issues and writes a stack file without creating
+worktrees:
 
 ```bash
 wt stack prepare
@@ -316,6 +319,36 @@ When issue identifiers are omitted, `prepare` opens the provider issue list,
 lets you select multiple issues, then asks for the base-to-top order. When
 identifiers are provided, their argument order is the stack order.
 
+You can also author stack TOML directly without a GitHub or Linear issue
+provider:
+
+```toml
+# .local/stacks/manual.toml
+base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[items]]
+kind = "new"
+title = "Add schema"
+branch = "add-schema"
+body = """
+Create the schema first.
+"""
+
+[[items]]
+kind = "new"
+title = "Wire API"
+branch = "wire-api"
+body = """
+Build on the schema branch.
+"""
+```
+
+`[[items]]` is the canonical stack list. Issue-based `prepare` also writes
+`[[items]]` with `kind = "issue"` and a `snapshot` path. Older `[[issues]]`
+stack files are still readable for compatibility.
+
 Start the next runnable stack item:
 
 ```bash
@@ -324,9 +357,9 @@ wt stack run latest
 ```
 
 `run` starts one prepared or failed item at a time and leaves it marked
-`running`. The first issue branch uses the stack base branch. Each following
-issue branch starts only after the previous item is completed, and uses that
-previous issue branch as its parent.
+`running`. The first item branch uses the stack base branch. Each following
+item branch starts only after the previous item is completed, and uses that
+previous item branch as its parent.
 
 When `run` starts an item, the agent prompt includes the completion command:
 
@@ -342,7 +375,7 @@ wt stack complete latest 123
 wt stack run latest
 ```
 
-The stack TOML records each issue's `parent`, branch, and status so reruns can
+The stack TOML records each item's `parent`, branch, and status so reruns can
 continue from the stored state.
 
 ## Site Provider Helpers

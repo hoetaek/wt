@@ -11,6 +11,9 @@ This project follows SemVer.
 - Added `wt stack prepare`, `wt stack run`, and `wt stack complete` for
   ordered issue stacks where each issue branch is based on the previous
   completed issue branch.
+- Generalized stack state to canonical `[[items]]` entries so stack TOML can
+  be authored directly without an issue provider, while keeping legacy
+  `[[issues]]` stack files readable.
 
 ## 0.4.0
 

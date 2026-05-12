@@ -37,7 +37,8 @@
 
 `batch`는 무엇들을 한꺼번에 실행할지에 대한 개념이다.
 
-`stack`은 어떤 issue들을 어떤 순서의 branch parent 체인으로 쌓을지에 대한 개념이다.
+`stack`은 어떤 작업 item들을 어떤 순서의 branch parent 체인으로 쌓을지에 대한
+개념이다.
 
 이 셋이 섞이면 사용자는 batch가 실행환경인지, stack이 단순 실행 목록인지,
 profile이 작업 묶음인지 다시 추론해야
@@ -90,8 +91,11 @@ Batch가 어떤 issue를 준비했고, 어떤 issue가 끝났고, 어떤 issue�
 가치가 있다. 반대로 내부 구현 편의를 위해 만든 가짜 이름이나 암묵적 상태를 저장하면
 나중에 사용자가 파일을 읽을 때 모델을 다시 배워야 한다.
 
-Stack이 어떤 issue를 어떤 parent 위에 쌓았는지도 저장할 가치가 있다. parent가 아직
-실행 전이라 확정되지 않았다면 가짜 값을 넣지 않고, 실행 시 확정된 branch를 기록한다.
+Stack이 어떤 item을 어떤 parent 위에 쌓았는지도 저장할 가치가 있다. canonical 상태
+목록은 `[[items]]`이고, item source는 issue, 직접 작성한 branch work 등으로 나뉠 수
+있다. 과거 `[[issues]]` 상태는 compatibility를 위해 읽을 수 있지만 새로 쓰는 상태는
+`[[items]]`로 수렴한다. parent가 아직 실행 전이라 확정되지 않았다면 가짜 값을 넣지
+않고, 실행 시 확정된 branch를 기록한다.
 Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 명시적
 `complete` 신호를 기다리는 상태다. 완료를 추정해서 다음 item을 시작하지 않는다.
 

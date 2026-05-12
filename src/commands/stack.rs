@@ -50,7 +50,7 @@ pub fn prepare(
         status: STATUS_PREPARED.into(),
         created_at: now.clone(),
         updated_at: now,
-        issues: stack_issues_from_snapshots(issue_snapshots, explicit_base(base)),
+        items: stack_items_from_snapshots(issue_snapshots, explicit_base(base)),
     };
     let stack_path = write_new_stack_metadata(ctx, &stack)?;
 
@@ -64,58 +64,58 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
     let mut metadata = read_stack_metadata(&stack_path)?;
     validate_profile(ctx, metadata.profile.as_deref())?;
 
-    if metadata.issues.is_empty() {
-        bail!("Stack has no issues: {}", stack_path.display());
+    if metadata.items.is_empty() {
+        bail!("Stack has no items: {}", stack_path.display());
     }
 
-    if let Some(issue) = metadata
-        .issues
+    if let Some(item) = metadata
+        .items
         .iter()
-        .find(|issue| issue.status == STATUS_RUNNING)
+        .find(|item| item.status == STATUS_RUNNING)
     {
         bail!(
             "Stack item {} is already running. Mark it complete with: wt stack complete {} {}",
-            issue.id,
+            item.label(),
             stack_path.display(),
-            issue.id
+            item.label()
         );
     }
 
-    let Some(idx) = next_runnable_issue(&metadata.issues) else {
+    let Some(idx) = next_runnable_item(&metadata.items) else {
         ctx.ui
-            .print_step("No prepared or failed issues to run in this stack.");
-        metadata.status = summarize_stack_status(&metadata.issues);
+            .print_step("No prepared or failed items to run in this stack.");
+        metadata.status = summarize_stack_status(&metadata.items);
         metadata.updated_at = current_utc_timestamp();
         write_stack_metadata(&stack_path, &metadata)?;
         return Ok(());
     };
 
-    let parent = parent_for_issue(ctx, &metadata, idx)?;
+    let parent = parent_for_item(ctx, &metadata, idx)?;
     metadata.status = STATUS_RUNNING.into();
     metadata.updated_at = current_utc_timestamp();
-    metadata.issues[idx].status = STATUS_RUNNING.into();
-    metadata.issues[idx].parent = Some(parent.clone());
-    metadata.issues[idx].error.clear();
+    metadata.items[idx].status = STATUS_RUNNING.into();
+    metadata.items[idx].parent = Some(parent.clone());
+    metadata.items[idx].error.clear();
     write_stack_metadata(&stack_path, &metadata)?;
 
-    let result = run_stack_issue(
+    let result = run_stack_item(
         ctx,
         &stack_path,
-        &metadata.issues[idx],
+        &metadata.items[idx],
         &parent,
         metadata.profile.as_deref(),
     );
 
     match result {
         Ok(result) => {
-            metadata.issues[idx].branch = result.branch_name;
-            metadata.issues[idx].status = STATUS_RUNNING.into();
-            metadata.issues[idx].error.clear();
+            metadata.items[idx].branch = result.branch_name;
+            metadata.items[idx].status = STATUS_RUNNING.into();
+            metadata.items[idx].error.clear();
             ctx.ui.print_step(&format!(
                 "Started stack item {}. Mark it complete with: wt stack complete {} {}",
-                metadata.issues[idx].id,
+                metadata.items[idx].label(),
                 stack_path.display(),
-                metadata.issues[idx].id
+                metadata.items[idx].label()
             ));
         }
         Err(err) => {
@@ -123,20 +123,20 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
                 .downcast_ref::<WtError>()
                 .is_some_and(|err| matches!(err, WtError::Cancelled))
             {
-                metadata.issues[idx].status = STATUS_SKIPPED.into();
-                metadata.issues[idx].error = "User cancelled".into();
-                metadata.status = summarize_stack_status(&metadata.issues);
+                metadata.items[idx].status = STATUS_SKIPPED.into();
+                metadata.items[idx].error = "User cancelled".into();
+                metadata.status = summarize_stack_status(&metadata.items);
                 metadata.updated_at = current_utc_timestamp();
                 write_stack_metadata(&stack_path, &metadata)?;
                 return Ok(());
             }
 
-            metadata.issues[idx].status = STATUS_FAILED.into();
-            metadata.issues[idx].error = err.to_string();
+            metadata.items[idx].status = STATUS_FAILED.into();
+            metadata.items[idx].error = err.to_string();
         }
     }
 
-    metadata.status = summarize_stack_status(&metadata.issues);
+    metadata.status = summarize_stack_status(&metadata.items);
     metadata.updated_at = current_utc_timestamp();
     write_stack_metadata(&stack_path, &metadata)?;
     ctx.ui
@@ -149,42 +149,53 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn complete(ctx: &Ctx, stack: &str, issue: Option<&str>) -> Result<()> {
+pub fn complete(ctx: &Ctx, stack: &str, item: Option<&str>) -> Result<()> {
     let stack_path = resolve_stack_path(ctx, stack)?;
     let mut metadata = read_stack_metadata(&stack_path)?;
 
     let Some(idx) = metadata
-        .issues
+        .items
         .iter()
-        .position(|issue| issue.status == STATUS_RUNNING)
+        .position(|item| item.status == STATUS_RUNNING)
     else {
         ctx.ui.print_warning("No running stack item found");
         return Ok(());
     };
 
-    if let Some(issue) = issue {
-        let running = &metadata.issues[idx];
-        if !stack_issue_matches(running, issue) {
+    if let Some(item) = item {
+        let running = &metadata.items[idx];
+        if !stack_item_matches(running, item) {
             bail!(
-                "Running stack item is {}, but complete was requested for {issue}",
-                running.id
+                "Running stack item is {}, but complete was requested for {item}",
+                running.label()
             );
         }
     }
 
-    metadata.issues[idx].status = STATUS_DONE.into();
-    metadata.issues[idx].error.clear();
-    metadata.status = summarize_stack_status(&metadata.issues);
+    metadata.items[idx].status = STATUS_DONE.into();
+    metadata.items[idx].error.clear();
+    metadata.status = summarize_stack_status(&metadata.items);
     metadata.updated_at = current_utc_timestamp();
     write_stack_metadata(&stack_path, &metadata)?;
 
     ctx.ui
-        .print_step(&format!("Marked {} done", metadata.issues[idx].id));
+        .print_step(&format!("Marked {} done", metadata.items[idx].label()));
     Ok(())
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 struct StackMetadata {
+    profile: Option<String>,
+    base_mode: String,
+    base: Option<String>,
+    status: String,
+    created_at: String,
+    updated_at: String,
+    items: Vec<StackItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawStackMetadata {
     #[serde(default)]
     profile: Option<String>,
     base_mode: String,
@@ -197,12 +208,50 @@ struct StackMetadata {
     #[serde(default)]
     updated_at: String,
     #[serde(default)]
-    issues: Vec<StackIssue>,
+    items: Vec<StackItem>,
+    #[serde(default)]
+    issues: Vec<StackItem>,
+}
+
+impl RawStackMetadata {
+    fn into_metadata(mut self) -> Result<StackMetadata> {
+        if !self.items.is_empty() && !self.issues.is_empty() {
+            bail!("Stack TOML cannot contain both [[items]] and legacy [[issues]]");
+        }
+
+        let mut items = if self.items.is_empty() {
+            for item in &mut self.issues {
+                if item.kind.trim().is_empty() || item.kind == "item" {
+                    item.kind = "issue".into();
+                }
+            }
+            self.issues
+        } else {
+            self.items
+        };
+        for item in &mut items {
+            item.normalize();
+        }
+
+        Ok(StackMetadata {
+            profile: self.profile,
+            base_mode: self.base_mode,
+            base: self.base,
+            status: self.status,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            items,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct StackIssue {
+struct StackItem {
+    #[serde(default = "default_item_kind")]
+    kind: String,
+    #[serde(default)]
     id: String,
+    #[serde(default)]
     source: String,
     #[serde(default)]
     title: String,
@@ -210,24 +259,84 @@ struct StackIssue {
     branch: String,
     #[serde(default)]
     parent: Option<String>,
-    snapshot: String,
+    #[serde(default)]
+    snapshot: Option<String>,
+    #[serde(default)]
+    body: String,
     #[serde(default = "default_issue_status")]
     status: String,
     #[serde(default)]
     error: String,
 }
 
-impl StackIssue {
+impl StackItem {
     fn from_snapshot(snapshot: IssueSnapshot, parent: Option<String>) -> Self {
         Self {
+            kind: "issue".into(),
             id: snapshot.id,
             source: snapshot.source,
             title: snapshot.title,
             branch: snapshot.branch,
             parent,
-            snapshot: snapshot.snapshot,
+            snapshot: Some(snapshot.snapshot),
+            body: String::new(),
             status: STATUS_PREPARED.into(),
             error: String::new(),
+        }
+    }
+
+    fn label(&self) -> String {
+        if !self.id.trim().is_empty() {
+            return self.id.clone();
+        }
+        if !self.branch.trim().is_empty() {
+            return self.branch.clone();
+        }
+        if !self.title.trim().is_empty() {
+            return self.title.clone();
+        }
+        "stack-item".into()
+    }
+
+    fn title(&self) -> String {
+        if !self.title.trim().is_empty() {
+            self.title.clone()
+        } else {
+            self.label()
+        }
+    }
+
+    fn kind(&self) -> &str {
+        if self.kind.trim().is_empty() {
+            if self.snapshot.is_some() {
+                "issue"
+            } else {
+                "item"
+            }
+        } else {
+            self.kind.as_str()
+        }
+    }
+
+    fn normalize(&mut self) {
+        if self.id.trim().is_empty() {
+            self.id = if !self.source.trim().is_empty() {
+                self.source.clone()
+            } else if !self.branch.trim().is_empty() {
+                self.branch.clone()
+            } else {
+                self.title.clone()
+            };
+        }
+        if self.title.trim().is_empty() {
+            self.title = self.label();
+        }
+        if self.kind.trim().is_empty() {
+            self.kind = if self.snapshot.is_some() {
+                "issue".into()
+            } else {
+                "item".into()
+            };
         }
     }
 }
@@ -286,23 +395,27 @@ fn parse_order(raw: &str, len: usize) -> Result<Vec<usize>> {
     Ok(order)
 }
 
-fn stack_issues_from_snapshots(
+fn stack_items_from_snapshots(
     snapshots: Vec<IssueSnapshot>,
     initial_parent: Option<String>,
-) -> Vec<StackIssue> {
+) -> Vec<StackItem> {
     let mut parent = initial_parent;
     snapshots
         .into_iter()
         .map(|snapshot| {
             let issue_parent = parent.clone();
             parent = prepared_branch_name(&snapshot.branch).map(str::to_string);
-            StackIssue::from_snapshot(snapshot, issue_parent)
+            StackItem::from_snapshot(snapshot, issue_parent)
         })
         .collect()
 }
 
 fn default_stack_status() -> String {
     STATUS_PREPARED.into()
+}
+
+fn default_item_kind() -> String {
+    "item".into()
 }
 
 fn default_issue_status() -> String {
@@ -322,24 +435,42 @@ fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn run_stack_issue(
+fn run_stack_item(
     ctx: &Ctx,
     stack_path: &Path,
-    stack_issue: &StackIssue,
+    stack_item: &StackItem,
     parent: &str,
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
-    let snapshot_path = stack_issue.snapshot.clone();
-    let content = fs::read_to_string(ctx.repo_root.join(&snapshot_path))
-        .with_context(|| format!("Failed to read issue snapshot: {snapshot_path}"))?;
+    let (snapshot_path, content) = stack_item_content(ctx, stack_item, parent)?;
     let content = format!(
-        "{}\n\n## Stack Completion\n\nWhen this issue is complete, run:\n\n```bash\nwt stack complete {} {}\n```",
+        "{}\n\n## Stack Completion\n\nWhen this item is complete, run:\n\n```bash\nwt stack complete {} {}\n```",
         content.trim_end(),
         stack_path.display(),
-        stack_issue.id
+        stack_item.label()
     );
-    let branch_name = prepared_branch_name(&stack_issue.branch);
+    let branch_name = prepared_branch_name(&stack_item.branch);
+    if branch_name.is_none() {
+        bail!("Stack item {} has no branch", stack_item.label());
+    }
     let base = Some(parent.to_string());
+    let identifier = stack_item.label();
+    let title = stack_item.title();
+    let mode = if stack_item.snapshot.is_some() {
+        "issue"
+    } else {
+        "new"
+    };
+    let prompt_intro = if stack_item.snapshot.is_some() {
+        "Use this issue snapshot before changing code."
+    } else {
+        "Use this stack item before changing code."
+    };
+    let path_label = if stack_item.snapshot.is_some() {
+        "Snapshot path"
+    } else {
+        "Stack item"
+    };
 
     issue::run_with_issue_snapshot(
         ctx,
@@ -347,10 +478,13 @@ fn run_stack_issue(
         profile,
         false,
         issue::PreparedIssueContext {
-            identifier: &stack_issue.id,
-            title: &stack_issue.title,
+            identifier: &identifier,
+            title: &title,
             branch_name,
+            mode,
+            prompt_intro,
             snapshot: issue::IssueSnapshotContext {
+                path_label,
                 path: &snapshot_path,
                 content: &content,
             },
@@ -358,16 +492,40 @@ fn run_stack_issue(
     )
 }
 
-fn stack_issue_matches(issue: &StackIssue, target: &str) -> bool {
-    issue.id == target
-        || issue.source == target
-        || prepared_branch_name(&issue.branch) == Some(target)
-        || issue.branch.rsplit('/').next() == Some(target)
+fn stack_item_content(ctx: &Ctx, item: &StackItem, parent: &str) -> Result<(String, String)> {
+    if let Some(snapshot_path) = item.snapshot.as_deref() {
+        let content = fs::read_to_string(ctx.repo_root.join(snapshot_path))
+            .with_context(|| format!("Failed to read issue snapshot: {snapshot_path}"))?;
+        return Ok((snapshot_path.to_string(), content));
+    }
+
+    let path = format!("stack:{}", item.label());
+    let mut content = format!(
+        "# {}\n\n- Kind: `{}`\n- Branch: `{}`\n- Parent: `{}`\n",
+        item.title(),
+        item.kind(),
+        item.branch,
+        parent
+    );
+    if !item.body.trim().is_empty() {
+        content.push_str("\n## Body\n\n");
+        content.push_str(item.body.trim());
+        content.push('\n');
+    }
+    Ok((path, content))
 }
 
-fn next_runnable_issue(issues: &[StackIssue]) -> Option<usize> {
-    for (idx, issue) in issues.iter().enumerate() {
-        match issue.status.as_str() {
+fn stack_item_matches(item: &StackItem, target: &str) -> bool {
+    item.id == target
+        || item.source == target
+        || item.title == target
+        || prepared_branch_name(&item.branch) == Some(target)
+        || item.branch.rsplit('/').next() == Some(target)
+}
+
+fn next_runnable_item(items: &[StackItem]) -> Option<usize> {
+    for (idx, item) in items.iter().enumerate() {
+        match item.status.as_str() {
             STATUS_DONE | STATUS_SKIPPED => continue,
             status if is_runnable_status(status) => return Some(idx),
             _ => return None,
@@ -376,19 +534,19 @@ fn next_runnable_issue(issues: &[StackIssue]) -> Option<usize> {
     None
 }
 
-fn parent_for_issue(ctx: &Ctx, stack: &StackMetadata, idx: usize) -> Result<String> {
+fn parent_for_item(ctx: &Ctx, stack: &StackMetadata, idx: usize) -> Result<String> {
     if idx == 0 {
         return resolve_initial_base(ctx, stack);
     }
 
-    let previous = &stack.issues[idx - 1];
+    let previous = &stack.items[idx - 1];
     if previous.status != STATUS_DONE && previous.status != STATUS_SKIPPED {
-        bail!("Previous stack item {} is not done", previous.id);
+        bail!("Previous stack item {} is not done", previous.label());
     }
 
     prepared_branch_name(&previous.branch)
         .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("Previous stack item {} has no branch", previous.id))
+        .ok_or_else(|| anyhow::anyhow!("Previous stack item {} has no branch", previous.label()))
 }
 
 fn prepared_branch_name(branch: &str) -> Option<&str> {
@@ -420,7 +578,8 @@ fn write_new_stack_metadata(ctx: &Ctx, stack: &StackMetadata) -> Result<PathBuf>
 
 fn read_stack_metadata(path: &Path) -> Result<StackMetadata> {
     let content = fs::read_to_string(path)?;
-    Ok(toml::from_str(&content)?)
+    let raw: RawStackMetadata = toml::from_str(&content)?;
+    raw.into_metadata()
 }
 
 fn write_stack_metadata(path: &Path, stack: &StackMetadata) -> Result<()> {
@@ -436,18 +595,28 @@ fn write_stack_metadata(path: &Path, stack: &StackMetadata) -> Result<()> {
     content.push_str(&format!("created_at = {}\n", toml_quote(&stack.created_at)));
     content.push_str(&format!("updated_at = {}\n", toml_quote(&stack.updated_at)));
 
-    for issue in &stack.issues {
-        content.push_str("\n[[issues]]\n");
-        content.push_str(&format!("id = {}\n", toml_quote(&issue.id)));
-        content.push_str(&format!("source = {}\n", toml_quote(&issue.source)));
-        content.push_str(&format!("title = {}\n", toml_quote(&issue.title)));
-        content.push_str(&format!("branch = {}\n", toml_quote(&issue.branch)));
-        if let Some(parent) = issue.parent.as_deref() {
+    for item in &stack.items {
+        content.push_str("\n[[items]]\n");
+        content.push_str(&format!("kind = {}\n", toml_quote(item.kind())));
+        if !item.id.trim().is_empty() {
+            content.push_str(&format!("id = {}\n", toml_quote(&item.id)));
+        }
+        if !item.source.trim().is_empty() {
+            content.push_str(&format!("source = {}\n", toml_quote(&item.source)));
+        }
+        content.push_str(&format!("title = {}\n", toml_quote(&item.title())));
+        content.push_str(&format!("branch = {}\n", toml_quote(&item.branch)));
+        if let Some(parent) = item.parent.as_deref() {
             content.push_str(&format!("parent = {}\n", toml_quote(parent)));
         }
-        content.push_str(&format!("snapshot = {}\n", toml_quote(&issue.snapshot)));
-        content.push_str(&format!("status = {}\n", toml_quote(&issue.status)));
-        content.push_str(&format!("error = {}\n", toml_quote(&issue.error)));
+        if let Some(snapshot) = item.snapshot.as_deref() {
+            content.push_str(&format!("snapshot = {}\n", toml_quote(snapshot)));
+        }
+        if !item.body.trim().is_empty() {
+            content.push_str(&format!("body = {}\n", toml_multiline_string(&item.body)));
+        }
+        content.push_str(&format!("status = {}\n", toml_quote(&item.status)));
+        content.push_str(&format!("error = {}\n", toml_quote(&item.error)));
     }
 
     fs::write(path, content)?;
@@ -552,23 +721,23 @@ fn is_runnable_status(status: &str) -> bool {
     matches!(status, STATUS_PREPARED | STATUS_FAILED)
 }
 
-fn summarize_stack_status(issues: &[StackIssue]) -> String {
-    if issues.is_empty() {
+fn summarize_stack_status(items: &[StackItem]) -> String {
+    if items.is_empty() {
         return STATUS_DONE.into();
     }
-    if issues.iter().any(|issue| issue.status == STATUS_FAILED) {
+    if items.iter().any(|item| item.status == STATUS_FAILED) {
         return STATUS_FAILED.into();
     }
-    if issues.iter().any(|issue| issue.status == STATUS_RUNNING) {
+    if items.iter().any(|item| item.status == STATUS_RUNNING) {
         return STATUS_RUNNING.into();
     }
-    if issues
+    if items
         .iter()
-        .all(|issue| matches!(issue.status.as_str(), STATUS_DONE | STATUS_SKIPPED))
+        .all(|item| matches!(item.status.as_str(), STATUS_DONE | STATUS_SKIPPED))
     {
         return STATUS_DONE.into();
     }
-    if issues.iter().all(|issue| issue.status == STATUS_PREPARED) {
+    if items.iter().all(|item| item.status == STATUS_PREPARED) {
         return STATUS_PREPARED.into();
     }
     STATUS_PARTIAL.into()
@@ -627,6 +796,13 @@ fn toml_quote(value: &str) -> String {
     }
     out.push('"');
     out
+}
+
+fn toml_multiline_string(value: &str) -> String {
+    let escaped = value
+        .replace("\\", "\\\\")
+        .replace("\"\"\"", "\\\"\\\"\\\"");
+    format!("\"\"\"\n{}\n\"\"\"", escaped.trim_end())
 }
 
 #[cfg(test)]
@@ -704,10 +880,73 @@ mod tests {
         let stack_path = latest_stack_path(&ctx).unwrap();
         let stack = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(stack.base.as_deref(), Some("main"));
-        assert_eq!(stack.issues[0].id, "PROJ-2");
-        assert_eq!(stack.issues[0].parent.as_deref(), Some("main"));
-        assert_eq!(stack.issues[1].id, "PROJ-1");
-        assert_eq!(stack.issues[1].parent.as_deref(), Some("alice/proj-2-api"));
+        assert_eq!(stack.items[0].id, "PROJ-2");
+        assert_eq!(stack.items[0].parent.as_deref(), Some("main"));
+        assert_eq!(stack.items[1].id, "PROJ-1");
+        assert_eq!(stack.items[1].parent.as_deref(), Some("alice/proj-2-api"));
+        let content = std::fs::read_to_string(stack_path).unwrap();
+        assert!(content.contains("[[items]]"));
+        assert!(content.contains("kind = \"issue\""));
+        assert!(!content.contains("[[issues]]"));
+    }
+
+    #[test]
+    fn read_stack_metadata_accepts_legacy_issues_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let stack_path = dir.path().join("legacy.toml");
+        std::fs::write(
+            &stack_path,
+            r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[issues]]
+id = "PROJ-1"
+source = "PROJ-1"
+title = "Schema"
+branch = "alice/proj-1-schema"
+snapshot = ".local/issues/PROJ-1.md"
+status = "prepared"
+error = ""
+"#,
+        )
+        .unwrap();
+
+        let stack = read_stack_metadata(&stack_path).unwrap();
+
+        assert_eq!(stack.items.len(), 1);
+        assert_eq!(stack.items[0].kind(), "issue");
+        assert_eq!(stack.items[0].id, "PROJ-1");
+        assert_eq!(
+            stack.items[0].snapshot.as_deref(),
+            Some(".local/issues/PROJ-1.md")
+        );
+    }
+
+    #[test]
+    fn read_stack_metadata_rejects_mixed_items_and_legacy_issues() {
+        let dir = tempfile::tempdir().unwrap();
+        let stack_path = dir.path().join("mixed.toml");
+        std::fs::write(
+            &stack_path,
+            r#"base_mode = "explicit"
+base = "main"
+
+[[items]]
+title = "Manual"
+branch = "manual"
+
+[[issues]]
+id = "PROJ-1"
+source = "PROJ-1"
+title = "Issue"
+branch = "alice/proj-1"
+snapshot = ".local/issues/PROJ-1.md"
+"#,
+        )
+        .unwrap();
+
+        assert!(read_stack_metadata(&stack_path).is_err());
     }
 
     #[test]
@@ -764,24 +1003,28 @@ mod tests {
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-12T00:00:00Z".into(),
             updated_at: "2026-05-12T00:00:00Z".into(),
-            issues: vec![
-                StackIssue {
+            items: vec![
+                StackItem {
+                    kind: "issue".into(),
                     id: "PROJ-1".into(),
                     source: "PROJ-1".into(),
                     title: "Schema".into(),
                     branch: "alice/proj-1-schema".into(),
                     parent: None,
-                    snapshot: ".local/issues/PROJ-1.md".into(),
+                    snapshot: Some(".local/issues/PROJ-1.md".into()),
+                    body: String::new(),
                     status: STATUS_PREPARED.into(),
                     error: String::new(),
                 },
-                StackIssue {
+                StackItem {
+                    kind: "issue".into(),
                     id: "PROJ-2".into(),
                     source: "PROJ-2".into(),
                     title: "API".into(),
                     branch: "alice/proj-2-api".into(),
                     parent: None,
-                    snapshot: ".local/issues/PROJ-2.md".into(),
+                    snapshot: Some(".local/issues/PROJ-2.md".into()),
+                    body: String::new(),
                     status: STATUS_PREPARED.into(),
                     error: String::new(),
                 },
@@ -793,23 +1036,23 @@ mod tests {
 
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
-        assert_eq!(updated.issues[0].parent.as_deref(), Some("main"));
-        assert_eq!(updated.issues[0].status, STATUS_RUNNING);
-        assert_eq!(updated.issues[1].status, STATUS_PREPARED);
+        assert_eq!(updated.items[0].parent.as_deref(), Some("main"));
+        assert_eq!(updated.items[0].status, STATUS_RUNNING);
+        assert_eq!(updated.items[1].status, STATUS_PREPARED);
 
         complete(&ctx, stack_path.to_str().unwrap(), Some("PROJ-1")).unwrap();
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_PARTIAL);
-        assert_eq!(updated.issues[0].status, STATUS_DONE);
+        assert_eq!(updated.items[0].status, STATUS_DONE);
 
         run(&ctx, stack_path.to_str().unwrap()).unwrap();
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
         assert_eq!(
-            updated.issues[1].parent.as_deref(),
+            updated.items[1].parent.as_deref(),
             Some("alice/proj-1-schema")
         );
-        assert_eq!(updated.issues[1].status, STATUS_RUNNING);
+        assert_eq!(updated.items[1].status, STATUS_RUNNING);
 
         let calls = runner.calls.lock().unwrap();
         assert!(calls.iter().any(|(_, args, _)| {
@@ -819,6 +1062,74 @@ mod tests {
                 && args[2] == "-b"
                 && args[3] == "alice/proj-2-api"
                 && args[5] == "alice/proj-1-schema"
+        }));
+    }
+
+    #[test]
+    fn run_supports_manual_item_without_issue_provider_or_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let stack_path = dir.path().join("manual.toml");
+        std::fs::write(
+            &stack_path,
+            r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[items]]
+kind = "new"
+title = "Add schema"
+branch = "add-schema"
+body = """
+Create the schema without an issue provider.
+"""
+status = "prepared"
+error = ""
+"#,
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+
+        let runner = Arc::new(runner);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, stack_path.to_str().unwrap()).unwrap();
+
+        let updated = read_stack_metadata(&stack_path).unwrap();
+        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.items[0].id, "add-schema");
+        assert_eq!(updated.items[0].parent.as_deref(), Some("main"));
+        assert_eq!(updated.items[0].status, STATUS_RUNNING);
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(_, args, _)| {
+            args.len() == 6
+                && args[0] == "worktree"
+                && args[1] == "add"
+                && args[2] == "-b"
+                && args[3] == "add-schema"
+                && args[5] == "main"
         }));
     }
 }
