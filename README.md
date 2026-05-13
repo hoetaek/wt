@@ -286,8 +286,10 @@ Issue bodies are stored as markdown snapshots:
 ```
 
 The batch TOML records the optional profile, base mode, overall batch status,
-and one `[[issues]]` table per issue. The double brackets are TOML's
-array-of-tables syntax, equivalent to an `issues: [...]` list in JSON.
+and one `[[items]]` table per issue item. The double brackets are TOML's
+array-of-tables syntax, equivalent to an `items: [...]` list in JSON. Issue
+items use `kind = "issue"` and a `snapshot` path. Older batch files with
+`[[issues]]` are still readable for compatibility.
 
 Run a prepared batch explicitly:
 
