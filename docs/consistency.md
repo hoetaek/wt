@@ -91,9 +91,12 @@ profile이 작업 묶음인지 다시 추론해야
 
 저장되는 상태는 사용자가 이해할 수 있는 상태여야 한다.
 
-Batch가 어떤 issue를 준비했고, 어떤 issue가 끝났고, 어떤 issue가 실패했는지는 저장할
-가치가 있다. 반대로 내부 구현 편의를 위해 만든 가짜 이름이나 암묵적 상태를 저장하면
-나중에 사용자가 파일을 읽을 때 모델을 다시 배워야 한다.
+Batch가 어떤 item을 준비했고, 어떤 item이 끝났고, 어떤 item이 실패했는지는 저장할
+가치가 있다. Batch의 canonical 상태 목록도 `[[items]]`이고, issue snapshot에서 만든
+item은 `kind = "issue"`로 저장한다. 과거 `[[issues]]` batch 상태는 compatibility를
+위해 읽을 수 있지만 새로 쓰는 상태는 `[[items]]`로 수렴한다. 반대로 내부 구현 편의를
+위해 만든 가짜 이름이나 암묵적 상태를 저장하면 나중에 사용자가 파일을 읽을 때 모델을
+다시 배워야 한다.
 
 Stack이 어떤 item을 어떤 parent 위에 쌓았는지도 저장할 가치가 있다. canonical 상태
 목록은 `[[items]]`이고, item source는 issue, 직접 작성한 branch work 등으로 나뉠 수

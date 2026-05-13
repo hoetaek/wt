@@ -49,9 +49,9 @@ pub fn issue(
         status: STATUS_PREPARED.into(),
         created_at: now.clone(),
         updated_at: now,
-        issues: issue_snapshots
+        items: issue_snapshots
             .into_iter()
-            .map(BatchIssue::from_snapshot)
+            .map(BatchItem::from_snapshot)
             .collect(),
     };
     let batch_path = write_new_batch_metadata(ctx, &batch)?;
@@ -66,19 +66,19 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
     let mut metadata = read_batch_metadata(&batch_path)?;
     validate_profile(ctx, metadata.profile.as_deref())?;
 
-    if metadata.issues.is_empty() {
-        bail!("Batch has no issues: {}", batch_path.display());
+    if metadata.items.is_empty() {
+        bail!("Batch has no items: {}", batch_path.display());
     }
 
     let base = batch_base_option(&metadata)?;
     let mut ran_any = false;
 
-    for idx in 0..metadata.issues.len() {
-        let current_status = metadata.issues[idx].status.as_str();
+    for idx in 0..metadata.items.len() {
+        let current_status = metadata.items[idx].status.as_str();
         if !is_runnable_status(current_status) {
             ctx.ui.print_step(&format!(
                 "Skipping {} ({current_status})",
-                metadata.issues[idx].id
+                metadata.items[idx].label()
             ));
             continue;
         }
@@ -86,51 +86,51 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
         ran_any = true;
         metadata.status = STATUS_RUNNING.into();
         metadata.updated_at = current_utc_timestamp();
-        metadata.issues[idx].status = STATUS_RUNNING.into();
-        metadata.issues[idx].error.clear();
+        metadata.items[idx].status = STATUS_RUNNING.into();
+        metadata.items[idx].error.clear();
         write_batch_metadata(&batch_path, &metadata)?;
 
-        let result = run_batch_issue(
+        let result = run_batch_item(
             ctx,
-            &metadata.issues[idx],
+            &metadata.items[idx],
             &base,
             metadata.profile.as_deref(),
         );
 
         match result {
             Ok(()) => {
-                metadata.issues[idx].status = STATUS_DONE.into();
-                metadata.issues[idx].error.clear();
+                metadata.items[idx].status = STATUS_DONE.into();
+                metadata.items[idx].error.clear();
             }
             Err(err) => {
                 if err
                     .downcast_ref::<WtError>()
                     .is_some_and(|err| matches!(err, WtError::Cancelled))
                 {
-                    metadata.issues[idx].status = STATUS_SKIPPED.into();
-                    metadata.issues[idx].error = "User cancelled".into();
-                    metadata.status = summarize_batch_status(&metadata.issues);
+                    metadata.items[idx].status = STATUS_SKIPPED.into();
+                    metadata.items[idx].error = "User cancelled".into();
+                    metadata.status = summarize_batch_status(&metadata.items);
                     metadata.updated_at = current_utc_timestamp();
                     write_batch_metadata(&batch_path, &metadata)?;
                     return Ok(());
                 }
 
-                metadata.issues[idx].status = STATUS_FAILED.into();
-                metadata.issues[idx].error = err.to_string();
+                metadata.items[idx].status = STATUS_FAILED.into();
+                metadata.items[idx].error = err.to_string();
             }
         }
 
-        metadata.status = summarize_batch_status(&metadata.issues);
+        metadata.status = summarize_batch_status(&metadata.items);
         metadata.updated_at = current_utc_timestamp();
         write_batch_metadata(&batch_path, &metadata)?;
     }
 
     if !ran_any {
         ctx.ui
-            .print_step("No prepared or failed issues to run in this batch.");
+            .print_step("No prepared or failed items to run in this batch.");
     }
 
-    metadata.status = summarize_batch_status(&metadata.issues);
+    metadata.status = summarize_batch_status(&metadata.items);
     metadata.updated_at = current_utc_timestamp();
     write_batch_metadata(&batch_path, &metadata)?;
     ctx.ui
@@ -156,13 +156,35 @@ struct BatchMetadata {
     created_at: String,
     #[serde(default)]
     updated_at: String,
+    items: Vec<BatchItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawBatchMetadata {
     #[serde(default)]
-    issues: Vec<BatchIssue>,
+    profile: Option<String>,
+    base_mode: String,
+    #[serde(default)]
+    base: Option<String>,
+    #[serde(default = "default_batch_status")]
+    status: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    updated_at: String,
+    #[serde(default)]
+    items: Vec<BatchItem>,
+    #[serde(default)]
+    issues: Vec<BatchItem>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct BatchIssue {
+struct BatchItem {
+    #[serde(default = "default_item_kind")]
+    kind: String,
+    #[serde(default)]
     id: String,
+    #[serde(default)]
     source: String,
     #[serde(default)]
     title: String,
@@ -175,9 +197,42 @@ struct BatchIssue {
     error: String,
 }
 
-impl BatchIssue {
+impl RawBatchMetadata {
+    fn into_metadata(mut self) -> Result<BatchMetadata> {
+        if !self.items.is_empty() && !self.issues.is_empty() {
+            bail!("Batch TOML cannot contain both [[items]] and legacy [[issues]]");
+        }
+
+        let mut items = if self.items.is_empty() {
+            for item in &mut self.issues {
+                if item.kind.trim().is_empty() || item.kind == "item" {
+                    item.kind = "issue".into();
+                }
+            }
+            self.issues
+        } else {
+            self.items
+        };
+        for item in &mut items {
+            item.normalize();
+        }
+
+        Ok(BatchMetadata {
+            profile: self.profile,
+            base_mode: self.base_mode,
+            base: self.base,
+            status: self.status,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            items,
+        })
+    }
+}
+
+impl BatchItem {
     fn from_snapshot(snapshot: IssueSnapshot) -> Self {
         Self {
+            kind: "issue".into(),
             id: snapshot.id,
             source: snapshot.source,
             title: snapshot.title,
@@ -187,10 +242,61 @@ impl BatchIssue {
             error: String::new(),
         }
     }
+
+    fn label(&self) -> String {
+        if !self.id.trim().is_empty() {
+            return self.id.clone();
+        }
+        if !self.branch.trim().is_empty() {
+            return self.branch.clone();
+        }
+        if !self.title.trim().is_empty() {
+            return self.title.clone();
+        }
+        "batch-item".into()
+    }
+
+    fn title(&self) -> String {
+        if !self.title.trim().is_empty() {
+            self.title.clone()
+        } else {
+            self.label()
+        }
+    }
+
+    fn kind(&self) -> &str {
+        if self.kind.trim().is_empty() {
+            "issue"
+        } else {
+            self.kind.as_str()
+        }
+    }
+
+    fn normalize(&mut self) {
+        if self.id.trim().is_empty() {
+            self.id = if !self.source.trim().is_empty() {
+                self.source.clone()
+            } else if !self.branch.trim().is_empty() {
+                self.branch.clone()
+            } else {
+                self.title.clone()
+            };
+        }
+        if self.title.trim().is_empty() {
+            self.title = self.label();
+        }
+        if self.kind.trim().is_empty() {
+            self.kind = "issue".into();
+        }
+    }
 }
 
 fn default_batch_status() -> String {
     STATUS_PREPARED.into()
+}
+
+fn default_item_kind() -> String {
+    "item".into()
 }
 
 fn default_issue_status() -> String {
@@ -210,16 +316,24 @@ fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn run_batch_issue(
+fn run_batch_item(
     ctx: &Ctx,
-    batch_issue: &BatchIssue,
+    batch_item: &BatchItem,
     base: &Option<String>,
     profile: Option<&str>,
 ) -> Result<()> {
-    let snapshot_path = batch_issue.snapshot.clone();
+    if batch_item.kind() != "issue" {
+        bail!(
+            "Batch item {} has unsupported kind: {}",
+            batch_item.label(),
+            batch_item.kind()
+        );
+    }
+
+    let snapshot_path = batch_item.snapshot.clone();
     let content = fs::read_to_string(ctx.repo_root.join(&snapshot_path))
         .with_context(|| format!("Failed to read issue snapshot: {snapshot_path}"))?;
-    let branch_name = prepared_branch_name(batch_issue);
+    let branch_name = prepared_branch_name(batch_item);
 
     issue::run_with_issue_snapshot(
         ctx,
@@ -227,8 +341,8 @@ fn run_batch_issue(
         profile,
         false,
         issue::PreparedIssueContext {
-            identifier: &batch_issue.id,
-            title: &batch_issue.title,
+            identifier: &batch_item.label(),
+            title: &batch_item.title(),
             branch_name,
             mode: "issue",
             prompt_intro: "Use this issue snapshot before changing code.",
@@ -242,8 +356,8 @@ fn run_batch_issue(
     .map(|_| ())
 }
 
-fn prepared_branch_name(issue: &BatchIssue) -> Option<&str> {
-    let branch = issue.branch.trim();
+fn prepared_branch_name(item: &BatchItem) -> Option<&str> {
+    let branch = item.branch.trim();
     if branch.is_empty() || branch == "-" {
         None
     } else {
@@ -271,7 +385,8 @@ fn write_new_batch_metadata(ctx: &Ctx, batch: &BatchMetadata) -> Result<PathBuf>
 
 fn read_batch_metadata(path: &Path) -> Result<BatchMetadata> {
     let content = fs::read_to_string(path)?;
-    Ok(toml::from_str(&content)?)
+    let raw: RawBatchMetadata = toml::from_str(&content)?;
+    raw.into_metadata()
 }
 
 fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
@@ -287,15 +402,20 @@ fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
     content.push_str(&format!("created_at = {}\n", toml_quote(&batch.created_at)));
     content.push_str(&format!("updated_at = {}\n", toml_quote(&batch.updated_at)));
 
-    for issue in &batch.issues {
-        content.push_str("\n[[issues]]\n");
-        content.push_str(&format!("id = {}\n", toml_quote(&issue.id)));
-        content.push_str(&format!("source = {}\n", toml_quote(&issue.source)));
-        content.push_str(&format!("title = {}\n", toml_quote(&issue.title)));
-        content.push_str(&format!("branch = {}\n", toml_quote(&issue.branch)));
-        content.push_str(&format!("snapshot = {}\n", toml_quote(&issue.snapshot)));
-        content.push_str(&format!("status = {}\n", toml_quote(&issue.status)));
-        content.push_str(&format!("error = {}\n", toml_quote(&issue.error)));
+    for item in &batch.items {
+        content.push_str("\n[[items]]\n");
+        content.push_str(&format!("kind = {}\n", toml_quote(item.kind())));
+        if !item.id.trim().is_empty() {
+            content.push_str(&format!("id = {}\n", toml_quote(&item.id)));
+        }
+        if !item.source.trim().is_empty() {
+            content.push_str(&format!("source = {}\n", toml_quote(&item.source)));
+        }
+        content.push_str(&format!("title = {}\n", toml_quote(&item.title())));
+        content.push_str(&format!("branch = {}\n", toml_quote(&item.branch)));
+        content.push_str(&format!("snapshot = {}\n", toml_quote(&item.snapshot)));
+        content.push_str(&format!("status = {}\n", toml_quote(&item.status)));
+        content.push_str(&format!("error = {}\n", toml_quote(&item.error)));
     }
 
     fs::write(path, content)?;
@@ -385,23 +505,23 @@ fn is_runnable_status(status: &str) -> bool {
     matches!(status, STATUS_PREPARED | STATUS_FAILED)
 }
 
-fn summarize_batch_status(issues: &[BatchIssue]) -> String {
-    if issues.is_empty() {
+fn summarize_batch_status(items: &[BatchItem]) -> String {
+    if items.is_empty() {
         return STATUS_DONE.into();
     }
-    if issues.iter().any(|issue| issue.status == STATUS_FAILED) {
+    if items.iter().any(|item| item.status == STATUS_FAILED) {
         return STATUS_FAILED.into();
     }
-    if issues.iter().any(|issue| issue.status == STATUS_RUNNING) {
+    if items.iter().any(|item| item.status == STATUS_RUNNING) {
         return STATUS_RUNNING.into();
     }
-    if issues
+    if items
         .iter()
-        .all(|issue| matches!(issue.status.as_str(), STATUS_DONE | STATUS_SKIPPED))
+        .all(|item| matches!(item.status.as_str(), STATUS_DONE | STATUS_SKIPPED))
     {
         return STATUS_DONE.into();
     }
-    if issues.iter().all(|issue| issue.status == STATUS_PREPARED) {
+    if items.iter().all(|item| item.status == STATUS_PREPARED) {
         return STATUS_PREPARED.into();
     }
     STATUS_PARTIAL.into()
@@ -546,7 +666,9 @@ mod tests {
         let content = std::fs::read_to_string(batch_path).unwrap();
         assert!(!content.contains("profile ="));
         assert!(content.contains("status = \"prepared\""));
-        assert!(content.contains("[[issues]]"));
+        assert!(content.contains("[[items]]"));
+        assert!(content.contains("kind = \"issue\""));
+        assert!(!content.contains("[[issues]]"));
         assert!(content.contains("id = \"PROJ-123\""));
         assert!(content.contains("title = \"Fix editor\""));
         assert!(content.contains("branch = \"alice/proj-123-fix-editor\""));
@@ -639,7 +761,8 @@ mod tests {
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:01:00Z".into(),
-            issues: vec![BatchIssue {
+            items: vec![BatchItem {
+                kind: "issue".into(),
                 id: "PROJ-123".into(),
                 source: "123".into(),
                 title: "Fix editor".into(),
@@ -656,7 +779,66 @@ mod tests {
         assert_eq!(parsed.profile.as_deref(), Some("codex-yolo"));
         assert_eq!(parsed.base.as_deref(), Some("main"));
         assert_eq!(parsed.status, STATUS_PARTIAL);
-        assert_eq!(parsed.issues[0].status, STATUS_DONE);
+        assert_eq!(parsed.items[0].kind(), "issue");
+        assert_eq!(parsed.items[0].status, STATUS_DONE);
+
+        let content = std::fs::read_to_string(path).unwrap();
+        assert!(content.contains("[[items]]"));
+        assert!(content.contains("kind = \"issue\""));
+        assert!(!content.contains("[[issues]]"));
+    }
+
+    #[test]
+    fn read_batch_metadata_accepts_legacy_issues_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_path = dir.path().join("legacy.toml");
+        std::fs::write(
+            &batch_path,
+            r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[issues]]
+id = "PROJ-1"
+source = "1"
+title = "Fix editor"
+branch = "alice/proj-1-fix-editor"
+snapshot = ".local/issues/PROJ-1.md"
+status = "prepared"
+error = ""
+"#,
+        )
+        .unwrap();
+
+        let batch = read_batch_metadata(&batch_path).unwrap();
+
+        assert_eq!(batch.items.len(), 1);
+        assert_eq!(batch.items[0].kind(), "issue");
+        assert_eq!(batch.items[0].id, "PROJ-1");
+    }
+
+    #[test]
+    fn read_batch_metadata_rejects_mixed_items_and_legacy_issues() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_path = dir.path().join("mixed.toml");
+        std::fs::write(
+            &batch_path,
+            r#"base_mode = "explicit"
+base = "main"
+
+[[items]]
+kind = "issue"
+id = "PROJ-1"
+snapshot = ".local/issues/PROJ-1.md"
+
+[[issues]]
+id = "PROJ-2"
+snapshot = ".local/issues/PROJ-2.md"
+"#,
+        )
+        .unwrap();
+
+        assert!(read_batch_metadata(&batch_path).is_err());
     }
 
     #[test]
@@ -681,7 +863,8 @@ mod tests {
 
     #[test]
     fn summarize_status_distinguishes_batch_and_item_state() {
-        let issue = |status: &str| BatchIssue {
+        let item = |status: &str| BatchItem {
+            kind: "issue".into(),
             id: "PROJ-123".into(),
             source: "123".into(),
             title: String::new(),
@@ -692,19 +875,19 @@ mod tests {
         };
 
         assert_eq!(
-            summarize_batch_status(&[issue(STATUS_PREPARED)]),
+            summarize_batch_status(&[item(STATUS_PREPARED)]),
             STATUS_PREPARED
         );
         assert_eq!(
-            summarize_batch_status(&[issue(STATUS_DONE), issue(STATUS_PREPARED)]),
+            summarize_batch_status(&[item(STATUS_DONE), item(STATUS_PREPARED)]),
             STATUS_PARTIAL
         );
         assert_eq!(
-            summarize_batch_status(&[issue(STATUS_DONE), issue(STATUS_FAILED)]),
+            summarize_batch_status(&[item(STATUS_DONE), item(STATUS_FAILED)]),
             STATUS_FAILED
         );
         assert_eq!(
-            summarize_batch_status(&[issue(STATUS_DONE), issue(STATUS_SKIPPED)]),
+            summarize_batch_status(&[item(STATUS_DONE), item(STATUS_SKIPPED)]),
             STATUS_DONE
         );
     }
@@ -727,7 +910,8 @@ mod tests {
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            issues: vec![BatchIssue {
+            items: vec![BatchItem {
+                kind: "issue".into(),
                 id: "PROJ-123".into(),
                 source: "123".into(),
                 title: "Fix editor".into(),
@@ -743,7 +927,7 @@ mod tests {
 
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.status, STATUS_DONE);
-        assert_eq!(updated.issues[0].status, STATUS_DONE);
+        assert_eq!(updated.items[0].status, STATUS_DONE);
     }
 
     #[test]
@@ -764,7 +948,8 @@ mod tests {
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            issues: vec![BatchIssue {
+            items: vec![BatchItem {
+                kind: "issue".into(),
                 id: "PROJ-123".into(),
                 source: "123".into(),
                 title: "Fix editor".into(),
@@ -781,9 +966,9 @@ mod tests {
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.status, STATUS_FAILED);
-        assert_eq!(updated.issues[0].status, STATUS_FAILED);
+        assert_eq!(updated.items[0].status, STATUS_FAILED);
         assert!(
-            updated.issues[0]
+            updated.items[0]
                 .error
                 .contains("Failed to read issue snapshot")
         );
@@ -830,7 +1015,8 @@ mod tests {
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            issues: vec![BatchIssue {
+            items: vec![BatchItem {
+                kind: "issue".into(),
                 id: "PROJ-123".into(),
                 source: "123".into(),
                 title: "Fix editor".into(),
@@ -846,6 +1032,6 @@ mod tests {
 
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.status, STATUS_DONE);
-        assert_eq!(updated.issues[0].status, STATUS_DONE);
+        assert_eq!(updated.items[0].status, STATUS_DONE);
     }
 }
