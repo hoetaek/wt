@@ -32,11 +32,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             parallel,
         } => commands::new::run(ctx, name, base, profile.as_deref(), *parallel),
         Commands::Batch { command } => match command {
-            BatchCommand::Prepare {
+            BatchCommand::Issue {
                 issues,
                 profile,
                 base,
-            } => commands::batch::prepare(ctx, issues, profile.as_deref(), base),
+            } => commands::batch::issue(ctx, issues, profile.as_deref(), base),
             BatchCommand::Run { batch } => commands::batch::run(ctx, batch),
         },
         Commands::Stack { command } => match command {

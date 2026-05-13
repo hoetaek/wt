@@ -28,7 +28,7 @@ Use this skill to choose `wt` commands and explain behavior without inventing a 
 - Use `wt pr [number]` for existing PR branch workflow. Omit `number` to select from open PRs.
 - Use `wt new <words...>` for a new branch-name workspace.
 - Use `wt open [target]` to open an existing worktree; use `wt list` to inspect; use `wt done [target...]` to clean up.
-- Use `wt batch prepare <issue>...` to snapshot issues without creating worktrees; use `wt batch run <path|latest>` to execute prepared or failed items.
+- Use `wt batch issue <issue>...` to snapshot issues without creating worktrees; use `wt batch run <path|latest>` to execute prepared or failed items.
 - Use `wt profile` to list named profiles, `wt profile create <name>` to create scaffold, and `wt profile promote <name>` only to move existing inline `[profile.*]` settings into a named profile.
 - Use `wt site doctor`, `wt site paths`, and `wt site example-launchd` for local site provider helpers. Do not use provider names as top-level commands.
 
