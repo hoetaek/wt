@@ -18,7 +18,7 @@ const STATUS_FAILED: &str = "failed";
 const STATUS_SKIPPED: &str = "skipped";
 const STATUS_PARTIAL: &str = "partial";
 
-pub fn prepare(
+pub fn issue(
     ctx: &Ctx,
     issues: &[String],
     profile: Option<&str>,
@@ -518,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_omits_profile_when_default_behavior_is_used() {
+    fn issue_omits_profile_when_default_behavior_is_used() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -540,7 +540,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        prepare(&ctx, &["PROJ-123".into()], None, &None).unwrap();
+        issue(&ctx, &["PROJ-123".into()], None, &None).unwrap();
 
         let batch_path = latest_batch_path(&ctx).unwrap();
         let content = std::fs::read_to_string(batch_path).unwrap();
@@ -554,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_records_explicit_named_profile() {
+    fn issue_records_explicit_named_profile() {
         let dir = tempfile::tempdir().unwrap();
         let profile_dir = dir.path().join(".local/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
@@ -584,7 +584,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        prepare(&ctx, &["PROJ-123".into()], Some("codex"), &None).unwrap();
+        issue(&ctx, &["PROJ-123".into()], Some("codex"), &None).unwrap();
 
         let batch_path = latest_batch_path(&ctx).unwrap();
         let content = std::fs::read_to_string(batch_path).unwrap();
@@ -592,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_with_no_args_selects_issues_from_provider_list() {
+    fn issue_with_no_args_selects_issues_from_provider_list() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -620,7 +620,7 @@ mod tests {
             Box::new(ui),
         );
 
-        prepare(&ctx, &[], None, &None).unwrap();
+        issue(&ctx, &[], None, &None).unwrap();
 
         let batch_path = latest_batch_path(&ctx).unwrap();
         let content = std::fs::read_to_string(batch_path).unwrap();

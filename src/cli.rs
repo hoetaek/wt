@@ -76,7 +76,7 @@ pub enum Commands {
         #[arg(long, conflicts_with = "profile")]
         parallel: bool,
     },
-    /// Prepare or run issue batches
+    /// Create or run issue batches
     Batch {
         #[command(subcommand)]
         command: BatchCommand,
@@ -204,7 +204,8 @@ pub enum InitSiteProvider {
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum BatchCommand {
     /// Snapshot issues and create a batch file without starting workspaces
-    Prepare {
+    #[command(alias = "prepare")]
+    Issue {
         /// Issue identifiers to snapshot (omit to select interactively)
         issues: Vec<String>,
         /// Named profile from .local/profiles/<name> for all issues
@@ -304,7 +305,7 @@ impl BaseMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).unwrap()
@@ -462,12 +463,12 @@ mod tests {
     }
 
     #[test]
-    fn batch_prepare_accepts_default_profile() {
-        let cli = parse(&["wt", "batch", "prepare", "PROJ-123", "PROJ-456"]);
+    fn batch_issue_accepts_default_profile() {
+        let cli = parse(&["wt", "batch", "issue", "PROJ-123", "PROJ-456"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Batch {
-                command: BatchCommand::Prepare {
+                command: BatchCommand::Issue {
                     ref issues,
                     profile: None,
                     base: None,
@@ -477,12 +478,12 @@ mod tests {
     }
 
     #[test]
-    fn batch_prepare_accepts_no_issue_args_for_interactive_selection() {
-        let cli = parse(&["wt", "batch", "prepare"]);
+    fn batch_issue_accepts_no_issue_args_for_interactive_selection() {
+        let cli = parse(&["wt", "batch", "issue"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Batch {
-                command: BatchCommand::Prepare {
+                command: BatchCommand::Issue {
                     ref issues,
                     profile: None,
                     base: None,
@@ -492,11 +493,11 @@ mod tests {
     }
 
     #[test]
-    fn batch_prepare_accepts_profile_and_base() {
+    fn batch_issue_accepts_profile_and_base() {
         let cli = parse(&[
             "wt",
             "batch",
-            "prepare",
+            "issue",
             "PROJ-123",
             "--profile",
             "codex-yolo",
@@ -506,7 +507,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Batch {
-                command: BatchCommand::Prepare {
+                command: BatchCommand::Issue {
                     ref issues,
                     profile: Some(ref profile),
                     base: Some(ref base),
@@ -515,6 +516,23 @@ mod tests {
                 && profile == "codex-yolo"
                 && base == "main"
         ));
+    }
+
+    #[test]
+    fn batch_prepare_alias_parses_as_issue_but_is_hidden_from_help() {
+        let cli = parse(&["wt", "batch", "prepare", "PROJ-123"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Issue { ref issues, .. }
+            }) if issues == &vec!["PROJ-123".to_string()]
+        ));
+
+        let mut command = Cli::command();
+        let batch = command.find_subcommand_mut("batch").unwrap();
+        let help = batch.render_help().to_string();
+        assert!(help.contains("issue"));
+        assert!(!help.contains("  prepare"));
     }
 
     #[test]

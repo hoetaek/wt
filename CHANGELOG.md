@@ -6,7 +6,9 @@ This project follows SemVer.
 
 ## Unreleased
 
-- Added interactive multi-select for `wt batch prepare` when no issue
+- Renamed batch issue snapshot creation to `wt batch issue`; `wt batch prepare`
+  remains as a hidden compatibility alias.
+- Added interactive multi-select for `wt batch issue` when no issue
   identifiers are provided.
 - Added `wt stack new` to create manual branch stacks from branch-name text
   without an issue provider.

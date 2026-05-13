@@ -86,7 +86,7 @@ wt new add profile docs
 Prepare issue work in bulk:
 
 ```bash
-wt batch prepare
+wt batch issue
 wt batch run latest
 wt stack issue
 wt stack run latest
@@ -262,16 +262,16 @@ wt profile
 
 ## Batches
 
-Batches split planning from execution. `prepare` snapshots issues and writes a
+Batches split planning from execution. `issue` snapshots issues and writes a
 batch file without creating worktrees:
 
 ```bash
-wt batch prepare
-wt batch prepare 123 456 789
-wt batch prepare 123 456 789 --profile codex
+wt batch issue
+wt batch issue 123 456 789
+wt batch issue 123 456 789 --profile codex
 ```
 
-When issue identifiers are omitted, `prepare` opens the provider issue list and
+When issue identifiers are omitted, `issue` opens the provider issue list and
 lets you select multiple issues interactively.
 
 When `--profile` is omitted, the batch does not store a profile field and uses
