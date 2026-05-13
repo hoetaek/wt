@@ -16,11 +16,13 @@ Run these before opening a pull request:
 
 ```bash
 cargo fmt --all --check
+cargo check --locked --all-targets --all-features
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --locked --all-features
 ```
 
 If you change dependencies, make sure `Cargo.lock` is updated.
+License/source/bans policy is checked in CI with `cargo deny`.
 
 ## Versioning
 

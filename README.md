@@ -423,11 +423,13 @@ Run the same checks as CI:
 
 ```bash
 cargo fmt --all --check
+cargo check --locked --all-targets --all-features
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --locked --all-features
 ```
 
-Security audit runs in GitHub Actions with `cargo audit`.
+Security and dependency policy checks run in GitHub Actions with `cargo audit`,
+CodeQL, and `cargo deny` for license/source/bans policy.
 
 ## License
 
