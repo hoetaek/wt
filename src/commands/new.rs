@@ -220,6 +220,7 @@ fn resolve_base_branch(ctx: &Ctx, git: &GitService, mode: &BaseMode) -> Result<S
             let idx = ctx.ui.select("Select base branch", &branches)?;
             Ok(branches[idx].clone())
         }
+        BaseMode::Current => git.current_branch(),
         BaseMode::Default => {
             let current = git.current_branch()?;
             let input = ctx.ui.input("Base branch", Some(&current))?;
@@ -371,6 +372,48 @@ mod tests {
         let words: Vec<String> = vec!["my".into(), "feature".into()];
         let result = run(&ctx, &words, &Some("develop".into()), None, false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn current_base_uses_current_branch_without_prompt() {
+        let mut runner = MockRunner::new();
+        // current_branch for --base .
+        runner.add_response("feature/current", true);
+        // local_branch_exists returns false
+        runner.add_response("", false);
+        // worktree_add_new_branch
+        runner.add_response("", true);
+        // set_branch_parent local_branch_exists
+        runner.add_response("", true);
+        // set_branch_parent config
+        runner.add_response("", true);
+
+        let runner = Arc::new(runner);
+        let ui = MockUi::new();
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            PathBuf::from("/tmp/test-repo"),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+        let words: Vec<String> = vec!["my".into(), "feature".into()];
+        run(&ctx, &words, &Some(".".into()), None, false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let worktree_add_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .expect("expected git worktree add -b call");
+        assert_eq!(worktree_add_call.1[5], "feature/current");
     }
 
     #[test]

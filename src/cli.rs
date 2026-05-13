@@ -43,7 +43,7 @@ pub enum Commands {
     Issue {
         /// Issue number or provider-specific key
         target: Option<String>,
-        /// Base branch: --base (interactive), --base main (explicit)
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
         /// Create a profiled issue worktree from .local/profiles/<name>
@@ -66,7 +66,7 @@ pub enum Commands {
         /// Branch name words
         #[arg(required = true)]
         name: Vec<String>,
-        /// Base branch: --base (interactive), --base main (explicit)
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
         /// Create a profiled branch worktree from .local/profiles/<name>
@@ -211,7 +211,7 @@ pub enum BatchCommand {
         /// Named profile from .local/profiles/<name> for all issues
         #[arg(long)]
         profile: Option<String>,
-        /// Base branch: --base (interactive), --base main (explicit)
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
     },
@@ -232,7 +232,7 @@ pub enum StackCommand {
         /// Named profile from .local/profiles/<name> for all items
         #[arg(long)]
         profile: Option<String>,
-        /// Base branch: --base (interactive), --base main (explicit)
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
     },
@@ -243,7 +243,7 @@ pub enum StackCommand {
         /// Named profile from .local/profiles/<name> for all issues
         #[arg(long)]
         profile: Option<String>,
-        /// Base branch: --base (interactive), --base main (explicit)
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
     },
@@ -288,6 +288,8 @@ pub enum BaseMode {
     Default,
     /// --base with no value: interactive select via dialoguer
     Interactive,
+    /// --base .: use current branch without prompting
+    Current,
     /// --base <branch>: use the explicit branch
     Explicit(String),
 }
@@ -297,6 +299,7 @@ impl BaseMode {
         match raw {
             None => BaseMode::Default,
             Some(s) if s.is_empty() => BaseMode::Interactive,
+            Some(s) if s == "." => BaseMode::Current,
             Some(s) => BaseMode::Explicit(s.clone()),
         }
     }
@@ -891,6 +894,11 @@ mod tests {
     #[test]
     fn base_mode_from_empty() {
         assert_eq!(BaseMode::from_raw(&Some("".into())), BaseMode::Interactive);
+    }
+
+    #[test]
+    fn base_mode_from_dot() {
+        assert_eq!(BaseMode::from_raw(&Some(".".into())), BaseMode::Current);
     }
 
     #[test]

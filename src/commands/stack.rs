@@ -816,6 +816,7 @@ fn resolve_initial_base(ctx: &Ctx, stack: &StackMetadata) -> Result<String> {
             let idx = ctx.ui.select("Select base branch", &branches)?;
             branches[idx].clone()
         }
+        "current" => git.current_branch()?,
         "explicit" => stack
             .base
             .clone()
@@ -833,6 +834,7 @@ fn base_mode_name(base: &Option<String>) -> &'static str {
     match BaseMode::from_raw(base) {
         BaseMode::Default => "default",
         BaseMode::Interactive => "interactive",
+        BaseMode::Current => "current",
         BaseMode::Explicit(_) => "explicit",
     }
 }
@@ -840,7 +842,7 @@ fn base_mode_name(base: &Option<String>) -> &'static str {
 fn explicit_base(base: &Option<String>) -> Option<String> {
     match BaseMode::from_raw(base) {
         BaseMode::Explicit(branch) => Some(branch),
-        BaseMode::Default | BaseMode::Interactive => None,
+        BaseMode::Default | BaseMode::Interactive | BaseMode::Current => None,
     }
 }
 
@@ -1025,6 +1027,54 @@ mod tests {
         assert!(content.contains("kind = \"new\""));
         assert!(!content.contains("snapshot ="));
         assert!(!content.contains("[[issues]]"));
+    }
+
+    #[test]
+    fn new_records_current_base_mode_for_dot_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let items = vec!["Add schema".into()];
+
+        new(&ctx, &items, None, &Some(".".into())).unwrap();
+
+        let stack_path = latest_stack_path(&ctx).unwrap();
+        let content = std::fs::read_to_string(stack_path).unwrap();
+        assert!(content.contains("base_mode = \"current\""));
+        assert!(!content.contains("base ="));
+    }
+
+    #[test]
+    fn resolve_initial_base_current_uses_current_branch_without_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response("feature/current", true);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let stack = StackMetadata {
+            profile: None,
+            base_mode: "current".into(),
+            base: None,
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-13T00:00:00Z".into(),
+            updated_at: "2026-05-13T00:00:00Z".into(),
+            items: Vec::new(),
+        };
+
+        assert_eq!(
+            resolve_initial_base(&ctx, &stack).unwrap(),
+            "feature/current"
+        );
     }
 
     #[test]

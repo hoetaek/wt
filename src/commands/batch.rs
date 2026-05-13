@@ -477,6 +477,7 @@ fn base_mode_name(base: &Option<String>) -> &'static str {
     match BaseMode::from_raw(base) {
         BaseMode::Default => "default",
         BaseMode::Interactive => "interactive",
+        BaseMode::Current => "current",
         BaseMode::Explicit(_) => "explicit",
     }
 }
@@ -484,7 +485,7 @@ fn base_mode_name(base: &Option<String>) -> &'static str {
 fn explicit_base(base: &Option<String>) -> Option<String> {
     match BaseMode::from_raw(base) {
         BaseMode::Explicit(branch) => Some(branch),
-        BaseMode::Default | BaseMode::Interactive => None,
+        BaseMode::Default | BaseMode::Interactive | BaseMode::Current => None,
     }
 }
 
@@ -492,6 +493,7 @@ fn batch_base_option(batch: &BatchMetadata) -> Result<Option<String>> {
     match batch.base_mode.as_str() {
         "default" => Ok(None),
         "interactive" => Ok(Some(String::new())),
+        "current" => Ok(Some(".".into())),
         "explicit" => batch
             .base
             .clone()
@@ -673,6 +675,52 @@ mod tests {
         assert!(content.contains("title = \"Fix editor\""));
         assert!(content.contains("branch = \"alice/proj-123-fix-editor\""));
         assert!(content.contains("snapshot = \".local/issues/PROJ-123.md\""));
+    }
+
+    #[test]
+    fn issue_records_current_base_mode_for_dot_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor","description":"Long issue body"}"#,
+            true,
+        );
+        let config = Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            ..Config::default()
+        };
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+
+        issue(&ctx, &["PROJ-123".into()], None, &Some(".".into())).unwrap();
+
+        let batch_path = latest_batch_path(&ctx).unwrap();
+        let content = std::fs::read_to_string(batch_path).unwrap();
+        assert!(content.contains("base_mode = \"current\""));
+        assert!(!content.contains("base ="));
+    }
+
+    #[test]
+    fn batch_base_option_current_returns_dot_base() {
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "current".into(),
+            base: None,
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-13T00:00:00Z".into(),
+            updated_at: "2026-05-13T00:00:00Z".into(),
+            items: Vec::new(),
+        };
+
+        assert_eq!(batch_base_option(&batch).unwrap(), Some(".".into()));
     }
 
     #[test]

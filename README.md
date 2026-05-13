@@ -68,6 +68,7 @@ Start a workspace from an issue:
 ```bash
 wt issue
 wt issue PROJ-123
+wt issue PROJ-123 --base .
 ```
 
 Start a workspace from a pull request:
@@ -278,6 +279,10 @@ When `--profile` is omitted, the batch does not store a profile field and uses
 the effective config at run time. When `--profile <name>` is provided, the
 batch stores that named profile.
 
+For commands that create new branches, `--base .` uses the current branch
+without prompting. `--base` with no value opens the local branch selector, and
+`--base <branch>` uses the named branch explicitly.
+
 Issue bodies are stored as markdown snapshots:
 
 ```text
@@ -312,6 +317,7 @@ Create a stack from branch-name text without creating worktrees:
 
 ```bash
 wt stack new "add schema" "wire API" --base main
+wt stack new "add schema" "wire API" --base .
 ```
 
 `issue` snapshots provider issues and writes a stack file without creating
@@ -320,6 +326,7 @@ worktrees:
 ```bash
 wt stack issue
 wt stack issue 123 456 789 --base main
+wt stack issue 123 456 789 --base .
 wt stack issue 123 456 789 --base main --profile codex
 ```
 

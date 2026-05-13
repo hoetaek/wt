@@ -453,6 +453,7 @@ fn resolve_base_branch(ctx: &Ctx, git: &GitService, base_raw: &Option<String>) -
             let idx = ctx.ui.select("Select base branch", &branches)?;
             Ok(branches[idx].clone())
         }
+        BaseMode::Current => git.current_branch(),
         BaseMode::Default => {
             let current = git.current_branch()?;
             ctx.ui.input("Base branch", Some(&current))
@@ -537,6 +538,7 @@ fn create_worktree(
             let idx = ctx.ui.select("Select base branch", &branches)?;
             branches[idx].clone()
         }
+        BaseMode::Current => git.current_branch()?,
         BaseMode::Default => {
             let current = git.current_branch()?;
             ctx.ui.input("Base branch", Some(&current))?
@@ -974,6 +976,70 @@ mod tests {
             worktree_add_call.1[5],
             "alice/proj-670-document-editor는-Document에-Categoryx로-Category를-지정할-수-있다"
         );
+
+        std::fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn issue_current_base_uses_current_branch_without_prompt() {
+        let temp = std::env::temp_dir().join(format!(
+            "wt-issue-current-base-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo_root = temp.join("sample-app");
+        let invocation_root = temp.join("sample-app-feature");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        std::fs::create_dir_all(&invocation_root).unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-672","title":" nested worktree bug","branchName":"alice/proj-672-nested-worktree-bug"}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"identifier":"PROJ-672","title":" nested worktree bug","branchName":"alice/proj-672-nested-worktree-bug"}"#,
+            true,
+        );
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("feature/current", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+
+        let runner = Arc::new(runner);
+        let ctx = Ctx::new(
+            repo_root,
+            invocation_root,
+            linear_config(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, Some("672"), &Some(".".into()), None, false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let worktree_add_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .expect("expected git worktree add -b call");
+        assert_eq!(worktree_add_call.1[5], "feature/current");
 
         std::fs::remove_dir_all(&temp).ok();
     }
