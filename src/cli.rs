@@ -257,6 +257,9 @@ pub enum StackCommand {
         stack: String,
         /// Running stack item identifier to complete
         item: Option<String>,
+        /// Start the next stack item after marking this one complete
+        #[arg(long)]
+        run_next: bool,
     },
 }
 
@@ -614,6 +617,29 @@ mod tests {
                 command: StackCommand::Complete {
                     ref stack,
                     item: Some(ref item),
+                    run_next: false,
+                }
+            }) if stack == "latest" && item == "PROJ-123"
+        ));
+    }
+
+    #[test]
+    fn stack_complete_accepts_run_next() {
+        let cli = parse(&[
+            "wt",
+            "stack",
+            "complete",
+            "latest",
+            "PROJ-123",
+            "--run-next",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::Complete {
+                    ref stack,
+                    item: Some(ref item),
+                    run_next: true,
                 }
             }) if stack == "latest" && item == "PROJ-123"
         ));

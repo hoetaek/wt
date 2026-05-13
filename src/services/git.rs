@@ -197,6 +197,29 @@ impl<'a> GitService<'a> {
             .map(|e| e.path))
     }
 
+    pub fn status_porcelain(&self, cwd: &Path) -> Result<String> {
+        let out = self
+            .runner
+            .run("git", &["status", "--porcelain"], Some(cwd))?;
+        if !out.success {
+            bail!(
+                "git status --porcelain failed: {}",
+                if out.stderr.is_empty() {
+                    &out.stdout
+                } else {
+                    &out.stderr
+                }
+            );
+        }
+        Ok(out.stdout)
+    }
+
+    pub fn branch_has_commits_ahead(&self, parent: &str, branch: &str) -> Result<bool> {
+        let range = format!("{parent}..{branch}");
+        let out = self.git(&["rev-list", "--count", &range])?;
+        Ok(out.stdout.trim().parse::<usize>().unwrap_or(0) > 0)
+    }
+
     fn git(&self, args: &[&str]) -> Result<CmdOutput> {
         let out = self.runner.run("git", args, self.cwd)?;
         if !out.success {

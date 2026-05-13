@@ -102,6 +102,9 @@ Stack이 어떤 item을 어떤 parent 위에 쌓았는지도 저장할 가치가
 않고, 실행 시 확정된 branch를 기록한다.
 Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 명시적
 `complete` 신호를 기다리는 상태다. 완료를 추정해서 다음 item을 시작하지 않는다.
+`complete`는 branch가 clean이고 parent보다 앞선 commit이 있을 때만 `done`으로
+전이해야 한다. 다음 item 자동 시작은 명시적인 continuation 선택, 예를 들어
+`--run-next`로만 일어난다.
 
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 

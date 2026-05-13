@@ -586,6 +586,7 @@ fn send_agent_prompt(
     if should_submit_with_enter_key(agent) {
         let prompt = rendered.trim_end_matches(['\n', '\r']).to_string();
         cmux.send(surface, ws_handle, &prompt)?;
+        std::thread::sleep(std::time::Duration::from_millis(500));
         cmux.send_key(surface, ws_handle, "enter")?;
         return Ok(());
     }

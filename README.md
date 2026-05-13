@@ -90,7 +90,7 @@ wt batch prepare
 wt batch run latest
 wt stack issue
 wt stack run latest
-wt stack complete latest PROJ-123
+wt stack complete latest PROJ-123 --run-next
 ```
 
 Open an existing worktree with its configured workspace:
@@ -373,16 +373,19 @@ previous item branch as its parent.
 When `run` starts an item, the agent prompt includes the completion command:
 
 ```bash
-wt stack complete .local/stacks/2026-05-12-001.toml 123
+wt stack complete .local/stacks/2026-05-12-001.toml 123 --run-next
 ```
 
-`complete` marks the running item `done`. Run the stack again to start the next
-item:
+`complete` verifies that the item branch has no uncommitted changes and has at
+least one commit ahead of its parent before marking the running item `done`.
+With `--run-next`, it then starts the next prepared or failed item
+automatically:
 
 ```bash
-wt stack complete latest 123
-wt stack run latest
+wt stack complete latest 123 --run-next
 ```
+
+Omit `--run-next` to mark one item done without starting another item.
 
 The stack TOML records each item's `parent`, branch, and status so reruns can
 continue from the stored state.

@@ -26,6 +26,8 @@ impl<'a> CmuxService<'a> {
                 name,
                 "--command",
                 command,
+                "--focus",
+                "true",
             ],
             None,
         )?;
@@ -160,6 +162,21 @@ mod tests {
             .new_workspace(Path::new("/tmp"), "my ws", "bash")
             .unwrap();
         assert_eq!(handle, "workspace:1");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "new-workspace",
+                "--cwd",
+                "/tmp",
+                "--name",
+                "my ws",
+                "--command",
+                "bash",
+                "--focus",
+                "true"
+            ]
+        );
     }
 
     #[test]

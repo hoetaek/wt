@@ -178,7 +178,7 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn complete(ctx: &Ctx, stack: &str, item: Option<&str>) -> Result<()> {
+pub fn complete(ctx: &Ctx, stack: &str, item: Option<&str>, run_next: bool) -> Result<()> {
     let stack_path = resolve_stack_path(ctx, stack)?;
     let mut metadata = read_stack_metadata(&stack_path)?;
 
@@ -201,6 +201,8 @@ pub fn complete(ctx: &Ctx, stack: &str, item: Option<&str>) -> Result<()> {
         }
     }
 
+    validate_completable_stack_item(ctx, &metadata.items[idx])?;
+
     metadata.items[idx].status = STATUS_DONE.into();
     metadata.items[idx].error.clear();
     metadata.status = summarize_stack_status(&metadata.items);
@@ -209,6 +211,9 @@ pub fn complete(ctx: &Ctx, stack: &str, item: Option<&str>) -> Result<()> {
 
     ctx.ui
         .print_step(&format!("Marked {} done", metadata.items[idx].label()));
+    if run_next {
+        run(ctx, stack_path.to_string_lossy().as_ref())?;
+    }
     Ok(())
 }
 
@@ -507,7 +512,7 @@ fn run_stack_item(
 ) -> Result<issue::IssueRunResult> {
     let (snapshot_path, content) = stack_item_content(ctx, stack_item, parent)?;
     let content = format!(
-        "{}\n\n## Stack Completion\n\nWhen this item is complete, run:\n\n```bash\nwt stack complete {} {}\n```",
+        "{}\n\n## Stack Completion\n\nWhen this item is complete and committed, run:\n\n```bash\nwt stack complete {} {} --run-next\n```",
         content.trim_end(),
         stack_path.display(),
         stack_item.label()
@@ -584,6 +589,65 @@ fn stack_item_matches(item: &StackItem, target: &str) -> bool {
         || item.title == target
         || prepared_branch_name(&item.branch) == Some(target)
         || item.branch.rsplit('/').next() == Some(target)
+}
+
+fn validate_completable_stack_item(ctx: &Ctx, item: &StackItem) -> Result<()> {
+    let branch = prepared_branch_name(&item.branch)
+        .ok_or_else(|| anyhow::anyhow!("Stack item {} has no branch", item.label()))?;
+    let parent = item
+        .parent
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("Stack item {} has no parent", item.label()))?;
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
+
+    if let Some(path) = git.checked_out_path(branch)? {
+        let status = git.status_porcelain(&path)?;
+        let relevant_status = relevant_worktree_status(ctx, &status);
+        if !relevant_status.trim().is_empty() {
+            bail!(
+                "Stack item {} has uncommitted changes in {}. Commit or stash them before completing.\n{}",
+                item.label(),
+                path.display(),
+                relevant_status.trim_end()
+            );
+        }
+    }
+
+    if !git.branch_has_commits_ahead(parent, branch)? {
+        bail!(
+            "Stack item {} has no commits ahead of parent {parent}. Commit the item work before completing.",
+            item.label()
+        );
+    }
+
+    Ok(())
+}
+
+fn relevant_worktree_status(ctx: &Ctx, status: &str) -> String {
+    status
+        .lines()
+        .filter(|line| !is_configured_link_status_line(ctx, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn is_configured_link_status_line(ctx: &Ctx, line: &str) -> bool {
+    let Some(path) = porcelain_status_path(line) else {
+        return false;
+    };
+
+    ctx.config
+        .worktree
+        .link
+        .iter()
+        .map(|linked| linked.trim_end_matches('/'))
+        .any(|linked| path == linked || path.starts_with(&format!("{linked}/")))
+}
+
+fn porcelain_status_path(line: &str) -> Option<&str> {
+    let path = line.get(3..)?.trim();
+    let path = path.rsplit(" -> ").next().unwrap_or(path);
+    Some(path.trim_matches('"'))
 }
 
 fn next_runnable_item(items: &[StackItem]) -> Option<usize> {
@@ -874,7 +938,7 @@ mod tests {
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CmdOutput, CommandRunner, Ctx};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     struct SharedRunner {
@@ -902,6 +966,30 @@ mod tests {
         assert!(parse_order("1,2", 3).is_err());
         assert!(parse_order("1,1,2", 3).is_err());
         assert!(parse_order("1,2,4", 3).is_err());
+    }
+
+    #[test]
+    fn relevant_worktree_status_ignores_configured_links() {
+        let config = Config {
+            worktree: crate::config::WorktreeConfig {
+                link: vec![".local".into()],
+                ..crate::config::WorktreeConfig::default()
+            },
+            ..Config::default()
+        };
+        let ctx = Ctx::new(
+            PathBuf::from("/repo"),
+            PathBuf::from("/repo"),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        assert_eq!(
+            relevant_worktree_status(&ctx, "?? .local\n M src/lib.rs"),
+            " M src/lib.rs"
+        );
+        assert_eq!(relevant_worktree_status(&ctx, "?? .local"), "");
     }
 
     #[test]
@@ -1087,6 +1175,16 @@ snapshot = ".local/issues/PROJ-1.md"
         runner.add_response("", true);
         runner.add_response(
             &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}/wt-proj-1\nHEAD def\nbranch refs/heads/alice/proj-1-schema\n\n",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("1", true);
+        runner.add_response(
+            &format!(
                 "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
                 dir.path().display()
             ),
@@ -1154,7 +1252,7 @@ snapshot = ".local/issues/PROJ-1.md"
         assert_eq!(updated.items[0].status, STATUS_RUNNING);
         assert_eq!(updated.items[1].status, STATUS_PREPARED);
 
-        complete(&ctx, stack_path.to_str().unwrap(), Some("PROJ-1")).unwrap();
+        complete(&ctx, stack_path.to_str().unwrap(), Some("PROJ-1"), false).unwrap();
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_PARTIAL);
         assert_eq!(updated.items[0].status, STATUS_DONE);
@@ -1177,6 +1275,214 @@ snapshot = ".local/issues/PROJ-1.md"
                 && args[3] == "alice/proj-2-api"
                 && args[5] == "alice/proj-1-schema"
         }));
+    }
+
+    #[test]
+    fn complete_with_run_next_starts_next_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let issues_dir = dir.path().join(".local/issues");
+        std::fs::create_dir_all(&issues_dir).unwrap();
+        std::fs::write(issues_dir.join("PROJ-1.md"), "# PROJ-1: Schema\n").unwrap();
+        std::fs::write(issues_dir.join("PROJ-2.md"), "# PROJ-2: API\n").unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}/wt-proj-1\nHEAD def\nbranch refs/heads/alice/proj-1-schema\n\n",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("1", true);
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}/wt-proj-1\nHEAD def\nbranch refs/heads/alice/proj-1-schema\n\n",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+
+        let runner = Arc::new(runner);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let stack_path = dir.path().join("stack.toml");
+        let stack = StackMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-12T00:00:00Z".into(),
+            updated_at: "2026-05-12T00:00:00Z".into(),
+            items: vec![
+                StackItem {
+                    kind: "issue".into(),
+                    id: "PROJ-1".into(),
+                    source: "PROJ-1".into(),
+                    title: "Schema".into(),
+                    branch: "alice/proj-1-schema".into(),
+                    parent: None,
+                    snapshot: Some(".local/issues/PROJ-1.md".into()),
+                    body: String::new(),
+                    status: STATUS_PREPARED.into(),
+                    error: String::new(),
+                },
+                StackItem {
+                    kind: "issue".into(),
+                    id: "PROJ-2".into(),
+                    source: "PROJ-2".into(),
+                    title: "API".into(),
+                    branch: "alice/proj-2-api".into(),
+                    parent: None,
+                    snapshot: Some(".local/issues/PROJ-2.md".into()),
+                    body: String::new(),
+                    status: STATUS_PREPARED.into(),
+                    error: String::new(),
+                },
+            ],
+        };
+        write_stack_metadata(&stack_path, &stack).unwrap();
+
+        run(&ctx, stack_path.to_str().unwrap()).unwrap();
+        complete(&ctx, stack_path.to_str().unwrap(), Some("PROJ-1"), true).unwrap();
+
+        let updated = read_stack_metadata(&stack_path).unwrap();
+        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.items[0].status, STATUS_DONE);
+        assert_eq!(updated.items[1].status, STATUS_RUNNING);
+        assert_eq!(
+            updated.items[1].parent.as_deref(),
+            Some("alice/proj-1-schema")
+        );
+    }
+
+    #[test]
+    fn complete_rejects_dirty_stack_item_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}/wt-proj-1\nHEAD def\nbranch refs/heads/feature\n\n",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response(" M src/lib.rs", true);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let stack_path = dir.path().join("stack.toml");
+        let stack = StackMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_RUNNING.into(),
+            created_at: "2026-05-12T00:00:00Z".into(),
+            updated_at: "2026-05-12T00:00:00Z".into(),
+            items: vec![StackItem {
+                kind: "new".into(),
+                id: "feature".into(),
+                source: String::new(),
+                title: "Feature".into(),
+                branch: "feature".into(),
+                parent: Some("main".into()),
+                snapshot: None,
+                body: String::new(),
+                status: STATUS_RUNNING.into(),
+                error: String::new(),
+            }],
+        };
+        write_stack_metadata(&stack_path, &stack).unwrap();
+
+        let err = complete(&ctx, stack_path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+        assert!(err.to_string().contains("uncommitted changes"));
+
+        let updated = read_stack_metadata(&stack_path).unwrap();
+        assert_eq!(updated.items[0].status, STATUS_RUNNING);
+    }
+
+    #[test]
+    fn complete_rejects_stack_item_without_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}/wt-proj-1\nHEAD def\nbranch refs/heads/feature\n\n",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("0", true);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let stack_path = dir.path().join("stack.toml");
+        let stack = StackMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_RUNNING.into(),
+            created_at: "2026-05-12T00:00:00Z".into(),
+            updated_at: "2026-05-12T00:00:00Z".into(),
+            items: vec![StackItem {
+                kind: "new".into(),
+                id: "feature".into(),
+                source: String::new(),
+                title: "Feature".into(),
+                branch: "feature".into(),
+                parent: Some("main".into()),
+                snapshot: None,
+                body: String::new(),
+                status: STATUS_RUNNING.into(),
+                error: String::new(),
+            }],
+        };
+        write_stack_metadata(&stack_path, &stack).unwrap();
+
+        let err = complete(&ctx, stack_path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+        assert!(err.to_string().contains("no commits ahead"));
+
+        let updated = read_stack_metadata(&stack_path).unwrap();
+        assert_eq!(updated.items[0].status, STATUS_RUNNING);
     }
 
     #[test]
