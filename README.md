@@ -428,8 +428,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --locked --all-features
 ```
 
-Security and dependency policy checks run in GitHub Actions with `cargo audit`,
-CodeQL, and `cargo deny` for license/source/bans policy.
+Security and dependency policy checks run in GitHub Actions with `cargo audit`
+and `cargo deny` for license/source/bans policy.
 
 ## License
 
