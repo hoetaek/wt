@@ -1,4 +1,0 @@
-interface:
-  display_name: "WT"
-  short_description: "Use the wt worktree CLI consistently"
-  default_prompt: "Use $wt to choose and run the right wt command for this workspace task."
