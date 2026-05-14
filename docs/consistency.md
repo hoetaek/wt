@@ -93,6 +93,12 @@ profile이 작업 묶음인지 다시 추론해야
 이때 중요한 것은 두 경로가 다른 개념처럼 보이지 않는 것이다. 단순한 형태와 복잡한
 형태는 같은 profile 모델의 두 표현이어야 한다.
 
+Prompt도 같은 원칙을 따른다. `common`은 별도 실행 mode가 아니라 기존
+`[agent.prompt]` / `[agent.prompt.append]` 모델 안의 공통 scope다. Config layer와
+profile convention file merge를 모두 끝낸 뒤 최종 effective config에서 한 번만
+`issue`, `new`, `pr` prompt 앞에 펼친다. `common`을 각 layer마다 mode별 prompt로
+복사하지 않는다.
+
 ### State Is Explicit
 
 저장되는 상태는 사용자가 이해할 수 있는 상태여야 한다.

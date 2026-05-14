@@ -140,8 +140,12 @@ profile convention files such as `.local/profiles/<name>/prompts/issue.md`.
 Later layers override scalar and map entries with the same key. List-style
 entries such as `worktree.copy` append unique values. Agent prompts follow an
 explicit rule: `[agent.prompt]` overwrites the prompt for that mode, while
-`[agent.prompt.append]` appends text to the current prompt. `wt config` prints
-the effective prompt after append directives have been applied.
+`[agent.prompt.append]` appends text to the current prompt. The reserved
+`common` prompt scope is not a runnable mode; after all layers are merged, it
+is prepended to the effective `issue`, `new`, and `pr` prompts. `wt config`
+prints the effective mode prompts after append directives and `common` have
+been applied.
+
 `wt config extract` is not an effective-config splitter. It moves selected
 sections from a real source file into the next structured file while preserving
 the local effective behavior.
@@ -223,6 +227,8 @@ Profiles live under `.local/profiles/<name>/`:
 .local/profiles/codex/
   profile.toml
   prompts/
+    common.md
+    common.append.md  # optional append for every mode
     issue.md
     issue.append.md  # optional append
     new.md
@@ -263,6 +269,8 @@ command = "sandvault run -- codex"
 
 Convention-based files are loaded when present:
 
+- `prompts/common.md` overwrites the shared prompt scope for all modes.
+- `prompts/common.append.md` appends text to the current shared prompt scope.
 - `prompts/issue.md`, `prompts/new.md`, and `prompts/pr.md` become prompts for
   those modes and overwrite earlier prompts for the same mode.
 - `prompts/issue.append.md`, `prompts/new.append.md`, and
@@ -275,9 +283,11 @@ replacing the prompt it inherited:
 
 ```toml
 [agent.prompt]
+common = ["Read AGENTS.md and project documentation before changing code.\n"]
 issue = ["Review the issue, make the change, verify it, and report the result.\n"]
 
 [agent.prompt.append]
+common = ["Report verification results before finishing.\n"]
 issue = ["Also check the project-specific release checklist before finishing.\n"]
 ```
 
