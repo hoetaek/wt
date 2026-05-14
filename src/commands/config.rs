@@ -41,6 +41,140 @@ pub fn extract(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Resul
     extract_from_source(ctx, summary)
 }
 
+pub fn inline(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Result<()> {
+    if profile.is_some() {
+        bail!("wt config inline does not accept --profile; pass a source file instead");
+    }
+
+    let summary = match source {
+        Some(source) => analyze_inline_source(ctx, &resolve_source_path(ctx, source)?)?,
+        None => select_inline_source(ctx)?,
+    };
+
+    inline_from_source(ctx, summary)
+}
+
+fn select_inline_source(ctx: &Ctx) -> Result<InlineSummary> {
+    let mut summaries = discover_inline_sources(ctx)?;
+    summaries.sort_by(|a, b| {
+        b.inlineable_count()
+            .cmp(&a.inlineable_count())
+            .then_with(|| b.blocked_count().cmp(&a.blocked_count()))
+            .then_with(|| a.display.cmp(&b.display))
+    });
+
+    let inlineable = summaries
+        .iter()
+        .filter(|summary| summary.inlineable_count() > 0)
+        .count();
+    if inlineable == 0 {
+        ctx.ui.print_step("No inlineable prompt files found.");
+        return Err(WtError::Cancelled.into());
+    }
+
+    if inlineable == 1 {
+        return summaries
+            .into_iter()
+            .find(|summary| summary.inlineable_count() > 0)
+            .ok_or_else(|| anyhow!("No inlineable prompt files found"));
+    }
+
+    let visible = summaries
+        .into_iter()
+        .filter(|summary| summary.inlineable_count() > 0 || summary.blocked_count() > 0)
+        .collect::<Vec<_>>();
+    let items = visible.iter().map(InlineSummary::item).collect::<Vec<_>>();
+    let selected = ctx.ui.select("Select config file:", &items)?;
+    visible
+        .into_iter()
+        .nth(selected)
+        .ok_or_else(|| anyhow!("Invalid config file selection"))
+}
+
+fn discover_inline_sources(ctx: &Ctx) -> Result<Vec<InlineSummary>> {
+    let profiles_dir = ctx.repo_root.join(".local/profiles");
+    if !profiles_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = fs::read_dir(&profiles_dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    paths.sort();
+
+    paths
+        .into_iter()
+        .filter(|path| path.is_dir())
+        .map(|path| path.join("profile.toml"))
+        .filter(|path| path.exists())
+        .map(|path| analyze_inline_source(ctx, &path))
+        .collect()
+}
+
+fn inline_from_source(ctx: &Ctx, summary: InlineSummary) -> Result<()> {
+    if summary.inlineable_count() == 0 {
+        print_no_inlineable(ctx, &summary);
+        return Ok(());
+    }
+
+    let items = summary
+        .candidates
+        .iter()
+        .map(InlineCandidate::item)
+        .collect::<Vec<_>>();
+    let selected_indices = ctx
+        .ui
+        .multi_select("Select prompt files to inline:", &items)?;
+    if selected_indices.is_empty() {
+        ctx.ui.print_warning("No prompt files selected");
+        return Ok(());
+    }
+
+    let mut selected = Vec::new();
+    for index in selected_indices {
+        let candidate = summary
+            .candidates
+            .get(index)
+            .ok_or_else(|| anyhow!("Invalid prompt file selection"))?;
+        if let Some(reason) = candidate.blocked.as_deref() {
+            bail!(
+                "Selected prompt file is blocked: {} ({reason})",
+                candidate.name
+            );
+        }
+        selected.push(candidate.clone());
+    }
+
+    let plan = build_inline_plan(ctx, &selected);
+    ctx.ui.print_step("Plan:");
+    for line in &plan {
+        ctx.ui.print_dim(&format!("  {line}"));
+    }
+
+    if !ctx.ui.confirm("Apply?", true)? {
+        return Err(WtError::Cancelled.into());
+    }
+
+    apply_inline_selected(ctx, &selected)?;
+    ctx.ui.print_step("Prompt files inlined.");
+    Ok(())
+}
+
+fn print_no_inlineable(ctx: &Ctx, summary: &InlineSummary) {
+    ctx.ui.print_step(&format!(
+        "No inlineable prompt files in {}.",
+        summary.display
+    ));
+
+    for candidate in summary
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.blocked.is_some())
+    {
+        ctx.ui.print_dim(&format!("  {}", candidate.item()));
+    }
+}
+
 fn select_source(ctx: &Ctx) -> Result<SourceSummary> {
     let mut summaries = discover_sources(ctx)?;
     summaries.sort_by(|a, b| {
@@ -581,6 +715,183 @@ fn analyze_profile_config(
     })
 }
 
+fn analyze_inline_source(ctx: &Ctx, path: &Path) -> Result<InlineSummary> {
+    if !path.exists() {
+        bail!("Config source does not exist: {}", path.display());
+    }
+
+    let path = path.to_path_buf();
+    let display = relative_display(ctx, &path);
+
+    if let Some(profile_name) = profile_name_for_source(ctx, &path) {
+        return analyze_inline_profile(ctx, path, display, profile_name, None);
+    }
+
+    if let Some(prompt_source) = prompt_source_for_path(ctx, &path) {
+        let profile_toml = prompt_source.profile_dir.join("profile.toml");
+        if !profile_toml.exists() {
+            bail!(
+                "Profile config does not exist: {}",
+                relative_display(ctx, &profile_toml)
+            );
+        }
+        return analyze_inline_profile(
+            ctx,
+            profile_toml,
+            display,
+            prompt_source.profile_name,
+            Some(path),
+        );
+    }
+
+    bail!(
+        "Unsupported inline source: {display}. Use .local/profiles/<name>/profile.toml or .local/profiles/<name>/prompts/<mode>.md"
+    );
+}
+
+fn analyze_inline_profile(
+    ctx: &Ctx,
+    path: PathBuf,
+    display: String,
+    profile_name: String,
+    only_source: Option<PathBuf>,
+) -> Result<InlineSummary> {
+    Config::load_file(&path)
+        .with_context(|| format!("failed to load {}", relative_display(ctx, path.as_path())))?;
+    let content = fs::read_to_string(&path)?;
+    let doc = content
+        .parse::<toml::Table>()
+        .with_context(|| format!("failed to parse {}", relative_display(ctx, &path)))?;
+    let profile = Config::load_profile(&ctx.repo_root, &profile_name, &ctx.base_config)?
+        .with_context(|| format!("Profile '{profile_name}' not found"))?;
+    let has_effective_agent = profile.agent.is_some();
+    let profile_dir = path
+        .parent()
+        .ok_or_else(|| anyhow!("Profile source has no parent directory: {}", path.display()))?;
+
+    let mut candidates = Vec::new();
+    for spec in prompt_file_specs() {
+        let source = profile_dir.join("prompts").join(spec.file_name());
+        if !source.exists() {
+            continue;
+        }
+        if only_source
+            .as_ref()
+            .is_some_and(|only_source| !same_existing_path(&source, only_source))
+        {
+            continue;
+        }
+
+        let prompt = fs::read_to_string(&source)?;
+        let blocked = if target_prompt_key_exists(&doc, &spec) {
+            Some(format!(
+                "{} already has {}",
+                relative_display(ctx, &path),
+                spec.target_label()
+            ))
+        } else if !has_effective_agent {
+            Some(
+                "no base [agent] or profile [agent] is available for the prompt convention file"
+                    .into(),
+            )
+        } else {
+            None
+        };
+
+        candidates.push(InlineCandidate {
+            name: relative_display(ctx, &source),
+            target: format!("{} {}", relative_display(ctx, &path), spec.target_label()),
+            blocked,
+            kind: InlineKind::ProfilePromptFile {
+                spec,
+                source,
+                prompt,
+                profile_toml: path.clone(),
+            },
+        });
+    }
+
+    Ok(InlineSummary {
+        display,
+        candidates,
+    })
+}
+
+fn build_inline_plan(ctx: &Ctx, selected: &[InlineCandidate]) -> Vec<String> {
+    selected
+        .iter()
+        .map(|candidate| match &candidate.kind {
+            InlineKind::ProfilePromptFile {
+                spec,
+                source,
+                profile_toml,
+                ..
+            } => format!(
+                "move {} -> {} {}",
+                relative_display(ctx, source),
+                relative_display(ctx, profile_toml),
+                spec.target_label()
+            ),
+        })
+        .collect()
+}
+
+fn apply_inline_selected(ctx: &Ctx, selected: &[InlineCandidate]) -> Result<()> {
+    let Some(first) = selected.first() else {
+        return Ok(());
+    };
+    let profile_toml = match &first.kind {
+        InlineKind::ProfilePromptFile { profile_toml, .. } => profile_toml.clone(),
+    };
+    if selected.iter().any(|candidate| match &candidate.kind {
+        InlineKind::ProfilePromptFile {
+            profile_toml: other,
+            ..
+        } => !same_existing_path(&profile_toml, other),
+    }) {
+        bail!("Selected prompt files must belong to the same profile.toml");
+    }
+
+    let content = fs::read_to_string(&profile_toml)?;
+    let mut doc = content
+        .parse::<toml::Table>()
+        .with_context(|| format!("failed to parse {}", relative_display(ctx, &profile_toml)))?;
+
+    for candidate in selected {
+        if let Some(reason) = candidate.blocked.as_deref() {
+            bail!(
+                "Selected prompt file is blocked: {} ({reason})",
+                candidate.name
+            );
+        }
+        let InlineKind::ProfilePromptFile { spec, prompt, .. } = &candidate.kind;
+        if target_prompt_key_exists(&doc, spec) {
+            bail!(
+                "{} already has {}",
+                relative_display(ctx, &profile_toml),
+                spec.target_label()
+            );
+        }
+        insert_agent_prompt(&mut doc, spec, prompt)?;
+    }
+
+    let updated = toml::to_string_pretty(&doc)?;
+    toml::from_str::<Config>(&updated).with_context(|| {
+        format!(
+            "updated {} would be invalid",
+            relative_display(ctx, &profile_toml)
+        )
+    })?;
+
+    fs::write(&profile_toml, updated)?;
+    for candidate in selected {
+        let InlineKind::ProfilePromptFile { source, .. } = &candidate.kind;
+        fs::remove_file(source)?;
+    }
+    remove_empty_prompts_dir(profile_toml.parent());
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 struct SourceSummary {
     path: PathBuf,
@@ -656,6 +967,97 @@ enum ExtractKind {
     },
 }
 
+#[derive(Debug, Clone)]
+struct InlineSummary {
+    display: String,
+    candidates: Vec<InlineCandidate>,
+}
+
+impl InlineSummary {
+    fn inlineable_count(&self) -> usize {
+        self.candidates
+            .iter()
+            .filter(|candidate| candidate.blocked.is_none())
+            .count()
+    }
+
+    fn blocked_count(&self) -> usize {
+        self.candidates
+            .iter()
+            .filter(|candidate| candidate.blocked.is_some())
+            .count()
+    }
+
+    fn item(&self) -> String {
+        let inlineable = self.inlineable_count();
+        let blocked = self.blocked_count();
+        let mut parts = Vec::new();
+        parts.push(format!(
+            "{inlineable} inlineable {}",
+            plural(inlineable, "prompt file", "prompt files")
+        ));
+        if blocked > 0 {
+            parts.push(format!(
+                "{blocked} blocked {}",
+                plural(blocked, "prompt file", "prompt files")
+            ));
+        }
+        format!("{}  {}", self.display, parts.join(", "))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct InlineCandidate {
+    name: String,
+    target: String,
+    blocked: Option<String>,
+    kind: InlineKind,
+}
+
+impl InlineCandidate {
+    fn item(&self) -> String {
+        let base = format!("{} -> {}", self.name, self.target);
+        match self.blocked.as_deref() {
+            Some(reason) => format!("[blocked] {base} ({reason})"),
+            None => base,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum InlineKind {
+    ProfilePromptFile {
+        spec: PromptFileSpec,
+        source: PathBuf,
+        prompt: String,
+        profile_toml: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct PromptFileSpec {
+    mode: String,
+    append: bool,
+}
+
+impl PromptFileSpec {
+    fn file_name(&self) -> String {
+        if self.append {
+            format!("{}.append.md", self.mode)
+        } else {
+            format!("{}.md", self.mode)
+        }
+    }
+
+    fn target_label(&self) -> String {
+        if self.append {
+            format!("[agent.prompt.append].{}", self.mode)
+        } else {
+            format!("[agent.prompt].{}", self.mode)
+        }
+    }
+}
+
 fn resolve_source_path(ctx: &Ctx, source: &Path) -> Result<PathBuf> {
     let path = if source.is_absolute() {
         source.to_path_buf()
@@ -684,6 +1086,67 @@ fn profile_name_for_source(ctx: &Ctx, path: &Path) -> Option<String> {
         .parent()?
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
+}
+
+struct PromptSource {
+    profile_name: String,
+    profile_dir: PathBuf,
+}
+
+fn prompt_source_for_path(ctx: &Ctx, path: &Path) -> Option<PromptSource> {
+    let profiles_dir = ctx.repo_root.join(".local/profiles");
+    let canonical_profiles_dir = profiles_dir.canonicalize().unwrap_or(profiles_dir);
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let relative = canonical_path.strip_prefix(&canonical_profiles_dir).ok()?;
+    let mut components = relative.components();
+    let profile_name = components
+        .next()?
+        .as_os_str()
+        .to_string_lossy()
+        .into_owned();
+    if components.next()?.as_os_str() != "prompts" {
+        return None;
+    }
+    let file_name = components
+        .next()?
+        .as_os_str()
+        .to_string_lossy()
+        .into_owned();
+    if components.next().is_some() || prompt_file_spec(&file_name).is_none() {
+        return None;
+    }
+    crate::config::validate_profile_name(&profile_name).ok()?;
+    Some(PromptSource {
+        profile_dir: canonical_profiles_dir.join(&profile_name),
+        profile_name,
+    })
+}
+
+fn prompt_file_specs() -> Vec<PromptFileSpec> {
+    ["common", "issue", "new", "pr"]
+        .into_iter()
+        .flat_map(|mode| {
+            [
+                PromptFileSpec {
+                    mode: mode.to_string(),
+                    append: false,
+                },
+                PromptFileSpec {
+                    mode: mode.to_string(),
+                    append: true,
+                },
+            ]
+        })
+        .collect()
+}
+
+fn prompt_file_spec(file_name: &str) -> Option<PromptFileSpec> {
+    for spec in prompt_file_specs() {
+        if spec.file_name() == file_name {
+            return Some(spec);
+        }
+    }
+    None
 }
 
 fn same_existing_path(a: &Path, b: &Path) -> bool {
@@ -740,6 +1203,70 @@ fn has_root_section(content: &str, root: &str) -> bool {
         table_header(line)
             .is_some_and(|header| header == root || header.starts_with(&format!("{root}.")))
     })
+}
+
+fn target_prompt_key_exists(doc: &toml::Table, spec: &PromptFileSpec) -> bool {
+    let Some(prompt) = doc
+        .get("agent")
+        .and_then(toml::Value::as_table)
+        .and_then(|agent| agent.get("prompt"))
+        .and_then(toml::Value::as_table)
+    else {
+        return false;
+    };
+
+    if spec.append {
+        return prompt
+            .get("append")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|append| append.contains_key(&spec.mode));
+    }
+
+    prompt.contains_key(&spec.mode)
+}
+
+fn insert_agent_prompt(doc: &mut toml::Table, spec: &PromptFileSpec, prompt: &str) -> Result<()> {
+    let agent = get_or_insert_table(doc, "agent")?;
+    let prompt_table = get_or_insert_table(agent, "prompt")?;
+    let value = toml::Value::Array(vec![toml::Value::String(prompt.to_string())]);
+
+    if spec.append {
+        let append_table = get_or_insert_table(prompt_table, "append")?;
+        if append_table.contains_key(&spec.mode) {
+            bail!("profile.toml already has {}", spec.target_label());
+        }
+        append_table.insert(spec.mode.clone(), value);
+        return Ok(());
+    }
+
+    if prompt_table.contains_key(&spec.mode) {
+        bail!("profile.toml already has {}", spec.target_label());
+    }
+    prompt_table.insert(spec.mode.clone(), value);
+    Ok(())
+}
+
+fn get_or_insert_table<'a>(table: &'a mut toml::Table, key: &str) -> Result<&'a mut toml::Table> {
+    if !table.contains_key(key) {
+        table.insert(key.to_string(), toml::Value::Table(toml::Table::new()));
+    }
+    table
+        .get_mut(key)
+        .and_then(toml::Value::as_table_mut)
+        .ok_or_else(|| anyhow!("{key} must be a table"))
+}
+
+fn remove_empty_prompts_dir(profile_dir: Option<&Path>) {
+    let Some(profile_dir) = profile_dir else {
+        return;
+    };
+    let prompts_dir = profile_dir.join("prompts");
+    let Ok(mut entries) = fs::read_dir(&prompts_dir) else {
+        return;
+    };
+    if entries.next().is_none() {
+        let _ = fs::remove_dir(prompts_dir);
+    }
 }
 
 fn root_section_text(content: &str, root: &str) -> Option<String> {
@@ -1012,6 +1539,163 @@ new = ["First\n", "Second\n"]
         assert_eq!(
             agent.prompt.get("new").unwrap(),
             &vec!["First\n".to_string(), "Second\n".to_string()]
+        );
+    }
+
+    #[test]
+    fn inline_profile_prompt_files_moves_conventions_into_profile_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        let prompts_dir = profile_dir.join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[agent]
+cli = "codex"
+args = ["--yolo"]
+
+[workspace]
+tabs = ["pnpm dev"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(prompts_dir.join("common.md"), "Common\n").unwrap();
+        std::fs::write(prompts_dir.join("common.append.md"), "Common append\n").unwrap();
+        std::fs::write(prompts_dir.join("issue.md"), "Issue\n").unwrap();
+        std::fs::write(prompts_dir.join("issue.append.md"), "Issue append\n").unwrap();
+        std::fs::write(prompts_dir.join("pr.append.md"), "PR append\n").unwrap();
+
+        let before = Config::load_profile(dir.path(), "codex", &Config::default())
+            .unwrap()
+            .unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0, 1, 2, 3, 4]);
+        ui.add_confirm(true);
+        let ctx = ctx_with_ui(dir.path(), ui);
+
+        inline(
+            &ctx,
+            None,
+            Some(Path::new(".local/profiles/codex/profile.toml")),
+        )
+        .unwrap();
+
+        assert!(!prompts_dir.exists());
+        let updated = std::fs::read_to_string(profile_dir.join("profile.toml")).unwrap();
+        assert!(updated.contains("[agent.prompt]"));
+        assert!(updated.contains("common"));
+        assert!(updated.contains("Common"));
+        assert!(updated.contains("issue"));
+        assert!(updated.contains("Issue"));
+        assert!(updated.contains("[agent.prompt.append]"));
+        assert!(updated.contains("pr"));
+        assert!(updated.contains("PR append"));
+
+        let after = Config::load_profile(dir.path(), "codex", &Config::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn inline_profile_prompt_file_blocks_existing_prompt_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        let prompts_dir = profile_dir.join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[agent]
+cli = "codex"
+
+[agent.prompt]
+issue = ["Existing issue\n"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(prompts_dir.join("common.md"), "Common\n").unwrap();
+        std::fs::write(prompts_dir.join("issue.md"), "Issue file\n").unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![1]);
+        let ctx = ctx_with_ui(dir.path(), ui);
+
+        let err = inline(
+            &ctx,
+            None,
+            Some(Path::new(".local/profiles/codex/profile.toml")),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("already has [agent.prompt].issue"));
+        assert!(prompts_dir.join("issue.md").exists());
+        let profile = std::fs::read_to_string(profile_dir.join("profile.toml")).unwrap();
+        assert!(!profile.contains("Common"));
+    }
+
+    #[test]
+    fn inline_accepts_direct_prompt_file_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        let prompts_dir = profile_dir.join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[agent]
+cli = "codex"
+"#,
+        )
+        .unwrap();
+        std::fs::write(prompts_dir.join("pr.append.md"), "PR append\n").unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+        ui.add_confirm(true);
+        let ctx = ctx_with_ui(dir.path(), ui);
+
+        inline(
+            &ctx,
+            None,
+            Some(Path::new(".local/profiles/codex/prompts/pr.append.md")),
+        )
+        .unwrap();
+
+        assert!(!prompts_dir.join("pr.append.md").exists());
+        let after = Config::load_profile(dir.path(), "codex", &Config::default())
+            .unwrap()
+            .unwrap();
+        let agent = after.agent.unwrap();
+        assert_eq!(
+            agent.prompt.get("pr").unwrap(),
+            &vec!["PR append\n".to_string()]
+        );
+    }
+
+    #[test]
+    fn inline_profile_prompt_file_blocks_when_convention_file_is_ineffective() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        let prompts_dir = profile_dir.join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+        std::fs::write(prompts_dir.join("issue.md"), "Issue\n").unwrap();
+
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+        inline(
+            &ctx,
+            None,
+            Some(Path::new(".local/profiles/codex/profile.toml")),
+        )
+        .unwrap();
+
+        assert!(prompts_dir.join("issue.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(profile_dir.join("profile.toml")).unwrap(),
+            ""
         );
     }
 

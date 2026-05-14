@@ -66,6 +66,9 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             Some(ConfigCommand::Extract { source }) => {
                 commands::config::extract(ctx, profile.as_deref(), source.as_deref())
             }
+            Some(ConfigCommand::Inline { source }) => {
+                commands::config::inline(ctx, profile.as_deref(), source.as_deref())
+            }
             None => commands::config::effective(ctx, profile.as_deref()),
         },
         Commands::Profile { command } => commands::profile::run(ctx, command.as_ref()),

@@ -133,6 +133,9 @@ Refactor config representation one source file at a time:
 wt config extract
 wt config extract .local/.wt.toml
 wt config extract .local/profiles/codex/profile.toml
+wt config inline
+wt config inline .local/profiles/codex/profile.toml
+wt config inline .local/profiles/codex/prompts/issue.md
 ```
 
 The merge order is `.wt.toml`, `.local/.wt.toml`, the selected profile, then
@@ -149,6 +152,12 @@ been applied.
 `wt config extract` is not an effective-config splitter. It moves selected
 sections from a real source file into the next structured file while preserving
 the local effective behavior.
+
+`wt config inline` moves selected profile prompt convention files back into the
+profile's `profile.toml` while preserving the local effective behavior. The
+first supported scope is `.local/profiles/<name>/prompts/{common,issue,new,pr}.md`
+and matching `.append.md` files. It refuses to overwrite an existing
+`[agent.prompt]` or `[agent.prompt.append]` key. Scaffold files are not inlined.
 
 Example shared `.wt.toml`:
 
@@ -324,6 +333,12 @@ Or extract inline `.local/.wt.toml` profile settings into a named profile:
 wt init --local --agent codex --no-prompts --yes
 wt config extract .local/.wt.toml
 wt profile
+```
+
+Or inline prompt convention files back into a profile TOML:
+
+```bash
+wt config inline .local/profiles/codex/profile.toml
 ```
 
 ## Batches

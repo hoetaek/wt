@@ -170,6 +170,11 @@ pub enum ConfigCommand {
         /// Config source file to refactor
         source: Option<PathBuf>,
     },
+    /// Move profile prompt files back into profile.toml
+    Inline {
+        /// Config or prompt source file to refactor
+        source: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
@@ -794,6 +799,23 @@ mod tests {
                 profile: None,
                 command: Some(ConfigCommand::Extract { ref source }),
             }) if source.as_deref() == Some(std::path::Path::new(".local/.wt.toml"))
+        ));
+    }
+
+    #[test]
+    fn config_inline_accepts_optional_source() {
+        let cli = parse(&[
+            "wt",
+            "config",
+            "inline",
+            ".local/profiles/codex/profile.toml",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Config {
+                profile: None,
+                command: Some(ConfigCommand::Inline { ref source }),
+            }) if source.as_deref() == Some(std::path::Path::new(".local/profiles/codex/profile.toml"))
         ));
     }
 
