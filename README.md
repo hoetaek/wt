@@ -108,6 +108,9 @@ wt done
 wt done PROJ-123
 ```
 
+When a matching cmux workspace is open, `wt done` closes it before removing the
+worktree.
+
 ## Configuration
 
 `wt` loads config in this order:
@@ -134,6 +137,7 @@ wt config extract
 wt config extract .local/.wt.toml
 wt config extract .local/profiles/codex/profile.toml
 wt config inline
+wt config inline .local/.wt.toml
 wt config inline .local/profiles/codex/profile.toml
 wt config inline .local/profiles/codex/prompts/issue.md
 ```
@@ -153,11 +157,16 @@ been applied.
 sections from a real source file into the next structured file while preserving
 the local effective behavior.
 
-`wt config inline` moves selected profile prompt convention files back into the
-profile's `profile.toml` while preserving the local effective behavior. The
-first supported scope is `.local/profiles/<name>/prompts/{common,issue,new,pr}.md`
-and matching `.append.md` files. It refuses to overwrite an existing
-`[agent.prompt]` or `[agent.prompt.append]` key. Scaffold files are not inlined.
+`wt config inline` moves selected structured config back toward the current
+source file while preserving the local effective behavior. It can move the
+selected named profile from `.local/profiles/<name>/profile.toml` back into
+`.local/.wt.toml` as `[profile.*]`, and it can move profile prompt convention
+files back into the profile's `profile.toml`. The supported prompt-file scope
+is `.local/profiles/<name>/prompts/{common,issue,new,pr}.md` and matching
+`.append.md` files. It refuses to overwrite an existing `[agent.prompt]` or
+`[agent.prompt.append]` key. A named profile is not inlined while supported
+prompt convention files or scaffold files would be lost; inline prompt files
+first. Scaffold files are not inlined.
 
 Example shared `.wt.toml`:
 
@@ -339,6 +348,12 @@ Or inline prompt convention files back into a profile TOML:
 
 ```bash
 wt config inline .local/profiles/codex/profile.toml
+```
+
+Or inline a selected named profile back into `.local/.wt.toml`:
+
+```bash
+wt config inline .local/.wt.toml
 ```
 
 ## Batches

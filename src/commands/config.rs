@@ -68,7 +68,7 @@ fn select_inline_source(ctx: &Ctx) -> Result<InlineSummary> {
         .filter(|summary| summary.inlineable_count() > 0)
         .count();
     if inlineable == 0 {
-        ctx.ui.print_step("No inlineable prompt files found.");
+        ctx.ui.print_step("No inlineable config items found.");
         return Err(WtError::Cancelled.into());
     }
 
@@ -76,7 +76,7 @@ fn select_inline_source(ctx: &Ctx) -> Result<InlineSummary> {
         return summaries
             .into_iter()
             .find(|summary| summary.inlineable_count() > 0)
-            .ok_or_else(|| anyhow!("No inlineable prompt files found"));
+            .ok_or_else(|| anyhow!("No inlineable config items found"));
     }
 
     let visible = summaries
@@ -92,9 +92,15 @@ fn select_inline_source(ctx: &Ctx) -> Result<InlineSummary> {
 }
 
 fn discover_inline_sources(ctx: &Ctx) -> Result<Vec<InlineSummary>> {
+    let mut summaries = Vec::new();
+    let local_config = ctx.repo_root.join(".local/.wt.toml");
+    if local_config.exists() {
+        summaries.push(analyze_inline_source(ctx, &local_config)?);
+    }
+
     let profiles_dir = ctx.repo_root.join(".local/profiles");
     if !profiles_dir.exists() {
-        return Ok(Vec::new());
+        return Ok(summaries);
     }
 
     let mut paths = fs::read_dir(&profiles_dir)?
@@ -102,13 +108,17 @@ fn discover_inline_sources(ctx: &Ctx) -> Result<Vec<InlineSummary>> {
         .collect::<std::result::Result<Vec<_>, _>>()?;
     paths.sort();
 
-    paths
+    for summary in paths
         .into_iter()
         .filter(|path| path.is_dir())
         .map(|path| path.join("profile.toml"))
         .filter(|path| path.exists())
         .map(|path| analyze_inline_source(ctx, &path))
-        .collect()
+    {
+        summaries.push(summary?);
+    }
+
+    Ok(summaries)
 }
 
 fn inline_from_source(ctx: &Ctx, summary: InlineSummary) -> Result<()> {
@@ -122,11 +132,9 @@ fn inline_from_source(ctx: &Ctx, summary: InlineSummary) -> Result<()> {
         .iter()
         .map(InlineCandidate::item)
         .collect::<Vec<_>>();
-    let selected_indices = ctx
-        .ui
-        .multi_select("Select prompt files to inline:", &items)?;
+    let selected_indices = ctx.ui.multi_select("Select items to inline:", &items)?;
     if selected_indices.is_empty() {
-        ctx.ui.print_warning("No prompt files selected");
+        ctx.ui.print_warning("No items selected");
         return Ok(());
     }
 
@@ -135,12 +143,9 @@ fn inline_from_source(ctx: &Ctx, summary: InlineSummary) -> Result<()> {
         let candidate = summary
             .candidates
             .get(index)
-            .ok_or_else(|| anyhow!("Invalid prompt file selection"))?;
+            .ok_or_else(|| anyhow!("Invalid item selection"))?;
         if let Some(reason) = candidate.blocked.as_deref() {
-            bail!(
-                "Selected prompt file is blocked: {} ({reason})",
-                candidate.name
-            );
+            bail!("Selected item is blocked: {} ({reason})", candidate.name);
         }
         selected.push(candidate.clone());
     }
@@ -156,13 +161,13 @@ fn inline_from_source(ctx: &Ctx, summary: InlineSummary) -> Result<()> {
     }
 
     apply_inline_selected(ctx, &selected)?;
-    ctx.ui.print_step("Prompt files inlined.");
+    ctx.ui.print_step("Config items inlined.");
     Ok(())
 }
 
 fn print_no_inlineable(ctx: &Ctx, summary: &InlineSummary) {
     ctx.ui.print_step(&format!(
-        "No inlineable prompt files in {}.",
+        "No inlineable config items in {}.",
         summary.display
     ));
 
@@ -723,6 +728,10 @@ fn analyze_inline_source(ctx: &Ctx, path: &Path) -> Result<InlineSummary> {
     let path = path.to_path_buf();
     let display = relative_display(ctx, &path);
 
+    if same_existing_path(&path, &ctx.repo_root.join(".local/.wt.toml")) {
+        return analyze_inline_local_config(ctx, path, display);
+    }
+
     if let Some(profile_name) = profile_name_for_source(ctx, &path) {
         return analyze_inline_profile(ctx, path, display, profile_name, None);
     }
@@ -745,8 +754,41 @@ fn analyze_inline_source(ctx: &Ctx, path: &Path) -> Result<InlineSummary> {
     }
 
     bail!(
-        "Unsupported inline source: {display}. Use .local/profiles/<name>/profile.toml or .local/profiles/<name>/prompts/<mode>.md"
+        "Unsupported inline source: {display}. Use .local/.wt.toml, .local/profiles/<name>/profile.toml, or .local/profiles/<name>/prompts/<mode>.md"
     );
+}
+
+fn analyze_inline_local_config(ctx: &Ctx, path: PathBuf, display: String) -> Result<InlineSummary> {
+    let config = Config::load_file(&path).with_context(|| format!("failed to load {display}"))?;
+    let mut candidates = Vec::new();
+
+    if let Some(profile_name) = config
+        .profile
+        .as_ref()
+        .and_then(|profile| profile.name.clone())
+    {
+        let profile_toml = ctx
+            .repo_root
+            .join(".local/profiles")
+            .join(&profile_name)
+            .join("profile.toml");
+        let blocked = named_profile_inline_blocker(ctx, &profile_name, &profile_toml)?;
+        candidates.push(InlineCandidate {
+            name: format!("[profile] name = {}", toml_quote(&profile_name)),
+            target: format!("{} [profile.*]", relative_display(ctx, &path)),
+            blocked,
+            kind: InlineKind::NamedProfile {
+                profile_name,
+                local_toml: path.clone(),
+                profile_toml,
+            },
+        });
+    }
+
+    Ok(InlineSummary {
+        display,
+        candidates,
+    })
 }
 
 fn analyze_inline_profile(
@@ -832,6 +874,15 @@ fn build_inline_plan(ctx: &Ctx, selected: &[InlineCandidate]) -> Vec<String> {
                 relative_display(ctx, profile_toml),
                 spec.target_label()
             ),
+            InlineKind::NamedProfile {
+                profile_name,
+                local_toml,
+                profile_toml,
+            } => format!(
+                "move {} -> {} [profile.*] for {profile_name}",
+                relative_display(ctx, profile_toml),
+                relative_display(ctx, local_toml)
+            ),
         })
         .collect()
 }
@@ -840,14 +891,29 @@ fn apply_inline_selected(ctx: &Ctx, selected: &[InlineCandidate]) -> Result<()> 
     let Some(first) = selected.first() else {
         return Ok(());
     };
+    if matches!(first.kind, InlineKind::NamedProfile { .. }) {
+        return apply_named_profile_inline(ctx, selected);
+    }
+
+    apply_inline_prompt_files(ctx, selected)
+}
+
+fn apply_inline_prompt_files(ctx: &Ctx, selected: &[InlineCandidate]) -> Result<()> {
+    let Some(first) = selected.first() else {
+        return Ok(());
+    };
     let profile_toml = match &first.kind {
         InlineKind::ProfilePromptFile { profile_toml, .. } => profile_toml.clone(),
+        InlineKind::NamedProfile { .. } => {
+            bail!("Selected items must come from the same inline kind")
+        }
     };
     if selected.iter().any(|candidate| match &candidate.kind {
         InlineKind::ProfilePromptFile {
             profile_toml: other,
             ..
         } => !same_existing_path(&profile_toml, other),
+        InlineKind::NamedProfile { .. } => true,
     }) {
         bail!("Selected prompt files must belong to the same profile.toml");
     }
@@ -859,12 +925,11 @@ fn apply_inline_selected(ctx: &Ctx, selected: &[InlineCandidate]) -> Result<()> 
 
     for candidate in selected {
         if let Some(reason) = candidate.blocked.as_deref() {
-            bail!(
-                "Selected prompt file is blocked: {} ({reason})",
-                candidate.name
-            );
+            bail!("Selected item is blocked: {} ({reason})", candidate.name);
         }
-        let InlineKind::ProfilePromptFile { spec, prompt, .. } = &candidate.kind;
+        let InlineKind::ProfilePromptFile { spec, prompt, .. } = &candidate.kind else {
+            bail!("Selected items must come from the same inline kind");
+        };
         if target_prompt_key_exists(&doc, spec) {
             bail!(
                 "{} already has {}",
@@ -885,10 +950,53 @@ fn apply_inline_selected(ctx: &Ctx, selected: &[InlineCandidate]) -> Result<()> 
 
     fs::write(&profile_toml, updated)?;
     for candidate in selected {
-        let InlineKind::ProfilePromptFile { source, .. } = &candidate.kind;
+        let InlineKind::ProfilePromptFile { source, .. } = &candidate.kind else {
+            bail!("Selected items must come from the same inline kind");
+        };
         fs::remove_file(source)?;
     }
     remove_empty_prompts_dir(profile_toml.parent());
+    Ok(())
+}
+
+fn apply_named_profile_inline(ctx: &Ctx, selected: &[InlineCandidate]) -> Result<()> {
+    if selected.len() != 1 {
+        bail!("Select one named profile to inline at a time");
+    }
+
+    let candidate = &selected[0];
+    if let Some(reason) = candidate.blocked.as_deref() {
+        bail!("Selected item is blocked: {} ({reason})", candidate.name);
+    }
+
+    let InlineKind::NamedProfile {
+        profile_name,
+        local_toml,
+        profile_toml,
+    } = &candidate.kind
+    else {
+        bail!("Selected items must come from the same inline kind");
+    };
+
+    if let Some(reason) = named_profile_inline_blocker(ctx, profile_name, profile_toml)? {
+        bail!("Selected item is blocked: {} ({reason})", candidate.name);
+    }
+
+    let local_content = fs::read_to_string(local_toml)?;
+    let profile_content = fs::read_to_string(profile_toml)?;
+    let inline_profile = render_profile_toml_as_inline_profile(&profile_content)?;
+    let updated_local =
+        replace_named_profile_with_inline_profile(&local_content, profile_name, &inline_profile)?;
+    toml::from_str::<Config>(&updated_local).with_context(|| {
+        format!(
+            "updated {} would be invalid",
+            relative_display(ctx, local_toml)
+        )
+    })?;
+
+    fs::write(local_toml, updated_local)?;
+    fs::remove_file(profile_toml)?;
+    remove_empty_profile_dir(profile_toml.parent());
     Ok(())
 }
 
@@ -994,12 +1102,12 @@ impl InlineSummary {
         let mut parts = Vec::new();
         parts.push(format!(
             "{inlineable} inlineable {}",
-            plural(inlineable, "prompt file", "prompt files")
+            plural(inlineable, "item", "items")
         ));
         if blocked > 0 {
             parts.push(format!(
                 "{blocked} blocked {}",
-                plural(blocked, "prompt file", "prompt files")
+                plural(blocked, "item", "items")
             ));
         }
         format!("{}  {}", self.display, parts.join(", "))
@@ -1030,6 +1138,11 @@ enum InlineKind {
         spec: PromptFileSpec,
         source: PathBuf,
         prompt: String,
+        profile_toml: PathBuf,
+    },
+    NamedProfile {
+        profile_name: String,
+        local_toml: PathBuf,
         profile_toml: PathBuf,
     },
 }
@@ -1141,12 +1254,9 @@ fn prompt_file_specs() -> Vec<PromptFileSpec> {
 }
 
 fn prompt_file_spec(file_name: &str) -> Option<PromptFileSpec> {
-    for spec in prompt_file_specs() {
-        if spec.file_name() == file_name {
-            return Some(spec);
-        }
-    }
-    None
+    prompt_file_specs()
+        .into_iter()
+        .find(|spec| spec.file_name() == file_name)
 }
 
 fn same_existing_path(a: &Path, b: &Path) -> bool {
@@ -1260,13 +1370,179 @@ fn remove_empty_prompts_dir(profile_dir: Option<&Path>) {
     let Some(profile_dir) = profile_dir else {
         return;
     };
-    let prompts_dir = profile_dir.join("prompts");
-    let Ok(mut entries) = fs::read_dir(&prompts_dir) else {
+    remove_dir_if_empty(&profile_dir.join("prompts"));
+}
+
+fn remove_empty_profile_dir(profile_dir: Option<&Path>) {
+    let Some(profile_dir) = profile_dir else {
+        return;
+    };
+    remove_dir_if_empty(&profile_dir.join("prompts"));
+    remove_dir_if_empty(&profile_dir.join("scaffold"));
+    remove_dir_if_empty(profile_dir);
+}
+
+fn remove_dir_if_empty(path: &Path) {
+    let Ok(mut entries) = fs::read_dir(path) else {
         return;
     };
     if entries.next().is_none() {
-        let _ = fs::remove_dir(prompts_dir);
+        let _ = fs::remove_dir(path);
     }
+}
+
+fn named_profile_inline_blocker(
+    ctx: &Ctx,
+    profile_name: &str,
+    profile_toml: &Path,
+) -> Result<Option<String>> {
+    if !profile_toml.exists() {
+        return Ok(Some(format!(
+            "profile config does not exist: {}",
+            relative_display(ctx, profile_toml)
+        )));
+    }
+
+    let profile_config = Config::load_file(profile_toml)
+        .with_context(|| format!("failed to load {}", relative_display(ctx, profile_toml)))?;
+    if profile_config.profile.is_some() {
+        return Ok(Some("[profile] is not valid in profile.toml".into()));
+    }
+
+    let content = fs::read_to_string(profile_toml)?;
+    let roots = profile_toml_root_sections(&content);
+    for root in &roots {
+        if !is_inlineable_profile_root(root) {
+            return Ok(Some(format!(
+                "[{root}] cannot be represented as inline [profile.*]"
+            )));
+        }
+    }
+    if roots.is_empty() {
+        return Ok(Some(
+            "profile.toml has no inlineable profile sections".into(),
+        ));
+    }
+
+    let profile_dir = profile_toml
+        .parent()
+        .ok_or_else(|| anyhow!("Profile source has no parent directory: {profile_name}"))?;
+    if profile_has_prompt_convention_files(profile_dir) {
+        return Ok(Some(format!(
+            "profile has prompt convention files; run wt config inline {} first",
+            relative_display(ctx, profile_toml)
+        )));
+    }
+    if dir_has_entries(&profile_dir.join("scaffold")) {
+        return Ok(Some(
+            "profile has scaffold files, and scaffold files are not inlined".into(),
+        ));
+    }
+
+    Ok(None)
+}
+
+fn profile_has_prompt_convention_files(profile_dir: &Path) -> bool {
+    let prompts_dir = profile_dir.join("prompts");
+    prompt_file_specs()
+        .iter()
+        .any(|spec| prompts_dir.join(spec.file_name()).exists())
+}
+
+fn dir_has_entries(path: &Path) -> bool {
+    fs::read_dir(path)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
+
+fn profile_toml_root_sections(content: &str) -> Vec<String> {
+    let mut sections = Vec::new();
+    for line in content.lines() {
+        let Some((_, header)) = toml_table_header(line) else {
+            continue;
+        };
+        let root = header.split('.').next().unwrap_or(header).to_string();
+        if !sections.contains(&root) {
+            sections.push(root);
+        }
+    }
+    sections
+}
+
+fn is_inlineable_profile_root(root: &str) -> bool {
+    matches!(
+        root,
+        "worktree" | "setup" | "site" | "workspace" | "agent" | "test"
+    )
+}
+
+fn render_profile_toml_as_inline_profile(content: &str) -> Result<String> {
+    let mut lines = Vec::new();
+    let mut has_profile_section = false;
+
+    for line in content.lines() {
+        if let Some((array, header)) = toml_table_header(line) {
+            let root = header.split('.').next().unwrap_or(header);
+            if !is_inlineable_profile_root(root) {
+                bail!("[{root}] cannot be represented as inline [profile.*]");
+            }
+            has_profile_section = true;
+            if array {
+                lines.push(format!("[[profile.{header}]]"));
+            } else {
+                lines.push(format!("[profile.{header}]"));
+            }
+            continue;
+        }
+
+        lines.push(line.to_string());
+    }
+
+    let rendered = finalize_lines(lines);
+    if !has_profile_section {
+        bail!("No inlineable profile sections found");
+    }
+    Ok(rendered)
+}
+
+fn replace_named_profile_with_inline_profile(
+    content: &str,
+    name: &str,
+    inline_profile: &str,
+) -> Result<String> {
+    let mut lines = Vec::new();
+    let mut skipping_profile = false;
+
+    for line in content.lines() {
+        if let Some(header) = table_header(line) {
+            skipping_profile = header == "profile";
+            if skipping_profile {
+                continue;
+            }
+        }
+
+        if !skipping_profile {
+            lines.push(line.to_string());
+        }
+    }
+
+    let mut updated = finalize_lines(lines);
+    updated = updated.trim_end().to_string();
+    if !updated.is_empty() {
+        updated.push_str("\n\n");
+    }
+    updated.push_str(inline_profile.trim());
+    updated.push('\n');
+
+    let parsed = toml::from_str::<Config>(&updated)?;
+    let profile = parsed
+        .profile
+        .as_ref()
+        .ok_or_else(|| anyhow!("updated config no longer has [profile.*]"))?;
+    if profile.name.as_deref() == Some(name) {
+        bail!("updated config still selects profile '{name}'");
+    }
+    Ok(updated)
 }
 
 fn root_section_text(content: &str, root: &str) -> Option<String> {
@@ -1396,6 +1672,22 @@ fn table_header(line: &str) -> Option<&str> {
     }
     let header = trimmed.trim_start_matches('[').trim_end_matches(']');
     (!header.starts_with('[') && !header.ends_with(']')).then_some(header)
+}
+
+fn toml_table_header(line: &str) -> Option<(bool, &str)> {
+    let trimmed = line
+        .trim()
+        .split_once('#')
+        .map_or_else(|| line.trim(), |(before, _)| before.trim_end());
+    if trimmed.starts_with("[[") && trimmed.ends_with("]]") {
+        let header = &trimmed[2..trimmed.len() - 2];
+        return (!header.starts_with('[') && !header.ends_with(']')).then_some((true, header));
+    }
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        let header = &trimmed[1..trimmed.len() - 1];
+        return (!header.starts_with('[') && !header.ends_with(']')).then_some((false, header));
+    }
+    None
 }
 
 fn toml_quote(value: &str) -> String {
@@ -1597,6 +1889,95 @@ tabs = ["pnpm dev"]
             .unwrap()
             .unwrap();
         assert_eq!(after, before);
+    }
+
+    #[test]
+    fn inline_selected_named_profile_moves_profile_toml_into_local_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(
+            dir.path().join(".wt.toml"),
+            "[issues]\nprovider = \"github\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+        std::fs::write(
+            dir.path().join(".local/.wt.toml"),
+            r#"
+[worktree]
+copy = [".env"]
+
+[profile]
+name = "codex"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[agent]
+cli = "codex"
+args = ["--yolo"]
+
+[agent.prompt]
+issue = ["Handle issue\n"]
+
+[workspace]
+tabs = ["pnpm dev"]
+"#,
+        )
+        .unwrap();
+
+        let before = Config::load(dir.path()).unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+        ui.add_confirm(true);
+        let ctx = ctx_with_ui(dir.path(), ui);
+
+        inline(&ctx, None, None).unwrap();
+
+        assert!(!profile_dir.join("profile.toml").exists());
+        let local = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        assert!(local.contains("[profile.agent]"));
+        assert!(local.contains("cli = \"codex\""));
+        assert!(local.contains("[profile.agent.prompt]"));
+        assert!(local.contains("[profile.workspace]"));
+        assert!(!local.contains("name = \"codex\""));
+
+        let after = Config::load(dir.path()).unwrap();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn inline_selected_named_profile_blocks_when_profile_has_convention_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        let prompts_dir = profile_dir.join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+        std::fs::write(
+            dir.path().join(".local/.wt.toml"),
+            "[profile]\nname = \"codex\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            "[agent]\ncli = \"codex\"\n",
+        )
+        .unwrap();
+        std::fs::write(prompts_dir.join("issue.md"), "Handle issue\n").unwrap();
+
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+
+        inline(&ctx, None, Some(Path::new(".local/.wt.toml"))).unwrap();
+
+        assert!(profile_dir.join("profile.toml").exists());
+        assert!(prompts_dir.join("issue.md").exists());
+        let local = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        assert!(local.contains("name = \"codex\""));
+        assert!(!local.contains("[profile.agent]"));
     }
 
     #[test]

@@ -97,7 +97,7 @@ pub enum Commands {
         /// Branch or worktree directory name to open directly
         target: Option<String>,
     },
-    /// Finish worktrees with cleanup
+    /// Finish worktrees and close matching cmux workspaces
     Done {
         /// Branch, issue number/key, or worktree directory names to finish
         targets: Vec<String>,
@@ -170,7 +170,7 @@ pub enum ConfigCommand {
         /// Config source file to refactor
         source: Option<PathBuf>,
     },
-    /// Move profile prompt files back into profile.toml
+    /// Move selected structured config back inline
     Inline {
         /// Config or prompt source file to refactor
         source: Option<PathBuf>,

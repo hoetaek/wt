@@ -13,6 +13,9 @@ This project follows SemVer.
 - Added `wt config extract [SOURCE]` for interactive one-step config
   refactors, including inline profile extraction and profile prompt file
   extraction.
+- Added `wt config inline [SOURCE]` support for moving selected named profile
+  settings back into `.local/.wt.toml`, alongside prompt convention file
+  inlining.
 - Removed `wt profile promote`; use `wt config extract .local/.wt.toml`
   instead.
 - Added `wt config` to print the merged effective config, with
