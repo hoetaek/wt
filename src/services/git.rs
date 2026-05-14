@@ -2,6 +2,7 @@ use crate::context::{CmdOutput, CommandRunner};
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeEntry {
     pub path: PathBuf,
     pub branch: String,
@@ -169,7 +170,28 @@ impl<'a> GitService<'a> {
 
     pub fn list_local_branches(&self) -> Result<Vec<String>> {
         let out = self.git(&["branch", "--format=%(refname:short)"])?;
-        Ok(out.stdout.lines().map(String::from).collect())
+        Ok(out
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(String::from)
+            .collect())
+    }
+
+    pub fn list_remote_branches(&self) -> Result<Vec<String>> {
+        let out = self.git(&[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/remotes/origin",
+        ])?;
+        Ok(out
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(String::from)
+            .collect())
     }
 
     pub fn fetch_branch(&self, branch: &str) -> Result<()> {
@@ -471,6 +493,28 @@ branch refs/heads/main
         let git = GitService::new(&runner, None);
         let branches = git.list_local_branches().unwrap();
         assert_eq!(branches, vec!["main", "develop", "feature"]);
+    }
+
+    #[test]
+    fn list_remote_branches_parses_origin_refs() {
+        let mut runner = MockRunner::new();
+        runner.add_response("origin/HEAD\norigin/main\norigin/alice/feature\n", true);
+        let git = GitService::new(&runner, None);
+        let branches = git.list_remote_branches().unwrap();
+        assert_eq!(
+            branches,
+            vec!["origin/HEAD", "origin/main", "origin/alice/feature"]
+        );
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/remotes/origin"
+            ]
+        );
     }
 
     #[test]

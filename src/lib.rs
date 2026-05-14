@@ -13,7 +13,7 @@ pub mod ui;
 pub mod worktree_naming;
 
 use anyhow::Result;
-use cli::{BatchCommand, Commands, StackCommand};
+use cli::{BatchCommand, Commands, ConfigCommand, StackCommand};
 use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
@@ -62,7 +62,12 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
         Commands::Doctor => commands::doctor::run(ctx),
-        Commands::Config { profile } => commands::config::effective(ctx, profile.as_deref()),
+        Commands::Config { profile, command } => match command {
+            Some(ConfigCommand::Extract { source }) => {
+                commands::config::extract(ctx, profile.as_deref(), source.as_deref())
+            }
+            None => commands::config::effective(ctx, profile.as_deref()),
+        },
         Commands::Profile { command } => commands::profile::run(ctx, command.as_ref()),
         Commands::Site { command } => commands::site::run(ctx, command),
         Commands::Init {

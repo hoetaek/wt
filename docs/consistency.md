@@ -44,6 +44,12 @@
 소스다. `new`는 branch-name text에서 직접 작성 item을 만들고, `issue`는 provider
 issue snapshot에서 issue item을 만든다.
 
+`wt open`은 issue selector가 아니라 branch/worktree 상태 selector다. 선택지는 현재
+checkout을 제외하고 `existing`(이미 별도 worktree가 있음), `local`(local branch만
+있음), `remote`(origin branch만 있음)으로 나뉜다. Linear나 GitHub issue 번호를 추정해
+분류하지 않는다. issue provider가 제안한 branch와 `worktree.naming`으로 만든 branch가
+다를 수 있기 때문이다.
+
 이 셋이 섞이면 사용자는 batch가 실행환경인지, stack이 단순 실행 목록인지,
 profile이 작업 묶음인지 다시 추론해야
 한다. 이런 혼동은 기능 추가보다 먼저 제거한다.

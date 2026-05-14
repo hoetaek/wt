@@ -1,5 +1,5 @@
 use crate::context::CommandRunner;
-use crate::services::issues::{IssueInfo, IssueListItem, IssueProvider};
+use crate::services::issues::{EnsuredBranch, IssueInfo, IssueListItem, IssueProvider};
 use crate::services::linear::LinearService;
 use anyhow::Result;
 use std::path::Path;
@@ -54,17 +54,23 @@ impl IssueProvider for LinearIssueProvider<'_> {
         id: &str,
         _base: Option<&str>,
         branch_name: Option<&str>,
-    ) -> Result<String> {
+    ) -> Result<EnsuredBranch> {
         if let Some(branch_name) = branch_name {
-            return Ok(branch_name.to_string());
+            return Ok(EnsuredBranch {
+                name: branch_name.to_string(),
+                created: false,
+            });
         }
 
         let issue = self.linear.get_issue(id)?;
-        issue.branch_name.ok_or_else(|| {
-            crate::error::WtError::NoBranchName {
+        let name = issue.branch_name.ok_or_else(|| {
+            anyhow::Error::from(crate::error::WtError::NoBranchName {
                 identifier: id.to_string(),
-            }
-            .into()
+            })
+        })?;
+        Ok(EnsuredBranch {
+            name,
+            created: false,
         })
     }
 
@@ -137,7 +143,8 @@ mod tests {
         );
         let provider = LinearIssueProvider::new(&runner, None);
         let branch = provider.ensure_branch("PROJ-680", None, None).unwrap();
-        assert_eq!(branch, "alice/proj-680-document-editor");
+        assert_eq!(branch.name, "alice/proj-680-document-editor");
+        assert!(!branch.created);
     }
 
     #[test]
@@ -147,7 +154,8 @@ mod tests {
         let branch = provider
             .ensure_branch("PROJ-680", None, Some("alice/proj-680-wiki-editor"))
             .unwrap();
-        assert_eq!(branch, "alice/proj-680-wiki-editor");
+        assert_eq!(branch.name, "alice/proj-680-wiki-editor");
+        assert!(!branch.created);
         assert!(runner.calls.lock().unwrap().is_empty());
     }
 

@@ -10,6 +10,11 @@ This project follows SemVer.
   `common.md`/`common.append.md` profile convention files, so shared
   instructions are prepended to `issue`, `new`, and `pr` prompts after all
   config layers are merged.
+- Added `wt config extract [SOURCE]` for interactive one-step config
+  refactors, including inline profile extraction and profile prompt file
+  extraction.
+- Removed `wt profile promote`; use `wt config extract .local/.wt.toml`
+  instead.
 - Added `wt config` to print the merged effective config, with
   `wt config --profile <name>` support for inspecting named profile layers.
 - Changed named profile scaffold files to live under

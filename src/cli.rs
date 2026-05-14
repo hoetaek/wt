@@ -92,9 +92,9 @@ pub enum Commands {
         #[arg(long)]
         wide: bool,
     },
-    /// Open existing worktree with full workspace
+    /// Open a workspace from an existing worktree or branch
     Open {
-        /// Branch, issue number, or worktree directory name to open
+        /// Branch or worktree directory name to open directly
         target: Option<String>,
     },
     /// Finish worktrees with cleanup
@@ -104,11 +104,13 @@ pub enum Commands {
     },
     /// Check configured providers and required local tools
     Doctor,
-    /// Print the effective config
+    /// Print or refactor wt config files
     Config {
-        /// Use a named profile from .local/profiles/<name>
+        /// Show effective config using .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
+        #[command(subcommand)]
+        command: Option<ConfigCommand>,
     },
     /// List or manage named profile configs
     Profile {
@@ -162,14 +164,18 @@ pub enum Commands {
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum ConfigCommand {
+    /// Move selected config sections into the next structured config file
+    Extract {
+        /// Config source file to refactor
+        source: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum ProfileCommand {
     /// Create a named profile scaffold
     Create {
-        /// New profile name
-        name: String,
-    },
-    /// Move inline [profile.*] settings into a named profile
-    Promote {
         /// New profile name
         name: String,
     },
@@ -760,7 +766,10 @@ mod tests {
         let cli = parse(&["wt", "config"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Config { profile: None })
+            Some(Commands::Config {
+                profile: None,
+                command: None
+            })
         ));
     }
 
@@ -770,9 +779,28 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
-                profile: Some(ref profile)
+                profile: Some(ref profile),
+                command: None
             }) if profile == "codex"
         ));
+    }
+
+    #[test]
+    fn config_extract_accepts_optional_source() {
+        let cli = parse(&["wt", "config", "extract", ".local/.wt.toml"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Config {
+                profile: None,
+                command: Some(ConfigCommand::Extract { ref source }),
+            }) if source.as_deref() == Some(std::path::Path::new(".local/.wt.toml"))
+        ));
+    }
+
+    #[test]
+    fn profile_promote_subcommand_is_removed() {
+        let result = Cli::try_parse_from(["wt", "profile", "promote", "codex"]);
+        assert!(result.is_err());
     }
 
     #[test]

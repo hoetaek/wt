@@ -1,5 +1,5 @@
 use crate::context::CommandRunner;
-use crate::services::issues::{IssueInfo, IssueListItem, IssueProvider};
+use crate::services::issues::{EnsuredBranch, IssueInfo, IssueListItem, IssueProvider};
 use anyhow::{Result, bail};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -62,13 +62,7 @@ impl IssueProvider for GithubIssueProvider<'_> {
         let list_out = self
             .runner
             .run("gh", &["issue", "develop", "--list", id], self.cwd)?;
-        let branch_name = list_out
-            .stdout
-            .lines()
-            .next()
-            .and_then(|line| line.split('\t').nth(1))
-            .filter(|s| !s.is_empty())
-            .map(String::from);
+        let branch_name = parse_linked_branch(&list_out.stdout);
 
         Ok(IssueInfo {
             identifier: format!("#{}", gh_issue.number),
@@ -113,18 +107,15 @@ impl IssueProvider for GithubIssueProvider<'_> {
         id: &str,
         base: Option<&str>,
         branch_name: Option<&str>,
-    ) -> Result<String> {
+    ) -> Result<EnsuredBranch> {
         let list_out = self
             .runner
             .run("gh", &["issue", "develop", "--list", id], self.cwd)?;
-        if let Some(branch) = list_out
-            .stdout
-            .lines()
-            .next()
-            .and_then(|line| line.split('\t').nth(1))
-            .filter(|s| !s.is_empty())
-        {
-            return Ok(branch.to_string());
+        if let Some(branch) = parse_linked_branch(&list_out.stdout) {
+            return Ok(EnsuredBranch {
+                name: branch,
+                created: false,
+            });
         }
 
         let mut args = vec!["issue", "develop"];
@@ -140,11 +131,13 @@ impl IssueProvider for GithubIssueProvider<'_> {
         if !out.success {
             bail!("Failed to create branch for issue #{id}");
         }
-        let branch = out.stdout.trim().to_string();
-        if branch.is_empty() {
+        let Some(branch) = parse_created_branch(&out.stdout) else {
             bail!("gh issue develop returned empty branch name for #{id}");
-        }
-        Ok(branch)
+        };
+        Ok(EnsuredBranch {
+            name: branch,
+            created: true,
+        })
     }
 
     fn on_start(&self, _id: &str) -> Result<()> {
@@ -153,6 +146,62 @@ impl IssueProvider for GithubIssueProvider<'_> {
 
     fn on_clean(&self, _id: &str, _branch: &str) -> Result<()> {
         Ok(())
+    }
+}
+
+fn parse_linked_branch(stdout: &str) -> Option<String> {
+    stdout.lines().find_map(|line| {
+        let branch = line.split('\t').next()?.trim();
+        if branch.is_empty() {
+            None
+        } else {
+            Some(branch.to_string())
+        }
+    })
+}
+
+fn parse_created_branch(stdout: &str) -> Option<String> {
+    stdout.lines().rev().find_map(parse_created_branch_line)
+}
+
+fn parse_created_branch_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(branch) = parse_tree_url_branch(trimmed) {
+        return Some(branch);
+    }
+
+    for token in trimmed.split_whitespace().rev() {
+        if let Some(branch) = parse_tree_url_branch(token) {
+            return Some(branch);
+        }
+    }
+
+    if trimmed.contains('\t') {
+        return parse_linked_branch(trimmed);
+    }
+
+    if trimmed.contains(char::is_whitespace) {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn parse_tree_url_branch(value: &str) -> Option<String> {
+    let (_, branch) = value.split_once("/tree/")?;
+    let branch = branch
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(branch)
+        .trim_matches('/');
+    if branch.is_empty() {
+        None
+    } else {
+        Some(branch.to_string())
     }
 }
 
@@ -174,7 +223,10 @@ mod tests {
     fn get_issue_parses_gh_json() {
         let mut runner = MockRunner::new();
         runner.add_response(r#"{"number":42,"title":"Add feature"}"#, true);
-        runner.add_response("42\talice/42-add-feature\n", true);
+        runner.add_response(
+            "alice/42-add-feature\thttps://github.com/alice/repo/tree/alice/42-add-feature\n",
+            true,
+        );
 
         let provider = GithubIssueProvider::new(&runner, None, None);
         let issue = provider.get_issue("42").unwrap();
@@ -238,22 +290,30 @@ mod tests {
     #[test]
     fn ensure_branch_returns_existing() {
         let mut runner = MockRunner::new();
-        runner.add_response("42\talice/42-add-feature\n", true);
+        runner.add_response(
+            "alice/42-add-feature\thttps://github.com/alice/repo/tree/alice/42-add-feature\n",
+            true,
+        );
 
         let provider = GithubIssueProvider::new(&runner, None, None);
         let branch = provider.ensure_branch("42", None, None).unwrap();
-        assert_eq!(branch, "alice/42-add-feature");
+        assert_eq!(branch.name, "alice/42-add-feature");
+        assert!(!branch.created);
     }
 
     #[test]
     fn ensure_branch_creates_new_without_base() {
         let mut runner = MockRunner::new();
         runner.add_response("", true);
-        runner.add_response("alice/42-add-feature", true);
+        runner.add_response(
+            "https://github.com/alice/repo/tree/alice/42-add-feature",
+            true,
+        );
 
         let provider = GithubIssueProvider::new(&runner, None, None);
         let branch = provider.ensure_branch("42", None, None).unwrap();
-        assert_eq!(branch, "alice/42-add-feature");
+        assert_eq!(branch.name, "alice/42-add-feature");
+        assert!(branch.created);
 
         let calls = runner.calls.lock().unwrap();
         let create_call = &calls[1];
@@ -264,11 +324,15 @@ mod tests {
     fn ensure_branch_creates_new_with_base() {
         let mut runner = MockRunner::new();
         runner.add_response("", true);
-        runner.add_response("alice/42-add-feature", true);
+        runner.add_response(
+            "https://github.com/alice/repo/tree/alice/42-add-feature",
+            true,
+        );
 
         let provider = GithubIssueProvider::new(&runner, None, None);
         let branch = provider.ensure_branch("42", Some("develop"), None).unwrap();
-        assert_eq!(branch, "alice/42-add-feature");
+        assert_eq!(branch.name, "alice/42-add-feature");
+        assert!(branch.created);
 
         let calls = runner.calls.lock().unwrap();
         let create_call = &calls[1];
@@ -282,13 +346,17 @@ mod tests {
     fn ensure_branch_creates_new_with_name() {
         let mut runner = MockRunner::new();
         runner.add_response("", true);
-        runner.add_response("alice/42-english-title", true);
+        runner.add_response(
+            "https://github.com/alice/repo/tree/alice/42-english-title",
+            true,
+        );
 
         let provider = GithubIssueProvider::new(&runner, None, None);
         let branch = provider
             .ensure_branch("42", Some("develop"), Some("alice/42-english-title"))
             .unwrap();
-        assert_eq!(branch, "alice/42-english-title");
+        assert_eq!(branch.name, "alice/42-english-title");
+        assert!(branch.created);
 
         let calls = runner.calls.lock().unwrap();
         let create_call = &calls[1];

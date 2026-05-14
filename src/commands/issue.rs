@@ -7,7 +7,7 @@ use crate::names::WorktreeNames;
 use crate::services::git::{CreateType, GitService};
 use crate::services::issues::github::GithubIssueProvider;
 use crate::services::issues::linear::LinearIssueProvider;
-use crate::services::issues::{IssueInfo, IssueProvider};
+use crate::services::issues::{EnsuredBranch, IssueInfo, IssueProvider};
 use crate::setup;
 use crate::worktree_naming::{self, WorktreeNamingResult};
 use anyhow::{Result, bail};
@@ -111,26 +111,35 @@ fn run_inner(
 
     let naming = worktree_naming::generate(ctx, &identifier, &title, suggested_branch.as_deref())?;
 
-    // Resolve base for ensure_branch
-    let base_mode = BaseMode::from_raw(base_raw);
-    let base_for_ensure = match &base_mode {
-        BaseMode::Explicit(b) => Some(b.as_str()),
-        _ => None,
-    };
+    let provider_branch_base =
+        if should_resolve_provider_branch_base(ctx, suggested_branch.as_deref(), prepared_issue) {
+            Some(resolve_base_branch(ctx, &git, base_raw)?)
+        } else {
+            None
+        };
 
     // Ensure branch exists (provider-specific: Linear reads, GH may create)
     let raw_id = identifier.trim_start_matches('#');
-    let branch_name =
+    let ensured_branch =
         if let Some(prepared_branch) = prepared_issue.and_then(|issue| issue.branch_name) {
-            prepared_branch.to_string()
+            EnsuredBranch {
+                name: prepared_branch.to_string(),
+                created: false,
+            }
         } else {
             let provider = build_provider(ctx)?;
             provider.ensure_branch(
                 raw_id,
-                base_for_ensure,
+                provider_branch_base.as_deref(),
                 naming.as_ref().and_then(|n| n.branch.as_deref()),
             )?
         };
+    let provider_created_branch_base = if ensured_branch.created {
+        provider_branch_base.as_deref()
+    } else {
+        None
+    };
+    let branch_name = ensured_branch.name;
 
     if parallel || profile.is_some() {
         let results = run_profiles(
@@ -226,7 +235,14 @@ fn run_inner(
 
     // 4. Create worktree
     git.fetch()?;
-    let create_type = create_worktree(ctx, &git, &branch_name, &names.path, base_raw)?;
+    let create_type = create_worktree(
+        ctx,
+        &git,
+        &branch_name,
+        &names.path,
+        base_raw,
+        provider_created_branch_base,
+    )?;
 
     // 5. Update issue status for new branches
     if create_type == CreateType::New {
@@ -461,6 +477,18 @@ fn resolve_base_branch(ctx: &Ctx, git: &GitService, base_raw: &Option<String>) -
     }
 }
 
+fn should_resolve_provider_branch_base(
+    ctx: &Ctx,
+    suggested_branch: Option<&str>,
+    prepared_issue: Option<&PreparedIssueContext<'_>>,
+) -> bool {
+    matches!(
+        ctx.config.issues.as_ref().map(|issues| &issues.provider),
+        Some(IssueProviderType::Github)
+    ) && suggested_branch.is_none()
+        && prepared_issue.and_then(|issue| issue.branch_name).is_none()
+}
+
 fn load_selected_profiles(ctx: &Ctx, profile: Option<&str>) -> Result<Vec<(String, Config)>> {
     if let Some(profile) = profile {
         let config = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
@@ -498,6 +526,7 @@ fn create_worktree(
     branch_name: &str,
     wt_path: &std::path::Path,
     base_raw: &Option<String>,
+    provider_created_branch_base: Option<&str>,
 ) -> Result<CreateType> {
     let base_mode = BaseMode::from_raw(base_raw);
 
@@ -515,7 +544,7 @@ fn create_worktree(
     }
 
     if git.remote_branch_exists(branch_name)? {
-        if base_mode != BaseMode::Default {
+        if base_mode != BaseMode::Default && provider_created_branch_base.is_none() {
             return Err(WtError::BranchExistsWithBase {
                 branch: branch_name.into(),
             }
@@ -524,24 +553,33 @@ fn create_worktree(
         ctx.ui
             .print_step(&format!("Tracking remote branch: origin/{branch_name}"));
         git.worktree_add_new_branch(wt_path, branch_name, &format!("origin/{branch_name}"))?;
-        let branches = git.list_local_branches()?;
-        let idx = ctx.ui.select("Select parent branch", &branches)?;
-        git.set_branch_parent(branch_name, &branches[idx]).ok();
+        let parent = if let Some(base) = provider_created_branch_base {
+            base.to_string()
+        } else {
+            let branches = git.list_local_branches()?;
+            let idx = ctx.ui.select("Select parent branch", &branches)?;
+            branches[idx].clone()
+        };
+        git.set_branch_parent(branch_name, &parent).ok();
         return Ok(CreateType::Remote);
     }
 
     // New branch — resolve base
-    let base = match base_mode {
-        BaseMode::Explicit(ref b) => b.clone(),
-        BaseMode::Interactive => {
-            let branches = git.list_local_branches()?;
-            let idx = ctx.ui.select("Select base branch", &branches)?;
-            branches[idx].clone()
-        }
-        BaseMode::Current => git.current_branch()?,
-        BaseMode::Default => {
-            let current = git.current_branch()?;
-            ctx.ui.input("Base branch", Some(&current))?
+    let base = if let Some(base) = provider_created_branch_base {
+        base.to_string()
+    } else {
+        match base_mode {
+            BaseMode::Explicit(ref b) => b.clone(),
+            BaseMode::Interactive => {
+                let branches = git.list_local_branches()?;
+                let idx = ctx.ui.select("Select base branch", &branches)?;
+                branches[idx].clone()
+            }
+            BaseMode::Current => git.current_branch()?,
+            BaseMode::Default => {
+                let current = git.current_branch()?;
+                ctx.ui.input("Base branch", Some(&current))?
+            }
         }
     };
 
@@ -568,6 +606,16 @@ mod tests {
         Config {
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            ..Config::default()
+        }
+    }
+
+    fn github_config() -> Config {
+        Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Github,
                 gh_user: None,
             }),
             ..Config::default()
@@ -1040,6 +1088,96 @@ mod tests {
             })
             .expect("expected git worktree add -b call");
         assert_eq!(worktree_add_call.1[5], "feature/current");
+
+        std::fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn github_issue_current_base_tracks_provider_created_branch() {
+        let temp = std::env::temp_dir().join(format!(
+            "wt-github-issue-current-base-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo_root = temp.join("sample-app");
+        let invocation_root = temp.join("sample-app-feature");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        std::fs::create_dir_all(&invocation_root).unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"number":5,"title":"Add interactive wt config extract"}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("feature/current", true);
+        runner.add_response("", true);
+        runner.add_response(
+            "https://github.com/hoetaek/wt/tree/5-add-interactive-wt-config-extract",
+            true,
+        );
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+
+        let runner = Arc::new(runner);
+        let ctx = Ctx::new(
+            repo_root,
+            invocation_root,
+            github_config(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, Some("5"), &Some(".".into()), None, false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "gh"
+                && args
+                    == &vec![
+                        "issue".to_string(),
+                        "develop".to_string(),
+                        "--base".to_string(),
+                        "feature/current".to_string(),
+                        "5".to_string(),
+                    ]
+        }));
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "git"
+                && args
+                    == &vec![
+                        "worktree".to_string(),
+                        "add".to_string(),
+                        "-b".to_string(),
+                        "5-add-interactive-wt-config-extract".to_string(),
+                        temp.join("sample-app-5-add-interactive-wt-config-extract")
+                            .to_string_lossy()
+                            .to_string(),
+                        "origin/5-add-interactive-wt-config-extract".to_string(),
+                    ]
+        }));
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "git"
+                && args
+                    == &vec![
+                        "config".to_string(),
+                        "branch.5-add-interactive-wt-config-extract.parentbranch".to_string(),
+                        "feature/current".to_string(),
+                    ]
+        }));
 
         std::fs::remove_dir_all(&temp).ok();
     }
