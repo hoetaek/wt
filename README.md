@@ -127,6 +127,14 @@ wt config
 wt config --profile codex
 ```
 
+Refactor config representation one source file at a time:
+
+```bash
+wt config extract
+wt config extract .local/.wt.toml
+wt config extract .local/profiles/codex/profile.toml
+```
+
 The merge order is `.wt.toml`, `.local/.wt.toml`, the selected profile, then
 profile convention files such as `.local/profiles/<name>/prompts/issue.md`.
 Later layers override scalar and map entries with the same key. List-style
@@ -134,6 +142,9 @@ entries such as `worktree.copy` append unique values. Agent prompts follow an
 explicit rule: `[agent.prompt]` overwrites the prompt for that mode, while
 `[agent.prompt.append]` appends text to the current prompt. `wt config` prints
 the effective prompt after append directives have been applied.
+`wt config extract` is not an effective-config splitter. It moves selected
+sections from a real source file into the next structured file while preserving
+the local effective behavior.
 
 Example shared `.wt.toml`:
 
@@ -223,9 +234,10 @@ Profiles live under `.local/profiles/<name>/`:
 ```
 
 Use `wt profile create <name>` to create a named profile scaffold. Use
-`wt profile promote <name>` to move inline `[profile.*]` settings from
+`wt config extract .local/.wt.toml` to move inline `[profile.*]` settings from
 `.local/.wt.toml` into `.local/profiles/<name>/profile.toml` and replace them
-with `[profile] name = "<name>"`.
+with `[profile] name = "<name>"`. The profile name is requested when the
+extract plan is built.
 
 The minimal `profile.toml` keeps runtime settings:
 
@@ -296,11 +308,11 @@ wt profile create codex
 wt profile
 ```
 
-Or promote inline `.local/.wt.toml` profile settings into a named profile:
+Or extract inline `.local/.wt.toml` profile settings into a named profile:
 
 ```bash
 wt init --local --agent codex --no-prompts --yes
-wt profile promote codex
+wt config extract .local/.wt.toml
 wt profile
 ```
 

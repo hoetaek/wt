@@ -161,10 +161,7 @@ fn parse_linked_branch(stdout: &str) -> Option<String> {
 }
 
 fn parse_created_branch(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .rev()
-        .find_map(|line| parse_created_branch_line(line))
+    stdout.lines().rev().find_map(parse_created_branch_line)
 }
 
 fn parse_created_branch_line(line: &str) -> Option<String> {

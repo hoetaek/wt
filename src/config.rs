@@ -315,19 +315,14 @@ impl ProfileConfig {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[derive(Debug, Deserialize, PartialEq, Clone, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentCli {
     Codex,
     Claude,
     Gemini,
+    #[default]
     None,
-}
-
-impl Default for AgentCli {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
