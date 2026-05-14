@@ -199,10 +199,12 @@ cli = "codex"
 args = ["--yolo"]
 
 [agent.prompt]
+common = ["profile common\n"]
 issue = ["from profile.toml\n"]
 new = ["new branch prompt\n"]
 
 [agent.prompt.append]
+common = ["profile common append\n"]
 new = ["new branch append\n"]
 
 [workspace]
@@ -211,6 +213,17 @@ tabs = ["pnpm dev"]
 [setup.env]
 CODEX_MODE = "1"
 "#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join(".local/profiles/codex/prompts/common.md"),
+        "from common prompt file\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path()
+            .join(".local/profiles/codex/prompts/common.append.md"),
+        "from common append file\n",
     )
     .unwrap();
     std::fs::write(
@@ -258,6 +271,7 @@ CODEX_MODE = "1"
     assert_eq!(explicit, implicit);
     let rendered = String::from_utf8(explicit).unwrap();
     assert!(!rendered.contains("[agent.prompt.append]"));
+    assert!(!rendered.contains("common ="));
     let config: wt::config::Config = toml::from_str(&rendered).unwrap();
 
     assert!(config.profile.is_none());
@@ -273,11 +287,21 @@ CODEX_MODE = "1"
     assert_eq!(agent.args, vec!["--yolo"]);
     assert_eq!(
         agent.prompt.get("issue").unwrap(),
-        &vec!["from prompt file\n\nfrom prompt append file\n".to_string()]
+        &vec![
+            "from common prompt file\n\nfrom common append file\n".to_string(),
+            "from prompt file\n\nfrom prompt append file\n".to_string(),
+        ]
     );
     assert_eq!(
         agent.prompt.get("new").unwrap(),
-        &vec!["new branch prompt\n\nnew branch append\n".to_string()]
+        &vec![
+            "from common prompt file\n\nfrom common append file\n".to_string(),
+            "new branch prompt\n\nnew branch append\n".to_string(),
+        ]
+    );
+    assert_eq!(
+        agent.prompt.get("pr").unwrap(),
+        &vec!["from common prompt file\n\nfrom common append file\n".to_string()]
     );
 
     let copy_as = config.worktree.copy_as;

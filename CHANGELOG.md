@@ -6,6 +6,10 @@ This project follows SemVer.
 
 ## Unreleased
 
+- Added the reserved `common` agent prompt scope, including
+  `common.md`/`common.append.md` profile convention files, so shared
+  instructions are prepended to `issue`, `new`, and `pr` prompts after all
+  config layers are merged.
 - Added `wt config` to print the merged effective config, with
   `wt config --profile <name>` support for inspecting named profile layers.
 - Changed named profile scaffold files to live under

@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 pub const RESERVED_PROFILE_NAME: &str = "default";
 const PROMPT_APPEND_PREFIX: &str = "\u{0}append:";
+const PROMPT_COMMON_SCOPE: &str = "common";
+const PROMPT_RUNTIME_MODES: [&str; 3] = ["issue", "new", "pr"];
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -619,18 +621,24 @@ impl Config {
 
     pub fn resolve_effective_profile(repo_root: &Path, mut config: Self) -> anyhow::Result<Self> {
         let Some(profile) = config.profile.take() else {
+            finalize_config_common_prompt_scope(&mut config);
             return Ok(config);
         };
 
         if let Some(name) = profile.name.as_deref() {
-            return Self::load_profile(repo_root, name, &config)?
-                .with_context(|| format!("Profile '{name}' not found"));
+            let mut config = Self::load_profile(repo_root, name, &config)?
+                .with_context(|| format!("Profile '{name}' not found"))?;
+            finalize_config_common_prompt_scope(&mut config);
+            return Ok(config);
         }
 
         if profile.has_inline_settings() {
-            return Ok(merge_config(&config, profile.into_config()));
+            let mut config = merge_config(&config, profile.into_config());
+            finalize_config_common_prompt_scope(&mut config);
+            return Ok(config);
         }
 
+        finalize_config_common_prompt_scope(&mut config);
         Ok(config)
     }
 
@@ -693,6 +701,7 @@ impl Config {
         let mut config = merge_config(base, profile_config);
         config.profile = None;
         apply_profile_conventions(repo_root, name, profile_dir, &mut config)?;
+        finalize_config_common_prompt_scope(&mut config);
         Ok(config)
     }
 }
@@ -751,6 +760,12 @@ fn finalize_config_prompt_appends(config: &mut Config) {
     }
 }
 
+fn finalize_config_common_prompt_scope(config: &mut Config) {
+    if let Some(agent) = config.agent.as_mut() {
+        finalize_agent_common_prompt_scope(agent);
+    }
+}
+
 fn merge_agent_config(mut base: AgentConfig, profile: AgentConfig) -> AgentConfig {
     if is_prompt_only_agent_patch(&profile) {
         apply_prompt_overlay(&mut base.prompt, profile.prompt);
@@ -776,6 +791,22 @@ fn is_prompt_only_agent_patch(agent: &AgentConfig) -> bool {
 fn finalize_agent_prompt_appends(agent: &mut AgentConfig) {
     let prompt = std::mem::take(&mut agent.prompt);
     apply_prompt_overlay(&mut agent.prompt, prompt);
+}
+
+fn finalize_agent_common_prompt_scope(agent: &mut AgentConfig) {
+    let Some(common_prompts) = agent.prompt.remove(PROMPT_COMMON_SCOPE) else {
+        return;
+    };
+    if common_prompts.is_empty() {
+        return;
+    }
+
+    for mode in PROMPT_RUNTIME_MODES {
+        let mode_prompts = agent.prompt.remove(mode).unwrap_or_default();
+        let mut prompts = common_prompts.clone();
+        prompts.extend(mode_prompts);
+        agent.prompt.insert(mode.to_string(), prompts);
+    }
 }
 
 fn apply_prompt_overlay(
@@ -890,7 +921,7 @@ fn apply_profile_conventions(
     config: &mut Config,
 ) -> anyhow::Result<()> {
     if let Some(agent) = config.agent.as_mut() {
-        for mode in ["issue", "new", "pr"] {
+        for mode in [PROMPT_COMMON_SCOPE, "issue", "new", "pr"] {
             let prompt_path = profile_dir.join("prompts").join(format!("{mode}.md"));
             if prompt_path.exists() {
                 let prompt = std::fs::read_to_string(prompt_path)?;
@@ -1253,6 +1284,112 @@ issue = ["local append\n"]
         assert_eq!(
             agent.prompt.get("issue").unwrap(),
             &vec!["local prompt\n\nlocal append\n".to_string()]
+        );
+    }
+
+    #[test]
+    fn common_prompt_scope_expands_after_layers_before_mode_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+
+        std::fs::write(
+            dir.path().join(".wt.toml"),
+            r#"
+[agent]
+cli = "codex"
+
+[agent.prompt]
+common = ["shared common\n"]
+issue = ["shared issue\n"]
+
+[agent.prompt.append]
+common = ["shared common append\n"]
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.path().join(".local/.wt.toml"),
+            r#"
+[agent.prompt.append]
+common = ["local common append\n"]
+issue = ["local issue append\n"]
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load(dir.path()).unwrap();
+        let agent = config.agent.unwrap();
+        assert!(!agent.prompt.contains_key("common"));
+        assert_eq!(
+            agent.prompt.get("issue").unwrap(),
+            &vec![
+                "shared common\n\nshared common append\n\nlocal common append\n".to_string(),
+                "shared issue\n\nlocal issue append\n".to_string(),
+            ]
+        );
+        assert_eq!(
+            agent.prompt.get("new").unwrap(),
+            &vec!["shared common\n\nshared common append\n\nlocal common append\n".to_string()]
+        );
+        assert_eq!(
+            agent.prompt.get("pr").unwrap(),
+            &vec!["shared common\n\nshared common append\n\nlocal common append\n".to_string()]
+        );
+    }
+
+    #[test]
+    fn profile_convention_common_prompt_files_expand_after_mode_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(profile_dir.join("prompts")).unwrap();
+
+        std::fs::write(
+            dir.path().join(".wt.toml"),
+            r#"
+[agent]
+cli = "codex"
+
+[agent.prompt]
+common = ["root common\n"]
+issue = ["root issue\n"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+        std::fs::write(profile_dir.join("prompts/common.md"), "file common\n").unwrap();
+        std::fs::write(
+            profile_dir.join("prompts/common.append.md"),
+            "file common append\n",
+        )
+        .unwrap();
+        std::fs::write(profile_dir.join("prompts/issue.md"), "file issue\n").unwrap();
+        std::fs::write(
+            profile_dir.join("prompts/issue.append.md"),
+            "file issue append\n",
+        )
+        .unwrap();
+
+        let (base, _, _) = Config::load_base_and_effective_with_source(dir.path()).unwrap();
+        let config = Config::load_profile(dir.path(), "codex", &base)
+            .unwrap()
+            .unwrap();
+        let agent = config.agent.unwrap();
+        assert!(!agent.prompt.contains_key("common"));
+        assert_eq!(
+            agent.prompt.get("issue").unwrap(),
+            &vec![
+                "file common\n\nfile common append\n".to_string(),
+                "file issue\n\nfile issue append\n".to_string(),
+            ]
+        );
+        assert_eq!(
+            agent.prompt.get("new").unwrap(),
+            &vec!["file common\n\nfile common append\n".to_string()]
+        );
+        assert_eq!(
+            agent.prompt.get("pr").unwrap(),
+            &vec!["file common\n\nfile common append\n".to_string()]
         );
     }
 
