@@ -1,7 +1,6 @@
 use crate::cli::ProfileCommand;
 use crate::config::{
-    AgentCli, AgentConfig, Config, IssueProviderType, ProfileConfig, ReadyMode, SiteProvider,
-    SubmitMode, validate_profile_name,
+    AgentCli, AgentConfig, Config, IssueProviderType, ReadyMode, SubmitMode, validate_profile_name,
 };
 use crate::context::Ctx;
 use anyhow::{Result, bail};
@@ -13,7 +12,6 @@ use std::path::PathBuf;
 pub fn run(ctx: &Ctx, command: Option<&ProfileCommand>) -> Result<()> {
     match command {
         Some(ProfileCommand::Create { name }) => create(ctx, name),
-        Some(ProfileCommand::Promote { name }) => promote(ctx, name),
         None => list(ctx),
     }
 }
@@ -90,60 +88,6 @@ fn create(ctx: &Ctx, name: &str) -> Result<()> {
         .print_dim(&format!("  dir:     {}", created.dir.display()));
     ctx.ui
         .print_step("Edit the files to adjust this profile's behavior.");
-
-    Ok(())
-}
-
-fn promote(ctx: &Ctx, name: &str) -> Result<()> {
-    validate_profile_name(name)?;
-    let local_path = ctx.repo_root.join(".local/.wt.toml");
-    if !local_path.exists() {
-        bail!("No local config found: {}", local_path.display());
-    }
-
-    let content = fs::read_to_string(&local_path)?;
-    let mut config = Config::load_file(&local_path)?;
-    let Some(profile) = config.profile.take() else {
-        bail!("No inline profile found in {}", local_path.display());
-    };
-    if let Some(existing) = profile.name.as_deref() {
-        bail!("Local config already selects named profile '{existing}'");
-    }
-    if !profile.has_inline_settings() {
-        bail!(
-            "No inline profile settings found in {}",
-            local_path.display()
-        );
-    }
-
-    let profile_dir = ctx.repo_root.join(".local/profiles").join(name);
-    let toml_path = profile_dir.join("profile.toml");
-    if toml_path.exists() {
-        bail!("Profile '{name}' already exists: {}", profile_dir.display());
-    }
-
-    let profile_toml = render_promoted_profile(&profile);
-    let updated = replace_inline_profile_with_name(&content, name)?;
-
-    fs::create_dir_all(&profile_dir)?;
-    fs::write(&toml_path, profile_toml)?;
-    fs::write(&local_path, updated)?;
-
-    if ctx.is_json() {
-        write_json(&CreatedProfile {
-            name: name.to_string(),
-            config_path: toml_path.display().to_string(),
-            dir: profile_dir.display().to_string(),
-        })?;
-        return Ok(());
-    }
-
-    ctx.ui
-        .print_step(&format!("Promoted inline profile to '{name}':"));
-    ctx.ui
-        .print_dim(&format!("  config:  {}", toml_path.display()));
-    ctx.ui
-        .print_dim(&format!("  local:   {}", local_path.display()));
 
     Ok(())
 }
@@ -280,230 +224,6 @@ fn generate_toml(agent: &AgentConfig) -> String {
     generate_agent_section(agent)
 }
 
-fn render_promoted_profile(profile: &ProfileConfig) -> String {
-    let mut s = String::new();
-
-    if let Some(agent) = profile.agent.as_ref() {
-        s.push_str(&generate_agent_section(agent));
-    }
-    append_worktree_section(&mut s, &profile.worktree);
-    append_setup_section(&mut s, &profile.setup);
-    if let Some(site) = profile.site.as_ref() {
-        append_site_section(&mut s, site);
-    }
-    if let Some(workspace) = profile.workspace.as_ref() {
-        append_workspace_section(&mut s, workspace);
-    }
-    if let Some(test) = profile.test.as_ref() {
-        append_test_section(&mut s, test);
-    }
-
-    if s.starts_with('\n') {
-        s.remove(0);
-    }
-    if !s.ends_with('\n') {
-        s.push('\n');
-    }
-    s
-}
-
-fn append_worktree_section(s: &mut String, worktree: &crate::config::WorktreeConfig) {
-    if worktree == &crate::config::WorktreeConfig::default() {
-        return;
-    }
-
-    s.push_str("\n[worktree]\n");
-    if let Some(path) = worktree.path.as_deref() {
-        s.push_str(&format!("path = {}\n", toml_quote(path)));
-    }
-    if !worktree.copy.is_empty() {
-        s.push_str(&format!("copy = {}\n", toml_array(&worktree.copy)));
-    }
-    if !worktree.copy_as.is_empty() {
-        s.push_str("copy_as = [\n");
-        for entry in &worktree.copy_as {
-            s.push_str(&format!(
-                "    {{ from = {}, to = {} }},\n",
-                toml_quote(&entry.from),
-                toml_quote(&entry.to)
-            ));
-        }
-        s.push_str("]\n");
-    }
-    if !worktree.link.is_empty() {
-        s.push_str(&format!("link = {}\n", toml_array(&worktree.link)));
-    }
-    if let Some(context) = worktree.inject_local_context.as_deref() {
-        s.push_str(&format!("inject_local_context = {}\n", toml_quote(context)));
-    }
-    if let Some(naming) = worktree.naming.as_ref() {
-        s.push_str("\n[worktree.naming]\n");
-        s.push_str(&format!("command = {}\n", toml_quote(&naming.command)));
-        s.push_str(&format!("prompt = {}\n", toml_quote(&naming.prompt)));
-        if let Some(branch) = naming.branch.as_deref() {
-            s.push_str(&format!("branch = {}\n", toml_quote(branch)));
-        }
-        if let Some(workspace) = naming.workspace.as_deref() {
-            s.push_str(&format!("workspace = {}\n", toml_quote(workspace)));
-        }
-    }
-}
-
-fn append_setup_section(s: &mut String, setup: &crate::config::SetupConfig) {
-    if setup == &crate::config::SetupConfig::default() {
-        return;
-    }
-
-    s.push_str("\n[setup]\n");
-    if !setup.deps.is_empty() {
-        s.push_str("deps = [\n");
-        for dep in &setup.deps {
-            s.push_str(&format!("    {{ run = {}", toml_quote(&dep.run)));
-            if let Some(if_exists) = dep.if_exists.as_deref() {
-                s.push_str(&format!(", if_exists = {}", toml_quote(if_exists)));
-            }
-            s.push_str(" },\n");
-        }
-        s.push_str("]\n");
-    }
-
-    if !setup.env.is_empty() {
-        s.push_str("\n[setup.env]\n");
-        let mut entries = setup.env.iter().collect::<Vec<_>>();
-        entries.sort_by(|a, b| a.0.cmp(b.0));
-        for (key, value) in entries {
-            s.push_str(&format!("{key} = {}\n", toml_quote(value)));
-        }
-    }
-
-    let mut env_files = setup.env_files.iter().collect::<Vec<_>>();
-    env_files.sort_by(|a, b| a.0.cmp(b.0));
-    for (path, values) in env_files {
-        s.push_str(&format!("\n[setup.env_files.{}]\n", toml_quote(path)));
-        let mut entries = values.iter().collect::<Vec<_>>();
-        entries.sort_by(|a, b| a.0.cmp(b.0));
-        for (key, value) in entries {
-            s.push_str(&format!("{key} = {}\n", toml_quote(value)));
-        }
-    }
-}
-
-fn append_site_section(s: &mut String, site: &crate::config::SiteConfig) {
-    s.push_str("\n[site]\n");
-    s.push_str(&format!(
-        "provider = {}\n",
-        toml_quote(site_provider_name(&site.provider))
-    ));
-    if let Some(name) = site.name.as_deref() {
-        s.push_str(&format!("name = {}\n", toml_quote(name)));
-    }
-    if let Some(root) = site.root.as_deref() {
-        s.push_str(&format!("root = {}\n", toml_quote(root)));
-    }
-    if let Some(secure) = site.secure {
-        s.push_str(&format!("secure = {secure}\n"));
-    }
-    if let Some(open_browser) = site.open_browser {
-        s.push_str(&format!("open_browser = {open_browser}\n"));
-    }
-    if let Some(browser) = site.browser.as_deref() {
-        s.push_str(&format!("browser = {}\n", toml_quote(browser)));
-    }
-    if let Some(url) = site.url.as_deref() {
-        s.push_str(&format!("url = {}\n", toml_quote(url)));
-    }
-    if let Some(target) = site.target.as_deref() {
-        s.push_str(&format!("target = {}\n", toml_quote(target)));
-    }
-}
-
-fn append_workspace_section(s: &mut String, workspace: &crate::config::WorkspaceConfig) {
-    s.push_str("\n[workspace]\n");
-    if !workspace.tabs.is_empty() {
-        s.push_str(&format!("tabs = {}\n", toml_array(&workspace.tabs)));
-    }
-    if !workspace.post_deps_tabs.is_empty() {
-        s.push_str(&format!(
-            "post_deps_tabs = {}\n",
-            toml_array(&workspace.post_deps_tabs)
-        ));
-    }
-    if !workspace.colors.is_empty() {
-        s.push_str(&format!(
-            "colors = {}\n",
-            toml_inline_string_map(&workspace.colors)
-        ));
-    }
-    if let Some(open_url) = workspace.open_url.as_deref() {
-        s.push_str(&format!("open_url = {}\n", toml_quote(open_url)));
-    }
-    if let Some(open_browser) = workspace.open_browser {
-        s.push_str(&format!("open_browser = {open_browser}\n"));
-    }
-    if let Some(browser) = workspace.browser.as_deref() {
-        s.push_str(&format!("browser = {}\n", toml_quote(browser)));
-    }
-}
-
-fn append_test_section(s: &mut String, test: &crate::config::TestConfig) {
-    if test.commands.is_empty() {
-        return;
-    }
-
-    s.push_str("\n[test]\ncommands = [\n");
-    for command in &test.commands {
-        s.push_str(&format!("    {{ run = {}", toml_quote(&command.run)));
-        if let Some(if_exists) = command.if_exists.as_deref() {
-            s.push_str(&format!(", if_exists = {}", toml_quote(if_exists)));
-        }
-        if let Some(label) = command.label.as_deref() {
-            s.push_str(&format!(", label = {}", toml_quote(label)));
-        }
-        s.push_str(" },\n");
-    }
-    s.push_str("]\n");
-}
-
-fn replace_inline_profile_with_name(content: &str, name: &str) -> Result<String> {
-    let mut lines = Vec::new();
-    let mut skipping_profile = false;
-
-    for line in content.lines() {
-        if let Some(header) = table_header(line) {
-            skipping_profile = header == "profile" || header.starts_with("profile.");
-            if skipping_profile {
-                continue;
-            }
-        }
-
-        if !skipping_profile {
-            lines.push(line.to_string());
-        }
-    }
-
-    let mut updated = lines.join("\n");
-    updated = updated.trim_end().to_string();
-    if !updated.is_empty() {
-        updated.push_str("\n\n");
-    }
-    updated.push_str("[profile]\n");
-    updated.push_str(&format!("name = {}\n", toml_quote(name)));
-    toml::from_str::<Config>(&updated)?;
-    Ok(updated)
-}
-
-fn table_header(line: &str) -> Option<&str> {
-    let trimmed = line
-        .trim()
-        .split_once('#')
-        .map_or_else(|| line.trim(), |(before, _)| before.trim_end());
-    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
-        return None;
-    }
-    let header = trimmed.trim_start_matches('[').trim_end_matches(']');
-    (!header.starts_with('[') && !header.ends_with(']')).then_some(header)
-}
-
 fn generate_agent_section(agent: &AgentConfig) -> String {
     let mut s = String::from("\n[agent]\n");
     s.push_str(&format!(
@@ -545,16 +265,6 @@ fn agent_cli_name(cli: &AgentCli) -> &'static str {
         AgentCli::Claude => "claude",
         AgentCli::Gemini => "gemini",
         AgentCli::None => "none",
-    }
-}
-
-fn site_provider_name(provider: &SiteProvider) -> &'static str {
-    match provider {
-        SiteProvider::None => "none",
-        SiteProvider::Herd => "herd",
-        SiteProvider::Valet => "valet",
-        SiteProvider::DockerProxy => "docker_proxy",
-        SiteProvider::Traefik => "traefik",
     }
 }
 
@@ -600,17 +310,6 @@ fn toml_quote(value: &str) -> String {
     }
     out.push('"');
     out
-}
-
-fn toml_inline_string_map(values: &std::collections::HashMap<String, String>) -> String {
-    let mut entries = values.iter().collect::<Vec<_>>();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    let rendered = entries
-        .into_iter()
-        .map(|(key, value)| format!("{key} = {}", toml_quote(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{{ {rendered} }}")
 }
 
 fn default_profile_agent() -> AgentConfig {

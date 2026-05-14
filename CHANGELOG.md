@@ -6,6 +6,11 @@ This project follows SemVer.
 
 ## Unreleased
 
+- Added `wt config extract [SOURCE]` for interactive one-step config
+  refactors, including inline profile extraction and profile prompt file
+  extraction.
+- Removed `wt profile promote`; use `wt config extract .local/.wt.toml`
+  instead.
 - Added `wt config` to print the merged effective config, with
   `wt config --profile <name>` support for inspecting named profile layers.
 - Changed named profile scaffold files to live under
