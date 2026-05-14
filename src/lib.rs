@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod commands;
 pub mod config;
+pub mod config_render;
 pub mod context;
 pub mod error;
 pub mod names;
@@ -61,6 +62,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
         Commands::Doctor => commands::doctor::run(ctx),
+        Commands::Config { profile } => commands::config::effective(ctx, profile.as_deref()),
         Commands::Profile { command } => commands::profile::run(ctx, command.as_ref()),
         Commands::Site { command } => commands::site::run(ctx, command),
         Commands::Init {

@@ -174,40 +174,47 @@ pub(crate) fn create_profile(
         bail!("Profile '{name}' already exists: {}", profile_dir.display());
     }
 
-    fs::create_dir_all(profile_dir.join("prompts"))?;
-    fs::create_dir_all(profile_dir.join("codex/skills/start"))?;
-    fs::create_dir_all(profile_dir.join("claude/agents"))?;
-    fs::create_dir_all(profile_dir.join("claude/commands"))?;
-
     let agent = options
         .agent
         .or_else(|| options.base_config.agent.clone())
         .unwrap_or_else(default_profile_agent);
+    let scaffold_dir = profile_dir.join("scaffold");
 
-    let agents_override = profile_dir.join("codex/AGENTS.override.md");
-    let root_agents = ctx.repo_root.join("AGENTS.md");
-    if root_agents.exists() {
-        fs::copy(root_agents, &agents_override)?;
-    } else {
-        fs::write(&agents_override, generate_codex_override(name))?;
+    fs::create_dir_all(profile_dir.join("prompts"))?;
+
+    match agent.cli {
+        AgentCli::Codex => {
+            fs::create_dir_all(scaffold_dir.join(".codex/skills/start"))?;
+            let agents_override = scaffold_dir.join("AGENTS.override.md");
+            let root_agents = ctx.repo_root.join("AGENTS.md");
+            if root_agents.exists() {
+                fs::copy(root_agents, &agents_override)?;
+            } else {
+                fs::write(&agents_override, generate_codex_override(name))?;
+            }
+            fs::write(
+                scaffold_dir.join(".codex/skills/start/SKILL.md"),
+                generate_start_skill(
+                    name,
+                    options
+                        .base_config
+                        .issues
+                        .as_ref()
+                        .map(|issues| &issues.provider),
+                ),
+            )?;
+        }
+        AgentCli::Claude => {
+            fs::create_dir_all(scaffold_dir.join(".claude/agents"))?;
+            fs::create_dir_all(scaffold_dir.join(".claude/commands"))?;
+            fs::create_dir_all(scaffold_dir.join(".claude/skills"))?;
+            fs::write(
+                scaffold_dir.join("CLAUDE.local.md"),
+                generate_claude_local(name),
+            )?;
+        }
+        AgentCli::Gemini | AgentCli::None => {}
     }
-
-    fs::write(
-        profile_dir.join("claude/CLAUDE.local.md"),
-        generate_claude_local(name),
-    )?;
-
-    fs::write(
-        profile_dir.join("codex/skills/start/SKILL.md"),
-        generate_start_skill(
-            name,
-            options
-                .base_config
-                .issues
-                .as_ref()
-                .map(|issues| &issues.provider),
-        ),
-    )?;
 
     if options.include_prompts {
         fs::write(
@@ -900,18 +907,23 @@ cli = "codex"
         assert!(profile_dir.join("prompts/new.md").exists());
         assert!(profile_dir.join("prompts/pr.md").exists());
         assert_eq!(
-            std::fs::read_to_string(profile_dir.join("codex/AGENTS.override.md")).unwrap(),
+            std::fs::read_to_string(profile_dir.join("scaffold/AGENTS.override.md")).unwrap(),
             "shared instructions\n"
         );
-        assert!(profile_dir.join("claude/CLAUDE.local.md").exists());
-        assert!(profile_dir.join("codex/skills/start/SKILL.md").exists());
+        assert!(!profile_dir.join("scaffold/CLAUDE.local.md").exists());
+        assert!(
+            profile_dir
+                .join("scaffold/.codex/skills/start/SKILL.md")
+                .exists()
+        );
         let skill =
-            std::fs::read_to_string(profile_dir.join("codex/skills/start/SKILL.md")).unwrap();
+            std::fs::read_to_string(profile_dir.join("scaffold/.codex/skills/start/SKILL.md"))
+                .unwrap();
         assert!(skill.contains("작업 컨텍스트"));
         assert!(!skill.contains("Linear 이슈"));
         assert!(!skill.contains("linear issue"));
-        assert!(profile_dir.join("claude/agents").is_dir());
-        assert!(profile_dir.join("claude/commands").is_dir());
+        assert!(!profile_dir.join("scaffold/.claude/agents").exists());
+        assert!(!profile_dir.join("scaffold/.claude/commands").exists());
     }
 
     #[test]
@@ -938,12 +950,56 @@ cli = "codex"
 
         let skill = std::fs::read_to_string(
             dir.path()
-                .join(".local/profiles/baseline/codex/skills/start/SKILL.md"),
+                .join(".local/profiles/baseline/scaffold/.codex/skills/start/SKILL.md"),
         )
         .unwrap();
         assert!(skill.contains("GitHub 이슈"));
         assert!(skill.contains("gh issue view"));
         assert!(!skill.contains("linear issue"));
+    }
+
+    #[test]
+    fn create_scaffolds_claude_profile_structure() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut base = Config::default();
+        base.agent = Some(AgentConfig {
+            cli: AgentCli::Claude,
+            args: Vec::new(),
+            command: None,
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 30,
+            send_after: 2,
+            prompt: Default::default(),
+        });
+
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        create_profile(
+            &ctx,
+            ProfileCreateOptions {
+                name: "claude-plan",
+                base_config: &base,
+                agent: None,
+                include_prompts: true,
+            },
+        )
+        .unwrap();
+
+        let profile_dir = dir.path().join(".local/profiles/claude-plan");
+        assert!(profile_dir.join("scaffold/CLAUDE.local.md").exists());
+        assert!(profile_dir.join("scaffold/.claude/agents").is_dir());
+        assert!(profile_dir.join("scaffold/.claude/commands").is_dir());
+        assert!(profile_dir.join("scaffold/.claude/skills").is_dir());
+        assert!(!profile_dir.join("scaffold/AGENTS.override.md").exists());
+        assert!(!profile_dir.join("scaffold/.codex").exists());
     }
 
     #[test]

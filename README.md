@@ -119,6 +119,19 @@ wt done PROJ-123
 `.local/` is ignored by this repository and is intended for private profiles,
 issue snapshots, and machine-specific settings.
 
+Inspect the effective config after shared, local, profile, and convention-file
+layers are merged:
+
+```bash
+wt config
+wt config --profile codex
+```
+
+The merge order is `.wt.toml`, `.local/.wt.toml`, the selected profile, then
+profile convention files such as `.local/profiles/<name>/prompts/issue.md`.
+Later layers override scalar and map entries with the same key. List-style
+entries such as `worktree.copy` append unique values.
+
 Example shared `.wt.toml`:
 
 ```toml
@@ -157,7 +170,7 @@ send_after = 2
 ## Profiles
 
 `profile` describes how a workspace should run. Profiles are execution
-environments: agent CLI, args, prompt files, and agent-specific scaffold files.
+environments: agent CLI, args, prompt files, and worktree scaffold files.
 
 For small default behavior, keep settings inline in `.local/.wt.toml`:
 
@@ -199,13 +212,10 @@ Profiles live under `.local/profiles/<name>/`:
     issue.md
     new.md
     pr.md
-  codex/
+  scaffold/
     AGENTS.override.md
-    skills/
-  claude/
-    CLAUDE.local.md
-    agents/
-    commands/
+    .codex/
+      skills/
 ```
 
 Use `wt profile create <name>` to create a named profile scaffold. Use
@@ -235,16 +245,32 @@ cli = "codex"
 command = "sandvault run -- codex"
 ```
 
-Convention-based files are loaded when present for the matching `agent.cli`:
+Convention-based files are loaded when present:
 
 - `prompts/issue.md`, `prompts/new.md`, and `prompts/pr.md` become prompts for
   those modes.
-- For `cli = "codex"`, `codex/AGENTS.override.md` is copied to the worktree
-  root as `AGENTS.override.md`, and `codex/skills/` is copied to
-  `.codex/skills/`.
-- For `cli = "claude"`, `claude/CLAUDE.local.md` is copied to the worktree root
-  as `CLAUDE.local.md`, and `claude/agents/`, `claude/commands/`, and
-  `claude/skills/` are copied to `.claude/`.
+- `scaffold/` is copied onto the worktree root. Keep files in this directory in
+  the same shape they should have in the created worktree.
+
+For a Codex profile, scaffold files commonly look like:
+
+```text
+scaffold/
+  AGENTS.override.md
+  .codex/
+    skills/
+```
+
+For a Claude profile, scaffold files commonly look like:
+
+```text
+scaffold/
+  CLAUDE.local.md
+  .claude/
+    agents/
+    commands/
+    skills/
+```
 
 Create a named profile scaffold:
 

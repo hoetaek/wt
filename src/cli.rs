@@ -104,6 +104,12 @@ pub enum Commands {
     },
     /// Check configured providers and required local tools
     Doctor,
+    /// Print the effective config
+    Config {
+        /// Use a named profile from .local/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// List or manage named profile configs
     Profile {
         #[command(subcommand)]
@@ -747,6 +753,26 @@ mod tests {
     fn doctor_subcommand() {
         let cli = parse(&["wt", "doctor"]);
         assert!(matches!(cli.command, Some(Commands::Doctor)));
+    }
+
+    #[test]
+    fn config_subcommand() {
+        let cli = parse(&["wt", "config"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Config { profile: None })
+        ));
+    }
+
+    #[test]
+    fn config_accepts_profile_flag() {
+        let cli = parse(&["wt", "config", "--profile", "codex"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Config {
+                profile: Some(ref profile)
+            }) if profile == "codex"
+        ));
     }
 
     #[test]

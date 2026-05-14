@@ -686,8 +686,6 @@ fn apply_profile_conventions(
     profile_dir: &Path,
     config: &mut Config,
 ) -> anyhow::Result<()> {
-    let agent_cli = config.agent.as_ref().map(|agent| agent.cli.clone());
-
     if let Some(agent) = config.agent.as_mut() {
         for mode in ["issue", "new", "pr"] {
             let prompt_path = profile_dir.join("prompts").join(format!("{mode}.md"));
@@ -699,49 +697,12 @@ fn apply_profile_conventions(
     }
 
     let profile_root = format!(".local/profiles/{name}");
-    match agent_cli {
-        Some(AgentCli::Codex) => {
-            push_copy_as_if_exists(
-                repo_root,
-                &mut config.worktree.copy_as,
-                &format!("{profile_root}/codex/AGENTS.override.md"),
-                "AGENTS.override.md",
-            );
-            push_copy_as_if_exists(
-                repo_root,
-                &mut config.worktree.copy_as,
-                &format!("{profile_root}/codex/skills"),
-                ".codex/skills",
-            );
-        }
-        Some(AgentCli::Claude) => {
-            push_copy_as_if_exists(
-                repo_root,
-                &mut config.worktree.copy_as,
-                &format!("{profile_root}/claude/CLAUDE.local.md"),
-                "CLAUDE.local.md",
-            );
-            push_copy_as_if_exists(
-                repo_root,
-                &mut config.worktree.copy_as,
-                &format!("{profile_root}/claude/agents"),
-                ".claude/agents",
-            );
-            push_copy_as_if_exists(
-                repo_root,
-                &mut config.worktree.copy_as,
-                &format!("{profile_root}/claude/commands"),
-                ".claude/commands",
-            );
-            push_copy_as_if_exists(
-                repo_root,
-                &mut config.worktree.copy_as,
-                &format!("{profile_root}/claude/skills"),
-                ".claude/skills",
-            );
-        }
-        Some(AgentCli::Gemini | AgentCli::None) | None => {}
-    }
+    push_copy_as_if_exists(
+        repo_root,
+        &mut config.worktree.copy_as,
+        &format!("{profile_root}/scaffold"),
+        ".",
+    );
 
     Ok(())
 }
@@ -1318,8 +1279,7 @@ args = ["--model", "gpt-5.5"]
         let dir = tempfile::tempdir().unwrap();
         let profile_dir = dir.path().join(".local/profiles/codex-yolo");
         std::fs::create_dir_all(profile_dir.join("prompts")).unwrap();
-        std::fs::create_dir_all(profile_dir.join("codex/skills")).unwrap();
-        std::fs::create_dir_all(profile_dir.join("claude")).unwrap();
+        std::fs::create_dir_all(profile_dir.join("scaffold/.codex/skills")).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),
             r#"
@@ -1331,12 +1291,15 @@ args = ["--yolo"]
         .unwrap();
         std::fs::write(profile_dir.join("prompts/issue.md"), "handle issue\n").unwrap();
         std::fs::write(
-            profile_dir.join("codex/AGENTS.override.md"),
+            profile_dir.join("scaffold/AGENTS.override.md"),
             "codex override\n",
         )
         .unwrap();
-        std::fs::write(profile_dir.join("codex/skills/README.md"), "skills\n").unwrap();
-        std::fs::write(profile_dir.join("claude/CLAUDE.local.md"), "claude\n").unwrap();
+        std::fs::write(
+            profile_dir.join("scaffold/.codex/skills/README.md"),
+            "skills\n",
+        )
+        .unwrap();
 
         let mut base = Config::default();
         base.worktree.copy = vec![".env".into()];
@@ -1357,15 +1320,7 @@ args = ["--yolo"]
         assert_eq!(agent.args, vec!["--yolo"]);
         assert_eq!(agent.prompt.get("issue").unwrap(), &vec!["handle issue\n"]);
         assert!(profile.worktree.copy_as.iter().any(|entry| {
-            entry.from == ".local/profiles/codex-yolo/codex/AGENTS.override.md"
-                && entry.to == "AGENTS.override.md"
-        }));
-        assert!(profile.worktree.copy_as.iter().any(|entry| {
-            entry.from == ".local/profiles/codex-yolo/codex/skills" && entry.to == ".codex/skills"
-        }));
-        assert!(!profile.worktree.copy_as.iter().any(|entry| {
-            entry.from == ".local/profiles/codex-yolo/claude/CLAUDE.local.md"
-                && entry.to == "CLAUDE.local.md"
+            entry.from == ".local/profiles/codex-yolo/scaffold" && entry.to == "."
         }));
     }
 
@@ -1400,11 +1355,10 @@ path = "profiles/{{default_name}}"
     }
 
     #[test]
-    fn load_profile_applies_claude_scaffold_only_for_claude_agent() {
+    fn load_profile_applies_profile_scaffold_root() {
         let dir = tempfile::tempdir().unwrap();
         let profile_dir = dir.path().join(".local/profiles/claude-plan");
-        std::fs::create_dir_all(profile_dir.join("codex")).unwrap();
-        std::fs::create_dir_all(profile_dir.join("claude/commands")).unwrap();
+        std::fs::create_dir_all(profile_dir.join("scaffold/.claude/commands")).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),
             r#"
@@ -1413,29 +1367,19 @@ cli = "claude"
 "#,
         )
         .unwrap();
+        std::fs::write(profile_dir.join("scaffold/CLAUDE.local.md"), "claude\n").unwrap();
         std::fs::write(
-            profile_dir.join("codex/AGENTS.override.md"),
-            "codex override\n",
+            profile_dir.join("scaffold/.claude/commands/start.md"),
+            "start\n",
         )
         .unwrap();
-        std::fs::write(profile_dir.join("claude/CLAUDE.local.md"), "claude\n").unwrap();
-        std::fs::write(profile_dir.join("claude/commands/start.md"), "start\n").unwrap();
 
         let profile = Config::load_profile(dir.path(), "claude-plan", &Config::default())
             .unwrap()
             .unwrap();
 
         assert!(profile.worktree.copy_as.iter().any(|entry| {
-            entry.from == ".local/profiles/claude-plan/claude/CLAUDE.local.md"
-                && entry.to == "CLAUDE.local.md"
-        }));
-        assert!(profile.worktree.copy_as.iter().any(|entry| {
-            entry.from == ".local/profiles/claude-plan/claude/commands"
-                && entry.to == ".claude/commands"
-        }));
-        assert!(!profile.worktree.copy_as.iter().any(|entry| {
-            entry.from == ".local/profiles/claude-plan/codex/AGENTS.override.md"
-                && entry.to == "AGENTS.override.md"
+            entry.from == ".local/profiles/claude-plan/scaffold" && entry.to == "."
         }));
     }
 

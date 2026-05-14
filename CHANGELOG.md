@@ -6,6 +6,10 @@ This project follows SemVer.
 
 ## Unreleased
 
+- Added `wt config` to print the merged effective config, with
+  `wt config --profile <name>` support for inspecting named profile layers.
+- Changed named profile scaffold files to live under
+  `.local/profiles/<name>/scaffold/`, copied onto the worktree root.
 - Renamed batch issue snapshot creation to `wt batch issue`; `wt batch prepare`
   remains as a hidden compatibility alias.
 - Added interactive multi-select for `wt batch issue` when no issue

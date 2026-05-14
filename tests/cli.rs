@@ -140,6 +140,145 @@ fn doctor_uses_config_override() {
 }
 
 #[test]
+fn config_renders_effective_profile_layers_and_conventions() {
+    let temp = TempDir::new().unwrap();
+    let status = StdCommand::new("git")
+        .arg("init")
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    std::fs::write(
+        temp.path().join(".wt.toml"),
+        r#"
+[issues]
+provider = "github"
+
+[worktree]
+copy = [".env.example"]
+link = ["storage"]
+
+[setup.env]
+APP_ENV = "local"
+LOG_LEVEL = "info"
+
+[agent]
+cli = "codex"
+args = ["--model", "gpt-5.5"]
+"#,
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(temp.path().join(".local/profiles/codex/prompts")).unwrap();
+    std::fs::create_dir_all(
+        temp.path()
+            .join(".local/profiles/codex/scaffold/.codex/skills"),
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        r#"
+[worktree]
+copy = [".env"]
+
+[setup.env]
+LOG_LEVEL = "debug"
+PRIVATE_TOKEN = "secret"
+
+[profile]
+name = "codex"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join(".local/profiles/codex/profile.toml"),
+        r#"
+[agent]
+cli = "codex"
+args = ["--yolo"]
+
+[agent.prompt]
+issue = ["from profile.toml\n"]
+new = ["new branch prompt\n"]
+
+[workspace]
+tabs = ["pnpm dev"]
+
+[setup.env]
+CODEX_MODE = "1"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join(".local/profiles/codex/prompts/issue.md"),
+        "from prompt file\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path()
+            .join(".local/profiles/codex/scaffold/AGENTS.override.md"),
+        "codex override\n",
+    )
+    .unwrap();
+
+    let explicit = Command::cargo_bin("wt")
+        .unwrap()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "config",
+            "--profile",
+            "codex",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let implicit = Command::cargo_bin("wt")
+        .unwrap()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert_eq!(explicit, implicit);
+    let rendered = String::from_utf8(explicit).unwrap();
+    let config: wt::config::Config = toml::from_str(&rendered).unwrap();
+
+    assert!(config.profile.is_none());
+    assert_eq!(config.worktree.copy, vec![".env.example", ".env"]);
+    assert_eq!(config.worktree.link, vec!["storage"]);
+    assert_eq!(config.setup.env.get("APP_ENV").unwrap(), "local");
+    assert_eq!(config.setup.env.get("LOG_LEVEL").unwrap(), "debug");
+    assert_eq!(config.setup.env.get("PRIVATE_TOKEN").unwrap(), "secret");
+    assert_eq!(config.setup.env.get("CODEX_MODE").unwrap(), "1");
+
+    let agent = config.agent.unwrap();
+    assert_eq!(agent.cli, wt::config::AgentCli::Codex);
+    assert_eq!(agent.args, vec!["--yolo"]);
+    assert_eq!(
+        agent.prompt.get("issue").unwrap(),
+        &vec!["from prompt file\n".to_string()]
+    );
+    assert_eq!(
+        agent.prompt.get("new").unwrap(),
+        &vec!["new branch prompt\n".to_string()]
+    );
+
+    let copy_as = config.worktree.copy_as;
+    assert!(
+        copy_as
+            .iter()
+            .any(|entry| { entry.from == ".local/profiles/codex/scaffold" && entry.to == "." })
+    );
+}
+
+#[test]
 fn list_supports_json_and_directory_override() {
     let temp = TempDir::new().unwrap();
     let status = StdCommand::new("git")

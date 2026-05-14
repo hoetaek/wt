@@ -851,6 +851,51 @@ mod tests {
     }
 
     #[test]
+    fn copy_files_copies_copy_as_directory_to_worktree_root() {
+        use crate::config::CopyAsEntry;
+        use crate::context::Ctx;
+        use crate::context::mock::{MockRunner, MockUi};
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let wt = dir.path().join("worktree");
+        let scaffold = repo.join(".local/profiles/codex/scaffold");
+        fs::create_dir_all(scaffold.join(".codex/skills/start")).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(scaffold.join("AGENTS.override.md"), "instructions\n").unwrap();
+        fs::write(
+            scaffold.join(".codex/skills/start/SKILL.md"),
+            "start skill\n",
+        )
+        .unwrap();
+
+        let mut config = Config::default();
+        config.worktree.copy_as = vec![CopyAsEntry {
+            from: ".local/profiles/codex/scaffold".into(),
+            to: ".".into(),
+        }];
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo,
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        copy_files(&ctx, &ctx.config, &wt).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(wt.join("AGENTS.override.md")).unwrap(),
+            "instructions\n"
+        );
+        assert_eq!(
+            fs::read_to_string(wt.join(".codex/skills/start/SKILL.md")).unwrap(),
+            "start skill\n"
+        );
+    }
+
+    #[test]
     fn link_files_creates_parent_dirs_for_nested_destinations() {
         use crate::context::Ctx;
         use crate::context::mock::{MockRunner, MockUi};
