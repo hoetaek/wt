@@ -130,7 +130,10 @@ wt config --profile codex
 The merge order is `.wt.toml`, `.local/.wt.toml`, the selected profile, then
 profile convention files such as `.local/profiles/<name>/prompts/issue.md`.
 Later layers override scalar and map entries with the same key. List-style
-entries such as `worktree.copy` append unique values.
+entries such as `worktree.copy` append unique values. Agent prompts follow an
+explicit rule: `[agent.prompt]` overwrites the prompt for that mode, while
+`[agent.prompt.append]` appends text to the current prompt. `wt config` prints
+the effective prompt after append directives have been applied.
 
 Example shared `.wt.toml`:
 
@@ -210,6 +213,7 @@ Profiles live under `.local/profiles/<name>/`:
   profile.toml
   prompts/
     issue.md
+    issue.append.md  # optional append
     new.md
     pr.md
   scaffold/
@@ -248,9 +252,22 @@ command = "sandvault run -- codex"
 Convention-based files are loaded when present:
 
 - `prompts/issue.md`, `prompts/new.md`, and `prompts/pr.md` become prompts for
-  those modes.
+  those modes and overwrite earlier prompts for the same mode.
+- `prompts/issue.append.md`, `prompts/new.append.md`, and
+  `prompts/pr.append.md` append text to the current prompt for those modes.
 - `scaffold/` is copied onto the worktree root. Keep files in this directory in
   the same shape they should have in the created worktree.
+
+Prompt append is useful when a layer needs to add instructions without
+replacing the prompt it inherited:
+
+```toml
+[agent.prompt]
+issue = ["Review the issue, make the change, verify it, and report the result.\n"]
+
+[agent.prompt.append]
+issue = ["Also check the project-specific release checklist before finishing.\n"]
+```
 
 For a Codex profile, scaffold files commonly look like:
 

@@ -1,9 +1,11 @@
 use anyhow::{Context, bail};
+use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub const RESERVED_PROFILE_NAME: &str = "default";
+const PROMPT_APPEND_PREFIX: &str = "\u{0}append:";
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -108,24 +110,127 @@ pub struct WorkspaceConfig {
     pub browser: Option<String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Clone)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct AgentConfig {
     pub cli: AgentCli,
-    #[serde(default)]
     pub args: Vec<String>,
-    #[serde(default)]
     pub command: Option<String>,
-    #[serde(default = "default_agent_ready")]
     pub ready: ReadyMode,
-    #[serde(default = "default_agent_submit")]
     pub submit: SubmitMode,
-    #[serde(default = "default_agent_timeout")]
     pub timeout: u64,
-    #[serde(default = "default_agent_send_after")]
     pub send_after: u64,
-    #[serde(default)]
     pub prompt: HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AgentConfigRaw {
+    cli: Option<AgentCli>,
+    args: Vec<String>,
+    command: Option<String>,
+    ready: ReadyMode,
+    submit: SubmitMode,
+    timeout: u64,
+    send_after: u64,
+    #[serde(default, deserialize_with = "deserialize_agent_prompts")]
+    prompt: HashMap<String, Vec<String>>,
+}
+
+impl Default for AgentConfigRaw {
+    fn default() -> Self {
+        Self {
+            cli: None,
+            args: Vec::new(),
+            command: None,
+            ready: default_agent_ready(),
+            submit: default_agent_submit(),
+            timeout: default_agent_timeout(),
+            send_after: default_agent_send_after(),
+            prompt: HashMap::new(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = AgentConfigRaw::deserialize(deserializer)?;
+        let is_prompt_only_patch = raw.cli.is_none()
+            && raw.args.is_empty()
+            && raw.command.is_none()
+            && raw.ready == default_agent_ready()
+            && raw.submit == default_agent_submit()
+            && raw.timeout == default_agent_timeout()
+            && raw.send_after == default_agent_send_after()
+            && !raw.prompt.is_empty();
+
+        if raw.cli.is_none() && !is_prompt_only_patch {
+            return Err(D::Error::custom(
+                "agent.cli is required unless the section only contains agent.prompt or agent.prompt.append",
+            ));
+        }
+
+        Ok(Self {
+            cli: raw.cli.unwrap_or(AgentCli::None),
+            args: raw.args,
+            command: raw.command,
+            ready: raw.ready,
+            submit: raw.submit,
+            timeout: raw.timeout,
+            send_after: raw.send_after,
+            prompt: raw.prompt,
+        })
+    }
+}
+
+fn deserialize_agent_prompts<'de, D>(
+    deserializer: D,
+) -> std::result::Result<HashMap<String, Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = HashMap::<String, toml::Value>::deserialize(deserializer)?;
+    let mut prompts = HashMap::new();
+
+    for (mode, value) in raw {
+        if mode == "append" {
+            let append = value.as_table().ok_or_else(|| {
+                D::Error::custom("[agent.prompt.append] must be a table of mode prompt arrays")
+            })?;
+            for (append_mode, append_value) in append {
+                let prompts_to_append = parse_prompt_values::<D::Error>(
+                    append_value.clone(),
+                    &format!("agent.prompt.append.{append_mode}"),
+                )?;
+                prompts.insert(prompt_append_key(append_mode), prompts_to_append);
+            }
+            continue;
+        }
+
+        let mode_prompts = parse_prompt_values::<D::Error>(value, &format!("agent.prompt.{mode}"))?;
+        prompts.insert(mode, mode_prompts);
+    }
+
+    Ok(prompts)
+}
+
+fn parse_prompt_values<E>(value: toml::Value, key: &str) -> std::result::Result<Vec<String>, E>
+where
+    E: DeError,
+{
+    value
+        .try_into::<Vec<String>>()
+        .map_err(|err| E::custom(format!("{key} must be an array of strings: {err}")))
+}
+
+fn prompt_append_key(mode: &str) -> String {
+    format!("{PROMPT_APPEND_PREFIX}{mode}")
+}
+
+fn prompt_append_mode(key: &str) -> Option<&str> {
+    key.strip_prefix(PROMPT_APPEND_PREFIX)
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -217,6 +322,12 @@ pub enum AgentCli {
     Claude,
     Gemini,
     None,
+}
+
+impl Default for AgentCli {
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -470,15 +581,18 @@ impl Config {
         let (base, source) = match (root_exists, local_exists) {
             (false, false) => (Config::default(), ConfigSource::Default),
             (true, false) => {
-                let config = Self::load_file(&root_path)?;
+                let mut config = Self::load_file(&root_path)?;
+                finalize_config_prompt_appends(&mut config);
                 (config, ConfigSource::File(root_path))
             }
             (false, true) => {
-                let config = Self::load_file(&local_path)?;
+                let mut config = Self::load_file(&local_path)?;
+                finalize_config_prompt_appends(&mut config);
                 (config, ConfigSource::File(local_path))
             }
             (true, true) => {
-                let root = Self::load_file(&root_path)?;
+                let mut root = Self::load_file(&root_path)?;
+                finalize_config_prompt_appends(&mut root);
                 let local = Self::load_file(&local_path)?;
                 (
                     merge_config(&root, local),
@@ -497,7 +611,8 @@ impl Config {
     }
 
     pub fn load_file_for_repo(path: &Path, repo_root: &Path) -> anyhow::Result<(Self, Self)> {
-        let base = Self::load_file(path)?;
+        let mut base = Self::load_file(path)?;
+        finalize_config_prompt_appends(&mut base);
         let effective = Self::resolve_effective_profile(repo_root, base.clone())?;
         Ok((base, effective))
     }
@@ -610,8 +725,15 @@ fn merge_config(base: &Config, profile: Config) -> Config {
             (_, profile_workspace) => profile_workspace,
         };
     }
-    if profile.agent.is_some() {
-        merged.agent = profile.agent;
+    if let Some(agent) = profile.agent {
+        merged.agent = Some(match merged.agent.take() {
+            Some(base_agent) => merge_agent_config(base_agent, agent),
+            None => {
+                let mut agent = agent;
+                finalize_agent_prompt_appends(&mut agent);
+                agent
+            }
+        });
     }
     if profile.test.is_some() {
         merged.test = profile.test;
@@ -621,6 +743,87 @@ fn merge_config(base: &Config, profile: Config) -> Config {
     }
 
     merged
+}
+
+fn finalize_config_prompt_appends(config: &mut Config) {
+    if let Some(agent) = config.agent.as_mut() {
+        finalize_agent_prompt_appends(agent);
+    }
+}
+
+fn merge_agent_config(mut base: AgentConfig, profile: AgentConfig) -> AgentConfig {
+    if is_prompt_only_agent_patch(&profile) {
+        apply_prompt_overlay(&mut base.prompt, profile.prompt);
+        return base;
+    }
+
+    let mut profile = profile;
+    finalize_agent_prompt_appends(&mut profile);
+    profile
+}
+
+fn is_prompt_only_agent_patch(agent: &AgentConfig) -> bool {
+    agent.cli == AgentCli::None
+        && agent.args.is_empty()
+        && agent.command.is_none()
+        && agent.ready == default_agent_ready()
+        && agent.submit == default_agent_submit()
+        && agent.timeout == default_agent_timeout()
+        && agent.send_after == default_agent_send_after()
+        && !agent.prompt.is_empty()
+}
+
+fn finalize_agent_prompt_appends(agent: &mut AgentConfig) {
+    let prompt = std::mem::take(&mut agent.prompt);
+    apply_prompt_overlay(&mut agent.prompt, prompt);
+}
+
+fn apply_prompt_overlay(
+    target: &mut HashMap<String, Vec<String>>,
+    overlay: HashMap<String, Vec<String>>,
+) {
+    let mut appends = Vec::new();
+
+    for (mode, prompts) in overlay {
+        if let Some(append_mode) = prompt_append_mode(&mode) {
+            appends.push((append_mode.to_string(), prompts));
+        } else {
+            target.insert(mode, prompts);
+        }
+    }
+
+    appends.sort_by(|a, b| a.0.cmp(&b.0));
+    for (mode, prompts) in appends {
+        append_prompt_blocks(target.entry(mode).or_default(), prompts);
+    }
+}
+
+fn append_prompt_blocks(target: &mut Vec<String>, additions: Vec<String>) {
+    for addition in additions {
+        if let Some(first_prompt) = target.first_mut() {
+            append_prompt_block(first_prompt, &addition);
+        } else {
+            target.push(addition);
+        }
+    }
+}
+
+fn append_prompt_block(target: &mut String, addition: &str) {
+    let addition = addition.trim_start_matches(['\n', '\r']);
+    if addition.is_empty() {
+        return;
+    }
+
+    if target.is_empty() {
+        target.push_str(addition);
+        return;
+    }
+
+    let trimmed = target.trim_end_matches(['\n', '\r']).to_string();
+    target.clear();
+    target.push_str(&trimmed);
+    target.push_str("\n\n");
+    target.push_str(addition);
 }
 
 fn merge_worktree_config(base: &mut WorktreeConfig, profile: WorktreeConfig) {
@@ -692,6 +895,16 @@ fn apply_profile_conventions(
             if prompt_path.exists() {
                 let prompt = std::fs::read_to_string(prompt_path)?;
                 agent.prompt.insert(mode.to_string(), vec![prompt]);
+            }
+            let append_path = profile_dir
+                .join("prompts")
+                .join(format!("{mode}.append.md"));
+            if append_path.exists() {
+                let prompt = std::fs::read_to_string(append_path)?;
+                append_prompt_blocks(
+                    agent.prompt.entry(mode.to_string()).or_default(),
+                    vec![prompt],
+                );
             }
         }
     }
@@ -966,6 +1179,84 @@ copy = ["CLAUDE.local.md"]
     }
 
     #[test]
+    fn prompt_append_layers_extend_effective_prompt_without_redeclaring_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+
+        std::fs::write(
+            dir.path().join(".wt.toml"),
+            r#"
+[agent]
+cli = "codex"
+args = ["--model", "gpt-5.5"]
+
+[agent.prompt]
+issue = ["shared prompt\n"]
+
+[agent.prompt.append]
+issue = ["shared append\n"]
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.path().join(".local/.wt.toml"),
+            r#"
+[agent.prompt.append]
+issue = ["local append\n"]
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load(dir.path()).unwrap();
+        let agent = config.agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Codex);
+        assert_eq!(agent.args, vec!["--model", "gpt-5.5"]);
+        assert_eq!(
+            agent.prompt.get("issue").unwrap(),
+            &vec!["shared prompt\n\nshared append\n\nlocal append\n".to_string()]
+        );
+    }
+
+    #[test]
+    fn prompt_overwrite_layer_replaces_then_append_extends() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+
+        std::fs::write(
+            dir.path().join(".wt.toml"),
+            r#"
+[agent]
+cli = "codex"
+
+[agent.prompt]
+issue = ["shared prompt\n"]
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.path().join(".local/.wt.toml"),
+            r#"
+[agent.prompt]
+issue = ["local prompt\n"]
+
+[agent.prompt.append]
+issue = ["local append\n"]
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load(dir.path()).unwrap();
+        let agent = config.agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Codex);
+        assert_eq!(
+            agent.prompt.get("issue").unwrap(),
+            &vec!["local prompt\n\nlocal append\n".to_string()]
+        );
+    }
+
+    #[test]
     fn falls_back_to_root_config() {
         let dir = std::env::temp_dir().join("wt-test-root-fallback");
         std::fs::create_dir_all(&dir).ok();
@@ -1127,6 +1418,29 @@ issue = ["start\n"]
         assert_eq!(agent.timeout, 15);
         assert_eq!(agent.send_after, 3);
         assert_eq!(agent.prompt.get("issue").unwrap(), &vec!["start\n"]);
+    }
+
+    #[test]
+    fn rejects_append_as_agent_prompt_mode_name() {
+        let toml_str = r#"
+[agent]
+cli = "codex"
+
+[agent.prompt]
+append = ["ambiguous\n"]
+"#;
+        let err = toml::from_str::<Config>(toml_str).unwrap_err();
+        assert!(err.to_string().contains("agent.prompt.append"));
+    }
+
+    #[test]
+    fn rejects_partial_agent_without_prompt_patch() {
+        let toml_str = r#"
+[agent]
+args = ["--yolo"]
+"#;
+        let err = toml::from_str::<Config>(toml_str).unwrap_err();
+        assert!(err.to_string().contains("agent.cli is required"));
     }
 
     #[test]
