@@ -92,9 +92,9 @@ pub enum Commands {
         #[arg(long)]
         wide: bool,
     },
-    /// Open existing worktree with full workspace
+    /// Open a workspace from an existing worktree or branch
     Open {
-        /// Branch, issue number, or worktree directory name to open
+        /// Branch or worktree directory name to open directly
         target: Option<String>,
     },
     /// Finish worktrees with cleanup

@@ -8,7 +8,9 @@ pub enum WtError {
     #[error("No branch name for {identifier}")]
     NoBranchName { identifier: String },
 
-    #[error("Branch '{branch}' already exists. --base is not applicable")]
+    #[error(
+        "Branch '{branch}' already exists. --base is not applicable.\nUse `wt open` to select the existing branch or worktree."
+    )]
     BranchExistsWithBase { branch: String },
 
     #[error("Command '{cmd}' not found")]
@@ -43,7 +45,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "Branch 'alice/proj-680' already exists. --base is not applicable"
+            "Branch 'alice/proj-680' already exists. --base is not applicable.\nUse `wt open` to select the existing branch or worktree."
         );
     }
 }
