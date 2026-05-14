@@ -16,6 +16,12 @@ pub struct IssueListItem {
     pub display: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnsuredBranch {
+    pub name: String,
+    pub created: bool,
+}
+
 pub trait IssueProvider {
     fn get_issue(&self, id: &str) -> Result<IssueInfo>;
     fn list_issues(&self) -> Result<Vec<IssueListItem>>;
@@ -24,7 +30,7 @@ pub trait IssueProvider {
         id: &str,
         base: Option<&str>,
         branch_name: Option<&str>,
-    ) -> Result<String>;
+    ) -> Result<EnsuredBranch>;
     fn on_start(&self, id: &str) -> Result<()>;
     fn on_clean(&self, id: &str, branch: &str) -> Result<()>;
 }
