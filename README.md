@@ -108,8 +108,8 @@ wt done
 wt done PROJ-123
 ```
 
-When a matching cmux workspace is open, `wt done` closes it before removing the
-worktree.
+When a cmux workspace was opened for the same worktree path, `wt done` attempts
+to close it before removing the worktree.
 
 ## Configuration
 
@@ -283,6 +283,35 @@ and override only the launch command:
 [agent]
 cli = "codex"
 command = "sandvault run -- codex"
+```
+
+`args` and `command` are rendered with the same worktree template variables
+used by setup values, including `{{repo_root}}`, `{{worktree_path}}`, and
+`{{branch_slug}}`. This can isolate per-worktree agent resources without a
+wrapper script. For example, a Codex profile can give Chrome DevTools MCP a
+separate browser profile per worktree:
+
+```toml
+[agent]
+cli = "codex"
+args = [
+  "--yolo",
+  "-c", "mcp_servers.chrome-devtools.command=\"npx\"",
+  "-c", "mcp_servers.chrome-devtools.args=[\"chrome-devtools-mcp@latest\",\"--user-data-dir={{repo_root}}/.local/chrome-devtools/{{branch_slug}}\"]",
+]
+```
+
+If persistent browser state is not needed, use Chrome DevTools MCP's temporary
+profile mode instead:
+
+```toml
+[agent]
+cli = "codex"
+args = [
+  "--yolo",
+  "-c", "mcp_servers.chrome-devtools.command=\"npx\"",
+  "-c", "mcp_servers.chrome-devtools.args=[\"chrome-devtools-mcp@latest\",\"--isolated\"]",
+]
 ```
 
 Convention-based files are loaded when present:

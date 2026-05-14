@@ -97,7 +97,7 @@ pub enum Commands {
         /// Branch or worktree directory name to open directly
         target: Option<String>,
     },
-    /// Finish worktrees and close matching cmux workspaces
+    /// Finish worktrees and attempt matching cmux workspace cleanup
     Done {
         /// Branch, issue number/key, or worktree directory names to finish
         targets: Vec<String>,

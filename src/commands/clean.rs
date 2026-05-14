@@ -1,10 +1,12 @@
 use crate::commands::issue::build_provider;
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
+use crate::services::cmux::{CmuxService, CmuxWorkspace};
 use crate::services::git::GitService;
 use crate::services::site::{SiteService, provider_label};
 use crate::setup;
 use anyhow::{Result, bail};
+use std::path::Path;
 
 pub fn run(ctx: &Ctx) -> Result<()> {
     run_with_targets(ctx, &[])
@@ -39,6 +41,9 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
     ctx.ui
         .print_step(&format!("Removing {} worktree(s)...", selected.len()));
 
+    let cmux = CmuxService::new(ctx.runner.as_ref());
+    let mut cmux_workspaces = load_cmux_workspaces(ctx, &cmux);
+
     let site_config = ctx.config.effective_site();
     let site = site_config
         .as_ref()
@@ -52,6 +57,8 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
         let entry = &additional[idx];
         let wt_path = &entry.path;
         let branch = &entry.branch;
+
+        close_matching_cmux_workspaces(ctx, &cmux, &mut cmux_workspaces, entry);
 
         // Site unlink
         if site_available {
@@ -123,6 +130,78 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn load_cmux_workspaces(ctx: &Ctx, cmux: &CmuxService<'_>) -> Vec<CmuxWorkspace> {
+    if !cmux.is_available() {
+        return Vec::new();
+    }
+
+    match cmux.list_workspaces() {
+        Ok(workspaces) => workspaces,
+        Err(e) => {
+            if ctx.config.workspace.is_some() {
+                ctx.ui
+                    .print_warning(&format!("  cmux workspace lookup: {e}"));
+            }
+            Vec::new()
+        }
+    }
+}
+
+fn close_matching_cmux_workspaces(
+    ctx: &Ctx,
+    cmux: &CmuxService<'_>,
+    cmux_workspaces: &mut Vec<CmuxWorkspace>,
+    entry: &crate::services::git::WorktreeEntry,
+) {
+    if cmux_workspaces.is_empty() {
+        return;
+    }
+
+    close_workspaces_at_path(ctx, cmux, cmux_workspaces, &entry.path);
+}
+
+fn close_workspaces_at_path(
+    ctx: &Ctx,
+    cmux: &CmuxService<'_>,
+    cmux_workspaces: &mut Vec<CmuxWorkspace>,
+    worktree_path: &Path,
+) -> usize {
+    let mut closed = 0;
+    let mut idx = 0;
+
+    while idx < cmux_workspaces.len() {
+        if cmux_workspaces[idx]
+            .current_directory
+            .as_deref()
+            .is_some_and(|cwd| same_path(cwd, worktree_path))
+        {
+            let workspace = cmux_workspaces.remove(idx);
+            match cmux.close_workspace(&workspace.handle) {
+                Ok(()) => {
+                    closed += 1;
+                    ctx.ui
+                        .print_step(&format!("  cmux workspace closed: {}", workspace.title));
+                }
+                Err(e) => ctx.ui.print_warning(&format!(
+                    "  Failed to close cmux workspace {}: {e}",
+                    workspace.title
+                )),
+            }
+        } else {
+            idx += 1;
+        }
+    }
+
+    closed
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 fn resolve_targets(
     entries: &[crate::services::git::WorktreeEntry],
     targets: &[String],
@@ -178,10 +257,26 @@ fn branch_issue_matches(branch: &str, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, WorkspaceConfig};
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
-    use std::path::PathBuf;
+    use crate::context::{CmdOutput, CommandRunner};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    struct SharedRunner {
+        inner: Arc<MockRunner>,
+    }
+
+    impl CommandRunner for SharedRunner {
+        fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+            self.inner.run(cmd, args, cwd)
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            self.inner.has_command(cmd)
+        }
+    }
 
     #[test]
     fn clean_with_no_additional_worktrees_returns_ok() {
@@ -256,6 +351,125 @@ mod tests {
         );
 
         assert!(run(&ctx).is_ok());
+    }
+
+    #[test]
+    fn clean_closes_matching_cmux_workspace() {
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/test-repo-feature\nHEAD def\nbranch refs/heads/alice/feature\n\n",
+            true,
+        );
+        runner.add_response(r#"{"windows":[{"ref":"window:1"}]}"#, true);
+        runner.add_response(
+            r#"{"workspaces":[{"ref":"workspace:1","title":"feature","current_directory":"/tmp/other-repo-feature"},{"ref":"workspace:2","title":"custom title","current_directory":"/tmp/test-repo-feature"}]}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            PathBuf::from("/tmp/test-repo"),
+            Config {
+                workspace: Some(WorkspaceConfig::default()),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(&ctx).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux"
+                && args
+                    == &vec![
+                        "--window".to_string(),
+                        "window:1".to_string(),
+                        "rpc".to_string(),
+                        "workspace.list".to_string(),
+                        "{}".to_string(),
+                    ]
+        }));
+        let close_idx = calls
+            .iter()
+            .position(|(cmd, args, _)| {
+                cmd == "cmux" && args.first().is_some_and(|arg| arg == "close-workspace")
+            })
+            .expect("expected cmux close-workspace call");
+        let remove_idx = calls
+            .iter()
+            .position(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.first().is_some_and(|arg| arg == "worktree")
+                    && args.get(1).is_some_and(|arg| arg == "remove")
+            })
+            .expect("expected git worktree remove call");
+
+        assert!(close_idx < remove_idx);
+        assert_eq!(
+            calls[close_idx].1,
+            vec!["close-workspace", "--workspace", "workspace:2"]
+        );
+    }
+
+    #[test]
+    fn clean_does_not_close_same_title_workspace_for_different_path() {
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/test-repo-feature\nHEAD def\nbranch refs/heads/alice/feature\n\n",
+            true,
+        );
+        runner.add_response(r#"{"windows":[{"ref":"window:1"}]}"#, true);
+        runner.add_response(
+            r#"{"workspaces":[{"ref":"workspace:2","title":"feature","current_directory":"/tmp/other-repo-feature"}]}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            PathBuf::from("/tmp/test-repo"),
+            Config {
+                workspace: Some(WorkspaceConfig::default()),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(&ctx).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(!calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux" && args.first().is_some_and(|arg| arg == "close-workspace")
+        }));
     }
 
     #[test]

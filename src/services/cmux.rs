@@ -1,6 +1,15 @@
 use crate::context::CommandRunner;
-use anyhow::Result;
+use anyhow::{Result, bail};
+use serde::Deserialize;
 use std::path::Path;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmuxWorkspace {
+    pub handle: String,
+    pub title: String,
+    pub current_directory: Option<PathBuf>,
+}
 
 pub struct CmuxService<'a> {
     runner: &'a dyn CommandRunner,
@@ -38,6 +47,47 @@ impl<'a> CmuxService<'a> {
             .unwrap_or(&out.stdout)
             .to_string();
         Ok(handle)
+    }
+
+    pub fn list_workspaces(&self) -> Result<Vec<CmuxWorkspace>> {
+        let windows = self.list_windows()?;
+        let mut workspaces = Vec::new();
+
+        for window in windows {
+            let out = self.runner.run(
+                "cmux",
+                &["--window", &window.handle, "rpc", "workspace.list", "{}"],
+                None,
+            )?;
+            if !out.success {
+                bail!("cmux workspace.list failed: {}", command_error(&out));
+            }
+            let response: WorkspaceListResponse = serde_json::from_str(&out.stdout)?;
+            workspaces.extend(response.workspaces.into_iter().map(Into::into));
+        }
+
+        Ok(workspaces)
+    }
+
+    pub fn close_workspace(&self, workspace: &str) -> Result<()> {
+        let out = self
+            .runner
+            .run("cmux", &["close-workspace", "--workspace", workspace], None)?;
+        if !out.success {
+            bail!("cmux close-workspace failed: {}", command_error(&out));
+        }
+        Ok(())
+    }
+
+    fn list_windows(&self) -> Result<Vec<CmuxWindow>> {
+        let out = self
+            .runner
+            .run("cmux", &["rpc", "window.list", "{}"], None)?;
+        if !out.success {
+            bail!("cmux window.list failed: {}", command_error(&out));
+        }
+        let response: WindowListResponse = serde_json::from_str(&out.stdout)?;
+        Ok(response.windows.into_iter().map(Into::into).collect())
     }
 
     pub fn list_panes(&self, workspace: &str) -> Result<Vec<String>> {
@@ -147,6 +197,61 @@ impl<'a> CmuxService<'a> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CmuxWindow {
+    handle: String,
+}
+
+fn command_error(out: &crate::context::CmdOutput) -> &str {
+    if out.stderr.is_empty() {
+        &out.stdout
+    } else {
+        &out.stderr
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WindowListResponse {
+    windows: Vec<RpcWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcWindow {
+    #[serde(rename = "ref")]
+    handle: String,
+}
+
+impl From<RpcWindow> for CmuxWindow {
+    fn from(window: RpcWindow) -> Self {
+        Self {
+            handle: window.handle,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkspaceListResponse {
+    workspaces: Vec<RpcWorkspace>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcWorkspace {
+    #[serde(rename = "ref")]
+    handle: String,
+    title: String,
+    current_directory: Option<PathBuf>,
+}
+
+impl From<RpcWorkspace> for CmuxWorkspace {
+    fn from(workspace: RpcWorkspace) -> Self {
+        Self {
+            handle: workspace.handle,
+            title: workspace.title,
+            current_directory: workspace.current_directory,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +292,68 @@ mod tests {
         let svc = CmuxService::new(&runner);
         let panes = svc.list_panes("workspace:1").unwrap();
         assert_eq!(panes, vec!["pane:0", "pane:1"]);
+    }
+
+    #[test]
+    fn list_workspaces_reads_rpc_windows_and_workspace_directories() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"windows":[{"ref":"window:1"},{"ref":"window:2"}]}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"workspaces":[{"ref":"workspace:1","title":"repo","current_directory":"/tmp/repo"}]}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"workspaces":[{"ref":"workspace:2","title":"other","current_directory":null}]}"#,
+            true,
+        );
+
+        let svc = CmuxService::new(&runner);
+        let workspaces = svc.list_workspaces().unwrap();
+
+        assert_eq!(
+            workspaces,
+            vec![
+                CmuxWorkspace {
+                    handle: "workspace:1".into(),
+                    title: "repo".into(),
+                    current_directory: Some(PathBuf::from("/tmp/repo")),
+                },
+                CmuxWorkspace {
+                    handle: "workspace:2".into(),
+                    title: "other".into(),
+                    current_directory: None,
+                },
+            ]
+        );
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["rpc", "window.list", "{}"]);
+        assert_eq!(
+            calls[1].1,
+            vec!["--window", "window:1", "rpc", "workspace.list", "{}"]
+        );
+        assert_eq!(
+            calls[2].1,
+            vec!["--window", "window:2", "rpc", "workspace.list", "{}"]
+        );
+    }
+
+    #[test]
+    fn close_workspace_passes_handle() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+
+        let svc = CmuxService::new(&runner);
+        svc.close_workspace("workspace:10").unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["close-workspace", "--workspace", "workspace:10"]
+        );
     }
 
     #[test]
