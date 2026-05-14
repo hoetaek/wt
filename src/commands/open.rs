@@ -6,30 +6,176 @@ use crate::services::git::GitService;
 use crate::services::linear::LinearService;
 use crate::{setup, template};
 use anyhow::{Result, bail};
+use std::collections::HashSet;
 use std::path::Path;
 
 pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
 
-    let entries = git.worktree_list()?;
-    let additional: Vec<_> = entries
-        .into_iter()
-        .filter(|e| e.path != ctx.repo_root)
-        .collect();
+    let candidates = load_open_candidates(ctx, &git)?;
 
-    if additional.is_empty() {
-        return Err(anyhow::anyhow!("No additional worktrees found"));
+    if candidates.is_empty() {
+        return Err(anyhow::anyhow!("No workspaces available to open"));
     }
 
     let idx = match target {
-        Some(target) => find_worktree(&additional, target)?,
+        Some(target) => find_candidate(&candidates, target)?,
         None => {
-            let items: Vec<String> = additional.iter().map(|e| e.branch.clone()).collect();
-            ctx.ui.select("Select a worktree to open", &items)?
+            let items: Vec<String> = candidates.iter().map(OpenCandidate::label).collect();
+            ctx.ui.select("Select a workspace to open", &items)?
         }
     };
-    let entry = &additional[idx];
+    let entry = ensure_candidate_worktree(ctx, &git, &candidates[idx])?;
 
+    open_worktree(ctx, &entry)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OpenCandidate {
+    Existing(crate::services::git::WorktreeEntry),
+    Local { branch: String },
+    Remote { branch: String },
+}
+
+impl OpenCandidate {
+    fn label(&self) -> String {
+        match self {
+            Self::Existing(entry) => {
+                format!("existing  {}  {}", entry.branch, entry.path.display())
+            }
+            Self::Local { branch } => format!("local     {branch}"),
+            Self::Remote { branch } => format!("remote    origin/{branch}"),
+        }
+    }
+
+    fn branch(&self) -> &str {
+        match self {
+            Self::Existing(entry) => &entry.branch,
+            Self::Local { branch } | Self::Remote { branch } => branch,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BranchSource {
+    Local,
+    Remote,
+}
+
+fn load_open_candidates(ctx: &Ctx, git: &GitService) -> Result<Vec<OpenCandidate>> {
+    let worktrees = git.worktree_list()?;
+    let local_branches = git.list_local_branches()?;
+    let remote_branches = git.list_remote_branches()?;
+    Ok(build_open_candidates(
+        worktrees,
+        local_branches,
+        remote_branches,
+        &ctx.invocation_root,
+    ))
+}
+
+fn build_open_candidates(
+    worktrees: Vec<crate::services::git::WorktreeEntry>,
+    local_branches: Vec<String>,
+    remote_branches: Vec<String>,
+    invocation_root: &Path,
+) -> Vec<OpenCandidate> {
+    let checked_out: HashSet<String> = worktrees.iter().map(|entry| entry.branch.clone()).collect();
+    let local_set: HashSet<String> = local_branches.iter().cloned().collect();
+
+    let mut candidates = worktrees
+        .into_iter()
+        .filter(|entry| !is_current_worktree_path(&entry.path, invocation_root))
+        .map(OpenCandidate::Existing)
+        .collect::<Vec<_>>();
+
+    let mut local_only = local_branches
+        .into_iter()
+        .filter(|branch| !checked_out.contains(branch))
+        .collect::<Vec<_>>();
+    local_only.sort();
+    local_only.dedup();
+    candidates.extend(
+        local_only
+            .into_iter()
+            .map(|branch| OpenCandidate::Local { branch }),
+    );
+
+    let mut remote_only = remote_branches
+        .into_iter()
+        .filter_map(|remote_ref| origin_branch_name(&remote_ref))
+        .filter(|branch| !checked_out.contains(branch) && !local_set.contains(branch))
+        .collect::<Vec<_>>();
+    remote_only.sort();
+    remote_only.dedup();
+    candidates.extend(
+        remote_only
+            .into_iter()
+            .map(|branch| OpenCandidate::Remote { branch }),
+    );
+
+    candidates
+}
+
+fn ensure_candidate_worktree(
+    ctx: &Ctx,
+    git: &GitService,
+    candidate: &OpenCandidate,
+) -> Result<crate::services::git::WorktreeEntry> {
+    match candidate {
+        OpenCandidate::Existing(entry) => Ok(entry.clone()),
+        OpenCandidate::Local { branch } => {
+            create_branch_worktree(ctx, git, branch, BranchSource::Local)
+        }
+        OpenCandidate::Remote { branch } => {
+            create_branch_worktree(ctx, git, branch, BranchSource::Remote)
+        }
+    }
+}
+
+fn create_branch_worktree(
+    ctx: &Ctx,
+    git: &GitService,
+    branch: &str,
+    source: BranchSource,
+) -> Result<crate::services::git::WorktreeEntry> {
+    let profile_config = load_profile_config_for_branch(ctx, branch)?;
+    let config = profile_config.as_ref().unwrap_or(&ctx.config);
+    let names = WorktreeNames::new_with_config(
+        branch,
+        &ctx.parent_dir,
+        &ctx.repo_root,
+        &ctx.repo_name,
+        None,
+        config.has_site().then_some(""),
+        config.worktree.path.as_deref(),
+    )?;
+
+    if names.path.exists() {
+        bail!("Worktree path already exists: {}", names.path.display());
+    }
+
+    match source {
+        BranchSource::Local => {
+            ctx.ui
+                .print_step(&format!("Creating worktree from local branch: {branch}"));
+            git.worktree_add(&names.path, branch)?;
+        }
+        BranchSource::Remote => {
+            ctx.ui.print_step(&format!(
+                "Creating worktree from remote branch: origin/{branch}"
+            ));
+            git.worktree_add_new_branch(&names.path, branch, &format!("origin/{branch}"))?;
+        }
+    }
+
+    Ok(crate::services::git::WorktreeEntry {
+        path: names.path,
+        branch: branch.to_string(),
+    })
+}
+
+fn open_worktree(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) -> Result<()> {
     let profile_config = load_profile_config_for_branch(ctx, &entry.branch)?;
     let config = profile_config.as_ref().unwrap_or(&ctx.config);
     let title = if matches!(
@@ -105,45 +251,60 @@ pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn find_worktree(entries: &[crate::services::git::WorktreeEntry], target: &str) -> Result<usize> {
+fn find_candidate(entries: &[OpenCandidate], target: &str) -> Result<usize> {
     let matches = entries
         .iter()
         .enumerate()
-        .filter(|(_, entry)| worktree_matches(entry, target))
+        .filter(|(_, candidate)| candidate_matches(candidate, target))
         .map(|(idx, _)| idx)
         .collect::<Vec<_>>();
 
     match matches.as_slice() {
         [idx] => Ok(*idx),
-        [] => bail!("No worktree matches {target:?}"),
-        _ => bail!("Multiple worktrees match {target:?}"),
+        [] => bail!("No workspace matches {target:?}"),
+        _ => bail!("Multiple workspaces match {target:?}"),
     }
 }
 
-fn worktree_matches(entry: &crate::services::git::WorktreeEntry, target: &str) -> bool {
-    entry.branch == target
-        || entry.branch.rsplit('/').next() == Some(target)
-        || branch_issue_matches(&entry.branch, target)
-        || entry.path.to_string_lossy() == target
-        || entry.path.file_name().and_then(|name| name.to_str()) == Some(target)
-}
-
-fn branch_issue_matches(branch: &str, target: &str) -> bool {
-    let target = target.trim_start_matches('#').to_ascii_lowercase();
+fn candidate_matches(candidate: &OpenCandidate, target: &str) -> bool {
+    let target = target.trim();
     if target.is_empty() {
         return false;
     }
 
-    let short = branch
-        .rsplit('/')
-        .next()
-        .unwrap_or(branch)
-        .to_ascii_lowercase();
-    if short == target || short.starts_with(&format!("{target}-")) {
+    let branch = candidate.branch();
+    branch == target
+        || branch.rsplit('/').next() == Some(target)
+        || matches!(
+            candidate,
+            OpenCandidate::Remote { branch } if format!("origin/{branch}") == target
+        )
+        || matches!(
+            candidate,
+            OpenCandidate::Existing(entry)
+                if entry.path.to_string_lossy() == target
+                    || entry.path.file_name().and_then(|name| name.to_str()) == Some(target)
+        )
+}
+
+fn origin_branch_name(remote_ref: &str) -> Option<String> {
+    let branch = remote_ref.strip_prefix("origin/")?;
+    if branch.is_empty() || branch == "HEAD" || branch.starts_with("HEAD ->") {
+        None
+    } else {
+        Some(branch.to_string())
+    }
+}
+
+fn is_current_worktree_path(path: &Path, invocation_root: &Path) -> bool {
+    if path == invocation_root {
         return true;
     }
 
-    short.contains(&format!("-{target}-")) || short.ends_with(&format!("-{target}"))
+    match (path.canonicalize(), invocation_root.canonicalize()) {
+        (Ok(path), Ok(invocation_root)) => path == invocation_root,
+        _ => false,
+    }
 }
 
 fn load_profile_config_for_branch(ctx: &Ctx, branch: &str) -> Result<Option<Config>> {
@@ -229,6 +390,8 @@ mod tests {
             "worktree /tmp/repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
         );
+        runner.add_response("main\n", true);
+        runner.add_response("", true);
 
         let ui = MockUi::new();
         let ctx = Ctx::new(
@@ -245,7 +408,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("No additional worktrees")
+                .contains("No workspaces available to open")
         );
     }
 
@@ -261,6 +424,8 @@ mod tests {
             "worktree /tmp/repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/repo-feature\nHEAD def\nbranch refs/heads/alice/feature\n\n",
             true,
         );
+        runner.add_response("main\nalice/feature\n", true);
+        runner.add_response("", true);
 
         let mut ui = MockUi::new();
         ui.add_select(0);
@@ -307,6 +472,8 @@ mod tests {
             "worktree /tmp/repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/repo-feature\nHEAD def\nbranch refs/heads/alice/feature\n\n",
             true,
         );
+        runner.add_response("main\nalice/feature\n", true);
+        runner.add_response("", true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
         runner.add_response("surface:1", true);
@@ -419,6 +586,8 @@ args = ["--model", "gpt-5.5"]
             ),
             true,
         );
+        runner.add_response("main\nalice/feature-codex\n", true);
+        runner.add_response("", true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
@@ -522,6 +691,8 @@ args = ["--yolo"]
             ),
             true,
         );
+        runner.add_response("main\nalice/feature-codex-yolo\n", true);
+        runner.add_response("", true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
@@ -609,6 +780,8 @@ args = ["--yolo"]
             ),
             true,
         );
+        runner.add_response("main\nalice/feature-codex\n", true);
+        runner.add_response("", true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
@@ -660,14 +833,214 @@ args = ["--yolo"]
     }
 
     #[test]
-    fn worktree_matches_issue_number_or_key() {
-        let entry = crate::services::git::WorktreeEntry {
+    fn open_candidates_exclude_current_and_group_branch_state() {
+        let worktrees = vec![
+            crate::services::git::WorktreeEntry {
+                path: "/tmp/repo".into(),
+                branch: "main".into(),
+            },
+            crate::services::git::WorktreeEntry {
+                path: "/tmp/repo-feature".into(),
+                branch: "alice/feature".into(),
+            },
+        ];
+
+        let candidates = build_open_candidates(
+            worktrees,
+            vec!["main".into(), "alice/feature".into(), "local-only".into()],
+            vec![
+                "origin/HEAD".into(),
+                "origin/main".into(),
+                "origin/alice/feature".into(),
+                "origin/remote-only".into(),
+            ],
+            Path::new("/tmp/repo"),
+        );
+        let labels = candidates
+            .iter()
+            .map(OpenCandidate::label)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            labels,
+            vec![
+                "existing  alice/feature  /tmp/repo-feature",
+                "local     local-only",
+                "remote    origin/remote-only"
+            ]
+        );
+    }
+
+    #[test]
+    fn candidate_matching_uses_branch_or_path_not_issue_number() {
+        let candidate = OpenCandidate::Existing(crate::services::git::WorktreeEntry {
             path: "/tmp/sample-app-proj-123-fix-editor".into(),
             branch: "alice/proj-123-fix-editor".into(),
-        };
+        });
 
-        assert!(worktree_matches(&entry, "123"));
-        assert!(worktree_matches(&entry, "PROJ-123"));
-        assert!(!worktree_matches(&entry, "12"));
+        assert!(candidate_matches(&candidate, "alice/proj-123-fix-editor"));
+        assert!(candidate_matches(&candidate, "proj-123-fix-editor"));
+        assert!(candidate_matches(
+            &candidate,
+            "sample-app-proj-123-fix-editor"
+        ));
+        assert!(!candidate_matches(&candidate, "123"));
+        assert!(!candidate_matches(&candidate, "PROJ-123"));
+    }
+
+    #[test]
+    fn open_creates_worktree_for_selected_local_branch() {
+        use crate::config::Config;
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::fs;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let parent = tempfile::tempdir().unwrap();
+        let repo = parent.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let expected = parent.path().join("repo-feature");
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.display()
+            ),
+            true,
+        );
+        runner.add_response("main\nfeature\n", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_select(0);
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(&ctx, None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let worktree_add = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.first().is_some_and(|arg| arg == "worktree")
+                    && args.get(1).is_some_and(|arg| arg == "add")
+            })
+            .expect("expected git worktree add");
+        assert_eq!(
+            worktree_add.1,
+            vec![
+                "worktree",
+                "add",
+                expected.to_string_lossy().as_ref(),
+                "feature"
+            ]
+        );
+    }
+
+    #[test]
+    fn open_creates_worktree_for_selected_remote_branch() {
+        use crate::config::Config;
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::fs;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let parent = tempfile::tempdir().unwrap();
+        let repo = parent.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let expected = parent.path().join("repo-feature");
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.display()
+            ),
+            true,
+        );
+        runner.add_response("main\n", true);
+        runner.add_response("origin/HEAD\norigin/main\norigin/feature\n", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_select(0);
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(&ctx, None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let worktree_add = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.first().is_some_and(|arg| arg == "worktree")
+                    && args.get(1).is_some_and(|arg| arg == "add")
+            })
+            .expect("expected git worktree add");
+        assert_eq!(
+            worktree_add.1,
+            vec![
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                expected.to_string_lossy().as_ref(),
+                "origin/feature"
+            ]
+        );
     }
 }

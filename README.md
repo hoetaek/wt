@@ -94,7 +94,7 @@ wt stack run latest
 wt stack complete latest PROJ-123 --run-next
 ```
 
-Open an existing worktree with its configured workspace:
+Open an existing worktree, or pick a local/remote branch and create its worktree:
 
 ```bash
 wt open
