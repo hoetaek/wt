@@ -661,17 +661,19 @@ cli = "codex"
     fn create_scaffolds_claude_profile_structure() {
         let dir = tempfile::tempdir().unwrap();
 
-        let mut base = Config::default();
-        base.agent = Some(AgentConfig {
-            cli: AgentCli::Claude,
-            args: Vec::new(),
-            command: None,
-            ready: ReadyMode::Auto,
-            submit: SubmitMode::Auto,
-            timeout: 30,
-            send_after: 2,
-            prompt: Default::default(),
-        });
+        let base = Config {
+            agent: Some(AgentConfig {
+                cli: AgentCli::Claude,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 30,
+                send_after: 2,
+                prompt: Default::default(),
+            }),
+            ..Config::default()
+        };
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),

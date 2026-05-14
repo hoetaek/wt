@@ -433,8 +433,7 @@ fn analyze_source(ctx: &Ctx, path: &Path) -> Result<SourceSummary> {
         analyze_profile_config(ctx, path, display, &content, profile_name)
     } else {
         bail!(
-            "Unsupported config source: {}. Use .wt.toml, .local/.wt.toml, or .local/profiles/<name>/profile.toml",
-            display
+            "Unsupported config source: {display}. Use .wt.toml, .local/.wt.toml, or .local/profiles/<name>/profile.toml"
         );
     }
 }
