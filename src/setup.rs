@@ -42,7 +42,7 @@ pub fn run_setup(
     copy_files(ctx, config, wt_path)?;
     link_files(ctx, config, wt_path)?;
 
-    let mut template_vars = build_template_vars(ctx, names, title);
+    let mut template_vars = build_template_vars(ctx, wt_path, names, title);
     if let Some(extra) = extra_vars {
         template_vars.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
@@ -91,7 +91,7 @@ pub fn run_setup(
         .and_then(|ws| ws.colors.get(mode))
         .cloned()
         .unwrap_or_default();
-    let ws_handle = open_workspace(ctx, config, wt_path, names, &ws_color)?;
+    let ws_handle = open_workspace(ctx, config, wt_path, names, &template_vars, &ws_color)?;
 
     inject_local_context(
         ctx,
@@ -202,11 +202,20 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
 
 pub(crate) fn build_template_vars(
     ctx: &Ctx,
+    worktree_path: &Path,
     names: &WorktreeNames,
     title: Option<&str>,
 ) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     vars.insert("repo".into(), ctx.repo_name.clone());
+    vars.insert(
+        "repo_root".into(),
+        ctx.repo_root.to_string_lossy().into_owned(),
+    );
+    vars.insert(
+        "worktree_path".into(),
+        worktree_path.to_string_lossy().into_owned(),
+    );
     vars.insert("branch".into(), names.workspace.clone());
     if let Some(site) = &names.site {
         vars.insert("site_name".into(), site.clone());
@@ -352,6 +361,7 @@ fn open_workspace(
     config: &Config,
     wt_path: &Path,
     names: &WorktreeNames,
+    template_vars: &HashMap<String, String>,
     color: &str,
 ) -> Result<Option<String>> {
     let cmux = CmuxService::new(ctx.runner.as_ref());
@@ -374,7 +384,9 @@ fn open_workspace(
         .print_step(&format!("Opening cmux workspace: {}", names.workspace));
 
     let command = match &config.agent {
-        Some(agent) => agent.command_line()?.unwrap_or_default(),
+        Some(agent) => agent
+            .command_line_with_vars(Some(template_vars))?
+            .unwrap_or_default(),
         None => String::new(),
     };
     let ws_handle = cmux.new_workspace(wt_path, &names.workspace, &command)?;
@@ -952,8 +964,15 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        let vars = build_template_vars(&ctx, &names, Some("Document editor"));
+        let actual_worktree_path = PathBuf::from("/tmp/existing-sample-app-proj-680");
+        let vars =
+            build_template_vars(&ctx, &actual_worktree_path, &names, Some("Document editor"));
         assert_eq!(vars.get("repo").unwrap(), "sample-app");
+        assert_eq!(vars.get("repo_root").unwrap(), "/home/dev/sample-app");
+        assert_eq!(
+            vars.get("worktree_path").unwrap(),
+            "/tmp/existing-sample-app-proj-680"
+        );
         assert_eq!(vars.get("site_name").unwrap(), "sample-app-proj-680");
         assert_eq!(vars.get("branch_slug").unwrap(), "proj-680-document-editor");
         assert_eq!(vars.get("issue_title").unwrap(), "Document editor");
@@ -1343,7 +1362,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        let vars = build_template_vars(&ctx, &names, None);
+        let vars = build_template_vars(&ctx, &names.path, &names, None);
         assert_eq!(vars.get("issue_slug").unwrap(), "proj-663");
         assert_eq!(vars.get("branch_slug").unwrap(), "proj-663-test");
     }
@@ -1369,7 +1388,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        let vars = build_template_vars(&ctx, &names, None);
+        let vars = build_template_vars(&ctx, &names.path, &names, None);
         assert_eq!(vars.get("repo").unwrap(), "repo");
         assert_eq!(vars.get("branch_slug").unwrap(), "my-feature");
         assert!(!vars.contains_key("issue_title"));
@@ -1406,7 +1425,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        let mut vars = build_template_vars(&ctx, &names, None);
+        let mut vars = build_template_vars(&ctx, &names.path, &names, None);
         let site = apply_site_template_vars(&ctx.config, &mut vars).unwrap();
 
         assert_eq!(site.name, "repo-my-feature");
@@ -1445,7 +1464,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        let mut vars = build_template_vars(&ctx, &names, None);
+        let mut vars = build_template_vars(&ctx, &names.path, &names, None);
         let site = apply_site_template_vars(&ctx.config, &mut vars).unwrap();
 
         assert_eq!(site.name, "my-feature.local.test");
@@ -1483,7 +1502,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        let mut vars = build_template_vars(&ctx, &names, None);
+        let mut vars = build_template_vars(&ctx, &names.path, &names, None);
         let site = apply_site_template_vars(&ctx.config, &mut vars).unwrap();
 
         assert_eq!(site.name, "repo-my-feature.l");
@@ -1520,7 +1539,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        let mut vars = build_template_vars(&ctx, &names, None);
+        let mut vars = build_template_vars(&ctx, &names.path, &names, None);
         let site = apply_site_template_vars(&ctx.config, &mut vars).unwrap();
 
         let expected = format!("http://127.0.0.1:{}", vars.get("vite_port").unwrap());
@@ -1595,7 +1614,12 @@ mod tests {
             workspace: Some(WorkspaceConfig::default()),
             agent: Some(AgentConfig {
                 cli: AgentCli::Codex,
-                args: vec!["--model".into(), "gpt-5.5".into()],
+                args: vec![
+                    "--model".into(),
+                    "{{repo}}-{{branch_slug}}".into(),
+                    "--cd".into(),
+                    "{{worktree_path}}".into(),
+                ],
                 command: None,
                 ready: ReadyMode::Auto,
                 submit: SubmitMode::Auto,
@@ -1616,7 +1640,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
         let names = WorktreeNames {
-            path: wt.clone(),
+            path: repo.with_file_name("wt-test-agent-command-computed-path"),
             branch: "alice/issue-1-test".into(),
             workspace: "test".into(),
             site: None,
@@ -1637,7 +1661,13 @@ mod tests {
             .position(|arg| arg == "--command")
             .and_then(|idx| workspace_call.1.get(idx + 1))
             .unwrap();
-        assert_eq!(command_arg, "codex --model gpt-5.5");
+        assert_eq!(
+            command_arg,
+            &format!(
+                "codex --model wt-test-agent-command-repo-issue-1-test --cd {}",
+                wt.display()
+            )
+        );
 
         fs::remove_dir_all(&repo).ok();
         fs::remove_dir_all(&wt).ok();
@@ -1755,7 +1785,7 @@ mod tests {
             workspace: "feature".into(),
             site: Some("sample-app-proj-680".into()),
         };
-        let mut vars = build_template_vars(&ctx, &names, Some("feature"));
+        let mut vars = build_template_vars(&ctx, &names.path, &names, Some("feature"));
         vars.insert("site_url".into(), "https://sample-app-proj-680.test".into());
 
         inject_local_context(&ctx, &ctx.config, &dir, &names, &vars, Some("workspace:3")).unwrap();

@@ -4,6 +4,8 @@ use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::template;
+
 pub const RESERVED_PROFILE_NAME: &str = "default";
 const PROMPT_APPEND_PREFIX: &str = "\u{0}append:";
 const PROMPT_COMMON_SCOPE: &str = "common";
@@ -374,12 +376,19 @@ fn default_agent_send_after() -> u64 {
 
 impl AgentConfig {
     pub fn command_line(&self) -> anyhow::Result<Option<String>> {
+        self.command_line_with_vars(None)
+    }
+
+    pub fn command_line_with_vars(
+        &self,
+        vars: Option<&HashMap<String, String>>,
+    ) -> anyhow::Result<Option<String>> {
         if self.cli == AgentCli::None {
             return Ok(None);
         }
 
         if let Some(command) = &self.command {
-            return Ok(Some(command.clone()));
+            return Ok(Some(render_agent_value(command, vars)));
         }
 
         let base = match self.cli {
@@ -396,7 +405,8 @@ impl AgentConfig {
         let args = self
             .args
             .iter()
-            .map(|arg| shell_escape_arg(arg))
+            .map(|arg| render_agent_value(arg, vars))
+            .map(|arg| shell_escape_arg(&arg))
             .collect::<Vec<_>>()
             .join(" ");
         Ok(Some(format!("{base} {args}")))
@@ -429,6 +439,13 @@ impl AgentConfig {
             SubmitMode::None => {}
         }
         prompt
+    }
+}
+
+fn render_agent_value(value: &str, vars: Option<&HashMap<String, String>>) -> String {
+    match vars {
+        Some(vars) => template::render(value, vars),
+        None => value.to_string(),
     }
 }
 
@@ -1640,6 +1657,46 @@ send_after = 4
         assert_eq!(
             override_agent.command_line().unwrap(),
             Some("env FOO=1 codex --model gpt-5.5".into())
+        );
+
+        let templated_agent = AgentConfig {
+            command: Some("env CHROME_DIR={{repo_root}}/profiles/{{branch_slug}} codex".into()),
+            args: vec![
+                "--cd".into(),
+                "{{worktree_path}}".into(),
+                "{{repo_root}}/profiles/{{branch_slug}}".into(),
+            ],
+            ..override_agent
+        };
+        let vars = HashMap::from([
+            ("repo_root".into(), "/tmp/repo".into()),
+            ("worktree_path".into(), "/tmp/repo-feature".into()),
+            ("branch_slug".into(), "feature".into()),
+        ]);
+        assert_eq!(
+            templated_agent.command_line_with_vars(Some(&vars)).unwrap(),
+            Some("env CHROME_DIR=/tmp/repo/profiles/feature codex".into())
+        );
+
+        let templated_args_agent = AgentConfig {
+            cli: AgentCli::Codex,
+            args: vec![
+                "--cd".into(),
+                "{{worktree_path}}".into(),
+                "{{repo_root}}/profiles/{{branch_slug}}".into(),
+            ],
+            command: None,
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 15,
+            send_after: 3,
+            prompt: HashMap::new(),
+        };
+        assert_eq!(
+            templated_args_agent
+                .command_line_with_vars(Some(&vars))
+                .unwrap(),
+            Some("codex --cd /tmp/repo-feature /tmp/repo/profiles/feature".into())
         );
     }
 

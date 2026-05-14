@@ -65,7 +65,7 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
             let site = site.as_ref().unwrap();
             let site_config = site_config.as_ref().unwrap();
             let names = WorktreeNames::new(branch, &ctx.parent_dir, &ctx.repo_name, None, Some(""));
-            let mut vars = setup::build_template_vars(ctx, &names, None);
+            let mut vars = setup::build_template_vars(ctx, wt_path, &names, None);
             let site_descriptor = setup::apply_site_template_vars(&ctx.config, &mut vars);
             if let Some(site_descriptor) = site_descriptor {
                 if site.unregister(&site_config.provider, &site_descriptor.name)? {

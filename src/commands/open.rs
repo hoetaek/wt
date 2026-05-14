@@ -194,7 +194,7 @@ fn open_worktree(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) -> Resu
         title.as_deref(),
         config.has_site().then_some(""),
     );
-    let template_vars = setup::build_template_vars(ctx, &names, title.as_deref());
+    let template_vars = setup::build_template_vars(ctx, &entry.path, &names, title.as_deref());
     let mut template_vars = template_vars;
     let site = setup::apply_site_template_vars(config, &mut template_vars);
 
@@ -213,7 +213,9 @@ fn open_worktree(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) -> Resu
         ctx.ui
             .print_step(&format!("Opening cmux workspace: {}", names.workspace));
         let command = match &config.agent {
-            Some(agent) => agent.command_line()?.unwrap_or_default(),
+            Some(agent) => agent
+                .command_line_with_vars(Some(&template_vars))?
+                .unwrap_or_default(),
             None => String::new(),
         };
         let ws_handle = cmux.new_workspace(&entry.path, &names.workspace, &command)?;
@@ -493,7 +495,12 @@ mod tests {
             }),
             agent: Some(AgentConfig {
                 cli: AgentCli::Codex,
-                args: vec!["--model".into(), "gpt-5.5".into()],
+                args: vec![
+                    "--model".into(),
+                    "{{repo}}-{{branch_slug}}".into(),
+                    "--cd".into(),
+                    "{{worktree_path}}".into(),
+                ],
                 command: None,
                 ready: ReadyMode::Auto,
                 submit: SubmitMode::Auto,
@@ -517,6 +524,23 @@ mod tests {
         run(&ctx, None).unwrap();
 
         let calls = runner.calls.lock().unwrap();
+        let workspace_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "cmux" && args.first().is_some_and(|a| a == "new-workspace")
+            })
+            .expect("expected new-workspace call");
+        let command_arg = workspace_call
+            .1
+            .iter()
+            .position(|arg| arg == "--command")
+            .and_then(|idx| workspace_call.1.get(idx + 1))
+            .unwrap();
+        assert_eq!(
+            command_arg,
+            "codex --model repo-feature --cd /tmp/repo-feature"
+        );
+
         let send_call = calls
             .iter()
             .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send"))

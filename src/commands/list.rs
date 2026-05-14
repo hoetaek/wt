@@ -112,7 +112,7 @@ fn site_url(ctx: &Ctx, entry: &WorktreeEntry) -> Option<String> {
         None,
         Some(""),
     );
-    let mut vars = setup::build_template_vars(ctx, &names, None);
+    let mut vars = setup::build_template_vars(ctx, &entry.path, &names, None);
     setup::apply_site_template_vars(&ctx.config, &mut vars);
     vars.remove("site_url")
 }
