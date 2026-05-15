@@ -1050,7 +1050,7 @@ fn toml_multiline_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, WorktreeNamingConfig};
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CmdOutput, CommandRunner, Ctx};
     use std::path::{Path, PathBuf};
@@ -1281,6 +1281,63 @@ mod tests {
         assert!(content.contains("[[items]]"));
         assert!(content.contains("kind = \"issue\""));
         assert!(!content.contains("[[issues]]"));
+    }
+
+    #[test]
+    fn issue_applies_worktree_naming_to_prepared_parent_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-1","title":"Schema","branchName":"alice/proj-1-schema","description":"Schema body"}"#,
+            true,
+        );
+        runner.add_response(r#"{"english_slug":"schema-layer"}"#, true);
+        runner.add_response(
+            r#"{"identifier":"PROJ-2","title":"API","branchName":"alice/proj-2-api","description":"API body"}"#,
+            true,
+        );
+        runner.add_response(r#"{"english_slug":"api-layer"}"#, true);
+        let config = crate::config::Config {
+            issues: Some(crate::config::IssuesConfig {
+                provider: crate::config::IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            worktree: crate::config::WorktreeConfig {
+                naming: Some(WorktreeNamingConfig {
+                    command: "namer".into(),
+                    prompt: "{{issue_title}}".into(),
+                    branch: Some("{{branch_prefix}}{{issue_key_lower}}-{{english_slug}}".into()),
+                    workspace: None,
+                }),
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+
+        issue(
+            &ctx,
+            &["PROJ-1".into(), "PROJ-2".into()],
+            None,
+            &Some("main".into()),
+        )
+        .unwrap();
+
+        let stack_path = latest_stack_path(&ctx).unwrap();
+        let stack = read_stack_metadata(&stack_path).unwrap();
+        assert_eq!(stack.items[0].branch, "alice/proj-1-schema-layer");
+        assert_eq!(stack.items[0].parent.as_deref(), Some("main"));
+        assert_eq!(stack.items[1].branch, "alice/proj-2-api-layer");
+        assert_eq!(
+            stack.items[1].parent.as_deref(),
+            Some("alice/proj-1-schema-layer")
+        );
     }
 
     #[test]

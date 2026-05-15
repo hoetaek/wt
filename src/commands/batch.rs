@@ -692,7 +692,7 @@ fn toml_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::commands::issue_snapshot::safe_file_stem;
-    use crate::config::{Config, IssueProviderType, IssuesConfig};
+    use crate::config::{Config, IssueProviderType, IssuesConfig, WorktreeNamingConfig};
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
 
@@ -782,6 +782,50 @@ mod tests {
         assert!(content.contains("title = \"Fix editor\""));
         assert!(content.contains("branch = \"alice/proj-123-fix-editor\""));
         assert!(content.contains("snapshot = \".local/issues/PROJ-123.md\""));
+    }
+
+    #[test]
+    fn issue_applies_worktree_naming_to_prepared_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor","description":"Long issue body"}"#,
+            true,
+        );
+        runner.add_response(r#"{"english_slug":"repair-editor"}"#, true);
+        runner.add_response("main", true);
+        let config = Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            worktree: crate::config::WorktreeConfig {
+                naming: Some(WorktreeNamingConfig {
+                    command: "namer".into(),
+                    prompt: "{{issue_title}}".into(),
+                    branch: Some("{{branch_prefix}}{{issue_key_lower}}-{{english_slug}}".into()),
+                    workspace: None,
+                }),
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+
+        issue(&ctx, &["PROJ-123".into()], None, &None).unwrap();
+
+        let batch_path = latest_batch_path(&ctx).unwrap();
+        let content = std::fs::read_to_string(&batch_path).unwrap();
+        assert!(content.contains("branch = \"alice/proj-123-repair-editor\""));
+        let markdown =
+            std::fs::read_to_string(dir.path().join(".local/issues/PROJ-123.md")).unwrap();
+        assert!(markdown.contains("- Branch: `alice/proj-123-repair-editor`"));
     }
 
     #[test]

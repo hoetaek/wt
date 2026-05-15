@@ -36,6 +36,8 @@ This project follows SemVer.
 - Changed `wt batch run` to require an explicit stored batch base before
   marking any item `running`, so base selection cannot strand an item in a
   stale running state.
+- Changed issue snapshots prepared by batch and stack workflows to store the
+  `worktree.naming` branch when branch naming is configured.
 - Added `wt batch show [BATCH]` for inspecting stored batch base, profile,
   status, and items without opening the TOML file.
 - Added `wt stack new` to create manual branch stacks from branch-name text

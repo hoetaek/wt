@@ -1,5 +1,6 @@
 use crate::commands::issue;
 use crate::context::Ctx;
+use crate::worktree_naming;
 use anyhow::Result;
 use std::fs;
 
@@ -20,10 +21,19 @@ pub(crate) fn snapshot_issues(ctx: &Ctx, issues: &[String]) -> Result<Vec<IssueS
     let mut snapshots = Vec::new();
     for source in issues {
         let issue = provider.get_issue(source.trim_start_matches('#'))?;
+        let naming = worktree_naming::generate(
+            ctx,
+            &issue.identifier,
+            &issue.title,
+            issue.branch_name.as_deref(),
+        )?;
         let file_name = format!("{}.md", safe_file_stem(&issue.identifier));
         let relative_path = format!(".local/issues/{file_name}");
         let snapshot_path = ctx.repo_root.join(&relative_path);
-        let branch = issue.branch_name.as_deref().unwrap_or("-").to_string();
+        let branch = naming
+            .and_then(|naming| naming.branch)
+            .or(issue.branch_name)
+            .unwrap_or_else(|| "-".into());
         let body = issue.body.as_deref().unwrap_or("").trim();
         let body_section = if body.is_empty() {
             String::new()
