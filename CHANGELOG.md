@@ -33,6 +33,9 @@ This project follows SemVer.
   identifiers are provided.
 - Changed `wt batch issue` to resolve and store the base branch during
   preparation, matching `wt issue` base prompt behavior.
+- Changed `wt batch run` to require an explicit stored batch base before
+  marking any item `running`, so base selection cannot strand an item in a
+  stale running state.
 - Added `wt batch show [BATCH]` for inspecting stored batch base, profile,
   status, and items without opening the TOML file.
 - Added `wt stack new` to create manual branch stacks from branch-name text

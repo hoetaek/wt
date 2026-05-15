@@ -65,7 +65,7 @@ pub fn issue(
 
 fn resolve_batch_base(ctx: &Ctx, base: &Option<String>) -> Result<String> {
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
-    match BaseMode::from_raw(base) {
+    let base = match BaseMode::from_raw(base) {
         BaseMode::Explicit(branch) => Ok(branch),
         BaseMode::Interactive => {
             let branches = git.list_local_branches()?;
@@ -80,7 +80,13 @@ fn resolve_batch_base(ctx: &Ctx, base: &Option<String>) -> Result<String> {
             let current = git.current_branch()?;
             ctx.ui.input("Base branch", Some(&current))
         }
+    }?;
+
+    if base.trim().is_empty() {
+        bail!("Base branch cannot be empty");
     }
+
+    Ok(base)
 }
 
 pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
@@ -92,7 +98,15 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
         bail!("Batch has no items: {}", batch_path.display());
     }
 
-    let base = batch_base_option(&metadata)?;
+    let has_runnable_item = metadata
+        .items
+        .iter()
+        .any(|item| is_runnable_status(&item.status));
+    let base = if has_runnable_item {
+        Some(batch_base_option(&metadata)?)
+    } else {
+        None
+    };
     let mut ran_any = false;
 
     for idx in 0..metadata.items.len() {
@@ -105,6 +119,10 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
             continue;
         }
 
+        let base = base
+            .as_ref()
+            .expect("batch base is validated before running an item");
+
         ran_any = true;
         metadata.status = STATUS_RUNNING.into();
         metadata.updated_at = current_utc_timestamp();
@@ -112,12 +130,7 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
         metadata.items[idx].error.clear();
         write_batch_metadata(&batch_path, &metadata)?;
 
-        let result = run_batch_item(
-            ctx,
-            &metadata.items[idx],
-            &base,
-            metadata.profile.as_deref(),
-        );
+        let result = run_batch_item(ctx, &metadata.items[idx], base, metadata.profile.as_deref());
 
         match result {
             Ok(()) => {
@@ -546,13 +559,13 @@ fn latest_batch_path(ctx: &Ctx) -> Result<PathBuf> {
 
 fn describe_batch_base(batch: &BatchMetadata) -> Result<String> {
     match batch.base_mode.as_str() {
-        "default" => Ok("prompt at run time".into()),
-        "interactive" => Ok("branch selector at run time".into()),
-        "current" => Ok("current branch at run time".into()),
         "explicit" => batch
             .base
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Batch base_mode is explicit but base is missing")),
+        "default" | "interactive" | "current" => {
+            bail!("Batch base_mode must be explicit; recreate the batch with wt batch issue")
+        }
         other => bail!("Unknown batch base_mode: {other}"),
     }
 }
@@ -582,14 +595,14 @@ fn batch_status_counts(items: &[BatchItem]) -> String {
 
 fn batch_base_option(batch: &BatchMetadata) -> Result<Option<String>> {
     match batch.base_mode.as_str() {
-        "default" => Ok(None),
-        "interactive" => Ok(Some(String::new())),
-        "current" => Ok(Some(".".into())),
         "explicit" => batch
             .base
             .clone()
             .map(Some)
             .ok_or_else(|| anyhow::anyhow!("Batch base_mode is explicit but base is missing")),
+        "default" | "interactive" | "current" => bail!(
+            "Batch base_mode must be explicit before run; recreate the batch with wt batch issue"
+        ),
         other => bail!("Unknown batch base_mode: {other}"),
     }
 }
@@ -804,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_base_option_current_returns_dot_base() {
+    fn batch_base_option_rejects_non_explicit_base() {
         let batch = BatchMetadata {
             profile: None,
             base_mode: "current".into(),
@@ -815,7 +828,15 @@ mod tests {
             items: Vec::new(),
         };
 
-        assert_eq!(batch_base_option(&batch).unwrap(), Some(".".into()));
+        let result = batch_base_option(&batch);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("base_mode must be explicit")
+        );
     }
 
     #[test]
@@ -1168,8 +1189,8 @@ snapshot = ".local/issues/PROJ-2.md"
         let batch_path = dir.path().join("batch.toml");
         let batch = BatchMetadata {
             profile: None,
-            base_mode: "default".into(),
-            base: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
@@ -1190,6 +1211,8 @@ snapshot = ".local/issues/PROJ-2.md"
 
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(updated.base_mode, "explicit");
+        assert_eq!(updated.base.as_deref(), Some("main"));
         assert_eq!(updated.status, STATUS_FAILED);
         assert_eq!(updated.items[0].status, STATUS_FAILED);
         assert!(
@@ -1197,6 +1220,53 @@ snapshot = ".local/issues/PROJ-2.md"
                 .error
                 .contains("Failed to read issue snapshot")
         );
+    }
+
+    #[test]
+    fn run_rejects_non_explicit_base_before_touching_items() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let batch_path = dir.path().join("batch.toml");
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "interactive".into(),
+            base: None,
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            items: vec![BatchItem {
+                kind: "issue".into(),
+                id: "PROJ-123".into(),
+                source: "123".into(),
+                title: "Fix editor".into(),
+                branch: "alice/proj-123-fix-editor".into(),
+                snapshot: ".local/issues/PROJ-123.md".into(),
+                status: STATUS_PREPARED.into(),
+                error: String::new(),
+            }],
+        };
+        write_batch_metadata(&batch_path, &batch).unwrap();
+
+        let result = run(&ctx, batch_path.to_str().unwrap());
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("base_mode must be explicit")
+        );
+        let updated = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(updated.base_mode, "interactive");
+        assert_eq!(updated.status, STATUS_PREPARED);
+        assert_eq!(updated.items[0].status, STATUS_PREPARED);
+        assert!(updated.items[0].error.is_empty());
     }
 
     #[test]
@@ -1221,7 +1291,6 @@ snapshot = ".local/issues/PROJ-2.md"
         runner.add_response("", true); // fetch
         runner.add_response("", false); // branch does not exist locally
         runner.add_response("", false); // branch does not exist remotely
-        runner.add_response("main", true); // current branch for default base
         runner.add_response("", true); // worktree add
         runner.add_response("", true); // parent branch exists
         runner.add_response("", true); // branch parent config
@@ -1235,8 +1304,8 @@ snapshot = ".local/issues/PROJ-2.md"
         let batch_path = dir.path().join("batch.toml");
         let batch = BatchMetadata {
             profile: None,
-            base_mode: "default".into(),
-            base: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
@@ -1256,6 +1325,8 @@ snapshot = ".local/issues/PROJ-2.md"
         run(&ctx, batch_path.to_str().unwrap()).unwrap();
 
         let updated = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(updated.base_mode, "explicit");
+        assert_eq!(updated.base.as_deref(), Some("main"));
         assert_eq!(updated.status, STATUS_DONE);
         assert_eq!(updated.items[0].status, STATUS_DONE);
     }

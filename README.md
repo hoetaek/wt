@@ -404,6 +404,7 @@ lets you select multiple issues interactively.
 batch file. `--base .` stores the current branch without prompting, `--base`
 with no value opens the local branch selector, and `--base <branch>` stores the
 named branch explicitly.
+`run` requires that stored explicit base before it marks any item `running`.
 
 When `--profile` is omitted, the batch does not store a profile field and uses
 the effective config at run time. When `--profile <name>` is provided, the
