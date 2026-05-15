@@ -95,10 +95,11 @@ wt pr
 wt pr 42
 ```
 
-Start a workspace from branch-name text:
+Start a workspace from branch-name text, or choose one prepared local task:
 
 ```bash
 wt new add profile docs
+wt new
 ```
 
 Prepare issue work in bulk:
@@ -275,17 +276,17 @@ name, so default behavior is not stored as `profile = "default"`.
 
 Explicit `--profile` has command-specific scope:
 
-- `wt issue --profile <name>` and `wt new --profile <name>` create profiled
-  worktrees. The branch and workspace names include the profile name so the
-  profiled run is separate from the unprofiled workspace.
+- `wt issue --profile <name>` and `wt new <words...> --profile <name>` create
+  profiled worktrees. The branch and workspace names include the profile name
+  so the profiled run is separate from the unprofiled workspace.
 - `wt pr --profile <name>` applies the named profile config to the PR
   worktree. It uses the PR branch name as-is because the branch already
   exists.
 
-Use `--matrix` on `wt issue` or `wt new` to expand one issue or branch-name
-input across all named profiles. `wt issue 123 --matrix` creates one issue
-worktree per profile, while `wt new add search --matrix` creates one branch
-worktree per profile from the `add-search` branch-name seed.
+Use `--matrix` on `wt issue` or `wt new <words...>` to expand one issue or
+branch-name input across all named profiles. `wt issue 123 --matrix` creates
+one issue worktree per profile, while `wt new add search --matrix` creates one
+branch worktree per profile from the `add-search` branch-name seed.
 
 When prompt or scaffold files are needed, move the profile into a named
 directory and select it explicitly from config:
@@ -444,6 +445,30 @@ Or inline a selected named profile back into `.local/.wt.toml`:
 wt config inline .local/.wt.toml
 ```
 
+## New Workspaces
+
+`wt new <words...>` starts a workspace from branch-name text:
+
+```bash
+wt new add profile docs
+wt new add profile docs --base main
+wt new add profile docs --profile codex
+wt new add profile docs --matrix
+```
+
+Omit the branch-name text to select one prepared task document from
+`.local/tasks/*.toml` and start it immediately:
+
+```bash
+wt new
+wt new --base main
+```
+
+The selected task uses the same task snapshot startup path as `wt batch run`
+and `wt stack run`, so the agent prompt includes the selected task TOML.
+`--profile` and `--matrix` require branch-name text; bare `wt new` uses the
+effective config for the selected task.
+
 ## Batches
 
 Batches split planning from execution. `task` prepares local tasks and `issue`
@@ -481,7 +506,8 @@ The batch TOML records the optional profile, base mode, overall batch status,
 and one `[[tasks]]` table per task. The double brackets are TOML's
 array-of-tables syntax, equivalent to a `tasks: [...]` list in JSON. Each task
 row stores the task key and status; the task TOML stores the title, branch,
-body, and optional issue origin.
+body, and optional issue origin. A prepared task document can also be started
+directly with bare `wt new`, without creating or running a batch file.
 
 Run a prepared batch explicitly:
 
@@ -567,6 +593,9 @@ body = """
 Create the schema first.
 """
 ```
+
+Run bare `wt new` to select and start one of these prepared task documents
+outside the stack state machine.
 
 `[[tasks]]` is the canonical stack list. Pull requests remain a separate
 workflow and are not stack tasks.

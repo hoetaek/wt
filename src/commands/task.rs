@@ -35,6 +35,14 @@ pub(crate) struct PreparedTask {
     pub(crate) branch: String,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SelectedTask {
+    pub(crate) key: String,
+    pub(crate) path: String,
+    pub(crate) content: String,
+    pub(crate) document: TaskDocument,
+}
+
 impl TaskDocument {
     pub(crate) fn title_or_key(&self, key: &str) -> String {
         if self.title.trim().is_empty() {
@@ -58,6 +66,43 @@ impl TaskDocument {
             .map(|origin| origin.id.clone())
             .unwrap_or_else(|| key.to_string())
     }
+}
+
+pub(crate) fn select_local_task(ctx: &Ctx) -> Result<SelectedTask> {
+    let tasks = list_local_tasks(ctx)?;
+    if tasks.is_empty() {
+        bail!("No task files found in .local/tasks");
+    }
+
+    let items = tasks.iter().map(task_selection_label).collect::<Vec<_>>();
+    let idx = ctx.ui.select("Select a local task", &items)?;
+    let task = tasks
+        .get(idx)
+        .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
+    Ok(task.clone())
+}
+
+pub(crate) fn list_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
+    let tasks_dir = ctx.repo_root.join(".local/tasks");
+    if !tasks_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in
+        fs::read_dir(&tasks_dir).with_context(|| "Failed to read task directory: .local/tasks")?
+    {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    paths
+        .into_iter()
+        .map(|path| read_selected_task(ctx, path))
+        .collect()
 }
 
 pub(crate) fn prepare_named_tasks(ctx: &Ctx, names: &[String]) -> Result<Vec<PreparedTask>> {
@@ -174,6 +219,15 @@ pub(crate) fn task_relative_path(key: &str) -> String {
     format!(".local/tasks/{}.toml", safe_task_key(key))
 }
 
+pub(crate) fn prepared_branch_name(branch: &str) -> Option<&str> {
+    let branch = branch.trim();
+    if branch.is_empty() || branch == "-" {
+        None
+    } else {
+        Some(branch)
+    }
+}
+
 fn task_path(ctx: &Ctx, key: &str) -> PathBuf {
     ctx.repo_root.join(task_relative_path(key))
 }
@@ -193,6 +247,41 @@ fn issue_provider_name(ctx: &Ctx) -> Result<String> {
         IssueProviderType::Linear => "linear",
     }
     .into())
+}
+
+fn read_selected_task(ctx: &Ctx, path: PathBuf) -> Result<SelectedTask> {
+    let relative_path = path
+        .strip_prefix(&ctx.repo_root)
+        .unwrap_or(&path)
+        .to_string_lossy()
+        .into_owned();
+    let key = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Task file is missing a key: {relative_path}"))?
+        .to_string();
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read task: {relative_path}"))?;
+    let document: TaskDocument = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse task: {relative_path}"))?;
+    Ok(SelectedTask {
+        key,
+        path: relative_path,
+        content,
+        document,
+    })
+}
+
+fn task_selection_label(task: &SelectedTask) -> String {
+    let title = task.document.title_or_key(&task.key);
+    let branch = prepared_branch_name(&task.document.branch);
+    match (title == task.key, branch) {
+        (true, Some(branch)) => format!("{} ({branch})", task.key),
+        (false, Some(branch)) => format!("{} - {} ({branch})", task.key, title),
+        (true, None) => task.key.clone(),
+        (false, None) => format!("{} - {}", task.key, title),
+    }
 }
 
 pub(crate) fn safe_task_key(value: &str) -> String {
@@ -302,5 +391,85 @@ mod tests {
         assert!(content.contains("[origin]"));
         assert!(content.contains("provider = \"linear\""));
         assert!(content.contains("id = \"PROJ-123\""));
+    }
+
+    #[test]
+    fn select_local_task_errors_when_no_task_files_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let result = select_local_task(&ctx);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No task files found in .local/tasks")
+        );
+    }
+
+    #[test]
+    fn select_local_task_reads_selected_task_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("a-first.toml"),
+            "title = \"First\"\nbranch = \"first\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("b-second.toml"),
+            "title = \"Second\"\nbranch = \"second\"\nbody = \"details\"\n",
+        )
+        .unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(1);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        let selected = select_local_task(&ctx).unwrap();
+
+        assert_eq!(selected.key, "b-second");
+        assert_eq!(selected.path, ".local/tasks/b-second.toml");
+        assert_eq!(selected.document.title, "Second");
+        assert_eq!(selected.document.branch, "second");
+        assert!(selected.content.contains("body = \"details\""));
+    }
+
+    #[test]
+    fn list_local_tasks_rejects_unknown_task_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("bad.toml"),
+            "title = \"Bad\"\nbranch = \"bad\"\nextra = true\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let result = list_local_tasks(&ctx);
+
+        assert!(result.is_err());
+        assert!(format!("{:#}", result.unwrap_err()).contains("unknown field"));
     }
 }

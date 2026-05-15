@@ -8,9 +8,12 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
-- Changed the package version line back to `0.3.x`; current `wt` development is
-  still pre-1.0 because CLI, config, and persisted state contracts are still
-  being stabilized.
+- Changed the package version line within the pre-1.0 minor series; current
+  `wt` development is still pre-1.0 because CLI, config, and persisted state
+  contracts are still being stabilized.
+- Added bare `wt new` support for selecting one prepared local task from
+  `.local/tasks/*.toml` and starting it through the same task snapshot path used
+  by batch and stack runs.
 - Renamed `wt issue --parallel` and `wt new --parallel` to `--matrix`, without a
   compatibility alias, to describe profile-matrix workspace creation instead of
   generic parallel execution.
@@ -108,10 +111,10 @@ minor version instead of moving to `x.0.0`.
 
 ## Historical Notes
 
-The entries below predate the current `0.3.x` pre-1.0 version reset and are
+The entries below predate the current pre-1.0 version reset and are
 kept as internal development history, not package release ordering.
 
-### Former 0.4.0
+### Former Pre-Reset 0.4.0
 
 - Changed config loading to merge `.wt.toml` as the shared base with
   `.local/.wt.toml` as the private override.
