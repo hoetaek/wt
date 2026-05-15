@@ -33,6 +33,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             parallel,
         } => commands::new::run(ctx, name, base, profile.as_deref(), *parallel),
         Commands::Batch { command } => match command {
+            BatchCommand::Task {
+                tasks,
+                profile,
+                base,
+            } => commands::batch::task(ctx, tasks, profile.as_deref(), base),
             BatchCommand::Issue {
                 issues,
                 profile,
@@ -43,11 +48,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             BatchCommand::Edit { batch } => commands::batch::edit(ctx, batch.as_deref()),
         },
         Commands::Stack { command } => match command {
-            StackCommand::New {
-                items,
+            StackCommand::Task {
+                tasks,
                 profile,
                 base,
-            } => commands::stack::new(ctx, items, profile.as_deref(), base),
+            } => commands::stack::task(ctx, tasks, profile.as_deref(), base),
             StackCommand::Issue {
                 issues,
                 profile,

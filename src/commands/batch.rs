@@ -1,12 +1,12 @@
 use crate::cli::BaseMode;
 use crate::commands::issue;
 use crate::commands::issue_selection;
-use crate::commands::issue_snapshot::{IssueSnapshot, snapshot_issues};
+use crate::commands::task::{self, PreparedTask};
 use crate::config::{Config, validate_profile_name};
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::git::GitService;
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,7 +41,32 @@ pub fn issue(
         return Ok(());
     }
 
-    let issue_snapshots = snapshot_issues(ctx, &selected_issues)?;
+    let prepared_tasks = task::prepare_issue_tasks(ctx, &selected_issues)?;
+    write_prepared_batch(ctx, profile, base, prepared_tasks)
+}
+
+pub fn task(
+    ctx: &Ctx,
+    tasks: &[String],
+    profile: Option<&str>,
+    base: &Option<String>,
+) -> Result<()> {
+    validate_profile(ctx, profile)?;
+    let prepared_tasks = task::prepare_named_tasks(ctx, tasks)?;
+    write_prepared_batch(ctx, profile, base, prepared_tasks)
+}
+
+fn write_prepared_batch(
+    ctx: &Ctx,
+    profile: Option<&str>,
+    base: &Option<String>,
+    prepared_tasks: Vec<PreparedTask>,
+) -> Result<()> {
+    if prepared_tasks.is_empty() {
+        ctx.ui.print_warning("No tasks selected");
+        return Ok(());
+    }
+
     let resolved_base = resolve_batch_base(ctx, base)?;
     let now = current_utc_timestamp();
     let batch = BatchMetadata {
@@ -51,9 +76,9 @@ pub fn issue(
         status: STATUS_PREPARED.into(),
         created_at: now.clone(),
         updated_at: now,
-        items: issue_snapshots
+        tasks: prepared_tasks
             .into_iter()
-            .map(BatchItem::from_snapshot)
+            .map(BatchTask::from_prepared)
             .collect(),
     };
     let batch_path = write_new_batch_metadata(ctx, &batch)?;
@@ -94,12 +119,12 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
     let mut metadata = read_batch_metadata(&batch_path)?;
     validate_profile(ctx, metadata.profile.as_deref())?;
 
-    if metadata.items.is_empty() {
-        bail!("Batch has no items: {}", batch_path.display());
+    if metadata.tasks.is_empty() {
+        bail!("Batch has no tasks: {}", batch_path.display());
     }
 
     let has_runnable_item = metadata
-        .items
+        .tasks
         .iter()
         .any(|item| is_runnable_status(&item.status));
     let base = if has_runnable_item {
@@ -109,12 +134,12 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
     };
     let mut ran_any = false;
 
-    for idx in 0..metadata.items.len() {
-        let current_status = metadata.items[idx].status.as_str();
+    for idx in 0..metadata.tasks.len() {
+        let current_status = metadata.tasks[idx].status.as_str();
         if !is_runnable_status(current_status) {
             ctx.ui.print_step(&format!(
                 "Skipping {} ({current_status})",
-                metadata.items[idx].label()
+                metadata.tasks[idx].label()
             ));
             continue;
         }
@@ -126,46 +151,46 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
         ran_any = true;
         metadata.status = STATUS_RUNNING.into();
         metadata.updated_at = current_utc_timestamp();
-        metadata.items[idx].status = STATUS_RUNNING.into();
-        metadata.items[idx].error.clear();
+        metadata.tasks[idx].status = STATUS_RUNNING.into();
+        metadata.tasks[idx].error.clear();
         write_batch_metadata(&batch_path, &metadata)?;
 
-        let result = run_batch_item(ctx, &metadata.items[idx], base, metadata.profile.as_deref());
+        let result = run_batch_task(ctx, &metadata.tasks[idx], base, metadata.profile.as_deref());
 
         match result {
             Ok(()) => {
-                metadata.items[idx].status = STATUS_DONE.into();
-                metadata.items[idx].error.clear();
+                metadata.tasks[idx].status = STATUS_DONE.into();
+                metadata.tasks[idx].error.clear();
             }
             Err(err) => {
                 if err
                     .downcast_ref::<WtError>()
                     .is_some_and(|err| matches!(err, WtError::Cancelled))
                 {
-                    metadata.items[idx].status = STATUS_SKIPPED.into();
-                    metadata.items[idx].error = "User cancelled".into();
-                    metadata.status = summarize_batch_status(&metadata.items);
+                    metadata.tasks[idx].status = STATUS_SKIPPED.into();
+                    metadata.tasks[idx].error = "User cancelled".into();
+                    metadata.status = summarize_batch_status(&metadata.tasks);
                     metadata.updated_at = current_utc_timestamp();
                     write_batch_metadata(&batch_path, &metadata)?;
                     return Ok(());
                 }
 
-                metadata.items[idx].status = STATUS_FAILED.into();
-                metadata.items[idx].error = err.to_string();
+                metadata.tasks[idx].status = STATUS_FAILED.into();
+                metadata.tasks[idx].error = err.to_string();
             }
         }
 
-        metadata.status = summarize_batch_status(&metadata.items);
+        metadata.status = summarize_batch_status(&metadata.tasks);
         metadata.updated_at = current_utc_timestamp();
         write_batch_metadata(&batch_path, &metadata)?;
     }
 
     if !ran_any {
         ctx.ui
-            .print_step("No prepared or failed items to run in this batch.");
+            .print_step("No prepared or failed tasks to run in this batch.");
     }
 
-    metadata.status = summarize_batch_status(&metadata.items);
+    metadata.status = summarize_batch_status(&metadata.tasks);
     metadata.updated_at = current_utc_timestamp();
     write_batch_metadata(&batch_path, &metadata)?;
     ctx.ui
@@ -195,13 +220,17 @@ pub fn show(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
         metadata.profile.as_deref().unwrap_or("(effective config)")
     ));
     ctx.ui.print_dim(&format!(
-        "  Items: {} ({})",
-        metadata.items.len(),
-        batch_status_counts(&metadata.items)
+        "  Tasks: {} ({})",
+        metadata.tasks.len(),
+        batch_status_counts(&metadata.tasks)
     ));
 
-    for (idx, item) in metadata.items.iter().enumerate() {
-        let title = item.title();
+    for (idx, item) in metadata.tasks.iter().enumerate() {
+        let task_doc = task::read_task_document(ctx, &item.task);
+        let title = task_doc
+            .as_ref()
+            .map(|doc| doc.title_or_key(&item.task))
+            .unwrap_or_else(|_| "(missing task)".into());
         let summary = if title.is_empty() {
             format!("  {}. {} [{}]", idx + 1, item.label(), item.status)
         } else {
@@ -214,11 +243,18 @@ pub fn show(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
             )
         };
         ctx.ui.print_dim(&summary);
-        if !item.branch.trim().is_empty() {
-            ctx.ui.print_dim(&format!("     Branch: {}", item.branch));
+        ctx.ui.print_dim(&format!(
+            "     Task: {}",
+            task::task_relative_path(&item.task)
+        ));
+        match task_doc {
+            Ok(doc) => {
+                if !doc.branch.trim().is_empty() {
+                    ctx.ui.print_dim(&format!("     Branch: {}", doc.branch));
+                }
+            }
+            Err(err) => ctx.ui.print_dim(&format!("     Task error: {err}")),
         }
-        ctx.ui
-            .print_dim(&format!("     Snapshot: {}", item.snapshot));
         if !item.error.trim().is_empty() {
             ctx.ui.print_dim(&format!("     Error: {}", item.error));
         }
@@ -250,80 +286,33 @@ struct BatchMetadata {
     #[serde(default)]
     updated_at: String,
     #[serde(default)]
-    items: Vec<BatchItem>,
+    tasks: Vec<BatchTask>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct BatchItem {
-    #[serde(default)]
-    kind: String,
-    #[serde(default)]
-    id: String,
-    #[serde(default)]
-    source: String,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    branch: String,
-    snapshot: String,
+struct BatchTask {
+    task: String,
     #[serde(default = "default_issue_status")]
     status: String,
     #[serde(default)]
     error: String,
 }
 
-impl BatchItem {
-    fn from_snapshot(snapshot: IssueSnapshot) -> Self {
+impl BatchTask {
+    fn from_prepared(task: PreparedTask) -> Self {
         Self {
-            kind: "issue".into(),
-            id: snapshot.id,
-            source: snapshot.source,
-            title: snapshot.title,
-            branch: snapshot.branch,
-            snapshot: snapshot.snapshot,
+            task: task.key,
             status: STATUS_PREPARED.into(),
             error: String::new(),
         }
     }
 
-    fn label(&self) -> String {
-        if !self.id.trim().is_empty() {
-            return self.id.clone();
-        }
-        if !self.branch.trim().is_empty() {
-            return self.branch.clone();
-        }
-        if !self.title.trim().is_empty() {
-            return self.title.clone();
-        }
-        "batch-item".into()
-    }
-
-    fn title(&self) -> String {
-        if !self.title.trim().is_empty() {
-            self.title.clone()
+    fn label(&self) -> &str {
+        if self.task.trim().is_empty() {
+            "batch-task"
         } else {
-            self.label()
-        }
-    }
-
-    fn kind(&self) -> &str {
-        self.kind.trim()
-    }
-
-    fn normalize(&mut self) {
-        if self.id.trim().is_empty() {
-            self.id = if !self.source.trim().is_empty() {
-                self.source.clone()
-            } else if !self.branch.trim().is_empty() {
-                self.branch.clone()
-            } else {
-                self.title.clone()
-            };
-        }
-        if self.title.trim().is_empty() {
-            self.title = self.label();
+            self.task.trim()
         }
     }
 }
@@ -349,48 +338,48 @@ fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn run_batch_item(
+fn run_batch_task(
     ctx: &Ctx,
-    batch_item: &BatchItem,
+    batch_task: &BatchTask,
     base: &Option<String>,
     profile: Option<&str>,
 ) -> Result<()> {
-    if batch_item.kind() != "issue" {
-        bail!(
-            "Batch item {} has unsupported kind: {}",
-            batch_item.label(),
-            batch_item.kind()
-        );
+    let (task_doc, task_path, content) = task::read_task_file(ctx, &batch_task.task)?;
+    let branch_name = prepared_branch_name(&task_doc.branch);
+    if branch_name.is_none() && task_doc.origin.is_none() {
+        bail!("Batch task {} has no branch", batch_task.label());
     }
+    let identifier = task_doc.identifier_or_key(&batch_task.task);
+    let title = task_doc.title_or_key(&batch_task.task);
 
-    let snapshot_path = batch_item.snapshot.clone();
-    let content = fs::read_to_string(ctx.repo_root.join(&snapshot_path))
-        .with_context(|| format!("Failed to read issue snapshot: {snapshot_path}"))?;
-    let branch_name = prepared_branch_name(batch_item);
-
-    issue::run_with_issue_snapshot(
+    let result = issue::run_with_issue_snapshot(
         ctx,
         base,
         profile,
         false,
         issue::PreparedIssueContext {
-            identifier: &batch_item.label(),
-            title: &batch_item.title(),
+            identifier: &identifier,
+            title: &title,
             branch_name,
-            mode: "issue",
-            prompt_intro: "Use this issue snapshot before changing code.",
+            mode: task_doc.mode(),
+            prompt_intro: "Use this task before changing code.",
             snapshot: issue::IssueSnapshotContext {
-                path_label: "Snapshot path",
-                path: &snapshot_path,
+                path_label: "Task path",
+                path: &task_path,
                 content: &content,
             },
         },
-    )
-    .map(|_| ())
+    )?;
+
+    if task_doc.branch != result.branch_name {
+        task::write_task_branch(ctx, &batch_task.task, &result.branch_name)?;
+    }
+
+    Ok(())
 }
 
-fn prepared_branch_name(item: &BatchItem) -> Option<&str> {
-    let branch = item.branch.trim();
+fn prepared_branch_name(branch: &str) -> Option<&str> {
+    let branch = branch.trim();
     if branch.is_empty() || branch == "-" {
         None
     } else {
@@ -419,25 +408,17 @@ fn write_new_batch_metadata(ctx: &Ctx, batch: &BatchMetadata) -> Result<PathBuf>
 fn read_batch_metadata(path: &Path) -> Result<BatchMetadata> {
     let content = fs::read_to_string(path)?;
     let mut metadata: BatchMetadata = toml::from_str(&content)?;
-    for item in &mut metadata.items {
-        item.normalize();
-        validate_batch_item_kind(item)?;
+    for item in &mut metadata.tasks {
+        validate_batch_task(item)?;
     }
     Ok(metadata)
 }
 
-fn validate_batch_item_kind(item: &BatchItem) -> Result<()> {
-    match item.kind() {
-        "issue" => Ok(()),
-        "" => bail!(
-            "Batch item {} is missing kind. Supported kind: issue",
-            item.label()
-        ),
-        other => bail!(
-            "Batch item {} has unsupported kind: {other}. Supported kind: issue",
-            item.label()
-        ),
+fn validate_batch_task(item: &BatchTask) -> Result<()> {
+    if item.task.trim().is_empty() {
+        bail!("Batch task is missing task");
     }
+    Ok(())
 }
 
 fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
@@ -453,18 +434,9 @@ fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
     content.push_str(&format!("created_at = {}\n", toml_quote(&batch.created_at)));
     content.push_str(&format!("updated_at = {}\n", toml_quote(&batch.updated_at)));
 
-    for item in &batch.items {
-        content.push_str("\n[[items]]\n");
-        content.push_str(&format!("kind = {}\n", toml_quote(item.kind())));
-        if !item.id.trim().is_empty() {
-            content.push_str(&format!("id = {}\n", toml_quote(&item.id)));
-        }
-        if !item.source.trim().is_empty() {
-            content.push_str(&format!("source = {}\n", toml_quote(&item.source)));
-        }
-        content.push_str(&format!("title = {}\n", toml_quote(&item.title())));
-        content.push_str(&format!("branch = {}\n", toml_quote(&item.branch)));
-        content.push_str(&format!("snapshot = {}\n", toml_quote(&item.snapshot)));
+    for item in &batch.tasks {
+        content.push_str("\n[[tasks]]\n");
+        content.push_str(&format!("task = {}\n", toml_quote(&item.task)));
         content.push_str(&format!("status = {}\n", toml_quote(&item.status)));
         content.push_str(&format!("error = {}\n", toml_quote(&item.error)));
     }
@@ -530,14 +502,14 @@ fn describe_batch_base(batch: &BatchMetadata) -> Result<String> {
             .base
             .clone()
             .ok_or_else(|| anyhow::anyhow!("Batch base_mode is explicit but base is missing")),
-        "default" | "interactive" | "current" => {
-            bail!("Batch base_mode must be explicit; recreate the batch with wt batch issue")
-        }
+        "default" | "interactive" | "current" => bail!(
+            "Batch base_mode must be explicit; recreate the batch with wt batch task or wt batch issue"
+        ),
         other => bail!("Unknown batch base_mode: {other}"),
     }
 }
 
-fn batch_status_counts(items: &[BatchItem]) -> String {
+fn batch_status_counts(items: &[BatchTask]) -> String {
     let statuses = [
         STATUS_PREPARED,
         STATUS_RUNNING,
@@ -568,7 +540,7 @@ fn batch_base_option(batch: &BatchMetadata) -> Result<Option<String>> {
             .map(Some)
             .ok_or_else(|| anyhow::anyhow!("Batch base_mode is explicit but base is missing")),
         "default" | "interactive" | "current" => bail!(
-            "Batch base_mode must be explicit before run; recreate the batch with wt batch issue"
+            "Batch base_mode must be explicit before run; recreate the batch with wt batch task or wt batch issue"
         ),
         other => bail!("Unknown batch base_mode: {other}"),
     }
@@ -578,7 +550,7 @@ fn is_runnable_status(status: &str) -> bool {
     matches!(status, STATUS_PREPARED | STATUS_FAILED)
 }
 
-fn summarize_batch_status(items: &[BatchItem]) -> String {
+fn summarize_batch_status(items: &[BatchTask]) -> String {
     if items.is_empty() {
         return STATUS_DONE.into();
     }
@@ -658,7 +630,6 @@ fn toml_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::issue_snapshot::safe_file_stem;
     use crate::config::{
         Config, EditorPlacement, IssueProviderType, IssuesConfig, WorktreeNamingConfig,
     };
@@ -670,15 +641,36 @@ mod tests {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
     }
 
-    #[test]
-    fn safe_file_stem_replaces_unsafe_chars() {
-        assert_eq!(safe_file_stem("#42"), "42");
-        assert_eq!(safe_file_stem("PROJ-123"), "PROJ-123");
-        assert_eq!(safe_file_stem("bad/value"), "bad-value");
+    fn batch_task(key: &str, status: &str, error: &str) -> BatchTask {
+        BatchTask {
+            task: key.into(),
+            status: status.into(),
+            error: error.into(),
+        }
+    }
+
+    fn write_task_file(root: &std::path::Path, key: &str, title: &str, branch: &str, body: &str) {
+        let tasks_dir = root.join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        let mut content = format!("title = \"{title}\"\n");
+        if !branch.is_empty() {
+            content.push_str(&format!("branch = \"{branch}\"\n"));
+        }
+        if !body.is_empty() {
+            content.push_str(&format!("body = \"\"\"\n{body}\n\"\"\"\n"));
+        }
+        std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
     }
 
     #[test]
-    fn snapshot_issues_writes_markdown_body_outside_batch_toml() {
+    fn safe_task_key_replaces_unsafe_chars() {
+        assert_eq!(task::safe_task_key("#42"), "42");
+        assert_eq!(task::safe_task_key("PROJ-123"), "PROJ-123");
+        assert_eq!(task::safe_task_key("bad/value"), "bad-value");
+    }
+
+    #[test]
+    fn prepare_issue_tasks_writes_task_body_outside_batch_toml() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -700,16 +692,18 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        let snapshots = snapshot_issues(&ctx, &["PROJ-123".into()]).unwrap();
+        let tasks = task::prepare_issue_tasks(&ctx, &["PROJ-123".into()]).unwrap();
 
-        assert_eq!(snapshots[0].snapshot, ".local/issues/PROJ-123.md");
-        assert_eq!(snapshots[0].title, "Fix editor");
-        assert_eq!(snapshots[0].branch, "alice/proj-123-fix-editor");
-        let markdown =
-            std::fs::read_to_string(dir.path().join(".local/issues/PROJ-123.md")).unwrap();
-        assert!(markdown.contains("# PROJ-123: Fix editor"));
-        assert!(markdown.contains("## Body"));
-        assert!(markdown.contains("Long issue body"));
+        assert_eq!(tasks[0].key, "PROJ-123");
+        assert_eq!(tasks[0].branch, "alice/proj-123-fix-editor");
+        let content =
+            std::fs::read_to_string(dir.path().join(".local/tasks/PROJ-123.toml")).unwrap();
+        assert!(content.contains("title = \"Fix editor\""));
+        assert!(content.contains("branch = \"alice/proj-123-fix-editor\""));
+        assert!(content.contains("body = \"\"\""));
+        assert!(content.contains("Long issue body"));
+        assert!(content.contains("[origin]"));
+        assert!(content.contains("id = \"PROJ-123\""));
     }
 
     #[test]
@@ -744,13 +738,16 @@ mod tests {
         assert!(content.contains("base_mode = \"explicit\""));
         assert!(content.contains("base = \"main\""));
         assert!(content.contains("status = \"prepared\""));
-        assert!(content.contains("[[items]]"));
-        assert!(content.contains("kind = \"issue\""));
+        assert!(content.contains("[[tasks]]"));
+        assert!(content.contains("task = \"PROJ-123\""));
+        assert!(!content.contains("[[items]]"));
         assert!(!content.contains("[[issues]]"));
-        assert!(content.contains("id = \"PROJ-123\""));
-        assert!(content.contains("title = \"Fix editor\""));
-        assert!(content.contains("branch = \"alice/proj-123-fix-editor\""));
-        assert!(content.contains("snapshot = \".local/issues/PROJ-123.md\""));
+
+        let task_content =
+            std::fs::read_to_string(dir.path().join(".local/tasks/PROJ-123.toml")).unwrap();
+        assert!(task_content.contains("title = \"Fix editor\""));
+        assert!(task_content.contains("branch = \"alice/proj-123-fix-editor\""));
+        assert!(task_content.contains("id = \"PROJ-123\""));
     }
 
     #[test]
@@ -791,10 +788,10 @@ mod tests {
 
         let batch_path = latest_batch_path(&ctx).unwrap();
         let content = std::fs::read_to_string(&batch_path).unwrap();
-        assert!(content.contains("branch = \"alice/proj-123-repair-editor\""));
-        let markdown =
-            std::fs::read_to_string(dir.path().join(".local/issues/PROJ-123.md")).unwrap();
-        assert!(markdown.contains("- Branch: `alice/proj-123-repair-editor`"));
+        assert!(content.contains("task = \"PROJ-123\""));
+        let task_content =
+            std::fs::read_to_string(dir.path().join(".local/tasks/PROJ-123.toml")).unwrap();
+        assert!(task_content.contains("branch = \"alice/proj-123-repair-editor\""));
     }
 
     #[test]
@@ -838,7 +835,7 @@ mod tests {
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-13T00:00:00Z".into(),
             updated_at: "2026-05-13T00:00:00Z".into(),
-            items: Vec::new(),
+            tasks: Vec::new(),
         };
 
         let result = batch_base_option(&batch);
@@ -936,6 +933,13 @@ mod tests {
             Box::new(MockRunner::new()),
             Box::new(ui.clone()),
         );
+        write_task_file(
+            dir.path(),
+            "PROJ-123",
+            "Fix editor",
+            "alice/proj-123-fix-editor",
+            "",
+        );
         let batch_path = dir.path().join("batch.toml");
         let batch = BatchMetadata {
             profile: Some("codex".into()),
@@ -944,16 +948,7 @@ mod tests {
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            items: vec![BatchItem {
-                kind: "issue".into(),
-                id: "PROJ-123".into(),
-                source: "123".into(),
-                title: "Fix editor".into(),
-                branch: "alice/proj-123-fix-editor".into(),
-                snapshot: ".local/issues/PROJ-123.md".into(),
-                status: STATUS_FAILED.into(),
-                error: "missing snapshot".into(),
-            }],
+            tasks: vec![batch_task("PROJ-123", STATUS_FAILED, "missing task")],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -965,10 +960,11 @@ mod tests {
         assert!(details.contains("Status: partial"));
         assert!(details.contains("Base: main"));
         assert!(details.contains("Profile: codex"));
-        assert!(details.contains("Items: 1 (failed=1)"));
+        assert!(details.contains("Tasks: 1 (failed=1)"));
         assert!(details.contains("PROJ-123 [failed] Fix editor"));
+        assert!(details.contains("Task: .local/tasks/PROJ-123.toml"));
         assert!(details.contains("Branch: alice/proj-123-fix-editor"));
-        assert!(details.contains("Error: missing snapshot"));
+        assert!(details.contains("Error: missing task"));
     }
 
     #[test]
@@ -990,7 +986,7 @@ mod tests {
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            items: Vec::new(),
+            tasks: Vec::new(),
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -1039,8 +1035,8 @@ mod tests {
 
         let batch_path = latest_batch_path(&ctx).unwrap();
         let content = std::fs::read_to_string(batch_path).unwrap();
-        assert!(content.contains("id = \"PROJ-2\""));
-        assert!(!content.contains("id = \"PROJ-1\""));
+        assert!(content.contains("task = \"PROJ-2\""));
+        assert!(!content.contains("task = \"PROJ-1\""));
     }
 
     #[test]
@@ -1054,16 +1050,7 @@ mod tests {
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:01:00Z".into(),
-            items: vec![BatchItem {
-                kind: "issue".into(),
-                id: "PROJ-123".into(),
-                source: "123".into(),
-                title: "Fix editor".into(),
-                branch: "alice/proj-123-fix-editor".into(),
-                snapshot: ".local/issues/PROJ-123.md".into(),
-                status: STATUS_DONE.into(),
-                error: String::new(),
-            }],
+            tasks: vec![batch_task("PROJ-123", STATUS_DONE, "")],
         };
 
         write_batch_metadata(&path, &batch).unwrap();
@@ -1072,12 +1059,12 @@ mod tests {
         assert_eq!(parsed.profile.as_deref(), Some("codex-yolo"));
         assert_eq!(parsed.base.as_deref(), Some("main"));
         assert_eq!(parsed.status, STATUS_PARTIAL);
-        assert_eq!(parsed.items[0].kind(), "issue");
-        assert_eq!(parsed.items[0].status, STATUS_DONE);
+        assert_eq!(parsed.tasks[0].task, "PROJ-123");
+        assert_eq!(parsed.tasks[0].status, STATUS_DONE);
 
         let content = std::fs::read_to_string(path).unwrap();
-        assert!(content.contains("[[items]]"));
-        assert!(content.contains("kind = \"issue\""));
+        assert!(content.contains("[[tasks]]"));
+        assert!(content.contains("task = \"PROJ-123\""));
         assert!(!content.contains("[[issues]]"));
     }
 
@@ -1107,7 +1094,7 @@ error = ""
     }
 
     #[test]
-    fn read_batch_metadata_rejects_non_issue_item_kind() {
+    fn read_batch_metadata_rejects_legacy_items_tables() {
         let dir = tempfile::tempdir().unwrap();
         let batch_path = dir.path().join("batch.toml");
         std::fs::write(
@@ -1128,13 +1115,11 @@ error = ""
         )
         .unwrap();
 
-        let err = read_batch_metadata(&batch_path).unwrap_err();
-        assert!(err.to_string().contains("unsupported kind: new"));
-        assert!(err.to_string().contains("Supported kind: issue"));
+        assert!(read_batch_metadata(&batch_path).is_err());
     }
 
     #[test]
-    fn read_batch_metadata_rejects_missing_item_kind() {
+    fn read_batch_metadata_rejects_legacy_items_without_kind() {
         let dir = tempfile::tempdir().unwrap();
         let batch_path = dir.path().join("batch.toml");
         std::fs::write(
@@ -1154,8 +1139,7 @@ error = ""
         )
         .unwrap();
 
-        let err = read_batch_metadata(&batch_path).unwrap_err();
-        assert!(err.to_string().contains("missing kind"));
+        assert!(read_batch_metadata(&batch_path).is_err());
     }
 
     #[test]
@@ -1206,16 +1190,7 @@ error = ""
 
     #[test]
     fn summarize_status_distinguishes_batch_and_item_state() {
-        let item = |status: &str| BatchItem {
-            kind: "issue".into(),
-            id: "PROJ-123".into(),
-            source: "123".into(),
-            title: String::new(),
-            branch: String::new(),
-            snapshot: ".local/issues/PROJ-123.md".into(),
-            status: status.into(),
-            error: String::new(),
-        };
+        let item = |status: &str| batch_task("PROJ-123", status, "");
 
         assert_eq!(
             summarize_batch_status(&[item(STATUS_PREPARED)]),
@@ -1253,16 +1228,7 @@ error = ""
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            items: vec![BatchItem {
-                kind: "issue".into(),
-                id: "PROJ-123".into(),
-                source: "123".into(),
-                title: "Fix editor".into(),
-                branch: "alice/proj-123-fix-editor".into(),
-                snapshot: ".local/issues/PROJ-123.md".into(),
-                status: STATUS_DONE.into(),
-                error: String::new(),
-            }],
+            tasks: vec![batch_task("PROJ-123", STATUS_DONE, "")],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -1270,11 +1236,11 @@ error = ""
 
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.status, STATUS_DONE);
-        assert_eq!(updated.items[0].status, STATUS_DONE);
+        assert_eq!(updated.tasks[0].status, STATUS_DONE);
     }
 
     #[test]
-    fn run_marks_item_failed_and_errors_when_snapshot_is_missing() {
+    fn run_marks_task_failed_and_errors_when_task_file_is_missing() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -1291,16 +1257,7 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            items: vec![BatchItem {
-                kind: "issue".into(),
-                id: "PROJ-123".into(),
-                source: "123".into(),
-                title: "Fix editor".into(),
-                branch: "alice/proj-123-fix-editor".into(),
-                snapshot: ".local/issues/PROJ-123.md".into(),
-                status: STATUS_PREPARED.into(),
-                error: String::new(),
-            }],
+            tasks: vec![batch_task("PROJ-123", STATUS_PREPARED, "")],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -1311,16 +1268,12 @@ error = ""
         assert_eq!(updated.base_mode, "explicit");
         assert_eq!(updated.base.as_deref(), Some("main"));
         assert_eq!(updated.status, STATUS_FAILED);
-        assert_eq!(updated.items[0].status, STATUS_FAILED);
-        assert!(
-            updated.items[0]
-                .error
-                .contains("Failed to read issue snapshot")
-        );
+        assert_eq!(updated.tasks[0].status, STATUS_FAILED);
+        assert!(updated.tasks[0].error.contains("Failed to read task"));
     }
 
     #[test]
-    fn run_rejects_non_explicit_base_before_touching_items() {
+    fn run_rejects_non_explicit_base_before_touching_tasks() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -1337,16 +1290,7 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            items: vec![BatchItem {
-                kind: "issue".into(),
-                id: "PROJ-123".into(),
-                source: "123".into(),
-                title: "Fix editor".into(),
-                branch: "alice/proj-123-fix-editor".into(),
-                snapshot: ".local/issues/PROJ-123.md".into(),
-                status: STATUS_PREPARED.into(),
-                error: String::new(),
-            }],
+            tasks: vec![batch_task("PROJ-123", STATUS_PREPARED, "")],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -1362,20 +1306,20 @@ error = ""
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.base_mode, "interactive");
         assert_eq!(updated.status, STATUS_PREPARED);
-        assert_eq!(updated.items[0].status, STATUS_PREPARED);
-        assert!(updated.items[0].error.is_empty());
+        assert_eq!(updated.tasks[0].status, STATUS_PREPARED);
+        assert!(updated.tasks[0].error.is_empty());
     }
 
     #[test]
-    fn run_uses_snapshot_metadata_without_issue_provider_when_branch_is_stored() {
+    fn run_uses_task_metadata_without_issue_provider_when_branch_is_stored() {
         let dir = tempfile::tempdir().unwrap();
-        let issues_dir = dir.path().join(".local/issues");
-        std::fs::create_dir_all(&issues_dir).unwrap();
-        std::fs::write(
-            issues_dir.join("PROJ-123.md"),
-            "# PROJ-123: Fix editor\n\nBody",
-        )
-        .unwrap();
+        write_task_file(
+            dir.path(),
+            "PROJ-123",
+            "Fix editor",
+            "alice/proj-123-fix-editor",
+            "Body",
+        );
 
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -1406,16 +1350,7 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            items: vec![BatchItem {
-                kind: "issue".into(),
-                id: "PROJ-123".into(),
-                source: "123".into(),
-                title: "Fix editor".into(),
-                branch: "alice/proj-123-fix-editor".into(),
-                snapshot: ".local/issues/PROJ-123.md".into(),
-                status: STATUS_PREPARED.into(),
-                error: String::new(),
-            }],
+            tasks: vec![batch_task("PROJ-123", STATUS_PREPARED, "")],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -1425,6 +1360,6 @@ error = ""
         assert_eq!(updated.base_mode, "explicit");
         assert_eq!(updated.base.as_deref(), Some("main"));
         assert_eq!(updated.status, STATUS_DONE);
-        assert_eq!(updated.items[0].status, STATUS_DONE);
+        assert_eq!(updated.tasks[0].status, STATUS_DONE);
     }
 }

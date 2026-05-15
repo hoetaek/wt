@@ -138,7 +138,7 @@ to close it before removing the worktree.
    override
 
 `.local/` is ignored by this repository and is intended for private profiles,
-issue snapshots, and machine-specific settings.
+prepared tasks, and machine-specific settings.
 
 Inspect the effective config after shared, local, profile, and convention-file
 layers are merged:
@@ -435,10 +435,11 @@ wt config inline .local/.wt.toml
 
 ## Batches
 
-Batches split planning from execution. `issue` snapshots issues and writes a
-batch file without creating worktrees:
+Batches split planning from execution. `task` prepares local tasks and `issue`
+imports provider issues as tasks without creating worktrees:
 
 ```bash
+wt batch task "add schema" "wire API" --base main
 wt batch issue
 wt batch issue 123 456 789
 wt batch issue 123 456 789 --base main
@@ -448,29 +449,28 @@ wt batch issue 123 456 789 --profile codex
 When issue identifiers are omitted, `issue` opens the provider issue list and
 lets you select multiple issues interactively.
 
-`issue` asks once for the base branch and stores the resolved branch in the
-batch file. `--base .` stores the current branch without prompting, `--base`
-with no value opens the local branch selector, and `--base <branch>` stores the
-named branch explicitly.
-`run` requires that stored explicit base before it marks any item `running`.
+Batch preparation asks once for the base branch and stores the resolved branch
+in the batch file. `--base .` stores the current branch without prompting,
+`--base` with no value opens the local branch selector, and `--base <branch>`
+stores the named branch explicitly.
+`run` requires that stored explicit base before it marks any task `running`.
 
 When `--profile` is omitted, the batch does not store a profile field and uses
 the effective config at run time. When `--profile <name>` is provided, the
 batch stores that named profile.
 
-Issue bodies are stored as markdown snapshots:
+Task details are stored separately from batch status:
 
 ```text
-.local/issues/123.md
+.local/tasks/123.toml
 .local/batches/2026-05-09-001.toml
 ```
 
 The batch TOML records the optional profile, base mode, overall batch status,
-and one `[[items]]` table per issue item. The double brackets are TOML's
-array-of-tables syntax, equivalent to an `items: [...]` list in JSON. Issue
-items use `kind = "issue"` and a `snapshot` path.
-Batch item kinds are strict: `kind = "issue"` is the only supported batch item
-kind.
+and one `[[tasks]]` table per task. The double brackets are TOML's
+array-of-tables syntax, equivalent to a `tasks: [...]` list in JSON. Each task
+row stores the task key and status; the task TOML stores the title, branch,
+body, and optional issue origin.
 
 Run a prepared batch explicitly:
 
@@ -483,28 +483,27 @@ wt batch run .local/batches/2026-05-09-001.toml
 wt batch run latest
 ```
 
-`show` prints the stored base branch, profile, batch status, and item statuses.
-`edit` opens the batch TOML file without changing item state.
+`show` prints the stored base branch, profile, batch status, and task statuses.
+`edit` opens the batch TOML file without changing task state.
 
-`run` executes only issue items with `status = "prepared"` or
-`status = "failed"`. Items marked `done` or `skipped` are left alone, so reruns
-can continue from the batch file's item status instead of checking a global
-issue state.
+`run` executes only tasks with `status = "prepared"` or `status = "failed"`.
+Tasks marked `done` or `skipped` are left alone, so reruns can continue from
+the batch file's task status instead of checking a global issue state.
 
 ## Stacks
 
-Stacks are ordered work where each item branch is based on the previous
-completed item branch.
+Stacks are ordered work where each task branch is based on the previous
+completed task branch.
 
 Create a stack from branch-name text without creating worktrees:
 
 ```bash
-wt stack new "add schema" "wire API" --base main
-wt stack new "add schema" "wire API" --base .
+wt stack task "add schema" "wire API" --base main
+wt stack task "add schema" "wire API" --base .
 ```
 
-`issue` snapshots provider issues and writes a stack file without creating
-worktrees:
+`issue` imports provider issues as tasks and writes a stack file without
+creating worktrees:
 
 ```bash
 wt stack issue
@@ -517,14 +516,14 @@ When issue identifiers are omitted, `issue` opens the provider issue list,
 lets you select multiple issues, then asks for the base-to-top order. When
 identifiers are provided, their argument order is the stack order.
 
-Both `new` and `issue` create stack TOML. `new` writes manual `kind = "new"`
-items from branch-name text. `issue` writes `kind = "issue"` items from
-provider issue snapshots.
+Both `task` and `issue` create stack TOML. `task` writes local task documents
+from branch-name text. `issue` writes task documents with provider origin
+metadata.
 
 Both commands ask once for the base branch and store the resolved branch in the
 stack file. `--base .` stores the current branch without prompting, `--base`
 with no value opens the local branch selector, and `--base <branch>` stores the
-named branch explicitly. The first item uses that stored base as its parent.
+named branch explicitly. The first task uses that stored base as its parent.
 
 You can also edit stack TOML directly:
 
@@ -534,29 +533,34 @@ base_mode = "explicit"
 base = "main"
 status = "prepared"
 
-[[items]]
-kind = "new"
+[[tasks]]
+task = "add-schema"
+parent = "main"
+status = "prepared"
+error = ""
+
+[[tasks]]
+task = "wire-api"
+parent = "add-schema"
+status = "prepared"
+error = ""
+```
+
+The referenced task documents live under `.local/tasks/`:
+
+```toml
+# .local/tasks/add-schema.toml
 title = "Add schema"
 branch = "add-schema"
 body = """
 Create the schema first.
 """
-
-[[items]]
-kind = "new"
-title = "Wire API"
-branch = "wire-api"
-body = """
-Build on the schema branch.
-"""
 ```
 
-`[[items]]` is the canonical stack list. Issue-based `issue` also writes
-`[[items]]` with `kind = "issue"` and a `snapshot` path.
-Stack item kinds are strict: `kind = "issue"` and `kind = "new"` are the only
-supported stack item kinds. Pull requests are not stack items.
+`[[tasks]]` is the canonical stack list. Pull requests remain a separate
+workflow and are not stack tasks.
 
-Start the next runnable stack item:
+Start the next runnable stack task:
 
 ```bash
 wt stack show
@@ -567,25 +571,25 @@ wt stack run .local/stacks/2026-05-12-001.toml
 wt stack run latest
 ```
 
-`show` prints the stored base branch, profile, stack status, item statuses, and
+`show` prints the stored base branch, profile, stack status, task statuses, and
 the recorded parent chain.
-`edit` opens the stack TOML file without changing item state.
+`edit` opens the stack TOML file without changing task state.
 
-`run` starts one prepared or failed item at a time and leaves it marked
-`running`. The first item branch uses the stack base branch. Each following
-item branch starts only after the previous item is completed, and uses that
-previous completed item branch as its parent. Skipped items are not used as
-parents; if every earlier item was skipped, the next item uses the stack base.
+`run` starts one prepared or failed task at a time and leaves it marked
+`running`. The first task branch uses the stack base branch. Each following
+task branch starts only after the previous task is completed, and uses that
+previous completed task branch as its parent. Skipped tasks are not used as
+parents; if every earlier task was skipped, the next task uses the stack base.
 
-When `run` starts an item, the agent prompt includes the completion command:
+When `run` starts a task, the agent prompt includes the completion command:
 
 ```bash
 wt stack complete .local/stacks/2026-05-12-001.toml 123 --run-next
 ```
 
-`complete` verifies that the item branch has no uncommitted changes and has at
-least one commit ahead of its parent before marking the running item `done`.
-With `--run-next`, it then starts the next prepared or failed item
+`complete` verifies that the task branch has no uncommitted changes and has at
+least one commit ahead of its parent before marking the running task `done`.
+With `--run-next`, it then starts the next prepared or failed task
 automatically:
 
 ```bash

@@ -1,14 +1,13 @@
 use crate::cli::BaseMode;
+use crate::commands::issue;
 use crate::commands::issue_selection::{self, SelectedIssue};
-use crate::commands::issue_snapshot::{IssueSnapshot, snapshot_issues};
-use crate::commands::{issue, new as new_command};
+use crate::commands::task::{self, PreparedTask};
 use crate::config::{Config, validate_profile_name};
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::git::GitService;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,35 +19,15 @@ const STATUS_FAILED: &str = "failed";
 const STATUS_SKIPPED: &str = "skipped";
 const STATUS_PARTIAL: &str = "partial";
 
-pub fn new(
+pub fn task(
     ctx: &Ctx,
-    items: &[String],
+    tasks: &[String],
     profile: Option<&str>,
     base: &Option<String>,
 ) -> Result<()> {
     validate_profile(ctx, profile)?;
-    if items.is_empty() {
-        bail!("Usage: wt stack new <item>...");
-    }
-
-    let mut stack_items = stack_items_from_names(items, None)?;
-    let resolved_base = resolve_stack_base(ctx, base)?;
-    assign_stack_item_parents(&mut stack_items, &resolved_base);
-    let now = current_utc_timestamp();
-    let stack = StackMetadata {
-        profile: profile.map(str::to_string),
-        base_mode: "explicit".into(),
-        base: Some(resolved_base),
-        status: STATUS_PREPARED.into(),
-        created_at: now.clone(),
-        updated_at: now,
-        items: stack_items,
-    };
-    let stack_path = write_new_stack_metadata(ctx, &stack)?;
-
-    ctx.ui
-        .print_step(&format!("Created stack: {}", stack_path.display()));
-    Ok(())
+    let prepared_tasks = task::prepare_named_tasks(ctx, tasks)?;
+    write_prepared_stack(ctx, profile, base, prepared_tasks)
 }
 
 pub fn issue(
@@ -73,10 +52,23 @@ pub fn issue(
         return Ok(());
     }
 
-    let issue_snapshots = snapshot_issues(ctx, &selected_issues)?;
-    let mut stack_items = stack_items_from_snapshots(issue_snapshots, None);
+    let prepared_tasks = task::prepare_issue_tasks(ctx, &selected_issues)?;
+    write_prepared_stack(ctx, profile, base, prepared_tasks)
+}
+
+fn write_prepared_stack(
+    ctx: &Ctx,
+    profile: Option<&str>,
+    base: &Option<String>,
+    prepared_tasks: Vec<PreparedTask>,
+) -> Result<()> {
+    if prepared_tasks.is_empty() {
+        ctx.ui.print_warning("No tasks selected");
+        return Ok(());
+    }
+
     let resolved_base = resolve_stack_base(ctx, base)?;
-    assign_stack_item_parents(&mut stack_items, &resolved_base);
+    let stack_tasks = stack_tasks_from_prepared(prepared_tasks, Some(resolved_base.clone()));
     let now = current_utc_timestamp();
     let stack = StackMetadata {
         profile: profile.map(str::to_string),
@@ -85,7 +77,7 @@ pub fn issue(
         status: STATUS_PREPARED.into(),
         created_at: now.clone(),
         updated_at: now,
-        items: stack_items,
+        tasks: stack_tasks,
     };
     let stack_path = write_new_stack_metadata(ctx, &stack)?;
 
@@ -99,27 +91,27 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
     let mut metadata = read_stack_metadata(&stack_path)?;
     validate_profile(ctx, metadata.profile.as_deref())?;
 
-    if metadata.items.is_empty() {
-        bail!("Stack has no items: {}", stack_path.display());
+    if metadata.tasks.is_empty() {
+        bail!("Stack has no tasks: {}", stack_path.display());
     }
 
     if let Some(item) = metadata
-        .items
+        .tasks
         .iter()
         .find(|item| item.status == STATUS_RUNNING)
     {
         bail!(
-            "Stack item {} is already running. Mark it complete with: wt stack complete {} {}",
+            "Stack task {} is already running. Mark it complete with: wt stack complete {} {}",
             item.label(),
             stack_path.display(),
             item.label()
         );
     }
 
-    let Some(idx) = next_runnable_item(&metadata.items) else {
+    let Some(idx) = next_runnable_task(&metadata.tasks) else {
         ctx.ui
-            .print_step("No prepared or failed items to run in this stack.");
-        metadata.status = summarize_stack_status(&metadata.items);
+            .print_step("No prepared or failed tasks to run in this stack.");
+        metadata.status = summarize_stack_status(&metadata.tasks);
         metadata.updated_at = current_utc_timestamp();
         write_stack_metadata(&stack_path, &metadata)?;
         return Ok(());
@@ -128,29 +120,29 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
     let parent = parent_for_item(ctx, &metadata, idx)?;
     metadata.status = STATUS_RUNNING.into();
     metadata.updated_at = current_utc_timestamp();
-    metadata.items[idx].status = STATUS_RUNNING.into();
-    metadata.items[idx].parent = Some(parent.clone());
-    metadata.items[idx].error.clear();
+    metadata.tasks[idx].status = STATUS_RUNNING.into();
+    metadata.tasks[idx].parent = Some(parent.clone());
+    metadata.tasks[idx].error.clear();
     write_stack_metadata(&stack_path, &metadata)?;
 
-    let result = run_stack_item(
+    let result = run_stack_task(
         ctx,
         &stack_path,
-        &metadata.items[idx],
+        &metadata.tasks[idx],
         &parent,
         metadata.profile.as_deref(),
     );
 
     match result {
         Ok(result) => {
-            metadata.items[idx].branch = result.branch_name;
-            metadata.items[idx].status = STATUS_RUNNING.into();
-            metadata.items[idx].error.clear();
+            task::write_task_branch(ctx, &metadata.tasks[idx].task, &result.branch_name)?;
+            metadata.tasks[idx].status = STATUS_RUNNING.into();
+            metadata.tasks[idx].error.clear();
             ctx.ui.print_step(&format!(
-                "Started stack item {}. Mark it complete with: wt stack complete {} {}",
-                metadata.items[idx].label(),
+                "Started stack task {}. Mark it complete with: wt stack complete {} {}",
+                metadata.tasks[idx].label(),
                 stack_path.display(),
-                metadata.items[idx].label()
+                metadata.tasks[idx].label()
             ));
         }
         Err(err) => {
@@ -158,20 +150,20 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
                 .downcast_ref::<WtError>()
                 .is_some_and(|err| matches!(err, WtError::Cancelled))
             {
-                metadata.items[idx].status = STATUS_SKIPPED.into();
-                metadata.items[idx].error = "User cancelled".into();
-                metadata.status = summarize_stack_status(&metadata.items);
+                metadata.tasks[idx].status = STATUS_SKIPPED.into();
+                metadata.tasks[idx].error = "User cancelled".into();
+                metadata.status = summarize_stack_status(&metadata.tasks);
                 metadata.updated_at = current_utc_timestamp();
                 write_stack_metadata(&stack_path, &metadata)?;
                 return Ok(());
             }
 
-            metadata.items[idx].status = STATUS_FAILED.into();
-            metadata.items[idx].error = err.to_string();
+            metadata.tasks[idx].status = STATUS_FAILED.into();
+            metadata.tasks[idx].error = err.to_string();
         }
     }
 
-    metadata.status = summarize_stack_status(&metadata.items);
+    metadata.status = summarize_stack_status(&metadata.tasks);
     metadata.updated_at = current_utc_timestamp();
     write_stack_metadata(&stack_path, &metadata)?;
     ctx.ui
@@ -201,13 +193,17 @@ pub fn show(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
         metadata.profile.as_deref().unwrap_or("(effective config)")
     ));
     ctx.ui.print_dim(&format!(
-        "  Items: {} ({})",
-        metadata.items.len(),
-        stack_status_counts(&metadata.items)
+        "  Tasks: {} ({})",
+        metadata.tasks.len(),
+        stack_status_counts(&metadata.tasks)
     ));
 
-    for (idx, item) in metadata.items.iter().enumerate() {
-        let title = item.title();
+    for (idx, item) in metadata.tasks.iter().enumerate() {
+        let task_doc = task::read_task_document(ctx, &item.task);
+        let title = task_doc
+            .as_ref()
+            .map(|doc| doc.title_or_key(&item.task))
+            .unwrap_or_else(|_| "(missing task)".into());
         let summary = if title.is_empty() {
             format!("  {}. {} [{}]", idx + 1, item.label(), item.status)
         } else {
@@ -220,15 +216,20 @@ pub fn show(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
             )
         };
         ctx.ui.print_dim(&summary);
-        ctx.ui.print_dim(&format!("     Kind: {}", item.kind()));
-        if !item.branch.trim().is_empty() {
-            ctx.ui.print_dim(&format!("     Branch: {}", item.branch));
+        ctx.ui.print_dim(&format!(
+            "     Task: {}",
+            task::task_relative_path(&item.task)
+        ));
+        match task_doc {
+            Ok(doc) => {
+                if !doc.branch.trim().is_empty() {
+                    ctx.ui.print_dim(&format!("     Branch: {}", doc.branch));
+                }
+            }
+            Err(err) => ctx.ui.print_dim(&format!("     Task error: {err}")),
         }
         if let Some(parent) = item.parent.as_deref() {
             ctx.ui.print_dim(&format!("     Parent: {parent}"));
-        }
-        if let Some(snapshot) = item.snapshot.as_deref() {
-            ctx.ui.print_dim(&format!("     Snapshot: {snapshot}"));
         }
         if !item.error.trim().is_empty() {
             ctx.ui.print_dim(&format!("     Error: {}", item.error));
@@ -251,34 +252,34 @@ pub fn complete(ctx: &Ctx, stack: &str, item: Option<&str>, run_next: bool) -> R
     let mut metadata = read_stack_metadata(&stack_path)?;
 
     let Some(idx) = metadata
-        .items
+        .tasks
         .iter()
         .position(|item| item.status == STATUS_RUNNING)
     else {
-        ctx.ui.print_warning("No running stack item found");
+        ctx.ui.print_warning("No running stack task found");
         return Ok(());
     };
 
     if let Some(item) = item {
-        let running = &metadata.items[idx];
-        if !stack_item_matches(running, item) {
+        let running = &metadata.tasks[idx];
+        if !stack_task_matches(ctx, running, item) {
             bail!(
-                "Running stack item is {}, but complete was requested for {item}",
+                "Running stack task is {}, but complete was requested for {item}",
                 running.label()
             );
         }
     }
 
-    validate_completable_stack_item(ctx, &metadata.items[idx])?;
+    validate_completable_stack_task(ctx, &metadata.tasks[idx])?;
 
-    metadata.items[idx].status = STATUS_DONE.into();
-    metadata.items[idx].error.clear();
-    metadata.status = summarize_stack_status(&metadata.items);
+    metadata.tasks[idx].status = STATUS_DONE.into();
+    metadata.tasks[idx].error.clear();
+    metadata.status = summarize_stack_status(&metadata.tasks);
     metadata.updated_at = current_utc_timestamp();
     write_stack_metadata(&stack_path, &metadata)?;
 
     ctx.ui
-        .print_step(&format!("Marked {} done", metadata.items[idx].label()));
+        .print_step(&format!("Marked {} done", metadata.tasks[idx].label()));
     if run_next {
         run(ctx, stack_path.to_string_lossy().as_ref())?;
     }
@@ -300,87 +301,36 @@ struct StackMetadata {
     #[serde(default)]
     updated_at: String,
     #[serde(default)]
-    items: Vec<StackItem>,
+    tasks: Vec<StackTask>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StackItem {
-    #[serde(default)]
-    kind: String,
-    #[serde(default)]
-    id: String,
-    #[serde(default)]
-    source: String,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    branch: String,
+struct StackTask {
+    task: String,
     #[serde(default)]
     parent: Option<String>,
-    #[serde(default)]
-    snapshot: Option<String>,
-    #[serde(default)]
-    body: String,
     #[serde(default = "default_issue_status")]
     status: String,
     #[serde(default)]
     error: String,
 }
 
-impl StackItem {
-    fn from_snapshot(snapshot: IssueSnapshot, parent: Option<String>) -> Self {
+impl StackTask {
+    fn from_prepared(task: PreparedTask, parent: Option<String>) -> Self {
         Self {
-            kind: "issue".into(),
-            id: snapshot.id,
-            source: snapshot.source,
-            title: snapshot.title,
-            branch: snapshot.branch,
+            task: task.key,
             parent,
-            snapshot: Some(snapshot.snapshot),
-            body: String::new(),
             status: STATUS_PREPARED.into(),
             error: String::new(),
         }
     }
 
-    fn label(&self) -> String {
-        if !self.id.trim().is_empty() {
-            return self.id.clone();
-        }
-        if !self.branch.trim().is_empty() {
-            return self.branch.clone();
-        }
-        if !self.title.trim().is_empty() {
-            return self.title.clone();
-        }
-        "stack-item".into()
-    }
-
-    fn title(&self) -> String {
-        if !self.title.trim().is_empty() {
-            self.title.clone()
+    fn label(&self) -> &str {
+        if self.task.trim().is_empty() {
+            "stack-task"
         } else {
-            self.label()
-        }
-    }
-
-    fn kind(&self) -> &str {
-        self.kind.trim()
-    }
-
-    fn normalize(&mut self) {
-        if self.id.trim().is_empty() {
-            self.id = if !self.source.trim().is_empty() {
-                self.source.clone()
-            } else if !self.branch.trim().is_empty() {
-                self.branch.clone()
-            } else {
-                self.title.clone()
-            };
-        }
-        if self.title.trim().is_empty() {
-            self.title = self.label();
+            self.task.trim()
         }
     }
 }
@@ -439,61 +389,19 @@ fn parse_order(raw: &str, len: usize) -> Result<Vec<usize>> {
     Ok(order)
 }
 
-fn stack_items_from_snapshots(
-    snapshots: Vec<IssueSnapshot>,
+fn stack_tasks_from_prepared(
+    prepared_tasks: Vec<PreparedTask>,
     initial_parent: Option<String>,
-) -> Vec<StackItem> {
+) -> Vec<StackTask> {
     let mut parent = initial_parent;
-    snapshots
+    prepared_tasks
         .into_iter()
-        .map(|snapshot| {
-            let issue_parent = parent.clone();
-            parent = prepared_branch_name(&snapshot.branch).map(str::to_string);
-            StackItem::from_snapshot(snapshot, issue_parent)
+        .map(|task| {
+            let task_parent = parent.clone();
+            parent = prepared_branch_name(&task.branch).map(str::to_string);
+            StackTask::from_prepared(task, task_parent)
         })
         .collect()
-}
-
-fn stack_items_from_names(
-    names: &[String],
-    initial_parent: Option<String>,
-) -> Result<Vec<StackItem>> {
-    let mut seen_branches = HashSet::new();
-    let mut parent = initial_parent;
-    let mut items = Vec::new();
-
-    for name in names {
-        let title = name.trim();
-        let branch = new_command::branch_name_from_words(&[title.to_string()])?;
-        if !seen_branches.insert(branch.clone()) {
-            bail!("Duplicate stack item branch: {branch}");
-        }
-
-        let item_parent = parent.clone();
-        parent = Some(branch.clone());
-        items.push(StackItem {
-            kind: "new".into(),
-            id: branch.clone(),
-            source: String::new(),
-            title: title.to_string(),
-            branch,
-            parent: item_parent,
-            snapshot: None,
-            body: String::new(),
-            status: STATUS_PREPARED.into(),
-            error: String::new(),
-        });
-    }
-
-    Ok(items)
-}
-
-fn assign_stack_item_parents(items: &mut [StackItem], initial_parent: &str) {
-    let mut parent = Some(initial_parent.to_string());
-    for item in items {
-        item.parent = parent.clone();
-        parent = prepared_branch_name(&item.branch).map(str::to_string);
-    }
 }
 
 fn default_stack_status() -> String {
@@ -517,42 +425,27 @@ fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn run_stack_item(
+fn run_stack_task(
     ctx: &Ctx,
     stack_path: &Path,
-    stack_item: &StackItem,
+    stack_task: &StackTask,
     parent: &str,
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
-    let (snapshot_path, content) = stack_item_content(ctx, stack_item, parent)?;
+    let (task_doc, task_path, content) = task::read_task_file(ctx, &stack_task.task)?;
     let content = format!(
-        "{}\n\n## Stack Completion\n\nWhen this item is complete and committed, run:\n\n```bash\nwt stack complete {} {} --run-next\n```",
+        "{}\n\n## Stack Completion\n\nWhen this task is complete and committed, run:\n\n```bash\nwt stack complete {} {} --run-next\n```",
         content.trim_end(),
         stack_path.display(),
-        stack_item.label()
+        stack_task.label()
     );
-    let branch_name = prepared_branch_name(&stack_item.branch);
-    if branch_name.is_none() {
-        bail!("Stack item {} has no branch", stack_item.label());
+    let branch_name = prepared_branch_name(&task_doc.branch);
+    if branch_name.is_none() && task_doc.origin.is_none() {
+        bail!("Stack task {} has no branch", stack_task.label());
     }
     let base = Some(parent.to_string());
-    let identifier = stack_item.label();
-    let title = stack_item.title();
-    let mode = if stack_item.snapshot.is_some() {
-        "issue"
-    } else {
-        "new"
-    };
-    let prompt_intro = if stack_item.snapshot.is_some() {
-        "Use this issue snapshot before changing code."
-    } else {
-        "Use this stack item before changing code."
-    };
-    let path_label = if stack_item.snapshot.is_some() {
-        "Snapshot path"
-    } else {
-        "Stack item"
-    };
+    let identifier = task_doc.identifier_or_key(&stack_task.task);
+    let title = task_doc.title_or_key(&stack_task.task);
 
     issue::run_with_issue_snapshot(
         ctx,
@@ -563,55 +456,37 @@ fn run_stack_item(
             identifier: &identifier,
             title: &title,
             branch_name,
-            mode,
-            prompt_intro,
+            mode: task_doc.mode(),
+            prompt_intro: "Use this task before changing code.",
             snapshot: issue::IssueSnapshotContext {
-                path_label,
-                path: &snapshot_path,
+                path_label: "Task path",
+                path: &task_path,
                 content: &content,
             },
         },
     )
 }
 
-fn stack_item_content(ctx: &Ctx, item: &StackItem, parent: &str) -> Result<(String, String)> {
-    if let Some(snapshot_path) = item.snapshot.as_deref() {
-        let content = fs::read_to_string(ctx.repo_root.join(snapshot_path))
-            .with_context(|| format!("Failed to read issue snapshot: {snapshot_path}"))?;
-        return Ok((snapshot_path.to_string(), content));
+fn stack_task_matches(ctx: &Ctx, item: &StackTask, target: &str) -> bool {
+    if item.task == target {
+        return true;
     }
-
-    let path = format!("stack:{}", item.label());
-    let mut content = format!(
-        "# {}\n\n- Kind: `{}`\n- Branch: `{}`\n- Parent: `{}`\n",
-        item.title(),
-        item.kind(),
-        item.branch,
-        parent
-    );
-    if !item.body.trim().is_empty() {
-        content.push_str("\n## Body\n\n");
-        content.push_str(item.body.trim());
-        content.push('\n');
-    }
-    Ok((path, content))
+    let Ok(task_doc) = task::read_task_document(ctx, &item.task) else {
+        return false;
+    };
+    task_doc.title == target
+        || prepared_branch_name(&task_doc.branch) == Some(target)
+        || task_doc.branch.rsplit('/').next() == Some(target)
 }
 
-fn stack_item_matches(item: &StackItem, target: &str) -> bool {
-    item.id == target
-        || item.source == target
-        || item.title == target
-        || prepared_branch_name(&item.branch) == Some(target)
-        || item.branch.rsplit('/').next() == Some(target)
-}
-
-fn validate_completable_stack_item(ctx: &Ctx, item: &StackItem) -> Result<()> {
-    let branch = prepared_branch_name(&item.branch)
-        .ok_or_else(|| anyhow::anyhow!("Stack item {} has no branch", item.label()))?;
+fn validate_completable_stack_task(ctx: &Ctx, item: &StackTask) -> Result<()> {
+    let task_doc = task::read_task_document(ctx, &item.task)?;
+    let branch = prepared_branch_name(&task_doc.branch)
+        .ok_or_else(|| anyhow::anyhow!("Stack task {} has no branch", item.label()))?;
     let parent = item
         .parent
         .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("Stack item {} has no parent", item.label()))?;
+        .ok_or_else(|| anyhow::anyhow!("Stack task {} has no parent", item.label()))?;
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
 
     if let Some(path) = git.checked_out_path(branch)? {
@@ -619,7 +494,7 @@ fn validate_completable_stack_item(ctx: &Ctx, item: &StackItem) -> Result<()> {
         let relevant_status = relevant_worktree_status(ctx, &status);
         if !relevant_status.trim().is_empty() {
             bail!(
-                "Stack item {} has uncommitted changes in {}. Commit or stash them before completing.\n{}",
+                "Stack task {} has uncommitted changes in {}. Commit or stash them before completing.\n{}",
                 item.label(),
                 path.display(),
                 relevant_status.trim_end()
@@ -629,7 +504,7 @@ fn validate_completable_stack_item(ctx: &Ctx, item: &StackItem) -> Result<()> {
 
     if !git.branch_has_commits_ahead(parent, branch)? {
         bail!(
-            "Stack item {} has no commits ahead of parent {parent}. Commit the item work before completing.",
+            "Stack task {} has no commits ahead of parent {parent}. Commit the task work before completing.",
             item.label()
         );
     }
@@ -664,7 +539,7 @@ fn porcelain_status_path(line: &str) -> Option<&str> {
     Some(path.trim_matches('"'))
 }
 
-fn next_runnable_item(items: &[StackItem]) -> Option<usize> {
+fn next_runnable_task(items: &[StackTask]) -> Option<usize> {
     for (idx, item) in items.iter().enumerate() {
         match item.status.as_str() {
             STATUS_DONE | STATUS_SKIPPED => continue,
@@ -680,17 +555,18 @@ fn parent_for_item(ctx: &Ctx, stack: &StackMetadata, idx: usize) -> Result<Strin
         return resolve_initial_base(ctx, stack);
     }
 
-    for previous in stack.items[..idx].iter().rev() {
+    for previous in stack.tasks[..idx].iter().rev() {
         match previous.status.as_str() {
             STATUS_DONE => {
-                return prepared_branch_name(&previous.branch)
+                let task_doc = task::read_task_document(ctx, &previous.task)?;
+                return prepared_branch_name(&task_doc.branch)
                     .map(str::to_string)
                     .ok_or_else(|| {
-                        anyhow::anyhow!("Previous stack item {} has no branch", previous.label())
+                        anyhow::anyhow!("Previous stack task {} has no branch", previous.label())
                     });
             }
             STATUS_SKIPPED => continue,
-            _ => bail!("Previous stack item {} is not done", previous.label()),
+            _ => bail!("Previous stack task {} is not done", previous.label()),
         }
     }
 
@@ -727,25 +603,17 @@ fn write_new_stack_metadata(ctx: &Ctx, stack: &StackMetadata) -> Result<PathBuf>
 fn read_stack_metadata(path: &Path) -> Result<StackMetadata> {
     let content = fs::read_to_string(path)?;
     let mut metadata: StackMetadata = toml::from_str(&content)?;
-    for item in &mut metadata.items {
-        item.normalize();
-        validate_stack_item_kind(item)?;
+    for item in &mut metadata.tasks {
+        validate_stack_task(item)?;
     }
     Ok(metadata)
 }
 
-fn validate_stack_item_kind(item: &StackItem) -> Result<()> {
-    match item.kind() {
-        "issue" | "new" => Ok(()),
-        "" => bail!(
-            "Stack item {} is missing kind. Supported kinds: issue, new",
-            item.label()
-        ),
-        other => bail!(
-            "Stack item {} has unsupported kind: {other}. Supported kinds: issue, new",
-            item.label()
-        ),
+fn validate_stack_task(item: &StackTask) -> Result<()> {
+    if item.task.trim().is_empty() {
+        bail!("Stack task is missing task");
     }
+    Ok(())
 }
 
 fn write_stack_metadata(path: &Path, stack: &StackMetadata) -> Result<()> {
@@ -761,25 +629,11 @@ fn write_stack_metadata(path: &Path, stack: &StackMetadata) -> Result<()> {
     content.push_str(&format!("created_at = {}\n", toml_quote(&stack.created_at)));
     content.push_str(&format!("updated_at = {}\n", toml_quote(&stack.updated_at)));
 
-    for item in &stack.items {
-        content.push_str("\n[[items]]\n");
-        content.push_str(&format!("kind = {}\n", toml_quote(item.kind())));
-        if !item.id.trim().is_empty() {
-            content.push_str(&format!("id = {}\n", toml_quote(&item.id)));
-        }
-        if !item.source.trim().is_empty() {
-            content.push_str(&format!("source = {}\n", toml_quote(&item.source)));
-        }
-        content.push_str(&format!("title = {}\n", toml_quote(&item.title())));
-        content.push_str(&format!("branch = {}\n", toml_quote(&item.branch)));
+    for item in &stack.tasks {
+        content.push_str("\n[[tasks]]\n");
+        content.push_str(&format!("task = {}\n", toml_quote(&item.task)));
         if let Some(parent) = item.parent.as_deref() {
             content.push_str(&format!("parent = {}\n", toml_quote(parent)));
-        }
-        if let Some(snapshot) = item.snapshot.as_deref() {
-            content.push_str(&format!("snapshot = {}\n", toml_quote(snapshot)));
-        }
-        if !item.body.trim().is_empty() {
-            content.push_str(&format!("body = {}\n", toml_multiline_string(&item.body)));
         }
         content.push_str(&format!("status = {}\n", toml_quote(&item.status)));
         content.push_str(&format!("error = {}\n", toml_quote(&item.error)));
@@ -907,7 +761,7 @@ fn describe_stack_base(stack: &StackMetadata) -> Result<String> {
     }
 }
 
-fn stack_status_counts(items: &[StackItem]) -> String {
+fn stack_status_counts(items: &[StackTask]) -> String {
     let statuses = [
         STATUS_PREPARED,
         STATUS_RUNNING,
@@ -934,7 +788,7 @@ fn is_runnable_status(status: &str) -> bool {
     matches!(status, STATUS_PREPARED | STATUS_FAILED)
 }
 
-fn summarize_stack_status(items: &[StackItem]) -> String {
+fn summarize_stack_status(items: &[StackTask]) -> String {
     if items.is_empty() {
         return STATUS_DONE.into();
     }
@@ -1011,13 +865,6 @@ fn toml_quote(value: &str) -> String {
     out
 }
 
-fn toml_multiline_string(value: &str) -> String {
-    let escaped = value
-        .replace("\\", "\\\\")
-        .replace("\"\"\"", "\\\"\\\"\\\"");
-    format!("\"\"\"\n{}\n\"\"\"", escaped.trim_end())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1039,6 +886,32 @@ mod tests {
         fn has_command(&self, cmd: &str) -> bool {
             self.inner.has_command(cmd)
         }
+    }
+
+    fn stack_task(key: &str, parent: Option<&str>, status: &str, error: &str) -> StackTask {
+        StackTask {
+            task: key.into(),
+            parent: parent.map(str::to_string),
+            status: status.into(),
+            error: error.into(),
+        }
+    }
+
+    fn write_task_file(root: &Path, key: &str, title: &str, branch: &str, body: &str) {
+        let tasks_dir = root.join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        let mut content = format!("title = \"{title}\"\n");
+        if !branch.is_empty() {
+            content.push_str(&format!("branch = \"{branch}\"\n"));
+        }
+        if !body.is_empty() {
+            content.push_str(&format!("body = \"\"\"\n{body}\n\"\"\"\n"));
+        }
+        std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
+    }
+
+    fn read_task_content(root: &Path, key: &str) -> String {
+        std::fs::read_to_string(root.join(format!(".local/tasks/{key}.toml"))).unwrap()
     }
 
     #[test]
@@ -1079,7 +952,7 @@ mod tests {
     }
 
     #[test]
-    fn new_creates_manual_stack_items() {
+    fn task_creates_manual_stack_tasks() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -1088,33 +961,33 @@ mod tests {
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
         );
-        let items = vec!["Add schema".into(), "Wire API".into()];
+        let tasks = vec!["Add schema".into(), "Wire API".into()];
 
-        new(&ctx, &items, None, &Some("main".into())).unwrap();
+        task(&ctx, &tasks, None, &Some("main".into())).unwrap();
 
         let stack_path = latest_stack_path(&ctx).unwrap();
         let stack = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(stack.base_mode, "explicit");
         assert_eq!(stack.base.as_deref(), Some("main"));
-        assert_eq!(stack.items.len(), 2);
-        assert_eq!(stack.items[0].kind(), "new");
-        assert_eq!(stack.items[0].id, "add-schema");
-        assert_eq!(stack.items[0].title, "Add schema");
-        assert_eq!(stack.items[0].branch, "add-schema");
-        assert_eq!(stack.items[0].parent.as_deref(), Some("main"));
-        assert!(stack.items[0].snapshot.is_none());
-        assert_eq!(stack.items[1].id, "wire-api");
-        assert_eq!(stack.items[1].parent.as_deref(), Some("add-schema"));
+        assert_eq!(stack.tasks.len(), 2);
+        assert_eq!(stack.tasks[0].task, "add-schema");
+        assert_eq!(stack.tasks[0].parent.as_deref(), Some("main"));
+        assert_eq!(stack.tasks[1].task, "wire-api");
+        assert_eq!(stack.tasks[1].parent.as_deref(), Some("add-schema"));
+
+        let add_schema = read_task_content(dir.path(), "add-schema");
+        assert!(add_schema.contains("title = \"Add schema\""));
+        assert!(add_schema.contains("branch = \"add-schema\""));
 
         let content = std::fs::read_to_string(stack_path).unwrap();
-        assert!(content.contains("[[items]]"));
-        assert!(content.contains("kind = \"new\""));
-        assert!(!content.contains("snapshot ="));
+        assert!(content.contains("[[tasks]]"));
+        assert!(content.contains("task = \"add-schema\""));
+        assert!(!content.contains("[[items]]"));
         assert!(!content.contains("[[issues]]"));
     }
 
     #[test]
-    fn new_resolves_current_base_for_dot_base() {
+    fn task_resolves_current_base_for_dot_base() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response("feature/current", true);
@@ -1125,9 +998,9 @@ mod tests {
             Box::new(runner),
             Box::new(MockUi::new()),
         );
-        let items = vec!["Add schema".into()];
+        let tasks = vec!["Add schema".into()];
 
-        new(&ctx, &items, None, &Some(".".into())).unwrap();
+        task(&ctx, &tasks, None, &Some(".".into())).unwrap();
 
         let stack_path = latest_stack_path(&ctx).unwrap();
         let content = std::fs::read_to_string(stack_path).unwrap();
@@ -1137,7 +1010,7 @@ mod tests {
     }
 
     #[test]
-    fn new_stores_default_base_prompt_result_at_prepare_time() {
+    fn task_stores_default_base_prompt_result_at_prepare_time() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response("main", true);
@@ -1150,15 +1023,15 @@ mod tests {
             Box::new(runner),
             Box::new(ui),
         );
-        let items = vec!["Add schema".into()];
+        let tasks = vec!["Add schema".into()];
 
-        new(&ctx, &items, None, &None).unwrap();
+        task(&ctx, &tasks, None, &None).unwrap();
 
         let stack_path = latest_stack_path(&ctx).unwrap();
         let stack = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(stack.base_mode, "explicit");
         assert_eq!(stack.base.as_deref(), Some("develop"));
-        assert_eq!(stack.items[0].parent.as_deref(), Some("develop"));
+        assert_eq!(stack.tasks[0].parent.as_deref(), Some("develop"));
     }
 
     #[test]
@@ -1180,7 +1053,7 @@ mod tests {
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-13T00:00:00Z".into(),
             updated_at: "2026-05-13T00:00:00Z".into(),
-            items: Vec::new(),
+            tasks: Vec::new(),
         };
 
         assert_eq!(
@@ -1192,6 +1065,9 @@ mod tests {
     #[test]
     fn parent_for_item_skips_skipped_items_when_finding_parent() {
         let dir = tempfile::tempdir().unwrap();
+        write_task_file(dir.path(), "schema", "Schema", "schema", "");
+        write_task_file(dir.path(), "api", "API", "api", "");
+        write_task_file(dir.path(), "ui", "UI", "ui", "");
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
@@ -1206,43 +1082,10 @@ mod tests {
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-13T00:00:00Z".into(),
             updated_at: "2026-05-13T00:00:00Z".into(),
-            items: vec![
-                StackItem {
-                    kind: "new".into(),
-                    id: "schema".into(),
-                    source: "Schema".into(),
-                    title: "Schema".into(),
-                    branch: "schema".into(),
-                    parent: Some("main".into()),
-                    snapshot: None,
-                    body: String::new(),
-                    status: STATUS_DONE.into(),
-                    error: String::new(),
-                },
-                StackItem {
-                    kind: "new".into(),
-                    id: "api".into(),
-                    source: "API".into(),
-                    title: "API".into(),
-                    branch: "api".into(),
-                    parent: Some("schema".into()),
-                    snapshot: None,
-                    body: String::new(),
-                    status: STATUS_SKIPPED.into(),
-                    error: "User cancelled".into(),
-                },
-                StackItem {
-                    kind: "new".into(),
-                    id: "ui".into(),
-                    source: "UI".into(),
-                    title: "UI".into(),
-                    branch: "ui".into(),
-                    parent: None,
-                    snapshot: None,
-                    body: String::new(),
-                    status: STATUS_PREPARED.into(),
-                    error: String::new(),
-                },
+            tasks: vec![
+                stack_task("schema", Some("main"), STATUS_DONE, ""),
+                stack_task("api", Some("schema"), STATUS_SKIPPED, "User cancelled"),
+                stack_task("ui", None, STATUS_PREPARED, ""),
             ],
         };
 
@@ -1252,6 +1095,8 @@ mod tests {
     #[test]
     fn parent_for_item_uses_initial_base_when_previous_items_are_skipped() {
         let dir = tempfile::tempdir().unwrap();
+        write_task_file(dir.path(), "schema", "Schema", "schema", "");
+        write_task_file(dir.path(), "api", "API", "api", "");
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
@@ -1266,31 +1111,9 @@ mod tests {
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-13T00:00:00Z".into(),
             updated_at: "2026-05-13T00:00:00Z".into(),
-            items: vec![
-                StackItem {
-                    kind: "new".into(),
-                    id: "schema".into(),
-                    source: "Schema".into(),
-                    title: "Schema".into(),
-                    branch: "schema".into(),
-                    parent: Some("main".into()),
-                    snapshot: None,
-                    body: String::new(),
-                    status: STATUS_SKIPPED.into(),
-                    error: "User cancelled".into(),
-                },
-                StackItem {
-                    kind: "new".into(),
-                    id: "api".into(),
-                    source: "API".into(),
-                    title: "API".into(),
-                    branch: "api".into(),
-                    parent: None,
-                    snapshot: None,
-                    body: String::new(),
-                    status: STATUS_PREPARED.into(),
-                    error: String::new(),
-                },
+            tasks: vec![
+                stack_task("schema", Some("main"), STATUS_SKIPPED, "User cancelled"),
+                stack_task("api", None, STATUS_PREPARED, ""),
             ],
         };
 
@@ -1298,7 +1121,7 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_duplicate_item_branches() {
+    fn task_rejects_duplicate_task_keys() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -1307,10 +1130,10 @@ mod tests {
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
         );
-        let items = vec!["Add schema".into(), "add schema".into()];
+        let tasks = vec!["Add schema".into(), "add schema".into()];
 
-        let err = new(&ctx, &items, None, &None).unwrap_err();
-        assert!(err.to_string().contains("Duplicate stack item branch"));
+        let err = task(&ctx, &tasks, None, &None).unwrap_err();
+        assert!(err.to_string().contains("Duplicate task: add-schema"));
     }
 
     #[test]
@@ -1352,13 +1175,13 @@ mod tests {
         let stack_path = latest_stack_path(&ctx).unwrap();
         let stack = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(stack.base.as_deref(), Some("main"));
-        assert_eq!(stack.items[0].id, "PROJ-2");
-        assert_eq!(stack.items[0].parent.as_deref(), Some("main"));
-        assert_eq!(stack.items[1].id, "PROJ-1");
-        assert_eq!(stack.items[1].parent.as_deref(), Some("alice/proj-2-api"));
+        assert_eq!(stack.tasks[0].task, "PROJ-2");
+        assert_eq!(stack.tasks[0].parent.as_deref(), Some("main"));
+        assert_eq!(stack.tasks[1].task, "PROJ-1");
+        assert_eq!(stack.tasks[1].parent.as_deref(), Some("alice/proj-2-api"));
         let content = std::fs::read_to_string(stack_path).unwrap();
-        assert!(content.contains("[[items]]"));
-        assert!(content.contains("kind = \"issue\""));
+        assert!(content.contains("[[tasks]]"));
+        assert!(content.contains("task = \"PROJ-2\""));
         assert!(!content.contains("[[issues]]"));
     }
 
@@ -1410,12 +1233,18 @@ mod tests {
 
         let stack_path = latest_stack_path(&ctx).unwrap();
         let stack = read_stack_metadata(&stack_path).unwrap();
-        assert_eq!(stack.items[0].branch, "alice/proj-1-schema-layer");
-        assert_eq!(stack.items[0].parent.as_deref(), Some("main"));
-        assert_eq!(stack.items[1].branch, "alice/proj-2-api-layer");
+        assert_eq!(stack.tasks[0].parent.as_deref(), Some("main"));
+        assert_eq!(stack.tasks[1].task, "PROJ-2");
         assert_eq!(
-            stack.items[1].parent.as_deref(),
+            stack.tasks[1].parent.as_deref(),
             Some("alice/proj-1-schema-layer")
+        );
+        assert!(
+            read_task_content(dir.path(), "PROJ-1")
+                .contains("branch = \"alice/proj-1-schema-layer\"")
+        );
+        assert!(
+            read_task_content(dir.path(), "PROJ-2").contains("branch = \"alice/proj-2-api-layer\"")
         );
     }
 
@@ -1430,6 +1259,7 @@ mod tests {
             Box::new(MockRunner::new()),
             Box::new(ui.clone()),
         );
+        write_task_file(dir.path(), "PROJ-1", "Schema", "alice/proj-1-schema", "");
         let stack_path = dir.path().join("stack.toml");
         let stack = StackMetadata {
             profile: Some("codex".into()),
@@ -1438,18 +1268,12 @@ mod tests {
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-12T00:00:00Z".into(),
             updated_at: "2026-05-12T00:00:00Z".into(),
-            items: vec![StackItem {
-                kind: "issue".into(),
-                id: "PROJ-1".into(),
-                source: "PROJ-1".into(),
-                title: "Schema".into(),
-                branch: "alice/proj-1-schema".into(),
-                parent: Some("main".into()),
-                snapshot: Some(".local/issues/PROJ-1.md".into()),
-                body: String::new(),
-                status: STATUS_FAILED.into(),
-                error: "missing snapshot".into(),
-            }],
+            tasks: vec![stack_task(
+                "PROJ-1",
+                Some("main"),
+                STATUS_FAILED,
+                "missing task",
+            )],
         };
         write_stack_metadata(&stack_path, &stack).unwrap();
 
@@ -1461,13 +1285,12 @@ mod tests {
         assert!(details.contains("Status: partial"));
         assert!(details.contains("Base: main"));
         assert!(details.contains("Profile: codex"));
-        assert!(details.contains("Items: 1 (failed=1)"));
+        assert!(details.contains("Tasks: 1 (failed=1)"));
         assert!(details.contains("PROJ-1 [failed] Schema"));
-        assert!(details.contains("Kind: issue"));
+        assert!(details.contains("Task: .local/tasks/PROJ-1.toml"));
         assert!(details.contains("Branch: alice/proj-1-schema"));
         assert!(details.contains("Parent: main"));
-        assert!(details.contains("Snapshot: .local/issues/PROJ-1.md"));
-        assert!(details.contains("Error: missing snapshot"));
+        assert!(details.contains("Error: missing task"));
     }
 
     #[test]
@@ -1496,7 +1319,7 @@ error = ""
     }
 
     #[test]
-    fn read_stack_metadata_rejects_pr_item_kind() {
+    fn read_stack_metadata_rejects_legacy_items_tables() {
         let dir = tempfile::tempdir().unwrap();
         let stack_path = dir.path().join("stack.toml");
         std::fs::write(
@@ -1516,13 +1339,11 @@ error = ""
         )
         .unwrap();
 
-        let err = read_stack_metadata(&stack_path).unwrap_err();
-        assert!(err.to_string().contains("unsupported kind: pr"));
-        assert!(err.to_string().contains("Supported kinds: issue, new"));
+        assert!(read_stack_metadata(&stack_path).is_err());
     }
 
     #[test]
-    fn read_stack_metadata_rejects_missing_item_kind() {
+    fn read_stack_metadata_rejects_legacy_items_without_kind() {
         let dir = tempfile::tempdir().unwrap();
         let stack_path = dir.path().join("stack.toml");
         std::fs::write(
@@ -1541,8 +1362,7 @@ error = ""
         )
         .unwrap();
 
-        let err = read_stack_metadata(&stack_path).unwrap_err();
-        assert!(err.to_string().contains("missing kind"));
+        assert!(read_stack_metadata(&stack_path).is_err());
     }
 
     #[test]
@@ -1572,12 +1392,10 @@ error = ""
     }
 
     #[test]
-    fn run_starts_one_item_and_complete_allows_next_parent() {
+    fn run_starts_one_task_and_complete_allows_next_parent() {
         let dir = tempfile::tempdir().unwrap();
-        let issues_dir = dir.path().join(".local/issues");
-        std::fs::create_dir_all(&issues_dir).unwrap();
-        std::fs::write(issues_dir.join("PROJ-1.md"), "# PROJ-1: Schema\n").unwrap();
-        std::fs::write(issues_dir.join("PROJ-2.md"), "# PROJ-2: API\n").unwrap();
+        write_task_file(dir.path(), "PROJ-1", "Schema", "alice/proj-1-schema", "");
+        write_task_file(dir.path(), "PROJ-2", "API", "alice/proj-2-api", "");
 
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -1635,31 +1453,9 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-12T00:00:00Z".into(),
             updated_at: "2026-05-12T00:00:00Z".into(),
-            items: vec![
-                StackItem {
-                    kind: "issue".into(),
-                    id: "PROJ-1".into(),
-                    source: "PROJ-1".into(),
-                    title: "Schema".into(),
-                    branch: "alice/proj-1-schema".into(),
-                    parent: None,
-                    snapshot: Some(".local/issues/PROJ-1.md".into()),
-                    body: String::new(),
-                    status: STATUS_PREPARED.into(),
-                    error: String::new(),
-                },
-                StackItem {
-                    kind: "issue".into(),
-                    id: "PROJ-2".into(),
-                    source: "PROJ-2".into(),
-                    title: "API".into(),
-                    branch: "alice/proj-2-api".into(),
-                    parent: None,
-                    snapshot: Some(".local/issues/PROJ-2.md".into()),
-                    body: String::new(),
-                    status: STATUS_PREPARED.into(),
-                    error: String::new(),
-                },
+            tasks: vec![
+                stack_task("PROJ-1", None, STATUS_PREPARED, ""),
+                stack_task("PROJ-2", None, STATUS_PREPARED, ""),
             ],
         };
         write_stack_metadata(&stack_path, &stack).unwrap();
@@ -1668,23 +1464,23 @@ error = ""
 
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
-        assert_eq!(updated.items[0].parent.as_deref(), Some("main"));
-        assert_eq!(updated.items[0].status, STATUS_RUNNING);
-        assert_eq!(updated.items[1].status, STATUS_PREPARED);
+        assert_eq!(updated.tasks[0].parent.as_deref(), Some("main"));
+        assert_eq!(updated.tasks[0].status, STATUS_RUNNING);
+        assert_eq!(updated.tasks[1].status, STATUS_PREPARED);
 
         complete(&ctx, stack_path.to_str().unwrap(), Some("PROJ-1"), false).unwrap();
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_PARTIAL);
-        assert_eq!(updated.items[0].status, STATUS_DONE);
+        assert_eq!(updated.tasks[0].status, STATUS_DONE);
 
         run(&ctx, stack_path.to_str().unwrap()).unwrap();
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
         assert_eq!(
-            updated.items[1].parent.as_deref(),
+            updated.tasks[1].parent.as_deref(),
             Some("alice/proj-1-schema")
         );
-        assert_eq!(updated.items[1].status, STATUS_RUNNING);
+        assert_eq!(updated.tasks[1].status, STATUS_RUNNING);
 
         let calls = runner.calls.lock().unwrap();
         assert!(calls.iter().any(|(_, args, _)| {
@@ -1698,12 +1494,10 @@ error = ""
     }
 
     #[test]
-    fn complete_with_run_next_starts_next_item() {
+    fn complete_with_run_next_starts_next_task() {
         let dir = tempfile::tempdir().unwrap();
-        let issues_dir = dir.path().join(".local/issues");
-        std::fs::create_dir_all(&issues_dir).unwrap();
-        std::fs::write(issues_dir.join("PROJ-1.md"), "# PROJ-1: Schema\n").unwrap();
-        std::fs::write(issues_dir.join("PROJ-2.md"), "# PROJ-2: API\n").unwrap();
+        write_task_file(dir.path(), "PROJ-1", "Schema", "alice/proj-1-schema", "");
+        write_task_file(dir.path(), "PROJ-2", "API", "alice/proj-2-api", "");
 
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -1762,31 +1556,9 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-12T00:00:00Z".into(),
             updated_at: "2026-05-12T00:00:00Z".into(),
-            items: vec![
-                StackItem {
-                    kind: "issue".into(),
-                    id: "PROJ-1".into(),
-                    source: "PROJ-1".into(),
-                    title: "Schema".into(),
-                    branch: "alice/proj-1-schema".into(),
-                    parent: None,
-                    snapshot: Some(".local/issues/PROJ-1.md".into()),
-                    body: String::new(),
-                    status: STATUS_PREPARED.into(),
-                    error: String::new(),
-                },
-                StackItem {
-                    kind: "issue".into(),
-                    id: "PROJ-2".into(),
-                    source: "PROJ-2".into(),
-                    title: "API".into(),
-                    branch: "alice/proj-2-api".into(),
-                    parent: None,
-                    snapshot: Some(".local/issues/PROJ-2.md".into()),
-                    body: String::new(),
-                    status: STATUS_PREPARED.into(),
-                    error: String::new(),
-                },
+            tasks: vec![
+                stack_task("PROJ-1", None, STATUS_PREPARED, ""),
+                stack_task("PROJ-2", None, STATUS_PREPARED, ""),
             ],
         };
         write_stack_metadata(&stack_path, &stack).unwrap();
@@ -1796,17 +1568,18 @@ error = ""
 
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
-        assert_eq!(updated.items[0].status, STATUS_DONE);
-        assert_eq!(updated.items[1].status, STATUS_RUNNING);
+        assert_eq!(updated.tasks[0].status, STATUS_DONE);
+        assert_eq!(updated.tasks[1].status, STATUS_RUNNING);
         assert_eq!(
-            updated.items[1].parent.as_deref(),
+            updated.tasks[1].parent.as_deref(),
             Some("alice/proj-1-schema")
         );
     }
 
     #[test]
-    fn complete_rejects_dirty_stack_item_worktree() {
+    fn complete_rejects_dirty_stack_task_worktree() {
         let dir = tempfile::tempdir().unwrap();
+        write_task_file(dir.path(), "feature", "Feature", "feature", "");
         let mut runner = MockRunner::new();
         runner.add_response(
             &format!(
@@ -1832,18 +1605,7 @@ error = ""
             status: STATUS_RUNNING.into(),
             created_at: "2026-05-12T00:00:00Z".into(),
             updated_at: "2026-05-12T00:00:00Z".into(),
-            items: vec![StackItem {
-                kind: "new".into(),
-                id: "feature".into(),
-                source: String::new(),
-                title: "Feature".into(),
-                branch: "feature".into(),
-                parent: Some("main".into()),
-                snapshot: None,
-                body: String::new(),
-                status: STATUS_RUNNING.into(),
-                error: String::new(),
-            }],
+            tasks: vec![stack_task("feature", Some("main"), STATUS_RUNNING, "")],
         };
         write_stack_metadata(&stack_path, &stack).unwrap();
 
@@ -1851,12 +1613,13 @@ error = ""
         assert!(err.to_string().contains("uncommitted changes"));
 
         let updated = read_stack_metadata(&stack_path).unwrap();
-        assert_eq!(updated.items[0].status, STATUS_RUNNING);
+        assert_eq!(updated.tasks[0].status, STATUS_RUNNING);
     }
 
     #[test]
-    fn complete_rejects_stack_item_without_commits() {
+    fn complete_rejects_stack_task_without_commits() {
         let dir = tempfile::tempdir().unwrap();
+        write_task_file(dir.path(), "feature", "Feature", "feature", "");
         let mut runner = MockRunner::new();
         runner.add_response(
             &format!(
@@ -1883,18 +1646,7 @@ error = ""
             status: STATUS_RUNNING.into(),
             created_at: "2026-05-12T00:00:00Z".into(),
             updated_at: "2026-05-12T00:00:00Z".into(),
-            items: vec![StackItem {
-                kind: "new".into(),
-                id: "feature".into(),
-                source: String::new(),
-                title: "Feature".into(),
-                branch: "feature".into(),
-                parent: Some("main".into()),
-                snapshot: None,
-                body: String::new(),
-                status: STATUS_RUNNING.into(),
-                error: String::new(),
-            }],
+            tasks: vec![stack_task("feature", Some("main"), STATUS_RUNNING, "")],
         };
         write_stack_metadata(&stack_path, &stack).unwrap();
 
@@ -1902,12 +1654,19 @@ error = ""
         assert!(err.to_string().contains("no commits ahead"));
 
         let updated = read_stack_metadata(&stack_path).unwrap();
-        assert_eq!(updated.items[0].status, STATUS_RUNNING);
+        assert_eq!(updated.tasks[0].status, STATUS_RUNNING);
     }
 
     #[test]
-    fn run_supports_manual_item_without_issue_provider_or_snapshot() {
+    fn run_supports_manual_task_without_issue_provider() {
         let dir = tempfile::tempdir().unwrap();
+        write_task_file(
+            dir.path(),
+            "add-schema",
+            "Add schema",
+            "add-schema",
+            "Create the schema without an issue provider.",
+        );
         let stack_path = dir.path().join("manual.toml");
         std::fs::write(
             &stack_path,
@@ -1915,13 +1674,8 @@ error = ""
 base = "main"
 status = "prepared"
 
-[[items]]
-kind = "new"
-title = "Add schema"
-branch = "add-schema"
-body = """
-Create the schema without an issue provider.
-"""
+[[tasks]]
+task = "add-schema"
 status = "prepared"
 error = ""
 "#,
@@ -1958,9 +1712,9 @@ error = ""
 
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
-        assert_eq!(updated.items[0].id, "add-schema");
-        assert_eq!(updated.items[0].parent.as_deref(), Some("main"));
-        assert_eq!(updated.items[0].status, STATUS_RUNNING);
+        assert_eq!(updated.tasks[0].task, "add-schema");
+        assert_eq!(updated.tasks[0].parent.as_deref(), Some("main"));
+        assert_eq!(updated.tasks[0].status, STATUS_RUNNING);
 
         let calls = runner.calls.lock().unwrap();
         assert!(calls.iter().any(|(_, args, _)| {

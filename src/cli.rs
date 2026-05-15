@@ -219,23 +219,35 @@ pub enum InitSiteProvider {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum BatchCommand {
-    /// Prepare issues as a batch file without starting workspaces
-    Issue {
-        /// Issue identifiers to snapshot (omit to select interactively)
-        issues: Vec<String>,
-        /// Named profile from .local/profiles/<name> for all issues
+    /// Prepare local tasks as a batch file without starting workspaces
+    Task {
+        /// Task titles or existing task keys to prepare
+        #[arg(required = true)]
+        tasks: Vec<String>,
+        /// Named profile from .local/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
     },
-    /// Run prepared or failed items from a batch file
+    /// Prepare issues as a batch file without starting workspaces
+    Issue {
+        /// Issue identifiers to import as tasks (omit to select interactively)
+        issues: Vec<String>,
+        /// Named profile from .local/profiles/<name> for all tasks
+        #[arg(long)]
+        profile: Option<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+    },
+    /// Run prepared or failed tasks from a batch file
     Run {
         /// Batch TOML path, or "latest" for the newest local batch
         batch: String,
     },
-    /// Show batch metadata and item statuses
+    /// Show batch metadata and task statuses
     Show {
         /// Batch TOML path, shorthand id, or "latest" (default)
         batch: Option<String>,
@@ -249,12 +261,12 @@ pub enum BatchCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum StackCommand {
-    /// Prepare branch-name text as a stack file without starting workspaces
-    New {
-        /// Branch-name text items to create in base-to-top order
+    /// Prepare local tasks as a stack file without starting workspaces
+    Task {
+        /// Task titles or existing task keys to prepare in base-to-top order
         #[arg(required = true)]
-        items: Vec<String>,
-        /// Named profile from .local/profiles/<name> for all items
+        tasks: Vec<String>,
+        /// Named profile from .local/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
@@ -263,9 +275,9 @@ pub enum StackCommand {
     },
     /// Prepare issues as a stack file without starting workspaces
     Issue {
-        /// Issue identifiers to snapshot in base-to-top order (omit to select interactively)
+        /// Issue identifiers to import as tasks in base-to-top order (omit to select interactively)
         issues: Vec<String>,
-        /// Named profile from .local/profiles/<name> for all issues
+        /// Named profile from .local/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
@@ -277,7 +289,7 @@ pub enum StackCommand {
         /// Stack TOML path, or "latest" for the newest local stack
         stack: String,
     },
-    /// Show stack metadata and item statuses
+    /// Show stack metadata and task statuses
     Show {
         /// Stack TOML path, shorthand id, or "latest" (default)
         stack: Option<String>,
@@ -291,9 +303,9 @@ pub enum StackCommand {
     Complete {
         /// Stack TOML path, or "latest" for the newest local stack
         stack: String,
-        /// Running stack item identifier to complete
+        /// Running stack task identifier to complete
         item: Option<String>,
-        /// Start the next stack item after marking this one complete
+        /// Start the next stack task after marking this one complete
         #[arg(long)]
         run_next: bool,
     },
@@ -640,11 +652,11 @@ mod tests {
     }
 
     #[test]
-    fn stack_new_accepts_items_profile_and_base() {
+    fn stack_task_accepts_tasks_profile_and_base() {
         let cli = parse(&[
             "wt",
             "stack",
-            "new",
+            "task",
             "add-schema",
             "wire-api",
             "--profile",
@@ -655,12 +667,12 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Stack {
-                command: StackCommand::New {
-                    ref items,
+                command: StackCommand::Task {
+                    ref tasks,
                     profile: Some(ref profile),
                     base: Some(ref base),
                 }
-            }) if items == &vec!["add-schema".to_string(), "wire-api".to_string()]
+            }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
                 && base == "main"
         ));
