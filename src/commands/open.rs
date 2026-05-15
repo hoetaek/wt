@@ -1,3 +1,4 @@
+use crate::commands::profile_match;
 use crate::config::{Config, IssueProviderType};
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
@@ -62,6 +63,12 @@ enum BranchSource {
     Remote,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OpenedWorktree {
+    entry: crate::services::git::WorktreeEntry,
+    created: bool,
+}
+
 fn load_open_candidates(ctx: &Ctx, git: &GitService) -> Result<Vec<OpenCandidate>> {
     let worktrees = git.worktree_list()?;
     let local_branches = git.list_local_branches()?;
@@ -121,15 +128,20 @@ fn ensure_candidate_worktree(
     ctx: &Ctx,
     git: &GitService,
     candidate: &OpenCandidate,
-) -> Result<crate::services::git::WorktreeEntry> {
+) -> Result<OpenedWorktree> {
     match candidate {
-        OpenCandidate::Existing(entry) => Ok(entry.clone()),
-        OpenCandidate::Local { branch } => {
-            create_branch_worktree(ctx, git, branch, BranchSource::Local)
-        }
-        OpenCandidate::Remote { branch } => {
-            create_branch_worktree(ctx, git, branch, BranchSource::Remote)
-        }
+        OpenCandidate::Existing(entry) => Ok(OpenedWorktree {
+            entry: entry.clone(),
+            created: false,
+        }),
+        OpenCandidate::Local { branch } => Ok(OpenedWorktree {
+            entry: create_branch_worktree(ctx, git, branch, BranchSource::Local)?,
+            created: true,
+        }),
+        OpenCandidate::Remote { branch } => Ok(OpenedWorktree {
+            entry: create_branch_worktree(ctx, git, branch, BranchSource::Remote)?,
+            created: true,
+        }),
     }
 }
 
@@ -139,7 +151,7 @@ fn create_branch_worktree(
     branch: &str,
     source: BranchSource,
 ) -> Result<crate::services::git::WorktreeEntry> {
-    let profile_config = load_profile_config_for_branch(ctx, branch)?;
+    let profile_config = profile_match::load_profile_config_for_branch(ctx, branch)?;
     let config = profile_config.as_ref().unwrap_or(&ctx.config);
     let names = WorktreeNames::new_with_config(
         branch,
@@ -175,9 +187,16 @@ fn create_branch_worktree(
     })
 }
 
-fn open_worktree(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) -> Result<()> {
-    let profile_config = load_profile_config_for_branch(ctx, &entry.branch)?;
+fn open_worktree(ctx: &Ctx, opened: &OpenedWorktree) -> Result<()> {
+    let entry = &opened.entry;
+    let profile_config = profile_match::load_profile_config_for_branch(ctx, &entry.branch)?;
     let config = profile_config.as_ref().unwrap_or(&ctx.config);
+
+    let cmux = CmuxService::new(ctx.runner.as_ref());
+    if !opened.created && focus_existing_cmux_workspace(ctx, config, &cmux, entry)? {
+        return Ok(());
+    }
+
     let title = if matches!(
         config.issues.as_ref().map(|issues| &issues.provider),
         Some(IssueProviderType::Linear)
@@ -187,19 +206,43 @@ fn open_worktree(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) -> Resu
         None
     };
 
-    let names = WorktreeNames::new(
-        &entry.branch,
-        &ctx.parent_dir,
-        &ctx.repo_name,
-        title.as_deref(),
-        config.has_site().then_some(""),
-    );
+    let names = if opened.created {
+        WorktreeNames::new_with_config(
+            &entry.branch,
+            &ctx.parent_dir,
+            &ctx.repo_root,
+            &ctx.repo_name,
+            title.as_deref(),
+            config.has_site().then_some(""),
+            config.worktree.path.as_deref(),
+        )?
+    } else {
+        WorktreeNames::new(
+            &entry.branch,
+            &ctx.parent_dir,
+            &ctx.repo_name,
+            title.as_deref(),
+            config.has_site().then_some(""),
+        )
+    };
+
+    if opened.created {
+        return setup::run_setup(
+            ctx,
+            &entry.path,
+            &names,
+            title.as_deref(),
+            "new",
+            None,
+            profile_config.as_ref(),
+        );
+    }
+
     let template_vars = setup::build_template_vars(ctx, &entry.path, &names, title.as_deref());
     let mut template_vars = template_vars;
     let site = setup::apply_site_template_vars(config, &mut template_vars);
 
     // Open workspace
-    let cmux = CmuxService::new(ctx.runner.as_ref());
     if !cmux.is_available() {
         ctx.ui
             .print_step(&format!("Worktree path: {}", entry.path.display()));
@@ -251,6 +294,42 @@ fn open_worktree(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) -> Resu
     }
 
     Ok(())
+}
+
+fn focus_existing_cmux_workspace(
+    ctx: &Ctx,
+    config: &Config,
+    cmux: &CmuxService<'_>,
+    entry: &crate::services::git::WorktreeEntry,
+) -> Result<bool> {
+    if !cmux.is_available() {
+        return Ok(false);
+    }
+
+    let workspaces = match cmux.list_workspaces() {
+        Ok(workspaces) => workspaces,
+        Err(err) => {
+            if config.workspace.is_some() {
+                ctx.ui
+                    .print_warning(&format!("cmux workspace lookup: {err}"));
+            }
+            return Ok(false);
+        }
+    };
+
+    let Some(workspace) = workspaces.into_iter().find(|workspace| {
+        workspace
+            .current_directory
+            .as_deref()
+            .is_some_and(|cwd| same_path(cwd, &entry.path))
+    }) else {
+        return Ok(false);
+    };
+
+    ctx.ui
+        .print_step(&format!("Focusing cmux workspace: {}", workspace.title));
+    cmux.select_workspace(&workspace.handle)?;
+    Ok(true)
 }
 
 fn find_candidate(entries: &[OpenCandidate], target: &str) -> Result<usize> {
@@ -309,19 +388,11 @@ fn is_current_worktree_path(path: &Path, invocation_root: &Path) -> bool {
     }
 }
 
-fn load_profile_config_for_branch(ctx: &Ctx, branch: &str) -> Result<Option<Config>> {
-    let short = branch.rsplit('/').next().unwrap_or(branch);
-    let mut profiles = Config::load_profiles(&ctx.repo_root, &ctx.base_config)?;
-    profiles.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
-
-    Ok(profiles
-        .into_iter()
-        .find(|(name, _)| {
-            short
-                .strip_suffix(name)
-                .is_some_and(|prefix| prefix.ends_with('-'))
-        })
-        .map(|(_, config)| config))
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
 }
 
 fn try_fetch_linear_title(ctx: &Ctx, worktree_path: &Path) -> Option<String> {
@@ -444,6 +515,89 @@ mod tests {
     }
 
     #[test]
+    fn open_focuses_existing_cmux_workspace_by_worktree_path() {
+        use crate::config::Config;
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::fs;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let parent = tempfile::tempdir().unwrap();
+        let repo = parent.path().join("repo");
+        let worktree = parent.path().join("repo-feature");
+        fs::create_dir(&repo).unwrap();
+        fs::create_dir(&worktree).unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\nbranch refs/heads/alice/feature\n\n",
+                repo.display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("main\nalice/feature\n", true);
+        runner.add_response("", true);
+        runner.add_response(r#"{"windows":[{"ref":"window:1"}]}"#, true);
+        runner.add_response(
+            &format!(
+                r#"{{"workspaces":[{{"ref":"workspace:7","title":"feature","current_directory":"{}"}}]}}"#,
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_select(0);
+
+        let ctx = Ctx::new(
+            repo,
+            parent.path().join("repo"),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(&ctx, None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux"
+                && args
+                    == &vec![
+                        "select-workspace".to_string(),
+                        "--workspace".to_string(),
+                        "workspace:7".to_string(),
+                    ]
+        }));
+        assert!(!calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux" && args.first().is_some_and(|arg| arg == "new-workspace")
+        }));
+    }
+
+    #[test]
     fn open_starts_post_deps_tabs_and_opens_workspace_url() {
         use crate::config::{
             AgentCli, AgentConfig, Config, ReadyMode, SubmitMode, WorkspaceConfig,
@@ -476,6 +630,7 @@ mod tests {
         );
         runner.add_response("main\nalice/feature\n", true);
         runner.add_response("", true);
+        runner.add_response(r#"{"windows":[]}"#, true);
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
@@ -613,6 +768,7 @@ args = ["--model", "gpt-5.5"]
         );
         runner.add_response("main\nalice/feature-codex\n", true);
         runner.add_response("", true);
+        runner.add_response(r#"{"windows":[]}"#, true);
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
@@ -719,6 +875,7 @@ args = ["--yolo"]
         );
         runner.add_response("main\nalice/feature-codex-yolo\n", true);
         runner.add_response("", true);
+        runner.add_response(r#"{"windows":[]}"#, true);
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
@@ -809,6 +966,7 @@ args = ["--yolo"]
         );
         runner.add_response("main\nalice/feature-codex\n", true);
         runner.add_response("", true);
+        runner.add_response(r#"{"windows":[]}"#, true);
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
@@ -990,6 +1148,72 @@ args = ["--yolo"]
                 expected.to_string_lossy().as_ref(),
                 "feature"
             ]
+        );
+    }
+
+    #[test]
+    fn open_runs_setup_for_created_local_branch() {
+        use crate::config::Config;
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::fs;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let parent = tempfile::tempdir().unwrap();
+        let repo = parent.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        fs::write(repo.join("README.md"), "setup copied\n").unwrap();
+        let expected = parent.path().join("repo-feature");
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.display()
+            ),
+            true,
+        );
+        runner.add_response("main\nfeature\n", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_select(0);
+
+        let mut config = Config::default();
+        config.worktree.copy = vec!["README.md".into()];
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo,
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(&ctx, None).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(expected.join("README.md")).unwrap(),
+            "setup copied\n"
         );
     }
 

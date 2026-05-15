@@ -94,6 +94,18 @@ impl<'a> CmuxService<'a> {
         Ok(())
     }
 
+    pub fn select_workspace(&self, workspace: &str) -> Result<()> {
+        let out = self.runner.run(
+            "cmux",
+            &["select-workspace", "--workspace", workspace],
+            None,
+        )?;
+        if !out.success {
+            bail!("cmux select-workspace failed: {}", command_error(&out));
+        }
+        Ok(())
+    }
+
     fn list_windows(&self) -> Result<Vec<CmuxWindow>> {
         let out = self
             .runner
@@ -409,6 +421,21 @@ mod tests {
         assert_eq!(
             calls[0].1,
             vec!["close-workspace", "--workspace", "workspace:10"]
+        );
+    }
+
+    #[test]
+    fn select_workspace_passes_handle() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+
+        let svc = CmuxService::new(&runner);
+        svc.select_workspace("workspace:10").unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["select-workspace", "--workspace", "workspace:10"]
         );
     }
 
