@@ -76,7 +76,7 @@ pub enum Commands {
         #[arg(long, conflicts_with = "profile")]
         matrix: bool,
     },
-    /// Prepare, inspect, edit, or run batches
+    /// Prepare, inspect, edit, run, or clean batches
     Batch {
         #[command(subcommand)]
         command: BatchCommand,
@@ -254,6 +254,11 @@ pub enum BatchCommand {
     },
     /// Open batch TOML in the configured editor
     Edit {
+        /// Batch TOML path, shorthand id, or "latest" (default)
+        batch: Option<String>,
+    },
+    /// Delete completed batch task snapshot files
+    Clean {
         /// Batch TOML path, shorthand id, or "latest" (default)
         batch: Option<String>,
     },
@@ -621,11 +626,39 @@ mod tests {
     }
 
     #[test]
+    fn batch_clean_accepts_optional_target() {
+        let cli = parse(&["wt", "batch", "clean"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Clean { batch: None }
+            })
+        ));
+
+        let cli = parse(&["wt", "batch", "clean", "latest"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Clean { ref batch }
+            }) if batch.as_deref() == Some("latest")
+        ));
+
+        let cli = parse(&["wt", "batch", "clean", ".local/batches/2026-05-09-001.toml"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Clean { ref batch }
+            }) if batch.as_deref() == Some(".local/batches/2026-05-09-001.toml")
+        ));
+    }
+
+    #[test]
     fn batch_help_uses_general_batch_description() {
         let mut command = Cli::command();
         let batch = command.find_subcommand_mut("batch").unwrap();
         let help = batch.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, edit, or run batches"));
+        assert!(help.contains("Prepare, inspect, edit, run, or clean batches"));
+        assert!(help.contains("clean"));
         assert!(help.contains("show"));
     }
 

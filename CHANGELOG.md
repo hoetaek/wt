@@ -8,6 +8,8 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added `wt batch clean [BATCH]` for explicitly deleting completed batch task
+  snapshot files while keeping the batch metadata record.
 - Changed the package version line back to `0.3.x`; current `wt` development is
   still pre-1.0 because CLI, config, and persisted state contracts are still
   being stabilized.

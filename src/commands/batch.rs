@@ -8,6 +8,7 @@ use crate::error::WtError;
 use crate::services::git::GitService;
 use anyhow::{Result, bail};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -271,6 +272,72 @@ pub fn edit(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
     crate::commands::editor::open_file(ctx, &batch_path)
 }
 
+pub fn clean(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
+    let batch_path = match batch {
+        Some(target) => resolve_batch_path(ctx, target)?,
+        None => latest_batch_path(ctx)?,
+    };
+    let metadata = read_batch_metadata(&batch_path)?;
+
+    if metadata.tasks.is_empty() {
+        bail!("Batch has no tasks: {}", batch_path.display());
+    }
+
+    let blocked = metadata
+        .tasks
+        .iter()
+        .filter(|item| !is_cleanable_status(&item.status))
+        .map(|item| format!("{} [{}]", item.label(), item.status))
+        .collect::<Vec<_>>();
+    if !blocked.is_empty() {
+        bail!(
+            "Batch has non-terminal tasks; cleanup requires every task to be done or skipped: {}",
+            blocked.join(", ")
+        );
+    }
+
+    let external_references = collect_external_task_references(ctx, &batch_path)?;
+    let mut seen = HashSet::new();
+    let mut deleted = Vec::new();
+    let mut skipped = Vec::new();
+    let mut missing = Vec::new();
+
+    for item in &metadata.tasks {
+        let key = task::safe_task_key(&item.task);
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+
+        let relative_path = task::task_relative_path(&key);
+        let path = ctx.repo_root.join(&relative_path);
+        if !path.exists() {
+            missing.push(relative_path);
+        } else if external_references.contains(&key) {
+            skipped.push(relative_path);
+        } else {
+            fs::remove_file(&path)?;
+            deleted.push(relative_path);
+        }
+    }
+
+    for path in &deleted {
+        ctx.ui.print_step(&format!("Deleted {path}"));
+    }
+    for path in &skipped {
+        ctx.ui.print_step(&format!(
+            "Skipped {path} (referenced by another batch or stack)"
+        ));
+    }
+    for path in &missing {
+        ctx.ui.print_dim(&format!("Already clean {path} (missing)"));
+    }
+    if deleted.is_empty() && skipped.is_empty() && missing.is_empty() {
+        ctx.ui.print_step("No task files to clean.");
+    }
+
+    Ok(())
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BatchMetadata {
@@ -297,6 +364,17 @@ struct BatchTask {
     status: String,
     #[serde(default)]
     error: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskReferenceMetadata {
+    #[serde(default)]
+    tasks: Vec<TaskReference>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskReference {
+    task: String,
 }
 
 impl BatchTask {
@@ -550,6 +628,62 @@ fn is_runnable_status(status: &str) -> bool {
     matches!(status, STATUS_PREPARED | STATUS_FAILED)
 }
 
+fn is_cleanable_status(status: &str) -> bool {
+    matches!(status, STATUS_DONE | STATUS_SKIPPED)
+}
+
+fn collect_external_task_references(
+    ctx: &Ctx,
+    current_batch_path: &Path,
+) -> Result<HashSet<String>> {
+    let mut references = HashSet::new();
+    collect_task_references_from_dir(
+        &ctx.repo_root.join(".local/batches"),
+        Some(current_batch_path),
+        &mut references,
+    )?;
+    collect_task_references_from_dir(&ctx.repo_root.join(".local/stacks"), None, &mut references)?;
+    Ok(references)
+}
+
+fn collect_task_references_from_dir(
+    dir: &Path,
+    excluded_path: Option<&Path>,
+    references: &mut HashSet<String>,
+) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "toml") {
+            continue;
+        }
+        if excluded_path.is_some_and(|excluded| paths_refer_to_same_file(&path, excluded)) {
+            continue;
+        }
+
+        let content = fs::read_to_string(&path)?;
+        let metadata: TaskReferenceMetadata = toml::from_str(&content)?;
+        for item in metadata.tasks {
+            if !item.task.trim().is_empty() {
+                references.insert(task::safe_task_key(&item.task));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
 fn summarize_batch_status(items: &[BatchTask]) -> String {
     if items.is_empty() {
         return STATUS_DONE.into();
@@ -660,6 +794,11 @@ mod tests {
             content.push_str(&format!("body = \"\"\"\n{body}\n\"\"\"\n"));
         }
         std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
+    }
+
+    fn write_batch_file(path: &Path, batch: &BatchMetadata) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_batch_metadata(path, batch).unwrap();
     }
 
     #[test]
@@ -1186,6 +1325,206 @@ error = ""
         );
 
         edit(&ctx, None).unwrap();
+    }
+
+    #[test]
+    fn clean_deletes_completed_batch_task_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = std::sync::Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui.clone()),
+        );
+        write_task_file(dir.path(), "done-task", "Done task", "done-task", "");
+        write_task_file(
+            dir.path(),
+            "skipped-task",
+            "Skipped task",
+            "skipped-task",
+            "",
+        );
+        let batch_path = dir.path().join(".local/batches/2026-05-11-001.toml");
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_DONE.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            tasks: vec![
+                batch_task("done-task", STATUS_DONE, ""),
+                batch_task("skipped-task", STATUS_SKIPPED, ""),
+            ],
+        };
+        write_batch_file(&batch_path, &batch);
+
+        clean(&ctx, Some(batch_path.to_str().unwrap())).unwrap();
+
+        assert!(!dir.path().join(".local/tasks/done-task.toml").exists());
+        assert!(!dir.path().join(".local/tasks/skipped-task.toml").exists());
+        assert!(batch_path.exists());
+        let steps = ui.steps.lock().unwrap().join("\n");
+        assert!(steps.contains("Deleted .local/tasks/done-task.toml"));
+        assert!(steps.contains("Deleted .local/tasks/skipped-task.toml"));
+    }
+
+    #[test]
+    fn clean_refuses_non_terminal_batch_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        for key in ["prepared-task", "running-task", "failed-task"] {
+            write_task_file(dir.path(), key, key, key, "");
+        }
+        let batch_path = dir.path().join(".local/batches/2026-05-11-001.toml");
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_FAILED.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            tasks: vec![
+                batch_task("prepared-task", STATUS_PREPARED, ""),
+                batch_task("running-task", STATUS_RUNNING, ""),
+                batch_task("failed-task", STATUS_FAILED, ""),
+            ],
+        };
+        write_batch_file(&batch_path, &batch);
+
+        let result = clean(&ctx, Some(batch_path.to_str().unwrap()));
+
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("non-terminal tasks"));
+        assert!(error.contains("prepared-task [prepared]"));
+        assert!(error.contains("running-task [running]"));
+        assert!(error.contains("failed-task [failed]"));
+        assert!(dir.path().join(".local/tasks/prepared-task.toml").exists());
+        assert!(dir.path().join(".local/tasks/running-task.toml").exists());
+        assert!(dir.path().join(".local/tasks/failed-task.toml").exists());
+    }
+
+    #[test]
+    fn clean_skips_tasks_referenced_by_other_batches_or_stacks() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = std::sync::Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui.clone()),
+        );
+        for key in ["target-only", "shared-batch", "shared-stack"] {
+            write_task_file(dir.path(), key, key, key, "");
+        }
+        let target_path = dir.path().join(".local/batches/2026-05-11-001.toml");
+        let target = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_DONE.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            tasks: vec![
+                batch_task("target-only", STATUS_DONE, ""),
+                batch_task("shared-batch", STATUS_DONE, ""),
+                batch_task("shared-stack", STATUS_DONE, ""),
+            ],
+        };
+        write_batch_file(&target_path, &target);
+        let other_batch_path = dir.path().join(".local/batches/2026-05-11-002.toml");
+        let other_batch = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_DONE.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            tasks: vec![batch_task("shared-batch", STATUS_DONE, "")],
+        };
+        write_batch_file(&other_batch_path, &other_batch);
+        let stacks_dir = dir.path().join(".local/stacks");
+        std::fs::create_dir_all(&stacks_dir).unwrap();
+        std::fs::write(
+            stacks_dir.join("2026-05-11-001.toml"),
+            r#"base_mode = "explicit"
+base = "main"
+status = "done"
+
+[[tasks]]
+task = "shared-stack"
+status = "done"
+error = ""
+"#,
+        )
+        .unwrap();
+
+        clean(&ctx, Some(target_path.to_str().unwrap())).unwrap();
+
+        assert!(!dir.path().join(".local/tasks/target-only.toml").exists());
+        assert!(dir.path().join(".local/tasks/shared-batch.toml").exists());
+        assert!(dir.path().join(".local/tasks/shared-stack.toml").exists());
+        let steps = ui.steps.lock().unwrap().join("\n");
+        assert!(steps.contains("Deleted .local/tasks/target-only.toml"));
+        assert!(steps.contains(
+            "Skipped .local/tasks/shared-batch.toml (referenced by another batch or stack)"
+        ));
+        assert!(steps.contains(
+            "Skipped .local/tasks/shared-stack.toml (referenced by another batch or stack)"
+        ));
+    }
+
+    #[test]
+    fn clean_treats_missing_task_files_as_already_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = std::sync::Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui.clone()),
+        );
+        write_task_file(
+            dir.path(),
+            "present-task",
+            "Present task",
+            "present-task",
+            "",
+        );
+        let batch_path = dir.path().join(".local/batches/2026-05-11-001.toml");
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_DONE.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            tasks: vec![
+                batch_task("present-task", STATUS_DONE, ""),
+                batch_task("missing-task", STATUS_DONE, ""),
+            ],
+        };
+        write_batch_file(&batch_path, &batch);
+
+        clean(&ctx, Some(batch_path.to_str().unwrap())).unwrap();
+
+        assert!(!dir.path().join(".local/tasks/present-task.toml").exists());
+        assert!(!dir.path().join(".local/tasks/missing-task.toml").exists());
+        let steps = ui.steps.lock().unwrap().join("\n");
+        let details = ui.dims.lock().unwrap().join("\n");
+        assert!(steps.contains("Deleted .local/tasks/present-task.toml"));
+        assert!(details.contains("Already clean .local/tasks/missing-task.toml (missing)"));
     }
 
     #[test]
