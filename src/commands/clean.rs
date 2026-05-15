@@ -45,6 +45,7 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
 
     let cmux = CmuxService::new(ctx.runner.as_ref());
     let mut cmux_workspaces = load_cmux_workspaces(ctx, &cmux);
+    let mut closed_cmux_workspace_ids = Vec::new();
 
     for &idx in &selected {
         let entry = &additional[idx];
@@ -53,7 +54,12 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
         let profile_config = profile_match::load_profile_config_for_branch(ctx, branch)?;
         let config = profile_config.as_ref().unwrap_or(&ctx.config);
 
-        close_matching_cmux_workspaces(ctx, &cmux, &mut cmux_workspaces, entry);
+        closed_cmux_workspace_ids.extend(close_matching_cmux_workspaces(
+            ctx,
+            &cmux,
+            &mut cmux_workspaces,
+            entry,
+        ));
 
         // Site unlink
         unlink_site(ctx, config, wt_path, branch)?;
@@ -96,6 +102,8 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
             ctx.ui.print_step("  Branch force deleted");
         }
     }
+
+    restore_caller_cmux_workspace(ctx, &cmux, &cmux_workspaces, &closed_cmux_workspace_ids);
 
     // Summary
     let remaining = git.worktree_list()?;
@@ -157,12 +165,12 @@ fn close_matching_cmux_workspaces(
     cmux: &CmuxService<'_>,
     cmux_workspaces: &mut Vec<CmuxWorkspace>,
     entry: &crate::services::git::WorktreeEntry,
-) {
+) -> Vec<String> {
     if cmux_workspaces.is_empty() {
-        return;
+        return Vec::new();
     }
 
-    close_workspaces_at_path(ctx, cmux, cmux_workspaces, &entry.path);
+    close_workspaces_at_path(ctx, cmux, cmux_workspaces, &entry.path)
 }
 
 fn close_workspaces_at_path(
@@ -170,8 +178,8 @@ fn close_workspaces_at_path(
     cmux: &CmuxService<'_>,
     cmux_workspaces: &mut Vec<CmuxWorkspace>,
     worktree_path: &Path,
-) -> usize {
-    let mut closed = 0;
+) -> Vec<String> {
+    let mut closed = Vec::new();
     let mut idx = 0;
 
     while idx < cmux_workspaces.len() {
@@ -181,9 +189,9 @@ fn close_workspaces_at_path(
             .is_some_and(|cwd| same_path(cwd, worktree_path))
         {
             let workspace = cmux_workspaces.remove(idx);
-            match cmux.close_workspace(&workspace.handle) {
+            match cmux.close_workspace(&workspace.id) {
                 Ok(()) => {
-                    closed += 1;
+                    closed.push(workspace.id);
                     ctx.ui
                         .print_step(&format!("  cmux workspace closed: {}", workspace.title));
                 }
@@ -198,6 +206,41 @@ fn close_workspaces_at_path(
     }
 
     closed
+}
+
+fn restore_caller_cmux_workspace(
+    ctx: &Ctx,
+    cmux: &CmuxService<'_>,
+    cmux_workspaces: &[CmuxWorkspace],
+    closed_workspace_ids: &[String],
+) {
+    if closed_workspace_ids.is_empty() {
+        return;
+    }
+
+    let Some(caller_workspace) = cmux
+        .caller_context()
+        .and_then(|caller| caller.workspace)
+        .filter(|workspace| !workspace.trim().is_empty())
+    else {
+        return;
+    };
+
+    let Some(workspace) = cmux_workspaces
+        .iter()
+        .find(|workspace| workspace.id == caller_workspace || workspace.handle == caller_workspace)
+    else {
+        return;
+    };
+
+    if closed_workspace_ids.contains(&workspace.id) {
+        return;
+    }
+
+    if let Err(e) = cmux.select_workspace(&workspace.id) {
+        ctx.ui
+            .print_warning(&format!("  Failed to restore cmux workspace focus: {e}"));
+    }
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -366,14 +409,18 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/test-repo-feature\nHEAD def\nbranch refs/heads/alice/feature\n\n",
             true,
         );
-        runner.add_response(r#"{"windows":[{"ref":"window:1"}]}"#, true);
         runner.add_response(
-            r#"{"workspaces":[{"ref":"workspace:1","title":"feature","current_directory":"/tmp/other-repo-feature"},{"ref":"workspace:2","title":"custom title","current_directory":"/tmp/test-repo-feature"}]}"#,
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{"id":"uuid-workspace-1","ref":"workspace:1","title":"feature","current_directory":"/tmp/other-repo-feature"},{"id":"uuid-workspace-2","ref":"workspace:2","title":"custom title","current_directory":"/tmp/test-repo-feature"}]}"#,
             true,
         );
         runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
+        runner.add_response(r#"{"caller":null}"#, true);
         runner.add_response(
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
             true,
@@ -403,19 +450,17 @@ mod tests {
             cmd == "cmux"
                 && args
                     == &vec![
-                        "--window".to_string(),
-                        "window:1".to_string(),
                         "rpc".to_string(),
                         "workspace.list".to_string(),
-                        "{}".to_string(),
+                        r#"{"window_id":"uuid-window-1"}"#.to_string(),
                     ]
         }));
         let close_idx = calls
             .iter()
             .position(|(cmd, args, _)| {
-                cmd == "cmux" && args.first().is_some_and(|arg| arg == "close-workspace")
+                cmd == "cmux" && args.get(1).is_some_and(|arg| arg == "workspace.close")
             })
-            .expect("expected cmux close-workspace call");
+            .expect("expected cmux workspace.close call");
         let remove_idx = calls
             .iter()
             .position(|(cmd, args, _)| {
@@ -428,7 +473,85 @@ mod tests {
         assert!(close_idx < remove_idx);
         assert_eq!(
             calls[close_idx].1,
-            vec!["close-workspace", "--workspace", "workspace:2"]
+            vec![
+                "rpc",
+                "workspace.close",
+                r#"{"workspace_id":"uuid-workspace-2"}"#
+            ]
+        );
+    }
+
+    #[test]
+    fn clean_restores_caller_cmux_workspace_after_closing_another_workspace() {
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/test-repo-feature\nHEAD def\nbranch refs/heads/alice/feature\n\n",
+            true,
+        );
+        runner.add_response(
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"},{"id":"uuid-window-2","ref":"window:2"}]}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{"id":"uuid-caller","ref":"workspace:1","title":"main","current_directory":"/tmp/test-repo"}]}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"window_id":"uuid-window-2","window_ref":"window:2","workspaces":[{"id":"uuid-target","ref":"workspace:2","title":"feature","current_directory":"/tmp/test-repo-feature"}]}"#,
+            true,
+        );
+        runner.add_response("", true); // cmux workspace.close
+        runner.add_response("", true); // git worktree remove
+        runner.add_response("", true); // git branch delete
+        runner.add_response(r#"{"caller":{"workspace_ref":"workspace:1"}}"#, true);
+        runner.add_response("", true); // cmux workspace.select
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            PathBuf::from("/tmp/test-repo"),
+            Config {
+                workspace: Some(WorkspaceConfig::default()),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(&ctx).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let close_idx = calls
+            .iter()
+            .position(|(cmd, args, _)| {
+                cmd == "cmux" && args.get(1).is_some_and(|arg| arg == "workspace.close")
+            })
+            .expect("expected cmux workspace.close call");
+        let select_idx = calls
+            .iter()
+            .position(|(cmd, args, _)| {
+                cmd == "cmux" && args.get(1).is_some_and(|arg| arg == "workspace.select")
+            })
+            .expect("expected cmux workspace.select call");
+
+        assert!(close_idx < select_idx);
+        assert_eq!(
+            calls[select_idx].1,
+            vec![
+                "rpc",
+                "workspace.select",
+                r#"{"workspace_id":"uuid-caller"}"#
+            ]
         );
     }
 
@@ -440,9 +563,12 @@ mod tests {
             "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /tmp/test-repo-feature\nHEAD def\nbranch refs/heads/alice/feature\n\n",
             true,
         );
-        runner.add_response(r#"{"windows":[{"ref":"window:1"}]}"#, true);
         runner.add_response(
-            r#"{"workspaces":[{"ref":"workspace:2","title":"feature","current_directory":"/tmp/other-repo-feature"}]}"#,
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{"id":"uuid-workspace-2","ref":"workspace:2","title":"feature","current_directory":"/tmp/other-repo-feature"}]}"#,
             true,
         );
         runner.add_response("", true);
@@ -473,7 +599,7 @@ mod tests {
 
         let calls = runner.calls.lock().unwrap();
         assert!(!calls.iter().any(|(cmd, args, _)| {
-            cmd == "cmux" && args.first().is_some_and(|arg| arg == "close-workspace")
+            cmd == "cmux" && args.get(1).is_some_and(|arg| arg == "workspace.close")
         }));
     }
 

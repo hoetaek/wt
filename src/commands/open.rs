@@ -328,7 +328,7 @@ fn focus_existing_cmux_workspace(
 
     ctx.ui
         .print_step(&format!("Focusing cmux workspace: {}", workspace.title));
-    cmux.select_workspace(&workspace.handle)?;
+    cmux.select_workspace(&workspace.id)?;
     Ok(true)
 }
 
@@ -556,10 +556,13 @@ mod tests {
         );
         runner.add_response("main\nalice/feature\n", true);
         runner.add_response("", true);
-        runner.add_response(r#"{"windows":[{"ref":"window:1"}]}"#, true);
+        runner.add_response(
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
         runner.add_response(
             &format!(
-                r#"{{"workspaces":[{{"ref":"workspace:7","title":"feature","current_directory":"{}"}}]}}"#,
+                r#"{{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{{"id":"uuid-workspace-7","ref":"workspace:7","title":"feature","current_directory":"{}"}}]}}"#,
                 worktree.display()
             ),
             true,
@@ -587,9 +590,9 @@ mod tests {
             cmd == "cmux"
                 && args
                     == &vec![
-                        "select-workspace".to_string(),
-                        "--workspace".to_string(),
-                        "workspace:7".to_string(),
+                        "rpc".to_string(),
+                        "workspace.select".to_string(),
+                        r#"{"workspace_id":"uuid-workspace-7"}"#.to_string(),
                     ]
         }));
         assert!(!calls.iter().any(|(cmd, args, _)| {

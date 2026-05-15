@@ -9,6 +9,8 @@ This project follows SemVer.
 - Added template rendering for agent `args` and `command`, including
   `{{repo_root}}` and `{{worktree_path}}`, so profiles can isolate per-worktree
   agent resources such as Chrome DevTools MCP browser data.
+- Fixed `wt done` cmux cleanup so closing a matching workspace in another cmux
+  window does not leave the caller on the wrong window.
 - Added `wt done` cleanup that attempts to close open cmux workspaces for the
   same worktree path before removing their worktrees.
 - Added the reserved `common` agent prompt scope, including

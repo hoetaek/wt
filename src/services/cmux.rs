@@ -1,12 +1,16 @@
 use crate::context::CommandRunner;
 use anyhow::{Result, bail};
 use serde::Deserialize;
+use serde_json::json;
 use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CmuxWorkspace {
+    pub id: String,
     pub handle: String,
+    pub window_id: String,
+    pub window_handle: String,
     pub title: String,
     pub current_directory: Option<PathBuf>,
 }
@@ -73,39 +77,47 @@ impl<'a> CmuxService<'a> {
         let mut workspaces = Vec::new();
 
         for window in windows {
-            let out = self.runner.run(
-                "cmux",
-                &["--window", &window.handle, "rpc", "workspace.list", "{}"],
-                None,
-            )?;
+            let params = json!({ "window_id": window.id }).to_string();
+            let out = self
+                .runner
+                .run("cmux", &["rpc", "workspace.list", &params], None)?;
             if !out.success {
                 bail!("cmux workspace.list failed: {}", command_error(&out));
             }
             let response: WorkspaceListResponse = serde_json::from_str(&out.stdout)?;
-            workspaces.extend(response.workspaces.into_iter().map(Into::into));
+            for workspace in response.workspaces {
+                workspaces.push(CmuxWorkspace {
+                    id: workspace.id,
+                    handle: workspace.handle,
+                    window_id: response.window_id.clone(),
+                    window_handle: response.window_ref.clone(),
+                    title: workspace.title,
+                    current_directory: workspace.current_directory,
+                });
+            }
         }
 
         Ok(workspaces)
     }
 
-    pub fn close_workspace(&self, workspace: &str) -> Result<()> {
+    pub fn close_workspace(&self, workspace_id: &str) -> Result<()> {
+        let params = json!({ "workspace_id": workspace_id }).to_string();
         let out = self
             .runner
-            .run("cmux", &["close-workspace", "--workspace", workspace], None)?;
+            .run("cmux", &["rpc", "workspace.close", &params], None)?;
         if !out.success {
-            bail!("cmux close-workspace failed: {}", command_error(&out));
+            bail!("cmux workspace.close failed: {}", command_error(&out));
         }
         Ok(())
     }
 
-    pub fn select_workspace(&self, workspace: &str) -> Result<()> {
-        let out = self.runner.run(
-            "cmux",
-            &["select-workspace", "--workspace", workspace],
-            None,
-        )?;
+    pub fn select_workspace(&self, workspace_id: &str) -> Result<()> {
+        let params = json!({ "workspace_id": workspace_id }).to_string();
+        let out = self
+            .runner
+            .run("cmux", &["rpc", "workspace.select", &params], None)?;
         if !out.success {
-            bail!("cmux select-workspace failed: {}", command_error(&out));
+            bail!("cmux workspace.select failed: {}", command_error(&out));
         }
         Ok(())
     }
@@ -252,7 +264,7 @@ impl<'a> CmuxService<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CmuxWindow {
-    handle: String,
+    id: String,
 }
 
 fn command_error(out: &crate::context::CmdOutput) -> &str {
@@ -270,15 +282,12 @@ struct WindowListResponse {
 
 #[derive(Debug, Deserialize)]
 struct RpcWindow {
-    #[serde(rename = "ref")]
-    handle: String,
+    id: String,
 }
 
 impl From<RpcWindow> for CmuxWindow {
     fn from(window: RpcWindow) -> Self {
-        Self {
-            handle: window.handle,
-        }
+        Self { id: window.id }
     }
 }
 
@@ -306,25 +315,18 @@ impl From<IdentifyCaller> for CmuxCaller {
 
 #[derive(Debug, Deserialize)]
 struct WorkspaceListResponse {
+    window_id: String,
+    window_ref: String,
     workspaces: Vec<RpcWorkspace>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RpcWorkspace {
+    id: String,
     #[serde(rename = "ref")]
     handle: String,
     title: String,
     current_directory: Option<PathBuf>,
-}
-
-impl From<RpcWorkspace> for CmuxWorkspace {
-    fn from(workspace: RpcWorkspace) -> Self {
-        Self {
-            handle: workspace.handle,
-            title: workspace.title,
-            current_directory: workspace.current_directory,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -404,15 +406,15 @@ mod tests {
     fn list_workspaces_reads_rpc_windows_and_workspace_directories() {
         let mut runner = MockRunner::new();
         runner.add_response(
-            r#"{"windows":[{"ref":"window:1"},{"ref":"window:2"}]}"#,
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"},{"id":"uuid-window-2","ref":"window:2"}]}"#,
             true,
         );
         runner.add_response(
-            r#"{"workspaces":[{"ref":"workspace:1","title":"repo","current_directory":"/tmp/repo"}]}"#,
+            r#"{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{"id":"uuid-workspace-1","ref":"workspace:1","title":"repo","current_directory":"/tmp/repo"}]}"#,
             true,
         );
         runner.add_response(
-            r#"{"workspaces":[{"ref":"workspace:2","title":"other","current_directory":null}]}"#,
+            r#"{"window_id":"uuid-window-2","window_ref":"window:2","workspaces":[{"id":"uuid-workspace-2","ref":"workspace:2","title":"other","current_directory":null}]}"#,
             true,
         );
 
@@ -423,12 +425,18 @@ mod tests {
             workspaces,
             vec![
                 CmuxWorkspace {
+                    id: "uuid-workspace-1".into(),
                     handle: "workspace:1".into(),
+                    window_id: "uuid-window-1".into(),
+                    window_handle: "window:1".into(),
                     title: "repo".into(),
                     current_directory: Some(PathBuf::from("/tmp/repo")),
                 },
                 CmuxWorkspace {
+                    id: "uuid-workspace-2".into(),
                     handle: "workspace:2".into(),
+                    window_id: "uuid-window-2".into(),
+                    window_handle: "window:2".into(),
                     title: "other".into(),
                     current_directory: None,
                 },
@@ -439,41 +447,49 @@ mod tests {
         assert_eq!(calls[0].1, vec!["rpc", "window.list", "{}"]);
         assert_eq!(
             calls[1].1,
-            vec!["--window", "window:1", "rpc", "workspace.list", "{}"]
+            vec!["rpc", "workspace.list", r#"{"window_id":"uuid-window-1"}"#]
         );
         assert_eq!(
             calls[2].1,
-            vec!["--window", "window:2", "rpc", "workspace.list", "{}"]
+            vec!["rpc", "workspace.list", r#"{"window_id":"uuid-window-2"}"#]
         );
     }
 
     #[test]
-    fn close_workspace_passes_handle() {
+    fn close_workspace_passes_id() {
         let mut runner = MockRunner::new();
         runner.add_response("", true);
 
         let svc = CmuxService::new(&runner);
-        svc.close_workspace("workspace:10").unwrap();
+        svc.close_workspace("uuid-workspace-10").unwrap();
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(
             calls[0].1,
-            vec!["close-workspace", "--workspace", "workspace:10"]
+            vec![
+                "rpc",
+                "workspace.close",
+                r#"{"workspace_id":"uuid-workspace-10"}"#
+            ]
         );
     }
 
     #[test]
-    fn select_workspace_passes_handle() {
+    fn select_workspace_passes_id() {
         let mut runner = MockRunner::new();
         runner.add_response("", true);
 
         let svc = CmuxService::new(&runner);
-        svc.select_workspace("workspace:10").unwrap();
+        svc.select_workspace("uuid-workspace-10").unwrap();
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(
             calls[0].1,
-            vec!["select-workspace", "--workspace", "workspace:10"]
+            vec![
+                "rpc",
+                "workspace.select",
+                r#"{"workspace_id":"uuid-workspace-10"}"#
+            ]
         );
     }
 
