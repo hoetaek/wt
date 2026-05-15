@@ -48,6 +48,11 @@ This project follows SemVer.
   matching `wt batch run`.
 - Changed batch and stack metadata parsing to require canonical `[[items]]`
   state instead of accepting alternate `[[issues]]` tables.
+- Changed site config parsing to require canonical `[site] provider = "herd"`
+  instead of accepting a separate `[herd]` section.
+- Changed global `--json` to appear in help output for commands that support
+  machine-readable output.
+- Removed Traefik cleanup of old compatibility TLS config filenames.
 - Changed stack runs so skipped items are not used as parent branches.
 - Changed `wt issue` and `wt new` to reject empty base branch input.
 - Added `wt batch show [BATCH]` for inspecting stored batch base, profile,

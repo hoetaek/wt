@@ -23,7 +23,7 @@ pub struct Cli {
     #[arg(long = "no-color", global = true, conflicts_with = "color")]
     pub no_color: bool,
     /// Emit machine-readable JSON for supported commands
-    #[arg(long, global = true, hide = true)]
+    #[arg(long, global = true)]
     pub json: bool,
     #[command(subcommand)]
     pub command: Option<Commands>,

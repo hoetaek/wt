@@ -17,7 +17,6 @@ pub struct Config {
     pub worktree: WorktreeConfig,
     pub setup: SetupConfig,
     pub profile: Option<ProfileConfig>,
-    pub herd: Option<HerdConfig>,
     pub site: Option<SiteConfig>,
     pub workspace: Option<WorkspaceConfig>,
     pub agent: Option<AgentConfig>,
@@ -54,14 +53,6 @@ pub struct SetupConfig {
 pub struct DepCommand {
     pub run: String,
     pub if_exists: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct HerdConfig {
-    pub site_name: String,
-    pub secure: Option<bool>,
-    pub open_browser: Option<bool>,
-    pub browser: Option<String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
@@ -549,23 +540,11 @@ Rules:
 
 impl Config {
     pub fn effective_site(&self) -> Option<SiteConfig> {
-        if let Some(site) = &self.site {
-            if site.provider == SiteProvider::None {
-                return None;
-            }
-            return Some(site.clone());
+        let site = self.site.as_ref()?;
+        if site.provider == SiteProvider::None {
+            return None;
         }
-
-        self.herd.as_ref().map(|herd| SiteConfig {
-            provider: SiteProvider::Herd,
-            name: Some(herd.site_name.clone()),
-            root: None,
-            secure: herd.secure,
-            open_browser: herd.open_browser,
-            browser: herd.browser.clone(),
-            url: None,
-            target: None,
-        })
+        Some(site.clone())
     }
 
     pub fn has_site(&self) -> bool {
@@ -729,10 +708,6 @@ fn merge_config(base: &Config, profile: Config) -> Config {
     }
     if profile.profile.is_some() {
         merged.profile = profile.profile;
-    }
-    if profile.herd.is_some() {
-        merged.herd = profile.herd;
-        merged.site = None;
     }
     if profile.site.is_some() {
         merged.site = profile.site;
@@ -1015,12 +990,6 @@ DJANGO_ENV = "dev"
 [profile]
 name = "codex"
 
-[herd]
-site_name = "{{repo}}-{{branch_slug}}"
-secure = true
-open_browser = true
-browser = "Google Chrome"
-
 [site]
 provider = "valet"
 name = "{{repo}}-{{branch_slug}}"
@@ -1094,11 +1063,6 @@ commands = [
         );
         assert_eq!(config.profile.unwrap().name.as_deref(), Some("codex"));
 
-        let herd = config.herd.unwrap();
-        assert_eq!(herd.site_name, "{{repo}}-{{branch_slug}}");
-        assert_eq!(herd.secure, Some(true));
-        assert_eq!(herd.browser.as_deref(), Some("Google Chrome"));
-
         let site = config.site.unwrap();
         assert_eq!(site.provider, SiteProvider::Valet);
         assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
@@ -1159,12 +1123,12 @@ copy = [".env"]
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.worktree.copy, vec![".env"]);
         assert!(config.worktree.link.is_empty());
-        assert!(config.herd.is_none());
+        assert!(config.site.is_none());
         assert!(config.workspace.is_none());
     }
 
     #[test]
-    fn rejects_legacy_claude_copy_field() {
+    fn rejects_removed_claude_copy_field() {
         let toml_str = r#"
 [worktree]
 copy = [".env"]
@@ -1413,14 +1377,17 @@ issue = ["root issue\n"]
         std::fs::write(
             dir.join(".wt.toml"),
             r#"
-[herd]
-site_name = "root"
+[site]
+provider = "herd"
+name = "root"
 "#,
         )
         .unwrap();
 
         let config = Config::load(&dir).unwrap();
-        assert_eq!(config.herd.unwrap().site_name, "root");
+        let site = config.site.unwrap();
+        assert_eq!(site.provider, SiteProvider::Herd);
+        assert_eq!(site.name.as_deref(), Some("root"));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1887,7 +1854,7 @@ cli = "claude"
     }
 
     #[test]
-    fn rejects_legacy_workspace_command_and_post_ready() {
+    fn rejects_removed_workspace_command_and_post_ready() {
         let command_toml = r#"
 [workspace]
 command = "bash"
@@ -1914,10 +1881,10 @@ pr = ["/conventional-review {{pr_number}}\n", "/codex:review --background\n"]
     }
 
     #[test]
-    fn rejects_legacy_claude_local_context_field() {
+    fn rejects_removed_claude_local_context_field() {
         let toml_str = r#"
 [worktree]
-claude_local_context = "legacy"
+claude_local_context = "old"
 "#;
 
         let err = toml::from_str::<Config>(toml_str).unwrap_err();
@@ -1925,33 +1892,26 @@ claude_local_context = "legacy"
     }
 
     #[test]
-    fn parses_open_browser_config() {
+    fn parses_site_open_browser_config() {
         let toml_str = r#"
-[herd]
-site_name = "test"
+[site]
+provider = "herd"
+name = "test"
 open_browser = true
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        let herd = config.herd.unwrap();
-        assert_eq!(herd.open_browser, Some(true));
+        let site = config.site.unwrap();
+        assert_eq!(site.open_browser, Some(true));
     }
 
     #[test]
-    fn effective_site_prefers_site_over_legacy_herd() {
+    fn rejects_herd_config_section() {
         let toml_str = r#"
 [herd]
 site_name = "{{repo}}-{{branch_slug}}"
-
-[site]
-provider = "docker_proxy"
-name = "{{repo}}-{{branch_slug}}"
-secure = false
 "#;
-        let config: Config = toml::from_str(toml_str).unwrap();
-        let site = config.effective_site().unwrap();
-        assert_eq!(site.provider, SiteProvider::DockerProxy);
-        assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
-        assert_eq!(site.secure, Some(false));
+        let err = toml::from_str::<Config>(toml_str).unwrap_err();
+        assert!(err.to_string().contains("herd"));
     }
 
     #[test]
@@ -1977,10 +1937,11 @@ secure = true
     }
 
     #[test]
-    fn effective_site_maps_legacy_herd() {
+    fn effective_site_uses_site_provider_herd() {
         let toml_str = r#"
-[herd]
-site_name = "{{repo}}-{{branch_slug}}"
+[site]
+provider = "herd"
+name = "{{repo}}-{{branch_slug}}"
 secure = true
 open_browser = true
 browser = "Google Chrome"

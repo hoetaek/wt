@@ -9,7 +9,7 @@ pub struct Issue {
     pub identifier: String,
     pub title: String,
     pub branch_name: Option<String>,
-    #[serde(default, alias = "body")]
+    #[serde(default)]
     pub description: Option<String>,
 }
 

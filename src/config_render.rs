@@ -1,6 +1,6 @@
 use crate::config::{
-    AgentCli, AgentConfig, Config, HerdConfig, IssueProviderType, IssuesConfig, ReadyMode,
-    SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig, WorkspaceConfig, WorktreeConfig,
+    AgentCli, AgentConfig, Config, IssueProviderType, IssuesConfig, ReadyMode, SetupConfig,
+    SiteConfig, SiteProvider, SubmitMode, TestConfig, WorkspaceConfig, WorktreeConfig,
 };
 
 pub fn render_effective_config(config: &Config) -> String {
@@ -10,9 +10,6 @@ pub fn render_effective_config(config: &Config) -> String {
     append_setup_section(&mut s, &config.setup);
     if let Some(issues) = config.issues.as_ref() {
         append_issues_section(&mut s, issues);
-    }
-    if let Some(herd) = config.herd.as_ref() {
-        append_herd_section(&mut s, herd);
     }
     if let Some(site) = config.site.as_ref() {
         append_site_section(&mut s, site);
@@ -125,20 +122,6 @@ fn append_issues_section(s: &mut String, issues: &IssuesConfig) {
     ));
     if let Some(gh_user) = issues.gh_user.as_deref() {
         s.push_str(&format!("gh_user = {}\n", toml_quote(gh_user)));
-    }
-}
-
-fn append_herd_section(s: &mut String, herd: &HerdConfig) {
-    s.push_str("\n[herd]\n");
-    s.push_str(&format!("site_name = {}\n", toml_quote(&herd.site_name)));
-    if let Some(secure) = herd.secure {
-        s.push_str(&format!("secure = {secure}\n"));
-    }
-    if let Some(open_browser) = herd.open_browser {
-        s.push_str(&format!("open_browser = {open_browser}\n"));
-    }
-    if let Some(browser) = herd.browser.as_deref() {
-        s.push_str(&format!("browser = {}\n", toml_quote(browser)));
     }
 }
 

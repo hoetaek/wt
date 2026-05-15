@@ -131,17 +131,16 @@ Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 
 
 이름은 구현의 과거가 아니라 현재의 의미를 설명해야 한다.
 
-### Compatibility Is Secondary to Clarity
+### Compatibility Does Not Create Aliases
 
-호환성은 중요하지만, 일관성을 깨뜨리는 alias를 기본값으로 만들지 않는다.
+호환성은 canonical 모델을 흐리게 만드는 두 번째 이름이나 상태 형태를 정당화하지
+않는다.
 
-호환 alias가 필요하다면 다음 조건을 만족해야 한다.
+사용자-facing 설정, 명령, 옵션, 상태 파일에는 같은 개념을 가리키는 호환 alias를
+남기지 않는다. 이전 이름을 입력하면 새 이름으로 조용히 해석하지 말고 실패시켜야 한다.
 
-- 새 사용자가 봐도 개념이 흐려지지 않는다.
-- 도움말과 문서에서 어느 이름이 canonical인지 분명하다.
-- 제거 계획이나 유지 이유가 설명되어 있다.
-
-그 조건을 만족하지 못하면 실패시키는 편이 낫다.
+예를 들어 local site 설정은 `[site] provider = "herd"`가 canonical이고, 같은 의미를
+`[herd]` 섹션으로 다시 받지 않는다.
 
 ## UX Checklist
 

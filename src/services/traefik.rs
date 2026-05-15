@@ -85,17 +85,6 @@ impl TraefikService {
             removed = true;
         }
 
-        let legacy_tls_path = self.legacy_tls_path(site_name);
-        if legacy_tls_path.exists() {
-            fs::remove_file(&legacy_tls_path).with_context(|| {
-                format!(
-                    "failed to delete Traefik TLS config: {}",
-                    legacy_tls_path.display()
-                )
-            })?;
-            removed = true;
-        }
-
         for path in self.cert_paths(site_name) {
             if path.exists() {
                 fs::remove_file(&path).with_context(|| {
@@ -115,13 +104,6 @@ impl TraefikService {
     fn site_path(&self, site_name: &str) -> PathBuf {
         self.sites_dir
             .join(format!("{}.yml", safe_file_stem(site_name)))
-    }
-
-    fn legacy_tls_path(&self, site_name: &str) -> PathBuf {
-        self.sites_dir.join(format!(
-            "_{}-tls.yml",
-            safe_file_stem(site_name).replace('.', "-")
-        ))
     }
 
     fn cert_paths(&self, site_name: &str) -> [PathBuf; 2] {
@@ -347,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_deletes_managed_certificate_files_and_legacy_tls_config() {
+    fn unregister_deletes_managed_certificate_files() {
         let dir = tempfile::tempdir().unwrap();
         let sites_dir = dir.path().join("sites");
         let certs_dir = dir.path().join("certs");
@@ -358,12 +340,9 @@ mod tests {
         let [cert, key] = svc.cert_paths("istat-feature-report.l");
         fs::write(&cert, "cert").unwrap();
         fs::write(&key, "key").unwrap();
-        let legacy_tls = svc.legacy_tls_path("istat-feature-report.l");
-        fs::write(&legacy_tls, "tls").unwrap();
 
         assert!(svc.unregister("istat-feature-report.l").unwrap());
         assert!(!cert.exists());
         assert!(!key.exists());
-        assert!(!legacy_tls.exists());
     }
 }
