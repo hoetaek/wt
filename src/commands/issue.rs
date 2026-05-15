@@ -459,7 +459,7 @@ fn profile_config_with_issue_snapshot(
 }
 
 fn resolve_base_branch(ctx: &Ctx, git: &GitService, base_raw: &Option<String>) -> Result<String> {
-    match BaseMode::from_raw(base_raw) {
+    let base = match BaseMode::from_raw(base_raw) {
         BaseMode::Explicit(branch) => Ok(branch),
         BaseMode::Interactive => {
             let branches = git.list_local_branches()?;
@@ -474,7 +474,12 @@ fn resolve_base_branch(ctx: &Ctx, git: &GitService, base_raw: &Option<String>) -
             let current = git.current_branch()?;
             ctx.ui.input("Base branch", Some(&current))
         }
+    }?;
+
+    if base.trim().is_empty() {
+        bail!("Base branch cannot be empty");
     }
+    Ok(base)
 }
 
 fn should_resolve_provider_branch_base(
@@ -582,6 +587,10 @@ fn create_worktree(
             }
         }
     };
+
+    if base.trim().is_empty() {
+        bail!("Base branch cannot be empty");
+    }
 
     ctx.ui
         .print_step(&format!("Creating new branch from {base}"));
@@ -928,6 +937,33 @@ mod tests {
         assert!(!worktree_add_call.1[4].contains("sample-app-proj-670-feature-alice-proj-672"));
 
         std::fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn issue_default_base_rejects_empty_prompt_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response("main", true);
+        let mut ui = MockUi::new();
+        ui.add_input(" ");
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+        let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+
+        let result = resolve_base_branch(&ctx, &git, &None);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Base branch cannot be empty")
+        );
     }
 
     #[test]

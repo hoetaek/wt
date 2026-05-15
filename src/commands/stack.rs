@@ -277,19 +277,9 @@ pub fn complete(ctx: &Ctx, stack: &str, item: Option<&str>, run_next: bool) -> R
     Ok(())
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StackMetadata {
-    profile: Option<String>,
-    base_mode: String,
-    base: Option<String>,
-    status: String,
-    created_at: String,
-    updated_at: String,
-    items: Vec<StackItem>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawStackMetadata {
     #[serde(default)]
     profile: Option<String>,
     base_mode: String,
@@ -303,43 +293,10 @@ struct RawStackMetadata {
     updated_at: String,
     #[serde(default)]
     items: Vec<StackItem>,
-    #[serde(default)]
-    issues: Vec<StackItem>,
-}
-
-impl RawStackMetadata {
-    fn into_metadata(mut self) -> Result<StackMetadata> {
-        if !self.items.is_empty() && !self.issues.is_empty() {
-            bail!("Stack TOML cannot contain both [[items]] and legacy [[issues]]");
-        }
-
-        let mut items = if self.items.is_empty() {
-            for item in &mut self.issues {
-                if item.kind.trim().is_empty() || item.kind == "item" {
-                    item.kind = "issue".into();
-                }
-            }
-            self.issues
-        } else {
-            self.items
-        };
-        for item in &mut items {
-            item.normalize();
-        }
-
-        Ok(StackMetadata {
-            profile: self.profile,
-            base_mode: self.base_mode,
-            base: self.base,
-            status: self.status,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-            items,
-        })
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StackItem {
     #[serde(default = "default_item_kind")]
     kind: String,
@@ -734,14 +691,21 @@ fn parent_for_item(ctx: &Ctx, stack: &StackMetadata, idx: usize) -> Result<Strin
         return resolve_initial_base(ctx, stack);
     }
 
-    let previous = &stack.items[idx - 1];
-    if previous.status != STATUS_DONE && previous.status != STATUS_SKIPPED {
-        bail!("Previous stack item {} is not done", previous.label());
+    for previous in stack.items[..idx].iter().rev() {
+        match previous.status.as_str() {
+            STATUS_DONE => {
+                return prepared_branch_name(&previous.branch)
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Previous stack item {} has no branch", previous.label())
+                    });
+            }
+            STATUS_SKIPPED => continue,
+            _ => bail!("Previous stack item {} is not done", previous.label()),
+        }
     }
 
-    prepared_branch_name(&previous.branch)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("Previous stack item {} has no branch", previous.label()))
+    resolve_initial_base(ctx, stack)
 }
 
 fn prepared_branch_name(branch: &str) -> Option<&str> {
@@ -773,8 +737,11 @@ fn write_new_stack_metadata(ctx: &Ctx, stack: &StackMetadata) -> Result<PathBuf>
 
 fn read_stack_metadata(path: &Path) -> Result<StackMetadata> {
     let content = fs::read_to_string(path)?;
-    let raw: RawStackMetadata = toml::from_str(&content)?;
-    raw.into_metadata()
+    let mut metadata: StackMetadata = toml::from_str(&content)?;
+    for item in &mut metadata.items {
+        item.normalize();
+    }
+    Ok(metadata)
 }
 
 fn write_stack_metadata(path: &Path, stack: &StackMetadata) -> Result<()> {
@@ -1219,6 +1186,114 @@ mod tests {
     }
 
     #[test]
+    fn parent_for_item_skips_skipped_items_when_finding_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let stack = StackMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PARTIAL.into(),
+            created_at: "2026-05-13T00:00:00Z".into(),
+            updated_at: "2026-05-13T00:00:00Z".into(),
+            items: vec![
+                StackItem {
+                    kind: "new".into(),
+                    id: "schema".into(),
+                    source: "Schema".into(),
+                    title: "Schema".into(),
+                    branch: "schema".into(),
+                    parent: Some("main".into()),
+                    snapshot: None,
+                    body: String::new(),
+                    status: STATUS_DONE.into(),
+                    error: String::new(),
+                },
+                StackItem {
+                    kind: "new".into(),
+                    id: "api".into(),
+                    source: "API".into(),
+                    title: "API".into(),
+                    branch: "api".into(),
+                    parent: Some("schema".into()),
+                    snapshot: None,
+                    body: String::new(),
+                    status: STATUS_SKIPPED.into(),
+                    error: "User cancelled".into(),
+                },
+                StackItem {
+                    kind: "new".into(),
+                    id: "ui".into(),
+                    source: "UI".into(),
+                    title: "UI".into(),
+                    branch: "ui".into(),
+                    parent: None,
+                    snapshot: None,
+                    body: String::new(),
+                    status: STATUS_PREPARED.into(),
+                    error: String::new(),
+                },
+            ],
+        };
+
+        assert_eq!(parent_for_item(&ctx, &stack, 2).unwrap(), "schema");
+    }
+
+    #[test]
+    fn parent_for_item_uses_initial_base_when_previous_items_are_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let stack = StackMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PARTIAL.into(),
+            created_at: "2026-05-13T00:00:00Z".into(),
+            updated_at: "2026-05-13T00:00:00Z".into(),
+            items: vec![
+                StackItem {
+                    kind: "new".into(),
+                    id: "schema".into(),
+                    source: "Schema".into(),
+                    title: "Schema".into(),
+                    branch: "schema".into(),
+                    parent: Some("main".into()),
+                    snapshot: None,
+                    body: String::new(),
+                    status: STATUS_SKIPPED.into(),
+                    error: "User cancelled".into(),
+                },
+                StackItem {
+                    kind: "new".into(),
+                    id: "api".into(),
+                    source: "API".into(),
+                    title: "API".into(),
+                    branch: "api".into(),
+                    parent: None,
+                    snapshot: None,
+                    body: String::new(),
+                    status: STATUS_PREPARED.into(),
+                    error: String::new(),
+                },
+            ],
+        };
+
+        assert_eq!(parent_for_item(&ctx, &stack, 1).unwrap(), "main");
+    }
+
+    #[test]
     fn new_rejects_duplicate_item_branches() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::new(
@@ -1392,9 +1467,9 @@ mod tests {
     }
 
     #[test]
-    fn read_stack_metadata_accepts_legacy_issues_tables() {
+    fn read_stack_metadata_rejects_issues_tables() {
         let dir = tempfile::tempdir().unwrap();
-        let stack_path = dir.path().join("legacy.toml");
+        let stack_path = dir.path().join("stack.toml");
         std::fs::write(
             &stack_path,
             r#"base_mode = "explicit"
@@ -1409,40 +1484,6 @@ branch = "alice/proj-1-schema"
 snapshot = ".local/issues/PROJ-1.md"
 status = "prepared"
 error = ""
-"#,
-        )
-        .unwrap();
-
-        let stack = read_stack_metadata(&stack_path).unwrap();
-
-        assert_eq!(stack.items.len(), 1);
-        assert_eq!(stack.items[0].kind(), "issue");
-        assert_eq!(stack.items[0].id, "PROJ-1");
-        assert_eq!(
-            stack.items[0].snapshot.as_deref(),
-            Some(".local/issues/PROJ-1.md")
-        );
-    }
-
-    #[test]
-    fn read_stack_metadata_rejects_mixed_items_and_legacy_issues() {
-        let dir = tempfile::tempdir().unwrap();
-        let stack_path = dir.path().join("mixed.toml");
-        std::fs::write(
-            &stack_path,
-            r#"base_mode = "explicit"
-base = "main"
-
-[[items]]
-title = "Manual"
-branch = "manual"
-
-[[issues]]
-id = "PROJ-1"
-source = "PROJ-1"
-title = "Issue"
-branch = "alice/proj-1"
-snapshot = ".local/issues/PROJ-1.md"
 "#,
         )
         .unwrap();

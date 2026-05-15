@@ -210,7 +210,7 @@ fn load_selected_profiles(ctx: &Ctx, profile: Option<&str>) -> Result<Vec<(Strin
 }
 
 fn resolve_base_branch(ctx: &Ctx, git: &GitService, mode: &BaseMode) -> Result<String> {
-    match mode {
+    let base = match mode {
         BaseMode::Explicit(branch) => Ok(branch.clone()),
         BaseMode::Interactive => {
             let branches = git.list_local_branches()?;
@@ -226,7 +226,12 @@ fn resolve_base_branch(ctx: &Ctx, git: &GitService, mode: &BaseMode) -> Result<S
             let input = ctx.ui.input("Base branch", Some(&current))?;
             Ok(input)
         }
+    }?;
+
+    if base.trim().is_empty() {
+        bail!("Base branch cannot be empty");
     }
+    Ok(base)
 }
 
 #[cfg(test)]
@@ -357,6 +362,26 @@ mod tests {
         let result = run(&ctx, &words, &None, None, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn default_base_rejects_empty_prompt_result() {
+        let mut runner = MockRunner::new();
+        runner.add_response("main", true);
+        let mut ui = MockUi::new();
+        ui.add_input("   ");
+        let ctx = make_ctx(runner, ui);
+        let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+
+        let result = resolve_base_branch(&ctx, &git, &BaseMode::Default);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Base branch cannot be empty")
+        );
     }
 
     #[test]

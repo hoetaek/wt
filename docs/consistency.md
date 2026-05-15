@@ -104,17 +104,16 @@ profile convention file merge를 모두 끝낸 뒤 최종 effective config에서
 저장되는 상태는 사용자가 이해할 수 있는 상태여야 한다.
 
 Batch가 어떤 item을 준비했고, 어떤 item이 끝났고, 어떤 item이 실패했는지는 저장할
-가치가 있다. Batch의 canonical 상태 목록도 `[[items]]`이고, issue snapshot에서 만든
-item은 `kind = "issue"`로 저장한다. 과거 `[[issues]]` batch 상태는 compatibility를
-위해 읽을 수 있지만 새로 쓰는 상태는 `[[items]]`로 수렴한다. 반대로 내부 구현 편의를
-위해 만든 가짜 이름이나 암묵적 상태를 저장하면 나중에 사용자가 파일을 읽을 때 모델을
-다시 배워야 한다.
+가치가 있다. Batch의 canonical 상태 목록은 `[[items]]`이고, issue snapshot에서 만든
+item은 `kind = "issue"`로 저장한다. `[[issues]]`처럼 같은 상태 목록을 가리키는 다른
+이름은 받지 않는다. 내부 구현 편의를 위해 만든 가짜 이름이나 암묵적 상태를 저장하면
+나중에 사용자가 파일을 읽을 때 모델을 다시 배워야 한다.
 
 Stack이 어떤 item을 어떤 parent 위에 쌓았는지도 저장할 가치가 있다. canonical 상태
 목록은 `[[items]]`이고, item source는 issue, 직접 작성한 branch work 등으로 나뉠 수
-있다. 과거 `[[issues]]` 상태는 compatibility를 위해 읽을 수 있지만 새로 쓰는 상태는
-`[[items]]`로 수렴한다. parent가 아직 실행 전이라 확정되지 않았다면 가짜 값을 넣지
-않고, 실행 시 확정된 branch를 기록한다.
+있다. `[[issues]]`처럼 같은 상태 목록을 가리키는 다른 이름은 받지 않는다. parent가
+아직 실행 전이라 확정되지 않았다면 가짜 값을 넣지 않고, 실행 시 확정된 branch를
+기록한다.
 Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 명시적
 `complete` 신호를 기다리는 상태다. 완료를 추정해서 다음 item을 시작하지 않는다.
 `complete`는 branch가 clean이고 parent보다 앞선 commit이 있을 때만 `done`으로

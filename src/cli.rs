@@ -221,7 +221,6 @@ pub enum InitSiteProvider {
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum BatchCommand {
     /// Prepare issues as a batch file without starting workspaces
-    #[command(alias = "prepare")]
     Issue {
         /// Issue identifiers to snapshot (omit to select interactively)
         issues: Vec<String>,
@@ -549,20 +548,9 @@ mod tests {
     }
 
     #[test]
-    fn batch_prepare_alias_parses_as_issue_but_is_hidden_from_help() {
-        let cli = parse(&["wt", "batch", "prepare", "PROJ-123"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Issue { ref issues, .. }
-            }) if issues == &vec!["PROJ-123".to_string()]
-        ));
-
-        let mut command = Cli::command();
-        let batch = command.find_subcommand_mut("batch").unwrap();
-        let help = batch.render_help().to_string();
-        assert!(help.contains("issue"));
-        assert!(!help.contains("  prepare"));
+    fn batch_prepare_is_not_a_command() {
+        let result = Cli::try_parse_from(["wt", "batch", "prepare", "PROJ-123"]);
+        assert!(result.is_err());
     }
 
     #[test]

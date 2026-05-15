@@ -228,6 +228,7 @@ pub fn show(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BatchMetadata {
     #[serde(default)]
     profile: Option<String>,
@@ -240,29 +241,12 @@ struct BatchMetadata {
     created_at: String,
     #[serde(default)]
     updated_at: String,
-    items: Vec<BatchItem>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawBatchMetadata {
-    #[serde(default)]
-    profile: Option<String>,
-    base_mode: String,
-    #[serde(default)]
-    base: Option<String>,
-    #[serde(default = "default_batch_status")]
-    status: String,
-    #[serde(default)]
-    created_at: String,
-    #[serde(default)]
-    updated_at: String,
     #[serde(default)]
     items: Vec<BatchItem>,
-    #[serde(default)]
-    issues: Vec<BatchItem>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BatchItem {
     #[serde(default = "default_item_kind")]
     kind: String,
@@ -279,38 +263,6 @@ struct BatchItem {
     status: String,
     #[serde(default)]
     error: String,
-}
-
-impl RawBatchMetadata {
-    fn into_metadata(mut self) -> Result<BatchMetadata> {
-        if !self.items.is_empty() && !self.issues.is_empty() {
-            bail!("Batch TOML cannot contain both [[items]] and legacy [[issues]]");
-        }
-
-        let mut items = if self.items.is_empty() {
-            for item in &mut self.issues {
-                if item.kind.trim().is_empty() || item.kind == "item" {
-                    item.kind = "issue".into();
-                }
-            }
-            self.issues
-        } else {
-            self.items
-        };
-        for item in &mut items {
-            item.normalize();
-        }
-
-        Ok(BatchMetadata {
-            profile: self.profile,
-            base_mode: self.base_mode,
-            base: self.base,
-            status: self.status,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-            items,
-        })
-    }
 }
 
 impl BatchItem {
@@ -469,8 +421,11 @@ fn write_new_batch_metadata(ctx: &Ctx, batch: &BatchMetadata) -> Result<PathBuf>
 
 fn read_batch_metadata(path: &Path) -> Result<BatchMetadata> {
     let content = fs::read_to_string(path)?;
-    let raw: RawBatchMetadata = toml::from_str(&content)?;
-    raw.into_metadata()
+    let mut metadata: BatchMetadata = toml::from_str(&content)?;
+    for item in &mut metadata.items {
+        item.normalize();
+    }
+    Ok(metadata)
 }
 
 fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
@@ -1003,6 +958,40 @@ mod tests {
     }
 
     #[test]
+    fn show_rejects_non_explicit_base_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = std::sync::Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui.clone()),
+        );
+        let batch_path = dir.path().join("batch.toml");
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "interactive".into(),
+            base: None,
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            items: Vec::new(),
+        };
+        write_batch_metadata(&batch_path, &batch).unwrap();
+
+        let result = show(&ctx, Some(batch_path.to_str().unwrap()));
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("base_mode must be explicit")
+        );
+    }
+
+    #[test]
     fn issue_with_no_args_selects_issues_from_provider_list() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
@@ -1079,9 +1068,9 @@ mod tests {
     }
 
     #[test]
-    fn read_batch_metadata_accepts_legacy_issues_tables() {
+    fn read_batch_metadata_rejects_issues_tables() {
         let dir = tempfile::tempdir().unwrap();
-        let batch_path = dir.path().join("legacy.toml");
+        let batch_path = dir.path().join("batch.toml");
         std::fs::write(
             &batch_path,
             r#"base_mode = "explicit"
@@ -1096,34 +1085,6 @@ branch = "alice/proj-1-fix-editor"
 snapshot = ".local/issues/PROJ-1.md"
 status = "prepared"
 error = ""
-"#,
-        )
-        .unwrap();
-
-        let batch = read_batch_metadata(&batch_path).unwrap();
-
-        assert_eq!(batch.items.len(), 1);
-        assert_eq!(batch.items[0].kind(), "issue");
-        assert_eq!(batch.items[0].id, "PROJ-1");
-    }
-
-    #[test]
-    fn read_batch_metadata_rejects_mixed_items_and_legacy_issues() {
-        let dir = tempfile::tempdir().unwrap();
-        let batch_path = dir.path().join("mixed.toml");
-        std::fs::write(
-            &batch_path,
-            r#"base_mode = "explicit"
-base = "main"
-
-[[items]]
-kind = "issue"
-id = "PROJ-1"
-snapshot = ".local/issues/PROJ-1.md"
-
-[[issues]]
-id = "PROJ-2"
-snapshot = ".local/issues/PROJ-2.md"
 "#,
         )
         .unwrap();

@@ -101,6 +101,12 @@ Open an existing worktree, or pick a local/remote branch and create its worktree
 wt open
 ```
 
+When `wt open` creates a worktree from a local or remote branch, it applies the
+same setup flow as `wt new`: copy/link files, env templates, deps, site setup,
+workspace tabs, and agent launch. When a cmux workspace already exists for the
+selected worktree path, `wt open` focuses that workspace instead of opening a
+duplicate.
+
 List and clean worktrees:
 
 ```bash
@@ -421,8 +427,7 @@ Issue bodies are stored as markdown snapshots:
 The batch TOML records the optional profile, base mode, overall batch status,
 and one `[[items]]` table per issue item. The double brackets are TOML's
 array-of-tables syntax, equivalent to an `items: [...]` list in JSON. Issue
-items use `kind = "issue"` and a `snapshot` path. Older batch files with
-`[[issues]]` are still readable for compatibility.
+items use `kind = "issue"` and a `snapshot` path.
 
 Run a prepared batch explicitly:
 
@@ -501,8 +506,7 @@ Build on the schema branch.
 ```
 
 `[[items]]` is the canonical stack list. Issue-based `issue` also writes
-`[[items]]` with `kind = "issue"` and a `snapshot` path. Older `[[issues]]`
-stack files are still readable for compatibility.
+`[[items]]` with `kind = "issue"` and a `snapshot` path.
 
 Start the next runnable stack item:
 
@@ -519,7 +523,8 @@ the recorded parent chain.
 `run` starts one prepared or failed item at a time and leaves it marked
 `running`. The first item branch uses the stack base branch. Each following
 item branch starts only after the previous item is completed, and uses that
-previous item branch as its parent.
+previous completed item branch as its parent. Skipped items are not used as
+parents; if every earlier item was skipped, the next item uses the stack base.
 
 When `run` starts an item, the agent prompt includes the completion command:
 
