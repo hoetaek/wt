@@ -1,4 +1,5 @@
 use crate::cli::BaseMode;
+use crate::commands::{issue, task};
 use crate::config::Config;
 use crate::context::Ctx;
 use crate::error::WtError;
@@ -15,7 +16,7 @@ pub fn run(
     matrix: bool,
 ) -> Result<()> {
     if name_words.is_empty() {
-        bail!("Usage: wt new <branch-name-text>");
+        return run_selected_task(ctx, base_raw, profile, matrix);
     }
 
     let branch_name = branch_name_from_words(name_words)?;
@@ -75,6 +76,57 @@ pub fn run(
     git.set_branch_parent(&branch_name, &base).ok();
 
     setup::run_setup(ctx, &names.path, &names, None, "new", None, None)?;
+
+    Ok(())
+}
+
+fn run_selected_task(
+    ctx: &Ctx,
+    base_raw: &Option<String>,
+    profile: Option<&str>,
+    matrix: bool,
+) -> Result<()> {
+    if matrix {
+        bail!(
+            "wt new --matrix requires branch-name text; omit --matrix when selecting a local task"
+        );
+    }
+    if profile.is_some() {
+        bail!(
+            "wt new --profile requires branch-name text; omit --profile when selecting a local task"
+        );
+    }
+
+    let selected = task::select_local_task(ctx)?;
+    let branch_name = task::prepared_branch_name(&selected.document.branch);
+    if branch_name.is_none() && selected.document.origin.is_none() {
+        bail!("Task {} has no branch", selected.key);
+    }
+
+    let identifier = selected.document.identifier_or_key(&selected.key);
+    let title = selected.document.title_or_key(&selected.key);
+    let result = issue::run_with_issue_snapshot(
+        ctx,
+        base_raw,
+        None,
+        false,
+        issue::PreparedIssueContext {
+            identifier: &identifier,
+            title: &title,
+            branch_name,
+            mode: selected.document.mode(),
+            prompt_intro: "Use this task before changing code.",
+            snapshot: issue::IssueSnapshotContext {
+                path_label: "Task path",
+                path: &selected.path,
+                content: &selected.content,
+            },
+        },
+    )?;
+
+    if selected.document.branch != result.branch_name {
+        task::write_task_branch(ctx, &selected.key, &result.branch_name)?;
+    }
 
     Ok(())
 }
@@ -281,13 +333,107 @@ mod tests {
     }
 
     #[test]
-    fn empty_name_is_error() {
+    fn empty_name_without_tasks_is_error() {
         let runner = MockRunner::new();
         let ui = MockUi::new();
         let ctx = make_ctx(runner, ui);
 
         let result = run(&ctx, &[], &None, None, false);
         assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No task files found in .local/tasks")
+        );
+    }
+
+    #[test]
+    fn empty_name_rejects_profile_before_task_selection() {
+        let runner = MockRunner::new();
+        let ui = MockUi::new();
+        let ctx = make_ctx(runner, ui);
+
+        let result = run(&ctx, &[], &None, Some("codex"), false);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("wt new --profile requires branch-name text")
+        );
+    }
+
+    #[test]
+    fn empty_name_rejects_matrix_before_task_selection() {
+        let runner = MockRunner::new();
+        let ui = MockUi::new();
+        let ctx = make_ctx(runner, ui);
+
+        let result = run(&ctx, &[], &None, None, true);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("wt new --matrix requires branch-name text")
+        );
+    }
+
+    #[test]
+    fn empty_name_selects_local_task_and_runs_task_snapshot() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("main", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_select(0);
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(&ctx, &[], &None, None, false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let worktree_add_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .expect("expected git worktree add -b call");
+        assert_eq!(worktree_add_call.1[3], "add-schema");
+        assert_eq!(worktree_add_call.1[5], "main");
     }
 
     #[test]

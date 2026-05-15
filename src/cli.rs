@@ -62,10 +62,10 @@ pub enum Commands {
         #[arg(long)]
         profile: Option<String>,
     },
-    /// Start a workspace from branch-name text
+    /// Start a workspace from branch-name text, or select a prepared local task
     New {
-        /// Branch name words
-        #[arg(required = true)]
+        /// Branch name words (omit to select one .local/tasks/*.toml task)
+        #[arg(num_args = 0..)]
         name: Vec<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
@@ -828,6 +828,20 @@ mod tests {
     }
 
     #[test]
+    fn new_without_name_starts_local_task_selector() {
+        let cli = parse(&["wt", "new"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::New {
+                ref name,
+                base: None,
+                profile: None,
+                matrix: false,
+            }) if name.is_empty()
+        ));
+    }
+
+    #[test]
     fn new_with_base_and_profile() {
         let cli = parse(&[
             "wt",
@@ -870,6 +884,15 @@ mod tests {
     fn new_rejects_removed_parallel_flag() {
         let result = Cli::try_parse_from(["wt", "new", "some", "feature", "--parallel"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn new_help_explains_branch_text_and_task_selection() {
+        let mut command = Cli::command();
+        let new = command.find_subcommand_mut("new").unwrap();
+        let help = new.render_help().to_string();
+        assert!(help.contains("Start a workspace from branch-name text"));
+        assert!(help.contains("omit to select one .local/tasks/*.toml task"));
     }
 
     #[test]
