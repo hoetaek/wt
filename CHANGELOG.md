@@ -38,6 +38,8 @@ This project follows SemVer.
   stale running state.
 - Changed issue snapshots prepared by batch and stack workflows to store the
   `worktree.naming` branch when branch naming is configured.
+- Changed cmux workspace creation to target the caller's cmux window explicitly
+  when caller context is available.
 - Added `wt batch show [BATCH]` for inspecting stored batch base, profile,
   status, and items without opening the TOML file.
 - Added `wt stack new` to create manual branch stacks from branch-name text

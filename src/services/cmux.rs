@@ -25,21 +25,23 @@ impl<'a> CmuxService<'a> {
     }
 
     pub fn new_workspace(&self, cwd: &Path, name: &str, command: &str) -> Result<String> {
-        let out = self.runner.run(
-            "cmux",
-            &[
-                "new-workspace",
-                "--cwd",
-                &cwd.to_string_lossy(),
-                "--name",
-                name,
-                "--command",
-                command,
-                "--focus",
-                "true",
-            ],
-            None,
-        )?;
+        let cwd = cwd.to_string_lossy().into_owned();
+        let mut args = vec![
+            "new-workspace".to_string(),
+            "--cwd".into(),
+            cwd,
+            "--name".into(),
+            name.into(),
+            "--command".into(),
+            command.into(),
+        ];
+        if let Some(window) = self.caller_window() {
+            args.extend(["--window".into(), window]);
+        }
+        args.extend(["--focus".into(), "true".into()]);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+
+        let out = self.runner.run("cmux", &arg_refs, None)?;
         let handle = out
             .stdout
             .split_whitespace()
@@ -47,6 +49,19 @@ impl<'a> CmuxService<'a> {
             .unwrap_or(&out.stdout)
             .to_string();
         Ok(handle)
+    }
+
+    fn caller_window(&self) -> Option<String> {
+        let out = self.runner.run("cmux", &["identify"], None).ok()?;
+        if !out.success {
+            return None;
+        }
+
+        let response: IdentifyResponse = serde_json::from_str(&out.stdout).ok()?;
+        response
+            .caller
+            .and_then(|caller| caller.window_ref)
+            .filter(|window| !window.trim().is_empty())
     }
 
     pub fn list_workspaces(&self) -> Result<Vec<CmuxWorkspace>> {
@@ -230,6 +245,16 @@ impl From<RpcWindow> for CmuxWindow {
 }
 
 #[derive(Debug, Deserialize)]
+struct IdentifyResponse {
+    caller: Option<IdentifyCaller>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdentifyCaller {
+    window_ref: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WorkspaceListResponse {
     workspaces: Vec<RpcWorkspace>,
 }
@@ -260,6 +285,7 @@ mod tests {
     #[test]
     fn new_workspace_extracts_handle() {
         let mut runner = MockRunner::new();
+        runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
 
         let svc = CmuxService::new(&runner);
@@ -268,8 +294,38 @@ mod tests {
             .unwrap();
         assert_eq!(handle, "workspace:1");
         let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["identify"]);
         assert_eq!(
-            calls[0].1,
+            calls[1].1,
+            vec![
+                "new-workspace",
+                "--cwd",
+                "/tmp",
+                "--name",
+                "my ws",
+                "--command",
+                "bash",
+                "--window",
+                "window:1",
+                "--focus",
+                "true"
+            ]
+        );
+    }
+
+    #[test]
+    fn new_workspace_omits_window_when_caller_is_unknown() {
+        let mut runner = MockRunner::new();
+        runner.add_response(r#"{"caller":null}"#, true);
+        runner.add_response("workspace:1 workspace:1", true);
+
+        let svc = CmuxService::new(&runner);
+        svc.new_workspace(Path::new("/tmp"), "my ws", "bash")
+            .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[1].1,
             vec![
                 "new-workspace",
                 "--cwd",

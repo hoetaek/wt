@@ -476,6 +476,7 @@ mod tests {
         );
         runner.add_response("main\nalice/feature\n", true);
         runner.add_response("", true);
+        runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
         runner.add_response("surface:1", true);
@@ -612,6 +613,7 @@ args = ["--model", "gpt-5.5"]
         );
         runner.add_response("main\nalice/feature-codex\n", true);
         runner.add_response("", true);
+        runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
@@ -717,6 +719,7 @@ args = ["--yolo"]
         );
         runner.add_response("main\nalice/feature-codex-yolo\n", true);
         runner.add_response("", true);
+        runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
@@ -806,6 +809,7 @@ args = ["--yolo"]
         );
         runner.add_response("main\nalice/feature-codex\n", true);
         runner.add_response("", true);
+        runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);

@@ -1024,6 +1024,7 @@ mod tests {
 
         let mut runner = MockRunner::new();
         runner.add_command("cmux");
+        runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
         runner.add_response("", true);
@@ -1606,6 +1607,7 @@ mod tests {
 
         let mut runner = MockRunner::new();
         runner.add_command("cmux");
+        runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
