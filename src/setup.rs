@@ -1,6 +1,8 @@
 use std::hash::{Hash, Hasher};
 
-use crate::config::{AgentCli, AgentConfig, Config, SiteConfig, SiteProvider, SubmitMode};
+use crate::config::{
+    AgentCli, AgentConfig, Config, DepCommand, SiteConfig, SiteProvider, SubmitMode, TestCommand,
+};
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
 use crate::services::cmux::CmuxService;
@@ -411,10 +413,13 @@ fn install_deps(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
         .setup
         .deps
         .iter()
-        .filter(|dep| {
-            dep.if_exists
+        .filter_map(|dep| {
+            let working_dir = command_working_dir(wt_path, dep.working_dir.as_deref());
+            let applies = dep
+                .if_exists
                 .as_ref()
-                .is_none_or(|f| wt_path.join(f).exists())
+                .is_none_or(|f| working_dir.join(f).exists());
+            applies.then(|| (dep, working_dir, setup_command_display(dep)))
         })
         .collect();
 
@@ -422,8 +427,8 @@ fn install_deps(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    for dep in &applicable {
-        ctx.ui.print_dim(&format!("  ⏳ {}", dep.run));
+    for (_, _, display) in &applicable {
+        ctx.ui.print_dim(&format!("  ⏳ {display}"));
     }
 
     let results = Arc::new(Mutex::new(Vec::new()));
@@ -431,43 +436,43 @@ fn install_deps(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
     std::thread::scope(|s| {
         let handles: Vec<_> = applicable
             .iter()
-            .map(|dep| {
+            .map(|(dep, working_dir, display)| {
                 let results = Arc::clone(&results);
-                let run_str = &dep.run;
+                let run_str = dep.run.clone();
+                let working_dir = working_dir.clone();
+                let display = display.clone();
                 s.spawn(move || {
                     let needs_shell =
                         run_str.contains("&&") || run_str.contains("||") || run_str.contains("|");
                     let out = if needs_shell {
-                        ctx.runner.run("sh", &["-c", run_str], Some(wt_path))
+                        ctx.runner.run("sh", &["-c", &run_str], Some(&working_dir))
                     } else {
                         let parts: Vec<&str> = run_str.split_whitespace().collect();
                         if let Some((cmd, args)) = parts.split_first() {
-                            ctx.runner.run(cmd, args, Some(wt_path))
+                            ctx.runner.run(cmd, args, Some(&working_dir))
                         } else {
                             return;
                         }
                     };
                     match out {
                         Ok(o) if o.success => {
-                            results.lock().unwrap().push((
-                                run_str.to_string(),
-                                true,
-                                String::new(),
-                            ));
+                            results
+                                .lock()
+                                .unwrap()
+                                .push((display.clone(), true, String::new()));
                         }
                         Ok(o) => {
                             results.lock().unwrap().push((
-                                run_str.to_string(),
+                                display.clone(),
                                 false,
                                 o.stderr.clone(),
                             ));
                         }
                         Err(e) => {
-                            results.lock().unwrap().push((
-                                run_str.to_string(),
-                                false,
-                                e.to_string(),
-                            ));
+                            results
+                                .lock()
+                                .unwrap()
+                                .push((display.clone(), false, e.to_string()));
                         }
                     }
                 })
@@ -491,6 +496,28 @@ fn install_deps(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn command_working_dir(wt_path: &Path, working_dir: Option<&str>) -> std::path::PathBuf {
+    working_dir.map_or_else(
+        || wt_path.to_path_buf(),
+        |working_dir| wt_path.join(working_dir),
+    )
+}
+
+fn setup_command_display(dep: &DepCommand) -> String {
+    command_display(dep.working_dir.as_deref(), &dep.run)
+}
+
+fn test_command_display(command: &TestCommand) -> String {
+    command_display(command.working_dir.as_deref(), &command.run)
+}
+
+fn command_display(working_dir: Option<&str>, run: &str) -> String {
+    working_dir.map_or_else(
+        || run.to_string(),
+        |working_dir| format!("{working_dir}: {run}"),
+    )
 }
 
 fn bootstrap_agent(
@@ -674,24 +701,26 @@ fn run_background_tests(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()
     ctx.ui.print_step("Running tests in background...");
 
     for test_cmd in &test_config.commands {
+        let working_dir = command_working_dir(wt_path, test_cmd.working_dir.as_deref());
         if let Some(ref check_file) = test_cmd.if_exists {
-            if !wt_path.join(check_file).exists() {
+            if !working_dir.join(check_file).exists() {
                 continue;
             }
         }
         let run_str = &test_cmd.run;
         let needs_shell = run_str.contains("&&") || run_str.contains("||") || run_str.contains("|");
         let out = if needs_shell {
-            ctx.runner.run("sh", &["-c", run_str], Some(wt_path))?
+            ctx.runner.run("sh", &["-c", run_str], Some(&working_dir))?
         } else {
             let parts: Vec<&str> = run_str.split_whitespace().collect();
             if let Some((cmd, args)) = parts.split_first() {
-                ctx.runner.run(cmd, args, Some(wt_path))?
+                ctx.runner.run(cmd, args, Some(&working_dir))?
             } else {
                 continue;
             }
         };
-        let label = test_cmd.label.as_deref().unwrap_or("test");
+        let display = test_command_display(test_cmd);
+        let label = test_cmd.label.as_deref().unwrap_or(display.as_str());
         if out.success {
             ctx.ui.print_step(&format!("{label}: PASSED"));
         } else {
@@ -905,6 +934,82 @@ mod tests {
             fs::read_to_string(wt.join(".codex/skills/start/SKILL.md")).unwrap(),
             "start skill\n"
         );
+    }
+
+    #[test]
+    fn install_deps_uses_working_dir_for_if_exists_and_command() {
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let wt = dir.path().join("worktree");
+        fs::create_dir_all(wt.join("frontend")).unwrap();
+        fs::write(wt.join("frontend/package.json"), "{}").unwrap();
+        fs::write(wt.join("composer.json"), "{}").unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let mut config = Config::default();
+        config.setup.deps = vec![
+            DepCommand {
+                working_dir: Some("frontend".into()),
+                run: "npm install".into(),
+                if_exists: Some("package.json".into()),
+            },
+            DepCommand {
+                working_dir: None,
+                run: "composer install".into(),
+                if_exists: Some("composer.json".into()),
+            },
+            DepCommand {
+                working_dir: Some("missing".into()),
+                run: "npm install".into(),
+                if_exists: Some("package.json".into()),
+            },
+        ];
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo,
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        install_deps(&ctx, &ctx.config, &wt).unwrap();
+
+        let mut calls = runner.calls.lock().unwrap().clone();
+        calls.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "composer");
+        assert_eq!(calls[0].1, vec!["install"]);
+        assert_eq!(calls[0].2, Some(wt.clone()));
+        assert_eq!(calls[1].0, "npm");
+        assert_eq!(calls[1].1, vec!["install"]);
+        assert_eq!(calls[1].2, Some(wt.join("frontend")));
     }
 
     #[test]
@@ -1243,7 +1348,8 @@ mod tests {
 
     #[test]
     fn substitute_env_files_updates_configured_files_only() {
-        let dir = std::env::temp_dir().join("wt-test-env-files-targets");
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
         fs::create_dir_all(dir.join("frontend")).ok();
         fs::create_dir_all(dir.join("backend")).ok();
         fs::write(dir.join(".env"), "APP_URL=http://old\n").unwrap();
@@ -1279,8 +1385,6 @@ mod tests {
         assert!(front.contains("OTHER=keep"));
         assert!(back.contains("DJANGO_ENV=old"));
         assert!(!back.contains("VITE_API_TARGET="));
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

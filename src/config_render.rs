@@ -86,7 +86,11 @@ fn append_setup_section(s: &mut String, setup: &SetupConfig) {
     if !setup.deps.is_empty() {
         s.push_str("deps = [\n");
         for dep in &setup.deps {
-            s.push_str(&format!("    {{ run = {}", toml_quote(&dep.run)));
+            s.push_str("    { ");
+            if let Some(working_dir) = dep.working_dir.as_deref() {
+                s.push_str(&format!("working_dir = {}, ", toml_quote(working_dir)));
+            }
+            s.push_str(&format!("run = {}", toml_quote(&dep.run)));
             if let Some(if_exists) = dep.if_exists.as_deref() {
                 s.push_str(&format!(", if_exists = {}", toml_quote(if_exists)));
             }
@@ -241,12 +245,16 @@ fn append_test_section(s: &mut String, test: &TestConfig) {
 
     s.push_str("\n[test]\ncommands = [\n");
     for command in &test.commands {
-        s.push_str(&format!("    {{ run = {}", toml_quote(&command.run)));
+        s.push_str("    { ");
+        if let Some(label) = command.label.as_deref() {
+            s.push_str(&format!("label = {}, ", toml_quote(label)));
+        }
+        if let Some(working_dir) = command.working_dir.as_deref() {
+            s.push_str(&format!("working_dir = {}, ", toml_quote(working_dir)));
+        }
+        s.push_str(&format!("run = {}", toml_quote(&command.run)));
         if let Some(if_exists) = command.if_exists.as_deref() {
             s.push_str(&format!(", if_exists = {}", toml_quote(if_exists)));
-        }
-        if let Some(label) = command.label.as_deref() {
-            s.push_str(&format!(", label = {}", toml_quote(label)));
         }
         s.push_str(" },\n");
     }

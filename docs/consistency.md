@@ -93,6 +93,13 @@ profile이 작업 묶음인지 다시 추론해야
 이때 중요한 것은 두 경로가 다른 개념처럼 보이지 않는 것이다. 단순한 형태와 복잡한
 형태는 같은 profile 모델의 두 표현이어야 한다.
 
+`wt init`은 사용자가 선택한 config 파일 하나를 만드는 시작점이다. 먼저 `.wt.toml` 또는
+`.local/.wt.toml` 중 하나를 고르고, 이후 issue provider, site provider, agent runtime,
+자주 쓰는 설정 질문은 타깃 구분 없이 동일하게 묻는다. 답한 설정은 선택한
+파일에만 쓰고, 다른 config 파일이나 named profile directory, prompt/scaffold 파일은
+부수적으로 만들지 않는다. Inline 설정을 구조화할 때 `wt config extract`나
+`wt profile create`로 드러낸다.
+
 Prompt도 같은 원칙을 따른다. `common`은 별도 실행 mode가 아니라 기존
 `[agent.prompt]` / `[agent.prompt.append]` 모델 안의 공통 scope다. Config layer와
 profile convention file merge를 모두 끝낸 뒤 최종 effective config에서 한 번만

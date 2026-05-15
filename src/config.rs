@@ -43,7 +43,7 @@ pub struct CopyAsEntry {
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SetupConfig {
     pub deps: Vec<DepCommand>,
     pub env: HashMap<String, String>,
@@ -51,7 +51,9 @@ pub struct SetupConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct DepCommand {
+    pub working_dir: Option<String>,
     pub run: String,
     pub if_exists: Option<String>,
 }
@@ -489,15 +491,16 @@ pub fn validate_profile_name(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(default)]
-#[derive(Default)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TestConfig {
     pub commands: Vec<TestCommand>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct TestCommand {
+    pub working_dir: Option<String>,
     pub run: String,
     pub if_exists: Option<String>,
     pub label: Option<String>,
@@ -1000,8 +1003,9 @@ inject_local_context = "\n## env\n- parent: `{{parent_branch}}`\n"
 
 [setup]
 deps = [
-    { run = "composer install", if_exists = "composer.json" },
-    { run = "npm install", if_exists = "package.json" },
+    { run = "composer install" },
+    { working_dir = "frontend", run = "npm install" },
+    { working_dir = "enterprise", run = "pnpm install", if_exists = "package.json" },
 ]
 
 [setup.env]
@@ -1044,7 +1048,7 @@ cli = "claude"
 
 [test]
 commands = [
-    { run = "./vendor/bin/pest", if_exists = "vendor/bin/pest", label = "PHP" },
+    { working_dir = "backend", run = "./vendor/bin/pest", if_exists = "vendor/bin/pest", label = "PHP" },
 ]
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
@@ -1066,8 +1070,21 @@ commands = [
                 .unwrap()
                 .contains("{{parent_branch}}")
         );
-        assert_eq!(config.setup.deps.len(), 2);
+        assert_eq!(config.setup.deps.len(), 3);
         assert_eq!(config.setup.deps[0].run, "composer install");
+        assert!(config.setup.deps[0].working_dir.is_none());
+        assert_eq!(
+            config.setup.deps[1].working_dir.as_deref(),
+            Some("frontend")
+        );
+        assert_eq!(
+            config.setup.deps[2].working_dir.as_deref(),
+            Some("enterprise")
+        );
+        assert_eq!(
+            config.setup.deps[2].if_exists.as_deref(),
+            Some("package.json")
+        );
         assert_eq!(
             config.setup.env.get("APP_URL").unwrap(),
             "https://{{site_name}}.test"
@@ -1125,6 +1142,37 @@ commands = [
 
         let test = config.test.unwrap();
         assert_eq!(test.commands[0].label.as_deref(), Some("PHP"));
+        assert_eq!(test.commands[0].working_dir.as_deref(), Some("backend"));
+    }
+
+    #[test]
+    fn rejects_unknown_setup_command_field() {
+        let err = toml::from_str::<Config>(
+            r#"
+[setup]
+deps = [
+    { cwd = "api", run = "uv sync" },
+]
+"#,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("unknown field `cwd`"));
+    }
+
+    #[test]
+    fn rejects_unknown_test_command_field() {
+        let err = toml::from_str::<Config>(
+            r#"
+[test]
+commands = [
+    { cwd = "web", run = "npm test" },
+]
+"#,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("unknown field `cwd`"));
     }
 
     #[test]

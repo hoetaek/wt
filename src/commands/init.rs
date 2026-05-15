@@ -1,10 +1,9 @@
 use crate::cli::{InitAgent, InitIssueProvider, InitSiteProvider};
-use crate::commands::profile::{ProfileCreateOptions, create_profile};
 use crate::config::{AgentCli, AgentConfig, Config, ReadyMode, SubmitMode};
 use crate::context::Ctx;
 use crate::error::WtError;
 use anyhow::{Result, bail};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub struct InitOptions {
@@ -16,8 +15,6 @@ pub struct InitOptions {
     pub issue_provider: Option<InitIssueProvider>,
     pub site_provider: Option<InitSiteProvider>,
     pub gh_user: Option<String>,
-    pub prompts: bool,
-    pub no_prompts: bool,
     pub yes: bool,
     pub force: bool,
 }
@@ -36,16 +33,51 @@ struct InitTarget {
 
 #[derive(Debug)]
 struct InitProfile {
-    name: String,
     agent: AgentConfig,
-    include_prompts: bool,
 }
 
 #[derive(Debug)]
 struct InitPlan {
     content: String,
-    config_for_profile: Config,
-    profile: Option<InitProfile>,
+}
+
+#[derive(Debug)]
+struct InitCommonConfig {
+    worktree_path: Option<String>,
+    setup_deps: Vec<InitCommand>,
+    editor_command: Option<String>,
+    test_commands: Vec<InitCommand>,
+    workspace_tabs: Vec<String>,
+    post_deps_tabs: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct InitCommand {
+    label: Option<String>,
+    working_dir: Option<String>,
+    run: String,
+    if_exists: Option<String>,
+    kind: InitCommandKind,
+    default_enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitCommandKind {
+    NodeInstall,
+    Other,
+}
+
+impl Default for InitCommonConfig {
+    fn default() -> Self {
+        Self {
+            worktree_path: None,
+            setup_deps: Vec::new(),
+            editor_command: None,
+            test_commands: Vec::new(),
+            workspace_tabs: vec!["lazygit".into(), "nvim".into()],
+            post_deps_tabs: Vec::new(),
+        }
+    }
 }
 
 pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
@@ -59,12 +91,6 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
 
     let plan = build_plan(ctx, &options, target.kind)?;
 
-    if target.kind == InitTargetKind::Shared {
-        if let Some(profile) = &plan.profile {
-            validate_local_profile_update(ctx, profile, options.force)?;
-        }
-    }
-
     if !options.yes && !ctx.ui.confirm("Create config?", true)? {
         return Err(WtError::Cancelled.into());
     }
@@ -75,42 +101,6 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     std::fs::write(&target.path, &plan.content)?;
     ctx.ui
         .print_step(&format!("Created config: {}", target.path.display()));
-
-    if let Some(profile) = &plan.profile {
-        if target.kind == InitTargetKind::Shared {
-            write_local_profile(ctx, profile, options.force)?;
-        }
-
-        if profile.include_prompts {
-            let profile_toml = ctx
-                .repo_root
-                .join(".local/profiles")
-                .join(&profile.name)
-                .join("profile.toml");
-            if profile_toml.exists() {
-                ctx.ui.print_step(&format!(
-                    "Profile '{}' already exists: {}",
-                    profile.name,
-                    profile_toml.display()
-                ));
-            } else {
-                let created = create_profile(
-                    ctx,
-                    ProfileCreateOptions {
-                        name: &profile.name,
-                        base_config: &plan.config_for_profile,
-                        agent: Some(profile.agent.clone()),
-                        include_prompts: true,
-                    },
-                )?;
-                ctx.ui.print_step(&format!(
-                    "Created profile '{}': {}",
-                    created.name,
-                    created.config_path.display()
-                ));
-            }
-        }
-    }
 
     Ok(())
 }
@@ -148,13 +138,8 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     }
 }
 
-fn build_plan(ctx: &Ctx, options: &InitOptions, target_kind: InitTargetKind) -> Result<InitPlan> {
-    let agent = resolve_agent(ctx, options)?;
-    let command = resolve_agent_command(options)?;
-    if agent == InitAgent::None && command.is_some() {
-        bail!("--agent-command cannot be used when --agent none");
-    }
-    let args = resolve_agent_args(ctx, &agent, options)?;
+fn build_plan(ctx: &Ctx, options: &InitOptions, _target_kind: InitTargetKind) -> Result<InitPlan> {
+    let profile = resolve_profile(ctx, options)?;
     let issue_provider = resolve_issue_provider(ctx, options)?;
     let gh_user = if issue_provider == Some(InitIssueProvider::Github) {
         resolve_gh_user(ctx, options)?
@@ -162,15 +147,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target_kind: InitTargetKind) -> 
         None
     };
     let site_provider = resolve_site_provider(ctx, options)?;
-    if agent == InitAgent::None && options.prompts {
-        bail!("--prompts cannot be used when --agent none");
-    }
-    let include_prompts = if agent == InitAgent::None {
-        false
-    } else {
-        resolve_prompts(ctx, options)?
-    };
-    let profile = build_profile(&agent, args, command, include_prompts);
+    let common = resolve_common_config(ctx, options)?;
 
     let mut s = String::new();
 
@@ -210,26 +187,17 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target_kind: InitTargetKind) -> 
         s.push('\n');
     }
 
-    if let (InitTargetKind::Local, Some(profile)) = (target_kind, &profile) {
+    if let Some(profile) = &profile {
         append_profile_selection(&mut s, profile);
     }
 
+    append_active_common_config(&mut s, &common);
+
     append_optional_scaffold(&mut s);
 
-    s.push_str("[workspace]\n");
-    s.push_str("tabs = [\"lazygit\", \"nvim\"]\n");
-    s.push_str("# post_deps_tabs = [\"npm run dev\"]\n");
-    s.push_str("# open_url = \"{{site_url}}\"\n");
-    s.push_str("# open_browser = true\n\n");
+    toml::from_str::<Config>(&s)?;
 
-    let mut config_for_profile = toml::from_str::<Config>(&s)?;
-    config_for_profile.profile = None;
-
-    Ok(InitPlan {
-        content: s,
-        config_for_profile,
-        profile,
-    })
+    Ok(InitPlan { content: s })
 }
 
 fn append_optional_scaffold(s: &mut String) {
@@ -237,7 +205,16 @@ fn append_optional_scaffold(s: &mut String) {
     s.push_str("# [worktree]\n");
     s.push_str("# path = \"$HOME/worktrees/{{default_name}}\"\n");
     s.push_str("# copy = [\".env\"]\n");
-    s.push_str("# link = [\".local\"]\n\n");
+    s.push_str("# copy_as = [\n");
+    s.push_str("#     { from = \".local/templates/.env\", to = \".env\" },\n");
+    s.push_str("# ]\n");
+    s.push_str("# link = [\".local\"]\n");
+    s.push_str("# inject_local_context = \"\"\"\n");
+    s.push_str("# ## Local context\n");
+    s.push_str("# - site: {{site_url}}\n");
+    s.push_str("# - worktree: {{worktree_path}}\n");
+    s.push_str("# - parent: {{parent_branch}}\n");
+    s.push_str("# \"\"\"\n\n");
 
     s.push_str("# Optional AI-assisted naming for issue worktrees.\n");
     s.push_str("# [worktree.naming]\n");
@@ -246,10 +223,547 @@ fn append_optional_scaffold(s: &mut String) {
     s.push_str("# workspace = \"{{english_title}}\"\n\n");
 
     s.push_str("# Optional setup commands run inside each worktree.\n");
+    s.push_str(
+        "# Omit if_exists for required setup; use it only for intentionally optional commands.\n",
+    );
     s.push_str("# [setup]\n");
     s.push_str("# deps = [\n");
-    s.push_str("#     { run = \"npm install\", if_exists = \"package.json\" },\n");
+    s.push_str("#     { run = \"npm install\" },\n");
+    s.push_str("#     { working_dir = \"frontend\", run = \"pnpm install\" },\n");
+    s.push_str("#     { working_dir = \"api\", run = \"uv sync\" },\n");
+    s.push_str(
+        "#     { working_dir = \"enterprise\", run = \"pnpm install\", if_exists = \"package.json\" },\n",
+    );
     s.push_str("# ]\n\n");
+    s.push_str("# Optional environment substitutions for existing env files.\n");
+    s.push_str("# [setup.env]\n");
+    s.push_str("# APP_ENV = \"local\"\n\n");
+    s.push_str("# [setup.env_files.\".env.local\"]\n");
+    s.push_str("# APP_URL = \"{{site_url}}\"\n");
+    s.push_str("# VITE_PORT = \"{{vite_port}}\"\n\n");
+
+    s.push_str("# Optional editor for wt-managed TOML files.\n");
+    s.push_str("# [editor]\n");
+    s.push_str("# command = \"nvim {{path}}\"\n");
+    s.push_str("# placement = \"cmux_surface\"\n\n");
+
+    s.push_str("# Optional test commands run after setup.\n");
+    s.push_str("# [test]\n");
+    s.push_str("# commands = [\n");
+    s.push_str("#     { label = \"test\", run = \"cargo test\" },\n");
+    s.push_str("#     { label = \"lint\", working_dir = \"frontend\", run = \"npm run lint\" },\n");
+    s.push_str("#     { label = \"optional-pest\", working_dir = \"backend\", run = \"./vendor/bin/pest\", if_exists = \"vendor/bin/pest\" },\n");
+    s.push_str("# ]\n\n");
+}
+
+fn append_active_common_config(s: &mut String, common: &InitCommonConfig) {
+    if let Some(path) = common.worktree_path.as_deref() {
+        s.push_str("[worktree]\n");
+        s.push_str(&format!("path = {}\n\n", toml_quote(path)));
+    }
+
+    if !common.setup_deps.is_empty() {
+        s.push_str("[setup]\n");
+        s.push_str("deps = [\n");
+        for command in &common.setup_deps {
+            append_command_entry(s, command);
+        }
+        s.push_str("]\n\n");
+    }
+
+    if let Some(command) = common.editor_command.as_deref() {
+        s.push_str("[editor]\n");
+        s.push_str(&format!("command = {}\n", toml_quote(command)));
+        s.push_str("placement = \"cmux_surface\"\n\n");
+    }
+
+    if !common.test_commands.is_empty() {
+        s.push_str("[test]\n");
+        s.push_str("commands = [\n");
+        for command in &common.test_commands {
+            append_command_entry(s, command);
+        }
+        s.push_str("]\n\n");
+    }
+
+    s.push_str("[workspace]\n");
+    s.push_str(&format!("tabs = {}\n", toml_array(&common.workspace_tabs)));
+    if !common.post_deps_tabs.is_empty() {
+        s.push_str(&format!(
+            "post_deps_tabs = {}\n",
+            toml_array(&common.post_deps_tabs)
+        ));
+    } else {
+        s.push_str("# post_deps_tabs = [\"npm run dev\"]\n");
+    }
+    s.push_str("# open_url = \"{{site_url}}\"\n");
+    s.push_str("# open_browser = true\n");
+    s.push_str("# browser = \"Google Chrome\"\n");
+    s.push_str("# colors = { issue = \"blue\", pr = \"magenta\", new = \"green\" }\n\n");
+}
+
+fn append_command_entry(s: &mut String, command: &InitCommand) {
+    s.push_str("    { ");
+    if let Some(label) = command.label.as_deref() {
+        s.push_str(&format!("label = {}, ", toml_quote(label)));
+    }
+    if let Some(working_dir) = command.working_dir.as_deref() {
+        s.push_str(&format!("working_dir = {}, ", toml_quote(working_dir)));
+    }
+    s.push_str(&format!("run = {}", toml_quote(&command.run)));
+    if let Some(if_exists) = command.if_exists.as_deref() {
+        s.push_str(&format!(", if_exists = {}", toml_quote(if_exists)));
+    }
+    s.push_str(" },\n");
+}
+
+fn resolve_common_config(ctx: &Ctx, options: &InitOptions) -> Result<InitCommonConfig> {
+    let mut config = InitCommonConfig::default();
+    if options.yes {
+        return Ok(config);
+    }
+
+    let items = vec![
+        "minimal".into(),
+        "customize frequently used settings".into(),
+    ];
+    if ctx.ui.select("Additional settings", &items)? == 0 {
+        return Ok(config);
+    }
+
+    config.worktree_path = resolve_worktree_path(ctx)?;
+    config.workspace_tabs = resolve_workspace_tabs(ctx)?;
+
+    config.setup_deps = resolve_setup_deps(ctx)?;
+
+    let post_deps_tabs = detect_post_deps_tabs(&ctx.repo_root);
+    if !post_deps_tabs.is_empty()
+        && ctx
+            .ui
+            .confirm("Start detected dev command after deps?", false)?
+    {
+        config.post_deps_tabs = post_deps_tabs;
+    }
+
+    let test_commands = detect_test_commands(&ctx.repo_root);
+    if !test_commands.is_empty() && ctx.ui.confirm("Add detected test commands?", true)? {
+        config.test_commands = test_commands;
+    }
+
+    config.editor_command = resolve_editor_command(ctx)?;
+    Ok(config)
+}
+
+fn resolve_worktree_path(ctx: &Ctx) -> Result<Option<String>> {
+    let items = vec![
+        "default sibling path".into(),
+        "$HOME/worktrees/{{default_name}}".into(),
+        "custom".into(),
+    ];
+    match ctx.ui.select("Worktree path", &items)? {
+        0 => Ok(None),
+        1 => Ok(Some("$HOME/worktrees/{{default_name}}".into())),
+        _ => {
+            let input = ctx.ui.input(
+                "Worktree path template",
+                Some("$HOME/worktrees/{{default_name}}"),
+            )?;
+            let input = input.trim();
+            Ok((!input.is_empty()).then(|| input.to_string()))
+        }
+    }
+}
+
+fn resolve_workspace_tabs(ctx: &Ctx) -> Result<Vec<String>> {
+    let input = ctx.ui.input("Workspace tabs", Some("lazygit, nvim"))?;
+    let tabs = split_list(&input);
+    if tabs.is_empty() {
+        Ok(Vec::new())
+    } else {
+        Ok(tabs)
+    }
+}
+
+fn resolve_editor_command(ctx: &Ctx) -> Result<Option<String>> {
+    let items = vec![
+        "default editor".into(),
+        "nvim {{path}}".into(),
+        "code {{path}}".into(),
+        "custom".into(),
+    ];
+    match ctx.ui.select("Config editor", &items)? {
+        0 => Ok(None),
+        1 => Ok(Some("nvim {{path}}".into())),
+        2 => Ok(Some("code {{path}}".into())),
+        _ => {
+            let input = ctx.ui.input("Editor command", Some("nvim {{path}}"))?;
+            let input = input.trim();
+            Ok((!input.is_empty()).then(|| input.to_string()))
+        }
+    }
+}
+
+fn split_list(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn resolve_setup_deps(ctx: &Ctx) -> Result<Vec<InitCommand>> {
+    let mut selected = Vec::new();
+    for mut command in detect_setup_deps(&ctx.repo_root) {
+        let display = command_display(&command);
+        if !ctx.ui.confirm(
+            &format!("Add setup command: {display}?"),
+            command.default_enabled,
+        )? {
+            continue;
+        }
+        if command.kind == InitCommandKind::NodeInstall {
+            command.run = resolve_node_install_command(ctx, &command)?;
+        }
+        selected.push(command);
+    }
+    Ok(selected)
+}
+
+fn resolve_node_install_command(ctx: &Ctx, command: &InitCommand) -> Result<String> {
+    let detected = command.run.as_str();
+    let mut options = Vec::new();
+    push_node_install_option(&mut options, format!("{detected} (detected)"), detected);
+    push_node_install_option(&mut options, "npm install".into(), "npm install");
+    push_node_install_option(&mut options, "pnpm install".into(), "pnpm install");
+    push_node_install_option(&mut options, "yarn install".into(), "yarn install");
+    push_node_install_option(&mut options, "bun install".into(), "bun install");
+    push_node_install_option(
+        &mut options,
+        "nvm use && npm install".into(),
+        "bash -lc 'source \"$HOME/.nvm/nvm.sh\" && nvm use && npm install'",
+    );
+
+    let mut items = options
+        .iter()
+        .map(|(label, _)| label.clone())
+        .collect::<Vec<_>>();
+    items.push("custom".into());
+
+    let prompt = command.working_dir.as_deref().map_or_else(
+        || "Node install command".to_string(),
+        |working_dir| format!("Node install command for {working_dir}"),
+    );
+    let selection = ctx.ui.select(&prompt, &items)?;
+    if selection < options.len() {
+        return Ok(options[selection].1.clone());
+    }
+
+    let input = ctx.ui.input("Custom setup command", Some(detected))?;
+    let input = input.trim();
+    Ok(if input.is_empty() {
+        detected.to_string()
+    } else {
+        input.to_string()
+    })
+}
+
+fn push_node_install_option(options: &mut Vec<(String, String)>, label: String, run: &str) {
+    if !options.iter().any(|(_, existing)| existing == run) {
+        options.push((label, run.to_string()));
+    }
+}
+
+fn detect_setup_deps(repo_root: &Path) -> Vec<InitCommand> {
+    let mut commands = Vec::new();
+    for rel_dir in detect_manifest_dirs(
+        repo_root,
+        &["package.json", "composer.json", "Gemfile", "pyproject.toml"],
+    ) {
+        let project_root = repo_root.join(&rel_dir);
+        let working_dir = relative_dir(&rel_dir);
+        if project_root.join("package.json").exists() {
+            commands.push(InitCommand {
+                label: None,
+                working_dir: working_dir.clone(),
+                run: format!("{} install", node_package_manager(&project_root)),
+                if_exists: None,
+                kind: InitCommandKind::NodeInstall,
+                default_enabled: true,
+            });
+        }
+        if project_root.join("composer.json").exists() {
+            commands.push(InitCommand {
+                label: None,
+                working_dir: working_dir.clone(),
+                run: "composer install".into(),
+                if_exists: None,
+                kind: InitCommandKind::Other,
+                default_enabled: true,
+            });
+        }
+        if project_root.join("Gemfile").exists() {
+            commands.push(InitCommand {
+                label: None,
+                working_dir: working_dir.clone(),
+                run: "bundle install".into(),
+                if_exists: None,
+                kind: InitCommandKind::Other,
+                default_enabled: true,
+            });
+        }
+        if project_root.join("pyproject.toml").exists() {
+            commands.push(InitCommand {
+                label: None,
+                working_dir,
+                run: "uv sync".into(),
+                if_exists: None,
+                kind: InitCommandKind::Other,
+                default_enabled: is_probable_uv_project(&project_root),
+            });
+        }
+    }
+    commands
+}
+
+fn detect_post_deps_tabs(repo_root: &Path) -> Vec<String> {
+    detect_package_roots(repo_root)
+        .into_iter()
+        .filter_map(|rel_dir| {
+            let project_root = repo_root.join(&rel_dir);
+            let working_dir = relative_dir(&rel_dir);
+            package_script_command(&project_root, "dev")
+                .map(|run| command_for_workspace_tab(working_dir.as_deref(), &run))
+        })
+        .collect()
+}
+
+fn detect_test_commands(repo_root: &Path) -> Vec<InitCommand> {
+    let mut commands = Vec::new();
+    for rel_dir in detect_manifest_dirs(repo_root, &["Cargo.toml"]) {
+        commands.push(InitCommand {
+            label: Some("test".into()),
+            working_dir: relative_dir(&rel_dir),
+            run: "cargo test".into(),
+            if_exists: None,
+            kind: InitCommandKind::Other,
+            default_enabled: true,
+        });
+    }
+    for rel_dir in detect_package_roots(repo_root) {
+        let project_root = repo_root.join(&rel_dir);
+        let working_dir = relative_dir(&rel_dir);
+        if let Some(run) = package_script_command(&project_root, "test") {
+            commands.push(InitCommand {
+                label: Some("test".into()),
+                working_dir: working_dir.clone(),
+                run,
+                if_exists: None,
+                kind: InitCommandKind::Other,
+                default_enabled: true,
+            });
+        }
+        if let Some(run) = package_script_command(&project_root, "lint") {
+            commands.push(InitCommand {
+                label: Some("lint".into()),
+                working_dir,
+                run,
+                if_exists: None,
+                kind: InitCommandKind::Other,
+                default_enabled: true,
+            });
+        }
+    }
+    commands
+}
+
+fn command_display(command: &InitCommand) -> String {
+    let command_part = command.working_dir.as_deref().map_or_else(
+        || command.run.clone(),
+        |working_dir| format!("{working_dir}: {}", command.run),
+    );
+    command
+        .if_exists
+        .as_deref()
+        .map_or(command_part.clone(), |guard| {
+            let guard = command.working_dir.as_deref().map_or_else(
+                || guard.to_string(),
+                |working_dir| format!("{working_dir}/{guard}"),
+            );
+            format!("{command_part} (when {guard} exists)")
+        })
+}
+
+fn command_for_workspace_tab(working_dir: Option<&str>, run: &str) -> String {
+    working_dir.map_or_else(
+        || run.to_string(),
+        |working_dir| format!("cd {} && {run}", shell_words::quote(working_dir)),
+    )
+}
+
+fn package_script_command(project_root: &Path, script: &str) -> Option<String> {
+    if !package_script_exists(project_root, script) {
+        return None;
+    }
+
+    let manager = node_package_manager(project_root);
+    let command = if script == "test" && manager == "npm" {
+        "npm test".into()
+    } else {
+        format!("{manager} run {script}")
+    };
+    Some(command)
+}
+
+fn package_script_exists(project_root: &Path, script: &str) -> bool {
+    let Ok(content) = std::fs::read_to_string(project_root.join("package.json")) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    value
+        .get("scripts")
+        .and_then(|scripts| scripts.get(script))
+        .and_then(|value| value.as_str())
+        .is_some()
+}
+
+fn detect_package_roots(repo_root: &Path) -> Vec<PathBuf> {
+    detect_manifest_dirs(repo_root, &["package.json"])
+}
+
+fn detect_manifest_dirs(repo_root: &Path, manifests: &[&str]) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    scan_manifest_dirs(repo_root, Path::new(""), 0, manifests, &mut roots);
+    roots.sort_by_key(|path| path.to_string_lossy().to_string());
+    roots.dedup();
+    roots
+}
+
+fn scan_manifest_dirs(
+    repo_root: &Path,
+    rel_dir: &Path,
+    depth: usize,
+    manifests: &[&str],
+    roots: &mut Vec<PathBuf>,
+) {
+    const MAX_MANIFEST_SCAN_DEPTH: usize = 4;
+
+    let dir = repo_root.join(rel_dir);
+    if manifests.iter().any(|manifest| dir.join(manifest).exists()) {
+        roots.push(rel_dir.to_path_buf());
+    }
+    if depth >= MAX_MANIFEST_SCAN_DEPTH {
+        return;
+    }
+
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let mut child_dirs = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            file_type.is_dir().then(|| entry.file_name())
+        })
+        .filter_map(|name| name.into_string().ok())
+        .filter(|name| !is_ignored_manifest_dir(name))
+        .collect::<Vec<_>>();
+    child_dirs.sort();
+
+    for child in child_dirs {
+        let child_rel = if rel_dir.as_os_str().is_empty() {
+            PathBuf::from(child)
+        } else {
+            rel_dir.join(child)
+        };
+        scan_manifest_dirs(repo_root, &child_rel, depth + 1, manifests, roots);
+    }
+}
+
+fn is_ignored_manifest_dir(name: &str) -> bool {
+    matches!(
+        name,
+        ".git"
+            | ".hg"
+            | ".svn"
+            | ".local"
+            | ".next"
+            | ".nuxt"
+            | ".turbo"
+            | ".cache"
+            | "node_modules"
+            | "vendor"
+            | "target"
+            | "dist"
+            | "build"
+            | "coverage"
+            | "tmp"
+    )
+}
+
+fn relative_dir(rel_dir: &Path) -> Option<String> {
+    (!rel_dir.as_os_str().is_empty()).then(|| rel_dir.to_string_lossy().replace('\\', "/"))
+}
+
+fn is_probable_uv_project(project_root: &Path) -> bool {
+    if project_root.join("uv.lock").exists() {
+        return true;
+    }
+    let Ok(pyproject) = std::fs::read_to_string(project_root.join("pyproject.toml")) else {
+        return false;
+    };
+    pyproject.contains("[tool.uv") || pyproject.contains("[dependency-groups]")
+}
+
+fn node_package_manager(project_root: &Path) -> &'static str {
+    package_manager_from_package_json(project_root).unwrap_or_else(|| {
+        if project_root.join("pnpm-lock.yaml").exists() {
+            "pnpm"
+        } else if project_root.join("bun.lock").exists() || project_root.join("bun.lockb").exists()
+        {
+            "bun"
+        } else if project_root.join("yarn.lock").exists() {
+            "yarn"
+        } else {
+            "npm"
+        }
+    })
+}
+
+fn package_manager_from_package_json(project_root: &Path) -> Option<&'static str> {
+    let content = std::fs::read_to_string(project_root.join("package.json")).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&content).ok()?;
+    let package_manager = value.get("packageManager")?.as_str()?;
+    let name = package_manager.split('@').next().unwrap_or(package_manager);
+    known_node_package_manager(name)
+}
+
+fn known_node_package_manager(name: &str) -> Option<&'static str> {
+    match name {
+        "npm" => Some("npm"),
+        "pnpm" => Some("pnpm"),
+        "yarn" => Some("yarn"),
+        "bun" => Some("bun"),
+        _ => None,
+    }
+}
+
+fn resolve_profile(ctx: &Ctx, options: &InitOptions) -> Result<Option<InitProfile>> {
+    let agent = resolve_agent(ctx, options)?;
+    let command = resolve_agent_command(options)?;
+    if agent == InitAgent::None {
+        if command.is_some() {
+            bail!("--agent-command cannot be used when --agent none");
+        }
+        if !options.agent_args.is_empty() {
+            bail!("--agent-arg cannot be used when --agent none");
+        }
+        return Ok(None);
+    }
+    let args = resolve_agent_args(ctx, &agent, options)?;
+    Ok(build_profile(&agent, args, command))
 }
 
 fn resolve_agent(ctx: &Ctx, options: &InitOptions) -> Result<InitAgent> {
@@ -370,32 +884,12 @@ fn resolve_gh_user(ctx: &Ctx, options: &InitOptions) -> Result<Option<String>> {
     Ok((!user.is_empty()).then(|| user.to_string()))
 }
 
-fn resolve_prompts(ctx: &Ctx, options: &InitOptions) -> Result<bool> {
-    if options.no_prompts {
-        return Ok(false);
-    }
-    if options.prompts {
-        return Ok(true);
-    }
-    if options.yes {
-        return Ok(false);
-    }
-    ctx.ui.confirm("Create named profile with prompts?", false)
-}
-
 fn build_profile(
     agent: &InitAgent,
     args: Vec<String>,
     command: Option<String>,
-    include_prompts: bool,
 ) -> Option<InitProfile> {
-    if *agent == InitAgent::None {
-        return None;
-    }
-
-    let name = agent_name(agent).to_string();
-    Some(InitProfile {
-        name,
+    (*agent != InitAgent::None).then(|| InitProfile {
         agent: AgentConfig {
             cli: init_agent_cli(agent),
             args,
@@ -406,18 +900,12 @@ fn build_profile(
             send_after: 2,
             prompt: Default::default(),
         },
-        include_prompts,
     })
 }
 
 fn append_profile_selection(s: &mut String, profile: &InitProfile) {
-    if profile.include_prompts {
-        s.push_str("[profile]\n");
-        s.push_str(&format!("name = {}\n\n", toml_quote(&profile.name)));
-    } else {
-        append_inline_agent_section(s, &profile.agent);
-        s.push('\n');
-    }
+    append_inline_agent_section(s, &profile.agent);
+    s.push('\n');
 }
 
 fn append_inline_agent_section(s: &mut String, agent: &AgentConfig) {
@@ -444,15 +932,6 @@ fn init_agent_cli(agent: &InitAgent) -> AgentCli {
         InitAgent::Claude => AgentCli::Claude,
         InitAgent::Gemini => AgentCli::Gemini,
         InitAgent::None => AgentCli::None,
-    }
-}
-
-fn agent_name(agent: &InitAgent) -> &'static str {
-    match agent {
-        InitAgent::Codex => "codex",
-        InitAgent::Claude => "claude",
-        InitAgent::Gemini => "gemini",
-        InitAgent::None => "none",
     }
 }
 
@@ -509,92 +988,6 @@ fn toml_array(values: &[String]) -> String {
     format!("[{rendered}]")
 }
 
-fn validate_local_profile_update(ctx: &Ctx, profile: &InitProfile, force: bool) -> Result<()> {
-    let path = ctx.repo_root.join(".local/.wt.toml");
-    if !path.exists() {
-        return Ok(());
-    }
-
-    let content = std::fs::read_to_string(&path)?;
-    set_local_profile_content(&content, profile, force)?;
-    Ok(())
-}
-
-fn write_local_profile(ctx: &Ctx, profile: &InitProfile, force: bool) -> Result<()> {
-    let path = ctx.repo_root.join(".local/.wt.toml");
-    let content = if path.exists() {
-        std::fs::read_to_string(&path)?
-    } else {
-        String::new()
-    };
-    let updated = set_local_profile_content(&content, profile, force)?;
-    if updated != content {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, updated)?;
-        ctx.ui
-            .print_step(&format!("Updated local profile config: {}", path.display()));
-    }
-    Ok(())
-}
-
-fn set_local_profile_content(content: &str, profile: &InitProfile, force: bool) -> Result<String> {
-    if !content.trim().is_empty() {
-        let config: Config = toml::from_str(content)?;
-        if let Some(existing_profile) = config.profile.as_ref() {
-            if profile.include_prompts && existing_profile.name.as_deref() == Some(&profile.name) {
-                return Ok(content.to_string());
-            }
-            if !force {
-                bail!("Local profile is already configured");
-            }
-        }
-    }
-
-    let mut updated = remove_profile_sections(content);
-    updated = updated.trim_end().to_string();
-    if !updated.is_empty() {
-        updated.push_str("\n\n");
-    }
-    append_profile_selection(&mut updated, profile);
-
-    toml::from_str::<Config>(&updated)?;
-    Ok(updated)
-}
-
-fn remove_profile_sections(content: &str) -> String {
-    let mut lines = Vec::new();
-    let mut skipping_profile = false;
-
-    for line in content.lines() {
-        if let Some(header) = table_header(line) {
-            skipping_profile = header == "profile" || header.starts_with("profile.");
-            if skipping_profile {
-                continue;
-            }
-        }
-
-        if !skipping_profile {
-            lines.push(line.to_string());
-        }
-    }
-
-    lines.join("\n")
-}
-
-fn table_header(line: &str) -> Option<&str> {
-    let trimmed = line
-        .trim()
-        .split_once('#')
-        .map_or_else(|| line.trim(), |(before, _)| before.trim_end());
-    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
-        return None;
-    }
-    let header = trimmed.trim_start_matches('[').trim_end_matches(']');
-    (!header.starts_with('[') && !header.ends_with(']')).then_some(header)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,15 +995,7 @@ mod tests {
     use crate::context::UserInterface;
     use crate::context::mock::{MockRunner, MockUi};
     use std::collections::VecDeque;
-    use std::path::Path;
     use std::sync::{Arc, Mutex};
-
-    fn read_profile_config(root: &Path, name: &str) -> Config {
-        let content =
-            std::fs::read_to_string(root.join(".local/profiles").join(name).join("profile.toml"))
-                .unwrap();
-        toml::from_str(&content).unwrap()
-    }
 
     #[test]
     fn init_local_codex_yes_creates_parseable_config() {
@@ -634,8 +1019,6 @@ mod tests {
                 issue_provider: None,
                 site_provider: None,
                 gh_user: None,
-                prompts: false,
-                no_prompts: false,
                 yes: true,
                 force: false,
             },
@@ -645,8 +1028,17 @@ mod tests {
         let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert!(content.contains("# path = \"$HOME/worktrees/{{default_name}}\""));
+        assert!(content.contains("# copy_as = ["));
+        assert!(content.contains("# inject_local_context = \"\"\""));
         assert!(content.contains("# [worktree.naming]"));
+        assert!(content.contains("# [setup.env]"));
+        assert!(content.contains("# [setup.env_files.\".env.local\"]"));
+        assert!(content.contains("# [editor]"));
+        assert!(content.contains("# [test]"));
         assert!(content.contains("# post_deps_tabs = [\"npm run dev\"]"));
+        assert!(
+            content.contains("# colors = { issue = \"blue\", pr = \"magenta\", new = \"green\" }")
+        );
         assert!(config.worktree.path.is_none());
         assert!(config.worktree.naming.is_none());
         let profile = config.profile.unwrap();
@@ -665,9 +1057,10 @@ mod tests {
     }
 
     #[test]
-    fn init_shared_gemini_with_github_options() {
+    fn init_shared_with_github_options_creates_only_shared_config() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -682,14 +1075,12 @@ mod tests {
             InitOptions {
                 local: false,
                 shared: true,
-                agent: Some(InitAgent::Gemini),
-                agent_args: vec!["--model=gemini-pro".into()],
+                agent: Some(InitAgent::None),
+                agent_args: Vec::new(),
                 agent_command: None,
                 issue_provider: Some(InitIssueProvider::Github),
                 site_provider: Some(InitSiteProvider::None),
                 gh_user: Some("alice".into()),
-                prompts: true,
-                no_prompts: false,
                 yes: false,
                 force: false,
             },
@@ -706,19 +1097,10 @@ mod tests {
         assert_eq!(issues.provider, IssueProviderType::Github);
         assert_eq!(issues.gh_user.as_deref(), Some("alice"));
 
-        let local_content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
-        let local_config: Config = toml::from_str(&local_content).unwrap();
-        assert_eq!(
-            local_config.profile.unwrap().name.as_deref(),
-            Some("gemini")
-        );
-        let profile = read_profile_config(dir.path(), "gemini");
-        let agent = profile.agent.unwrap();
-        assert_eq!(agent.cli, AgentCli::Gemini);
-        assert_eq!(agent.args, vec!["--model=gemini-pro"]);
+        assert!(!dir.path().join(".local/.wt.toml").exists());
         assert!(
-            dir.path()
-                .join(".local/profiles/gemini/prompts/issue.md")
+            !dir.path()
+                .join(".local/profiles/gemini/profile.toml")
                 .exists()
         );
     }
@@ -745,8 +1127,6 @@ mod tests {
                 issue_provider: Some(InitIssueProvider::Github),
                 site_provider: None,
                 gh_user: None,
-                prompts: false,
-                no_prompts: false,
                 yes: true,
                 force: false,
             },
@@ -766,6 +1146,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // no agent args
+        ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -786,8 +1167,6 @@ mod tests {
                 issue_provider: Some(InitIssueProvider::None),
                 site_provider: Some(InitSiteProvider::Valet),
                 gh_user: None,
-                prompts: false,
-                no_prompts: true,
                 yes: false,
                 force: false,
             },
@@ -808,6 +1187,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // no agent args
+        ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -828,8 +1208,6 @@ mod tests {
                 issue_provider: Some(InitIssueProvider::None),
                 site_provider: Some(InitSiteProvider::Traefik),
                 gh_user: None,
-                prompts: false,
-                no_prompts: true,
                 yes: false,
                 force: false,
             },
@@ -854,11 +1232,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(1); // .wt.toml
-        ui.add_select(1); // claude
+        ui.add_select(0); // codex
         ui.add_select(0); // no agent args
         ui.add_select(2); // no issue provider
         ui.add_select(0); // no site provider
-        ui.add_confirm(false); // keep profile inline
+        ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
 
         let ctx = Ctx::new(
@@ -880,8 +1258,6 @@ mod tests {
                 issue_provider: None,
                 site_provider: None,
                 gh_user: None,
-                prompts: false,
-                no_prompts: false,
                 yes: false,
                 force: false,
             },
@@ -891,17 +1267,9 @@ mod tests {
         let content = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert!(config.agent.is_none());
-        assert!(config.profile.is_none());
-        let local_content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
-        let local_config: Config = toml::from_str(&local_content).unwrap();
-        let agent = local_config.profile.unwrap().agent.unwrap();
-        assert_eq!(agent.cli, AgentCli::Claude);
-        assert!(agent.prompt.is_empty());
-        assert!(
-            !dir.path()
-                .join(".local/profiles/claude/profile.toml")
-                .exists()
-        );
+        let agent = config.profile.unwrap().agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Codex);
+        assert!(!dir.path().join(".local/.wt.toml").exists());
         assert!(config.issues.is_none());
     }
 
@@ -915,7 +1283,7 @@ mod tests {
         ui.add_input("--model gpt-5.5");
         ui.add_select(2); // no issue provider
         ui.add_select(0); // no site provider
-        ui.add_confirm(false); // keep profile inline
+        ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
 
         let ctx = Ctx::new(
@@ -937,8 +1305,6 @@ mod tests {
                 issue_provider: None,
                 site_provider: None,
                 gh_user: None,
-                prompts: false,
-                no_prompts: false,
                 yes: false,
                 force: false,
             },
@@ -950,6 +1316,210 @@ mod tests {
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
         assert_eq!(agent.args, vec!["--model", "gpt-5.5"]);
+    }
+
+    #[test]
+    fn init_interactive_custom_common_config_writes_selected_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"dev":"vite","test":"vitest","lint":"eslint ."}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_select(1); // customize frequently used settings
+        ui.add_select(1); // $HOME/worktrees/{{default_name}}
+        ui.add_input("lazygit, nvim, pnpm run dev");
+        ui.add_confirm(true); // add detected setup commands
+        ui.add_select(0); // detected pnpm install
+        ui.add_confirm(true); // start detected dev command after deps
+        ui.add_confirm(true); // add detected test commands
+        ui.add_select(1); // nvim {{path}}
+        ui.add_confirm(true); // create config
+
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                shared: false,
+                agent: Some(InitAgent::None),
+                agent_args: Vec::new(),
+                agent_command: None,
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                gh_user: None,
+                yes: false,
+                force: false,
+            },
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        assert_eq!(
+            config.worktree.path.as_deref(),
+            Some("$HOME/worktrees/{{default_name}}")
+        );
+        assert_eq!(config.setup.deps.len(), 1);
+        assert_eq!(config.setup.deps[0].run, "pnpm install");
+        assert!(config.setup.deps[0].working_dir.is_none());
+        assert!(config.setup.deps[0].if_exists.is_none());
+        assert_eq!(config.editor.command.as_deref(), Some("nvim {{path}}"));
+
+        let workspace = config.workspace.unwrap();
+        assert_eq!(
+            workspace.tabs,
+            vec![
+                "lazygit".to_string(),
+                "nvim".to_string(),
+                "pnpm run dev".to_string()
+            ]
+        );
+        assert_eq!(workspace.post_deps_tabs, vec!["pnpm run dev".to_string()]);
+
+        let test = config.test.unwrap();
+        assert!(test.commands.iter().any(|command| {
+            command.label.as_deref() == Some("test")
+                && command.run == "pnpm run test"
+                && command.working_dir.is_none()
+                && command.if_exists.is_none()
+        }));
+        assert!(test.commands.iter().any(|command| {
+            command.label.as_deref() == Some("lint")
+                && command.run == "pnpm run lint"
+                && command.working_dir.is_none()
+                && command.if_exists.is_none()
+        }));
+    }
+
+    #[test]
+    fn init_interactive_setup_deps_supports_root_polyglot_and_subdir_override() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"scripts":{}}"#).unwrap();
+        std::fs::write(dir.path().join("composer.json"), "{}").unwrap();
+        std::fs::create_dir_all(dir.path().join("apps/web")).unwrap();
+        std::fs::write(
+            dir.path().join("apps/web/package.json"),
+            r#"{"packageManager":"pnpm@9.0.0","scripts":{"dev":"vite"}}"#,
+        )
+        .unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_select(1); // customize frequently used settings
+        ui.add_select(0); // default worktree path
+        ui.add_input("lazygit, nvim");
+        ui.add_confirm(true); // root npm install
+        ui.add_select(0); // detected npm install
+        ui.add_confirm(true); // root composer install
+        ui.add_confirm(true); // apps/web pnpm install
+        ui.add_select(4); // nvm use && npm install
+        ui.add_confirm(false); // do not start detected dev command
+        ui.add_select(0); // default editor
+        ui.add_confirm(true); // create config
+
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                shared: false,
+                agent: Some(InitAgent::None),
+                agent_args: Vec::new(),
+                agent_command: None,
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                gh_user: None,
+                yes: false,
+                force: false,
+            },
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        assert_eq!(config.setup.deps.len(), 3);
+        assert_eq!(config.setup.deps[0].run, "npm install");
+        assert!(config.setup.deps[0].working_dir.is_none());
+        assert_eq!(config.setup.deps[1].run, "composer install");
+        assert!(config.setup.deps[1].working_dir.is_none());
+        assert_eq!(
+            config.setup.deps[2].working_dir.as_deref(),
+            Some("apps/web")
+        );
+        assert_eq!(
+            config.setup.deps[2].run,
+            "bash -lc 'source \"$HOME/.nvm/nvm.sh\" && nvm use && npm install'"
+        );
+        assert!(content.contains("working_dir = \"apps/web\""));
+    }
+
+    #[test]
+    fn init_interactive_setup_deps_detects_uv_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("api")).unwrap();
+        std::fs::write(
+            dir.path().join("api/pyproject.toml"),
+            "[project]\nname = \"api\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("api/uv.lock"), "").unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_select(1); // customize frequently used settings
+        ui.add_select(0); // default worktree path
+        ui.add_input("lazygit, nvim");
+        ui.add_confirm(true); // api uv sync
+        ui.add_select(0); // default editor
+        ui.add_confirm(true); // create config
+
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                shared: false,
+                agent: Some(InitAgent::None),
+                agent_args: Vec::new(),
+                agent_command: None,
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                gh_user: None,
+                yes: false,
+                force: false,
+            },
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        assert_eq!(config.setup.deps.len(), 1);
+        assert_eq!(config.setup.deps[0].working_dir.as_deref(), Some("api"));
+        assert_eq!(config.setup.deps[0].run, "uv sync");
+        assert!(config.setup.deps[0].if_exists.is_none());
     }
 
     #[test]
@@ -1000,8 +1570,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let agent_args_items = Arc::new(Mutex::new(None));
         let ui = CapturingUi {
-            selects: Mutex::new(VecDeque::from([0, 0, 0, 2, 0])),
-            confirms: Mutex::new(VecDeque::from([false, true])),
+            selects: Mutex::new(VecDeque::from([0, 0, 0, 2, 0, 0])),
+            confirms: Mutex::new(VecDeque::from([true])),
             agent_args_items: Arc::clone(&agent_args_items),
         };
         let ctx = Ctx::new(
@@ -1023,8 +1593,6 @@ mod tests {
                 issue_provider: None,
                 site_provider: None,
                 gh_user: None,
-                prompts: false,
-                no_prompts: false,
                 yes: false,
                 force: false,
             },
@@ -1046,7 +1614,7 @@ mod tests {
         ui.add_select(0); // no agent args
         ui.add_select(2); // no issue provider
         ui.add_select(0); // no site provider
-        ui.add_confirm(false); // keep profile inline
+        ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
 
         let ctx = Ctx::new(
@@ -1068,8 +1636,6 @@ mod tests {
                 issue_provider: None,
                 site_provider: None,
                 gh_user: None,
-                prompts: false,
-                no_prompts: false,
                 yes: false,
                 force: false,
             },
@@ -1106,8 +1672,6 @@ mod tests {
                 issue_provider: None,
                 site_provider: None,
                 gh_user: None,
-                prompts: false,
-                no_prompts: true,
                 yes: true,
                 force: false,
             },
@@ -1146,8 +1710,6 @@ mod tests {
                 issue_provider: None,
                 site_provider: None,
                 gh_user: None,
-                prompts: false,
-                no_prompts: true,
                 yes: true,
                 force: false,
             },
@@ -1163,26 +1725,73 @@ mod tests {
     }
 
     #[test]
-    fn set_local_profile_content_adds_inline_profile_section() {
-        let profile = build_profile(&InitAgent::Codex, Vec::new(), None, false).unwrap();
-        let updated =
-            set_local_profile_content("[workspace]\ntabs = []\n", &profile, false).unwrap();
-        let config: Config = toml::from_str(&updated).unwrap();
+    fn init_shared_accepts_agent_runtime_in_selected_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: false,
+                shared: true,
+                agent: Some(InitAgent::Codex),
+                agent_args: Vec::new(),
+                agent_command: None,
+                issue_provider: None,
+                site_provider: None,
+                gh_user: None,
+                yes: true,
+                force: false,
+            },
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.profile.unwrap().agent.unwrap().cli, AgentCli::Codex);
-        assert!(updated.contains("[workspace]\ntabs = []"));
-        assert!(updated.contains("[profile.agent]\ncli = \"codex\""));
+        assert!(!dir.path().join(".local/.wt.toml").exists());
     }
 
     #[test]
-    fn set_local_profile_content_rejects_conflict_without_force() {
-        let profile = build_profile(&InitAgent::Codex, Vec::new(), None, true).unwrap();
-        let result = set_local_profile_content("[profile]\nname = \"claude\"\n", &profile, false);
-        assert!(result.is_err());
+    fn init_none_agent_rejects_agent_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
 
-        let updated =
-            set_local_profile_content("[profile]\nname = \"claude\"\n", &profile, true).unwrap();
-        let config: Config = toml::from_str(&updated).unwrap();
-        assert_eq!(config.profile.unwrap().name.as_deref(), Some("codex"));
+        let result = run(
+            &ctx,
+            InitOptions {
+                local: true,
+                shared: false,
+                agent: Some(InitAgent::None),
+                agent_args: vec!["--model".into()],
+                agent_command: None,
+                issue_provider: None,
+                site_provider: None,
+                gh_user: None,
+                yes: true,
+                force: false,
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("--agent-arg cannot be used when --agent none")
+        );
     }
 
     #[test]
@@ -1193,6 +1802,7 @@ mod tests {
         ui.add_select(3); // none
         ui.add_select(2); // no issue provider
         ui.add_select(0); // no site provider
+        ui.add_select(0); // minimal additional settings
         ui.add_confirm(false); // do not create config
 
         let ctx = Ctx::new(
@@ -1214,8 +1824,6 @@ mod tests {
                 issue_provider: None,
                 site_provider: None,
                 gh_user: None,
-                prompts: false,
-                no_prompts: false,
                 yes: false,
                 force: false,
             },
@@ -1249,8 +1857,6 @@ mod tests {
             issue_provider: None,
             site_provider: None,
             gh_user: None,
-            prompts: false,
-            no_prompts: false,
             yes: true,
             force: false,
         };
@@ -1269,8 +1875,6 @@ mod tests {
                     issue_provider: None,
                     site_provider: None,
                     gh_user: None,
-                    prompts: false,
-                    no_prompts: false,
                     yes: true,
                     force: false,
                 }

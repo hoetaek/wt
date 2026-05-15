@@ -6,6 +6,25 @@ This project follows SemVer.
 
 ## Unreleased
 
+- Changed `wt init` to create only the selected config file. After choosing
+  `.wt.toml` or `.local/.wt.toml`, issue provider, site provider, agent runtime,
+  and additional setup prompts all write to that selected file only. Named
+  profile/prompt scaffold creation is left to `wt config extract` and
+  `wt profile create`.
+- Removed `wt init --prompts` and `wt init --no-prompts`; `wt init` now always
+  writes inline `[profile.agent]` settings when an agent is configured.
+- Expanded the generated `wt init` config scaffold with commented examples for
+  worktree copy/link/context injection, setup environment, editor, workspace,
+  and test command settings.
+- Added an interactive path to `wt init` for frequently customized settings such
+  as worktree path, workspace tabs, detected dependency setup, detected dev/test
+  commands, and config editor.
+- Added optional `working_dir` for `setup.deps` and `test.commands`, allowing
+  setup and test commands to run inside subprojects. `wt init` now detects
+  dependency manifests in subdirectories and can suggest `uv sync` for Python
+  projects.
+- Kept `if_exists` as an advanced optional guard, but stopped generating it for
+  active `wt init` dependency and test commands so stale paths fail visibly.
 - Added template rendering for agent `args` and `command`, including
   `{{repo_root}}` and `{{worktree_path}}`, so profiles can isolate per-worktree
   agent resources such as Chrome DevTools MCP browser data.

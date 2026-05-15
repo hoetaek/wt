@@ -125,13 +125,13 @@ pub enum Commands {
         /// Write shared project config to .wt.toml
         #[arg(long)]
         shared: bool,
-        /// Agent runtime for omitted --profile runs
+        /// Agent runtime to write into [profile.agent]
         #[arg(long, value_enum)]
         agent: Option<InitAgent>,
-        /// Extra argument for the generated agent command
+        /// Extra argument for [profile.agent]
         #[arg(long = "agent-arg", allow_hyphen_values = true)]
         agent_args: Vec<String>,
-        /// Override the generated agent command
+        /// Override the agent launch command
         #[arg(long)]
         agent_command: Option<String>,
         /// Issue provider to configure
@@ -143,16 +143,10 @@ pub enum Commands {
         /// GitHub user for issue list filtering
         #[arg(long)]
         gh_user: Option<String>,
-        /// Create a named profile with prompt scaffold
-        #[arg(long, conflicts_with = "no_prompts")]
-        prompts: bool,
-        /// Keep profile settings inline
-        #[arg(long)]
-        no_prompts: bool,
-        /// Skip confirmation prompts
+        /// Skip interactive prompts and use defaults
         #[arg(long)]
         yes: bool,
-        /// Overwrite existing config/profile settings
+        /// Overwrite existing config file
         #[arg(long)]
         force: bool,
     },
@@ -955,11 +949,11 @@ mod tests {
     }
 
     #[test]
-    fn init_parses_agent_args_and_prompts() {
+    fn init_parses_agent_args() {
         let cli = parse(&[
             "wt",
             "init",
-            "--shared",
+            "--local",
             "--agent",
             "gemini",
             "--agent-arg",
@@ -970,17 +964,15 @@ mod tests {
             "valet",
             "--gh-user",
             "alice",
-            "--prompts",
             "--force",
         ]);
         assert!(matches!(
             cli.command,
             Some(Commands::Init {
-                shared: true,
+                local: true,
                 agent: Some(InitAgent::Gemini),
                 issue_provider: Some(InitIssueProvider::Github),
                 site_provider: Some(InitSiteProvider::Valet),
-                prompts: true,
                 force: true,
                 ..
             })
@@ -996,6 +988,15 @@ mod tests {
             assert_eq!(site_provider, Some(InitSiteProvider::Valet));
             assert_eq!(gh_user.as_deref(), Some("alice"));
         }
+    }
+
+    #[test]
+    fn init_rejects_prompts_flag() {
+        let result = Cli::try_parse_from(["wt", "init", "--prompts"]);
+        assert!(result.is_err());
+
+        let result = Cli::try_parse_from(["wt", "init", "--no-prompts"]);
+        assert!(result.is_err());
     }
 
     #[test]

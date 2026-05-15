@@ -89,8 +89,6 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             issue_provider,
             site_provider,
             gh_user,
-            prompts,
-            no_prompts,
             yes,
             force,
         } => commands::init::run(
@@ -104,8 +102,6 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 issue_provider: issue_provider.clone(),
                 site_provider: site_provider.clone(),
                 gh_user: gh_user.clone(),
-                prompts: *prompts,
-                no_prompts: *no_prompts,
                 yes: *yes,
                 force: *force,
             },

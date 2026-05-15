@@ -54,14 +54,25 @@ Create a shared project config:
 wt init --shared --agent codex --issue-provider github --yes
 ```
 
-This writes shared project settings to `.wt.toml`, creates
-`.local/.wt.toml`, and stores the default agent runtime inline.
+This writes the selected settings to `.wt.toml` only.
+
+Create the same shape as private config for this checkout:
+
+```bash
+wt init --local --agent codex --yes
+```
+
+This writes the selected settings to `.local/.wt.toml` only.
 
 Or keep the config local to your checkout:
 
 ```bash
 wt init --local --agent codex --issue-provider github --yes
 ```
+
+`wt init` only creates the selected config file. It does not create named
+profile directories or prompt scaffold files; use `wt config extract` or
+`wt profile create` when you want that structure.
 
 Start a workspace from an issue:
 
@@ -197,6 +208,13 @@ inject_local_context = """
 [issues]
 provider = "github"
 
+[setup]
+deps = [
+    { run = "npm install" },
+    { run = "composer install" },
+    { working_dir = "api", run = "uv sync" },
+]
+
 [site]
 provider = "none"
 
@@ -207,6 +225,10 @@ tabs = ["lazygit", "nvim"]
 `inject_local_context` is a rendered text block appended to the local agent
 context file in the worktree. Codex uses `AGENTS.override.md`; Claude uses
 `CLAUDE.local.md`. If the target file is not present, setup leaves it alone.
+
+In `setup.deps`, `working_dir` runs the command inside a subdirectory. Add
+`if_exists` only for intentionally optional commands; when `working_dir` is set,
+that guard is checked relative to the same directory.
 
 Example private `.local/.wt.toml`:
 
@@ -233,7 +255,8 @@ use `process` for commands such as `code {{path}}`.
 `profile` describes how a workspace should run. Profiles are execution
 environments: agent CLI, args, prompt files, and worktree scaffold files.
 
-For small default behavior, keep settings inline in `.local/.wt.toml`:
+For small default behavior, keep settings inline in the selected config file
+and use `.local/.wt.toml` for checkout-private settings:
 
 ```toml
 [profile.agent]
@@ -393,7 +416,7 @@ wt profile
 Or extract inline `.local/.wt.toml` profile settings into a named profile:
 
 ```bash
-wt init --local --agent codex --no-prompts --yes
+wt init --local --agent codex --yes
 wt config extract .local/.wt.toml
 wt profile
 ```
