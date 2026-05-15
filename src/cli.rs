@@ -53,10 +53,11 @@ pub enum Commands {
         #[arg(long, conflicts_with = "profile")]
         matrix: bool,
     },
-    /// Start a workspace from a pull request
+    /// Start workspaces from pull requests
     Pr {
-        /// Pull request number (omit to select from the open PR list)
-        number: Option<u32>,
+        /// Pull request numbers (omit to select multiple open PRs)
+        #[arg(value_name = "PR")]
+        numbers: Vec<u32>,
         /// Apply config from .local/profiles/<name> to the PR worktree
         #[arg(long)]
         profile: Option<String>,
@@ -499,9 +500,9 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Pr {
-                number: None,
+                ref numbers,
                 profile: None
-            })
+            }) if numbers.is_empty()
         ));
     }
 
@@ -511,10 +512,36 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Pr {
-                number: Some(42),
+                ref numbers,
                 profile: Some(ref profile),
-            }) if profile == "codex"
+            }) if numbers == &vec![42] && profile == "codex"
         ));
+    }
+
+    #[test]
+    fn pr_with_multiple_numbers_and_profile() {
+        let cli = parse(&["wt", "pr", "42", "43", "44", "--profile", "codex"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Pr {
+                ref numbers,
+                profile: Some(ref profile),
+            }) if numbers == &vec![42, 43, 44] && profile == "codex"
+        ));
+    }
+
+    #[test]
+    fn pr_help_describes_multiple_targets() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("pr")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("[PR]..."));
+        assert!(help.contains("Pull request numbers"));
+        assert!(help.contains("select multiple open PRs"));
     }
 
     #[test]

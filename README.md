@@ -88,12 +88,16 @@ wt issue PROJ-123
 wt issue PROJ-123 --base .
 ```
 
-Start a workspace from a pull request:
+Start workspaces from pull requests:
 
 ```bash
 wt pr
 wt pr 42
+wt pr 42 43 44
 ```
+
+When pull request numbers are omitted, `pr` opens the GitHub PR list and lets
+you select multiple PRs interactively. Each selected PR starts sequentially.
 
 Start a workspace from branch-name text:
 
@@ -278,8 +282,8 @@ Explicit `--profile` has command-specific scope:
 - `wt issue --profile <name>` and `wt new --profile <name>` create profiled
   worktrees. The branch and workspace names include the profile name so the
   profiled run is separate from the unprofiled workspace.
-- `wt pr --profile <name>` applies the named profile config to the PR
-  worktree. It uses the PR branch name as-is because the branch already
+- `wt pr --profile <name>` applies the named profile config to every selected
+  PR worktree. It uses each PR branch name as-is because the branch already
   exists.
 
 Use `--matrix` on `wt issue` or `wt new` to expand one issue or branch-name

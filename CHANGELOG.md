@@ -8,9 +8,13 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
-- Changed the package version line back to `0.3.x`; current `wt` development is
-  still pre-1.0 because CLI, config, and persisted state contracts are still
-  being stabilized.
+- Bumped the package version to `0.4.0`; current `wt` development is still
+  pre-1.0 because CLI, config, and persisted state contracts are still being
+  stabilized.
+- Changed `wt pr` without explicit PR numbers to use the multi-select PR list
+  and start each selected PR worktree sequentially. `wt pr 42` remains the
+  explicit single-PR path, and `wt pr 42 43 44` starts multiple explicit PR
+  worktrees in order.
 - Renamed `wt issue --parallel` and `wt new --parallel` to `--matrix`, without a
   compatibility alias, to describe profile-matrix workspace creation instead of
   generic parallel execution.

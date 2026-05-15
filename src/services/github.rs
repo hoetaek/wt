@@ -5,7 +5,7 @@ use std::path::Path;
 
 const PR_JSON_FIELDS: &str = "number,title,headRefName,baseRefName,state,author";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequest {
     pub number: u32,
@@ -16,7 +16,7 @@ pub struct PullRequest {
     pub author: Option<PullRequestAuthor>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct PullRequestAuthor {
     #[serde(default)]
     pub login: String,

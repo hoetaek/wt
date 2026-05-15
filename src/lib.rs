@@ -25,7 +25,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             profile,
             matrix,
         } => commands::issue::run(ctx, target.as_deref(), base, profile.as_deref(), *matrix),
-        Commands::Pr { number, profile } => commands::pr::run(ctx, *number, profile.as_deref()),
+        Commands::Pr { numbers, profile } => commands::pr::run(ctx, numbers, profile.as_deref()),
         Commands::New {
             name,
             base,

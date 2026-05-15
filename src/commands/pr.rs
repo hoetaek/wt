@@ -5,60 +5,93 @@ use crate::names::WorktreeNames;
 use crate::services::git::GitService;
 use crate::services::github::{GithubService, PullRequest};
 use crate::setup;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 
-pub fn run(ctx: &Ctx, number: Option<u32>, profile: Option<&str>) -> Result<()> {
+pub fn run(ctx: &Ctx, numbers: &[u32], profile: Option<&str>) -> Result<()> {
     let github = GithubService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
     let profile_config = load_profile_config(ctx, profile)?;
     let config = profile_config.as_ref().unwrap_or(&ctx.config);
 
-    // 1. Resolve PR
-    let (pr_number, title, branch_name, base_branch) = if let Some(num) = number {
-        let pr = github.get_pr(num)?;
-        ctx.ui.print_step(&format_pr_summary(&pr));
-        (pr.number, pr.title, pr.head_ref_name, pr.base_ref_name)
-    } else {
-        let prs = github.list_prs()?;
-        if prs.is_empty() {
-            bail!("No open PRs found");
+    if numbers.is_empty() {
+        let prs = select_prs(ctx, &github)?;
+        for pr in prs {
+            run_resolved_pr(ctx, &git, &pr, profile, profile_config.as_ref(), config)
+                .with_context(|| format!("PR #{}", pr.number))?;
         }
+    } else {
+        for number in numbers {
+            let pr = github
+                .get_pr(*number)
+                .with_context(|| format!("PR #{number}"))?;
+            run_resolved_pr(ctx, &git, &pr, profile, profile_config.as_ref(), config)
+                .with_context(|| format!("PR #{}", pr.number))?;
+        }
+    }
 
-        let items = format_pr_select_items(&prs);
+    Ok(())
+}
 
-        let idx = ctx.ui.select("Select a PR", &items)?;
-        let selected = &prs[idx];
-        ctx.ui.print_step(&format_pr_summary(selected));
-        (
-            selected.number,
-            selected.title.clone(),
-            selected.head_ref_name.clone(),
-            selected.base_ref_name.clone(),
-        )
-    };
+fn select_prs(ctx: &Ctx, github: &GithubService<'_>) -> Result<Vec<PullRequest>> {
+    let prs = github.list_prs()?;
+    if prs.is_empty() {
+        bail!("No open PRs found");
+    }
+
+    let items = format_pr_select_items(&prs);
+    let selected_indices = ctx.ui.multi_select("Select PRs to start", &items)?;
+    if selected_indices.is_empty() {
+        ctx.ui.print_warning("No PRs selected");
+        return Ok(Vec::new());
+    }
+
+    let mut selected = Vec::new();
+    for index in selected_indices {
+        let pr = prs
+            .get(index)
+            .ok_or_else(|| anyhow::anyhow!("Invalid PR selection"))?;
+        selected.push(pr.clone());
+    }
+    Ok(selected)
+}
+
+fn run_resolved_pr(
+    ctx: &Ctx,
+    git: &GitService<'_>,
+    pr: &PullRequest,
+    profile: Option<&str>,
+    profile_config: Option<&Config>,
+    config: &Config,
+) -> Result<()> {
+    let pr_number = pr.number;
+    let title = pr.title.as_str();
+    let branch_name = pr.head_ref_name.as_str();
+    let base_branch = pr.base_ref_name.as_str();
+
+    ctx.ui.print_step(&format_pr_summary(pr));
 
     let names = WorktreeNames::new_with_config(
-        &branch_name,
+        branch_name,
         &ctx.parent_dir,
         &ctx.repo_root,
         &ctx.repo_name,
-        Some(&title),
+        Some(title),
         config.has_site().then_some(""),
         config.worktree.path.as_deref(),
     )?;
 
     let mut extra_vars: HashMap<String, String> = [
         ("pr_number".into(), pr_number.to_string()),
-        ("base_branch".into(), base_branch.clone()),
+        ("base_branch".into(), base_branch.to_string()),
     ]
     .into();
     if let Some(profile) = profile {
         extra_vars.insert("profile".into(), profile.to_string());
     }
 
-    // 2. Check if branch is already checked out
-    let existing_path = git.checked_out_path(&branch_name)?;
+    // Check if branch is already checked out
+    let existing_path = git.checked_out_path(branch_name)?;
     if let Some(ref existing) = existing_path {
         if *existing == ctx.invocation_root {
             ctx.ui
@@ -70,21 +103,21 @@ pub fn run(ctx: &Ctx, number: Option<u32>, profile: Option<&str>) -> Result<()> 
                 "Branch already checked out at: {}",
                 existing.display()
             ));
-            git.set_branch_parent(&branch_name, &base_branch).ok();
+            git.set_branch_parent(branch_name, base_branch).ok();
             setup::run_setup(
                 ctx,
                 existing,
                 &names,
-                Some(&title),
+                Some(title),
                 "pr",
                 Some(&extra_vars),
-                profile_config.as_ref(),
+                profile_config,
             )?;
             return Ok(());
         }
     }
 
-    // 3. Handle existing worktree
+    // Handle existing worktree
     if names.path.exists() {
         ctx.ui.print_warning(&format!(
             "Worktree {} already exists.",
@@ -105,15 +138,15 @@ pub fn run(ctx: &Ctx, number: Option<u32>, profile: Option<&str>) -> Result<()> 
                 }
             }
             1 => {
-                git.set_branch_parent(&branch_name, &base_branch).ok();
+                git.set_branch_parent(branch_name, base_branch).ok();
                 setup::run_setup(
                     ctx,
                     &names.path,
                     &names,
-                    Some(&title),
+                    Some(title),
                     "pr",
                     Some(&extra_vars),
-                    profile_config.as_ref(),
+                    profile_config,
                 )?;
                 return Ok(());
             }
@@ -121,32 +154,32 @@ pub fn run(ctx: &Ctx, number: Option<u32>, profile: Option<&str>) -> Result<()> 
         }
     }
 
-    // 4. Fetch and create worktree from remote branch
+    // Fetch and create worktree from remote branch
     ctx.ui
         .print_step(&format!("Fetching and creating worktree for {branch_name}"));
-    git.fetch_branch(&branch_name)?;
+    git.fetch_branch(branch_name)?;
 
-    if git.local_branch_exists(&branch_name)? {
+    if git.local_branch_exists(branch_name)? {
         ctx.ui
             .print_step(&format!("Reusing existing local branch: {branch_name}"));
-        git.worktree_add(&names.path, &branch_name)?;
+        git.worktree_add(&names.path, branch_name)?;
     } else {
         let remote_ref = format!("origin/{branch_name}");
-        git.worktree_add_new_branch(&names.path, &branch_name, &remote_ref)?;
-        git.set_upstream(&branch_name, &remote_ref, &names.path)?;
+        git.worktree_add_new_branch(&names.path, branch_name, &remote_ref)?;
+        git.set_upstream(branch_name, &remote_ref, &names.path)?;
     }
 
-    git.set_branch_parent(&branch_name, &base_branch).ok();
+    git.set_branch_parent(branch_name, base_branch).ok();
 
-    // 5. Setup
+    // Setup
     setup::run_setup(
         ctx,
         &names.path,
         &names,
-        Some(&title),
+        Some(title),
         "pr",
         Some(&extra_vars),
-        profile_config.as_ref(),
+        profile_config,
     )?;
 
     Ok(())
@@ -228,6 +261,25 @@ mod tests {
         }
     }
 
+    fn pr_json(number: u32, title: &str, branch: &str) -> String {
+        format!(
+            r#"{{"number":{number},"title":"{title}","headRefName":"{branch}","baseRefName":"main","state":"OPEN","author":{{"login":"alice"}}}}"#
+        )
+    }
+
+    fn queue_remote_worktree_creation(runner: &mut MockRunner) {
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        runner.add_response("", true); // fetch origin branch
+        runner.add_response("", false); // local branch does not exist
+        runner.add_response("", true); // git worktree add -b
+        runner.add_response("", true); // git branch --set-upstream-to
+        runner.add_response("", true); // parent branch exists locally
+        runner.add_response("", true); // git config branch.<name>.parentbranch
+    }
+
     #[test]
     fn pr_with_number_fetches_and_resolves() {
         let mut runner = MockRunner::new();
@@ -259,8 +311,51 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some(42), None);
+        let result = run(&ctx, &[42], None);
         assert!(result.is_ok() || result.unwrap_err().to_string().contains("setup"));
+    }
+
+    #[test]
+    fn pr_with_multiple_numbers_starts_each_worktree() {
+        let mut runner = MockRunner::new();
+        runner.add_response(&pr_json(42, "First PR", "alice/first"), true);
+        queue_remote_worktree_creation(&mut runner);
+        runner.add_response(&pr_json(43, "Second PR", "alice/second"), true);
+        queue_remote_worktree_creation(&mut runner);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            PathBuf::from("/tmp/test-repo"),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, &[42, 43], None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let viewed_prs = calls
+            .iter()
+            .filter(|(cmd, args, _)| cmd == "gh" && args.starts_with(&["pr".into(), "view".into()]))
+            .map(|(_, args, _)| args[2].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(viewed_prs, vec!["42", "43"]);
+
+        let created_branches = calls
+            .iter()
+            .filter(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .map(|(_, args, _)| args[3].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(created_branches, vec!["alice/first", "alice/second"]);
     }
 
     #[test]
@@ -309,7 +404,7 @@ cli = "codex"
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, Some(42), Some("codex-yolo")).unwrap();
+        run(&ctx, &[42], Some("codex-yolo")).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -340,9 +435,88 @@ cli = "codex"
             Box::new(ui),
         );
 
-        let result = run(&ctx, None, None);
+        let result = run(&ctx, &[], None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No open PRs"));
+    }
+
+    #[test]
+    fn pr_without_numbers_multi_selects_prs() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"[
+                {"number":42,"title":"First PR","headRefName":"alice/first","baseRefName":"main","state":"OPEN","author":{"login":"alice"}},
+                {"number":43,"title":"Skipped PR","headRefName":"alice/skipped","baseRefName":"main","state":"OPEN","author":{"login":"alice"}},
+                {"number":44,"title":"Third PR","headRefName":"alice/third","baseRefName":"main","state":"OPEN","author":{"login":"alice"}}
+            ]"#,
+            true,
+        );
+        queue_remote_worktree_creation(&mut runner);
+        queue_remote_worktree_creation(&mut runner);
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0, 2]);
+        let ui = Arc::new(ui);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            PathBuf::from("/tmp/test-repo"),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run(&ctx, &[], None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let created_branches = calls
+            .iter()
+            .filter(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .map(|(_, args, _)| args[3].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(created_branches, vec!["alice/first", "alice/third"]);
+        assert!(ui.warnings.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn pr_without_numbers_empty_selection_returns_ok() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"[{"number":42,"title":"First PR","headRefName":"alice/first","baseRefName":"main","state":"OPEN","author":{"login":"alice"}}]"#,
+            true,
+        );
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![]);
+        let ui = Arc::new(ui);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/test-repo"),
+            PathBuf::from("/tmp/test-repo"),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run(&ctx, &[], None).unwrap();
+
+        assert_eq!(ui.warnings.lock().unwrap().as_slice(), ["No PRs selected"]);
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().all(|(cmd, args, _)| {
+            !(cmd == "git" && args.len() >= 2 && args[0] == "worktree" && args[1] == "add")
+        }));
     }
 
     #[test]
@@ -376,7 +550,7 @@ cli = "codex"
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some(10), None);
+        let result = run(&ctx, &[10], None);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
     }
 
