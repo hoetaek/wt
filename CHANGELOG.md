@@ -8,7 +8,9 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
-- Bumped the package version to `0.4.0`; current `wt` development is still
+- Added `wt batch clean [BATCH]` for explicitly deleting completed batch task
+  snapshot files while keeping the batch metadata record.
+- Bumped the package version to `0.4.1`; current `wt` development is still
   pre-1.0 because CLI, config, and persisted state contracts are still being
   stabilized.
 - Changed `wt pr` without explicit PR numbers to use the multi-select PR list

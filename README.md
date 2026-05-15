@@ -522,6 +522,8 @@ wt batch edit
 wt batch edit latest
 wt batch run .local/batches/2026-05-09-001.toml
 wt batch run latest
+wt batch clean
+wt batch clean latest
 ```
 
 `show` prints the stored base branch, profile, batch status, and task statuses.
@@ -530,6 +532,12 @@ wt batch run latest
 `run` executes only tasks with `status = "prepared"` or `status = "failed"`.
 Tasks marked `done` or `skipped` are left alone, so reruns can continue from
 the batch file's task status instead of checking a global issue state.
+
+`clean` deletes task snapshot files from `.local/tasks/` for a completed batch.
+It keeps the batch TOML as the execution record, refuses batches with
+`prepared`, `running`, or `failed` tasks, skips task files still referenced by
+another batch or stack, and reports deleted, skipped, and already-missing task
+files.
 
 ## Stacks
 
