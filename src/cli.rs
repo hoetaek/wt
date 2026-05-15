@@ -76,12 +76,12 @@ pub enum Commands {
         #[arg(long, conflicts_with = "profile")]
         parallel: bool,
     },
-    /// Prepare, inspect, or run batches
+    /// Prepare, inspect, edit, or run batches
     Batch {
         #[command(subcommand)]
         command: BatchCommand,
     },
-    /// Prepare, inspect, run, or complete stacks
+    /// Prepare, inspect, edit, run, or complete stacks
     Stack {
         #[command(subcommand)]
         command: StackCommand,
@@ -104,7 +104,7 @@ pub enum Commands {
     },
     /// Check configured providers and required local tools
     Doctor,
-    /// Print or refactor wt config files
+    /// Print, edit, or refactor wt config files
     Config {
         /// Show effective config using .local/profiles/<name>
         #[arg(long)]
@@ -165,6 +165,11 @@ pub enum Commands {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum ConfigCommand {
+    /// Open a config file in the configured editor
+    Edit {
+        /// Config file to edit (omit to select from known config files)
+        source: Option<PathBuf>,
+    },
     /// Move selected config sections into the next structured config file
     Extract {
         /// Config source file to refactor
@@ -241,6 +246,11 @@ pub enum BatchCommand {
         /// Batch TOML path, shorthand id, or "latest" (default)
         batch: Option<String>,
     },
+    /// Open batch TOML in the configured editor
+    Edit {
+        /// Batch TOML path, shorthand id, or "latest" (default)
+        batch: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
@@ -275,6 +285,11 @@ pub enum StackCommand {
     },
     /// Show stack metadata and item statuses
     Show {
+        /// Stack TOML path, shorthand id, or "latest" (default)
+        stack: Option<String>,
+    },
+    /// Open stack TOML in the configured editor
+    Edit {
         /// Stack TOML path, shorthand id, or "latest" (default)
         stack: Option<String>,
     },
@@ -584,11 +599,22 @@ mod tests {
     }
 
     #[test]
+    fn batch_edit_accepts_optional_target() {
+        let cli = parse(&["wt", "batch", "edit", "latest"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Edit { ref batch }
+            }) if batch.as_deref() == Some("latest")
+        ));
+    }
+
+    #[test]
     fn batch_help_uses_general_batch_description() {
         let mut command = Cli::command();
         let batch = command.find_subcommand_mut("batch").unwrap();
         let help = batch.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, or run batches"));
+        assert!(help.contains("Prepare, inspect, edit, or run batches"));
         assert!(help.contains("show"));
     }
 
@@ -692,11 +718,22 @@ mod tests {
     }
 
     #[test]
+    fn stack_edit_accepts_optional_target() {
+        let cli = parse(&["wt", "stack", "edit", "latest"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::Edit { ref stack }
+            }) if stack.as_deref() == Some("latest")
+        ));
+    }
+
+    #[test]
     fn stack_help_uses_general_stack_description() {
         let mut command = Cli::command();
         let stack = command.find_subcommand_mut("stack").unwrap();
         let help = stack.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, run, or complete stacks"));
+        assert!(help.contains("Prepare, inspect, edit, run, or complete stacks"));
         assert!(help.contains("show"));
     }
 
@@ -841,6 +878,18 @@ mod tests {
                 profile: Some(ref profile),
                 command: None
             }) if profile == "codex"
+        ));
+    }
+
+    #[test]
+    fn config_edit_accepts_optional_source() {
+        let cli = parse(&["wt", "config", "edit", ".local/.wt.toml"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Config {
+                profile: None,
+                command: Some(ConfigCommand::Edit { ref source }),
+            }) if source.as_deref() == Some(std::path::Path::new(".local/.wt.toml"))
         ));
     }
 

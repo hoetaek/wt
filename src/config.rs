@@ -18,6 +18,7 @@ pub struct Config {
     pub setup: SetupConfig,
     pub profile: Option<ProfileConfig>,
     pub site: Option<SiteConfig>,
+    pub editor: EditorConfig,
     pub workspace: Option<WorkspaceConfig>,
     pub agent: Option<AgentConfig>,
     pub test: Option<TestConfig>,
@@ -66,6 +67,20 @@ pub struct SiteConfig {
     pub browser: Option<String>,
     pub url: Option<String>,
     pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct EditorConfig {
+    pub command: Option<String>,
+    pub placement: Option<EditorPlacement>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EditorPlacement {
+    CmuxSurface,
+    Process,
 }
 
 impl Default for SiteConfig {
@@ -712,6 +727,9 @@ fn merge_config(base: &Config, profile: Config) -> Config {
     if profile.site.is_some() {
         merged.site = profile.site;
     }
+    if profile.editor != EditorConfig::default() {
+        merge_editor_config(&mut merged.editor, profile.editor);
+    }
     if profile.workspace.is_some() {
         merged.workspace = match (merged.workspace.take(), profile.workspace) {
             (Some(mut base_workspace), Some(profile_workspace)) => {
@@ -882,6 +900,15 @@ fn merge_workspace_config(base: &mut WorkspaceConfig, profile: WorkspaceConfig) 
     }
 }
 
+fn merge_editor_config(base: &mut EditorConfig, profile: EditorConfig) {
+    if profile.command.is_some() {
+        base.command = profile.command;
+    }
+    if profile.placement.is_some() {
+        base.placement = profile.placement;
+    }
+}
+
 fn extend_unique(target: &mut Vec<String>, additions: Vec<String>) {
     for value in additions {
         if !target.contains(&value) {
@@ -1000,6 +1027,10 @@ browser = "Safari"
 url = "https://{{site_name}}.test"
 target = "http://127.0.0.1:{{vite_port}}"
 
+[editor]
+command = "vi {{path}}"
+placement = "cmux_surface"
+
 [workspace]
 tabs = ["lazygit"]
 post_deps_tabs = ["npm run dev"]
@@ -1074,6 +1105,11 @@ commands = [
         assert_eq!(
             site.target.as_deref(),
             Some("http://127.0.0.1:{{vite_port}}")
+        );
+        assert_eq!(config.editor.command.as_deref(), Some("vi {{path}}"));
+        assert_eq!(
+            config.editor.placement.as_ref(),
+            Some(&EditorPlacement::CmuxSurface)
         );
 
         let ws = config.workspace.unwrap();
@@ -1183,6 +1219,33 @@ copy = ["CLAUDE.local.md"]
         assert_eq!(site.provider, SiteProvider::Traefik);
         assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}.l"));
         assert_eq!(config.worktree.copy, vec![".env", "CLAUDE.local.md"]);
+    }
+
+    #[test]
+    fn local_editor_config_overrides_command_and_preserves_placement() {
+        let base: Config = toml::from_str(
+            r#"
+[editor]
+command = "vi {{path}}"
+placement = "cmux_surface"
+"#,
+        )
+        .unwrap();
+        let profile: Config = toml::from_str(
+            r#"
+[editor]
+command = "code {{path}}"
+"#,
+        )
+        .unwrap();
+
+        let merged = merge_config(&base, profile);
+
+        assert_eq!(merged.editor.command.as_deref(), Some("code {{path}}"));
+        assert_eq!(
+            merged.editor.placement.as_ref(),
+            Some(&EditorPlacement::CmuxSurface)
+        );
     }
 
     #[test]

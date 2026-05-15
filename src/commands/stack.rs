@@ -238,6 +238,14 @@ pub fn show(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+pub fn edit(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
+    let stack_path = match stack {
+        Some(target) => resolve_stack_path(ctx, target)?,
+        None => latest_stack_path(ctx)?,
+    };
+    crate::commands::editor::open_file(ctx, &stack_path)
+}
+
 pub fn complete(ctx: &Ctx, stack: &str, item: Option<&str>, run_next: bool) -> Result<()> {
     let stack_path = resolve_stack_path(ctx, stack)?;
     let mut metadata = read_stack_metadata(&stack_path)?;
@@ -298,7 +306,7 @@ struct StackMetadata {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StackItem {
-    #[serde(default = "default_item_kind")]
+    #[serde(default)]
     kind: String,
     #[serde(default)]
     id: String,
@@ -358,15 +366,7 @@ impl StackItem {
     }
 
     fn kind(&self) -> &str {
-        if self.kind.trim().is_empty() {
-            if self.snapshot.is_some() {
-                "issue"
-            } else {
-                "item"
-            }
-        } else {
-            self.kind.as_str()
-        }
+        self.kind.trim()
     }
 
     fn normalize(&mut self) {
@@ -381,13 +381,6 @@ impl StackItem {
         }
         if self.title.trim().is_empty() {
             self.title = self.label();
-        }
-        if self.kind.trim().is_empty() {
-            self.kind = if self.snapshot.is_some() {
-                "issue".into()
-            } else {
-                "item".into()
-            };
         }
     }
 }
@@ -505,10 +498,6 @@ fn assign_stack_item_parents(items: &mut [StackItem], initial_parent: &str) {
 
 fn default_stack_status() -> String {
     STATUS_PREPARED.into()
-}
-
-fn default_item_kind() -> String {
-    "item".into()
 }
 
 fn default_issue_status() -> String {
@@ -740,8 +729,23 @@ fn read_stack_metadata(path: &Path) -> Result<StackMetadata> {
     let mut metadata: StackMetadata = toml::from_str(&content)?;
     for item in &mut metadata.items {
         item.normalize();
+        validate_stack_item_kind(item)?;
     }
     Ok(metadata)
+}
+
+fn validate_stack_item_kind(item: &StackItem) -> Result<()> {
+    match item.kind() {
+        "issue" | "new" => Ok(()),
+        "" => bail!(
+            "Stack item {} is missing kind. Supported kinds: issue, new",
+            item.label()
+        ),
+        other => bail!(
+            "Stack item {} has unsupported kind: {other}. Supported kinds: issue, new",
+            item.label()
+        ),
+    }
 }
 
 fn write_stack_metadata(path: &Path, stack: &StackMetadata) -> Result<()> {
@@ -1017,7 +1021,7 @@ fn toml_multiline_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, WorktreeNamingConfig};
+    use crate::config::{Config, EditorPlacement, WorktreeNamingConfig};
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CmdOutput, CommandRunner, Ctx};
     use std::path::{Path, PathBuf};
@@ -1489,6 +1493,82 @@ error = ""
         .unwrap();
 
         assert!(read_stack_metadata(&stack_path).is_err());
+    }
+
+    #[test]
+    fn read_stack_metadata_rejects_pr_item_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let stack_path = dir.path().join("stack.toml");
+        std::fs::write(
+            &stack_path,
+            r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[items]]
+kind = "pr"
+id = "42"
+title = "Existing PR"
+branch = "alice/pr-42"
+status = "prepared"
+error = ""
+"#,
+        )
+        .unwrap();
+
+        let err = read_stack_metadata(&stack_path).unwrap_err();
+        assert!(err.to_string().contains("unsupported kind: pr"));
+        assert!(err.to_string().contains("Supported kinds: issue, new"));
+    }
+
+    #[test]
+    fn read_stack_metadata_rejects_missing_item_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let stack_path = dir.path().join("stack.toml");
+        std::fs::write(
+            &stack_path,
+            r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[items]]
+id = "add-schema"
+title = "Add schema"
+branch = "add-schema"
+status = "prepared"
+error = ""
+"#,
+        )
+        .unwrap();
+
+        let err = read_stack_metadata(&stack_path).unwrap_err();
+        assert!(err.to_string().contains("missing kind"));
+    }
+
+    #[test]
+    fn edit_opens_latest_stack_with_configured_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let stacks_dir = dir.path().join(".local/stacks");
+        std::fs::create_dir_all(&stacks_dir).unwrap();
+        std::fs::write(
+            stacks_dir.join("2026-05-12-001.toml"),
+            "base_mode = \"explicit\"\n",
+        )
+        .unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        let mut config = Config::default();
+        config.editor.command = Some("code {{path}}".into());
+        config.editor.placement = Some(EditorPlacement::Process);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+
+        edit(&ctx, None).unwrap();
     }
 
     #[test]

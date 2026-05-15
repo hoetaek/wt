@@ -54,6 +54,74 @@ pub fn inline(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Result
     inline_from_source(ctx, summary)
 }
 
+pub fn edit(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Result<()> {
+    if profile.is_some() {
+        bail!("wt config edit does not accept --profile; pass a source file instead");
+    }
+
+    let path = match source {
+        Some(source) => resolve_source_path(ctx, source)?,
+        None => select_edit_source(ctx)?,
+    };
+    crate::commands::editor::open_file(ctx, &path)
+}
+
+fn select_edit_source(ctx: &Ctx) -> Result<PathBuf> {
+    let sources = discover_edit_sources(ctx)?;
+    if sources.is_empty() {
+        let path = ctx.repo_root.join(".local/.wt.toml");
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        return Ok(path);
+    }
+
+    if sources.len() == 1 {
+        return Ok(sources[0].clone());
+    }
+
+    let items = sources
+        .iter()
+        .map(|path| display_path(ctx, path))
+        .collect::<Vec<_>>();
+    let selected = ctx.ui.select("Select config file:", &items)?;
+    Ok(sources[selected].clone())
+}
+
+fn discover_edit_sources(ctx: &Ctx) -> Result<Vec<PathBuf>> {
+    let mut sources = Vec::new();
+    for path in [
+        ctx.repo_root.join(".wt.toml"),
+        ctx.repo_root.join(".local/.wt.toml"),
+    ] {
+        if path.exists() {
+            sources.push(path.canonicalize()?);
+        }
+    }
+
+    let profiles_dir = ctx.repo_root.join(".local/profiles");
+    if profiles_dir.exists() {
+        let mut profile_sources = Vec::new();
+        for entry in fs::read_dir(&profiles_dir)? {
+            let entry = entry?;
+            let path = entry.path().join("profile.toml");
+            if path.exists() {
+                profile_sources.push(path.canonicalize()?);
+            }
+        }
+        profile_sources.sort();
+        sources.extend(profile_sources);
+    }
+    Ok(sources)
+}
+
+fn display_path(ctx: &Ctx, path: &Path) -> String {
+    path.strip_prefix(&ctx.repo_root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
 fn select_inline_source(ctx: &Ctx) -> Result<InlineSummary> {
     let mut summaries = discover_inline_sources(ctx)?;
     summaries.sort_by(|a, b| {
@@ -1290,6 +1358,7 @@ fn is_movable_shared_section(section: &str) -> bool {
                 | "agent"
                 | "test"
                 | "issues"
+                | "editor"
         )
     )
 }
@@ -2115,6 +2184,32 @@ cli = "codex"
     }
 
     #[test]
+    fn editor_section_can_be_extracted_from_shared_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".wt.toml"),
+            r#"
+[editor]
+command = "vi {{path}}"
+"#,
+        )
+        .unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+        ui.add_confirm(true);
+        let ctx = ctx_with_ui(dir.path(), ui);
+
+        extract(&ctx, None, Some(Path::new(".wt.toml"))).unwrap();
+
+        let shared = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
+        assert!(!shared.contains("[editor]"));
+        let local = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        assert!(local.contains("[editor]"));
+        assert!(local.contains("command = \"vi {{path}}\""));
+    }
+
+    #[test]
     fn selected_named_profile_suggests_profile_toml_without_extracting() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".local")).unwrap();
@@ -2126,5 +2221,32 @@ cli = "codex"
 
         let ctx = ctx_with_ui(dir.path(), MockUi::new());
         extract(&ctx, None, Some(Path::new(".local/.wt.toml"))).unwrap();
+    }
+
+    #[test]
+    fn select_edit_source_lists_known_config_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".local/profiles/codex")).unwrap();
+        std::fs::write(dir.path().join(".wt.toml"), "").unwrap();
+        std::fs::write(dir.path().join(".local/.wt.toml"), "").unwrap();
+        std::fs::write(dir.path().join(".local/profiles/codex/profile.toml"), "").unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(1);
+        let ctx = ctx_with_ui(dir.path(), ui);
+
+        let selected = select_edit_source(&ctx).unwrap();
+
+        assert!(selected.ends_with(".local/.wt.toml"));
+    }
+
+    #[test]
+    fn select_edit_source_defaults_to_local_config_when_none_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+
+        let selected = select_edit_source(&ctx).unwrap();
+
+        assert!(selected.ends_with(".local/.wt.toml"));
+        assert!(dir.path().join(".local").is_dir());
     }
 }

@@ -227,6 +227,14 @@ pub fn show(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+pub fn edit(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
+    let batch_path = match batch {
+        Some(target) => resolve_batch_path(ctx, target)?,
+        None => latest_batch_path(ctx)?,
+    };
+    crate::commands::editor::open_file(ctx, &batch_path)
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BatchMetadata {
@@ -248,7 +256,7 @@ struct BatchMetadata {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BatchItem {
-    #[serde(default = "default_item_kind")]
+    #[serde(default)]
     kind: String,
     #[serde(default)]
     id: String,
@@ -301,11 +309,7 @@ impl BatchItem {
     }
 
     fn kind(&self) -> &str {
-        if self.kind.trim().is_empty() {
-            "issue"
-        } else {
-            self.kind.as_str()
-        }
+        self.kind.trim()
     }
 
     fn normalize(&mut self) {
@@ -321,18 +325,11 @@ impl BatchItem {
         if self.title.trim().is_empty() {
             self.title = self.label();
         }
-        if self.kind.trim().is_empty() {
-            self.kind = "issue".into();
-        }
     }
 }
 
 fn default_batch_status() -> String {
     STATUS_PREPARED.into()
-}
-
-fn default_item_kind() -> String {
-    "item".into()
 }
 
 fn default_issue_status() -> String {
@@ -424,8 +421,23 @@ fn read_batch_metadata(path: &Path) -> Result<BatchMetadata> {
     let mut metadata: BatchMetadata = toml::from_str(&content)?;
     for item in &mut metadata.items {
         item.normalize();
+        validate_batch_item_kind(item)?;
     }
     Ok(metadata)
+}
+
+fn validate_batch_item_kind(item: &BatchItem) -> Result<()> {
+    match item.kind() {
+        "issue" => Ok(()),
+        "" => bail!(
+            "Batch item {} is missing kind. Supported kind: issue",
+            item.label()
+        ),
+        other => bail!(
+            "Batch item {} has unsupported kind: {other}. Supported kind: issue",
+            item.label()
+        ),
+    }
 }
 
 fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
@@ -647,7 +659,9 @@ fn toml_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::commands::issue_snapshot::safe_file_stem;
-    use crate::config::{Config, IssueProviderType, IssuesConfig, WorktreeNamingConfig};
+    use crate::config::{
+        Config, EditorPlacement, IssueProviderType, IssuesConfig, WorktreeNamingConfig,
+    };
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
 
@@ -1093,6 +1107,58 @@ error = ""
     }
 
     #[test]
+    fn read_batch_metadata_rejects_non_issue_item_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_path = dir.path().join("batch.toml");
+        std::fs::write(
+            &batch_path,
+            r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[items]]
+kind = "new"
+id = "add-schema"
+title = "Add schema"
+branch = "add-schema"
+snapshot = ".local/issues/add-schema.md"
+status = "prepared"
+error = ""
+"#,
+        )
+        .unwrap();
+
+        let err = read_batch_metadata(&batch_path).unwrap_err();
+        assert!(err.to_string().contains("unsupported kind: new"));
+        assert!(err.to_string().contains("Supported kind: issue"));
+    }
+
+    #[test]
+    fn read_batch_metadata_rejects_missing_item_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_path = dir.path().join("batch.toml");
+        std::fs::write(
+            &batch_path,
+            r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[items]]
+id = "PROJ-1"
+title = "Schema"
+branch = "alice/proj-1-schema"
+snapshot = ".local/issues/PROJ-1.md"
+status = "prepared"
+error = ""
+"#,
+        )
+        .unwrap();
+
+        let err = read_batch_metadata(&batch_path).unwrap_err();
+        assert!(err.to_string().contains("missing kind"));
+    }
+
+    #[test]
     fn latest_batch_path_uses_lexically_newest_batch_file() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::new(
@@ -1110,6 +1176,32 @@ error = ""
         let latest = latest_batch_path(&ctx).unwrap();
 
         assert!(latest.ends_with("2026-05-11-002.toml"));
+    }
+
+    #[test]
+    fn edit_opens_latest_batch_with_configured_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let batches_dir = dir.path().join(".local/batches");
+        std::fs::create_dir_all(&batches_dir).unwrap();
+        std::fs::write(
+            batches_dir.join("2026-05-11-001.toml"),
+            "base_mode = \"explicit\"\n",
+        )
+        .unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        let mut config = Config::default();
+        config.editor.command = Some("code {{path}}".into());
+        config.editor.placement = Some(EditorPlacement::Process);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+
+        edit(&ctx, None).unwrap();
     }
 
     #[test]

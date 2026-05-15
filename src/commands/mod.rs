@@ -3,6 +3,7 @@ pub mod clean;
 pub mod config;
 pub mod doctor;
 pub mod done;
+pub mod editor;
 pub mod init;
 pub mod issue;
 pub mod issue_selection;

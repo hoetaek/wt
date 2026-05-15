@@ -11,6 +11,13 @@ pub struct CmuxWorkspace {
     pub current_directory: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmuxCaller {
+    pub window: Option<String>,
+    pub workspace: Option<String>,
+    pub pane: Option<String>,
+}
+
 pub struct CmuxService<'a> {
     runner: &'a dyn CommandRunner,
 }
@@ -35,7 +42,7 @@ impl<'a> CmuxService<'a> {
             "--command".into(),
             command.into(),
         ];
-        if let Some(window) = self.caller_window() {
+        if let Some(window) = self.caller_context().and_then(|caller| caller.window) {
             args.extend(["--window".into(), window]);
         }
         args.extend(["--focus".into(), "true".into()]);
@@ -51,17 +58,14 @@ impl<'a> CmuxService<'a> {
         Ok(handle)
     }
 
-    fn caller_window(&self) -> Option<String> {
+    pub fn caller_context(&self) -> Option<CmuxCaller> {
         let out = self.runner.run("cmux", &["identify"], None).ok()?;
         if !out.success {
             return None;
         }
 
         let response: IdentifyResponse = serde_json::from_str(&out.stdout).ok()?;
-        response
-            .caller
-            .and_then(|caller| caller.window_ref)
-            .filter(|window| !window.trim().is_empty())
+        response.caller.map(Into::into)
     }
 
     pub fn list_workspaces(&self) -> Result<Vec<CmuxWorkspace>> {
@@ -104,6 +108,28 @@ impl<'a> CmuxService<'a> {
             bail!("cmux select-workspace failed: {}", command_error(&out));
         }
         Ok(())
+    }
+
+    pub fn open_command_surface(&self, command: &str) -> Result<String> {
+        let caller = self
+            .caller_context()
+            .ok_or_else(|| anyhow::anyhow!("cmux caller context not found"))?;
+        let workspace = caller
+            .workspace
+            .filter(|workspace| !workspace.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("cmux caller workspace not found"))?;
+        let pane = match caller.pane.filter(|pane| !pane.trim().is_empty()) {
+            Some(pane) => pane,
+            None => self
+                .list_panes(&workspace)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("cmux caller pane not found"))?,
+        };
+
+        let surface = self.new_surface(&pane, &workspace)?;
+        self.send(&surface, &workspace, &format!("{command}\n"))?;
+        Ok(surface)
     }
 
     fn list_windows(&self) -> Result<Vec<CmuxWindow>> {
@@ -264,6 +290,18 @@ struct IdentifyResponse {
 #[derive(Debug, Deserialize)]
 struct IdentifyCaller {
     window_ref: Option<String>,
+    workspace_ref: Option<String>,
+    pane_ref: Option<String>,
+}
+
+impl From<IdentifyCaller> for CmuxCaller {
+    fn from(caller: IdentifyCaller) -> Self {
+        Self {
+            window: caller.window_ref,
+            workspace: caller.workspace_ref,
+            pane: caller.pane_ref,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -436,6 +474,45 @@ mod tests {
         assert_eq!(
             calls[0].1,
             vec!["select-workspace", "--workspace", "workspace:10"]
+        );
+    }
+
+    #[test]
+    fn open_command_surface_uses_caller_workspace_and_pane() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:2","pane_ref":"pane:3"}}"#,
+            true,
+        );
+        runner.add_response("surface:4 surface:4", true);
+        runner.add_response("", true);
+
+        let svc = CmuxService::new(&runner);
+        let surface = svc.open_command_surface("vi file.toml").unwrap();
+
+        assert_eq!(surface, "surface:4");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1, vec!["identify"]);
+        assert_eq!(
+            calls[1].1,
+            vec![
+                "new-surface",
+                "--pane",
+                "pane:3",
+                "--workspace",
+                "workspace:2"
+            ]
+        );
+        assert_eq!(
+            calls[2].1,
+            vec![
+                "send",
+                "--surface",
+                "surface:4",
+                "--workspace",
+                "workspace:2",
+                "vi file.toml\n"
+            ]
         );
     }
 

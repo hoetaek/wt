@@ -21,6 +21,10 @@ This project follows SemVer.
 - Added `wt config inline [SOURCE]` support for moving selected named profile
   settings back into `.local/.wt.toml`, alongside prompt convention file
   inlining.
+- Added `[editor]` config for opening wt-managed files with a configurable
+  command and placement.
+- Added `wt config edit [SOURCE]`, `wt batch edit [BATCH]`, and
+  `wt stack edit [STACK]` for opening config, batch, and stack TOML files.
 - Removed `wt profile promote`; use `wt config extract .local/.wt.toml`
   instead.
 - Added `wt config` to print the merged effective config, with

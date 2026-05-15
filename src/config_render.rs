@@ -1,6 +1,7 @@
 use crate::config::{
-    AgentCli, AgentConfig, Config, IssueProviderType, IssuesConfig, ReadyMode, SetupConfig,
-    SiteConfig, SiteProvider, SubmitMode, TestConfig, WorkspaceConfig, WorktreeConfig,
+    AgentCli, AgentConfig, Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
+    ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig, WorkspaceConfig,
+    WorktreeConfig,
 };
 
 pub fn render_effective_config(config: &Config) -> String {
@@ -14,6 +15,7 @@ pub fn render_effective_config(config: &Config) -> String {
     if let Some(site) = config.site.as_ref() {
         append_site_section(&mut s, site);
     }
+    append_editor_section(&mut s, &config.editor);
     if let Some(workspace) = config.workspace.as_ref() {
         append_workspace_section(&mut s, workspace);
     }
@@ -154,6 +156,23 @@ fn append_site_section(s: &mut String, site: &SiteConfig) {
     }
 }
 
+fn append_editor_section(s: &mut String, editor: &EditorConfig) {
+    if editor == &EditorConfig::default() {
+        return;
+    }
+
+    s.push_str("\n[editor]\n");
+    if let Some(command) = editor.command.as_deref() {
+        s.push_str(&format!("command = {}\n", toml_quote(command)));
+    }
+    if let Some(placement) = editor.placement.as_ref() {
+        s.push_str(&format!(
+            "placement = {}\n",
+            toml_quote(editor_placement_name(placement))
+        ));
+    }
+}
+
 fn append_workspace_section(s: &mut String, workspace: &WorkspaceConfig) {
     s.push_str("\n[workspace]\n");
     if !workspace.tabs.is_empty() {
@@ -257,6 +276,13 @@ fn site_provider_name(provider: &SiteProvider) -> &'static str {
         SiteProvider::Valet => "valet",
         SiteProvider::DockerProxy => "docker_proxy",
         SiteProvider::Traefik => "traefik",
+    }
+}
+
+fn editor_placement_name(placement: &EditorPlacement) -> &'static str {
+    match placement {
+        EditorPlacement::CmuxSurface => "cmux_surface",
+        EditorPlacement::Process => "process",
     }
 }
 

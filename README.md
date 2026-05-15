@@ -147,6 +147,8 @@ wt config inline
 wt config inline .local/.wt.toml
 wt config inline .local/profiles/codex/profile.toml
 wt config inline .local/profiles/codex/prompts/issue.md
+wt config edit
+wt config edit .local/.wt.toml
 ```
 
 The merge order is `.wt.toml`, `.local/.wt.toml`, the selected profile, then
@@ -174,6 +176,11 @@ is `.local/profiles/<name>/prompts/{common,issue,new,pr}.md` and matching
 `[agent.prompt.append]` key. A named profile is not inlined while supported
 prompt convention files or scaffold files would be lost; inline prompt files
 first. Scaffold files are not inlined.
+
+`wt config edit` opens an existing config file in your configured editor. When
+no source is provided, it lists `.wt.toml`, `.local/.wt.toml`, and named
+profile `profile.toml` files; if no config file exists, it opens
+`.local/.wt.toml`.
 
 Example shared `.wt.toml`:
 
@@ -208,7 +215,18 @@ Example private `.local/.wt.toml`:
 cli = "codex"
 timeout = 30
 send_after = 2
+
+[editor]
+command = "vi {{path}}"
+placement = "cmux_surface"
 ```
+
+`[editor]` config controls commands that open wt-managed TOML files. `command`
+is rendered with `{{path}}` as a shell-quoted path and `{{path_raw}}` as the raw
+path. If the command has no path placeholder, wt appends `{{path}}`. Omit
+`command` to use `$VISUAL`, `$EDITOR`, or `vi {{path}}`. `placement` is
+`cmux_surface` by default, opening a new cmux surface in the caller workspace;
+use `process` for commands such as `code {{path}}`.
 
 ## Profiles
 
@@ -428,17 +446,22 @@ The batch TOML records the optional profile, base mode, overall batch status,
 and one `[[items]]` table per issue item. The double brackets are TOML's
 array-of-tables syntax, equivalent to an `items: [...]` list in JSON. Issue
 items use `kind = "issue"` and a `snapshot` path.
+Batch item kinds are strict: `kind = "issue"` is the only supported batch item
+kind.
 
 Run a prepared batch explicitly:
 
 ```bash
 wt batch show
 wt batch show latest
+wt batch edit
+wt batch edit latest
 wt batch run .local/batches/2026-05-09-001.toml
 wt batch run latest
 ```
 
 `show` prints the stored base branch, profile, batch status, and item statuses.
+`edit` opens the batch TOML file without changing item state.
 
 `run` executes only issue items with `status = "prepared"` or
 `status = "failed"`. Items marked `done` or `skipped` are left alone, so reruns
@@ -507,18 +530,23 @@ Build on the schema branch.
 
 `[[items]]` is the canonical stack list. Issue-based `issue` also writes
 `[[items]]` with `kind = "issue"` and a `snapshot` path.
+Stack item kinds are strict: `kind = "issue"` and `kind = "new"` are the only
+supported stack item kinds. Pull requests are not stack items.
 
 Start the next runnable stack item:
 
 ```bash
 wt stack show
 wt stack show latest
+wt stack edit
+wt stack edit latest
 wt stack run .local/stacks/2026-05-12-001.toml
 wt stack run latest
 ```
 
 `show` prints the stored base branch, profile, stack status, item statuses, and
 the recorded parent chain.
+`edit` opens the stack TOML file without changing item state.
 
 `run` starts one prepared or failed item at a time and leaves it marked
 `running`. The first item branch uses the stack base branch. Each following

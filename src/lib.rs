@@ -40,6 +40,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             } => commands::batch::issue(ctx, issues, profile.as_deref(), base),
             BatchCommand::Run { batch } => commands::batch::run(ctx, batch),
             BatchCommand::Show { batch } => commands::batch::show(ctx, batch.as_deref()),
+            BatchCommand::Edit { batch } => commands::batch::edit(ctx, batch.as_deref()),
         },
         Commands::Stack { command } => match command {
             StackCommand::New {
@@ -54,6 +55,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             } => commands::stack::issue(ctx, issues, profile.as_deref(), base),
             StackCommand::Run { stack } => commands::stack::run(ctx, stack),
             StackCommand::Show { stack } => commands::stack::show(ctx, stack.as_deref()),
+            StackCommand::Edit { stack } => commands::stack::edit(ctx, stack.as_deref()),
             StackCommand::Complete {
                 stack,
                 item,
@@ -65,6 +67,9 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Done { targets } => commands::done::run(ctx, targets),
         Commands::Doctor => commands::doctor::run(ctx),
         Commands::Config { profile, command } => match command {
+            Some(ConfigCommand::Edit { source }) => {
+                commands::config::edit(ctx, profile.as_deref(), source.as_deref())
+            }
             Some(ConfigCommand::Extract { source }) => {
                 commands::config::extract(ctx, profile.as_deref(), source.as_deref())
             }
