@@ -1,6 +1,12 @@
 use crate::context::{CmdOutput, CommandRunner};
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
+
+static REPO_GIT_METADATA_WRITE_LOCK: Mutex<()> = Mutex::new(());
+const GIT_CONFIG_LOCK_RETRY_ATTEMPTS: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeEntry {
@@ -101,7 +107,7 @@ impl<'a> GitService<'a> {
                 }
             }
         }
-        self.git(&["config", &format!("branch.{branch}.parentbranch"), parent])?;
+        self.set_branch_parent_config(branch, parent)?;
         Ok(())
     }
 
@@ -257,6 +263,58 @@ impl<'a> GitService<'a> {
         }
         Ok(out)
     }
+
+    fn set_branch_parent_config(&self, branch: &str, parent: &str) -> Result<()> {
+        let key = format!("branch.{branch}.parentbranch");
+        let _guard = REPO_GIT_METADATA_WRITE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        // This guard serializes threads inside one wt process. The retry handles
+        // the common cross-process case where another git config writer holds
+        // .git/config.lock briefly.
+        for attempt in 0..GIT_CONFIG_LOCK_RETRY_ATTEMPTS {
+            let out = self
+                .runner
+                .run("git", &["config", &key, parent], self.cwd)?;
+            if out.success {
+                return Ok(());
+            }
+
+            if attempt + 1 < GIT_CONFIG_LOCK_RETRY_ATTEMPTS && is_git_config_lock_failure(&out) {
+                let delay = git_config_lock_retry_delay(attempt);
+                if !delay.is_zero() {
+                    thread::sleep(delay);
+                }
+                continue;
+            }
+
+            bail!(
+                "git config {key} failed: {}",
+                if out.stderr.is_empty() {
+                    &out.stdout
+                } else {
+                    &out.stderr
+                }
+            );
+        }
+
+        Ok(())
+    }
+}
+
+fn is_git_config_lock_failure(out: &CmdOutput) -> bool {
+    let message = format!("{}\n{}", out.stdout, out.stderr).to_ascii_lowercase();
+    message.contains("config.lock")
+        || (message.contains("could not lock config file") && message.contains("file exists"))
+}
+
+fn git_config_lock_retry_delay(attempt: usize) -> Duration {
+    if cfg!(test) {
+        Duration::ZERO
+    } else {
+        Duration::from_millis(25 * 2_u64.pow(attempt as u32))
+    }
 }
 
 fn parse_worktree_list(porcelain: &str) -> Result<Vec<WorktreeEntry>> {
@@ -285,6 +343,11 @@ fn parse_worktree_list(porcelain: &str) -> Result<Vec<WorktreeEntry>> {
 mod tests {
     use super::*;
     use crate::context::mock::MockRunner;
+    use crate::context::{CmdOutput, CommandRunner};
+    use anyhow::Result;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
 
     #[test]
     fn parse_worktree_list_porcelain() {
@@ -549,6 +612,98 @@ branch refs/heads/main
         let git = GitService::new(&runner, None);
         let out = git.branch_delete("feature").unwrap();
         assert!(out.success);
+    }
+
+    #[test]
+    fn set_branch_parent_writes_parentbranch_config() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        runner.add_response("", true);
+
+        let git = GitService::new(&runner, None);
+        git.set_branch_parent("alice/feature", "main").unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["show-ref", "--verify", "--quiet", "refs/heads/main"]
+        );
+        assert_eq!(
+            calls[1].1,
+            vec!["config", "branch.alice/feature.parentbranch", "main"]
+        );
+    }
+
+    #[test]
+    fn set_branch_parent_retries_git_config_lock_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        runner.add_response(
+            "error: could not lock config file .git/config: File exists",
+            false,
+        );
+        runner.add_response("", true);
+
+        let git = GitService::new(&runner, None);
+        git.set_branch_parent("alice/feature", "main").unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let config_calls = calls
+            .iter()
+            .filter(|(cmd, args, _)| {
+                cmd == "git" && args.first().is_some_and(|arg| arg == "config")
+            })
+            .count();
+        assert_eq!(config_calls, 2);
+    }
+
+    #[test]
+    fn set_branch_parent_config_writes_are_process_serialized() {
+        struct SlowConfigRunner {
+            active_config_writes: AtomicUsize,
+            overlapped: AtomicBool,
+        }
+
+        impl CommandRunner for SlowConfigRunner {
+            fn run(&self, cmd: &str, args: &[&str], _cwd: Option<&Path>) -> Result<CmdOutput> {
+                assert_eq!(cmd, "git");
+                if args.first() == Some(&"config") {
+                    if self.active_config_writes.fetch_add(1, Ordering::SeqCst) > 0 {
+                        self.overlapped.store(true, Ordering::SeqCst);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                    self.active_config_writes.fetch_sub(1, Ordering::SeqCst);
+                }
+
+                Ok(CmdOutput {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: true,
+                })
+            }
+
+            fn has_command(&self, _cmd: &str) -> bool {
+                false
+            }
+        }
+
+        let runner = SlowConfigRunner {
+            active_config_writes: AtomicUsize::new(0),
+            overlapped: AtomicBool::new(false),
+        };
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let git = GitService::new(&runner, None);
+                git.set_branch_parent("alice/feature-a", "main").unwrap();
+            });
+            scope.spawn(|| {
+                let git = GitService::new(&runner, None);
+                git.set_branch_parent("alice/feature-b", "main").unwrap();
+            });
+        });
+
+        assert!(!runner.overlapped.load(Ordering::SeqCst));
     }
 
     #[test]

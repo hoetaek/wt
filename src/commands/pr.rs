@@ -243,24 +243,42 @@ mod tests {
         );
         // fetch origin branch
         runner.add_response("", true);
+        // local_branch_exists
+        runner.add_response("", false);
         // worktree_add_new_branch
         runner.add_response("", true);
         // set upstream
         runner.add_response("", true);
-        // set_branch_parent
+        // set_branch_parent local_branch_exists
+        runner.add_response("", true);
+        // set_branch_parent config
         runner.add_response("", true);
 
+        let runner = Arc::new(runner);
         let ui = MockUi::new();
         let ctx = Ctx::new(
             PathBuf::from("/tmp/test-repo"),
             PathBuf::from("/tmp/test-repo"),
             Config::default(),
-            Box::new(runner),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
             Box::new(ui),
         );
 
         let result = run(&ctx, Some(42), None);
         assert!(result.is_ok() || result.unwrap_err().to_string().contains("setup"));
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "git"
+                && args
+                    == &vec![
+                        "config".to_string(),
+                        "branch.alice/feature.parentbranch".to_string(),
+                        "main".to_string(),
+                    ]
+        }));
     }
 
     #[test]
@@ -297,6 +315,7 @@ cli = "codex"
         runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
+        runner.add_response("", true);
         let runner = Arc::new(runner);
 
         let ctx = Ctx::new(
@@ -324,6 +343,15 @@ cli = "codex"
             .expect("expected git worktree add -b call");
         assert!(worktree_add_call.1[4].contains("profile-worktrees/"));
         assert!(worktree_add_call.1[4].ends_with("-alice-feature"));
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "git"
+                && args
+                    == &vec![
+                        "config".to_string(),
+                        "branch.alice/feature.parentbranch".to_string(),
+                        "main".to_string(),
+                    ]
+        }));
     }
 
     #[test]

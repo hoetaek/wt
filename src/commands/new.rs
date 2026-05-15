@@ -439,6 +439,64 @@ mod tests {
             })
             .expect("expected git worktree add -b call");
         assert_eq!(worktree_add_call.1[5], "feature/current");
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "git"
+                && args
+                    == &vec![
+                        "config".to_string(),
+                        "branch.my-feature.parentbranch".to_string(),
+                        "feature/current".to_string(),
+                    ]
+        }));
+    }
+
+    #[test]
+    fn new_with_profile_records_parentbranch_for_profile_branch() {
+        let repo = tempfile::tempdir().unwrap();
+        let profile_dir = repo.path().join(".local/profiles/codex-yolo");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+
+        let mut runner = MockRunner::new();
+        // profile branch local_branch_exists
+        runner.add_response("", false);
+        // worktree_add_new_branch
+        runner.add_response("", true);
+        // set_branch_parent local_branch_exists
+        runner.add_response("", true);
+        // set_branch_parent config
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(
+            &ctx,
+            &["my".into(), "feature".into()],
+            &Some("main".into()),
+            Some("codex-yolo"),
+            false,
+        )
+        .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "git"
+                && args
+                    == &vec![
+                        "config".to_string(),
+                        "branch.my-feature-codex-yolo.parentbranch".to_string(),
+                        "main".to_string(),
+                    ]
+        }));
     }
 
     #[test]
