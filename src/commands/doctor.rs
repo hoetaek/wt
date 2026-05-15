@@ -14,6 +14,7 @@ pub fn run(ctx: &Ctx) -> Result<()> {
     check_github_cli(ctx);
     check_site_provider(ctx);
     check_agent_config(ctx);
+    check_workspace_config(ctx);
     check_worktree_naming(ctx);
     check_cmux(ctx);
     Ok(())
@@ -25,6 +26,7 @@ fn run_json(ctx: &Ctx) -> Result<()> {
     collect_github_cli_check(ctx, &mut checks);
     collect_site_provider_checks(ctx, &mut checks);
     collect_agent_checks(ctx, &mut checks);
+    collect_workspace_config_checks(ctx, &mut checks);
     collect_worktree_naming_checks(ctx, &mut checks);
     collect_cmux_check(ctx, &mut checks);
 
@@ -252,13 +254,24 @@ fn collect_worktree_naming_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     );
 }
 
+fn collect_workspace_config_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
+    if ctx.config.workspace.is_some() {
+        checks.push(DoctorCheck::ok(
+            "workspace_config",
+            Some("configured".into()),
+        ));
+    } else if agent_launch_requested(ctx) {
+        checks.push(DoctorCheck::warning(
+            "workspace_config",
+            "missing; add [workspace] to open a cmux workspace and launch the agent.",
+        ));
+    } else {
+        checks.push(DoctorCheck::ok("workspace_config", Some("none".into())));
+    }
+}
+
 fn collect_cmux_check(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
-    let needs_cmux = ctx.config.workspace.is_some()
-        || ctx
-            .config
-            .agent
-            .as_ref()
-            .is_some_and(|agent| !agent.prompt.is_empty());
+    let needs_cmux = cmux_relevant(ctx);
 
     if needs_cmux {
         collect_required_command(
@@ -497,13 +510,20 @@ fn check_worktree_naming(ctx: &Ctx) {
     );
 }
 
+fn check_workspace_config(ctx: &Ctx) {
+    if ctx.config.workspace.is_some() {
+        ctx.ui.print_step("Workspace config: configured");
+    } else if agent_launch_requested(ctx) {
+        ctx.ui.print_warning(
+            "Workspace config: missing. Add [workspace] to open a cmux workspace and launch the agent.",
+        );
+    } else {
+        ctx.ui.print_step("Workspace config: none");
+    }
+}
+
 fn check_cmux(ctx: &Ctx) {
-    let needs_cmux = ctx.config.workspace.is_some()
-        || ctx
-            .config
-            .agent
-            .as_ref()
-            .is_some_and(|agent| !agent.prompt.is_empty());
+    let needs_cmux = cmux_relevant(ctx);
 
     if needs_cmux {
         check_required_command(
@@ -513,6 +533,23 @@ fn check_cmux(ctx: &Ctx) {
             "Install cmux, or remove [workspace]/[agent.prompt] automation.",
         );
     }
+}
+
+fn cmux_relevant(ctx: &Ctx) -> bool {
+    ctx.config.workspace.is_some()
+        || agent_launch_requested(ctx)
+        || ctx
+            .config
+            .agent
+            .as_ref()
+            .is_some_and(|agent| !agent.prompt.is_empty())
+}
+
+fn agent_launch_requested(ctx: &Ctx) -> bool {
+    ctx.config
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.cli != AgentCli::None)
 }
 
 fn agent_cli_name(cli: &AgentCli) -> &'static str {
@@ -766,10 +803,12 @@ mod tests {
                 send_after: 3,
                 prompt: Default::default(),
             }),
+            workspace: Some(Default::default()),
             ..Default::default()
         };
         let mut runner = MockRunner::new();
         runner.add_command("claude");
+        runner.add_command("cmux");
         let ui = RecordingUi::new();
         let steps = Arc::clone(&ui.steps);
         let warnings = Arc::clone(&ui.warnings);
@@ -896,5 +935,32 @@ mod tests {
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("cmux CLI: missing"));
         assert!(warnings.contains("[workspace]"));
+    }
+
+    #[test]
+    fn warns_when_agent_launch_has_no_workspace_config() {
+        let config = Config {
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                args: vec!["--yolo".into()],
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: Default::default(),
+            }),
+            ..Default::default()
+        };
+        let ui = RecordingUi::new();
+        let warnings = Arc::clone(&ui.warnings);
+        let ctx = ctx_with(config, MockRunner::new(), ui);
+
+        run(&ctx).unwrap();
+
+        let warnings = warnings.lock().unwrap().join("\n");
+        assert!(warnings.contains("Workspace config: missing"));
+        assert!(warnings.contains("launch the agent"));
+        assert!(warnings.contains("cmux CLI: missing"));
     }
 }
