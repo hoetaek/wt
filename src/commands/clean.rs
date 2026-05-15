@@ -1,4 +1,6 @@
 use crate::commands::issue::build_provider;
+use crate::commands::profile_match;
+use crate::config::Config;
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
 use crate::services::cmux::{CmuxService, CmuxWorkspace};
@@ -44,39 +46,17 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
     let cmux = CmuxService::new(ctx.runner.as_ref());
     let mut cmux_workspaces = load_cmux_workspaces(ctx, &cmux);
 
-    let site_config = ctx.config.effective_site();
-    let site = site_config
-        .as_ref()
-        .map(|_| SiteService::new(ctx.runner.as_ref()));
-    let site_available = site
-        .as_ref()
-        .zip(site_config.as_ref())
-        .is_some_and(|(svc, config)| svc.is_available(&config.provider));
-
     for &idx in &selected {
         let entry = &additional[idx];
         let wt_path = &entry.path;
         let branch = &entry.branch;
+        let profile_config = profile_match::load_profile_config_for_branch(ctx, branch)?;
+        let config = profile_config.as_ref().unwrap_or(&ctx.config);
 
         close_matching_cmux_workspaces(ctx, &cmux, &mut cmux_workspaces, entry);
 
         // Site unlink
-        if site_available {
-            let site = site.as_ref().unwrap();
-            let site_config = site_config.as_ref().unwrap();
-            let names = WorktreeNames::new(branch, &ctx.parent_dir, &ctx.repo_name, None, Some(""));
-            let mut vars = setup::build_template_vars(ctx, wt_path, &names, None);
-            let site_descriptor = setup::apply_site_template_vars(&ctx.config, &mut vars);
-            if let Some(site_descriptor) = site_descriptor {
-                if site.unregister(&site_config.provider, &site_descriptor.name)? {
-                    ctx.ui.print_step(&format!(
-                        "  {}: {} unlinked",
-                        provider_label(&site_config.provider),
-                        site_descriptor.url
-                    ));
-                }
-            }
-        }
+        unlink_site(ctx, config, wt_path, branch)?;
 
         // Issue provider cleanup hook
         if let Ok(provider) = build_provider(ctx) {
@@ -127,6 +107,31 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
             .print_step(&format!("{remaining_count} worktree(s) remaining"));
     }
 
+    Ok(())
+}
+
+fn unlink_site(ctx: &Ctx, config: &Config, wt_path: &Path, branch: &str) -> Result<()> {
+    let Some(site_config) = config.effective_site() else {
+        return Ok(());
+    };
+    let site = SiteService::new(ctx.runner.as_ref());
+    if !site.is_available(&site_config.provider) {
+        return Ok(());
+    }
+
+    let names = WorktreeNames::new(branch, &ctx.parent_dir, &ctx.repo_name, None, Some(""));
+    let mut vars = setup::build_template_vars(ctx, wt_path, &names, None);
+    let Some(site_descriptor) = setup::apply_site_template_vars(config, &mut vars) else {
+        return Ok(());
+    };
+
+    if site.unregister(&site_config.provider, &site_descriptor.name)? {
+        ctx.ui.print_step(&format!(
+            "  {}: {} unlinked",
+            provider_label(&site_config.provider),
+            site_descriptor.url
+        ));
+    }
     Ok(())
 }
 
@@ -469,6 +474,62 @@ mod tests {
         let calls = runner.calls.lock().unwrap();
         assert!(!calls.iter().any(|(cmd, args, _)| {
             cmd == "cmux" && args.first().is_some_and(|arg| arg == "close-workspace")
+        }));
+    }
+
+    #[test]
+    fn clean_uses_matching_profile_config_for_site_unlink() {
+        let repo = tempfile::tempdir().unwrap();
+        let worktree = repo.path().with_file_name("repo-cms-codex");
+        let profile_dir = repo.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[site]
+provider = "herd"
+name = "profile-{{branch_slug}}"
+"#,
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("herd");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\nbranch refs/heads/feature/cms-codex\n\n",
+                repo.path().display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("", true); // herd unlink
+        runner.add_response("", true); // worktree remove
+        runner.add_response("", true); // branch delete
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run_with_targets(&ctx, &["cms-codex".into()]).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "herd" && args == &vec!["unlink".to_string(), "profile-cms-codex".to_string()]
         }));
     }
 

@@ -1,3 +1,5 @@
+use crate::commands::profile_match;
+use crate::config::Config;
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
 use crate::services::git::{GitService, WorktreeEntry};
@@ -70,7 +72,7 @@ fn build_row(
         parent,
         ahead,
         behind,
-        site_url: site_url(ctx, entry),
+        site_url: site_url(ctx, entry)?,
     })
 }
 
@@ -100,9 +102,19 @@ fn ahead_behind(ctx: &Ctx, branch: &str, parent: &str) -> Option<(Option<u32>, O
     Some((Some(ahead), Some(behind)))
 }
 
-fn site_url(ctx: &Ctx, entry: &WorktreeEntry) -> Option<String> {
-    if !ctx.config.has_site() {
-        return None;
+fn site_url(ctx: &Ctx, entry: &WorktreeEntry) -> Result<Option<String>> {
+    let profile_config = profile_match::load_profile_config_for_branch(ctx, &entry.branch)?;
+    let config = profile_config.as_ref().unwrap_or(&ctx.config);
+    site_url_with_config(ctx, config, entry)
+}
+
+fn site_url_with_config(
+    ctx: &Ctx,
+    config: &Config,
+    entry: &WorktreeEntry,
+) -> Result<Option<String>> {
+    if !config.has_site() {
+        return Ok(None);
     }
 
     let names = WorktreeNames::new(
@@ -113,8 +125,8 @@ fn site_url(ctx: &Ctx, entry: &WorktreeEntry) -> Option<String> {
         Some(""),
     );
     let mut vars = setup::build_template_vars(ctx, &entry.path, &names, None);
-    setup::apply_site_template_vars(&ctx.config, &mut vars);
-    vars.remove("site_url")
+    setup::apply_site_template_vars(config, &mut vars);
+    Ok(vars.remove("site_url"))
 }
 
 fn print_table(items: &[WorktreeRow], wide: bool) -> Result<()> {
@@ -462,6 +474,39 @@ mod tests {
         assert_eq!(rows[1].parent.as_deref(), Some("main"));
         assert_eq!(rows[1].ahead, Some(2));
         assert_eq!(rows[1].behind, Some(1));
+    }
+
+    #[test]
+    fn site_url_uses_matching_profile_config_from_branch_suffix() {
+        let repo = tempfile::tempdir().unwrap();
+        let profile_dir = repo.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[site]
+provider = "herd"
+url = "https://profile-{{branch_slug}}.test"
+"#,
+        )
+        .unwrap();
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let entry = WorktreeEntry {
+            branch: "feature/cms-codex".into(),
+            path: repo.path().join("repo-cms-codex"),
+        };
+
+        assert_eq!(
+            site_url(&ctx, &entry).unwrap().as_deref(),
+            Some("https://profile-cms-codex.test")
+        );
     }
 
     #[test]
