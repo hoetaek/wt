@@ -43,6 +43,10 @@ This project follows SemVer.
 - Added `wt stack issue`, `wt stack run`, and `wt stack complete` for
   ordered issue stacks where each issue branch is based on the previous
   completed issue branch.
+- Changed `wt stack new` and `wt stack issue` to resolve and store the base
+  branch during preparation.
+- Added `wt stack show [STACK]` for inspecting stored stack base, profile,
+  status, items, and parent chain without opening the TOML file.
 - Generalized stack state to canonical `[[items]]` entries so stack TOML can
   be authored directly without an issue provider, while keeping legacy
   `[[issues]]` stack files readable.

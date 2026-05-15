@@ -31,15 +31,18 @@ pub fn new(
         bail!("Usage: wt stack new <item>...");
     }
 
+    let mut stack_items = stack_items_from_names(items, None)?;
+    let resolved_base = resolve_stack_base(ctx, base)?;
+    assign_stack_item_parents(&mut stack_items, &resolved_base);
     let now = current_utc_timestamp();
     let stack = StackMetadata {
         profile: profile.map(str::to_string),
-        base_mode: base_mode_name(base).into(),
-        base: explicit_base(base),
+        base_mode: "explicit".into(),
+        base: Some(resolved_base),
         status: STATUS_PREPARED.into(),
         created_at: now.clone(),
         updated_at: now,
-        items: stack_items_from_names(items, explicit_base(base))?,
+        items: stack_items,
     };
     let stack_path = write_new_stack_metadata(ctx, &stack)?;
 
@@ -71,15 +74,18 @@ pub fn issue(
     }
 
     let issue_snapshots = snapshot_issues(ctx, &selected_issues)?;
+    let mut stack_items = stack_items_from_snapshots(issue_snapshots, None);
+    let resolved_base = resolve_stack_base(ctx, base)?;
+    assign_stack_item_parents(&mut stack_items, &resolved_base);
     let now = current_utc_timestamp();
     let stack = StackMetadata {
         profile: profile.map(str::to_string),
-        base_mode: base_mode_name(base).into(),
-        base: explicit_base(base),
+        base_mode: "explicit".into(),
+        base: Some(resolved_base),
         status: STATUS_PREPARED.into(),
         created_at: now.clone(),
         updated_at: now,
-        items: stack_items_from_snapshots(issue_snapshots, explicit_base(base)),
+        items: stack_items,
     };
     let stack_path = write_new_stack_metadata(ctx, &stack)?;
 
@@ -173,6 +179,60 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
 
     if metadata.status == STATUS_FAILED {
         bail!("Stack failed: {}", stack_path.display());
+    }
+
+    Ok(())
+}
+
+pub fn show(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
+    let stack_path = match stack {
+        Some(target) => resolve_stack_path(ctx, target)?,
+        None => latest_stack_path(ctx)?,
+    };
+    let metadata = read_stack_metadata(&stack_path)?;
+
+    ctx.ui
+        .print_step(&format!("Stack: {}", stack_path.display()));
+    ctx.ui.print_dim(&format!("  Status: {}", metadata.status));
+    ctx.ui
+        .print_dim(&format!("  Base: {}", describe_stack_base(&metadata)?));
+    ctx.ui.print_dim(&format!(
+        "  Profile: {}",
+        metadata.profile.as_deref().unwrap_or("(effective config)")
+    ));
+    ctx.ui.print_dim(&format!(
+        "  Items: {} ({})",
+        metadata.items.len(),
+        stack_status_counts(&metadata.items)
+    ));
+
+    for (idx, item) in metadata.items.iter().enumerate() {
+        let title = item.title();
+        let summary = if title.is_empty() {
+            format!("  {}. {} [{}]", idx + 1, item.label(), item.status)
+        } else {
+            format!(
+                "  {}. {} [{}] {}",
+                idx + 1,
+                item.label(),
+                item.status,
+                title
+            )
+        };
+        ctx.ui.print_dim(&summary);
+        ctx.ui.print_dim(&format!("     Kind: {}", item.kind()));
+        if !item.branch.trim().is_empty() {
+            ctx.ui.print_dim(&format!("     Branch: {}", item.branch));
+        }
+        if let Some(parent) = item.parent.as_deref() {
+            ctx.ui.print_dim(&format!("     Parent: {parent}"));
+        }
+        if let Some(snapshot) = item.snapshot.as_deref() {
+            ctx.ui.print_dim(&format!("     Snapshot: {snapshot}"));
+        }
+        if !item.error.trim().is_empty() {
+            ctx.ui.print_dim(&format!("     Error: {}", item.error));
+        }
     }
 
     Ok(())
@@ -476,6 +536,14 @@ fn stack_items_from_names(
     }
 
     Ok(items)
+}
+
+fn assign_stack_item_parents(items: &mut [StackItem], initial_parent: &str) {
+    let mut parent = Some(initial_parent.to_string());
+    for item in items {
+        item.parent = parent.clone();
+        parent = prepared_branch_name(&item.branch).map(str::to_string);
+    }
 }
 
 fn default_stack_status() -> String {
@@ -801,6 +869,31 @@ fn latest_stack_path(ctx: &Ctx) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("No stack files found in .local/stacks"))
 }
 
+fn resolve_stack_base(ctx: &Ctx, base: &Option<String>) -> Result<String> {
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+    let base = match BaseMode::from_raw(base) {
+        BaseMode::Explicit(branch) => branch,
+        BaseMode::Interactive => {
+            let branches = git.list_local_branches()?;
+            if branches.is_empty() {
+                bail!("No local branches found");
+            }
+            let idx = ctx.ui.select("Select base branch", &branches)?;
+            branches[idx].clone()
+        }
+        BaseMode::Current => git.current_branch()?,
+        BaseMode::Default => {
+            let current = git.current_branch()?;
+            ctx.ui.input("Base branch", Some(&current))?
+        }
+    };
+
+    if base.trim().is_empty() {
+        bail!("Base branch cannot be empty");
+    }
+    Ok(base)
+}
+
 fn resolve_initial_base(ctx: &Ctx, stack: &StackMetadata) -> Result<String> {
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
     let base = match stack.base_mode.as_str() {
@@ -830,19 +923,39 @@ fn resolve_initial_base(ctx: &Ctx, stack: &StackMetadata) -> Result<String> {
     Ok(base)
 }
 
-fn base_mode_name(base: &Option<String>) -> &'static str {
-    match BaseMode::from_raw(base) {
-        BaseMode::Default => "default",
-        BaseMode::Interactive => "interactive",
-        BaseMode::Current => "current",
-        BaseMode::Explicit(_) => "explicit",
+fn describe_stack_base(stack: &StackMetadata) -> Result<String> {
+    match stack.base_mode.as_str() {
+        "default" => Ok("prompt at run time".into()),
+        "interactive" => Ok("branch selector at run time".into()),
+        "current" => Ok("current branch at run time".into()),
+        "explicit" => stack
+            .base
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Stack base_mode is explicit but base is missing")),
+        other => bail!("Unknown stack base_mode: {other}"),
     }
 }
 
-fn explicit_base(base: &Option<String>) -> Option<String> {
-    match BaseMode::from_raw(base) {
-        BaseMode::Explicit(branch) => Some(branch),
-        BaseMode::Default | BaseMode::Interactive | BaseMode::Current => None,
+fn stack_status_counts(items: &[StackItem]) -> String {
+    let statuses = [
+        STATUS_PREPARED,
+        STATUS_RUNNING,
+        STATUS_DONE,
+        STATUS_FAILED,
+        STATUS_SKIPPED,
+    ];
+    let counts = statuses
+        .iter()
+        .filter_map(|status| {
+            let count = items.iter().filter(|item| item.status == *status).count();
+            (count > 0).then(|| format!("{status}={count}"))
+        })
+        .collect::<Vec<_>>();
+
+    if counts.is_empty() {
+        "none".into()
+    } else {
+        counts.join(", ")
     }
 }
 
@@ -1030,13 +1143,15 @@ mod tests {
     }
 
     #[test]
-    fn new_records_current_base_mode_for_dot_base() {
+    fn new_resolves_current_base_for_dot_base() {
         let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response("feature/current", true);
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
             Config::default(),
-            Box::new(MockRunner::new()),
+            Box::new(runner),
             Box::new(MockUi::new()),
         );
         let items = vec!["Add schema".into()];
@@ -1045,8 +1160,34 @@ mod tests {
 
         let stack_path = latest_stack_path(&ctx).unwrap();
         let content = std::fs::read_to_string(stack_path).unwrap();
-        assert!(content.contains("base_mode = \"current\""));
-        assert!(!content.contains("base ="));
+        assert!(content.contains("base_mode = \"explicit\""));
+        assert!(content.contains("base = \"feature/current\""));
+        assert!(content.contains("parent = \"feature/current\""));
+    }
+
+    #[test]
+    fn new_stores_default_base_prompt_result_at_prepare_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response("main", true);
+        let mut ui = MockUi::new();
+        ui.add_input("develop");
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+        let items = vec!["Add schema".into()];
+
+        new(&ctx, &items, None, &None).unwrap();
+
+        let stack_path = latest_stack_path(&ctx).unwrap();
+        let stack = read_stack_metadata(&stack_path).unwrap();
+        assert_eq!(stack.base_mode, "explicit");
+        assert_eq!(stack.base.as_deref(), Some("develop"));
+        assert_eq!(stack.items[0].parent.as_deref(), Some("develop"));
     }
 
     #[test]
@@ -1140,6 +1281,57 @@ mod tests {
         assert!(content.contains("[[items]]"));
         assert!(content.contains("kind = \"issue\""));
         assert!(!content.contains("[[issues]]"));
+    }
+
+    #[test]
+    fn show_prints_stack_metadata_and_items() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui.clone()),
+        );
+        let stack_path = dir.path().join("stack.toml");
+        let stack = StackMetadata {
+            profile: Some("codex".into()),
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PARTIAL.into(),
+            created_at: "2026-05-12T00:00:00Z".into(),
+            updated_at: "2026-05-12T00:00:00Z".into(),
+            items: vec![StackItem {
+                kind: "issue".into(),
+                id: "PROJ-1".into(),
+                source: "PROJ-1".into(),
+                title: "Schema".into(),
+                branch: "alice/proj-1-schema".into(),
+                parent: Some("main".into()),
+                snapshot: Some(".local/issues/PROJ-1.md".into()),
+                body: String::new(),
+                status: STATUS_FAILED.into(),
+                error: "missing snapshot".into(),
+            }],
+        };
+        write_stack_metadata(&stack_path, &stack).unwrap();
+
+        show(&ctx, Some(stack_path.to_str().unwrap())).unwrap();
+
+        let steps = ui.steps.lock().unwrap();
+        assert!(steps[0].contains("Stack:"));
+        let details = ui.dims.lock().unwrap().join("\n");
+        assert!(details.contains("Status: partial"));
+        assert!(details.contains("Base: main"));
+        assert!(details.contains("Profile: codex"));
+        assert!(details.contains("Items: 1 (failed=1)"));
+        assert!(details.contains("PROJ-1 [failed] Schema"));
+        assert!(details.contains("Kind: issue"));
+        assert!(details.contains("Branch: alice/proj-1-schema"));
+        assert!(details.contains("Parent: main"));
+        assert!(details.contains("Snapshot: .local/issues/PROJ-1.md"));
+        assert!(details.contains("Error: missing snapshot"));
     }
 
     #[test]

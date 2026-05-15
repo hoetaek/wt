@@ -90,6 +90,7 @@ Prepare issue work in bulk:
 wt batch issue
 wt batch run latest
 wt stack issue
+wt stack show latest
 wt stack run latest
 wt stack complete latest PROJ-123 --run-next
 ```
@@ -469,6 +470,11 @@ Both `new` and `issue` create stack TOML. `new` writes manual `kind = "new"`
 items from branch-name text. `issue` writes `kind = "issue"` items from
 provider issue snapshots.
 
+Both commands ask once for the base branch and store the resolved branch in the
+stack file. `--base .` stores the current branch without prompting, `--base`
+with no value opens the local branch selector, and `--base <branch>` stores the
+named branch explicitly. The first item uses that stored base as its parent.
+
 You can also edit stack TOML directly:
 
 ```toml
@@ -501,9 +507,14 @@ stack files are still readable for compatibility.
 Start the next runnable stack item:
 
 ```bash
+wt stack show
+wt stack show latest
 wt stack run .local/stacks/2026-05-12-001.toml
 wt stack run latest
 ```
+
+`show` prints the stored base branch, profile, stack status, item statuses, and
+the recorded parent chain.
 
 `run` starts one prepared or failed item at a time and leaves it marked
 `running`. The first item branch uses the stack base branch. Each following

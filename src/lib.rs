@@ -53,6 +53,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 base,
             } => commands::stack::issue(ctx, issues, profile.as_deref(), base),
             StackCommand::Run { stack } => commands::stack::run(ctx, stack),
+            StackCommand::Show { stack } => commands::stack::show(ctx, stack.as_deref()),
             StackCommand::Complete {
                 stack,
                 item,

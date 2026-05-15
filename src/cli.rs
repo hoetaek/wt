@@ -81,7 +81,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: BatchCommand,
     },
-    /// Create or run branch stacks
+    /// Prepare, inspect, run, or complete stacks
     Stack {
         #[command(subcommand)]
         command: StackCommand,
@@ -246,7 +246,7 @@ pub enum BatchCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum StackCommand {
-    /// Create a stack file from branch-name text without starting workspaces
+    /// Prepare branch-name text as a stack file without starting workspaces
     New {
         /// Branch-name text items to create in base-to-top order
         #[arg(required = true)]
@@ -258,7 +258,7 @@ pub enum StackCommand {
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
     },
-    /// Create a stack file from issues without starting workspaces
+    /// Prepare issues as a stack file without starting workspaces
     Issue {
         /// Issue identifiers to snapshot in base-to-top order (omit to select interactively)
         issues: Vec<String>,
@@ -273,6 +273,11 @@ pub enum StackCommand {
     Run {
         /// Stack TOML path, or "latest" for the newest local stack
         stack: String,
+    },
+    /// Show stack metadata and item statuses
+    Show {
+        /// Stack TOML path, shorthand id, or "latest" (default)
+        stack: Option<String>,
     },
     /// Mark the running item in a stack as complete
     Complete {
@@ -677,6 +682,34 @@ mod tests {
                 command: StackCommand::Run { ref stack }
             }) if stack == "latest"
         ));
+    }
+
+    #[test]
+    fn stack_show_accepts_optional_target() {
+        let cli = parse(&["wt", "stack", "show"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::Show { stack: None }
+            })
+        ));
+
+        let cli = parse(&["wt", "stack", "show", "latest"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::Show { ref stack }
+            }) if stack.as_deref() == Some("latest")
+        ));
+    }
+
+    #[test]
+    fn stack_help_uses_general_stack_description() {
+        let mut command = Cli::command();
+        let stack = command.find_subcommand_mut("stack").unwrap();
+        let help = stack.render_help().to_string();
+        assert!(help.contains("Prepare, inspect, run, or complete stacks"));
+        assert!(help.contains("show"));
     }
 
     #[test]
