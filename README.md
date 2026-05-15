@@ -393,19 +393,21 @@ batch file without creating worktrees:
 ```bash
 wt batch issue
 wt batch issue 123 456 789
+wt batch issue 123 456 789 --base main
 wt batch issue 123 456 789 --profile codex
 ```
 
 When issue identifiers are omitted, `issue` opens the provider issue list and
 lets you select multiple issues interactively.
 
+`issue` asks once for the base branch and stores the resolved branch in the
+batch file. `--base .` stores the current branch without prompting, `--base`
+with no value opens the local branch selector, and `--base <branch>` stores the
+named branch explicitly.
+
 When `--profile` is omitted, the batch does not store a profile field and uses
 the effective config at run time. When `--profile <name>` is provided, the
 batch stores that named profile.
-
-For commands that create new branches, `--base .` uses the current branch
-without prompting. `--base` with no value opens the local branch selector, and
-`--base <branch>` uses the named branch explicitly.
 
 Issue bodies are stored as markdown snapshots:
 
@@ -423,9 +425,13 @@ items use `kind = "issue"` and a `snapshot` path. Older batch files with
 Run a prepared batch explicitly:
 
 ```bash
+wt batch show
+wt batch show latest
 wt batch run .local/batches/2026-05-09-001.toml
 wt batch run latest
 ```
+
+`show` prints the stored base branch, profile, batch status, and item statuses.
 
 `run` executes only issue items with `status = "prepared"` or
 `status = "failed"`. Items marked `done` or `skipped` are left alone, so reruns

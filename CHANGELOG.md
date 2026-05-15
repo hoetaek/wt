@@ -31,6 +31,10 @@ This project follows SemVer.
   remains as a hidden compatibility alias.
 - Added interactive multi-select for `wt batch issue` when no issue
   identifiers are provided.
+- Changed `wt batch issue` to resolve and store the base branch during
+  preparation, matching `wt issue` base prompt behavior.
+- Added `wt batch show [BATCH]` for inspecting stored batch base, profile,
+  status, and items without opening the TOML file.
 - Added `wt stack new` to create manual branch stacks from branch-name text
   without an issue provider.
 - Added `wt stack issue`, `wt stack run`, and `wt stack complete` for

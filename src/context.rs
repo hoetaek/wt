@@ -122,7 +122,7 @@ impl Ctx {
 pub mod mock {
     use super::*;
     use std::collections::VecDeque;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     pub type CommandCall = (String, Vec<String>, Option<PathBuf>);
 
@@ -185,6 +185,7 @@ pub mod mock {
         confirm_responses: Mutex<VecDeque<bool>>,
         input_responses: Mutex<VecDeque<String>>,
         pub steps: Mutex<Vec<String>>,
+        pub dims: Mutex<Vec<String>>,
         pub warnings: Mutex<Vec<String>>,
     }
 
@@ -202,6 +203,7 @@ pub mod mock {
                 confirm_responses: Mutex::new(VecDeque::new()),
                 input_responses: Mutex::new(VecDeque::new()),
                 steps: Mutex::new(Vec::new()),
+                dims: Mutex::new(Vec::new()),
                 warnings: Mutex::new(Vec::new()),
             }
         }
@@ -268,9 +270,45 @@ pub mod mock {
             self.warnings.lock().unwrap().push(msg.into());
         }
 
-        fn print_dim(&self, _msg: &str) {}
+        fn print_dim(&self, msg: &str) {
+            self.dims.lock().unwrap().push(msg.into());
+        }
 
         fn print_error(&self, _msg: &str) {}
+    }
+
+    impl UserInterface for Arc<MockUi> {
+        fn select(&self, prompt: &str, items: &[String]) -> Result<usize> {
+            self.as_ref().select(prompt, items)
+        }
+
+        fn multi_select(&self, prompt: &str, items: &[String]) -> Result<Vec<usize>> {
+            self.as_ref().multi_select(prompt, items)
+        }
+
+        fn confirm(&self, prompt: &str, default: bool) -> Result<bool> {
+            self.as_ref().confirm(prompt, default)
+        }
+
+        fn input(&self, prompt: &str, default: Option<&str>) -> Result<String> {
+            self.as_ref().input(prompt, default)
+        }
+
+        fn print_step(&self, msg: &str) {
+            self.as_ref().print_step(msg);
+        }
+
+        fn print_dim(&self, msg: &str) {
+            self.as_ref().print_dim(msg);
+        }
+
+        fn print_warning(&self, msg: &str) {
+            self.as_ref().print_warning(msg);
+        }
+
+        fn print_error(&self, msg: &str) {
+            self.as_ref().print_error(msg);
+        }
     }
 }
 

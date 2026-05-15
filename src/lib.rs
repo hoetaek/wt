@@ -39,6 +39,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 base,
             } => commands::batch::issue(ctx, issues, profile.as_deref(), base),
             BatchCommand::Run { batch } => commands::batch::run(ctx, batch),
+            BatchCommand::Show { batch } => commands::batch::show(ctx, batch.as_deref()),
         },
         Commands::Stack { command } => match command {
             StackCommand::New {

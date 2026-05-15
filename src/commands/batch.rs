@@ -5,6 +5,7 @@ use crate::commands::issue_snapshot::{IssueSnapshot, snapshot_issues};
 use crate::config::{Config, validate_profile_name};
 use crate::context::Ctx;
 use crate::error::WtError;
+use crate::services::git::GitService;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::fs;
@@ -41,11 +42,12 @@ pub fn issue(
     }
 
     let issue_snapshots = snapshot_issues(ctx, &selected_issues)?;
+    let resolved_base = resolve_batch_base(ctx, base)?;
     let now = current_utc_timestamp();
     let batch = BatchMetadata {
         profile: profile.map(str::to_string),
-        base_mode: base_mode_name(base).into(),
-        base: explicit_base(base),
+        base_mode: "explicit".into(),
+        base: Some(resolved_base),
         status: STATUS_PREPARED.into(),
         created_at: now.clone(),
         updated_at: now,
@@ -59,6 +61,26 @@ pub fn issue(
     ctx.ui
         .print_step(&format!("Prepared batch: {}", batch_path.display()));
     Ok(())
+}
+
+fn resolve_batch_base(ctx: &Ctx, base: &Option<String>) -> Result<String> {
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+    match BaseMode::from_raw(base) {
+        BaseMode::Explicit(branch) => Ok(branch),
+        BaseMode::Interactive => {
+            let branches = git.list_local_branches()?;
+            if branches.is_empty() {
+                bail!("No local branches found");
+            }
+            let idx = ctx.ui.select("Select base branch", &branches)?;
+            Ok(branches[idx].clone())
+        }
+        BaseMode::Current => git.current_branch(),
+        BaseMode::Default => {
+            let current = git.current_branch()?;
+            ctx.ui.input("Base branch", Some(&current))
+        }
+    }
 }
 
 pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
@@ -138,6 +160,55 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
 
     if metadata.status == STATUS_FAILED {
         bail!("Batch failed: {}", batch_path.display());
+    }
+
+    Ok(())
+}
+
+pub fn show(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
+    let batch_path = match batch {
+        Some(target) => resolve_batch_path(ctx, target)?,
+        None => latest_batch_path(ctx)?,
+    };
+    let metadata = read_batch_metadata(&batch_path)?;
+
+    ctx.ui
+        .print_step(&format!("Batch: {}", batch_path.display()));
+    ctx.ui.print_dim(&format!("  Status: {}", metadata.status));
+    ctx.ui
+        .print_dim(&format!("  Base: {}", describe_batch_base(&metadata)?));
+    ctx.ui.print_dim(&format!(
+        "  Profile: {}",
+        metadata.profile.as_deref().unwrap_or("(effective config)")
+    ));
+    ctx.ui.print_dim(&format!(
+        "  Items: {} ({})",
+        metadata.items.len(),
+        batch_status_counts(&metadata.items)
+    ));
+
+    for (idx, item) in metadata.items.iter().enumerate() {
+        let title = item.title();
+        let summary = if title.is_empty() {
+            format!("  {}. {} [{}]", idx + 1, item.label(), item.status)
+        } else {
+            format!(
+                "  {}. {} [{}] {}",
+                idx + 1,
+                item.label(),
+                item.status,
+                title
+            )
+        };
+        ctx.ui.print_dim(&summary);
+        if !item.branch.trim().is_empty() {
+            ctx.ui.print_dim(&format!("     Branch: {}", item.branch));
+        }
+        ctx.ui
+            .print_dim(&format!("     Snapshot: {}", item.snapshot));
+        if !item.error.trim().is_empty() {
+            ctx.ui.print_dim(&format!("     Error: {}", item.error));
+        }
     }
 
     Ok(())
@@ -473,19 +544,39 @@ fn latest_batch_path(ctx: &Ctx) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("No batch files found in .local/batches"))
 }
 
-fn base_mode_name(base: &Option<String>) -> &'static str {
-    match BaseMode::from_raw(base) {
-        BaseMode::Default => "default",
-        BaseMode::Interactive => "interactive",
-        BaseMode::Current => "current",
-        BaseMode::Explicit(_) => "explicit",
+fn describe_batch_base(batch: &BatchMetadata) -> Result<String> {
+    match batch.base_mode.as_str() {
+        "default" => Ok("prompt at run time".into()),
+        "interactive" => Ok("branch selector at run time".into()),
+        "current" => Ok("current branch at run time".into()),
+        "explicit" => batch
+            .base
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Batch base_mode is explicit but base is missing")),
+        other => bail!("Unknown batch base_mode: {other}"),
     }
 }
 
-fn explicit_base(base: &Option<String>) -> Option<String> {
-    match BaseMode::from_raw(base) {
-        BaseMode::Explicit(branch) => Some(branch),
-        BaseMode::Default | BaseMode::Interactive | BaseMode::Current => None,
+fn batch_status_counts(items: &[BatchItem]) -> String {
+    let statuses = [
+        STATUS_PREPARED,
+        STATUS_RUNNING,
+        STATUS_DONE,
+        STATUS_FAILED,
+        STATUS_SKIPPED,
+    ];
+    let counts = statuses
+        .iter()
+        .filter_map(|status| {
+            let count = items.iter().filter(|item| item.status == *status).count();
+            (count > 0).then(|| format!("{status}={count}"))
+        })
+        .collect::<Vec<_>>();
+
+    if counts.is_empty() {
+        "none".into()
+    } else {
+        counts.join(", ")
     }
 }
 
@@ -647,6 +738,7 @@ mod tests {
             r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor","description":"Long issue body"}"#,
             true,
         );
+        runner.add_response("main", true);
         let config = Config {
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
@@ -667,6 +759,8 @@ mod tests {
         let batch_path = latest_batch_path(&ctx).unwrap();
         let content = std::fs::read_to_string(batch_path).unwrap();
         assert!(!content.contains("profile ="));
+        assert!(content.contains("base_mode = \"explicit\""));
+        assert!(content.contains("base = \"main\""));
         assert!(content.contains("status = \"prepared\""));
         assert!(content.contains("[[items]]"));
         assert!(content.contains("kind = \"issue\""));
@@ -678,13 +772,14 @@ mod tests {
     }
 
     #[test]
-    fn issue_records_current_base_mode_for_dot_base() {
+    fn issue_resolves_current_base_for_dot_base() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response(
             r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor","description":"Long issue body"}"#,
             true,
         );
+        runner.add_response("feature", true);
         let config = Config {
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
@@ -704,8 +799,8 @@ mod tests {
 
         let batch_path = latest_batch_path(&ctx).unwrap();
         let content = std::fs::read_to_string(batch_path).unwrap();
-        assert!(content.contains("base_mode = \"current\""));
-        assert!(!content.contains("base ="));
+        assert!(content.contains("base_mode = \"explicit\""));
+        assert!(content.contains("base = \"feature\""));
     }
 
     #[test]
@@ -724,6 +819,40 @@ mod tests {
     }
 
     #[test]
+    fn issue_stores_default_base_prompt_result_at_prepare_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor","description":"Long issue body"}"#,
+            true,
+        );
+        runner.add_response("main", true);
+        let mut ui = MockUi::new();
+        ui.add_input("develop");
+        let config = Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            ..Config::default()
+        };
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        issue(&ctx, &["PROJ-123".into()], None, &None).unwrap();
+
+        let batch_path = latest_batch_path(&ctx).unwrap();
+        let content = std::fs::read_to_string(batch_path).unwrap();
+        assert!(content.contains("base_mode = \"explicit\""));
+        assert!(content.contains("base = \"develop\""));
+    }
+
+    #[test]
     fn issue_records_explicit_named_profile() {
         let dir = tempfile::tempdir().unwrap();
         let profile_dir = dir.path().join(".local/profiles/codex");
@@ -739,6 +868,7 @@ mod tests {
             r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor","description":"Long issue body"}"#,
             true,
         );
+        runner.add_response("main", true);
         let config = Config {
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,
@@ -762,6 +892,52 @@ mod tests {
     }
 
     #[test]
+    fn show_prints_batch_metadata_and_items() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = std::sync::Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui.clone()),
+        );
+        let batch_path = dir.path().join("batch.toml");
+        let batch = BatchMetadata {
+            profile: Some("codex".into()),
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PARTIAL.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            items: vec![BatchItem {
+                kind: "issue".into(),
+                id: "PROJ-123".into(),
+                source: "123".into(),
+                title: "Fix editor".into(),
+                branch: "alice/proj-123-fix-editor".into(),
+                snapshot: ".local/issues/PROJ-123.md".into(),
+                status: STATUS_FAILED.into(),
+                error: "missing snapshot".into(),
+            }],
+        };
+        write_batch_metadata(&batch_path, &batch).unwrap();
+
+        show(&ctx, Some(batch_path.to_str().unwrap())).unwrap();
+
+        let steps = ui.steps.lock().unwrap();
+        assert!(steps[0].contains("Batch:"));
+        let details = ui.dims.lock().unwrap().join("\n");
+        assert!(details.contains("Status: partial"));
+        assert!(details.contains("Base: main"));
+        assert!(details.contains("Profile: codex"));
+        assert!(details.contains("Items: 1 (failed=1)"));
+        assert!(details.contains("PROJ-123 [failed] Fix editor"));
+        assert!(details.contains("Branch: alice/proj-123-fix-editor"));
+        assert!(details.contains("Error: missing snapshot"));
+    }
+
+    #[test]
     fn issue_with_no_args_selects_issues_from_provider_list() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
@@ -773,6 +949,7 @@ mod tests {
             r#"{"identifier":"PROJ-2","title":"API","branchName":"alice/proj-2-api","description":"API body"}"#,
             true,
         );
+        runner.add_response("main", true);
         let mut ui = MockUi::new();
         ui.add_multi_select(vec![1]);
         let config = Config {

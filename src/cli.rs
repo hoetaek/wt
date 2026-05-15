@@ -76,7 +76,7 @@ pub enum Commands {
         #[arg(long, conflicts_with = "profile")]
         parallel: bool,
     },
-    /// Create or run issue batches
+    /// Prepare, inspect, or run batches
     Batch {
         #[command(subcommand)]
         command: BatchCommand,
@@ -220,7 +220,7 @@ pub enum InitSiteProvider {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum BatchCommand {
-    /// Snapshot issues and create a batch file without starting workspaces
+    /// Prepare issues as a batch file without starting workspaces
     #[command(alias = "prepare")]
     Issue {
         /// Issue identifiers to snapshot (omit to select interactively)
@@ -236,6 +236,11 @@ pub enum BatchCommand {
     Run {
         /// Batch TOML path, or "latest" for the newest local batch
         batch: String,
+    },
+    /// Show batch metadata and item statuses
+    Show {
+        /// Batch TOML path, shorthand id, or "latest" (default)
+        batch: Option<String>,
     },
 }
 
@@ -564,6 +569,34 @@ mod tests {
                 command: BatchCommand::Run { ref batch }
             }) if batch == "latest"
         ));
+    }
+
+    #[test]
+    fn batch_show_accepts_optional_target() {
+        let cli = parse(&["wt", "batch", "show"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Show { batch: None }
+            })
+        ));
+
+        let cli = parse(&["wt", "batch", "show", "latest"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Show { ref batch }
+            }) if batch.as_deref() == Some("latest")
+        ));
+    }
+
+    #[test]
+    fn batch_help_uses_general_batch_description() {
+        let mut command = Cli::command();
+        let batch = command.find_subcommand_mut("batch").unwrap();
+        let help = batch.render_help().to_string();
+        assert!(help.contains("Prepare, inspect, or run batches"));
+        assert!(help.contains("show"));
     }
 
     #[test]
