@@ -6,11 +6,14 @@ use crate::config::{Config, validate_profile_name};
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::git::GitService;
+use crate::worktree_naming;
 use anyhow::{Result, bail};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const STATUS_PREPARED: &str = "prepared";
@@ -115,7 +118,7 @@ fn resolve_batch_base(ctx: &Ctx, base: &Option<String>) -> Result<String> {
     Ok(base)
 }
 
-pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
+pub fn run(ctx: &Ctx, batch: &str, jobs: usize) -> Result<()> {
     let batch_path = resolve_batch_path(ctx, batch)?;
     let mut metadata = read_batch_metadata(&batch_path)?;
     validate_profile(ctx, metadata.profile.as_deref())?;
@@ -129,63 +132,413 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
         .iter()
         .any(|task| is_runnable_status(&task.status));
     let base = if has_runnable_task {
-        Some(batch_base_option(&metadata)?)
+        batch_base_option(&metadata)?
     } else {
         None
     };
+    let ran_any = if jobs == 1 {
+        run_batch_sequential(ctx, &batch_path, &mut metadata, base)?
+    } else {
+        run_batch_parallel(ctx, &batch_path, &mut metadata, base, jobs)?
+    };
+
+    finish_batch_run(ctx, &batch_path, &mut metadata, ran_any)
+}
+
+fn run_batch_sequential(
+    ctx: &Ctx,
+    batch_path: &Path,
+    metadata: &mut BatchMetadata,
+    base: Option<String>,
+) -> Result<bool> {
     let mut ran_any = false;
 
     for idx in 0..metadata.tasks.len() {
-        let current_status = metadata.tasks[idx].status.as_str();
-        if !is_runnable_status(current_status) {
-            ctx.ui.print_step(&format!(
-                "Skipping {} ({current_status})",
-                metadata.tasks[idx].label()
-            ));
+        let Some(execution) = next_task_execution(ctx, metadata, idx, base.clone(), true)? else {
             continue;
-        }
-
-        let base = base
-            .as_ref()
-            .expect("batch base is validated before running a task");
+        };
 
         ran_any = true;
-        metadata.status = STATUS_RUNNING.into();
-        metadata.updated_at = current_utc_timestamp();
-        metadata.tasks[idx].status = STATUS_RUNNING.into();
-        metadata.tasks[idx].error.clear();
-        write_batch_metadata(&batch_path, &metadata)?;
+        apply_task_event(
+            ctx,
+            batch_path,
+            metadata,
+            TaskEvent::Started { idx: execution.idx },
+        )?;
 
-        let result = run_batch_task(ctx, &metadata.tasks[idx], base, metadata.profile.as_deref());
+        let result = run_batch_task(ctx, &execution);
+        let cancelled = apply_task_result(ctx, batch_path, metadata, execution.idx, result)?;
+        if cancelled {
+            return Ok(ran_any);
+        }
+    }
 
-        match result {
-            Ok(()) => {
-                metadata.tasks[idx].status = STATUS_DONE.into();
-                metadata.tasks[idx].error.clear();
-            }
-            Err(err) => {
-                if err
-                    .downcast_ref::<WtError>()
-                    .is_some_and(|err| matches!(err, WtError::Cancelled))
-                {
-                    metadata.tasks[idx].status = STATUS_SKIPPED.into();
-                    metadata.tasks[idx].error = "User cancelled".into();
-                    metadata.status = summarize_batch_status(&metadata.tasks);
-                    metadata.updated_at = current_utc_timestamp();
-                    write_batch_metadata(&batch_path, &metadata)?;
-                    return Ok(());
+    Ok(ran_any)
+}
+
+fn run_batch_parallel(
+    ctx: &Ctx,
+    batch_path: &Path,
+    metadata: &mut BatchMetadata,
+    base: Option<String>,
+    jobs: usize,
+) -> Result<bool> {
+    let mut touched_any = false;
+    let mut executions = Vec::new();
+
+    for idx in 0..metadata.tasks.len() {
+        let Some(execution) = next_task_execution(ctx, metadata, idx, base.clone(), false)? else {
+            continue;
+        };
+        touched_any = true;
+        executions.push(execution);
+    }
+
+    let (preflight_failures, runnable_executions) = preflight_parallel_executions(ctx, &executions);
+    for failure in preflight_failures {
+        apply_task_event(
+            ctx,
+            batch_path,
+            metadata,
+            TaskEvent::Failed {
+                idx: failure.idx,
+                error: failure.error,
+            },
+        )?;
+    }
+
+    if runnable_executions.is_empty() {
+        return Ok(touched_any);
+    }
+
+    run_bounded_workers(ctx, batch_path, metadata, runnable_executions, jobs)?;
+    Ok(touched_any)
+}
+
+fn next_task_execution(
+    ctx: &Ctx,
+    metadata: &BatchMetadata,
+    idx: usize,
+    base: Option<String>,
+    allow_interactive_prompts: bool,
+) -> Result<Option<BatchTaskExecution>> {
+    let current_status = metadata.tasks[idx].status.as_str();
+    if !is_runnable_status(current_status) {
+        ctx.ui.print_step(&format!(
+            "Skipping {} ({current_status})",
+            metadata.tasks[idx].label()
+        ));
+        return Ok(None);
+    }
+
+    Ok(Some(BatchTaskExecution {
+        idx,
+        batch_task: metadata.tasks[idx].clone(),
+        base: base.expect("batch base is validated before running a task"),
+        profile: metadata.profile.clone(),
+        allow_interactive_prompts,
+    }))
+}
+
+fn preflight_parallel_executions(
+    ctx: &Ctx,
+    executions: &[BatchTaskExecution],
+) -> (Vec<PreflightFailure>, Vec<BatchTaskExecution>) {
+    let mut failures = Vec::new();
+    let mut runnable = Vec::new();
+    let mut branches: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut paths: HashMap<PathBuf, Vec<usize>> = HashMap::new();
+    let mut plans = Vec::new();
+
+    for execution in executions {
+        match preflight_parallel_execution(ctx, execution) {
+            Ok(plan) => {
+                for branch in &plan.branches {
+                    branches
+                        .entry(branch.clone())
+                        .or_default()
+                        .push(execution.idx);
                 }
+                for path in &plan.paths {
+                    paths.entry(path.clone()).or_default().push(execution.idx);
+                }
+                plans.push((execution, plan));
+            }
+            Err(err) => failures.push(PreflightFailure {
+                idx: execution.idx,
+                error: err.to_string(),
+            }),
+        }
+    }
 
-                metadata.tasks[idx].status = STATUS_FAILED.into();
-                metadata.tasks[idx].error = err.to_string();
+    let mut failed_indices = HashSet::new();
+    for (branch, indices) in branches {
+        if indices.len() > 1 {
+            for idx in indices {
+                if failed_indices.insert(idx) {
+                    failures.push(PreflightFailure {
+                        idx,
+                        error: format!(
+                            "Multiple runnable batch tasks target branch {branch}; adjust task branches before parallel run"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    for (path, indices) in paths {
+        if indices.len() > 1 {
+            for idx in indices {
+                if failed_indices.insert(idx) {
+                    failures.push(PreflightFailure {
+                        idx,
+                        error: format!(
+                            "Multiple runnable batch tasks target worktree path {}; adjust task branches before parallel run",
+                            path.display()
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    for (execution, _) in plans {
+        if !failed_indices.contains(&execution.idx) {
+            runnable.push(execution.clone());
+        }
+    }
+
+    (dedupe_preflight_failures(failures), runnable)
+}
+
+struct ParallelPreflightPlan {
+    branches: Vec<String>,
+    paths: Vec<PathBuf>,
+}
+
+fn preflight_parallel_execution(
+    ctx: &Ctx,
+    execution: &BatchTaskExecution,
+) -> Result<ParallelPreflightPlan> {
+    let batch_task = &execution.batch_task;
+    let task_doc = task::read_task_document(ctx, &batch_task.task)?;
+    let branch_name = prepared_branch_name(&task_doc.branch);
+    if branch_name.is_none() && task_doc.origin.is_none() {
+        bail!("Batch task {} has no branch", batch_task.label());
+    }
+
+    let Some(branch_name) = branch_name else {
+        return Ok(ParallelPreflightPlan {
+            branches: Vec::new(),
+            paths: Vec::new(),
+        });
+    };
+
+    let identifier = task_doc.identifier_or_key(&batch_task.task);
+    let title = task_doc.title_or_key(&batch_task.task);
+    let naming = worktree_naming::generate(ctx, &identifier, &title, Some(branch_name))?;
+    let plans = issue::planned_worktrees_for_prepared_issue(
+        ctx,
+        &title,
+        branch_name,
+        execution.profile.as_deref(),
+        naming.as_ref(),
+    )?;
+
+    for plan in &plans {
+        if plan.path.exists() {
+            bail!(
+                "Worktree {} already exists; parallel batch workers cannot prompt to delete or open it",
+                plan.path.display()
+            );
+        }
+    }
+
+    Ok(ParallelPreflightPlan {
+        branches: plans.iter().map(|plan| plan.branch_name.clone()).collect(),
+        paths: plans.into_iter().map(|plan| plan.path).collect(),
+    })
+}
+
+fn dedupe_preflight_failures(failures: Vec<PreflightFailure>) -> Vec<PreflightFailure> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+    for failure in failures {
+        if seen.insert((failure.idx, failure.error.clone())) {
+            deduped.push(failure);
+        }
+    }
+    deduped
+}
+
+fn run_bounded_workers(
+    ctx: &Ctx,
+    batch_path: &Path,
+    metadata: &mut BatchMetadata,
+    executions: Vec<BatchTaskExecution>,
+    jobs: usize,
+) -> Result<()> {
+    let worker_count = jobs.max(1);
+    let (tx, rx) = mpsc::channel::<BatchTaskCompletion>();
+    let mut next = 0;
+    let mut active = 0;
+    let mut cancelled = false;
+
+    thread::scope(|scope| -> Result<()> {
+        loop {
+            while !cancelled && active < worker_count && next < executions.len() {
+                let execution = executions[next].clone();
+                apply_task_event(
+                    ctx,
+                    batch_path,
+                    metadata,
+                    TaskEvent::Started { idx: execution.idx },
+                )?;
+                let tx = tx.clone();
+                scope.spawn(move || {
+                    let result = run_batch_task(ctx, &execution);
+                    let _ = tx.send(BatchTaskCompletion {
+                        idx: execution.idx,
+                        result,
+                    });
+                });
+                active += 1;
+                next += 1;
+            }
+
+            if active == 0 {
+                break;
+            }
+
+            let completion = rx
+                .recv()
+                .map_err(|_| anyhow::anyhow!("Batch worker result channel closed"))?;
+            active -= 1;
+            if apply_task_result(ctx, batch_path, metadata, completion.idx, completion.result)? {
+                cancelled = true;
             }
         }
 
-        metadata.status = summarize_batch_status(&metadata.tasks);
-        metadata.updated_at = current_utc_timestamp();
-        write_batch_metadata(&batch_path, &metadata)?;
+        Ok(())
+    })?;
+
+    if cancelled {
+        for execution in executions.iter().skip(next) {
+            apply_task_event(
+                ctx,
+                batch_path,
+                metadata,
+                TaskEvent::Skipped {
+                    idx: execution.idx,
+                    error: "Skipped after user cancellation".into(),
+                },
+            )?;
+        }
     }
 
+    Ok(())
+}
+
+fn apply_task_result(
+    ctx: &Ctx,
+    batch_path: &Path,
+    metadata: &mut BatchMetadata,
+    idx: usize,
+    result: Result<BatchTaskSuccess>,
+) -> Result<bool> {
+    match result {
+        Ok(success) => {
+            if let Some(branch) = success.branch_update {
+                if let Err(err) = task::write_task_branch(ctx, &metadata.tasks[idx].task, &branch) {
+                    apply_task_event(
+                        ctx,
+                        batch_path,
+                        metadata,
+                        TaskEvent::Failed {
+                            idx,
+                            error: err.to_string(),
+                        },
+                    )?;
+                    return Ok(false);
+                }
+            }
+            apply_task_event(ctx, batch_path, metadata, TaskEvent::Succeeded { idx })?;
+            Ok(false)
+        }
+        Err(err) if is_cancelled(&err) => {
+            apply_task_event(ctx, batch_path, metadata, TaskEvent::Cancelled { idx })?;
+            Ok(true)
+        }
+        Err(err) => {
+            apply_task_event(
+                ctx,
+                batch_path,
+                metadata,
+                TaskEvent::Failed {
+                    idx,
+                    error: err.to_string(),
+                },
+            )?;
+            Ok(false)
+        }
+    }
+}
+
+fn apply_task_event(
+    ctx: &Ctx,
+    batch_path: &Path,
+    metadata: &mut BatchMetadata,
+    event: TaskEvent,
+) -> Result<()> {
+    match event {
+        TaskEvent::Started { idx } => {
+            ctx.ui
+                .print_step(&format!("Starting {}", metadata.tasks[idx].label()));
+            metadata.status = STATUS_RUNNING.into();
+            metadata.tasks[idx].status = STATUS_RUNNING.into();
+            metadata.tasks[idx].error.clear();
+        }
+        TaskEvent::Succeeded { idx } => {
+            ctx.ui
+                .print_step(&format!("Succeeded {}", metadata.tasks[idx].label()));
+            metadata.tasks[idx].status = STATUS_DONE.into();
+            metadata.tasks[idx].error.clear();
+        }
+        TaskEvent::Failed { idx, error } => {
+            ctx.ui
+                .print_warning(&format!("Failed {}: {error}", metadata.tasks[idx].label()));
+            metadata.tasks[idx].status = STATUS_FAILED.into();
+            metadata.tasks[idx].error = error;
+        }
+        TaskEvent::Cancelled { idx } => {
+            ctx.ui.print_warning(&format!(
+                "Cancelled {}; not starting additional batch tasks",
+                metadata.tasks[idx].label()
+            ));
+            metadata.tasks[idx].status = STATUS_SKIPPED.into();
+            metadata.tasks[idx].error = "User cancelled".into();
+        }
+        TaskEvent::Skipped { idx, error } => {
+            ctx.ui.print_step(&format!(
+                "Skipping {} ({error})",
+                metadata.tasks[idx].label()
+            ));
+            metadata.tasks[idx].status = STATUS_SKIPPED.into();
+            metadata.tasks[idx].error = error;
+        }
+    }
+
+    metadata.status = summarize_batch_status(&metadata.tasks);
+    metadata.updated_at = current_utc_timestamp();
+    write_batch_metadata(batch_path, metadata)
+}
+
+fn finish_batch_run(
+    ctx: &Ctx,
+    batch_path: &Path,
+    metadata: &mut BatchMetadata,
+    ran_any: bool,
+) -> Result<()> {
     if !ran_any {
         ctx.ui
             .print_step("No prepared or failed tasks to run in this batch.");
@@ -193,7 +546,7 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
 
     metadata.status = summarize_batch_status(&metadata.tasks);
     metadata.updated_at = current_utc_timestamp();
-    write_batch_metadata(&batch_path, &metadata)?;
+    write_batch_metadata(batch_path, metadata)?;
     ctx.ui
         .print_step(&format!("Batch status: {}", metadata.status));
 
@@ -202,6 +555,11 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn is_cancelled(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<WtError>()
+        .is_some_and(|err| matches!(err, WtError::Cancelled))
 }
 
 pub fn show(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
@@ -416,12 +774,39 @@ fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn run_batch_task(
-    ctx: &Ctx,
-    batch_task: &BatchTask,
-    base: &Option<String>,
-    profile: Option<&str>,
-) -> Result<()> {
+#[derive(Clone)]
+struct BatchTaskExecution {
+    idx: usize,
+    batch_task: BatchTask,
+    base: String,
+    profile: Option<String>,
+    allow_interactive_prompts: bool,
+}
+
+struct BatchTaskSuccess {
+    branch_update: Option<String>,
+}
+
+struct BatchTaskCompletion {
+    idx: usize,
+    result: Result<BatchTaskSuccess>,
+}
+
+struct PreflightFailure {
+    idx: usize,
+    error: String,
+}
+
+enum TaskEvent {
+    Started { idx: usize },
+    Succeeded { idx: usize },
+    Failed { idx: usize, error: String },
+    Cancelled { idx: usize },
+    Skipped { idx: usize, error: String },
+}
+
+fn run_batch_task(ctx: &Ctx, execution: &BatchTaskExecution) -> Result<BatchTaskSuccess> {
+    let batch_task = &execution.batch_task;
     let (task_doc, task_path, content) = task::read_task_file(ctx, &batch_task.task)?;
     let branch_name = prepared_branch_name(&task_doc.branch);
     if branch_name.is_none() && task_doc.origin.is_none() {
@@ -429,31 +814,30 @@ fn run_batch_task(
     }
     let identifier = task_doc.identifier_or_key(&batch_task.task);
     let title = task_doc.title_or_key(&batch_task.task);
+    let base = Some(execution.base.clone());
+    let profile = execution.profile.as_deref();
 
-    let result = issue::run_with_issue_snapshot(
-        ctx,
-        base,
-        profile,
-        false,
-        issue::PreparedIssueContext {
-            identifier: &identifier,
-            title: &title,
-            branch_name,
-            mode: task_doc.mode(),
-            prompt_intro: "Use this task before changing code.",
-            snapshot: issue::IssueSnapshotContext {
-                path_label: "Task path",
-                path: &task_path,
-                content: &content,
-            },
+    let prepared = issue::PreparedIssueContext {
+        identifier: &identifier,
+        title: &title,
+        branch_name,
+        mode: task_doc.mode(),
+        prompt_intro: "Use this task before changing code.",
+        snapshot: issue::IssueSnapshotContext {
+            path_label: "Task path",
+            path: &task_path,
+            content: &content,
         },
-    )?;
+    };
+    let result = if execution.allow_interactive_prompts {
+        issue::run_with_issue_snapshot(ctx, &base, profile, false, prepared)?
+    } else {
+        issue::run_with_issue_snapshot_non_interactive(ctx, &base, profile, false, prepared)?
+    };
 
-    if task_doc.branch != result.branch_name {
-        task::write_task_branch(ctx, &batch_task.task, &result.branch_name)?;
-    }
-
-    Ok(())
+    Ok(BatchTaskSuccess {
+        branch_update: (task_doc.branch != result.branch_name).then_some(result.branch_name),
+    })
 }
 
 fn prepared_branch_name(branch: &str) -> Option<&str> {
@@ -765,10 +1149,14 @@ fn toml_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::{
-        Config, EditorPlacement, IssueProviderType, IssuesConfig, WorktreeNamingConfig,
+        Config, EditorPlacement, IssueProviderType, IssuesConfig, WorktreeConfig,
+        WorktreeNamingConfig,
     };
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::{CmdOutput, CommandRunner};
+    use anyhow::Result;
+    use std::sync::Mutex;
 
     #[test]
     fn civil_date_matches_unix_epoch() {
@@ -799,6 +1187,99 @@ mod tests {
     fn write_batch_file(path: &Path, batch: &BatchMetadata) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         write_batch_metadata(path, batch).unwrap();
+    }
+
+    struct ParallelBatchRunner {
+        fail_worktree_branch: Option<String>,
+        calls: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl ParallelBatchRunner {
+        fn new() -> Self {
+            Self {
+                fail_worktree_branch: None,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn failing_worktree_add(branch: &str) -> Self {
+            Self {
+                fail_worktree_branch: Some(branch.into()),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<Vec<String>> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl CommandRunner for std::sync::Arc<ParallelBatchRunner> {
+        fn run(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            cwd: Option<&std::path::Path>,
+        ) -> Result<CmdOutput> {
+            assert_eq!(cmd, "git");
+            self.calls
+                .lock()
+                .unwrap()
+                .push(args.iter().map(|arg| arg.to_string()).collect());
+
+            let success = |stdout: &str| {
+                Ok(CmdOutput {
+                    stdout: stdout.into(),
+                    stderr: String::new(),
+                    success: true,
+                })
+            };
+            let failure = |stderr: &str| {
+                Ok(CmdOutput {
+                    stdout: String::new(),
+                    stderr: stderr.into(),
+                    success: false,
+                })
+            };
+
+            match args {
+                ["worktree", "list", "--porcelain"] => success(&format!(
+                    "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                    cwd.unwrap().display()
+                )),
+                ["fetch", "origin"] => success(""),
+                ["show-ref", "--verify", "--quiet", reference] => {
+                    if *reference == "refs/heads/main" {
+                        success("")
+                    } else {
+                        failure("")
+                    }
+                }
+                ["worktree", "add", "-b", branch, _path, "main"] => {
+                    if self.fail_worktree_branch.as_deref() == Some(*branch) {
+                        failure("worktree add failed")
+                    } else {
+                        success("")
+                    }
+                }
+                ["config", key, "main"] if key.starts_with("branch.") => success(""),
+                other => failure(&format!("unexpected git args: {other:?}")),
+            }
+        }
+
+        fn has_command(&self, _cmd: &str) -> bool {
+            false
+        }
+    }
+
+    fn parallel_batch_config() -> Config {
+        Config {
+            worktree: WorktreeConfig {
+                path: Some(".local/worktrees/{{branch_slug}}".into()),
+                ..WorktreeConfig::default()
+            },
+            ..Config::default()
+        }
     }
 
     #[test]
@@ -1571,7 +2052,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        run(&ctx, batch_path.to_str().unwrap()).unwrap();
+        run(&ctx, batch_path.to_str().unwrap(), 1).unwrap();
 
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.status, STATUS_DONE);
@@ -1600,7 +2081,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        let result = run(&ctx, batch_path.to_str().unwrap());
+        let result = run(&ctx, batch_path.to_str().unwrap(), 1);
 
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
@@ -1633,7 +2114,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        let result = run(&ctx, batch_path.to_str().unwrap());
+        let result = run(&ctx, batch_path.to_str().unwrap(), 1);
 
         assert!(result.is_err());
         assert!(
@@ -1647,6 +2128,217 @@ error = ""
         assert_eq!(updated.status, STATUS_PREPARED);
         assert_eq!(updated.tasks[0].status, STATUS_PREPARED);
         assert!(updated.tasks[0].error.is_empty());
+    }
+
+    #[test]
+    fn run_parallel_marks_multiple_tasks_done_through_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task_file(dir.path(), "task-one", "Task one", "alice/task-one", "");
+        write_task_file(dir.path(), "task-two", "Task two", "alice/task-two", "");
+        let runner = std::sync::Arc::new(ParallelBatchRunner::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            parallel_batch_config(),
+            Box::new(runner.clone()),
+            Box::new(MockUi::new()),
+        );
+        let batch_path = dir.path().join("batch.toml");
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            tasks: vec![
+                batch_task("task-one", STATUS_PREPARED, ""),
+                batch_task("task-two", STATUS_PREPARED, ""),
+            ],
+        };
+        write_batch_metadata(&batch_path, &batch).unwrap();
+
+        run(&ctx, batch_path.to_str().unwrap(), 2).unwrap();
+
+        let updated = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(updated.status, STATUS_DONE);
+        assert_eq!(updated.tasks[0].status, STATUS_DONE);
+        assert_eq!(updated.tasks[1].status, STATUS_DONE);
+        let calls = runner.calls();
+        let worktree_adds = calls
+            .iter()
+            .filter(|args| args.starts_with(&["worktree".into(), "add".into(), "-b".into()]))
+            .count();
+        assert_eq!(worktree_adds, 2);
+    }
+
+    #[test]
+    fn run_parallel_records_worker_failure_and_keeps_other_result() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task_file(dir.path(), "task-ok", "Task ok", "alice/task-ok", "");
+        write_task_file(dir.path(), "task-fail", "Task fail", "alice/task-fail", "");
+        let runner =
+            std::sync::Arc::new(ParallelBatchRunner::failing_worktree_add("alice/task-fail"));
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            parallel_batch_config(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let batch_path = dir.path().join("batch.toml");
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            tasks: vec![
+                batch_task("task-ok", STATUS_PREPARED, ""),
+                batch_task("task-fail", STATUS_PREPARED, ""),
+            ],
+        };
+        write_batch_metadata(&batch_path, &batch).unwrap();
+
+        let result = run(&ctx, batch_path.to_str().unwrap(), 2);
+
+        assert!(result.is_err());
+        let updated = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(updated.status, STATUS_FAILED);
+        assert_eq!(updated.tasks[0].status, STATUS_DONE);
+        assert_eq!(updated.tasks[1].status, STATUS_FAILED);
+        assert!(updated.tasks[1].error.contains("worktree add failed"));
+    }
+
+    #[test]
+    fn run_parallel_skips_non_runnable_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task_file(dir.path(), "task-one", "Task one", "alice/task-one", "");
+        write_task_file(dir.path(), "task-done", "Task done", "alice/task-done", "");
+        let runner = std::sync::Arc::new(ParallelBatchRunner::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            parallel_batch_config(),
+            Box::new(runner.clone()),
+            Box::new(MockUi::new()),
+        );
+        let batch_path = dir.path().join("batch.toml");
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PARTIAL.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            tasks: vec![
+                batch_task("task-one", STATUS_PREPARED, ""),
+                batch_task("task-done", STATUS_DONE, ""),
+            ],
+        };
+        write_batch_metadata(&batch_path, &batch).unwrap();
+
+        run(&ctx, batch_path.to_str().unwrap(), 2).unwrap();
+
+        let updated = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(updated.status, STATUS_DONE);
+        assert_eq!(updated.tasks[0].status, STATUS_DONE);
+        assert_eq!(updated.tasks[1].status, STATUS_DONE);
+        let calls = runner.calls();
+        let worktree_adds = calls
+            .iter()
+            .filter(|args| args.starts_with(&["worktree".into(), "add".into(), "-b".into()]))
+            .count();
+        assert_eq!(worktree_adds, 1);
+    }
+
+    #[test]
+    fn run_parallel_marks_existing_worktree_prompt_case_failed_before_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task_file(dir.path(), "task-one", "Task one", "alice/task-one", "");
+        let existing_path = dir.path().join(".local/worktrees/task-one");
+        std::fs::create_dir_all(&existing_path).unwrap();
+        let runner = std::sync::Arc::new(ParallelBatchRunner::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            parallel_batch_config(),
+            Box::new(runner.clone()),
+            Box::new(MockUi::new()),
+        );
+        let batch_path = dir.path().join("batch.toml");
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            tasks: vec![batch_task("task-one", STATUS_PREPARED, "")],
+        };
+        write_batch_metadata(&batch_path, &batch).unwrap();
+
+        let result = run(&ctx, batch_path.to_str().unwrap(), 2);
+
+        assert!(result.is_err());
+        let updated = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(updated.status, STATUS_FAILED);
+        assert_eq!(updated.tasks[0].status, STATUS_FAILED);
+        assert!(
+            updated.tasks[0]
+                .error
+                .contains("parallel batch workers cannot prompt")
+        );
+        assert!(runner.calls().is_empty());
+    }
+
+    #[test]
+    fn run_parallel_marks_duplicate_branch_preflight_failed_before_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task_file(dir.path(), "task-one", "Task one", "alice/same-task", "");
+        write_task_file(dir.path(), "task-two", "Task two", "alice/same-task", "");
+        let runner = std::sync::Arc::new(ParallelBatchRunner::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            parallel_batch_config(),
+            Box::new(runner.clone()),
+            Box::new(MockUi::new()),
+        );
+        let batch_path = dir.path().join("batch.toml");
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            tasks: vec![
+                batch_task("task-one", STATUS_PREPARED, ""),
+                batch_task("task-two", STATUS_PREPARED, ""),
+            ],
+        };
+        write_batch_metadata(&batch_path, &batch).unwrap();
+
+        let result = run(&ctx, batch_path.to_str().unwrap(), 2);
+
+        assert!(result.is_err());
+        let updated = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(updated.status, STATUS_FAILED);
+        assert_eq!(updated.tasks[0].status, STATUS_FAILED);
+        assert_eq!(updated.tasks[1].status, STATUS_FAILED);
+        assert!(
+            updated.tasks[0]
+                .error
+                .contains("target branch alice/same-task")
+        );
+        assert!(
+            updated.tasks[1]
+                .error
+                .contains("target branch alice/same-task")
+        );
+        assert!(runner.calls().is_empty());
     }
 
     #[test]
@@ -1693,7 +2385,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        run(&ctx, batch_path.to_str().unwrap()).unwrap();
+        run(&ctx, batch_path.to_str().unwrap(), 1).unwrap();
 
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.base_mode, "explicit");

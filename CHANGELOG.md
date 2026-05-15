@@ -8,6 +8,8 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added `wt batch run <batch|latest> --jobs <N>` for bounded concurrent batch
+  execution while keeping batch metadata writes coordinated through one writer.
 - Added `wt batch clean [BATCH]` for explicitly deleting completed batch task
   snapshot files while keeping the batch metadata record.
 - Changed the package version line back to `0.3.x`; current `wt` development is
