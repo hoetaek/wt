@@ -23,15 +23,15 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             target,
             base,
             profile,
-            parallel,
-        } => commands::issue::run(ctx, target.as_deref(), base, profile.as_deref(), *parallel),
+            matrix,
+        } => commands::issue::run(ctx, target.as_deref(), base, profile.as_deref(), *matrix),
         Commands::Pr { number, profile } => commands::pr::run(ctx, *number, profile.as_deref()),
         Commands::New {
             name,
             base,
             profile,
-            parallel,
-        } => commands::new::run(ctx, name, base, profile.as_deref(), *parallel),
+            matrix,
+        } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
         Commands::Batch { command } => match command {
             BatchCommand::Task {
                 tasks,
@@ -63,9 +63,9 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             StackCommand::Edit { stack } => commands::stack::edit(ctx, stack.as_deref()),
             StackCommand::Complete {
                 stack,
-                item,
+                task,
                 run_next,
-            } => commands::stack::complete(ctx, stack, item.as_deref(), *run_next),
+            } => commands::stack::complete(ctx, stack, task.as_deref(), *run_next),
         },
         Commands::List { wide } => commands::list::run(ctx, *wide),
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),

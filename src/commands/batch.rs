@@ -123,11 +123,11 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
         bail!("Batch has no tasks: {}", batch_path.display());
     }
 
-    let has_runnable_item = metadata
+    let has_runnable_task = metadata
         .tasks
         .iter()
-        .any(|item| is_runnable_status(&item.status));
-    let base = if has_runnable_item {
+        .any(|task| is_runnable_status(&task.status));
+    let base = if has_runnable_task {
         Some(batch_base_option(&metadata)?)
     } else {
         None
@@ -146,7 +146,7 @@ pub fn run(ctx: &Ctx, batch: &str) -> Result<()> {
 
         let base = base
             .as_ref()
-            .expect("batch base is validated before running an item");
+            .expect("batch base is validated before running a task");
 
         ran_any = true;
         metadata.status = STATUS_RUNNING.into();
@@ -293,7 +293,7 @@ struct BatchMetadata {
 #[serde(deny_unknown_fields)]
 struct BatchTask {
     task: String,
-    #[serde(default = "default_issue_status")]
+    #[serde(default = "default_task_status")]
     status: String,
     #[serde(default)]
     error: String,
@@ -321,7 +321,7 @@ fn default_batch_status() -> String {
     STATUS_PREPARED.into()
 }
 
-fn default_issue_status() -> String {
+fn default_task_status() -> String {
     STATUS_PREPARED.into()
 }
 
@@ -923,7 +923,7 @@ mod tests {
     }
 
     #[test]
-    fn show_prints_batch_metadata_and_items() {
+    fn show_prints_batch_metadata_and_tasks() {
         let dir = tempfile::tempdir().unwrap();
         let ui = std::sync::Arc::new(MockUi::new());
         let ctx = Ctx::new(
@@ -1189,29 +1189,29 @@ error = ""
     }
 
     #[test]
-    fn summarize_status_distinguishes_batch_and_item_state() {
-        let item = |status: &str| batch_task("PROJ-123", status, "");
+    fn summarize_status_distinguishes_batch_and_task_state() {
+        let task = |status: &str| batch_task("PROJ-123", status, "");
 
         assert_eq!(
-            summarize_batch_status(&[item(STATUS_PREPARED)]),
+            summarize_batch_status(&[task(STATUS_PREPARED)]),
             STATUS_PREPARED
         );
         assert_eq!(
-            summarize_batch_status(&[item(STATUS_DONE), item(STATUS_PREPARED)]),
+            summarize_batch_status(&[task(STATUS_DONE), task(STATUS_PREPARED)]),
             STATUS_PARTIAL
         );
         assert_eq!(
-            summarize_batch_status(&[item(STATUS_DONE), item(STATUS_FAILED)]),
+            summarize_batch_status(&[task(STATUS_DONE), task(STATUS_FAILED)]),
             STATUS_FAILED
         );
         assert_eq!(
-            summarize_batch_status(&[item(STATUS_DONE), item(STATUS_SKIPPED)]),
+            summarize_batch_status(&[task(STATUS_DONE), task(STATUS_SKIPPED)]),
             STATUS_DONE
         );
     }
 
     #[test]
-    fn run_skips_done_items_without_touching_issue_provider() {
+    fn run_skips_done_tasks_without_touching_issue_provider() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::new(
             dir.path().to_path_buf(),

@@ -40,19 +40,19 @@ pub fn run(
     target: Option<&str>,
     base_raw: &Option<String>,
     profile: Option<&str>,
-    parallel: bool,
+    matrix: bool,
 ) -> Result<()> {
-    run_inner(ctx, target, base_raw, profile, parallel, None).map(|_| ())
+    run_inner(ctx, target, base_raw, profile, matrix, None).map(|_| ())
 }
 
 pub(crate) fn run_with_issue_snapshot(
     ctx: &Ctx,
     base_raw: &Option<String>,
     profile: Option<&str>,
-    parallel: bool,
+    matrix: bool,
     prepared: PreparedIssueContext<'_>,
 ) -> Result<IssueRunResult> {
-    run_inner(ctx, None, base_raw, profile, parallel, Some(&prepared))
+    run_inner(ctx, None, base_raw, profile, matrix, Some(&prepared))
 }
 
 fn run_inner(
@@ -60,7 +60,7 @@ fn run_inner(
     target: Option<&str>,
     base_raw: &Option<String>,
     profile: Option<&str>,
-    parallel: bool,
+    matrix: bool,
     prepared_issue: Option<&PreparedIssueContext<'_>>,
 ) -> Result<IssueRunResult> {
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
@@ -141,7 +141,7 @@ fn run_inner(
     };
     let branch_name = ensured_branch.name;
 
-    if parallel || profile.is_some() {
+    if matrix || profile.is_some() {
         let results = run_profiles(
             ctx,
             &title,
@@ -718,23 +718,23 @@ mod tests {
             ..Config::default()
         };
         let snapshot = IssueSnapshotContext {
-            path_label: "Stack item",
-            path: "stack:add-schema",
-            content: "# Add schema\n\n- Kind: `new`",
+            path_label: "Task path",
+            path: ".local/tasks/add-schema.toml",
+            content: "# Add schema\n\nbranch = \"add-schema\"",
         };
 
         let config = profile_config_with_issue_snapshot(
             &config,
             &snapshot,
             "new",
-            "Use this stack item before changing code.",
+            "Use this task before changing code.",
         );
 
         let mut agent = config.agent.unwrap();
         let new_prompts = agent.prompt.remove("new").unwrap();
         assert_eq!(new_prompts.len(), 1);
-        assert!(new_prompts[0].contains("Use this stack item before changing code."));
-        assert!(new_prompts[0].contains("Stack item: `stack:add-schema`"));
+        assert!(new_prompts[0].contains("Use this task before changing code."));
+        assert!(new_prompts[0].contains("Task path: `.local/tasks/add-schema.toml`"));
         assert!(new_prompts[0].contains("# Add schema"));
         assert!(new_prompts[0].contains("New branch prompt"));
         assert_eq!(agent.prompt.remove("issue").unwrap(), vec!["Issue prompt"]);

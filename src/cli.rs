@@ -49,9 +49,9 @@ pub enum Commands {
         /// Create a profiled issue worktree from .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
-        /// Start one workspace for each profile
+        /// Start one workspace for each named profile
         #[arg(long, conflicts_with = "profile")]
-        parallel: bool,
+        matrix: bool,
     },
     /// Start a workspace from a pull request
     Pr {
@@ -72,9 +72,9 @@ pub enum Commands {
         /// Create a profiled branch worktree from .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
-        /// Start one workspace for each profile
+        /// Start one workspace for each named profile
         #[arg(long, conflicts_with = "profile")]
-        parallel: bool,
+        matrix: bool,
     },
     /// Prepare, inspect, edit, or run batches
     Batch {
@@ -284,7 +284,7 @@ pub enum StackCommand {
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
     },
-    /// Start the next prepared or failed item from a stack file
+    /// Start the next prepared or failed task from a stack file
     Run {
         /// Stack TOML path, or "latest" for the newest local stack
         stack: String,
@@ -299,12 +299,12 @@ pub enum StackCommand {
         /// Stack TOML path, shorthand id, or "latest" (default)
         stack: Option<String>,
     },
-    /// Mark the running item in a stack as complete
+    /// Mark the running task in a stack as complete
     Complete {
         /// Stack TOML path, or "latest" for the newest local stack
         stack: String,
         /// Running stack task identifier to complete
-        item: Option<String>,
+        task: Option<String>,
         /// Start the next stack task after marking this one complete
         #[arg(long)]
         run_next: bool,
@@ -426,7 +426,7 @@ mod tests {
                 target: None,
                 base: None,
                 profile: None,
-                parallel: false
+                matrix: false
             })
         ));
     }
@@ -438,13 +438,13 @@ mod tests {
             target,
             base,
             profile,
-            parallel,
+            matrix,
         }) = cli.command
         {
             assert_eq!(target.as_deref(), Some("PROJ-680"));
             assert_eq!(base, None);
             assert_eq!(profile, None);
-            assert!(!parallel);
+            assert!(!matrix);
         } else {
             panic!("expected Issue");
         }
@@ -461,11 +461,11 @@ mod tests {
     }
 
     #[test]
-    fn issue_with_parallel_flag() {
-        let cli = parse(&["wt", "issue", "680", "--parallel"]);
+    fn issue_with_matrix_flag() {
+        let cli = parse(&["wt", "issue", "680", "--matrix"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Issue { parallel: true, .. })
+            Some(Commands::Issue { matrix: true, .. })
         ));
     }
 
@@ -482,9 +482,14 @@ mod tests {
     }
 
     #[test]
-    fn issue_rejects_parallel_with_profile() {
-        let result =
-            Cli::try_parse_from(["wt", "issue", "680", "--parallel", "--profile", "codex"]);
+    fn issue_rejects_matrix_with_profile() {
+        let result = Cli::try_parse_from(["wt", "issue", "680", "--matrix", "--profile", "codex"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn issue_rejects_removed_parallel_flag() {
+        let result = Cli::try_parse_from(["wt", "issue", "680", "--parallel"]);
         assert!(result.is_err());
     }
 
@@ -740,21 +745,25 @@ mod tests {
         let stack = command.find_subcommand_mut("stack").unwrap();
         let help = stack.render_help().to_string();
         assert!(help.contains("Prepare, inspect, edit, run, or complete stacks"));
+        assert!(help.contains("Start the next prepared or failed task"));
+        assert!(help.contains("Mark the running task"));
+        assert!(!help.contains("failed item"));
+        assert!(!help.contains("running item"));
         assert!(help.contains("show"));
     }
 
     #[test]
-    fn stack_complete_accepts_stack_and_item() {
+    fn stack_complete_accepts_stack_and_task() {
         let cli = parse(&["wt", "stack", "complete", "latest", "PROJ-123"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Stack {
                 command: StackCommand::Complete {
                     ref stack,
-                    item: Some(ref item),
+                    task: Some(ref task),
                     run_next: false,
                 }
-            }) if stack == "latest" && item == "PROJ-123"
+            }) if stack == "latest" && task == "PROJ-123"
         ));
     }
 
@@ -773,19 +782,19 @@ mod tests {
             Some(Commands::Stack {
                 command: StackCommand::Complete {
                     ref stack,
-                    item: Some(ref item),
+                    task: Some(ref task),
                     run_next: true,
                 }
-            }) if stack == "latest" && item == "PROJ-123"
+            }) if stack == "latest" && task == "PROJ-123"
         ));
     }
 
     #[test]
-    fn new_with_branch_words() {
-        let cli = parse(&["wt", "new", "some", "feature", "--parallel"]);
-        if let Some(Commands::New { name, parallel, .. }) = &cli.command {
+    fn new_with_matrix_flag() {
+        let cli = parse(&["wt", "new", "some", "feature", "--matrix"]);
+        if let Some(Commands::New { name, matrix, .. }) = &cli.command {
             assert_eq!(name, &vec!["some".to_string(), "feature".to_string()]);
-            assert!(*parallel);
+            assert!(*matrix);
         } else {
             panic!("expected New");
         }
@@ -809,7 +818,7 @@ mod tests {
                 ref name,
                 base: Some(ref base),
                 profile: Some(ref profile),
-                parallel: false,
+                matrix: false,
             }) if name == &vec!["some".to_string(), "feature".to_string()]
                 && base == "main"
                 && profile == "codex"
@@ -817,16 +826,22 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_parallel_with_profile() {
+    fn new_rejects_matrix_with_profile() {
         let result = Cli::try_parse_from([
             "wt",
             "new",
             "some",
             "feature",
-            "--parallel",
+            "--matrix",
             "--profile",
             "codex",
         ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn new_rejects_removed_parallel_flag() {
+        let result = Cli::try_parse_from(["wt", "new", "some", "feature", "--parallel"]);
         assert!(result.is_err());
     }
 

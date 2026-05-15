@@ -40,6 +40,10 @@
 `stack`은 어떤 작업 task들을 어떤 순서의 branch parent 체인으로 쌓을지에 대한
 개념이다.
 
+`matrix`는 하나의 issue 또는 branch-name 입력을 named profile 목록으로 확장하는
+개념이다. `batch`나 `stack`처럼 여러 task 자체를 뜻하지 않고, profile 축으로 여러
+worktree를 만드는 실행 형태다.
+
 `wt stack task`와 `wt stack issue`는 둘 다 stack 상태 파일과 task 문서를 만든다.
 차이는 입력 소스다. `task`는 branch-name text에서 local task를 만들고, `issue`는
 provider issue를 origin이 있는 task로 가져온다.
@@ -67,8 +71,9 @@ profile이 작업 묶음인지 다시 추론해야
 
 애매한 조합은 추론하지 말고 거부한다.
 
-예를 들어 한 옵션은 “하나의 profile 선택”을 뜻하고 다른 옵션은 “모든 profile 실행”을
-뜻한다면, 둘을 동시에 받은 상태에서 임의로 우선순위를 정하지 않는다.
+예를 들어 `--profile`은 “하나의 profile 선택”을 뜻하고 `--matrix`는 “모든
+profile로 확장”을 뜻한다면, 둘을 동시에 받은 상태에서 임의로 우선순위를 정하지
+않는다.
 
 명령은 사용자가 의도를 잘못 표현했을 때 조용히 다른 일을 해서는 안 된다. 빠르게
 실패하고, 어떤 선택을 해야 하는지 알려줘야 한다.
@@ -149,6 +154,16 @@ Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 
 
 예를 들어 local site 설정은 `[site] provider = "herd"`가 canonical이고, 같은 의미를
 `[herd]` 섹션으로 다시 받지 않는다.
+
+### Versioning Reflects Stability
+
+버전 번호도 사용자-facing 계약이다.
+
+`wt`는 아직 1.0에 도달하지 않았으므로 CLI, config, 상태 파일 모델이 안정화될 때까지
+breaking change를 `x.0.0` major로 표현하지 않는다. 새 기능과 breaking user-facing
+정리는 `0.x.0` minor로 올리고, 버그 수정이나 내부 로직 변경은 `0.x.y` patch로 올린다.
+
+1.0 이후에만 기존 사용자-facing 계약을 깨는 변경을 major bump로 표현한다.
 
 ## UX Checklist
 

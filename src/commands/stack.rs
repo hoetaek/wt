@@ -117,7 +117,7 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
         return Ok(());
     };
 
-    let parent = parent_for_item(ctx, &metadata, idx)?;
+    let parent = parent_for_task(ctx, &metadata, idx)?;
     metadata.status = STATUS_RUNNING.into();
     metadata.updated_at = current_utc_timestamp();
     metadata.tasks[idx].status = STATUS_RUNNING.into();
@@ -247,7 +247,7 @@ pub fn edit(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
     crate::commands::editor::open_file(ctx, &stack_path)
 }
 
-pub fn complete(ctx: &Ctx, stack: &str, item: Option<&str>, run_next: bool) -> Result<()> {
+pub fn complete(ctx: &Ctx, stack: &str, task: Option<&str>, run_next: bool) -> Result<()> {
     let stack_path = resolve_stack_path(ctx, stack)?;
     let mut metadata = read_stack_metadata(&stack_path)?;
 
@@ -260,11 +260,11 @@ pub fn complete(ctx: &Ctx, stack: &str, item: Option<&str>, run_next: bool) -> R
         return Ok(());
     };
 
-    if let Some(item) = item {
+    if let Some(task) = task {
         let running = &metadata.tasks[idx];
-        if !stack_task_matches(ctx, running, item) {
+        if !stack_task_matches(ctx, running, task) {
             bail!(
-                "Running stack task is {}, but complete was requested for {item}",
+                "Running stack task is {}, but complete was requested for {task}",
                 running.label()
             );
         }
@@ -310,7 +310,7 @@ struct StackTask {
     task: String,
     #[serde(default)]
     parent: Option<String>,
-    #[serde(default = "default_issue_status")]
+    #[serde(default = "default_task_status")]
     status: String,
     #[serde(default)]
     error: String,
@@ -364,7 +364,7 @@ fn parse_order(raw: &str, len: usize) -> Result<Vec<usize>> {
         .filter(|part| !part.is_empty())
         .map(|part| {
             part.parse::<usize>()
-                .with_context(|| format!("Invalid stack order item: {part}"))
+                .with_context(|| format!("Invalid stack order task: {part}"))
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -376,11 +376,11 @@ fn parse_order(raw: &str, len: usize) -> Result<Vec<usize>> {
     let mut order = Vec::new();
     for number in numbers {
         if number == 0 || number > len {
-            bail!("Stack order item out of range: {number}");
+            bail!("Stack order task out of range: {number}");
         }
         let idx = number - 1;
         if seen[idx] {
-            bail!("Stack order includes duplicate item: {number}");
+            bail!("Stack order includes duplicate task: {number}");
         }
         seen[idx] = true;
         order.push(idx);
@@ -408,7 +408,7 @@ fn default_stack_status() -> String {
     STATUS_PREPARED.into()
 }
 
-fn default_issue_status() -> String {
+fn default_task_status() -> String {
     STATUS_PREPARED.into()
 }
 
@@ -550,7 +550,7 @@ fn next_runnable_task(items: &[StackTask]) -> Option<usize> {
     None
 }
 
-fn parent_for_item(ctx: &Ctx, stack: &StackMetadata, idx: usize) -> Result<String> {
+fn parent_for_task(ctx: &Ctx, stack: &StackMetadata, idx: usize) -> Result<String> {
     if idx == 0 {
         return resolve_initial_base(ctx, stack);
     }
@@ -921,7 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_order_rejects_missing_duplicate_or_out_of_range_items() {
+    fn parse_order_rejects_missing_duplicate_or_out_of_range_tasks() {
         assert!(parse_order("1,2", 3).is_err());
         assert!(parse_order("1,1,2", 3).is_err());
         assert!(parse_order("1,2,4", 3).is_err());
@@ -1063,7 +1063,7 @@ mod tests {
     }
 
     #[test]
-    fn parent_for_item_skips_skipped_items_when_finding_parent() {
+    fn parent_for_task_skips_skipped_tasks_when_finding_parent() {
         let dir = tempfile::tempdir().unwrap();
         write_task_file(dir.path(), "schema", "Schema", "schema", "");
         write_task_file(dir.path(), "api", "API", "api", "");
@@ -1089,11 +1089,11 @@ mod tests {
             ],
         };
 
-        assert_eq!(parent_for_item(&ctx, &stack, 2).unwrap(), "schema");
+        assert_eq!(parent_for_task(&ctx, &stack, 2).unwrap(), "schema");
     }
 
     #[test]
-    fn parent_for_item_uses_initial_base_when_previous_items_are_skipped() {
+    fn parent_for_task_uses_initial_base_when_previous_tasks_are_skipped() {
         let dir = tempfile::tempdir().unwrap();
         write_task_file(dir.path(), "schema", "Schema", "schema", "");
         write_task_file(dir.path(), "api", "API", "api", "");
@@ -1117,7 +1117,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(parent_for_item(&ctx, &stack, 1).unwrap(), "main");
+        assert_eq!(parent_for_task(&ctx, &stack, 1).unwrap(), "main");
     }
 
     #[test]
@@ -1249,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    fn show_prints_stack_metadata_and_items() {
+    fn show_prints_stack_metadata_and_tasks() {
         let dir = tempfile::tempdir().unwrap();
         let ui = Arc::new(MockUi::new());
         let ctx = Ctx::new(

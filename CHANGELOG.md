@@ -2,10 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
-This project follows SemVer.
+This project follows pre-1.0 SemVer. Until the CLI, config, and persisted state
+model are stable enough for 1.0, breaking user-facing changes bump the `0.x.0`
+minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Changed the package version line back to `0.3.x`; current `wt` development is
+  still pre-1.0 because CLI, config, and persisted state contracts are still
+  being stabilized.
+- Renamed `wt issue --parallel` and `wt new --parallel` to `--matrix`, without a
+  compatibility alias, to describe profile-matrix workspace creation instead of
+  generic parallel execution.
 - Changed `wt init` to create only the selected config file. After choosing
   `.wt.toml` or `.local/.wt.toml`, issue provider, site provider, agent runtime,
   and additional setup prompts all write to that selected file only. Named
@@ -98,26 +106,31 @@ This project follows SemVer.
 - Generalized batch and stack state to canonical `[[tasks]]` entries that
   reference `.local/tasks/*.toml` task documents.
 
-## 0.4.0
+## Historical Notes
+
+The entries below predate the current `0.3.x` pre-1.0 version reset and are
+kept as internal development history, not package release ordering.
+
+### Former 0.4.0
 
 - Changed config loading to merge `.wt.toml` as the shared base with
   `.local/.wt.toml` as the private override.
 - Changed `wt init --agent <agent>` to create a default profile under
   `.local/profiles/<agent>/` and set `[profiles] default = "<agent>"`.
 
-## 0.3.0
+### Former 0.3.0
 
 - Added `[profiles] default = "..."` support for default `wt start` profile
   selection.
 
-## 0.2.1
+### Former 0.2.1
 
 - Added open-source project metadata and licensing files.
 - Documented installation, requirements, configuration, and development checks.
 - Changed the default Traefik LaunchDaemon label to avoid maintainer-specific
   namespaces.
 
-## 0.2.0
+### Former 0.2.0
 
 - Added Traefik site provider support.
 - Reworked agent profiles and batch workflows.

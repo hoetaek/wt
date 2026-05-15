@@ -1374,7 +1374,7 @@ mod tests {
             ("site_url".into(), "https://root.test".into()),
             ("api_url".into(), "http://127.0.0.1:15001".into()),
         ]);
-        substitute_env(&dir, &config, &vars).unwrap();
+        substitute_env(dir, &config, &vars).unwrap();
 
         let root = fs::read_to_string(dir.join(".env")).unwrap();
         let front = fs::read_to_string(dir.join("frontend/.env.development")).unwrap();

@@ -12,7 +12,7 @@ pub fn run(
     name_words: &[String],
     base_raw: &Option<String>,
     profile: Option<&str>,
-    parallel: bool,
+    matrix: bool,
 ) -> Result<()> {
     if name_words.is_empty() {
         bail!("Usage: wt new <branch-name-text>");
@@ -21,7 +21,7 @@ pub fn run(
     let branch_name = branch_name_from_words(name_words)?;
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
-    if parallel || profile.is_some() {
+    if matrix || profile.is_some() {
         let base_mode = BaseMode::from_raw(base_raw);
         let base = resolve_base_branch(ctx, &git, &base_mode)?;
         return run_profiles(ctx, &branch_name, &base, profile);

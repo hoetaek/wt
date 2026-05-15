@@ -25,6 +25,12 @@ cargo install --path .
 The crate is not published to crates.io. The `wt` package name is already used
 there by another project.
 
+## Versioning
+
+`wt` is still pre-1.0. Until the CLI, config format, and persisted state files
+stabilize, breaking user-facing changes are represented as `0.x.0` minor
+bumps, not `x.0.0` major releases.
+
 ## Requirements
 
 Required:
@@ -275,6 +281,11 @@ Explicit `--profile` has command-specific scope:
 - `wt pr --profile <name>` applies the named profile config to the PR
   worktree. It uses the PR branch name as-is because the branch already
   exists.
+
+Use `--matrix` on `wt issue` or `wt new` to expand one issue or branch-name
+input across all named profiles. `wt issue 123 --matrix` creates one issue
+worktree per profile, while `wt new add search --matrix` creates one branch
+worktree per profile from the `add-search` branch-name seed.
 
 When prompt or scaffold files are needed, move the profile into a named
 directory and select it explicitly from config:
@@ -596,9 +607,9 @@ automatically:
 wt stack complete latest 123 --run-next
 ```
 
-Omit `--run-next` to mark one item done without starting another item.
+Omit `--run-next` to mark one task done without starting another task.
 
-The stack TOML records each item's `parent`, branch, and status so reruns can
+The stack TOML records each task's `parent`, branch, and status so reruns can
 continue from the stored state.
 
 ## Site Provider Helpers
