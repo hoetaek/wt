@@ -21,7 +21,7 @@ effects.
 | Workflow runner orchestration | `src/commands/workflow.rs` today; extract to `src/workflow/run.rs` when split | Coordinating planner output with `TaskDocument`, `TaskRun`, `issue` start paths, and setup results | Domain schema definitions, config merge policy, provider implementation details |
 | Rendering | `ctx.ui` call sites and prompt builders in command modules today; extract workflow prompt/status text to `src/workflow/render.rs` when split | Human status text, selector labels, agent prompt snapshots, coordinator handoff text | State transitions, filesystem writes, shelling out to tools |
 | Config layering | `src/config/` | Config schema, `.wt.toml` and `.local/.wt.toml` load order, profile resolution, profile convention overlays, prompt merge/finalization | Worktree creation, site registration, TaskDocument/TaskRun/Workflow state |
-| Setup side effects | `src/setup.rs` | Copy/link/env substitution, site registration, cmux workspace opening, agent bootstrap, dependency/test command execution, setup summary | Config precedence, workflow planning, task state ownership |
+| Setup side effects | `src/setup.rs` and `src/setup/*` | `run_setup` orchestration plus side-effect modules for files, env/template variables, site registration, cmux workspace runtime, agent bootstrap, dependency commands, post-deps tabs, background tests, local context injection, and setup summary | Config precedence, workflow planning, task state ownership |
 | External services | `src/services/*` | Shell/tool boundaries for Git, GitHub, Linear, cmux, Herd, Valet, Docker proxy, Traefik, issue providers, and work-session observation | CLI policy, persisted wt state schemas, UX concept naming |
 
 ## Canonical State
@@ -62,8 +62,9 @@ Site providers are external services. `SiteConfig` and provider choice live in
 `src/config/`; service dispatch lives in `src/services/site.rs`; provider
 implementations live in `src/services/herd.rs`, `src/services/valet.rs`, and
 `src/services/traefik.rs`, with no-op providers such as Docker proxy handled by
-the dispatch layer. `src/setup.rs` may invoke them while preparing a worktree,
-but provider modules should not decide CLI behavior or persisted wt state shape.
+the dispatch layer. `src/setup/site.rs` may invoke them while preparing a
+worktree, but provider modules should not decide CLI behavior or persisted wt
+state shape.
 
 ## Workflow Refactor Target
 
@@ -101,12 +102,14 @@ loading, convention overlays, and prompt merge/finalization. Commands may ask
 whether a profile is valid and may pass an effective `Config` onward. They
 should not duplicate merge rules or inspect profile directories directly.
 
-`src/setup.rs` owns effects that happen after a worktree path, names, prompt
-context, and effective config are already known. It can copy or link files,
-substitute env values, register a site, open cmux, bootstrap an agent, run
-dependency/test commands, and print a setup summary. It should not decide which
-TaskDocument or Workflow is runnable, write TaskRun status, or define config
-precedence.
+`src/setup.rs` is the setup facade and keeps `run_setup` as the orchestration
+entrypoint after a worktree path, names, prompt context, and effective config are
+already known. Setup child modules own the side-effect boundaries: file
+copy/link, env substitution and template variables, site rendering/registration,
+cmux workspace runtime and coordinator variables, agent bootstrap, dependency
+commands, post-deps tabs, local context injection, background tests, and summary
+rendering. Setup should not decide which TaskDocument or Workflow is runnable,
+write TaskRun status, or define config precedence.
 
 ## Checklist for New Commands
 
@@ -118,8 +121,8 @@ Before adding a command or expanding an existing one:
   persisted state.
 - Put TOML schema and validation in the state owner, not in the command facade.
 - Keep provider and tool calls behind `src/services/*`.
-- Keep setup effects in `src/setup.rs`; pass it prepared inputs instead of
-  letting setup discover workflow/task state.
+- Keep setup effects behind `src/setup.rs` and its child modules; pass prepared
+  inputs instead of letting setup discover workflow/task state.
 - Keep human output, selector labels, and agent prompt text in rendering
   helpers when the text is longer than a local status line.
 - Treat `.local/batches`, `.local/stacks`, `wt batch`, and `wt stack` as
