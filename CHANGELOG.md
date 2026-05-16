@@ -14,6 +14,9 @@ minor version instead of moving to `x.0.0`.
   `needs_input` exits 2, `failed` exits 3, missing work exits 1, and cmux
   unavailability now fails instead of looking like a successful no-session
   poll.
+- Added advisory `wt doctor` checks for Codex cmux hook readiness, including
+  `hooks.json`, the Codex hooks feature flag, and trusted hook entries used by
+  reliable Codex `wt status` polling.
 - Bumped the package version to `0.20.0` because `wt status` adds a new
   user-facing CLI command while `wt` is still pre-1.0.
 - Added canonical `wt init` starter presets with `--preset

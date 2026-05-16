@@ -123,6 +123,9 @@ pub enum Commands {
         target: Option<String>,
     },
     /// Poll a task agent's current status
+    #[command(
+        long_about = "Poll a task agent's current status from the matching cmux surface. This is read-only: it observes cmux screen, status, and hook signals without updating TaskRuns or provider issues. Codex status is weaker until cmux Codex hooks are installed with `cmux hooks codex install --yes`."
+    )]
     Status {
         /// Branch, worktree path/name, or TaskRun id to poll
         target: String,

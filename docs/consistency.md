@@ -318,6 +318,13 @@ observation contract이므로 `status`, `agent`, cmux id/ref, 마지막 tool/ses
 warnings/meta처럼 agent가 polling할 수 있는 값을 안정적인 snake_case 이름으로 노출한다.
 사람용 출력은 같은 관찰 결과를 얇게 읽기 좋게 보여주는 layer일 뿐 별도 의미를 만들지
 않는다. cmux 자체를 사용할 수 없으면 성공한 `no_session`처럼 보이지 않도록 실패한다.
+Agent별 상태 신호 준비도는 `status`가 고치는 대상이 아니라 관찰의 신뢰도 조건이다.
+Claude Code는 cmux의 Claude 통합에서 status/sidebar 신호가 나오고, Codex는 사용자가
+`cmux hooks codex install --yes`를 명시적으로 실행한 뒤에야 `agent.hook.*`와
+`set_status codex Running/Idle` 신호가 나온다. Codex hook이 없으면 `wt status`는
+화면 텍스트 fallback을 쓸 수 있지만 약한 관찰이라는 warning을 남겨야 한다.
+`wt doctor`는 이 준비도를 보고만 하고, 일반 wt 명령이 전역 Codex hook을 자동 설치하거나
+사용자 agent config를 몰래 수정하면 안 된다.
 
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 

@@ -185,7 +185,9 @@ fn status_help_explains_polling_target() {
         .stdout(predicate::str::contains("<TARGET>"))
         .stdout(predicate::str::contains(
             "Branch, worktree path/name, or TaskRun id",
-        ));
+        ))
+        .stdout(predicate::str::contains("read-only"))
+        .stdout(predicate::str::contains("cmux hooks codex install --yes"));
 }
 
 #[test]
@@ -465,6 +467,13 @@ fn doctor_supports_json_and_directory_override() {
         value["checks"]
             .as_array()
             .is_some_and(|checks| !checks.is_empty())
+    );
+    assert!(
+        value["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| { check["name"] == "cmux_cli" })
     );
 }
 

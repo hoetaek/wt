@@ -52,6 +52,18 @@ Run this in a project after creating a config:
 wt doctor
 ```
 
+`doctor` is a readiness inspection command. It reports missing optional tools
+and, for Codex agents, whether the local Codex cmux hook files appear ready for
+reliable `wt status` polling. It does not install hooks or mutate agent config.
+
+Claude Code status is driven through cmux's Claude integration. Codex can run in
+cmux without extra setup, but reliable Codex status events require explicit
+Codex hooks:
+
+```bash
+cmux hooks codex install --yes
+```
+
 ## Quick Start
 
 Start the guided workspace starter wizard:
@@ -652,6 +664,16 @@ a worktree. The command uses the same target model as `review` and `send`, reads
 the matching cmux workspace/surface when available, and reports the observed
 agent, status, last tool, session, event time, and warnings without updating
 TaskRuns or provider issues.
+
+`status` observes the current cmux surface, screen text, cmux status values, and
+agent hook/sidebar events. It does not mark TaskRuns done, update provider
+issues, send messages, or install hooks. Claude Code status comes from cmux's
+Claude integration. Codex emits the reliable `agent.hook.*` and
+`set_status codex Running/Idle` signals only after
+`cmux hooks codex install --yes`; without those hooks, Codex can still run in
+cmux but `wt status` falls back to weaker terminal-screen inference and may
+report a `codex_hooks_missing` warning. Run `wt doctor` to inspect cmux
+availability and Codex hook readiness.
 
 ```bash
 wt status feature
