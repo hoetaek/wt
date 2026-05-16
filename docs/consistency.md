@@ -283,6 +283,15 @@ Workspace label은 저장 상태가 아니라 현재 실행을 찾기 위한 표
 이름에는 `batch`나 `stack` 같은 mode label을 섞지 않는다. `B`/`S` prefix는 workflow
 contract에 포함하지 않는다.
 
+`wt task run` coordinator handoff는 즉시 TaskDocument 실행 handoff다. `wt task run`이
+시작하는 prompt에는 `Task Run Coordinator Handoff` section이 포함되고, 현재 coordinator
+cmux workspace/surface 좌표로 렌더링되는 `cmux send`와 `cmux send-key ... enter` 명령이
+들어간다. 이것은 Workflow orchestration이나 completion command가 아니다. Task-run agent는
+`PR=none`인 `Agent Completion Report`를 coordinator에게 보내고, coordinator가 review,
+landing, cleanup을 명시적으로 처리할 때까지 기다린다. 좌표는 현재 transport 정보일 뿐이므로
+TaskDocument나 TaskRun에 저장하지 않는다. 좌표가 unavailable 또는 stale이면 agent는 같은
+보고를 task session에 남기고 기다린다.
+
 Workflow coordinator handoff는 `stack` 전용 개념이 아니라 `wt workflow run`이 시작하는
 모든 task prompt의 계약이다. Prompt에는 `Workflow Coordinator Handoff` section이 포함되고,
 현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
