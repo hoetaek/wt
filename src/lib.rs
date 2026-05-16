@@ -103,6 +103,8 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Init {
             local,
             shared,
+            preset,
+            minimal,
             agent,
             agent_args,
             agent_command,
@@ -110,12 +112,15 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             site_provider,
             gh_user,
             yes,
+            dry_run,
             force,
         } => commands::init::run(
             ctx,
             commands::init::InitOptions {
                 local: *local,
                 shared: *shared,
+                preset: *preset,
+                minimal: *minimal,
                 agent: agent.clone(),
                 agent_args: agent_args.clone(),
                 agent_command: agent_command.clone(),
@@ -123,6 +128,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 site_provider: site_provider.clone(),
                 gh_user: gh_user.clone(),
                 yes: *yes,
+                dry_run: *dry_run,
                 force: *force,
             },
         ),

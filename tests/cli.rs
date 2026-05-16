@@ -148,6 +148,77 @@ fn task_publish_help_explains_behavior() {
 }
 
 #[test]
+fn init_yes_uses_minimal_preset_without_agent() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created config:"));
+
+    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    assert!(content.contains("[workspace]"));
+    assert!(!content.contains("[profile.agent]"));
+    assert!(!content.contains("[issues]"));
+}
+
+#[test]
+fn init_preset_agent_yes_writes_agent() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "init",
+            "--preset",
+            "agent",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    assert!(content.contains("[profile.agent]"));
+    assert!(content.contains("cli = \"codex\""));
+}
+
+#[test]
+fn init_minimal_shortcut_writes_minimal_config() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "init",
+            "--minimal",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    assert!(content.contains("[workspace]"));
+    assert!(!content.contains("[profile.agent]"));
+}
+
+#[test]
+fn init_rejects_conflicting_preset_and_minimal() {
+    wt_command()
+        .args(["init", "--preset", "minimal", "--minimal"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "'--preset <PRESET>' cannot be used with '--minimal'",
+        ));
+}
+
+#[test]
 fn completion_generates_script() {
     wt_command()
         .args(["completion", "bash"])

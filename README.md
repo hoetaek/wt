@@ -80,8 +80,10 @@ Canonical starter presets are `minimal`, `agent`, `issue`, and `app`. The
 runtime. Use `--local` to target `.local/.wt.toml` or `--shared` to target
 `.wt.toml`; use `--dry-run` to preview the generated TOML without writing files.
 
-`wt init --yes` is non-interactive and uses safe defaults. In a non-TTY context,
-pass `--yes`, `--minimal`, or `--preset <name>` so the command never waits for
+Bare `wt init --yes` is non-interactive and chooses the `minimal` preset.
+Explicit starter options such as `--agent`, `--issue-provider`, and
+`--site-provider` still add their matching sections. In a non-TTY context, pass
+`--yes`, `--minimal`, or `--preset <name>` so the command never waits for
 interactive answers.
 
 For explicit config values, pass the relevant starter options:

@@ -1,14 +1,16 @@
-use crate::cli::{InitAgent, InitIssueProvider, InitSiteProvider};
+use crate::cli::{InitAgent, InitIssueProvider, InitPreset, InitSiteProvider};
 use crate::config::{AgentCli, AgentConfig, Config, ReadyMode, SubmitMode};
 use crate::context::Ctx;
 use crate::error::WtError;
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct InitOptions {
     pub local: bool,
     pub shared: bool,
+    pub preset: Option<InitPreset>,
+    pub minimal: bool,
     pub agent: Option<InitAgent>,
     pub agent_args: Vec<String>,
     pub agent_command: Option<String>,
@@ -16,6 +18,7 @@ pub struct InitOptions {
     pub site_provider: Option<InitSiteProvider>,
     pub gh_user: Option<String>,
     pub yes: bool,
+    pub dry_run: bool,
     pub force: bool,
 }
 
@@ -38,7 +41,38 @@ struct InitProfile {
 
 #[derive(Debug)]
 struct InitPlan {
+    target_path: PathBuf,
+    target_kind: InitTargetKind,
+    preset: InitPreset,
+    sections: Vec<InitSection>,
     content: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitSection {
+    Issues,
+    Site,
+    ProfileAgent,
+    Worktree,
+    Setup,
+    Editor,
+    Test,
+    Workspace,
+}
+
+impl InitSection {
+    fn name(self) -> &'static str {
+        match self {
+            InitSection::Issues => "issues",
+            InitSection::Site => "site",
+            InitSection::ProfileAgent => "profile.agent",
+            InitSection::Worktree => "worktree",
+            InitSection::Setup => "setup",
+            InitSection::Editor => "editor",
+            InitSection::Test => "test",
+            InitSection::Workspace => "workspace",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -81,27 +115,43 @@ impl Default for InitCommonConfig {
 }
 
 pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
+    validate_options(&options)?;
     let target = resolve_target(ctx, &options)?;
-    if target.path.exists() && !options.force {
+    if target.path.exists() && !options.force && !options.dry_run {
         bail!(
             "Config already exists: {} (use --force to overwrite)",
             target.path.display()
         );
     }
 
-    let plan = build_plan(ctx, &options, target.kind)?;
+    let plan = build_plan(ctx, &options, target)?;
 
+    if options.dry_run {
+        print_plan(ctx, &plan);
+        return Ok(());
+    }
+
+    if !options.yes {
+        print_plan(ctx, &plan);
+    }
     if !options.yes && !ctx.ui.confirm("Create config?", true)? {
         return Err(WtError::Cancelled.into());
     }
 
-    if let Some(parent) = target.path.parent() {
+    if let Some(parent) = plan.target_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&target.path, &plan.content)?;
+    std::fs::write(&plan.target_path, &plan.content)?;
     ctx.ui
-        .print_step(&format!("Created config: {}", target.path.display()));
+        .print_step(&format!("Created config: {}", plan.target_path.display()));
 
+    Ok(())
+}
+
+fn validate_options(options: &InitOptions) -> Result<()> {
+    if options.minimal && options.preset.is_some() {
+        bail!("--minimal cannot be used with --preset");
+    }
     Ok(())
 }
 
@@ -138,20 +188,65 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     }
 }
 
-fn build_plan(ctx: &Ctx, options: &InitOptions, _target_kind: InitTargetKind) -> Result<InitPlan> {
-    let profile = resolve_profile(ctx, options)?;
-    let issue_provider = resolve_issue_provider(ctx, options)?;
+fn resolve_preset(ctx: &Ctx, options: &InitOptions) -> Result<InitPreset> {
+    if options.minimal {
+        return Ok(InitPreset::Minimal);
+    }
+    if let Some(preset) = options.preset {
+        return Ok(preset);
+    }
+    if let Some(preset) = preset_from_explicit_overrides(options) {
+        return Ok(preset);
+    }
+    if options.yes {
+        return Ok(InitPreset::Minimal);
+    }
+
+    let items = vec![
+        "minimal".into(),
+        "agent".into(),
+        "issue".into(),
+        "app".into(),
+    ];
+    Ok(match ctx.ui.select("Starter preset", &items)? {
+        1 => InitPreset::Agent,
+        2 => InitPreset::Issue,
+        3 => InitPreset::App,
+        _ => InitPreset::Minimal,
+    })
+}
+
+fn preset_from_explicit_overrides(options: &InitOptions) -> Option<InitPreset> {
+    if explicit_site_provider(options.site_provider.as_ref()).is_some() {
+        return Some(InitPreset::App);
+    }
+    if explicit_issue_provider(options.issue_provider.as_ref()).is_some() {
+        return Some(InitPreset::Issue);
+    }
+    if explicit_agent_requested(options) {
+        return Some(InitPreset::Agent);
+    }
+    None
+}
+
+fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<InitPlan> {
+    validate_options(options)?;
+    let preset = resolve_preset(ctx, options)?;
+    let profile = resolve_profile(ctx, options, preset)?;
+    let issue_provider = resolve_issue_provider(ctx, options, preset)?;
     let gh_user = if issue_provider == Some(InitIssueProvider::Github) {
         resolve_gh_user(ctx, options)?
     } else {
         None
     };
-    let site_provider = resolve_site_provider(ctx, options)?;
-    let common = resolve_common_config(ctx, options)?;
+    let site_provider = resolve_site_provider(ctx, options, preset)?;
+    let common = resolve_common_config(ctx, options, preset)?;
 
     let mut s = String::new();
+    let mut sections = Vec::new();
 
     if let Some(provider) = issue_provider {
+        sections.push(InitSection::Issues);
         s.push_str("[issues]\n");
         s.push_str(&format!(
             "provider = {}\n",
@@ -166,6 +261,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, _target_kind: InitTargetKind) ->
     }
 
     if let Some(provider) = site_provider {
+        sections.push(InitSection::Site);
         s.push_str("[site]\n");
         s.push_str(&format!(
             "provider = {}\n",
@@ -188,16 +284,49 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, _target_kind: InitTargetKind) ->
     }
 
     if let Some(profile) = &profile {
+        sections.push(InitSection::ProfileAgent);
         append_profile_selection(&mut s, profile);
     }
 
-    append_active_common_config(&mut s, &common);
+    append_active_common_config(&mut s, &common, &mut sections);
 
     append_optional_scaffold(&mut s);
 
     toml::from_str::<Config>(&s)?;
 
-    Ok(InitPlan { content: s })
+    Ok(InitPlan {
+        target_path: target.path,
+        target_kind: target.kind,
+        preset,
+        sections,
+        content: s,
+    })
+}
+
+fn print_plan(ctx: &Ctx, plan: &InitPlan) {
+    ctx.ui.print_step("Init plan");
+    ctx.ui
+        .print_dim(&format!("  target: {}", plan.target_path.display()));
+    ctx.ui.print_dim(&format!(
+        "  target kind: {}",
+        target_kind_name(plan.target_kind)
+    ));
+    ctx.ui
+        .print_dim(&format!("  preset: {}", preset_name(plan.preset)));
+    let sections = if plan.sections.is_empty() {
+        "none".to_string()
+    } else {
+        plan.sections
+            .iter()
+            .map(|section| section.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    ctx.ui.print_dim(&format!("  sections: {sections}"));
+    ctx.ui.print_dim("  toml:");
+    for line in plan.content.lines() {
+        ctx.ui.print_dim(&format!("    {line}"));
+    }
 }
 
 fn append_optional_scaffold(s: &mut String) {
@@ -256,13 +385,19 @@ fn append_optional_scaffold(s: &mut String) {
     s.push_str("# ]\n\n");
 }
 
-fn append_active_common_config(s: &mut String, common: &InitCommonConfig) {
+fn append_active_common_config(
+    s: &mut String,
+    common: &InitCommonConfig,
+    sections: &mut Vec<InitSection>,
+) {
     if let Some(path) = common.worktree_path.as_deref() {
+        sections.push(InitSection::Worktree);
         s.push_str("[worktree]\n");
         s.push_str(&format!("path = {}\n\n", toml_quote(path)));
     }
 
     if !common.setup_deps.is_empty() {
+        sections.push(InitSection::Setup);
         s.push_str("[setup]\n");
         s.push_str("deps = [\n");
         for command in &common.setup_deps {
@@ -272,12 +407,14 @@ fn append_active_common_config(s: &mut String, common: &InitCommonConfig) {
     }
 
     if let Some(command) = common.editor_command.as_deref() {
+        sections.push(InitSection::Editor);
         s.push_str("[editor]\n");
         s.push_str(&format!("command = {}\n", toml_quote(command)));
         s.push_str("placement = \"cmux_surface\"\n\n");
     }
 
     if !common.test_commands.is_empty() {
+        sections.push(InitSection::Test);
         s.push_str("[test]\n");
         s.push_str("commands = [\n");
         for command in &common.test_commands {
@@ -286,6 +423,7 @@ fn append_active_common_config(s: &mut String, common: &InitCommonConfig) {
         s.push_str("]\n\n");
     }
 
+    sections.push(InitSection::Workspace);
     s.push_str("[workspace]\n");
     s.push_str(&format!("tabs = {}\n", toml_array(&common.workspace_tabs)));
     if !common.post_deps_tabs.is_empty() {
@@ -317,10 +455,22 @@ fn append_command_entry(s: &mut String, command: &InitCommand) {
     s.push_str(" },\n");
 }
 
-fn resolve_common_config(ctx: &Ctx, options: &InitOptions) -> Result<InitCommonConfig> {
+fn resolve_common_config(
+    ctx: &Ctx,
+    options: &InitOptions,
+    preset: InitPreset,
+) -> Result<InitCommonConfig> {
     let mut config = InitCommonConfig::default();
     if options.yes {
+        if preset == InitPreset::App {
+            config.setup_deps = default_enabled_setup_deps(&ctx.repo_root);
+            config.test_commands = default_enabled_test_commands(&ctx.repo_root);
+        }
         return Ok(config);
+    }
+
+    if preset == InitPreset::App {
+        return resolve_custom_common_config(ctx, config);
     }
 
     let items = vec![
@@ -331,6 +481,13 @@ fn resolve_common_config(ctx: &Ctx, options: &InitOptions) -> Result<InitCommonC
         return Ok(config);
     }
 
+    resolve_custom_common_config(ctx, config)
+}
+
+fn resolve_custom_common_config(
+    ctx: &Ctx,
+    mut config: InitCommonConfig,
+) -> Result<InitCommonConfig> {
     config.worktree_path = resolve_worktree_path(ctx)?;
     config.workspace_tabs = resolve_workspace_tabs(ctx)?;
 
@@ -352,6 +509,20 @@ fn resolve_common_config(ctx: &Ctx, options: &InitOptions) -> Result<InitCommonC
 
     config.editor_command = resolve_editor_command(ctx)?;
     Ok(config)
+}
+
+fn default_enabled_setup_deps(repo_root: &Path) -> Vec<InitCommand> {
+    detect_setup_deps(repo_root)
+        .into_iter()
+        .filter(|command| command.default_enabled)
+        .collect()
+}
+
+fn default_enabled_test_commands(repo_root: &Path) -> Vec<InitCommand> {
+    detect_test_commands(repo_root)
+        .into_iter()
+        .filter(|command| command.default_enabled)
+        .collect()
 }
 
 fn resolve_worktree_path(ctx: &Ctx) -> Result<Option<String>> {
@@ -750,7 +921,15 @@ fn known_node_package_manager(name: &str) -> Option<&'static str> {
     }
 }
 
-fn resolve_profile(ctx: &Ctx, options: &InitOptions) -> Result<Option<InitProfile>> {
+fn resolve_profile(
+    ctx: &Ctx,
+    options: &InitOptions,
+    preset: InitPreset,
+) -> Result<Option<InitProfile>> {
+    if !preset_includes_agent(preset) && !explicit_agent_requested(options) {
+        return Ok(None);
+    }
+
     let agent = resolve_agent(ctx, options)?;
     let command = resolve_agent_command(options)?;
     if agent == InitAgent::None {
@@ -820,16 +999,22 @@ fn resolve_agent_args(ctx: &Ctx, agent: &InitAgent, options: &InitOptions) -> Re
     }
 }
 
-fn resolve_issue_provider(ctx: &Ctx, options: &InitOptions) -> Result<Option<InitIssueProvider>> {
-    if let Some(provider) = &options.issue_provider {
-        return Ok(match provider {
-            InitIssueProvider::Github => Some(InitIssueProvider::Github),
-            InitIssueProvider::Linear => Some(InitIssueProvider::Linear),
-            InitIssueProvider::None => None,
-        });
+fn resolve_issue_provider(
+    ctx: &Ctx,
+    options: &InitOptions,
+    preset: InitPreset,
+) -> Result<Option<InitIssueProvider>> {
+    if let Some(provider) = explicit_issue_provider(options.issue_provider.as_ref()) {
+        return Ok(Some(provider));
+    }
+    if matches!(options.issue_provider, Some(InitIssueProvider::None)) {
+        return Ok(None);
+    }
+    if !preset_includes_issue_provider(preset) {
+        return Ok(None);
     }
     if options.yes {
-        return Ok(None);
+        return Ok(Some(InitIssueProvider::Github));
     }
 
     let items = vec!["github".into(), "linear".into(), "none".into()];
@@ -840,15 +1025,19 @@ fn resolve_issue_provider(ctx: &Ctx, options: &InitOptions) -> Result<Option<Ini
     })
 }
 
-fn resolve_site_provider(ctx: &Ctx, options: &InitOptions) -> Result<Option<InitSiteProvider>> {
-    if let Some(provider) = &options.site_provider {
-        return Ok(match provider {
-            InitSiteProvider::None => None,
-            InitSiteProvider::Herd => Some(InitSiteProvider::Herd),
-            InitSiteProvider::Valet => Some(InitSiteProvider::Valet),
-            InitSiteProvider::DockerProxy => Some(InitSiteProvider::DockerProxy),
-            InitSiteProvider::Traefik => Some(InitSiteProvider::Traefik),
-        });
+fn resolve_site_provider(
+    ctx: &Ctx,
+    options: &InitOptions,
+    preset: InitPreset,
+) -> Result<Option<InitSiteProvider>> {
+    if let Some(provider) = explicit_site_provider(options.site_provider.as_ref()) {
+        return Ok(Some(provider));
+    }
+    if matches!(options.site_provider, Some(InitSiteProvider::None)) {
+        return Ok(None);
+    }
+    if !preset_includes_site_provider(preset) {
+        return Ok(None);
     }
     if options.yes {
         return Ok(None);
@@ -935,12 +1124,66 @@ fn init_agent_cli(agent: &InitAgent) -> AgentCli {
     }
 }
 
+fn preset_includes_agent(preset: InitPreset) -> bool {
+    preset == InitPreset::Agent
+}
+
+fn preset_includes_issue_provider(preset: InitPreset) -> bool {
+    preset == InitPreset::Issue
+}
+
+fn preset_includes_site_provider(preset: InitPreset) -> bool {
+    preset == InitPreset::App
+}
+
+fn explicit_agent_requested(options: &InitOptions) -> bool {
+    matches!(
+        options.agent.as_ref(),
+        Some(InitAgent::Codex | InitAgent::Claude | InitAgent::Gemini)
+    ) || options.agent_command.is_some()
+        || !options.agent_args.is_empty()
+}
+
+fn explicit_issue_provider(provider: Option<&InitIssueProvider>) -> Option<InitIssueProvider> {
+    match provider {
+        Some(InitIssueProvider::Github) => Some(InitIssueProvider::Github),
+        Some(InitIssueProvider::Linear) => Some(InitIssueProvider::Linear),
+        Some(InitIssueProvider::None) | None => None,
+    }
+}
+
+fn explicit_site_provider(provider: Option<&InitSiteProvider>) -> Option<InitSiteProvider> {
+    match provider {
+        Some(InitSiteProvider::Herd) => Some(InitSiteProvider::Herd),
+        Some(InitSiteProvider::Valet) => Some(InitSiteProvider::Valet),
+        Some(InitSiteProvider::DockerProxy) => Some(InitSiteProvider::DockerProxy),
+        Some(InitSiteProvider::Traefik) => Some(InitSiteProvider::Traefik),
+        Some(InitSiteProvider::None) | None => None,
+    }
+}
+
 fn agent_cli_name(agent: &AgentCli) -> &'static str {
     match agent {
         AgentCli::Codex => "codex",
         AgentCli::Claude => "claude",
         AgentCli::Gemini => "gemini",
         AgentCli::None => "none",
+    }
+}
+
+fn preset_name(preset: InitPreset) -> &'static str {
+    match preset {
+        InitPreset::Minimal => "minimal",
+        InitPreset::Agent => "agent",
+        InitPreset::Issue => "issue",
+        InitPreset::App => "app",
+    }
+}
+
+fn target_kind_name(kind: InitTargetKind) -> &'static str {
+    match kind {
+        InitTargetKind::Local => "local",
+        InitTargetKind::Shared => "shared",
     }
 }
 
@@ -997,6 +1240,133 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
+    fn local_target(dir: &tempfile::TempDir) -> InitTarget {
+        InitTarget {
+            path: dir.path().join(".local/.wt.toml"),
+            kind: InitTargetKind::Local,
+        }
+    }
+
+    fn ctx_for_dir(dir: &tempfile::TempDir) -> Ctx {
+        Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        )
+    }
+
+    #[test]
+    fn init_minimal_preset_plan_records_target_preset_and_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::Minimal),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+
+        assert_eq!(plan.target_path, dir.path().join(".local/.wt.toml"));
+        assert_eq!(plan.target_kind, InitTargetKind::Local);
+        assert_eq!(plan.preset, InitPreset::Minimal);
+        assert_eq!(plan.sections, vec![InitSection::Workspace]);
+        assert!(!plan.content.contains("[profile.agent]"));
+        assert!(!plan.content.contains("[issues]"));
+        assert!(!plan.content.contains("[site]"));
+    }
+
+    #[test]
+    fn init_agent_preset_plan_writes_agent_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::Agent),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.sections,
+            vec![InitSection::ProfileAgent, InitSection::Workspace]
+        );
+        assert!(plan.content.contains("[profile.agent]"));
+        assert!(plan.content.contains("cli = \"codex\""));
+        assert!(!plan.content.contains("[issues]"));
+    }
+
+    #[test]
+    fn init_issue_preset_plan_writes_issue_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::Issue),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.sections,
+            vec![InitSection::Issues, InitSection::Workspace]
+        );
+        assert!(plan.content.contains("[issues]"));
+        assert!(plan.content.contains("provider = \"github\""));
+        assert!(!plan.content.contains("[profile.agent]"));
+    }
+
+    #[test]
+    fn init_app_preset_plan_writes_detected_app_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"test":"vitest","lint":"eslint ."}}"#,
+        )
+        .unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::App),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.sections,
+            vec![
+                InitSection::Setup,
+                InitSection::Test,
+                InitSection::Workspace
+            ]
+        );
+        assert!(plan.content.contains("[setup]"));
+        assert!(plan.content.contains("run = \"npm install\""));
+        assert!(plan.content.contains("[test]"));
+        assert!(plan.content.contains("run = \"npm test\""));
+    }
+
     #[test]
     fn init_local_codex_yes_creates_parseable_config() {
         let dir = tempfile::tempdir().unwrap();
@@ -1013,6 +1383,7 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
+                preset: Some(InitPreset::Agent),
                 agent: Some(InitAgent::Codex),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -1021,6 +1392,7 @@ mod tests {
                 gh_user: None,
                 yes: true,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1080,6 +1452,7 @@ mod tests {
             InitOptions {
                 local: false,
                 shared: true,
+                preset: Some(InitPreset::Issue),
                 agent: Some(InitAgent::None),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -1088,6 +1461,7 @@ mod tests {
                 gh_user: Some("alice".into()),
                 yes: false,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1126,6 +1500,7 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
+                preset: Some(InitPreset::Issue),
                 agent: Some(InitAgent::None),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -1134,6 +1509,7 @@ mod tests {
                 gh_user: None,
                 yes: true,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1166,6 +1542,7 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
+                preset: Some(InitPreset::Agent),
                 agent: Some(InitAgent::Codex),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -1174,6 +1551,7 @@ mod tests {
                 gh_user: None,
                 yes: false,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1207,6 +1585,7 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
+                preset: Some(InitPreset::Agent),
                 agent: Some(InitAgent::Codex),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -1215,6 +1594,7 @@ mod tests {
                 gh_user: None,
                 yes: false,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1237,10 +1617,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(1); // .wt.toml
+        ui.add_select(1); // agent preset
         ui.add_select(0); // codex
         ui.add_select(0); // no agent args
-        ui.add_select(2); // no issue provider
-        ui.add_select(0); // no site provider
         ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
 
@@ -1265,6 +1644,7 @@ mod tests {
                 gh_user: None,
                 yes: false,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1283,11 +1663,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .local/.wt.toml
+        ui.add_select(1); // agent preset
         ui.add_select(0); // codex
         ui.add_select(1); // enter agent args
         ui.add_input("--model gpt-5.5");
-        ui.add_select(2); // no issue provider
-        ui.add_select(0); // no site provider
         ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
 
@@ -1312,6 +1691,7 @@ mod tests {
                 gh_user: None,
                 yes: false,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1357,6 +1737,7 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
+                preset: Some(InitPreset::Minimal),
                 agent: Some(InitAgent::None),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -1365,6 +1746,7 @@ mod tests {
                 gh_user: None,
                 yes: false,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1445,6 +1827,7 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
+                preset: Some(InitPreset::Minimal),
                 agent: Some(InitAgent::None),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -1453,6 +1836,7 @@ mod tests {
                 gh_user: None,
                 yes: false,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1507,6 +1891,7 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
+                preset: Some(InitPreset::Minimal),
                 agent: Some(InitAgent::None),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -1515,6 +1900,7 @@ mod tests {
                 gh_user: None,
                 yes: false,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1575,7 +1961,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let agent_args_items = Arc::new(Mutex::new(None));
         let ui = CapturingUi {
-            selects: Mutex::new(VecDeque::from([0, 0, 0, 2, 0, 0])),
+            selects: Mutex::new(VecDeque::from([0, 1, 0, 0, 0])),
             confirms: Mutex::new(VecDeque::from([true])),
             agent_args_items: Arc::clone(&agent_args_items),
         };
@@ -1600,6 +1986,7 @@ mod tests {
                 gh_user: None,
                 yes: false,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1615,10 +2002,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .local/.wt.toml
+        ui.add_select(1); // agent preset
         ui.add_select(0); // codex
         ui.add_select(0); // no agent args
-        ui.add_select(2); // no issue provider
-        ui.add_select(0); // no site provider
         ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
 
@@ -1643,6 +2029,7 @@ mod tests {
                 gh_user: None,
                 yes: false,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1679,6 +2066,7 @@ mod tests {
                 gh_user: None,
                 yes: true,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1717,6 +2105,7 @@ mod tests {
                 gh_user: None,
                 yes: true,
                 force: false,
+                ..InitOptions::default()
             },
         );
 
@@ -1753,6 +2142,7 @@ mod tests {
                 gh_user: None,
                 yes: true,
                 force: false,
+                ..InitOptions::default()
             },
         )
         .unwrap();
@@ -1787,6 +2177,7 @@ mod tests {
                 gh_user: None,
                 yes: true,
                 force: false,
+                ..InitOptions::default()
             },
         );
 
@@ -1804,9 +2195,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // .local/.wt.toml
-        ui.add_select(3); // none
-        ui.add_select(2); // no issue provider
-        ui.add_select(0); // no site provider
+        ui.add_select(0); // minimal preset
         ui.add_select(0); // minimal additional settings
         ui.add_confirm(false); // do not create config
 
@@ -1831,6 +2220,7 @@ mod tests {
                 gh_user: None,
                 yes: false,
                 force: false,
+                ..InitOptions::default()
             },
         );
 
@@ -1864,6 +2254,7 @@ mod tests {
             gh_user: None,
             yes: true,
             force: false,
+            ..InitOptions::default()
         };
         assert!(run(&ctx, options).is_err());
 
@@ -1882,6 +2273,7 @@ mod tests {
                     gh_user: None,
                     yes: true,
                     force: false,
+                    ..InitOptions::default()
                 }
             },
         )

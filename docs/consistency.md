@@ -134,9 +134,10 @@ Canonical starter preset 이름은 `minimal`, `agent`, `issue`, `app`이다.
   starter다. Detected command는 사용자가 선택했거나 non-interactive default로 안전하게
   설명할 수 있을 때만 active config로 쓴다.
 
-`wt init --yes`는 non-interactive default를 받아들이는 자동화 경로다. TTY가 아니면
-`--yes`, `--minimal`, 또는 `--preset <name>`처럼 prompt 없이 끝낼 수 있는 starter 선택이
-있어야 하며, 그렇지 않으면 interactive prompt를 시도하지 말고 명확한 에러로 실패한다.
+preset을 명시하지 않은 `wt init --yes`는 non-interactive default를 받아들이는 자동화 경로이며
+`minimal` preset을 선택한다. TTY가 아니면 `--yes`, `--minimal`, 또는
+`--preset <name>`처럼 prompt 없이 끝낼 수 있는 starter 선택이 있어야 하며, 그렇지 않으면
+interactive prompt를 시도하지 말고 명확한 에러로 실패한다.
 `wt init --preset <name> --yes`는 반복 가능한 automation 표면이므로 같은 repo 상태와 같은
 flag 조합에서 같은 config content를 만들어야 한다. `wt init --dry-run`은 같은 validation을
 거친 뒤 생성될 target, preset, section, TOML content를 preview하고 파일을 쓰지 않는다.

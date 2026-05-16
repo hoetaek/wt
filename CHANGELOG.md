@@ -8,6 +8,14 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added canonical `wt init` starter presets with `--preset
+  <minimal|agent|issue|app>`, `--minimal`, and `--dry-run` so wizard and
+  non-interactive init paths build the same typed generation plan before
+  writing a config file.
+- Changed bare `wt init --yes` to choose the `minimal` preset; explicit options
+  such as `--agent codex` still add their matching sections.
+- Bumped the package version to `0.16.0` because `wt init` gained new
+  user-facing CLI options while `wt` is still pre-1.0.
 - Added multi-task `wt new` workspace runs. Repeat `--task <task>` with
   branch-name text, or use bare `wt new --task` to multi-select tasks and
   prompt for a workspace branch when more than one task is selected.
