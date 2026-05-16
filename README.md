@@ -108,10 +108,13 @@ wt new --task
 wt new --task add-profile-docs
 ```
 
-Publish a prepared local task to the configured issue provider:
+Publish prepared local tasks to the configured issue provider without starting
+workspaces:
 
 ```bash
 wt task publish add-profile-docs
+wt task publish --stack latest
+wt task publish --batch latest
 ```
 
 Prepare issue work in bulk:
@@ -519,7 +522,7 @@ created profile worktree gets its own TaskRun record.
 ## Publishing Local Tasks
 
 Use `wt task publish <task>...` to create provider issues from local
-TaskDocuments:
+TaskDocuments without starting workspaces:
 
 ```bash
 wt task publish add-profile-docs
@@ -533,11 +536,20 @@ import provider issues into `.local/tasks/`. `wt issue` remains focused on
 starting work from existing provider issues; it is not the issue-creation
 surface for local tasks.
 
-Publishing is a provider side effect with a durable local link. The command
+Publishing is a provider side effect with a durable local link. It does not
+start workspaces, create TaskRuns, or run batch or stack work. The command
 succeeds only after the provider issue is created and the selected
 `.local/tasks/<task>.toml` file is updated with `[origin]`. If either step
 fails, the command must not report success. The `origin` table is the durable
 link to the external issue, not a pending publish request.
+
+After `[origin]` is written, `wt new --task`, `wt batch run`, and
+`wt stack run` treat that TaskDocument as provider-origin issue work. The
+`origin.id` becomes the issue identifier used for naming, setup mode, and agent
+prompt context. If the TaskDocument still has a `branch`, future runs use that
+branch; if `branch` is empty, the configured provider is asked to ensure the
+issue branch and the resulting branch is written back to the task on a
+successful start.
 
 TaskDocument stays limited to title, branch, body, and optional origin:
 

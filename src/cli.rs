@@ -302,7 +302,7 @@ pub enum BatchCommand {
 pub enum TaskCommand {
     /// Publish local TaskDocuments as provider issues
     #[command(
-        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id.\n\nSelect tasks with explicit task keys, --stack <STACK>, or --batch <BATCH>. Stack and batch selectors accept a TOML path, shorthand id, or \"latest\". Mixed sources are rejected before creating issues.\n\nFails before creating an issue for a task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run batch or stack work.\n\nAfter [origin] is written, later wt new --task, wt batch run, and wt stack run treat the task as provider-origin issue work.\n\nSelect tasks with explicit task keys, --stack <STACK>, or --batch <BATCH>. Stack and batch selectors accept a TOML path, shorthand id, or \"latest\". Mixed sources are rejected before creating issues.\n\nFails before creating an issue for a task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
     )]
     Publish {
         /// Local task keys from .local/tasks/<task>.toml
@@ -920,6 +920,8 @@ mod tests {
 
         assert!(help.contains("provider issue"));
         assert!(help.contains("write [origin]"));
+        assert!(help.contains("does not start workspaces"));
+        assert!(help.contains("later wt new --task, wt batch run, and wt stack run"));
         assert!(help.contains("--stack <STACK>"));
         assert!(help.contains("--batch <BATCH>"));
         assert!(help.contains("Mixed sources are rejected"));
