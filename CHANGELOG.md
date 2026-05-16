@@ -8,6 +8,14 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added multi-task `wt new` workspace runs. Repeat `--task <task>` with
+  branch-name text, or use bare `wt new --task` to multi-select tasks and
+  prompt for a workspace branch when more than one task is selected.
+- Changed `wt review [TARGET]` to show every TaskRun that matches the selected
+  branch, so a multi-task `wt new` workspace can be reviewed as one worktree
+  with separate task records.
+- Bumped the package version to `0.15.0` because multi-task `wt new` changes
+  the user-facing CLI and TaskRun state model while `wt` is still pre-1.0.
 - Changed stack task prompts to ask task agents to `wt send` their Agent
   Completion Report back to the coordinator worktree before waiting for review;
   the coordinator still advances the stack with `wt stack complete --run-next`.

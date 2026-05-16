@@ -69,6 +69,7 @@ impl TaskDocument {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn select_local_task(ctx: &Ctx) -> Result<SelectedTask> {
     let tasks = list_local_tasks(ctx)?;
     if tasks.is_empty() {
@@ -81,6 +82,24 @@ pub(crate) fn select_local_task(ctx: &Ctx) -> Result<SelectedTask> {
         .get(idx)
         .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
     Ok(task.clone())
+}
+
+pub(crate) fn select_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
+    let tasks = list_local_tasks(ctx)?;
+    if tasks.is_empty() {
+        bail!("No task files found in .local/tasks");
+    }
+
+    let items = tasks.iter().map(task_selection_label).collect::<Vec<_>>();
+    let selections = ctx.ui.multi_select("Select local tasks to start", &items)?;
+    let mut selected = Vec::new();
+    for idx in selections {
+        let task = tasks
+            .get(idx)
+            .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
+        selected.push(task.clone());
+    }
+    Ok(selected)
 }
 
 pub(crate) fn select_local_task_by_key(ctx: &Ctx, key: &str) -> Result<SelectedTask> {

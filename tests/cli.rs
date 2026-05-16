@@ -72,7 +72,7 @@ fn new_without_args_requires_branch_text_or_task_option() {
 }
 
 #[test]
-fn new_task_option_without_value_reaches_local_task_selection() {
+fn new_task_option_without_value_enters_task_selection() {
     let temp = TempDir::new().unwrap();
     let status = StdCommand::new("git")
         .arg("init")
@@ -101,7 +101,7 @@ fn new_help_explains_branch_text_and_task_selection() {
         .stdout(predicate::str::contains("branch-name text"))
         .stdout(predicate::str::contains("--task [<TASK>]"))
         .stdout(predicate::str::contains(
-            "omit value to select from .local/tasks/*.toml",
+            "repeat for multiple; omit value to select",
         ));
 }
 

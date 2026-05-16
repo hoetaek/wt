@@ -38,11 +38,7 @@ pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
             .print_dim("  Worktree: branch is not checked out in a local worktree"),
     }
 
-    if let Some(record) = latest_task_run_for_target(ctx, &target)? {
-        print_task_run(ctx, &record)?;
-    } else {
-        ctx.ui.print_dim("  TaskRun: none");
-    }
+    print_task_runs(ctx, &task_runs_for_target(ctx, &target)?)?;
 
     print_worktree_status(ctx, status.as_deref());
     print_cmux_contact(ctx, target.worktree.as_deref());
@@ -177,26 +173,31 @@ fn worktree_matches(entry: &WorktreeEntry, raw: &str) -> bool {
             .is_some_and(|name| name == raw)
 }
 
-fn latest_task_run_for_target(
-    ctx: &Ctx,
-    target: &ReviewTarget,
-) -> Result<Option<task_run::TaskRunRecord>> {
+fn task_runs_for_target(ctx: &Ctx, target: &ReviewTarget) -> Result<Vec<task_run::TaskRunRecord>> {
     if let Some(record) = target.task_run.clone() {
-        return Ok(Some(record));
+        return Ok(vec![record]);
     }
 
     let mut records = task_run::list(ctx)?
         .into_iter()
         .filter(|record| record.run.branch == target.branch)
         .collect::<Vec<_>>();
-    records.sort_by(|left, right| {
-        left.run
-            .updated_at
-            .cmp(&right.run.updated_at)
-            .then_with(|| left.run.created_at.cmp(&right.run.created_at))
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    Ok(records.pop())
+    records.sort_by(task_run::compare_task_run_records);
+    Ok(records)
+}
+
+fn print_task_runs(ctx: &Ctx, records: &[task_run::TaskRunRecord]) -> Result<()> {
+    match records {
+        [] => ctx.ui.print_dim("  TaskRun: none"),
+        [record] => print_task_run(ctx, record)?,
+        _ => {
+            ctx.ui.print_dim(&format!("  TaskRuns: {}", records.len()));
+            for record in records {
+                print_task_run(ctx, record)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn print_task_run(ctx: &Ctx, record: &task_run::TaskRunRecord) -> Result<()> {
@@ -565,6 +566,69 @@ mod tests {
         assert!(dims.contains("Parent: main"));
         assert!(dims.contains("Commits ahead of parent: 2"));
         assert!(dims.contains("dirty (1 paths)"));
+    }
+
+    #[test]
+    fn review_prints_all_task_runs_for_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("sample");
+        let worktree = dir.path().join("sample-workspace");
+        std::fs::create_dir_all(repo.join(".local/tasks")).unwrap();
+        std::fs::create_dir_all(repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            repo.join(".local/tasks/add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join(".local/tasks/publish-issues.toml"),
+            "title = \"Publish issues\"\nbranch = \"publish-issues\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join(".local/task-runs/run-add-schema.toml"),
+            "task = \"add-schema\"\nbranch = \"team-run\"\nstatus = \"running\"\nsource = \"new\"\ncreation_order = 1\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join(".local/task-runs/run-publish-issues.toml"),
+            "task = \"publish-issues\"\nbranch = \"team-run\"\nstatus = \"running\"\nsource = \"new\"\ncreation_order = 2\ncreated_at = \"2026-05-16T00:00:01Z\"\nupdated_at = \"2026-05-16T00:00:01Z\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/master\n\nworktree {}\nHEAD def\nbranch refs/heads/team-run\n\n",
+                repo.display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("main", true);
+        runner.add_response("", true);
+        runner.add_response("1", true);
+        runner.add_response("def add review", true);
+        runner.add_response(" src/lib.rs | 1 +\n 1 file changed, 1 insertion(+)", true);
+        runner.add_response("1", true);
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo,
+            worktree,
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui.clone()),
+        );
+
+        run(&ctx, Some("team-run")).unwrap();
+
+        let dims = ui.dims.lock().unwrap().join("\n");
+        assert!(dims.contains("TaskRuns: 2"));
+        assert!(dims.contains("TaskRun: run-add-schema"));
+        assert!(dims.contains("TaskRun: run-publish-issues"));
+        assert!(dims.contains("Task: .local/tasks/add-schema.toml (Add schema)"));
+        assert!(dims.contains("Task: .local/tasks/publish-issues.toml (Publish issues)"));
     }
 
     #[test]

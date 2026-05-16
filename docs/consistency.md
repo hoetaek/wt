@@ -49,9 +49,13 @@ named profile 목록으로 확장하는 개념이다. `batch`나 `stack`처럼 �
 provider issue를 origin이 있는 task로 가져온다.
 
 `wt new <words...>`는 branch-name text에서 바로 worktree를 시작한다.
-`.local/tasks` 아래의 준비된 task를 하나 골라 바로 시작하려면 `wt new --task [task]`를
-쓴다. Bare `wt new`처럼 생략으로 입력 소스를 바꾸면 branch-name 입력과 task 선택이
-같은 빈 입력에 묶여서 사용자가 대상을 다시 추론해야 한다.
+`.local/tasks` 아래의 준비된 task를 시작하려면 `wt new --task` selector나
+`wt new --task <task>`를 쓴다. 여러 prepared task를 한 workspace에서 처리하려면
+`wt new <workspace-branch-words...> --task <task> --task <task>`처럼 `--task`를
+반복한다. 이때 branch-name text는 공유 workspace branch이고, 각 TaskDocument는 같은
+branch와 group을 가리키는 별도 TaskRun으로 기록된다. `--tasks` 같은 별도 복수 옵션은
+만들지 않는다. Bare `wt new`는 여전히 거부한다. Bare `wt new --task`는 빈 입력을 다른
+소스로 추론하는 것이 아니라, 사용자가 task selector를 명시한 것이다.
 
 `wt open`은 issue selector가 아니라 branch/worktree 상태 selector다. 선택지는 현재
 checkout을 제외하고 `existing`(이미 별도 worktree가 있음), `local`(local branch만
@@ -171,8 +175,11 @@ status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이고,
 
 통합 실행 상태 모델은 TaskDocument와 TaskRun의 책임을 나누는 데서 시작한다.
 TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, TaskRun은 그 설명을 한 번
-실행한 기록이다. `wt new --task`, `wt batch run`, `wt stack run`은 모두 TaskDocument를
-읽어 실행 context로 쓰고, 실행 상태는 `.local/task-runs`의 TaskRun에만 쓴다.
+실행한 기록이다. `wt new --task`, `wt new --task <task>`, `wt batch run`,
+`wt stack run`은 모두 TaskDocument를 읽어 실행 context로 쓰고, 실행 상태는
+`.local/task-runs`의 TaskRun에만 쓴다. 하나의
+`wt new <workspace> --task <task> --task <task>` 실행은 workspace를 하나 만들 수 있지만,
+실행 기록은 task마다 별도 TaskRun으로 남긴다.
 
 Batch가 어떤 task를 준비했고, 어떤 task가 끝났고, 어떤 task가 실패했는지는 저장할
 가치가 있다. Batch 준비는 각 task마다 `.local/tasks` 아래의 TaskDocument와
