@@ -3,6 +3,7 @@ use anyhow::Result;
 pub mod github;
 pub mod linear;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueInfo {
     pub identifier: String,
     pub title: String,
@@ -10,10 +11,17 @@ pub struct IssueInfo {
     pub body: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueListItem {
     pub identifier: String,
     pub title: String,
     pub display: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateIssueRequest {
+    pub title: String,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +33,7 @@ pub struct EnsuredBranch {
 pub trait IssueProvider {
     fn get_issue(&self, id: &str) -> Result<IssueInfo>;
     fn list_issues(&self) -> Result<Vec<IssueListItem>>;
+    fn create_issue(&self, request: CreateIssueRequest) -> Result<IssueInfo>;
     fn ensure_branch(
         &self,
         id: &str,

@@ -1,3 +1,4 @@
+use crate::context::CmdOutput;
 use crate::context::CommandRunner;
 use anyhow::{Result, bail};
 use serde::Deserialize;
@@ -73,6 +74,38 @@ impl<'a> LinearService<'a> {
         Ok(issues)
     }
 
+    pub fn create_issue(&self, title: &str, description: &str) -> Result<Issue> {
+        let out = self.runner.run(
+            "linear",
+            &[
+                "issue",
+                "create",
+                "--title",
+                title,
+                "--description",
+                description,
+            ],
+            self.cwd,
+        )?;
+        if !out.success {
+            bail!(
+                "Linear issue creation failed: {}",
+                command_failure_detail(&out)
+            );
+        }
+
+        let Some(identifier) = parse_created_identifier(&out.stdout, &out.stderr) else {
+            bail!("linear issue create did not return a created issue identifier");
+        };
+
+        Ok(Issue {
+            identifier,
+            title: title.to_string(),
+            branch_name: None,
+            description: optional_description(description),
+        })
+    }
+
     pub fn update_status(&self, identifier: &str, state: &str) -> Result<()> {
         let out = self.runner.run(
             "linear",
@@ -83,6 +116,63 @@ impl<'a> LinearService<'a> {
             bail!("Failed to update issue {identifier} to {state}");
         }
         Ok(())
+    }
+}
+
+fn parse_created_identifier(stdout: &str, stderr: &str) -> Option<String> {
+    stderr
+        .lines()
+        .chain(stdout.lines())
+        .find_map(parse_created_identifier_line)
+}
+
+fn parse_created_identifier_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if let Some(identifier) = trimmed.strip_prefix("Created:") {
+        return normalize_identifier(identifier.trim());
+    }
+
+    trimmed
+        .split_whitespace()
+        .find_map(parse_created_identifier_token)
+}
+
+fn parse_created_identifier_token(token: &str) -> Option<String> {
+    let (_, issue) = token.split_once("/issue/")?;
+    let issue = issue
+        .split(['?', '#', '/', '\t', '\r', '\n'])
+        .next()
+        .unwrap_or(issue)
+        .trim();
+    normalize_identifier(issue)
+}
+
+fn normalize_identifier(identifier: &str) -> Option<String> {
+    let (team, number) = identifier.split_once('-')?;
+    if team.is_empty()
+        || number.is_empty()
+        || !team.chars().all(|ch| ch.is_ascii_alphanumeric())
+        || !number.chars().all(|ch| ch.is_ascii_digit())
+    {
+        None
+    } else {
+        Some(format!("{}-{number}", team.to_ascii_uppercase()))
+    }
+}
+
+fn optional_description(description: &str) -> Option<String> {
+    if description.trim().is_empty() {
+        None
+    } else {
+        Some(description.to_string())
+    }
+}
+
+fn command_failure_detail(out: &CmdOutput) -> &str {
+    if out.stderr.trim().is_empty() {
+        out.stdout.trim()
+    } else {
+        out.stderr.trim()
     }
 }
 

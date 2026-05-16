@@ -1,5 +1,7 @@
 use crate::context::CommandRunner;
-use crate::services::issues::{EnsuredBranch, IssueInfo, IssueListItem, IssueProvider};
+use crate::services::issues::{
+    CreateIssueRequest, EnsuredBranch, IssueInfo, IssueListItem, IssueProvider,
+};
 use crate::services::linear::LinearService;
 use anyhow::Result;
 use std::path::Path;
@@ -47,6 +49,16 @@ impl IssueProvider for LinearIssueProvider<'_> {
                 }
             })
             .collect())
+    }
+
+    fn create_issue(&self, request: CreateIssueRequest) -> Result<IssueInfo> {
+        let issue = self.linear.create_issue(&request.title, &request.body)?;
+        Ok(IssueInfo {
+            identifier: issue.identifier,
+            title: issue.title,
+            branch_name: issue.branch_name,
+            body: issue.description,
+        })
     }
 
     fn ensure_branch(
@@ -132,6 +144,77 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].identifier, "PROJ-1");
         assert_eq!(items[0].display, "PROJ-1    Started      alice    Issue 1");
+    }
+
+    #[test]
+    fn create_issue_delegates_to_linear_cli_and_parses_identifier() {
+        let mut runner = MockRunner::new();
+        runner.add_response_with_stderr(
+            "https://linear.app/acme/issue/PROJ-123/add-publish",
+            "Created: PROJ-123",
+            true,
+        );
+
+        let provider = LinearIssueProvider::new(&runner, None);
+        let issue = provider
+            .create_issue(CreateIssueRequest {
+                title: "Add publish".into(),
+                body: "Create provider issue.".into(),
+            })
+            .unwrap();
+
+        assert_eq!(issue.identifier, "PROJ-123");
+        assert_eq!(issue.title, "Add publish");
+        assert_eq!(issue.body.as_deref(), Some("Create provider issue."));
+        assert!(issue.branch_name.is_none());
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "issue",
+                "create",
+                "--title",
+                "Add publish",
+                "--description",
+                "Create provider issue."
+            ]
+        );
+    }
+
+    #[test]
+    fn create_issue_reports_linear_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response_with_stderr("", "--team is required (or set team_id in config)", false);
+
+        let provider = LinearIssueProvider::new(&runner, None);
+        let result = provider.create_issue(CreateIssueRequest {
+            title: "Add publish".into(),
+            body: String::new(),
+        });
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Linear issue creation failed"));
+        assert!(err.contains("--team is required"));
+    }
+
+    #[test]
+    fn create_issue_errors_when_linear_output_has_no_identifier() {
+        let mut runner = MockRunner::new();
+        runner.add_response("https://linear.app/acme/inbox/123", true);
+
+        let provider = LinearIssueProvider::new(&runner, None);
+        let result = provider.create_issue(CreateIssueRequest {
+            title: "Add publish".into(),
+            body: String::new(),
+        });
+
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("did not return a created issue identifier")
+        );
     }
 
     #[test]

@@ -1,5 +1,8 @@
+use crate::context::CmdOutput;
 use crate::context::CommandRunner;
-use crate::services::issues::{EnsuredBranch, IssueInfo, IssueListItem, IssueProvider};
+use crate::services::issues::{
+    CreateIssueRequest, EnsuredBranch, IssueInfo, IssueListItem, IssueProvider,
+};
 use anyhow::{Result, bail};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -100,6 +103,38 @@ impl IssueProvider for GithubIssueProvider<'_> {
                 title: i.title,
             })
             .collect())
+    }
+
+    fn create_issue(&self, request: CreateIssueRequest) -> Result<IssueInfo> {
+        let out = self.runner.run(
+            "gh",
+            &[
+                "issue",
+                "create",
+                "--title",
+                &request.title,
+                "--body",
+                &request.body,
+            ],
+            self.cwd,
+        )?;
+        if !out.success {
+            bail!(
+                "GitHub issue creation failed: {}",
+                command_failure_detail(&out)
+            );
+        }
+
+        let Some(number) = parse_created_issue_number(&out.stdout) else {
+            bail!("gh issue create did not return an issue URL containing an issue number");
+        };
+
+        Ok(IssueInfo {
+            identifier: format!("#{number}"),
+            title: request.title,
+            branch_name: None,
+            body: optional_body(request.body),
+        })
     }
 
     fn ensure_branch(
@@ -205,12 +240,48 @@ fn parse_tree_url_branch(value: &str) -> Option<String> {
     }
 }
 
+fn parse_created_issue_number(stdout: &str) -> Option<u32> {
+    stdout
+        .split_whitespace()
+        .find_map(parse_created_issue_number_token)
+}
+
+fn parse_created_issue_number_token(token: &str) -> Option<u32> {
+    let (_, issue) = token.split_once("/issues/")?;
+    let issue = issue
+        .split(['?', '#', '/', '\t', '\r', '\n'])
+        .next()
+        .unwrap_or(issue)
+        .trim();
+    if issue.is_empty() {
+        None
+    } else {
+        issue.parse().ok()
+    }
+}
+
 fn snapshot_body(body: Option<String>, url: Option<String>) -> Option<String> {
     match (body, url) {
         (Some(body), Some(url)) if !body.trim().is_empty() => Some(format!("{body}\n\nURL: {url}")),
         (Some(body), _) if !body.trim().is_empty() => Some(body),
         (_, Some(url)) => Some(format!("URL: {url}")),
         _ => None,
+    }
+}
+
+fn optional_body(body: String) -> Option<String> {
+    if body.trim().is_empty() {
+        None
+    } else {
+        Some(body)
+    }
+}
+
+fn command_failure_detail(out: &CmdOutput) -> &str {
+    if out.stderr.trim().is_empty() {
+        out.stdout.trim()
+    } else {
+        out.stderr.trim()
     }
 }
 
@@ -285,6 +356,73 @@ mod tests {
 
         let calls = runner.calls.lock().unwrap();
         assert!(!calls[0].1.contains(&"-a".to_string()));
+    }
+
+    #[test]
+    fn create_issue_parses_created_issue_url() {
+        let mut runner = MockRunner::new();
+        runner.add_response("https://github.com/acme/widgets/issues/123", true);
+
+        let provider = GithubIssueProvider::new(&runner, None, None);
+        let issue = provider
+            .create_issue(CreateIssueRequest {
+                title: "Add publish".into(),
+                body: "Create provider issue.".into(),
+            })
+            .unwrap();
+
+        assert_eq!(issue.identifier, "#123");
+        assert_eq!(issue.title, "Add publish");
+        assert_eq!(issue.body.as_deref(), Some("Create provider issue."));
+        assert!(issue.branch_name.is_none());
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "issue",
+                "create",
+                "--title",
+                "Add publish",
+                "--body",
+                "Create provider issue."
+            ]
+        );
+    }
+
+    #[test]
+    fn create_issue_reports_gh_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response_with_stderr("", "GraphQL: could not create issue", false);
+
+        let provider = GithubIssueProvider::new(&runner, None, None);
+        let result = provider.create_issue(CreateIssueRequest {
+            title: "Add publish".into(),
+            body: String::new(),
+        });
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("GitHub issue creation failed"));
+        assert!(err.contains("GraphQL: could not create issue"));
+    }
+
+    #[test]
+    fn create_issue_errors_when_gh_output_has_no_issue_number() {
+        let mut runner = MockRunner::new();
+        runner.add_response("https://github.com/acme/widgets/pulls/123", true);
+
+        let provider = GithubIssueProvider::new(&runner, None, None);
+        let result = provider.create_issue(CreateIssueRequest {
+            title: "Add publish".into(),
+            body: String::new(),
+        });
+
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("did not return an issue URL")
+        );
     }
 
     #[test]

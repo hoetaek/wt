@@ -155,6 +155,14 @@ pub mod mock {
             });
         }
 
+        pub fn add_response_with_stderr(&mut self, stdout: &str, stderr: &str, success: bool) {
+            self.responses.lock().unwrap().push_back(CmdOutput {
+                stdout: stdout.into(),
+                stderr: stderr.into(),
+                success,
+            });
+        }
+
         pub fn add_command(&mut self, cmd: &str) {
             self.available_commands.push(cmd.into());
         }
