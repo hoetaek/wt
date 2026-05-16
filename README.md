@@ -77,11 +77,13 @@ wt init --preset agent --yes
 
 Canonical starter presets are `minimal`, `agent`, `issue`, and `app`. The
 `agent` preset uses Codex by default; pass `--agent <name>` to choose another
-runtime. Use `--local` to target `.local/.wt.toml` or `--shared` to target
-`.wt.toml`; use `--dry-run` to preview the generated TOML without writing files.
-Dry run is the safe inspection path: it prints the target file, selected preset,
-selected sections, detected repo signals, and generated TOML while leaving both
-`.wt.toml` and `.local/.wt.toml` untouched.
+runtime. The `app` preset scans the repo for setup commands, dev tabs, and test
+commands it can place in the generated plan. Use `--local` to target
+`.local/.wt.toml` or `--shared` to target `.wt.toml`; use `--dry-run` to preview
+the generated TOML without writing files. Dry run is the safe inspection path:
+it prints the target file, selected preset, selected sections, detected repo
+signals, and generated TOML while leaving both `.wt.toml` and `.local/.wt.toml`
+untouched.
 
 ```bash
 wt init --preset app --yes --dry-run
@@ -100,7 +102,10 @@ wt init --shared --preset issue --issue-provider github --yes
 ```
 
 `wt init` does not create named profile directories or prompt scaffold files;
-use `wt config extract` or `wt profile create` when you want that structure.
+keep small runtime settings inline in the selected config file. Use
+`wt config extract` to move inline `[profile.*]` settings into a named profile,
+or `wt profile create` when you want to start with an explicit profile
+directory.
 
 Start a workspace from an issue:
 

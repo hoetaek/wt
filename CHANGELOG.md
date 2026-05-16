@@ -9,13 +9,20 @@ minor version instead of moving to `x.0.0`.
 ## Unreleased
 
 - Added canonical `wt init` starter presets with `--preset
-  <minimal|agent|issue|app>`, `--minimal`, and `--dry-run` so wizard and
-  non-interactive init paths build the same typed generation plan before
-  writing a config file.
+  <minimal|agent|issue|app>`, `--minimal`, and `--dry-run` so the guided wizard
+  and non-interactive init paths build the same typed generation plan before
+  writing only the selected config file.
+- Added repo detection to `wt init` plans for setup commands, app dev tabs, and
+  test commands. Dry runs print the target file, selected preset, generated
+  sections, detected signals, and TOML without writing files.
 - Changed bare `wt init --yes` to choose the `minimal` preset; explicit options
   such as `--agent codex` still add their matching sections.
-- Bumped the package version to `0.16.0` because `wt init` gained new
-  user-facing CLI options while `wt` is still pre-1.0.
+- Documented post-init structure paths: keep simple runtime settings inline in
+  the selected config file, then use `wt config extract` or
+  `wt profile create` when named profile directories or prompt/scaffold files
+  are needed.
+- Bumped the package version to `0.17.0` because the final `wt init` starter
+  wizard changes user-facing CLI behavior while `wt` is still pre-1.0.
 - Added multi-task `wt new` workspace runs. Repeat `--task <task>` with
   branch-name text, or use bare `wt new --task` to multi-select tasks and
   prompt for a workspace branch when more than one task is selected.
@@ -199,8 +206,8 @@ kept as internal development history, not package release ordering.
 
 - Changed config loading to merge `.wt.toml` as the shared base with
   `.local/.wt.toml` as the private override.
-- Changed `wt init --agent <agent>` to create a default profile under
-  `.local/profiles/<agent>/` and set `[profiles] default = "<agent>"`.
+- Added early agent-oriented init scaffolding that was later replaced by the
+  selected-config-only `wt init` model documented above.
 
 ### Former 0.3.0
 

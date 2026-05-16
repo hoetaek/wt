@@ -139,8 +139,10 @@ preset을 명시하지 않은 `wt init --yes`는 non-interactive default를 받�
 `--preset <name>`처럼 prompt 없이 끝낼 수 있는 starter 선택이 있어야 하며, 그렇지 않으면
 interactive prompt를 시도하지 말고 명확한 에러로 실패한다.
 `wt init --preset <name> --yes`는 반복 가능한 automation 표면이므로 같은 repo 상태와 같은
-flag 조합에서 같은 config content를 만들어야 한다. `wt init --dry-run`은 같은 validation을
-거친 뒤 생성될 target, preset, section, TOML content를 preview하고 파일을 쓰지 않는다.
+flag 조합에서 같은 config content를 만들어야 한다. `app` starter는 repo manifest를 scan해
+setup command, dev tab, test command 후보를 plan에 반영한다. `wt init --dry-run`은 같은
+validation을 거친 뒤 생성될 target, preset, section, detected signal, TOML content를
+preview하고 파일을 쓰지 않는다.
 
 Generated output은 여전히 사용자가 선택한 config 파일 하나에만 쓴다. `.wt.toml`과
 `.local/.wt.toml` 중 하나를 선택하고, 답한 설정은 그 파일에만 쓴다. 다른 config 파일,
@@ -148,7 +150,7 @@ named profile directory, prompt/scaffold 파일은 `wt init`의 부수 효과로
 그런 구조가 필요하면 `wt config extract`나 `wt profile create`로 드러낸다. 나중에 starter
 scaffold generation을 추가하더라도 별도의 명시적 starter choice로 다뤄야 한다.
 
-Planned `wt init --help` contract도 이 모델을 따라야 한다. Subcommand 설명은 “start a
+`wt init --help` contract도 이 모델을 따라야 한다. Subcommand 설명은 “start a
 workspace config wizard”를 말해야 하고, `--minimal`, `--preset <minimal|agent|issue|app>`,
 `--yes`, `--dry-run`, `--local`, `--shared`는 starter shape, automation, preview, target
 file 선택을 설명해야 한다. Help text는 named profile directory나 prompt/scaffold file을
