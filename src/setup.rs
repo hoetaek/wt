@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 const DEFAULT_SITE_NAME_TEMPLATE: &str = "{{repo}}-{{branch_slug}}";
-const CMUX_BACKGROUND_AGENT_PROBE_SECS: u64 = 10;
+const CMUX_BACKGROUND_AGENT_PROBE_SECS: u64 = 5;
 const CMUX_FOCUS_SETTLE_SECS: u64 = 3;
 
 #[derive(Clone, Copy)]
