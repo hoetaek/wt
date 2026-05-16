@@ -356,8 +356,7 @@ pub enum TaskCommand {
 pub enum WorkflowCommand {
     /// Prepare local tasks as a workflow file without starting workspaces
     Task {
-        /// Task titles or existing task keys to prepare
-        #[arg(required = true)]
+        /// Task titles or existing task keys to prepare (omit to select multiple existing tasks)
         tasks: Vec<String>,
         /// Workflow execution shape
         #[arg(long, value_enum)]
@@ -1108,6 +1107,23 @@ mod tests {
     }
 
     #[test]
+    fn workflow_task_accepts_no_task_args_for_interactive_selection() {
+        let cli = parse(&["wt", "workflow", "task", "--mode", "batch"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Task {
+                    ref tasks,
+                    mode: WorkflowModeArg::Batch,
+                    profile: None,
+                    base: None,
+                    pull_request: false,
+                }
+            }) if tasks.is_empty()
+        ));
+    }
+
+    #[test]
     fn workflow_issue_accepts_no_issue_args_for_interactive_selection() {
         let cli = parse(&["wt", "workflow", "issue", "--mode", "batch"]);
         assert!(matches!(
@@ -1147,6 +1163,16 @@ mod tests {
         assert!(help.contains("task"));
         assert!(help.contains("issue"));
         assert!(help.contains("complete"));
+    }
+
+    #[test]
+    fn workflow_task_help_explains_interactive_task_selection() {
+        let mut command = Cli::command();
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+        let task = workflow.find_subcommand_mut("task").unwrap();
+        let help = task.render_help().to_string();
+        assert!(help.contains("[TASKS]..."));
+        assert!(help.contains("omit to select multiple existing tasks"));
     }
 
     #[test]

@@ -30,7 +30,17 @@ pub fn task(
 ) -> Result<()> {
     validate_profile(ctx, profile)?;
     validate_mode_options(mode, pull_request)?;
-    let prepared_tasks = task_command::prepare_named_tasks(ctx, tasks)?;
+    let prepared_tasks = if tasks.is_empty() {
+        task_command::select_local_tasks(ctx)?
+            .into_iter()
+            .map(|task| PreparedTask {
+                key: task.key,
+                branch: task.document.branch,
+            })
+            .collect()
+    } else {
+        task_command::prepare_named_tasks(ctx, tasks)?
+    };
     write_prepared_workflow(ctx, mode, profile, base, prepared_tasks, pull_request)
 }
 
@@ -1495,6 +1505,59 @@ mod tests {
         assert!(workflow.tasks.iter().all(|row| row.parent.is_none()));
         assert!(workflow.tasks.iter().all(|row| row.pull_request.is_none()));
         assert_eq!(task_run::list(&ctx).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn task_without_args_multi_selects_existing_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("wire-api.toml"),
+            "title = \"Wire API\"\nbranch = \"wire-api\"\n",
+        )
+        .unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0, 1]);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        task(
+            &ctx,
+            &[],
+            WorkflowModeArg::Batch,
+            None,
+            &Some("main".into()),
+            false,
+        )
+        .unwrap();
+
+        let workflow = workflow_store::list(&ctx).unwrap().remove(0).workflow;
+        assert_eq!(workflow.mode, WorkflowMode::Batch);
+        assert_eq!(workflow.tasks.len(), 2);
+        assert_eq!(workflow.tasks[0].task, "add-schema");
+        assert_eq!(workflow.tasks[1].task, "wire-api");
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 2);
+        assert!(
+            runs.iter()
+                .all(|record| record.run.source == task_run::SOURCE_BATCH)
+        );
+        assert!(
+            runs.iter()
+                .all(|record| record.run.status == STATUS_PREPARED)
+        );
     }
 
     #[test]
