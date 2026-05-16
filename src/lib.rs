@@ -78,7 +78,9 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 base,
                 *pull_request,
             ),
-            WorkflowCommand::Run { workflow } => commands::workflow::run(ctx, workflow.as_deref()),
+            WorkflowCommand::Run { workflow, jobs } => {
+                commands::workflow::run(ctx, workflow.as_deref(), *jobs)
+            }
             WorkflowCommand::Show { workflow } => {
                 commands::workflow::show(ctx, workflow.as_deref())
             }

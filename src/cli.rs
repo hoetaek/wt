@@ -391,6 +391,9 @@ pub enum WorkflowCommand {
     Run {
         /// Workflow TOML path or shorthand id
         workflow: Option<String>,
+        /// Maximum number of runnable batch-mode tasks to execute concurrently
+        #[arg(long, default_value_t = 1, value_parser = parse_positive_usize)]
+        jobs: usize,
     },
     /// Show workflow metadata and task statuses
     Show {
@@ -1116,6 +1119,20 @@ mod tests {
                     pull_request: false,
                 }
             }) if issues.is_empty()
+        ));
+    }
+
+    #[test]
+    fn workflow_run_accepts_jobs() {
+        let cli = parse(&["wt", "workflow", "run", "2026-05-16-001", "--jobs", "3"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Run {
+                    ref workflow,
+                    jobs: 3,
+                }
+            }) if workflow.as_deref() == Some("2026-05-16-001")
         ));
     }
 
