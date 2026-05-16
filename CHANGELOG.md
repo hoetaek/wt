@@ -11,6 +11,15 @@ minor version instead of moving to `x.0.0`.
 - Fixed sequential `wt workflow run <workflow> --jobs 1` cancellation so later
   runnable batch tasks are not started after the user cancels one task.
 
+## 0.24.0 - 2026-05-16
+
+- Changed bare `wt workflow run` to select runnable workflows from
+  `.local/workflows`, auto-run the only runnable workflow, and fail
+  non-interactive multiple-candidate runs with explicit rerun commands before
+  mutating Workflow or TaskRun state.
+- Bumped the package version to `0.24.0` because workflow run target omission
+  changes the user-facing CLI contract while `wt` is still pre-1.0.
+
 ## 0.21.0 - 2026-05-16
 
 - Added `wt status <TARGET>` and `wt --json status <TARGET>` for read-only
