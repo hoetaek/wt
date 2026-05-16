@@ -30,13 +30,18 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Pr { numbers, profile } => commands::pr::run(ctx, numbers, profile.as_deref()),
         Commands::New {
             name,
-            task,
             base,
             profile,
             matrix,
-        } => commands::new::run(ctx, name, task, base, profile.as_deref(), *matrix),
+        } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
         Commands::Batch { .. } => legacy_batch_command_error(),
         Commands::Task { command } => match command {
+            TaskCommand::Run {
+                tasks,
+                base,
+                profile,
+                matrix,
+            } => commands::task_run_command::run(ctx, tasks, base, profile.as_deref(), *matrix),
             TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
         },
         Commands::Workflow { command } => match command {
