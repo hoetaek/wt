@@ -92,7 +92,7 @@ fn no_args_prints_help_successfully() {
 }
 
 #[test]
-fn new_without_args_requires_branch_text_or_task_option() {
+fn new_without_args_requires_branch_text() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -101,12 +101,12 @@ fn new_without_args_requires_branch_text_or_task_option() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "wt new requires branch-name text or --task",
+            "wt new starts one ad hoc worktree from branch-name text",
         ));
 }
 
 #[test]
-fn new_task_option_without_value_enters_task_selection() {
+fn new_task_option_is_unknown() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -114,22 +114,29 @@ fn new_task_option_without_value_enters_task_selection() {
         .args(["-C", temp.path().to_str().unwrap(), "new", "--task"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "No task files found in .local/tasks",
-        ));
+        .stderr(predicate::str::contains("unexpected argument '--task'"));
 }
 
 #[test]
-fn new_help_explains_branch_text_and_task_selection() {
+fn new_help_explains_branch_text_only() {
     wt_command()
         .args(["new", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("branch-name text"))
-        .stdout(predicate::str::contains("--task [<TASK>]"))
-        .stdout(predicate::str::contains(
-            "repeat with branch-name text for multiple; omit value to select",
-        ));
+        .stdout(predicate::str::contains("--task").not());
+}
+
+#[test]
+fn task_run_help_explains_task_execution() {
+    wt_command()
+        .args(["task", "run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("one worktree per selected"))
+        .stdout(predicate::str::contains("source = \"new\" TaskRun"))
+        .stdout(predicate::str::contains("wt workflow task --mode batch"))
+        .stdout(predicate::str::contains("wt workflow task --mode single"));
 }
 
 #[test]
@@ -141,7 +148,7 @@ fn task_publish_help_explains_behavior() {
         .stdout(predicate::str::contains("provider issue"))
         .stdout(predicate::str::contains("write [origin]"))
         .stdout(predicate::str::contains("does not start workspaces"))
-        .stdout(predicate::str::contains("wt workflow run"))
+        .stdout(predicate::str::contains("wt task run and wt workflow run"))
         .stdout(predicate::str::contains("Omit task keys"))
         .stdout(predicate::str::contains(
             "already have [origin] are excluded",

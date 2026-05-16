@@ -62,24 +62,15 @@ pub enum Commands {
         #[arg(long)]
         profile: Option<String>,
     },
-    /// Start a workspace from branch-name text or prepared local tasks
+    /// Start a workspace from branch-name text
     New {
         /// Branch name words
         #[arg(num_args = 0..)]
         name: Vec<String>,
-        /// Prepared local task key (repeat with branch-name text for multiple; omit value to select)
-        #[arg(
-            long,
-            value_name = "TASK",
-            num_args = 0..=1,
-            default_missing_value = "",
-            action = ArgAction::Append
-        )]
-        task: Vec<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Create a profiled branch or task worktree from .local/profiles/<name>
+        /// Create a profiled branch worktree from .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         /// Start one workspace for each named profile
@@ -341,9 +332,27 @@ pub enum BatchCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum TaskCommand {
+    /// Start one worktree per selected local TaskDocument
+    #[command(
+        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a source = \"new\" TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
+    )]
+    Run {
+        /// Local task keys from .local/tasks/<task>.toml
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Create a profiled task worktree from .local/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+        /// Start one task worktree for each named profile
+        #[arg(long, conflicts_with = "profile")]
+        matrix: bool,
+    },
     /// Publish local TaskDocuments as provider issues
     #[command(
-        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt workflow run treats that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt task run and wt workflow run treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
     )]
     Publish {
         /// Local task keys from .local/tasks/<task>.toml
@@ -1062,13 +1071,93 @@ mod tests {
         assert!(help.contains("provider issue"));
         assert!(help.contains("write [origin]"));
         assert!(help.contains("does not start workspaces"));
-        assert!(help.contains("later wt workflow run"));
+        assert!(help.contains("later wt task run and wt workflow run"));
         assert!(help.contains("Omit task keys to choose unprocessed local TaskDocuments"));
         assert!(help.contains("tasks that already have [origin] are excluded"));
         assert!(!help.contains("--stack <STACK>"));
         assert!(!help.contains("--batch <BATCH>"));
         assert!(help.contains("no issue provider"));
         assert!(help.contains("already has origin"));
+    }
+
+    #[test]
+    fn task_run_accepts_task_keys_base_profile_and_matrix() {
+        let cli = parse(&[
+            "wt", "task", "run", "task-a", "task-b", "--base", "main", "--matrix",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Run {
+                    ref tasks,
+                    base: Some(ref base),
+                    profile: None,
+                    matrix: true,
+                }
+            }) if tasks == &vec!["task-a".to_string(), "task-b".to_string()]
+                && base == "main"
+        ));
+
+        let cli = parse(&["wt", "task", "run", "task-a", "--profile", "codex"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Run {
+                    ref tasks,
+                    profile: Some(ref profile),
+                    matrix: false,
+                    ..
+                }
+            }) if tasks == &vec!["task-a".to_string()] && profile == "codex"
+        ));
+    }
+
+    #[test]
+    fn task_run_accepts_no_task_keys_for_interactive_selection() {
+        let cli = parse(&["wt", "task", "run"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Run {
+                    ref tasks,
+                    base: None,
+                    profile: None,
+                    matrix: false,
+                }
+            }) if tasks.is_empty()
+        ));
+    }
+
+    #[test]
+    fn task_run_rejects_matrix_with_profile() {
+        let result = Cli::try_parse_from([
+            "wt",
+            "task",
+            "run",
+            "task-a",
+            "--matrix",
+            "--profile",
+            "codex",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn task_run_help_explains_task_execution_surface() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("run")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("one worktree per selected"));
+        assert!(help.contains("source = \"new\" TaskRun"));
+        assert!(help.contains("Omit task keys"));
+        assert!(help.contains("wt workflow task --mode batch"));
+        assert!(help.contains("wt workflow task --mode single"));
     }
 
     #[test]
@@ -1377,12 +1466,8 @@ mod tests {
     #[test]
     fn new_with_matrix_flag() {
         let cli = parse(&["wt", "new", "some", "feature", "--matrix"]);
-        if let Some(Commands::New {
-            name, task, matrix, ..
-        }) = &cli.command
-        {
+        if let Some(Commands::New { name, matrix, .. }) = &cli.command {
             assert_eq!(name, &vec!["some".to_string(), "feature".to_string()]);
-            assert!(task.is_empty());
             assert!(*matrix);
         } else {
             panic!("expected New");
@@ -1390,58 +1475,11 @@ mod tests {
     }
 
     #[test]
-    fn new_task_without_value_enters_task_selection() {
-        let cli = parse(&["wt", "new", "--task"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::New {
-                ref name,
-                ref task,
-                base: None,
-                profile: None,
-                matrix: false,
-            }) if name.is_empty() && task == &vec!["".to_string()]
-        ));
-    }
-
-    #[test]
-    fn new_task_with_value_selects_named_local_task() {
-        let cli = parse(&["wt", "new", "--task", "add-schema"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::New {
-                ref name,
-                ref task,
-                base: None,
-                profile: None,
-                matrix: false,
-            }) if name.is_empty() && task == &vec!["add-schema".to_string()]
-        ));
-    }
-
-    #[test]
-    fn new_task_accepts_multiple_values_with_branch_text() {
-        let cli = parse(&[
-            "wt",
-            "new",
-            "team",
-            "run",
-            "--task",
-            "add-schema",
-            "--task",
-            "publish",
-        ]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::New {
-                ref name,
-                ref task,
-                base: None,
-                profile: None,
-                matrix: false,
-            }) if name == &vec!["team".to_string(), "run".to_string()]
-                && task == &vec!["add-schema".to_string(), "publish".to_string()]
-        ));
+    fn new_rejects_task_option() {
+        let err = Cli::try_parse_from(["wt", "new", "--task", "add-schema"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unexpected argument '--task'"));
     }
 
     #[test]
@@ -1460,12 +1498,10 @@ mod tests {
             cli.command,
             Some(Commands::New {
                 ref name,
-                ref task,
                 base: Some(ref base),
                 profile: Some(ref profile),
                 matrix: false,
             }) if name == &vec!["some".to_string(), "feature".to_string()]
-                && task.is_empty()
                 && base == "main"
                 && profile == "codex"
         ));
@@ -1486,20 +1522,6 @@ mod tests {
     }
 
     #[test]
-    fn new_task_accepts_branch_words_after_single_task_value() {
-        let cli = parse(&["wt", "new", "--task", "add-schema", "branch-text"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::New {
-                ref name,
-                ref task,
-                ..
-            }) if name == &vec!["branch-text".to_string()]
-                && task == &vec!["add-schema".to_string()]
-        ));
-    }
-
-    #[test]
     fn new_rejects_removed_parallel_flag() {
         let result = Cli::try_parse_from(["wt", "new", "some", "feature", "--parallel"]);
         assert!(result.is_err());
@@ -1511,8 +1533,8 @@ mod tests {
         let new = command.find_subcommand_mut("new").unwrap();
         let help = new.render_help().to_string();
         assert!(help.contains("Start a workspace from branch-name text"));
-        assert!(help.contains("--task [<TASK>]"));
-        assert!(help.contains("repeat with branch-name text for multiple; omit value to select"));
+        assert!(!help.contains("--task"));
+        assert!(!help.contains("prepared local task"));
     }
 
     #[test]

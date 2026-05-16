@@ -68,9 +68,13 @@ Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 �
 named profile 목록으로 확장하는 개념이다. `batch`나 `stack`처럼 여러 task 자체를
 뜻하지 않고, profile 축으로 여러 worktree를 만드는 실행 형태다.
 
-`wt new <words...>`는 branch-name text에서 바로 ad hoc worktree를 시작한다. 준비된
-TaskDocument 실행은 workflow model이 맡는다. `wt new`에 prepared-task 실행 의미를 계속
-넓히면 `single` mode workflow와 같은 개념이 두 표면에 나뉘게 된다.
+`wt new <words...>`는 branch-name text에서 바로 ad hoc worktree를 시작한다. 즉시
+준비된 TaskDocument를 실행하는 표면은 `wt task run [<task>...]`이다. 여러
+TaskDocument를 하나의 저장된 실행 계획으로 묶어 batch coordination을 해야 하면
+`wt workflow task --mode batch`와 `wt workflow run`을 쓰고, 하나의 shared workspace에서
+실행해야 하면 `wt workflow task --mode single`과 `wt workflow run`을 쓴다. `wt new`에
+prepared-task 실행 의미를 계속 넓히면 ad hoc branch worktree, immediate task run,
+saved workflow가 한 명령에서 섞인다.
 
 `wt open`은 issue selector가 아니라 branch/worktree 상태 selector다. 선택지는 현재
 checkout을 제외하고 `existing`(이미 별도 worktree가 있음), `local`(local branch만
@@ -356,9 +360,9 @@ Claude Code는 cmux의 Claude 통합에서 status/sidebar 신호가 나오고, C
 `wt`는 아직 1.0에 도달하지 않았으므로 CLI, config, 상태 파일 모델이 안정화될 때까지
 breaking change를 `x.0.0` major로 표현하지 않는다. 새 기능과 breaking user-facing
 정리는 `0.x.0` minor로 올리고, 버그 수정이나 내부 로직 변경은 `0.x.y` patch로 올린다.
-예를 들어 prepared-task `wt new`, `wt batch`, `wt stack` 표면을 `wt workflow`와
-`.local/workflows`로 수렴시키는 변경은 CLI와 상태 파일 계약을 바꾸므로 patch가 아니라
-pre-1.0 minor 변경이다.
+예를 들어 prepared-task 실행 표면을 `wt new --task`에서 `wt task run`으로 옮기거나,
+saved orchestration을 `wt workflow`와 `.local/workflows`로 수렴시키는 변경은 CLI와 상태
+파일 계약을 바꾸므로 patch가 아니라 pre-1.0 minor 변경이다.
 
 다만 version bump는 일반 개발 커밋마다 하지 않는다. `develop`은 기본 개발 브랜치이고,
 `master`는 릴리즈 브랜치다. 릴리즈 PR에서 `Cargo.toml`/`Cargo.lock` version을 한 번만
