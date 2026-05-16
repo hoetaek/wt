@@ -67,7 +67,7 @@ pub enum Commands {
         /// Branch name words
         #[arg(num_args = 0..)]
         name: Vec<String>,
-        /// Prepared local task key (repeat for multiple; omit value to select)
+        /// Prepared local task key (repeat with branch-name text for multiple; omit value to select)
         #[arg(
             long,
             value_name = "TASK",
@@ -1220,7 +1220,7 @@ mod tests {
         let help = new.render_help().to_string();
         assert!(help.contains("Start a workspace from branch-name text"));
         assert!(help.contains("--task [<TASK>]"));
-        assert!(help.contains("repeat for multiple; omit value to select"));
+        assert!(help.contains("repeat with branch-name text for multiple; omit value to select"));
     }
 
     #[test]

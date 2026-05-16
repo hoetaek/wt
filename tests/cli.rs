@@ -128,7 +128,7 @@ fn new_help_explains_branch_text_and_task_selection() {
         .stdout(predicate::str::contains("branch-name text"))
         .stdout(predicate::str::contains("--task [<TASK>]"))
         .stdout(predicate::str::contains(
-            "repeat for multiple; omit value to select",
+            "repeat with branch-name text for multiple; omit value to select",
         ));
 }
 

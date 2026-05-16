@@ -919,6 +919,7 @@ fn run_batch_task(ctx: &Ctx, execution: &BatchTaskExecution) -> Result<BatchTask
         title: &title,
         branch_name,
         mode: task_doc.mode(),
+        on_start_issue_id: task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
         prompt_intro: "Use this task before changing code.",
         workspace_label: Some(workspace_label),
         snapshot: issue::IssueSnapshotContext {

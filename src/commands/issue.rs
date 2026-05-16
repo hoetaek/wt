@@ -27,6 +27,7 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) title: &'a str,
     pub(crate) branch_name: Option<&'a str>,
     pub(crate) mode: &'a str,
+    pub(crate) on_start_issue_id: Option<&'a str>,
     pub(crate) prompt_intro: &'a str,
     pub(crate) workspace_label: Option<String>,
     pub(crate) snapshot: IssueSnapshotContext<'a>,
@@ -428,10 +429,15 @@ fn run_inner_many(
 
     // 5. Update issue status for new branches
     if create_type == CreateType::New {
-        if let Ok(provider) = build_provider(ctx) {
-            if let Err(e) = provider.on_start(raw_id) {
-                ctx.ui
-                    .print_warning(&format!("Failed to update issue status: {e}"));
+        let on_start_issue_id = prepared_issue
+            .map(|issue| issue.on_start_issue_id)
+            .unwrap_or(Some(raw_id));
+        if let Some(on_start_issue_id) = on_start_issue_id {
+            if let Ok(provider) = build_provider(ctx) {
+                if let Err(e) = provider.on_start(on_start_issue_id) {
+                    ctx.ui
+                        .print_warning(&format!("Failed to update issue status: {e}"));
+                }
             }
         }
     }

@@ -193,6 +193,11 @@ fn run_single_selected_task(
                 title: &title,
                 branch_name,
                 mode: selected.document.mode(),
+                on_start_issue_id: selected
+                    .document
+                    .origin
+                    .as_ref()
+                    .map(|origin| origin.id.as_str()),
                 prompt_intro: "Use this task before changing code.",
                 workspace_label: None,
                 snapshot: issue::IssueSnapshotContext {
@@ -248,6 +253,11 @@ fn run_single_selected_task(
             title: &title,
             branch_name,
             mode: selected.document.mode(),
+            on_start_issue_id: selected
+                .document
+                .origin
+                .as_ref()
+                .map(|origin| origin.id.as_str()),
             prompt_intro: "Use this task before changing code.",
             workspace_label: None,
             snapshot: issue::IssueSnapshotContext {
@@ -333,6 +343,7 @@ fn run_selected_tasks_workspace(
             title: &title,
             branch_name: Some(branch_name),
             mode: "new",
+            on_start_issue_id: None,
             prompt_intro,
             workspace_label,
             snapshot: issue::IssueSnapshotContext {
@@ -843,7 +854,13 @@ mod tests {
         let ctx = Ctx::new(
             repo.path().to_path_buf(),
             repo.path().to_path_buf(),
-            Config::default(),
+            Config {
+                issues: Some(IssuesConfig {
+                    provider: IssueProviderType::Linear,
+                    gh_user: None,
+                }),
+                ..Config::default()
+            },
             Box::new(SharedRunner {
                 inner: Arc::clone(&runner),
             }),
@@ -865,6 +882,8 @@ mod tests {
             .expect("expected git worktree add -b call");
         assert_eq!(worktree_add_call.1[3], "add-schema");
         assert_eq!(worktree_add_call.1[5], "main");
+        assert!(calls.iter().all(|(cmd, _, _)| cmd != "linear"));
+        drop(calls);
 
         let runs = task_run::list(&ctx).unwrap();
         assert_eq!(runs.len(), 1);
@@ -1184,6 +1203,68 @@ mod tests {
     }
 
     #[test]
+    fn named_workspace_local_tasks_do_not_update_issue_provider() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("publish-issues.toml"),
+            "title = \"Publish issues\"\nbranch = \"publish-issues\"\nbody = \"Publish the issue tasks.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true); // fetch
+        runner.add_response("", false); // local branch exists
+        runner.add_response("", false); // remote branch exists
+        runner.add_response("", true); // worktree add
+        runner.add_response("", true); // parent local branch exists
+        runner.add_response("", true); // set parent config
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config {
+                issues: Some(IssuesConfig {
+                    provider: IssueProviderType::Linear,
+                    gh_user: None,
+                }),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(
+            &ctx,
+            &["publish".into(), "tasks".into()],
+            &["add-schema".into(), "publish-issues".into()],
+            &Some("main".into()),
+            None,
+            false,
+        )
+        .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().all(|(cmd, _, _)| cmd != "linear"));
+    }
+
+    #[test]
     fn task_option_matrix_records_created_profile_runs_after_later_profile_failure() {
         let repo = tempfile::tempdir().unwrap();
         let tasks_dir = repo.path().join(".local/tasks");
@@ -1396,6 +1477,19 @@ id = "PROJ-123"
             .expect("expected latest task run");
         assert_eq!(latest.run.status, task_run::STATUS_RUNNING);
         assert_eq!(latest.run.branch, "alice/proj-123-fix-editor");
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "linear"
+                && args
+                    == &vec![
+                        "issue".to_string(),
+                        "update".to_string(),
+                        "PROJ-123".to_string(),
+                        "--state".to_string(),
+                        "In Progress".to_string(),
+                    ]
+        }));
     }
 
     #[test]
