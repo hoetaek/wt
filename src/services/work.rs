@@ -93,6 +93,12 @@ pub(crate) enum WorkTargetError {
     Ambiguous { target: String, matches: String },
 }
 
+#[derive(Clone, Debug)]
+struct WorkTargetCandidate {
+    target: WorkTarget,
+    matches: Vec<String>,
+}
+
 pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
     let target = resolve_target(ctx, target)?;
     let Some(worktree) = target.worktree.clone() else {
@@ -267,78 +273,255 @@ fn resolve_explicit_target(
     worktrees: &[WorktreeEntry],
     raw: &str,
 ) -> Result<WorkTarget> {
-    if let Some(path) = existing_directory_target(ctx, raw) {
-        let branch = branch_at_path(ctx, &path)?;
-        return Ok(WorkTarget {
-            label: raw.to_string(),
-            branch,
-            worktree: Some(path),
-            task_run: None,
-        });
+    if is_explicit_path_target(raw) {
+        return resolve_explicit_path_target(ctx, worktrees, raw);
     }
 
-    if let Ok(path) = task_run::resolve(ctx, raw) {
-        if path.is_file() {
-            let run = task_run::read(&path)?;
-            let id = task_run_id(&path)?;
-            let worktree = worktree_for_branch(worktrees, &run.branch)
-                .or_else(|| git.checked_out_path(&run.branch).ok().flatten());
-            return Ok(WorkTarget {
-                label: id.clone(),
-                branch: run.branch.clone(),
-                worktree,
-                task_run: Some(task_run::TaskRunRecord { id, path, run }),
-            });
+    if let Some(candidate) = explicit_task_run_path_candidate(ctx, worktrees, raw)? {
+        return Ok(candidate.target);
+    }
+
+    let mut candidates = Vec::new();
+    let mut path_error = None;
+
+    if let Some(path) = existing_directory_target(ctx, raw) {
+        match path_target_candidate(ctx, raw, path) {
+            Ok(candidate) => add_work_target_candidate(&mut candidates, candidate),
+            Err(err) => path_error = Some(err),
         }
     }
 
+    if let Some(candidate) = task_run_candidate(ctx, worktrees, raw)? {
+        add_work_target_candidate(&mut candidates, candidate);
+    }
+
+    let has_checked_out_branch = add_checked_out_branch_candidate(&mut candidates, worktrees, raw);
+    for entry in worktrees
+        .iter()
+        .filter(|entry| worktree_path_matches(entry, raw))
+    {
+        add_work_target_candidate(&mut candidates, worktree_name_candidate(raw, entry));
+    }
+
+    if !has_checked_out_branch && candidates.len() <= 1 && git.local_branch_exists(raw)? {
+        add_work_target_candidate(&mut candidates, branch_candidate(raw, None));
+    }
+
+    if candidates.is_empty() {
+        if let Some(err) = path_error {
+            return Err(err);
+        }
+        return Err(WorkTargetError::NotFound { target: raw.into() }.into());
+    }
+
+    select_work_target(raw, candidates)
+}
+
+fn is_explicit_path_target(raw: &str) -> bool {
+    let raw_path = Path::new(raw);
+    raw_path.is_absolute()
+        || raw == "."
+        || raw == ".."
+        || raw.starts_with("./")
+        || raw.starts_with("../")
+}
+
+fn resolve_explicit_path_target(
+    ctx: &Ctx,
+    worktrees: &[WorktreeEntry],
+    raw: &str,
+) -> Result<WorkTarget> {
+    if let Some(candidate) = task_run_candidate(ctx, worktrees, raw)? {
+        return Ok(candidate.target);
+    }
+
+    if let Some(path) = existing_directory_target(ctx, raw) {
+        return Ok(path_target_candidate(ctx, raw, path)?.target);
+    }
+
+    Err(WorkTargetError::NotFound { target: raw.into() }.into())
+}
+
+fn explicit_task_run_path_candidate(
+    ctx: &Ctx,
+    worktrees: &[WorktreeEntry],
+    raw: &str,
+) -> Result<Option<WorkTargetCandidate>> {
+    if !raw.contains('/') {
+        return Ok(None);
+    }
+
+    let Some(path) = task_run_path(ctx, raw) else {
+        return Ok(None);
+    };
+    if is_task_run_file_path(&path) {
+        return task_run_candidate_from_path(worktrees, path).map(Some);
+    }
+
+    Ok(None)
+}
+
+fn path_target_candidate(ctx: &Ctx, raw: &str, path: PathBuf) -> Result<WorkTargetCandidate> {
+    let branch = branch_at_path(ctx, &path)?;
+    Ok(WorkTargetCandidate {
+        target: WorkTarget {
+            label: raw.to_string(),
+            branch: branch.clone(),
+            worktree: Some(path.clone()),
+            task_run: None,
+        },
+        matches: vec![format!("path {} (branch {})", path.display(), branch)],
+    })
+}
+
+fn task_run_candidate(
+    ctx: &Ctx,
+    worktrees: &[WorktreeEntry],
+    raw: &str,
+) -> Result<Option<WorkTargetCandidate>> {
+    let Some(path) = task_run_path(ctx, raw) else {
+        return Ok(None);
+    };
+    task_run_candidate_from_path(worktrees, path).map(Some)
+}
+
+fn task_run_path(ctx: &Ctx, raw: &str) -> Option<PathBuf> {
+    match task_run::resolve(ctx, raw) {
+        Ok(path) if path.is_file() => Some(path),
+        _ => None,
+    }
+}
+
+fn task_run_candidate_from_path(
+    worktrees: &[WorktreeEntry],
+    path: PathBuf,
+) -> Result<WorkTargetCandidate> {
+    let run = task_run::read(&path)?;
+    let id = task_run_id(&path)?;
+    let worktree = worktree_for_branch(worktrees, &run.branch);
+    Ok(WorkTargetCandidate {
+        target: WorkTarget {
+            label: id.clone(),
+            branch: run.branch.clone(),
+            worktree,
+            task_run: Some(task_run::TaskRunRecord {
+                id: id.clone(),
+                path,
+                run: run.clone(),
+            }),
+        },
+        matches: vec![format!("TaskRun {} (branch {})", id, run.branch)],
+    })
+}
+
+fn is_task_run_file_path(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "toml")
+        && path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "task-runs")
+        && path
+            .parent()
+            .and_then(|parent| parent.parent())
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == ".local")
+}
+
+fn add_checked_out_branch_candidate(
+    candidates: &mut Vec<WorkTargetCandidate>,
+    worktrees: &[WorktreeEntry],
+    raw: &str,
+) -> bool {
     if let Some(entry) = worktrees.iter().find(|entry| entry.branch == raw) {
-        return Ok(WorkTarget {
+        add_work_target_candidate(candidates, branch_candidate(raw, Some(entry.path.clone())));
+        return true;
+    }
+    false
+}
+
+fn branch_candidate(raw: &str, worktree: Option<PathBuf>) -> WorkTargetCandidate {
+    let detail = match worktree.as_ref() {
+        Some(path) => format!("branch {} ({})", raw, path.display()),
+        None => format!("branch {raw}"),
+    };
+    WorkTargetCandidate {
+        target: WorkTarget {
+            label: raw.to_string(),
+            branch: raw.to_string(),
+            worktree,
+            task_run: None,
+        },
+        matches: vec![detail],
+    }
+}
+
+fn worktree_name_candidate(raw: &str, entry: &WorktreeEntry) -> WorkTargetCandidate {
+    WorkTargetCandidate {
+        target: WorkTarget {
             label: raw.to_string(),
             branch: entry.branch.clone(),
             worktree: Some(entry.path.clone()),
             task_run: None,
-        });
+        },
+        matches: vec![format!("{} ({})", entry.branch, entry.path.display())],
+    }
+}
+
+fn add_work_target_candidate(
+    candidates: &mut Vec<WorkTargetCandidate>,
+    candidate: WorkTargetCandidate,
+) {
+    if let Some(existing) = candidates
+        .iter_mut()
+        .find(|existing| same_work_target(&existing.target, &candidate.target))
+    {
+        for item in candidate.matches {
+            if !existing.matches.contains(&item) {
+                existing.matches.push(item);
+            }
+        }
+        return;
     }
 
-    let matches = worktrees
-        .iter()
-        .filter(|entry| worktree_path_matches(entry, raw))
-        .collect::<Vec<_>>();
-    match matches.as_slice() {
-        [] => {}
-        [entry] => {
-            return Ok(WorkTarget {
-                label: raw.to_string(),
-                branch: entry.branch.clone(),
-                worktree: Some(entry.path.clone()),
-                task_run: None,
-            });
+    candidates.push(candidate);
+}
+
+fn same_work_target(a: &WorkTarget, b: &WorkTarget) -> bool {
+    match (&a.task_run, &b.task_run) {
+        (Some(a_run), Some(b_run)) => a_run.id == b_run.id && same_path(&a_run.path, &b_run.path),
+        (None, None) => {
+            a.branch == b.branch && same_optional_path(a.worktree.as_deref(), b.worktree.as_deref())
         }
+        _ => false,
+    }
+}
+
+fn same_optional_path(a: Option<&Path>, b: Option<&Path>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => same_path(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn select_work_target(raw: &str, candidates: Vec<WorkTargetCandidate>) -> Result<WorkTarget> {
+    match candidates.as_slice() {
+        [candidate] => Ok(candidate.target.clone()),
         _ => {
-            let matches = matches
+            let matches = candidates
                 .iter()
-                .map(|entry| format!("{} ({})", entry.branch, entry.path.display()))
+                .map(|candidate| candidate.matches.join(" / "))
                 .collect::<Vec<_>>()
                 .join(", ");
-            return Err(WorkTargetError::Ambiguous {
+            Err(WorkTargetError::Ambiguous {
                 target: raw.into(),
                 matches,
             }
-            .into());
+            .into())
         }
     }
-
-    if git.local_branch_exists(raw)? {
-        return Ok(WorkTarget {
-            label: raw.to_string(),
-            branch: raw.to_string(),
-            worktree: git.checked_out_path(raw)?,
-            task_run: None,
-        });
-    }
-
-    Err(WorkTargetError::NotFound { target: raw.into() }.into())
 }
 
 fn existing_directory_target(ctx: &Ctx, raw: &str) -> Option<PathBuf> {
@@ -514,6 +697,7 @@ mod tests {
         let mut runner = MockRunner::new();
         add_worktree_list(&mut runner, &fixture);
         runner.add_response("feature", true);
+        runner.add_response("", false);
         let ctx = fixture.ctx(runner);
 
         let basename = fixture.worktree.file_name().unwrap().to_str().unwrap();
@@ -550,9 +734,97 @@ mod tests {
 
         let mut runner = MockRunner::new();
         add_worktree_list(&mut runner, &fixture);
+        runner.add_response("", false);
         let ctx = fixture.ctx(runner);
 
         let target = resolve_target(&ctx, Some("run-feature")).unwrap();
+
+        assert_eq!(target.label, "run-feature");
+        assert_eq!(target.branch, "feature");
+        assert_eq!(
+            target.task_run.as_ref().map(|run| run.id.as_str()),
+            Some("run-feature")
+        );
+        assert_eq!(target.worktree.as_deref(), Some(fixture.worktree.as_path()));
+    }
+
+    #[test]
+    fn resolve_target_rejects_path_branch_collision() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.repo.join("feature")).unwrap();
+        let mut runner = MockRunner::new();
+        add_worktree_list(&mut runner, &fixture);
+        runner.add_response("path-branch", true);
+        let ctx = fixture.ctx(runner);
+
+        let err = resolve_target(&ctx, Some("feature"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Work target is ambiguous"));
+        assert!(err.contains("path "));
+        assert!(err.contains("branch path-branch"));
+        assert!(err.contains("branch feature"));
+    }
+
+    #[test]
+    fn resolve_target_accepts_explicit_relative_path_collision() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.repo.join("feature")).unwrap();
+        let mut runner = MockRunner::new();
+        add_worktree_list(&mut runner, &fixture);
+        runner.add_response("path-branch", true);
+        let ctx = fixture.ctx(runner);
+
+        let target = resolve_target(&ctx, Some("./feature")).unwrap();
+
+        assert_eq!(target.label, "./feature");
+        assert_eq!(target.branch, "path-branch");
+        assert!(same_path(
+            target.worktree.as_deref().unwrap(),
+            &fixture.repo.join("./feature")
+        ));
+    }
+
+    #[test]
+    fn resolve_target_rejects_task_run_id_branch_collision() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::write(
+            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"stack\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        add_worktree_list(&mut runner, &fixture);
+        runner.add_response("", true);
+        let ctx = fixture.ctx(runner);
+
+        let err = resolve_target(&ctx, Some("run-feature"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Work target is ambiguous"));
+        assert!(err.contains("TaskRun run-feature"));
+        assert!(err.contains("branch run-feature"));
+    }
+
+    #[test]
+    fn resolve_target_accepts_explicit_task_run_path_collision() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::write(
+            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"stack\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        add_worktree_list(&mut runner, &fixture);
+        let ctx = fixture.ctx(runner);
+
+        let target = resolve_target(&ctx, Some(".local/task-runs/run-feature.toml")).unwrap();
 
         assert_eq!(target.label, "run-feature");
         assert_eq!(target.branch, "feature");
