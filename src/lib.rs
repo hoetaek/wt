@@ -11,6 +11,7 @@ pub mod services;
 pub mod setup;
 pub mod template;
 pub mod ui;
+pub mod workflow;
 pub mod worktree_naming;
 
 use anyhow::Result;
