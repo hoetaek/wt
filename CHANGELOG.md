@@ -25,8 +25,8 @@ minor version instead of moving to `x.0.0`.
 - Bumped the package version to `0.16.0` because task publish and stack run
   changed user-facing CLI behavior while `wt` is still pre-1.0.
 - Changed bare `wt batch run` to select from runnable batches with semantic
-  labels, kept explicit batch path/id targets for scripts, and removed
-  `wt batch run latest` from the run contract.
+  labels, kept explicit batch path/id targets for scripts, and removed the
+  legacy `latest` target from the run contract.
 - Bumped the package version to `0.18.0` because batch run changed user-facing
   CLI behavior while `wt` is still pre-1.0.
 - Changed stack task prompts to include conditional draft-PR handoff guidance:
@@ -87,8 +87,8 @@ minor version instead of moving to `x.0.0`.
 - Bumped the package version to `0.6.0` because `wt new --task` and TaskRun add
   new user-facing CLI and persisted local state-file contracts while `wt` is
   still pre-1.0.
-- Added `wt batch run <batch|latest> --jobs <N>` for bounded concurrent batch
-  execution while keeping batch metadata writes coordinated through one writer.
+- Added `--jobs <N>` for bounded concurrent batch execution while keeping batch
+  metadata writes coordinated through one writer.
 - Added `wt batch clean [BATCH]` for explicitly deleting completed batch
   TaskDocument files while keeping the batch metadata record.
 - Bumped the package version to `0.5.0`; current `wt` development is still
