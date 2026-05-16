@@ -45,7 +45,20 @@ fn resolve_cmux_contact(
             worktree.display()
         ),
         [contact] => Ok(contact.clone()),
-        _ => select_cmux_contact(ctx, contacts, message, no_enter),
+        _ => match selected_cmux_contact(&contacts) {
+            Some(contact) => Ok(contact),
+            None => select_cmux_contact(ctx, contacts, message, no_enter),
+        },
+    }
+}
+
+fn selected_cmux_contact(contacts: &[review::CmuxContact]) -> Option<review::CmuxContact> {
+    let mut selected = contacts.iter().filter(|contact| contact.selected);
+    let contact = selected.next()?;
+    if selected.next().is_none() {
+        Some(contact.clone())
+    } else {
+        None
     }
 }
 
@@ -71,9 +84,10 @@ fn select_cmux_contact(
 }
 
 fn contact_label(contact: &review::CmuxContact) -> String {
+    let selected = if contact.selected { " [selected]" } else { "" };
     format!(
-        "{} {} (pane {}, workspace \"{}\", window {})",
-        contact.workspace, contact.surface, contact.pane, contact.title, contact.window
+        "{} {}{} (pane {}, workspace \"{}\", window {})",
+        contact.workspace, contact.surface, selected, contact.pane, contact.title, contact.window
     )
 }
 
@@ -203,6 +217,10 @@ mod tests {
         );
         runner.add_response("pane:3", true);
         runner.add_response("surface:4\nsurface:5", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":null,"selected_surface_ref":null}]}"#,
+            true,
+        );
         let ui = Arc::new(MockUi::new());
         let ctx = Ctx::new(
             repo,
@@ -221,6 +239,116 @@ mod tests {
             err.contains("cmux send --workspace workspace:1 --surface surface:4 'hello agent'")
         );
         assert!(err.contains("cmux send-key --workspace workspace:1 --surface surface:5 enter"));
+    }
+
+    #[test]
+    fn send_uses_the_selected_surface_when_multiple_surfaces_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("sample");
+        let worktree = dir.path().join("sample-feature");
+        std::fs::create_dir_all(&worktree).unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/master\n\nworktree {}\nHEAD def\nbranch refs/heads/feature\n\n",
+                repo.display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response(
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
+        runner.add_response(
+            &format!(
+                r#"{{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{{"id":"uuid-workspace-1","ref":"workspace:1","title":"feature","current_directory":"{}"}}]}}"#,
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4\nsurface:5\nsurface:6", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-5","selected_surface_ref":"surface:5"}]}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo,
+            worktree,
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui.clone()),
+        );
+
+        run(&ctx, "feature", &["hello".into(), "agent".into()], false).unwrap();
+
+        let steps = ui.steps.lock().unwrap().join("\n");
+        let prompts = ui.prompts.lock().unwrap().join("\n");
+        assert!(steps.contains("Sent message to surface:5 on workspace:1"));
+        assert!(!prompts.contains("Select cmux surface"));
+    }
+
+    #[test]
+    fn send_fails_when_multiple_matching_surfaces_are_selected() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("sample");
+        let worktree = dir.path().join("sample-feature");
+        std::fs::create_dir_all(&worktree).unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/master\n\nworktree {}\nHEAD def\nbranch refs/heads/feature\n\n",
+                repo.display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response(
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
+        runner.add_response(
+            &format!(
+                r#"{{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{{"id":"uuid-workspace-1","ref":"workspace:1","title":"feature","current_directory":"{}"}}]}}"#,
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("pane:3\npane:4", true);
+        runner.add_response("surface:4", true);
+        runner.add_response("surface:5", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"},{"id":"uuid-pane-4","ref":"pane:4","selected_surface_id":"uuid-surface-5","selected_surface_ref":"surface:5"}]}"#,
+            true,
+        );
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo,
+            worktree,
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        let err = run(&ctx, "feature", &["hello".into(), "agent".into()], false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Multiple cmux surfaces match the target worktree"));
+        assert!(
+            err.contains("cmux send --workspace workspace:1 --surface surface:4 'hello agent'")
+        );
+        assert!(
+            err.contains("cmux send --workspace workspace:1 --surface surface:5 'hello agent'")
+        );
     }
 
     #[test]
@@ -253,6 +381,10 @@ mod tests {
         );
         runner.add_response("pane:3", true);
         runner.add_response("surface:4\nsurface:5", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":null,"selected_surface_ref":null}]}"#,
+            true,
+        );
         runner.add_response("", true);
         runner.add_response("", true);
         let mut ui = MockUi::new();

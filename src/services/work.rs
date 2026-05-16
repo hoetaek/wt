@@ -5,6 +5,7 @@ use crate::context::Ctx;
 use crate::services::cmux::{CmuxEvent, CmuxPaneSelectedSurface, CmuxService, CmuxWorkspace};
 use crate::services::git::{GitService, WorktreeEntry};
 use anyhow::{Result, bail};
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
@@ -28,6 +29,7 @@ pub(crate) struct CmuxContact {
     pub(crate) pane: String,
     pub(crate) title: String,
     pub(crate) window: String,
+    pub(crate) selected: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,6 +83,7 @@ impl WorkCmuxSurface {
             pane: self.pane_ref.clone()?,
             title: self.workspace_title.clone(),
             window: self.window_ref.clone(),
+            selected: true,
         })
     }
 }
@@ -261,8 +264,12 @@ pub(crate) fn cmux_contacts(ctx: &Ctx, worktree: &Path) -> Result<Vec<CmuxContac
                 pane,
                 title: workspace.title.clone(),
                 window: workspace.window_handle.clone(),
+                selected: false,
             });
         }
+    }
+    if contacts.len() > 1 {
+        mark_selected_cmux_contacts(&cmux, &mut contacts);
     }
     Ok(contacts)
 }
@@ -584,6 +591,28 @@ fn cmux_surfaces(cmux: &CmuxService<'_>, workspace_handle: &str) -> Result<Vec<(
     Ok(contacts)
 }
 
+fn mark_selected_cmux_contacts(cmux: &CmuxService<'_>, contacts: &mut [CmuxContact]) {
+    let workspaces = contacts
+        .iter()
+        .map(|contact| contact.workspace.clone())
+        .collect::<BTreeSet<_>>();
+    for workspace in workspaces {
+        let Ok(selected_surfaces) = cmux.selected_surfaces(&workspace) else {
+            continue;
+        };
+        let selected = selected_surfaces
+            .into_iter()
+            .map(|surface| (surface.pane_handle, surface.selected_surface_handle))
+            .collect::<HashSet<_>>();
+        for contact in contacts
+            .iter_mut()
+            .filter(|contact| contact.workspace == workspace)
+        {
+            contact.selected = selected.contains(&(contact.pane.clone(), contact.surface.clone()));
+        }
+    }
+}
+
 fn cmux_workspace_matches(workspace: &CmuxWorkspace, worktree: &Path) -> bool {
     workspace
         .current_directory
@@ -855,7 +884,55 @@ mod tests {
                 pane: "pane:3".into(),
                 title: "feature".into(),
                 window: "window:1".into(),
+                selected: false,
             }]
+        );
+    }
+
+    #[test]
+    fn cmux_contacts_marks_the_selected_matching_surface() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4\nsurface:5\nsurface:6", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-5","selected_surface_ref":"surface:5"}]}"#,
+            true,
+        );
+        let ctx = fixture.ctx(runner);
+
+        let contacts = cmux_contacts(&ctx, &fixture.worktree).unwrap();
+
+        assert_eq!(
+            contacts,
+            vec![
+                CmuxContact {
+                    workspace: "workspace:1".into(),
+                    surface: "surface:4".into(),
+                    pane: "pane:3".into(),
+                    title: "feature".into(),
+                    window: "window:1".into(),
+                    selected: false,
+                },
+                CmuxContact {
+                    workspace: "workspace:1".into(),
+                    surface: "surface:5".into(),
+                    pane: "pane:3".into(),
+                    title: "feature".into(),
+                    window: "window:1".into(),
+                    selected: true,
+                },
+                CmuxContact {
+                    workspace: "workspace:1".into(),
+                    surface: "surface:6".into(),
+                    pane: "pane:3".into(),
+                    title: "feature".into(),
+                    window: "window:1".into(),
+                    selected: false,
+                },
+            ]
         );
     }
 
