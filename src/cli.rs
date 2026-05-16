@@ -62,15 +62,18 @@ pub enum Commands {
         #[arg(long)]
         profile: Option<String>,
     },
-    /// Start a workspace from branch-name text, or select a prepared local task
+    /// Start a workspace from branch-name text or a prepared local task
     New {
-        /// Branch name words (omit to select one .local/tasks/*.toml task)
+        /// Branch name words
         #[arg(num_args = 0..)]
         name: Vec<String>,
+        /// Prepared local task key (omit value to select from .local/tasks/*.toml)
+        #[arg(long, value_name = "TASK", num_args = 0..=1, conflicts_with = "name")]
+        task: Option<Option<String>>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Create a profiled branch worktree from .local/profiles/<name>
+        /// Create a profiled branch or task worktree from .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         /// Start one workspace for each named profile
@@ -892,8 +895,12 @@ mod tests {
     #[test]
     fn new_with_matrix_flag() {
         let cli = parse(&["wt", "new", "some", "feature", "--matrix"]);
-        if let Some(Commands::New { name, matrix, .. }) = &cli.command {
+        if let Some(Commands::New {
+            name, task, matrix, ..
+        }) = &cli.command
+        {
             assert_eq!(name, &vec!["some".to_string(), "feature".to_string()]);
+            assert_eq!(task, &None);
             assert!(*matrix);
         } else {
             panic!("expected New");
@@ -901,16 +908,32 @@ mod tests {
     }
 
     #[test]
-    fn new_without_name_starts_local_task_selector() {
-        let cli = parse(&["wt", "new"]);
+    fn new_task_without_value_selects_local_task() {
+        let cli = parse(&["wt", "new", "--task"]);
         assert!(matches!(
             cli.command,
             Some(Commands::New {
                 ref name,
+                task: Some(None),
                 base: None,
                 profile: None,
                 matrix: false,
             }) if name.is_empty()
+        ));
+    }
+
+    #[test]
+    fn new_task_with_value_selects_named_local_task() {
+        let cli = parse(&["wt", "new", "--task", "add-schema"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::New {
+                ref name,
+                task: Some(Some(ref task)),
+                base: None,
+                profile: None,
+                matrix: false,
+            }) if name.is_empty() && task == "add-schema"
         ));
     }
 
@@ -930,6 +953,7 @@ mod tests {
             cli.command,
             Some(Commands::New {
                 ref name,
+                task: None,
                 base: Some(ref base),
                 profile: Some(ref profile),
                 matrix: false,
@@ -954,6 +978,12 @@ mod tests {
     }
 
     #[test]
+    fn new_rejects_task_with_branch_text() {
+        let result = Cli::try_parse_from(["wt", "new", "--task", "add-schema", "branch-text"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn new_rejects_removed_parallel_flag() {
         let result = Cli::try_parse_from(["wt", "new", "some", "feature", "--parallel"]);
         assert!(result.is_err());
@@ -965,7 +995,8 @@ mod tests {
         let new = command.find_subcommand_mut("new").unwrap();
         let help = new.render_help().to_string();
         assert!(help.contains("Start a workspace from branch-name text"));
-        assert!(help.contains("omit to select one .local/tasks/*.toml task"));
+        assert!(help.contains("--task [<TASK>]"));
+        assert!(help.contains("omit value to select from .local/tasks/*.toml"));
     }
 
     #[test]

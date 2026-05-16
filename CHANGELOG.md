@@ -9,12 +9,14 @@ minor version instead of moving to `x.0.0`.
 ## Unreleased
 
 - Added TaskRun execution records under `.local/task-runs/<id>.toml` for
-  prepared local tasks started by `wt new`, `wt batch run`, and `wt stack run`.
+  prepared local tasks started by `wt new --task`, `wt batch run`, and
+  `wt stack run`.
   Batch and stack files now keep their orchestration rows while each started
   task points at a readable run record with source, group, status, error, and
   timestamps.
-- Bumped the package version to `0.6.0` because TaskRun adds a new persisted
-  local state-file contract while `wt` is still pre-1.0.
+- Bumped the package version to `0.6.0` because `wt new --task` and TaskRun add
+  new user-facing CLI and persisted local state-file contracts while `wt` is
+  still pre-1.0.
 - Added `wt batch run <batch|latest> --jobs <N>` for bounded concurrent batch
   execution while keeping batch metadata writes coordinated through one writer.
 - Added `wt batch clean [BATCH]` for explicitly deleting completed batch task
@@ -26,9 +28,10 @@ minor version instead of moving to `x.0.0`.
   and start each selected PR worktree sequentially. `wt pr 42` remains the
   explicit single-PR path, and `wt pr 42 43 44` starts multiple explicit PR
   worktrees in order.
-- Added bare `wt new` support for selecting one prepared local task from
-  `.local/tasks/*.toml` and starting it through the same task snapshot path used
-  by batch and stack runs.
+- Added `wt new --task [<task-key>]` support for selecting one prepared local
+  task from `.local/tasks/*.toml` and starting it through the same task snapshot
+  path used by batch and stack runs. Bare `wt new` is rejected so branch-name
+  workspaces and prepared-task execution stay explicit.
 - Renamed `wt issue --parallel` and `wt new --parallel` to `--matrix`, without a
   compatibility alias, to describe profile-matrix workspace creation instead of
   generic parallel execution.

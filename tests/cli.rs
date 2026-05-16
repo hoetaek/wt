@@ -52,7 +52,7 @@ fn no_args_prints_help_successfully() {
 }
 
 #[test]
-fn new_without_args_reaches_local_task_selection() {
+fn new_without_args_requires_branch_text_or_task_option() {
     let temp = TempDir::new().unwrap();
     let status = StdCommand::new("git")
         .arg("init")
@@ -64,6 +64,26 @@ fn new_without_args_reaches_local_task_selection() {
     Command::cargo_bin("wt")
         .unwrap()
         .args(["-C", temp.path().to_str().unwrap(), "new"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "wt new requires branch-name text or --task",
+        ));
+}
+
+#[test]
+fn new_task_option_without_value_reaches_local_task_selection() {
+    let temp = TempDir::new().unwrap();
+    let status = StdCommand::new("git")
+        .arg("init")
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    Command::cargo_bin("wt")
+        .unwrap()
+        .args(["-C", temp.path().to_str().unwrap(), "new", "--task"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -79,8 +99,9 @@ fn new_help_explains_branch_text_and_task_selection() {
         .assert()
         .success()
         .stdout(predicate::str::contains("branch-name text"))
+        .stdout(predicate::str::contains("--task [<TASK>]"))
         .stdout(predicate::str::contains(
-            "omit to select one .local/tasks/*.toml task",
+            "omit value to select from .local/tasks/*.toml",
         ));
 }
 

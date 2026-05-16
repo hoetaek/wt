@@ -89,6 +89,24 @@ pub(crate) fn run_with_issue_snapshot(
     )
 }
 
+pub(crate) fn run_with_issue_snapshot_many(
+    ctx: &Ctx,
+    base_raw: &Option<String>,
+    profile: Option<&str>,
+    matrix: bool,
+    prepared: PreparedIssueContext<'_>,
+) -> Result<Vec<IssueRunResult>> {
+    run_inner_many(
+        ctx,
+        None,
+        base_raw,
+        profile,
+        matrix,
+        Some(&prepared),
+        PromptPolicy::Allow,
+    )
+}
+
 pub(crate) fn run_with_issue_snapshot_non_interactive(
     ctx: &Ctx,
     base_raw: &Option<String>,
@@ -161,6 +179,29 @@ fn run_inner(
     prepared_issue: Option<&PreparedIssueContext<'_>>,
     prompt_policy: PromptPolicy,
 ) -> Result<IssueRunResult> {
+    run_inner_many(
+        ctx,
+        target,
+        base_raw,
+        profile,
+        matrix,
+        prepared_issue,
+        prompt_policy,
+    )?
+    .into_iter()
+    .last()
+    .ok_or_else(|| anyhow::anyhow!("No worktrees created"))
+}
+
+fn run_inner_many(
+    ctx: &Ctx,
+    target: Option<&str>,
+    base_raw: &Option<String>,
+    profile: Option<&str>,
+    matrix: bool,
+    prepared_issue: Option<&PreparedIssueContext<'_>>,
+    prompt_policy: PromptPolicy,
+) -> Result<Vec<IssueRunResult>> {
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
     // 1. Resolve issue
@@ -240,7 +281,7 @@ fn run_inner(
     let branch_name = ensured_branch.name;
 
     if matrix || profile.is_some() {
-        let results = run_profiles(
+        return run_profiles(
             ctx,
             &title,
             &branch_name,
@@ -251,11 +292,7 @@ fn run_inner(
                 prepared_issue,
                 prompt_policy,
             },
-        )?;
-        return results
-            .into_iter()
-            .last()
-            .ok_or_else(|| anyhow::anyhow!("No profile worktrees created"));
+        );
     }
 
     let names = issue_worktree_names(ctx, &branch_name, &title, naming.as_ref())?;
@@ -269,10 +306,10 @@ fn run_inner(
         if *existing == ctx.invocation_root {
             ctx.ui
                 .print_warning("이미 이 브랜치에 있습니다. 다른 브랜치로 전환 후 다시 시도하세요.");
-            return Ok(IssueRunResult {
+            return Ok(vec![IssueRunResult {
                 branch_name,
                 worktree_path: existing.clone(),
-            });
+            }]);
         }
         if *existing != names.path {
             ctx.ui.print_step(&format!(
@@ -288,10 +325,10 @@ fn run_inner(
                 naming.as_ref().map(|n| &n.vars),
                 snapshot_config.as_ref(),
             )?;
-            return Ok(IssueRunResult {
+            return Ok(vec![IssueRunResult {
                 branch_name,
                 worktree_path: existing.clone(),
-            });
+            }]);
         }
     }
 
@@ -331,10 +368,10 @@ fn run_inner(
                     naming.as_ref().map(|n| &n.vars),
                     snapshot_config.as_ref(),
                 )?;
-                return Ok(IssueRunResult {
+                return Ok(vec![IssueRunResult {
                     branch_name,
                     worktree_path: names.path,
-                });
+                }]);
             }
             _ => return Err(WtError::Cancelled.into()),
         }
@@ -373,10 +410,10 @@ fn run_inner(
         snapshot_config.as_ref(),
     )?;
 
-    Ok(IssueRunResult {
+    Ok(vec![IssueRunResult {
         branch_name,
         worktree_path: names.path,
-    })
+    }])
 }
 
 fn issue_worktree_names(

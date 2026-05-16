@@ -99,11 +99,13 @@ wt pr 42 43 44
 When pull request numbers are omitted, `pr` opens the GitHub PR list and lets
 you select multiple PRs interactively. Each selected PR starts sequentially.
 
-Start a workspace from branch-name text, or choose one prepared local task:
+Start a workspace from branch-name text, or explicitly choose one prepared
+local task:
 
 ```bash
 wt new add profile docs
-wt new
+wt new --task
+wt new --task add-profile-docs
 ```
 
 Prepare issue work in bulk:
@@ -280,17 +282,20 @@ name, so default behavior is not stored as `profile = "default"`.
 
 Explicit `--profile` has command-specific scope:
 
-- `wt issue --profile <name>` and `wt new <words...> --profile <name>` create
-  profiled worktrees. The branch and workspace names include the profile name
-  so the profiled run is separate from the unprofiled workspace.
+- `wt issue --profile <name>`, `wt new <words...> --profile <name>`, and
+  `wt new --task <task> --profile <name>` create profiled worktrees. The branch
+  and workspace names include the profile name so the profiled run is separate
+  from the unprofiled workspace.
 - `wt pr --profile <name>` applies the named profile config to every selected
   PR worktree. It uses each PR branch name as-is because the branch already
   exists.
 
-Use `--matrix` on `wt issue` or `wt new <words...>` to expand one issue or
-branch-name input across all named profiles. `wt issue 123 --matrix` creates
-one issue worktree per profile, while `wt new add search --matrix` creates one
-branch worktree per profile from the `add-search` branch-name seed.
+Use `--matrix` on `wt issue`, `wt new <words...>`, or `wt new --task <task>` to
+expand one issue, branch-name input, or prepared task across all named profiles.
+`wt issue 123 --matrix` creates one issue worktree per profile,
+`wt new add search --matrix` creates one branch worktree per profile from the
+`add-search` branch-name seed, and `wt new --task add-search --matrix` creates
+one prepared task worktree per profile.
 
 When prompt or scaffold files are needed, move the profile into a named
 directory and select it explicitly from config:
@@ -460,23 +465,27 @@ wt new add profile docs --profile codex
 wt new add profile docs --matrix
 ```
 
-Omit the branch-name text to select one prepared task document from
-`.local/tasks/*.toml` and start it immediately:
+Use `--task` to select one prepared task document from `.local/tasks/*.toml`
+and start it immediately:
 
 ```bash
-wt new
-wt new --base main
+wt new --task
+wt new --task add-profile-docs
+wt new --task add-profile-docs --base main
+wt new --task add-profile-docs --profile codex
+wt new --task add-profile-docs --matrix
 ```
 
 The selected task uses the same task snapshot startup path as `wt batch run`
 and `wt stack run`, so the agent prompt includes the selected task TOML.
-`--profile` and `--matrix` require branch-name text; bare `wt new` uses the
-effective config for the selected task.
+Bare `wt new` is rejected; pass branch-name text for a new branch workspace or
+`--task` for a prepared local task.
 
-When bare `wt new` starts a selected task, it writes a TaskRun record under
+When `wt new --task` starts a selected task, it writes TaskRun records under
 `.local/task-runs/<id>.toml` with `source = "new"`. Tasks whose latest run is
 `running`, `done`, or `skipped` are omitted from the selector; failed runs stay
-retryable.
+retryable. With `--profile` or `--matrix`, each created profile worktree gets
+its own TaskRun record.
 
 ## Batches
 
@@ -521,8 +530,8 @@ summary status/error. The TaskRun TOML is the execution-instance record: it
 stores the task key, branch, status, `source = "batch"`, `group` derived from
 the batch file stem, optional error, and timestamps. The task TOML stores the
 title, branch, body, and optional issue origin. A prepared task document can
-also be started directly with bare `wt new`, without creating or running a
-batch file.
+also be started directly with `wt new --task <task>`, without creating or
+running a batch file.
 
 Run a prepared batch explicitly:
 
@@ -628,8 +637,8 @@ Create the schema first.
 """
 ```
 
-Run bare `wt new` to select and start one of these prepared task documents
-outside the stack state machine.
+Run `wt new --task <task>` to select and start one of these prepared task
+documents outside the stack state machine.
 
 `[[tasks]]` is the canonical stack list. Pull requests remain a separate
 workflow and are not stack tasks.

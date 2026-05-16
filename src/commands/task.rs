@@ -83,6 +83,17 @@ pub(crate) fn select_local_task(ctx: &Ctx) -> Result<SelectedTask> {
     Ok(task.clone())
 }
 
+pub(crate) fn select_local_task_by_key(ctx: &Ctx, key: &str) -> Result<SelectedTask> {
+    let key = safe_task_key(key);
+    let (document, path, content) = read_task_file(ctx, &key)?;
+    Ok(SelectedTask {
+        key,
+        path,
+        content,
+        document,
+    })
+}
+
 pub(crate) fn list_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
     let tasks_dir = ctx.repo_root.join(".local/tasks");
     if !tasks_dir.exists() {

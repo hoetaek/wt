@@ -40,13 +40,18 @@
 `stack`은 어떤 작업 task들을 어떤 순서의 branch parent 체인으로 쌓을지에 대한
 개념이다.
 
-`matrix`는 하나의 issue 또는 branch-name 입력을 named profile 목록으로 확장하는
-개념이다. `batch`나 `stack`처럼 여러 task 자체를 뜻하지 않고, profile 축으로 여러
-worktree를 만드는 실행 형태다.
+`matrix`는 하나의 issue, branch-name 입력, 또는 명시적으로 선택한 prepared task를
+named profile 목록으로 확장하는 개념이다. `batch`나 `stack`처럼 여러 task 자체를
+뜻하지 않고, profile 축으로 여러 worktree를 만드는 실행 형태다.
 
 `wt stack task`와 `wt stack issue`는 둘 다 stack 상태 파일과 task 문서를 만든다.
 차이는 입력 소스다. `task`는 branch-name text에서 local task를 만들고, `issue`는
 provider issue를 origin이 있는 task로 가져온다.
+
+`wt new <words...>`는 branch-name text에서 바로 worktree를 시작한다.
+`.local/tasks` 아래의 준비된 task를 하나 골라 바로 시작하려면 `wt new --task [task]`를
+쓴다. Bare `wt new`처럼 생략으로 입력 소스를 바꾸면 branch-name 입력과 task 선택이
+같은 빈 입력에 묶여서 사용자가 대상을 다시 추론해야 한다.
 
 `wt open`은 issue selector가 아니라 branch/worktree 상태 selector다. 선택지는 현재
 checkout을 제외하고 `existing`(이미 별도 worktree가 있음), `local`(local branch만
