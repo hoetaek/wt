@@ -79,6 +79,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::List { wide } => commands::list::run(ctx, *wide),
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
+        Commands::Review { target } => commands::review::run(ctx, target.as_deref()),
         Commands::Doctor => commands::doctor::run(ctx),
         Commands::Config { profile, command } => match command {
             Some(ConfigCommand::Edit { source }) => {

@@ -1,4 +1,5 @@
 use crate::cli::BaseMode;
+use crate::commands::agent_report;
 use crate::config::Config;
 use crate::config::IssueProviderType;
 use crate::context::Ctx;
@@ -600,8 +601,12 @@ fn profile_config_with_issue_snapshot(
     let mut config = config.clone();
     if let Some(agent) = config.agent.as_mut() {
         let snapshot_prompt = format!(
-            "{}\n\n{}: `{}`\n\n{}",
-            prompt_intro, snapshot.path_label, snapshot.path, snapshot.content
+            "{}\n\n{}: `{}`\n\n{}\n\n{}",
+            prompt_intro,
+            snapshot.path_label,
+            snapshot.path,
+            snapshot.content,
+            agent_report::prompt_section()
         );
         let prompts = agent.prompt.entry(mode.into()).or_default();
         if let Some(first_prompt) = prompts.first_mut() {
@@ -858,6 +863,7 @@ mod tests {
         assert_eq!(prompts.len(), 2);
         assert!(prompts[0].contains(".local/issues/PROJ-123.md"));
         assert!(prompts[0].contains("# PROJ-123: Fix editor"));
+        assert!(prompts[0].contains("Agent Completion Report"));
         assert!(prompts[0].contains("Start from the profile instructions."));
         assert!(
             prompts[0].find("# PROJ-123: Fix editor").unwrap()
@@ -905,6 +911,7 @@ mod tests {
         assert!(new_prompts[0].contains("Use this task before changing code."));
         assert!(new_prompts[0].contains("Task path: `.local/tasks/add-schema.toml`"));
         assert!(new_prompts[0].contains("# Add schema"));
+        assert!(new_prompts[0].contains("Changed files"));
         assert!(new_prompts[0].contains("New branch prompt"));
         assert_eq!(agent.prompt.remove("issue").unwrap(), vec!["Issue prompt"]);
     }

@@ -106,6 +106,11 @@ pub enum Commands {
         /// Branch, issue number/key, or worktree directory names to finish
         targets: Vec<String>,
     },
+    /// Inspect a worktree, branch, or TaskRun before review or landing
+    Review {
+        /// Branch, worktree path/name, or TaskRun id to inspect
+        target: Option<String>,
+    },
     /// Check configured providers and required local tools
     Doctor,
     /// Print, edit, or refactor wt config files
@@ -563,6 +568,34 @@ mod tests {
         assert!(help.contains("[PR]..."));
         assert!(help.contains("Pull request numbers"));
         assert!(help.contains("select multiple open PRs"));
+    }
+
+    #[test]
+    fn review_accepts_optional_target() {
+        let cli = parse(&["wt", "review"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Review { target: None })
+        ));
+
+        let cli = parse(&["wt", "review", "feature"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Review { ref target }) if target.as_deref() == Some("feature")
+        ));
+    }
+
+    #[test]
+    fn review_help_describes_target_types() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("review")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("worktree, branch, or TaskRun"));
+        assert!(help.contains("Branch, worktree path/name, or TaskRun id"));
     }
 
     #[test]

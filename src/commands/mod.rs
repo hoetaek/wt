@@ -1,3 +1,4 @@
+pub mod agent_report;
 pub mod batch;
 pub mod clean;
 pub mod config;
@@ -13,6 +14,7 @@ pub mod open;
 pub mod pr;
 pub mod profile;
 pub mod profile_match;
+pub mod review;
 pub mod site;
 pub mod stack;
 pub mod task;

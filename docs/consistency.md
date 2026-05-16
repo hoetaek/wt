@@ -161,6 +161,12 @@ running TaskRun만 실제 worktree 제거와 함께 `done`으로 전이한다. S
 parent-chain 검증이 필요한 실행 순서 모델 안에 있으므로 `wt stack complete`만
 `done`으로 전이한다.
 
+`wt review`는 상태 전이 명령이 아니다. branch, worktree, TaskRun을 읽어서 parent,
+dirty 상태, commit/diff 정보, agent 완료 보고 기대치를 보여주는 점검 명령이다. cmux
+workspace/surface 정보도 저장된 실행 상태가 아니라 현재 세션에서 발견한 transport
+좌표로만 보여준다. 실제 완료 기록은 `wt done` 또는 `wt stack complete`처럼 source별
+completion 명령이 맡는다.
+
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 
 ### Agent-Neutral Names Stay Agent-Neutral

@@ -8,6 +8,13 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added `wt review [TARGET]` for read-only branch/worktree/TaskRun inspection
+  before review or landing, including matching cmux workspace/surface handles
+  when cmux can find the target worktree. Task-start prompts now also ask
+  agents to return a compact completion report with summary, changed files,
+  checks, and risks.
+- Bumped the package version to `0.11.0` because `wt review` adds a new
+  user-facing CLI command while `wt` is still pre-1.0.
 - Documented the canonical TaskDocument/TaskRun state model across README and
   consistency notes: TaskDocuments define reusable work under `.local/tasks`,
   TaskRuns record execution state under `.local/task-runs`, batch and stack

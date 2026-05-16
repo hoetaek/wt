@@ -135,9 +135,14 @@ List and clean worktrees:
 
 ```bash
 wt list
+wt review
+wt review task-run-new-profile-partial-runs
 wt done
 wt done PROJ-123
 ```
+
+`wt review [TARGET]` is a read-only pre-landing check. Omit the target to
+inspect the current branch, or pass a branch, worktree path/name, or TaskRun id.
 
 When a cmux workspace was opened for the same worktree path, `wt done` attempts
 to close it before removing the worktree.
@@ -477,7 +482,9 @@ wt new --task add-profile-docs --matrix
 ```
 
 The agent prompt includes the selected TaskDocument content, matching the task
-context used by `wt batch run` and `wt stack run`.
+context used by `wt batch run` and `wt stack run`. It also asks the agent to
+finish with a compact completion report: summary, changed files, checks run,
+and risks or follow-ups.
 Bare `wt new` is rejected; pass branch-name text for a new branch workspace or
 `--task` for a prepared local task.
 
@@ -493,6 +500,15 @@ worktree is cleaned up with `wt done`, which marks the run `done`. Bare
 `wt new --task` hides tasks whose latest run is `running`, `done`, or
 `skipped`; failed runs stay retryable. With `--profile` or `--matrix`, each
 created profile worktree gets its own TaskRun record.
+
+Use `wt review [branch|worktree|task-run]` to inspect a task run before landing
+it. The command reads the linked TaskRun and TaskDocument when available,
+reports the recorded parent branch, shows dirty worktree state, committed
+commits and diff stats, and repeats the expected agent completion report shape.
+When cmux is available, it also shows the matching workspace and first surface
+for the target worktree, plus the raw `cmux send` and `cmux send-key` commands
+needed to talk to that surface. It does not mark anything done, merge branches,
+send messages, or remove worktrees.
 
 ## Batches
 
