@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - develop
-      - main
       - master
 
 permissions:
@@ -39,6 +38,24 @@ jobs:
 
       - name: Run tests
         run: cargo test --locked --all-features
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85.0
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check package with MSRV
+        run: cargo check --locked --all-targets --all-features
 
   audit:
     name: Security audit
