@@ -11,10 +11,23 @@
 아직 `wt`는 1.0에 도달하지 않은 도구로 본다. 사용자-facing CLI, config,
 상태 파일 모델이 안정화되기 전까지는 breaking change도 `0.x.0` minor로 표현한다.
 
-버전은 `Cargo.toml`의 `version` 필드에서 관리하되, 일반 개발 커밋에서는 올리지 않는다.
-기본 개발 브랜치는 `develop`이고, `master`는 릴리즈된 코드만 담는 브랜치다.
-릴리즈할 때 `develop`에서 release 브랜치를 만들고, 릴리즈 PR이 `master`로 merge되기 전에
-그 릴리즈에 포함된 변경 중 가장 큰 범위에 맞춰 version을 한 번 올린다.
+버전은 `Cargo.toml`의 `version` 필드에서 관리한다.
+
+## 릴리즈 전략
+
+기본 개발 브랜치는 `develop`이고, 일반 개발 커밋에서는 버전을 올리지 않는다.
+기능, 버그 수정, 문서 정리는 `develop`으로 통합한다.
+
+`master`는 릴리즈된 코드만 담는 보호 브랜치다. 직접 push, force push, branch 삭제는
+허용하지 않는다. `master`로 들어가는 변경은 pull request를 거쳐야 하며, 최신 base 기준의
+필수 체크 `Rust`, `Security audit`, `cargo-deny`가 통과해야 한다. PR conversation은
+merge 전에 모두 resolve되어야 하고, linear history를 유지한다.
+
+릴리즈할 때는 최신 `develop`에서 `release/vX.Y.Z` 브랜치를 만들고, 그 릴리즈에 포함된
+변경 중 가장 큰 범위에 맞춰 `Cargo.toml`의 version을 한 번 올린다. release 브랜치에서
+검증을 통과시킨 뒤 `master` 대상으로 릴리즈 PR을 만들고, merge 후 `vX.Y.Z` tag와 GitHub
+release를 생성한다.
 
 릴리즈 PR이 `master`에 merge되고 tag가 생성되면, version bump commit을 다시 `develop`에
-merge해서 다음 릴리즈 기준점이 두 브랜치에서 어긋나지 않게 한다.
+merge해서 다음 릴리즈 기준점이 두 브랜치에서 어긋나지 않게 한다. CI job 이름이나 보호
+규칙을 바꾸면 이 문서와 GitHub branch protection rule을 함께 갱신한다.
