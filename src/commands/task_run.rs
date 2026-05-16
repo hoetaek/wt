@@ -295,23 +295,19 @@ fn latest_path(ctx: &Ctx) -> Result<PathBuf> {
 }
 
 pub(crate) fn compare_task_run_records(left: &TaskRunRecord, right: &TaskRunRecord) -> Ordering {
-    if let (Some(left_order), Some(right_order)) =
-        (left.run.creation_order, right.run.creation_order)
-    {
-        let order = left_order.cmp(&right_order);
-        if order != Ordering::Equal {
-            return order;
-        }
+    match (left.run.creation_order, right.run.creation_order) {
+        (Some(left_order), Some(right_order)) => left_order
+            .cmp(&right_order)
+            .then_with(|| compare_task_run_record_fallbacks(left, right)),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => compare_task_run_record_fallbacks(left, right),
     }
+}
 
+fn compare_task_run_record_fallbacks(left: &TaskRunRecord, right: &TaskRunRecord) -> Ordering {
     normalized_utc_timestamp(&left.run.created_at)
         .cmp(&normalized_utc_timestamp(&right.run.created_at))
-        .then_with(|| {
-            left.run
-                .creation_order
-                .unwrap_or(0)
-                .cmp(&right.run.creation_order.unwrap_or(0))
-        })
         .then_with(|| left.id.cmp(&right.id))
 }
 
@@ -681,7 +677,7 @@ updated_at = "2026-05-16T00:00:00Z"
             &run_with_order(
                 "add-schema",
                 STATUS_FAILED,
-                Some(1),
+                None,
                 "2026-05-16T00:00:00.000000001Z",
             ),
         )
@@ -691,6 +687,64 @@ updated_at = "2026-05-16T00:00:00Z"
         assert_eq!(latest.id, "a-fractional");
         assert_eq!(latest.run.status, STATUS_FAILED);
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
+    }
+
+    #[test]
+    fn latest_for_task_orders_mixed_legacy_and_ordered_records_totally() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let task_runs_dir = dir.path().join(".local/task-runs");
+        std::fs::create_dir_all(&task_runs_dir).unwrap();
+
+        write(
+            &task_runs_dir.join("a-ordered-first.toml"),
+            &run_with_order("add-schema", STATUS_FAILED, Some(1), "2026-05-16T00:00:03Z"),
+        )
+        .unwrap();
+        write(
+            &task_runs_dir.join("b-legacy.toml"),
+            &run_with_order("add-schema", STATUS_DONE, None, "2026-05-16T00:00:02Z"),
+        )
+        .unwrap();
+        write(
+            &task_runs_dir.join("c-ordered-second.toml"),
+            &run_with_order(
+                "add-schema",
+                STATUS_RUNNING,
+                Some(2),
+                "2026-05-16T00:00:01Z",
+            ),
+        )
+        .unwrap();
+
+        let records = list(&ctx).unwrap();
+        let legacy = record_by_id(&records, "b-legacy");
+        let ordered_first = record_by_id(&records, "a-ordered-first");
+        let ordered_second = record_by_id(&records, "c-ordered-second");
+        assert_eq!(
+            compare_task_run_records(legacy, ordered_first),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_task_run_records(ordered_first, ordered_second),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_task_run_records(legacy, ordered_second),
+            Ordering::Less
+        );
+
+        let latest = latest_for_task(&ctx, "add-schema").unwrap().unwrap();
+        assert_eq!(latest.id, "c-ordered-second");
+        assert_eq!(latest.run.status, STATUS_RUNNING);
+        assert!(!task_is_selectable(&ctx, "add-schema").unwrap());
+    }
+
+    fn record_by_id<'a>(records: &'a [TaskRunRecord], id: &str) -> &'a TaskRunRecord {
+        records
+            .iter()
+            .find(|record| record.id == id)
+            .unwrap_or_else(|| panic!("missing task run record: {id}"))
     }
 
     fn run_with_order(

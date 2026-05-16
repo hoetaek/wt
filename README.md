@@ -656,8 +656,9 @@ attempt to execute that task: task key, branch, status, source, optional group,
 optional error, creation order, and timestamps. New TaskRun files include a
 monotonic `creation_order` value so latest-run selection follows execution
 creation order even when multiple runs share the same timestamp second.
-Existing TaskRun files without `creation_order` remain readable and use their
-timestamps as the legacy ordering fallback.
+Existing TaskRun files without `creation_order` remain readable. They sort
+before ordered TaskRuns and use timestamps as the legacy ordering fallback among
+other legacy records.
 
 When `wt new --task` starts selected tasks, it writes TaskRuns with
 `source = "new"`. Successful starts remain `running` until the matching
