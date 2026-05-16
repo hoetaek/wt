@@ -108,6 +108,13 @@ wt new --task
 wt new --task add-profile-docs
 ```
 
+Publish a prepared local task to the configured issue provider when the
+provider write path is added:
+
+```bash
+wt task publish add-profile-docs
+```
+
 Prepare issue work in bulk:
 
 ```bash
@@ -509,6 +516,61 @@ worktree is cleaned up with `wt done`, which marks the run `done`. Bare
 `wt new --task` hides tasks whose latest run is `running`, `done`, or
 `skipped`; failed runs stay retryable. With `--profile` or `--matrix`, each
 created profile worktree gets its own TaskRun record.
+
+## Publishing Local Tasks
+
+The publish contract reserves `wt task publish <task>` as the canonical command
+shape for creating a provider issue from one local TaskDocument:
+
+```bash
+wt task publish add-profile-docs
+```
+
+This is the reverse direction from `wt batch issue` and `wt stack issue`, which
+import provider issues into `.local/tasks/`. `wt issue` remains focused on
+starting work from existing provider issues; it is not the issue-creation
+surface for local tasks.
+
+Publishing is a provider side effect with a durable local link. The command
+succeeds only after the provider issue is created and the selected
+`.local/tasks/<task>.toml` file is updated with `[origin]`. If either step
+fails, the command must not report success. The `origin` table is the durable
+link to the external issue, not a pending publish request.
+
+TaskDocument stays limited to title, branch, body, and optional origin:
+
+```toml
+title = "Add profile docs"
+branch = "add-profile-docs"
+body = """
+Document profile setup and extraction.
+"""
+
+[origin]
+provider = "github"
+id = "123"
+```
+
+Publish does not store TaskRun execution state, batch or stack orchestration,
+profile selection, retry status, or branch landing state in the TaskDocument.
+Future batch or stack selectors may choose more than one TaskDocument to
+publish, but each provider link still belongs only in the selected
+TaskDocument's `origin`.
+
+Ambiguity fails before any provider write:
+
+- No configured issue provider: fail with a clear error.
+- Existing `origin`: fail by default and do not silently create a duplicate
+  issue. A future multi-task selector may add an explicit `--skip-existing`
+  option, but skipping is not implicit.
+- Existing `origin.provider` differs from the configured issue provider: fail
+  as a provider mismatch.
+- Empty `title`: fail because the provider issue needs a title.
+- Empty or omitted `body`: allowed; publish an empty issue body.
+
+Dry-run is not part of the first publish write path. If it is added later, it
+should run the same validation and print the planned provider issue fields and
+local `origin` update without writing pending state to the TaskDocument.
 
 Use `wt review [branch|worktree|task-run]` to inspect a task run before landing
 it. The command reads the linked TaskRun and TaskDocument when available,
