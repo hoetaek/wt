@@ -479,13 +479,17 @@ fn open_workspace(
     };
     let should_probe_workspace_start = options.focus_restore_if_workspace_cold
         && (!command.trim().is_empty() || !ws_config.tabs.is_empty());
-    let caller_context = cmux.caller_context();
-    let caller_workspace = (options.restore_caller_after_workspace_open
+    let identity_context = cmux.identity_context();
+    let caller_context = identity_context
+        .as_ref()
+        .and_then(|identity| identity.caller.clone());
+    let focus_restore_target = (options.restore_caller_after_workspace_open
         && (options.focus_workspace || should_probe_workspace_start))
         .then(|| {
-            caller_context
+            identity_context
                 .as_ref()
-                .and_then(|caller| caller.workspace.clone())
+                .and_then(|identity| identity.focused.clone())
+                .or_else(|| caller_context.clone())
         })
         .flatten();
     let ws_handle = cmux.new_workspace_with_caller(
@@ -542,18 +546,10 @@ fn open_workspace(
     }
 
     if options.restore_caller_after_workspace_open && focus_was_moved {
-        if let Some(caller_workspace) = caller_workspace
-            .as_deref()
-            .filter(|workspace| !workspace.trim().is_empty() && *workspace != ws_handle)
-        {
+        if let Some(target) = focus_restore_target.as_ref() {
             // Temporary cmux 0.64.x workaround: focus starts the offscreen PTY
-            // (manaflow-ai/cmux#4187/#4193), then we restore the caller workspace.
-            if let Err(err) = cmux.select_workspace(caller_workspace) {
-                ctx.ui
-                    .print_warning(&format!("Failed to restore cmux workspace focus: {err}"));
-            } else if should_probe_workspace_start {
-                ctx.ui.print_step("Returned to previous cmux workspace");
-            }
+            // (manaflow-ai/cmux#4187/#4193), then we restore the prior focus.
+            restore_cmux_focus(ctx, &cmux, &ws_handle, target, should_probe_workspace_start);
         }
     }
 
@@ -561,6 +557,48 @@ fn open_workspace(
         handle: ws_handle,
         coordinator: caller_context,
     }))
+}
+
+fn restore_cmux_focus(
+    ctx: &Ctx,
+    cmux: &CmuxService<'_>,
+    opened_workspace: &str,
+    target: &CmuxCaller,
+    print_returned_step: bool,
+) {
+    let workspace = target
+        .workspace
+        .as_deref()
+        .filter(|workspace| !workspace.trim().is_empty());
+    let surface = target
+        .surface
+        .as_deref()
+        .filter(|surface| !surface.trim().is_empty());
+
+    if let Some(surface) = surface {
+        match cmux.focus_surface(surface, workspace) {
+            Ok(()) => {
+                if print_returned_step {
+                    ctx.ui.print_step("Returned to previous cmux surface");
+                }
+                return;
+            }
+            Err(err) => {
+                ctx.ui.print_warning(&format!(
+                    "Failed to restore cmux surface focus: {err}; falling back to workspace focus"
+                ));
+            }
+        }
+    }
+
+    if let Some(workspace) = workspace.filter(|workspace| *workspace != opened_workspace) {
+        if let Err(err) = cmux.select_workspace(workspace) {
+            ctx.ui
+                .print_warning(&format!("Failed to restore cmux workspace focus: {err}"));
+        } else if print_returned_step {
+            ctx.ui.print_step("Returned to previous cmux workspace");
+        }
+    }
 }
 
 fn workspace_terminal_ready(cmux: &CmuxService<'_>, ws_handle: &str) -> bool {
@@ -1355,6 +1393,98 @@ mod tests {
             vars.get("coordinator_enter_command").map(String::as_str),
             Some("cmux send-key --workspace workspace:1 --surface surface:128 enter")
         );
+    }
+
+    #[test]
+    fn open_workspace_restores_focused_cmux_surface() {
+        use crate::config::{Config, WorkspaceConfig};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let repo = std::env::temp_dir().join("wt-test-focused-surface-repo");
+        let wt = std::env::temp_dir().join("wt-test-focused-surface-worktree");
+        fs::create_dir_all(&repo).ok();
+        fs::create_dir_all(&wt).ok();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:1","pane_ref":"pane:1","surface_ref":"surface:10"},"focused":{"window_ref":"window:1","workspace_ref":"workspace:1","pane_ref":"pane:1","surface_ref":"surface:20"}}"#,
+            true,
+        );
+        runner.add_response("workspace:2 workspace:2", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let config = Config {
+            workspace: Some(WorkspaceConfig::default()),
+            ..Config::default()
+        };
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            config.clone(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: wt.clone(),
+            branch: "alice/focus-restore".into(),
+            workspace: "focus restore".into(),
+            site: None,
+        };
+        let options = SetupOptions {
+            focus_workspace: true,
+            focus_restore_if_workspace_cold: false,
+            ..SetupOptions::default()
+        };
+
+        let opened = open_workspace(&ctx, &config, &wt, &names, &HashMap::new(), "", options)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            opened
+                .coordinator
+                .as_ref()
+                .and_then(|caller| caller.surface.as_deref()),
+            Some("surface:10")
+        );
+        let calls = runner.calls.lock().unwrap();
+        let focus_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "cmux"
+                    && args.first().is_some_and(|arg| arg == "rpc")
+                    && args.get(1).is_some_and(|arg| arg == "surface.focus")
+            })
+            .expect("expected surface.focus call");
+        let params: serde_json::Value = serde_json::from_str(&focus_call.1[2]).unwrap();
+        assert_eq!(params["surface_id"], "surface:20");
+        assert_eq!(params["workspace_id"], "workspace:1");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
     }
 
     #[test]

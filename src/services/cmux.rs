@@ -23,6 +23,12 @@ pub struct CmuxCaller {
     pub surface: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmuxIdentity {
+    pub caller: Option<CmuxCaller>,
+    pub focused: Option<CmuxCaller>,
+}
+
 pub struct CmuxService<'a> {
     runner: &'a dyn CommandRunner,
     focus_new_workspace: bool,
@@ -89,13 +95,17 @@ impl<'a> CmuxService<'a> {
     }
 
     pub fn caller_context(&self) -> Option<CmuxCaller> {
+        self.identity_context()?.caller
+    }
+
+    pub fn identity_context(&self) -> Option<CmuxIdentity> {
         let out = self.runner.run("cmux", &["identify"], None).ok()?;
         if !out.success {
             return None;
         }
 
         let response: IdentifyResponse = serde_json::from_str(&out.stdout).ok()?;
-        response.caller.map(Into::into)
+        Some(response.into())
     }
 
     pub fn list_workspaces(&self) -> Result<Vec<CmuxWorkspace>> {
@@ -144,6 +154,21 @@ impl<'a> CmuxService<'a> {
             .run("cmux", &["rpc", "workspace.select", &params], None)?;
         if !out.success {
             bail!("cmux workspace.select failed: {}", command_error(&out));
+        }
+        Ok(())
+    }
+
+    pub fn focus_surface(&self, surface_id: &str, workspace_id: Option<&str>) -> Result<()> {
+        let params = match workspace_id {
+            Some(workspace_id) => json!({ "surface_id": surface_id, "workspace_id": workspace_id }),
+            None => json!({ "surface_id": surface_id }),
+        }
+        .to_string();
+        let out = self
+            .runner
+            .run("cmux", &["rpc", "surface.focus", &params], None)?;
+        if !out.success {
+            bail!("cmux surface.focus failed: {}", command_error(&out));
         }
         Ok(())
     }
@@ -328,19 +353,29 @@ impl From<RpcWindow> for CmuxWindow {
 
 #[derive(Debug, Deserialize)]
 struct IdentifyResponse {
-    caller: Option<IdentifyCaller>,
+    caller: Option<IdentifyContext>,
+    focused: Option<IdentifyContext>,
 }
 
 #[derive(Debug, Deserialize)]
-struct IdentifyCaller {
+struct IdentifyContext {
     window_ref: Option<String>,
     workspace_ref: Option<String>,
     pane_ref: Option<String>,
     surface_ref: Option<String>,
 }
 
-impl From<IdentifyCaller> for CmuxCaller {
-    fn from(caller: IdentifyCaller) -> Self {
+impl From<IdentifyResponse> for CmuxIdentity {
+    fn from(response: IdentifyResponse) -> Self {
+        Self {
+            caller: response.caller.map(Into::into),
+            focused: response.focused.map(Into::into),
+        }
+    }
+}
+
+impl From<IdentifyContext> for CmuxCaller {
+    fn from(caller: IdentifyContext) -> Self {
         Self {
             window: caller.window_ref,
             workspace: caller.workspace_ref,
@@ -447,6 +482,27 @@ mod tests {
     }
 
     #[test]
+    fn identity_context_reads_focused_surface_ref() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:2","surface_ref":"surface:4"},"focused":{"window_ref":"window:1","workspace_ref":"workspace:2","pane_ref":"pane:3","surface_ref":"surface:5"}}"#,
+            true,
+        );
+
+        let svc = CmuxService::new(&runner);
+        let identity = svc.identity_context().unwrap();
+
+        assert_eq!(
+            identity.caller.unwrap().surface.as_deref(),
+            Some("surface:4")
+        );
+        let focused = identity.focused.unwrap();
+        assert_eq!(focused.workspace.as_deref(), Some("workspace:2"));
+        assert_eq!(focused.pane.as_deref(), Some("pane:3"));
+        assert_eq!(focused.surface.as_deref(), Some("surface:5"));
+    }
+
+    #[test]
     fn list_panes_filters_pane_ids() {
         let mut runner = MockRunner::new();
         runner.add_response("pane:0 extra pane:1 data", true);
@@ -545,6 +601,23 @@ mod tests {
                 r#"{"workspace_id":"uuid-workspace-10"}"#
             ]
         );
+    }
+
+    #[test]
+    fn focus_surface_passes_surface_and_workspace_refs() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+
+        let svc = CmuxService::new(&runner);
+        svc.focus_surface("surface:10", Some("workspace:2"))
+            .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls[0].1[0], "rpc");
+        assert_eq!(calls[0].1[1], "surface.focus");
+        let params: serde_json::Value = serde_json::from_str(&calls[0].1[2]).unwrap();
+        assert_eq!(params["surface_id"], "surface:10");
+        assert_eq!(params["workspace_id"], "workspace:2");
     }
 
     #[test]
