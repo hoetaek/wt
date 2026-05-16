@@ -252,12 +252,10 @@ fn task_key_from_text(value: &str) -> Result<String> {
     new_command::branch_name_from_words(&[value.to_string()])
 }
 
-fn issue_provider_name(ctx: &Ctx) -> Result<String> {
-    let issues = ctx
-        .config
-        .issues
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("No [issues] section in .wt.toml"))?;
+pub(crate) fn issue_provider_name(ctx: &Ctx) -> Result<String> {
+    let issues = ctx.config.issues.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("No [issues] section in .wt.toml. Set provider = \"linear\" or \"github\"")
+    })?;
     Ok(match issues.provider {
         IssueProviderType::Github => "github",
         IssueProviderType::Linear => "linear",
@@ -370,10 +368,13 @@ fn toml_quote(value: &str) -> String {
 }
 
 fn toml_multiline_string(value: &str) -> String {
+    if value.starts_with(['\n', '\r']) {
+        return toml_quote(value);
+    }
     let escaped = value
         .replace("\\", "\\\\")
         .replace("\"\"\"", "\\\"\\\"\\\"");
-    format!("\"\"\"\n{}\n\"\"\"", escaped.trim_end())
+    format!("\"\"\"{}\"\"\"", escaped)
 }
 
 #[cfg(test)]

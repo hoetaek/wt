@@ -108,8 +108,7 @@ wt new --task
 wt new --task add-profile-docs
 ```
 
-Publish a prepared local task to the configured issue provider when the
-provider write path is added:
+Publish a prepared local task to the configured issue provider:
 
 ```bash
 wt task publish add-profile-docs
@@ -519,8 +518,8 @@ created profile worktree gets its own TaskRun record.
 
 ## Publishing Local Tasks
 
-The publish contract reserves `wt task publish <task>` as the canonical command
-shape for creating a provider issue from one local TaskDocument:
+Use `wt task publish <task>` to create a provider issue from one local
+TaskDocument:
 
 ```bash
 wt task publish add-profile-docs

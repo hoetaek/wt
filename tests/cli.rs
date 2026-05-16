@@ -106,6 +106,18 @@ fn new_help_explains_branch_text_and_task_selection() {
 }
 
 #[test]
+fn task_publish_help_explains_behavior() {
+    Command::cargo_bin("wt")
+        .unwrap()
+        .args(["task", "publish", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("provider issue"))
+        .stdout(predicate::str::contains("write [origin]"))
+        .stdout(predicate::str::contains("already has origin"));
+}
+
+#[test]
 fn completion_generates_script() {
     Command::cargo_bin("wt")
         .unwrap()

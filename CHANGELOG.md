@@ -11,6 +11,11 @@ minor version instead of moving to `x.0.0`.
 - Changed stack task prompts to ask task agents to `wt send` their Agent
   Completion Report back to the coordinator worktree before waiting for review;
   the coordinator still advances the stack with `wt stack complete --run-next`.
+- Added `wt task publish <task>` for publishing one local TaskDocument to the
+  configured issue provider and writing the created issue origin back to the
+  selected task file without creating a TaskRun or worktree.
+- Bumped the package version to `0.13.0` because `wt task publish` adds a new
+  user-facing CLI command while `wt` is still pre-1.0.
 - Added `wt send <TARGET> <MESSAGE...>` for sending a message to the cmux
   surface discovered by the same branch/worktree/TaskRun target model used by
   `wt review`.

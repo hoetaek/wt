@@ -13,7 +13,7 @@ pub mod ui;
 pub mod worktree_naming;
 
 use anyhow::Result;
-use cli::{BatchCommand, Commands, ConfigCommand, StackCommand};
+use cli::{BatchCommand, Commands, ConfigCommand, StackCommand, TaskCommand};
 use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
@@ -55,6 +55,9 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             BatchCommand::Show { batch } => commands::batch::show(ctx, batch.as_deref()),
             BatchCommand::Edit { batch } => commands::batch::edit(ctx, batch.as_deref()),
             BatchCommand::Clean { batch } => commands::batch::clean(ctx, batch.as_deref()),
+        },
+        Commands::Task { command } => match command {
+            TaskCommand::Publish { task } => commands::task_publish::run(ctx, task),
         },
         Commands::Stack { command } => match command {
             StackCommand::Task {

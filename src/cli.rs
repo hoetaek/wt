@@ -85,6 +85,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: BatchCommand,
     },
+    /// Manage local TaskDocuments
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
     /// Prepare, inspect, edit, run, or complete stacks
     Stack {
         #[command(subcommand)]
@@ -290,6 +295,18 @@ pub enum BatchCommand {
     Clean {
         /// Batch TOML path, shorthand id, or "latest" (default)
         batch: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum TaskCommand {
+    /// Publish one local TaskDocument as a provider issue
+    #[command(
+        long_about = "Create a provider issue from .local/tasks/<task>.toml, then write [origin] with the configured provider and created issue id.\n\nFails before creating an issue when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+    )]
+    Publish {
+        /// Local task key from .local/tasks/<task>.toml
+        task: String,
     },
 }
 
@@ -821,6 +838,34 @@ mod tests {
         let help = run.render_help().to_string();
         assert!(help.contains("--jobs <JOBS>"));
         assert!(help.contains("Maximum number of runnable tasks to execute concurrently"));
+    }
+
+    #[test]
+    fn task_publish_accepts_task_key() {
+        let cli = parse(&["wt", "task", "publish", "add-profile-docs"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Publish { ref task }
+            }) if task == "add-profile-docs"
+        ));
+    }
+
+    #[test]
+    fn task_publish_help_explains_side_effects_and_failures() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("publish")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("provider issue"));
+        assert!(help.contains("write [origin]"));
+        assert!(help.contains("no issue provider"));
+        assert!(help.contains("already has origin"));
     }
 
     #[test]
