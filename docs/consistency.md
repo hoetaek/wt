@@ -228,6 +228,8 @@ TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<i
 task, branch, status, source, group, error, creation_order, created_at,
 updated_at을 저장한다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
 초 단위 timestamp 우연성에 기대지 않도록 새 TaskRun마다 증가하는 실행 생성 순서다.
+`creation_order`가 없는 legacy TaskRun은 계속 읽되 ordered TaskRun보다 앞에 정렬하고,
+legacy끼리는 `created_at`과 id를 fallback으로 쓴다.
 status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이다. 알 수 없는
 status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서 실패시킨다.
 
