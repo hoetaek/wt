@@ -662,10 +662,11 @@ timestamps as the legacy ordering fallback.
 When `wt new --task` starts selected tasks, it writes TaskRuns with
 `source = "new"`. Successful starts remain `running` until the matching
 worktree is cleaned up with `wt done`, which marks the matching runs `done`.
-The task selector hides tasks whose latest run is `running`, `done`, or
-`skipped`; failed runs stay retryable. With `--profile` or `--matrix`, each
-created profile worktree gets its own TaskRun record. With multiple selected
-tasks, each task gets its own TaskRun record on the same created branch.
+The task selector hides tasks whose latest run is `running` or `done`.
+Latest `prepared`, `failed`, and `skipped` runs stay selectable/retryable.
+With `--profile` or `--matrix`, each created profile worktree gets its own
+TaskRun record. With multiple selected tasks, each task gets its own TaskRun
+record on the same created branch.
 
 ## Publishing Local Tasks
 
