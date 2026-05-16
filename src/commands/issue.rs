@@ -35,6 +35,23 @@ pub(crate) struct IssueRunResult {
     pub(crate) worktree_path: PathBuf,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PlannedIssueWorktree {
+    pub(crate) branch_name: String,
+    pub(crate) path: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PromptPolicy {
+    Allow,
+    Deny,
+}
+
+struct ProfileRunOptions<'a> {
+    prepared_issue: Option<&'a PreparedIssueContext<'a>>,
+    prompt_policy: PromptPolicy,
+}
+
 pub fn run(
     ctx: &Ctx,
     target: Option<&str>,
@@ -42,7 +59,16 @@ pub fn run(
     profile: Option<&str>,
     matrix: bool,
 ) -> Result<()> {
-    run_inner(ctx, target, base_raw, profile, matrix, None).map(|_| ())
+    run_inner(
+        ctx,
+        target,
+        base_raw,
+        profile,
+        matrix,
+        None,
+        PromptPolicy::Allow,
+    )
+    .map(|_| ())
 }
 
 pub(crate) fn run_with_issue_snapshot(
@@ -52,7 +78,78 @@ pub(crate) fn run_with_issue_snapshot(
     matrix: bool,
     prepared: PreparedIssueContext<'_>,
 ) -> Result<IssueRunResult> {
-    run_inner(ctx, None, base_raw, profile, matrix, Some(&prepared))
+    run_inner(
+        ctx,
+        None,
+        base_raw,
+        profile,
+        matrix,
+        Some(&prepared),
+        PromptPolicy::Allow,
+    )
+}
+
+pub(crate) fn run_with_issue_snapshot_non_interactive(
+    ctx: &Ctx,
+    base_raw: &Option<String>,
+    profile: Option<&str>,
+    matrix: bool,
+    prepared: PreparedIssueContext<'_>,
+) -> Result<IssueRunResult> {
+    run_inner(
+        ctx,
+        None,
+        base_raw,
+        profile,
+        matrix,
+        Some(&prepared),
+        PromptPolicy::Deny,
+    )
+}
+
+pub(crate) fn planned_worktrees_for_prepared_issue(
+    ctx: &Ctx,
+    title: &str,
+    branch_name: &str,
+    profile: Option<&str>,
+    naming: Option<&WorktreeNamingResult>,
+) -> Result<Vec<PlannedIssueWorktree>> {
+    if profile.is_some() {
+        let profiles = load_selected_profiles(ctx, profile)?;
+        return profiles
+            .into_iter()
+            .map(|(profile_name, profile_config)| {
+                let profile_branch = format!("{branch_name}-{profile_name}");
+                let profile_title = format!("{title} [{profile_name}]");
+                let profile_workspace = naming
+                    .and_then(|n| n.workspace.as_deref())
+                    .map(|workspace| format!("{workspace} [{profile_name}]"))
+                    .unwrap_or_else(|| {
+                        WorktreeNames::build_workspace_name(&profile_branch, Some(&profile_title))
+                    });
+
+                let names = WorktreeNames::new_with_workspace_config(
+                    &profile_branch,
+                    &ctx.parent_dir,
+                    &ctx.repo_root,
+                    &ctx.repo_name,
+                    Some(&profile_workspace),
+                    profile_config.has_site().then_some(""),
+                    profile_config.worktree.path.as_deref(),
+                )?;
+                Ok(PlannedIssueWorktree {
+                    branch_name: profile_branch,
+                    path: names.path,
+                })
+            })
+            .collect();
+    }
+
+    let names = issue_worktree_names(ctx, branch_name, title, naming)?;
+    Ok(vec![PlannedIssueWorktree {
+        branch_name: branch_name.to_string(),
+        path: names.path,
+    }])
 }
 
 fn run_inner(
@@ -62,6 +159,7 @@ fn run_inner(
     profile: Option<&str>,
     matrix: bool,
     prepared_issue: Option<&PreparedIssueContext<'_>>,
+    prompt_policy: PromptPolicy,
 ) -> Result<IssueRunResult> {
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
@@ -149,7 +247,10 @@ fn run_inner(
             naming.as_ref(),
             base_raw,
             profile,
-            prepared_issue,
+            ProfileRunOptions {
+                prepared_issue,
+                prompt_policy,
+            },
         )?;
         return results
             .into_iter()
@@ -205,6 +306,12 @@ fn run_inner(
             "Open existing".into(),
             "Abort".into(),
         ];
+        if prompt_policy == PromptPolicy::Deny {
+            bail!(
+                "Worktree {} already exists; parallel batch workers cannot prompt to delete or open it",
+                names.path.display()
+            );
+        }
         let choice = ctx.ui.select("Worktree already exists", &items)?;
         match choice {
             0 => {
@@ -242,6 +349,7 @@ fn run_inner(
         &names.path,
         base_raw,
         provider_created_branch_base,
+        prompt_policy,
     )?;
 
     // 5. Update issue status for new branches
@@ -307,11 +415,15 @@ fn run_profiles(
     naming: Option<&WorktreeNamingResult>,
     base_raw: &Option<String>,
     profile: Option<&str>,
-    prepared_issue: Option<&PreparedIssueContext<'_>>,
+    options: ProfileRunOptions<'_>,
 ) -> Result<Vec<IssueRunResult>> {
-    let issue_snapshot = prepared_issue.map(|issue| &issue.snapshot);
-    let setup_mode = prepared_issue.map(|issue| issue.mode).unwrap_or("issue");
-    let prompt_intro = prepared_issue
+    let issue_snapshot = options.prepared_issue.map(|issue| &issue.snapshot);
+    let setup_mode = options
+        .prepared_issue
+        .map(|issue| issue.mode)
+        .unwrap_or("issue");
+    let prompt_intro = options
+        .prepared_issue
         .map(|issue| issue.prompt_intro)
         .unwrap_or("Use this issue snapshot before changing code.");
     let profiles = load_selected_profiles(ctx, profile)?;
@@ -368,6 +480,12 @@ fn run_profiles(
                 "Skip".into(),
                 "Abort all".into(),
             ];
+            if options.prompt_policy == PromptPolicy::Deny {
+                bail!(
+                    "Worktree {} already exists; parallel batch workers cannot prompt to delete, skip, or abort",
+                    names.path.display()
+                );
+            }
             let choice = ctx
                 .ui
                 .select(&format!("[{profile_name}] Worktree already exists"), &items)?;
@@ -532,6 +650,7 @@ fn create_worktree(
     wt_path: &std::path::Path,
     base_raw: &Option<String>,
     provider_created_branch_base: Option<&str>,
+    prompt_policy: PromptPolicy,
 ) -> Result<CreateType> {
     let base_mode = BaseMode::from_raw(base_raw);
 
@@ -561,6 +680,11 @@ fn create_worktree(
         let parent = if let Some(base) = provider_created_branch_base {
             base.to_string()
         } else {
+            if prompt_policy == PromptPolicy::Deny {
+                bail!(
+                    "Remote branch {branch_name} needs a parent branch selection; parallel batch workers cannot prompt"
+                );
+            }
             let branches = git.list_local_branches()?;
             let idx = ctx.ui.select("Select parent branch", &branches)?;
             branches[idx].clone()
@@ -576,12 +700,20 @@ fn create_worktree(
         match base_mode {
             BaseMode::Explicit(ref b) => b.clone(),
             BaseMode::Interactive => {
+                if prompt_policy == PromptPolicy::Deny {
+                    bail!(
+                        "Base branch selection is interactive; parallel batch workers cannot prompt"
+                    );
+                }
                 let branches = git.list_local_branches()?;
                 let idx = ctx.ui.select("Select base branch", &branches)?;
                 branches[idx].clone()
             }
             BaseMode::Current => git.current_branch()?,
             BaseMode::Default => {
+                if prompt_policy == PromptPolicy::Deny {
+                    bail!("Base branch input is interactive; parallel batch workers cannot prompt");
+                }
                 let current = git.current_branch()?;
                 ctx.ui.input("Base branch", Some(&current))?
             }

@@ -522,6 +522,7 @@ wt batch edit
 wt batch edit latest
 wt batch run .local/batches/2026-05-09-001.toml
 wt batch run latest
+wt batch run latest --jobs 3
 wt batch clean
 wt batch clean latest
 ```
@@ -532,6 +533,14 @@ wt batch clean latest
 `run` executes only tasks with `status = "prepared"` or `status = "failed"`.
 Tasks marked `done` or `skipped` are left alone, so reruns can continue from
 the batch file's task status instead of checking a global issue state.
+By default `run` uses `--jobs 1` and keeps the current sequential behavior.
+`--jobs <N>` starts at most N runnable tasks concurrently. The batch file stays
+the resumable source of truth: workers do not write batch metadata directly,
+and the coordinator records started, succeeded, failed, and skipped task
+events. Shared Git metadata writes such as `parentbranch` are serialized by the
+repo mutation guard. In parallel mode, conflict cases that would require an
+interactive worker prompt, such as an existing worktree path, are recorded as
+task failures instead.
 
 `clean` deletes task snapshot files from `.local/tasks/` for a completed batch.
 It keeps the batch TOML as the execution record, refuses batches with

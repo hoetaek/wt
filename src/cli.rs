@@ -247,6 +247,9 @@ pub enum BatchCommand {
     Run {
         /// Batch TOML path, or "latest" for the newest local batch
         batch: String,
+        /// Maximum number of runnable tasks to execute concurrently
+        #[arg(long, default_value_t = 1, value_parser = parse_positive_usize)]
+        jobs: usize,
     },
     /// Show batch metadata and task statuses
     Show {
@@ -356,6 +359,16 @@ impl BaseMode {
             Some(s) => BaseMode::Explicit(s.clone()),
         }
     }
+}
+
+fn parse_positive_usize(value: &str) -> std::result::Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| "must be a positive integer".to_string())?;
+    if parsed == 0 {
+        return Err("must be a positive integer".into());
+    }
+    Ok(parsed)
 }
 
 #[cfg(test)]
@@ -617,9 +630,26 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Batch {
-                command: BatchCommand::Run { ref batch }
-            }) if batch == "latest"
+                command: BatchCommand::Run { ref batch, jobs }
+            }) if batch == "latest" && jobs == 1
         ));
+    }
+
+    #[test]
+    fn batch_run_accepts_jobs() {
+        let cli = parse(&["wt", "batch", "run", "latest", "--jobs", "3"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Run { ref batch, jobs }
+            }) if batch == "latest" && jobs == 3
+        ));
+    }
+
+    #[test]
+    fn batch_run_rejects_zero_jobs() {
+        let result = Cli::try_parse_from(["wt", "batch", "run", "latest", "--jobs", "0"]);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -687,6 +717,16 @@ mod tests {
         assert!(help.contains("Prepare, inspect, edit, run, or clean batches"));
         assert!(help.contains("clean"));
         assert!(help.contains("show"));
+    }
+
+    #[test]
+    fn batch_run_help_explains_jobs() {
+        let mut command = Cli::command();
+        let batch = command.find_subcommand_mut("batch").unwrap();
+        let run = batch.find_subcommand_mut("run").unwrap();
+        let help = run.render_help().to_string();
+        assert!(help.contains("--jobs <JOBS>"));
+        assert!(help.contains("Maximum number of runnable tasks to execute concurrently"));
     }
 
     #[test]
