@@ -8,6 +8,10 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+No changes yet.
+
+## 0.23.0 - 2026-05-17
+
 - Changed bare `wt workflow run` to select runnable workflows from
   `.local/workflows`, auto-run the only runnable workflow, and fail
   non-interactive multiple-candidate runs with explicit rerun commands before
@@ -20,6 +24,9 @@ minor version instead of moving to `x.0.0`.
 - Removed prepared TaskDocument execution from `wt new --task`; `wt new` now
   only starts one ad hoc worktree from branch-name text and guides prepared
   task execution to `wt task run`.
+- Bumped the package version to `0.23.0` because `wt workflow run` target
+  omission and `wt task run` change the user-facing CLI contract while `wt` is
+  still pre-1.0.
 
 ## 0.21.0 - 2026-05-16
 
