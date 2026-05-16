@@ -2,7 +2,7 @@
 
 이 문서는 `wt` 코드베이스가 지켜야 할 UX 일관성 원칙을 정리한다.
 
-`wt`는 worktree, issue, pull request, profile, batch, stack, agent runtime처럼 서로
+`wt`는 worktree, issue, pull request, profile, workflow, agent runtime처럼 서로
 다른 개념을 조합하는 도구다. 기능이 늘어날수록 사용자가 기억해야 할 규칙이 늘기
 쉽다. 그래서 `wt`의 UX는 기능 수보다 개념의 선명함을 우선한다.
 
@@ -41,27 +41,36 @@ setup/site/test/workspace 기본값까지 잡을지를 고르는 선택이다.
 `[profile.agent]`를 쓸 수는 있지만, agent runtime을 구조화하고 재사용하는 책임은 계속
 `profile`에 둔다.
 
-`batch`는 무엇들을 한꺼번에 실행할지에 대한 개념이다.
+`workflow`는 `.local/workflows` 아래에 저장되는 prepared execution plan이다.
+사용자는 어떤 task들을 어떤 실행 shape로 시작하고 이어갈지를 workflow로 다룬다.
+Canonical command surface는 `wt workflow`다.
 
-`stack`은 어떤 작업 task들을 어떤 순서의 branch parent 체인으로 쌓을지에 대한
-개념이다.
+Workflow는 정확히 하나의 `mode = "single" | "batch" | "stack"` 값을 가진다.
+`mode`는 실행 shape만 고른다. `single`은 하나의 branch workspace에서 하나 이상의
+TaskDocument를 실행하고, `batch`는 같은 base에서 여러 독립 branch를 실행하며,
+`stack`은 task branch들을 정해진 parent chain으로 순서대로 실행한다.
+
+`batch`와 `stack`은 workflow mode 값으로 남지만 top-level 상태 파일 noun이 아니다.
+새 상태 파일은 `.local/workflows` 아래에만 만들고, `.local/batches`와
+`.local/stacks`는 migration context 또는 old readable state로만 다룬다. `wt batch`나
+`wt stack`을 `wt workflow`의 compatibility alias로 남겨 두면 두 command surface가 모두
+canonical처럼 보이므로, migration 시에는 명시적으로 실패하거나 제거한다.
+
+Workflow file은 mode, base, profile, color, timestamps, task/run link 같은
+orchestration만 저장한다. Task branch name의 source of truth는 항상
+TaskDocument의 `branch`다. Workflow task row는 branch 이름을 복사해 저장하지 않는다.
+
+Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 묶는 표시다. 색상이
+생략되면 `wt`가 내장 cmux named-color palette의 다음 색을 고르고 workflow file에
+기록한다. 색상은 mode나 task의 의미가 아니라 workflow-level 표시다.
 
 `matrix`는 하나의 issue, branch-name 입력, 또는 명시적으로 선택한 prepared task를
 named profile 목록으로 확장하는 개념이다. `batch`나 `stack`처럼 여러 task 자체를
 뜻하지 않고, profile 축으로 여러 worktree를 만드는 실행 형태다.
 
-`wt stack task`와 `wt stack issue`는 둘 다 stack 상태 파일과 task 문서를 만든다.
-차이는 입력 소스다. `task`는 branch-name text에서 local task를 만들고, `issue`는
-provider issue를 origin이 있는 task로 가져온다.
-
-`wt new <words...>`는 branch-name text에서 바로 worktree를 시작한다.
-`.local/tasks` 아래의 준비된 task를 시작하려면 `wt new --task` selector나
-`wt new --task <task>`를 쓴다. 여러 prepared task를 한 workspace에서 처리하려면
-`wt new <workspace-branch-words...> --task <task> --task <task>`처럼 `--task`를
-반복한다. 이때 branch-name text는 공유 workspace branch이고, 각 TaskDocument는 같은
-branch와 group을 가리키는 별도 TaskRun으로 기록된다. `--tasks` 같은 별도 복수 옵션은
-만들지 않는다. Bare `wt new`는 여전히 거부한다. Bare `wt new --task`는 빈 입력을 다른
-소스로 추론하는 것이 아니라, 사용자가 task selector를 명시한 것이다.
+`wt new <words...>`는 branch-name text에서 바로 ad hoc worktree를 시작한다. 준비된
+TaskDocument 실행은 workflow model이 맡는다. `wt new`에 prepared-task 실행 의미를 계속
+넓히면 `single` mode workflow와 같은 개념이 두 표면에 나뉘게 된다.
 
 `wt open`은 issue selector가 아니라 branch/worktree 상태 selector다. 선택지는 현재
 checkout을 제외하고 `existing`(이미 별도 worktree가 있음), `local`(local branch만
@@ -69,9 +78,8 @@ checkout을 제외하고 `existing`(이미 별도 worktree가 있음), `local`(l
 분류하지 않는다. issue provider가 제안한 branch와 `worktree.naming`으로 만든 branch가
 다를 수 있기 때문이다.
 
-이 셋이 섞이면 사용자는 batch가 실행환경인지, stack이 단순 실행 목록인지,
-profile이 작업 묶음인지 다시 추론해야
-한다. 이런 혼동은 기능 추가보다 먼저 제거한다.
+이 개념들이 섞이면 사용자는 workflow가 실행환경인지, mode가 상태 파일 noun인지,
+profile이 작업 묶음인지 다시 추론해야 한다. 이런 혼동은 기능 추가보다 먼저 제거한다.
 
 ### Omission Means Default Behavior
 
@@ -106,7 +114,7 @@ profile로 확장”을 뜻한다면, 둘을 동시에 받은 상태에서 임�
 Interactive prompt도 CLI contract다. 사용자가 값을 생략해서 selector가 열리는
 command는 무엇을 고르는지, 한 개를 고르는지 여러 개를 고르는지, 빈 선택이 허용되는지
 문서와 help text에서 같은 말로 설명해야 한다. Selector는 작은 terminal prompt로
-동작하고, filterable list와 최대 10개 visible row 안에서 task, branch, PR, batch, stack,
+동작하고, filterable list와 최대 10개 visible row 안에서 task, branch, PR, workflow,
 config section 같은 현재 concept label만 보여준다. 색상, symbol, checkbox는 보조
 표현일 뿐이고 의미는 text label에 남아야 한다.
 
@@ -191,13 +199,13 @@ Local TaskDocument를 provider issue로 만드는 흐름을 `wt issue create`, `
 가져오는 방향이고, `publish`는 TaskDocument를 provider issue로 내보내는 방향이다.
 
 Publish는 TaskDocument의 schema를 넓히지 않는다. TaskDocument에는 계속 title, branch,
-body, optional origin만 둔다. TaskRun, batch, stack, profile, retry status, pending
+body, optional origin만 둔다. TaskRun, workflow, profile, retry status, pending
 publish state는 TaskDocument에 저장하지 않는다. Publish selector는 어떤 local
 TaskDocument를 고를지에만 관여하고, provider issue link는 선택된 각 TaskDocument의
 `origin`에만 기록한다.
 
 Publish ambiguity는 provider side effect 전에 실패해야 한다. Explicit task keys,
-bare selector 외에 batch나 stack alias 같은 두 번째 task source를 만들면 안 된다.
+bare selector 외에 workflow alias 같은 두 번째 task source를 만들면 안 된다.
 Configured issue provider가 없으면 실패한다. Bare selector에서는 이미 `origin`이 있는
 TaskDocument를 보여주지 않는다. 명시 task key에 이미 `origin`이 있으면 해당 task는
 실패이며, 같은 task를 조용히 다시 publish해서 duplicate issue를 만들지 않는다. 이미
@@ -213,113 +221,79 @@ plan이어야 하고, TaskDocument에 pending state를 저장해서 dry-run 결�
 `wt task publish --help`는 이 side effect를 그대로 설명해야 한다. 즉 provider issue를
 생성하고 local TaskDocument origin을 기록한다는 점, 이미 origin이 있거나 provider가
 불명확하면 실패한다는 점, bare publish는 아직 origin이 없는 TaskDocument를 고른다는 점을
-보여줘야 한다. Worktree 시작, TaskRun 생성, batch/stack 실행, branch landing처럼 다른
+보여줘야 한다. Worktree 시작, TaskRun 생성, workflow 실행, branch landing처럼 다른
 lifecycle을 publish 도움말에 섞지 않는다.
 
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
 task, branch, status, source, group, error, creation_order, created_at,
 updated_at을 저장한다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
 초 단위 timestamp 우연성에 기대지 않도록 새 TaskRun마다 증가하는 실행 생성 순서다.
-status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이고, source는
-`new`, `batch`, `stack`만 canonical이다. 알 수 없는 status/source 값은 조용히
-해석하지 않고 파싱 단계에서 실패시킨다.
+status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이다. 알 수 없는
+status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서 실패시킨다.
 
-통합 실행 상태 모델은 TaskDocument와 TaskRun의 책임을 나누는 데서 시작한다.
-TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, TaskRun은 그 설명을 한 번
-실행한 기록이다. `wt new --task`, `wt new --task <task>`, `wt batch run`,
-`wt stack run`은 모두 TaskDocument를 읽어 실행 context로 쓰고, 실행 상태는
-`.local/task-runs`의 TaskRun에만 쓴다. 하나의
-`wt new <workspace> --task <task> --task <task>` 실행은 workspace를 하나 만들 수 있지만,
-실행 기록은 task마다 별도 TaskRun으로 남긴다.
+통합 실행 상태 모델은 TaskDocument, Workflow, TaskRun의 책임을 나누는 데서 시작한다.
+TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, Workflow는 그 task set을
+어떤 실행 shape로 이어갈지에 대한 저장된 계획이며, TaskRun은 TaskDocument 하나를 한 번
+실행한 기록이다.
 
-Batch가 어떤 task를 준비했고, 어떤 task가 끝났고, 어떤 task가 실패했는지는 저장할
-가치가 있다. Batch 준비는 각 task마다 `.local/tasks` 아래의 TaskDocument와
-`.local/task-runs` 아래의 `source = "batch"` TaskRun을 만든다. Batch의 canonical
-상태 목록은 `[[tasks]]`이고, 각 row는 task key와 linked TaskRun id 같은 orchestration
-link만 저장한다. Batch row는 어떤 task들이 함께 시작 대상인지와 어떤 실행 기록을
-읽어야 하는지만 저장하고, status/error를 따로 가지지 않는다. 실행 인스턴스의 canonical
-기록은 TaskRun이다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을 가리키는 다른
-이름은 받지 않는다. 내부 구현 편의를 위해 만든 가짜 이름이나 암묵적 상태를 저장하면
-나중에 사용자가 파일을 읽을 때 모델을 다시 배워야 한다.
-Batch가 만든 cmux workspace 이름은 저장 상태가 아니라 현재 실행을 찾기 위한 표시다.
-좁은 탭에서 잘려도 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을
-앞에 붙이고, branch/path/site 이름에는 batch label을 섞지 않는다.
-Bare `run`은 runnable batch 목록을 filterable selector로 보여준다. Runnable batch는
-`prepared` 또는 `failed` TaskRun이 하나 이상 있는 batch다. Batch task들은 독립적이므로
-이미 `running`인 TaskRun이 있어도 prepared/failed sibling이 있으면 runnable로 남는다.
-Selector label은 task titles/keys, runnable count, running count를 포함한 status counts,
-base, profile 같은 semantic summary를 담아서 `.local/batches/<date>.toml` 같은 파일명만
-보고 고르게 하지 않는다. Explicit `wt batch run <path-or-id>`는 scripts를 위해 남기지만
-`latest`는 run target contract가 아니다.
+Workflow 준비는 `.local/workflows/<id>.toml` 하나와 각 task의 TaskDocument/TaskRun link를
+만든다. Workflow의 canonical task 목록은 `[[tasks]]`이고, 각 row는 task key, linked
+TaskRun id, stack-mode parent, pull request handoff intent처럼 orchestration에 필요한
+link와 실행 지시만 저장한다. Workflow row는 status/error를 따로 가지지 않고, branch
+이름도 복사하지 않는다. 실행 인스턴스의 canonical 기록은 TaskRun이고, branch name의
+canonical 기록은 TaskDocument다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을
+가리키는 다른 이름은 받지 않는다.
 
-Stack이 어떤 task를 어떤 parent 위에 쌓았는지도 저장할 가치가 있다. Stack 준비는 각
-task마다 `.local/tasks` 아래의 TaskDocument와 `.local/task-runs` 아래의
-`source = "stack"` TaskRun을 만든다. canonical 상태 목록은 `[[tasks]]`이고, task 문서는
-issue origin이 있는 작업과 직접 작성한 branch work를 같은 형태로 담는다. Stack row는
-task key, parent, linked TaskRun id, pull request handoff intent 같은 orchestration
-link와 실행 지시만 저장하고, status/error를 따로 가지지 않는다. 실행 인스턴스의
-canonical 기록은 TaskRun이다. `pull_request = true|false`는 각 stack task가 작업 완료
-뒤 draft pull request를 열어야 하는지에 대한 명시적 handoff intent다. 이것은 PR 자체나
-review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. `wt stack task`와
-`wt stack issue`는 `--pull-request`가 있을 때만 `pull_request = true`를 쓰고, 생략하면
-`false`를 쓴다. `[[issues]]`나
-`[[items]]`처럼 같은 상태 목록을 가리키는 다른 이름은 받지 않는다. Bare `run`은 runnable
-stack 목록을 filterable selector로 보여준다. Runnable stack은 다음 `prepared` 또는
-`failed` TaskRun이 있고 current `running` TaskRun은 없는 stack이다. Selector label은 task
-titles/keys, next task, status counts, base, profile 같은 semantic summary를 담아서
-`.local/stacks/<date>.toml` 같은 파일명만 보고 고르게 하지 않는다. Explicit
-`wt stack run <path-or-id>`는 scripts를 위해 남기지만 `latest`는 run target contract가
-아니다. `run`은 선택된 stack의 다음 runnable TaskRun을 `running`으로 전이하고, 명시적
-`complete` 신호가 들어오면 같은 TaskRun을 `done`으로 전이한다.
-`pr`은 기존 pull request workflow를 가리키는 별도 개념이므로 stack task로 받지 않는다.
-Stack이 만든 cmux workspace 이름도 저장 상태가 아니라 현재 실행을 찾기 위한 표시다.
-좁은 탭에서 잘려도 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을
-앞에 붙이고, branch/path/site 이름에는 stack label을 섞지 않는다.
-Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 명시적
-`complete` 신호를 기다리는 상태다. 완료를 추정해서 다음 task를 시작하지 않는다.
-`complete`는 branch가 clean이고 parent보다 앞선 commit이 있을 때만 `done`으로
-전이해야 한다. 다음 task 자동 시작은 명시적인 continuation 선택, 예를 들어
-`--run-next`로만 일어난다.
-Stack task prompt는 작업 agent가 자기 판단만으로 stack을 전진시키기보다, 작업과
-commit을 끝낸 뒤 stack row의 `pull_request` 값에 맞춰 handoff하도록 안내한다.
-`pull_request = true`면 branch를 push하고 stack parent branch를 base로 draft pull
-request를 열게 한다. `pull_request = false`면 pull request를 열지 않고 `PR=none`으로
-보고하게 한다. 그 다음 `wt send <coordinator-worktree> ...`로 실행자 worktree에 pull
-request URL 또는 `PR=none`을 포함한 Agent Completion Report를 보내도록 안내한다. 이
-보고 전송은 transport일 뿐 상태 전이가 아니다. 실행자나 master agent가 `wt review`, 필요한 경우 pull request, 보고를 확인한 뒤
-`wt stack complete ... --run-next`를 실행할 때 TaskRun 상태가 전이된다.
+`.local/workflows`는 `.local/batches`와 `.local/stacks`를 대체한다. 이유는 batch와 stack이
+저장소 noun이 아니라 하나의 Workflow 안에서 고르는 execution mode이기 때문이다. 새
+기능이 `.local/batches`나 `.local/stacks`에 상태를 계속 추가하면 사용자는 같은 준비 작업을
+workflow, batch file, stack file 중 무엇으로 읽어야 하는지 다시 배워야 한다. 기존 old
+state를 읽는 기간이 필요하더라도 migration context로만 설명하고, 새 canonical state는
+Workflow file 하나로 수렴시킨다.
 
-`wt done`은 worktree와 local branch cleanup 명령이므로 `source = "new"`와
-`source = "batch"`인 running TaskRun만 실제 worktree 제거와 함께 `done`으로
-전이한다. Stack TaskRun은 parent-chain 검증이 필요한 실행 순서 모델 안에 있으므로
-`wt stack complete`만 `done`으로 전이한다.
+`single` mode workflow는 하나의 branch workspace에서 하나 이상의 TaskDocument를 실행한다.
+`batch` mode workflow는 같은 base에서 여러 TaskDocument를 독립 branch로 실행한다. Batch
+task들은 독립적이므로 이미 `running`인 TaskRun이 있어도 prepared/failed sibling이 있으면
+workflow는 runnable로 남을 수 있다. `stack` mode workflow는 TaskDocument를 base-to-top
+parent chain으로 실행하고, current `running` TaskRun이 있으면 다음 task를 시작하지 않는다.
+Stack-mode에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 명시적 completion
+신호를 기다리는 상태다. 완료를 추정해서 다음 task를 시작하지 않는다.
 
-Branch landing은 TaskRun 상태와 별도 lifecycle이다. `complete`는 stack TaskRun을
-검증 후 `done`으로 바꾸는 실행 완료 신호이고, `done`은 worktree와 local branch를
-치우는 cleanup 신호이며, `merge`/`land`는 branch commit을 `master` 같은 통합 branch에
-넣는 Git workflow다. `wt done`이나 `wt stack complete`가 branch를 `master`에
-merge했다고 해석하지 않는다. 현재는 별도 `wt land` 명령을 만들지 않고,
-`git switch master`, `git pull --ff-only`, `git merge --ff-only <branch>` 같은 명시적
-Git 단계로 landing을 문서화한다. Stack branch는 `wt stack show`가 보여주는
-base-to-top 순서대로 landing한다.
+Workspace label은 저장 상태가 아니라 현재 실행을 찾기 위한 표시다. 좁은 탭에서 잘려도
+의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을 앞에 붙이고, branch/path/site
+이름에는 `batch`나 `stack` 같은 mode label을 섞지 않는다. `B`/`S` prefix는 workflow
+contract에 포함하지 않는다.
+
+Stack-mode handoff intent는 workflow task row에 저장할 수 있다. `pull_request = true`면
+작업 agent가 branch를 push하고 stack parent branch를 base로 draft pull request를 열어야
+한다. `pull_request = false`면 pull request를 열지 않고 `PR=none`으로 보고한다. 이것은 PR
+자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은 transport일
+뿐 상태 전이가 아니다. 실행자나 coordinator가 `wt review`, 필요한 경우 pull request, 보고를
+확인한 뒤 workflow completion command를 실행할 때 TaskRun 상태가 전이된다.
+
+`wt done`은 worktree와 local branch cleanup 명령이다. `done`은 cleanup 신호이고,
+workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch commit을 `master` 같은
+통합 branch에 넣는 Git workflow다. `wt done`이나 workflow completion command가 branch를
+`master`에 merge했다고 해석하지 않는다. 현재는 별도 `wt land` 명령을 만들지 않고,
+`git switch master`, `git pull --ff-only`, `git merge --ff-only <branch>` 같은 명시적 Git
+단계로 landing을 문서화한다. Stack-mode workflow branch는 workflow가 보여주는 base-to-top
+순서대로 landing한다.
 
 Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work definition이므로
-기본적으로 보존한다. 한 번 실행하고 끝난 batch task는 모든 linked TaskRun이
-`done`이나 `skipped`가 된 뒤 `wt batch clean`으로 `.local/tasks`의 TaskDocument만
-지운다. Stack task에는 아직 cleanup 명령이 없으므로 landing이 끝났고 다른 batch나
-stack이 참조하지 않는 것을 확인한 뒤 필요할 때만 `.local/tasks/<task>.toml`을
-수동 삭제한다. 나중에 `wt land`, `wt task clean`, `wt run clean` 같은 명령을 만들더라도
-`done`이나 `complete`에 merge나 task definition 삭제 의미를 섞지 않는다.
+기본적으로 보존한다. 한 번 실행하고 끝난 task라도 linked TaskRun과 Workflow reference가
+정리되기 전까지 TaskDocument 삭제를 execution completion에 섞지 않는다. 나중에 `wt land`,
+`wt task clean`, `wt run clean`, `wt workflow clean` 같은 명령을 만들더라도 `done`이나
+`complete`에 merge나 task definition 삭제 의미를 섞지 않는다.
 
 `wt review`는 상태 전이 명령이 아니다. branch, worktree, TaskRun을 읽어서 parent,
 dirty 상태, commit/diff 정보, agent 완료 보고 기대치를 보여주는 점검 명령이다. cmux
 workspace/surface 정보도 저장된 실행 상태가 아니라 현재 세션에서 발견한 transport
-좌표로만 보여준다. 실제 완료 기록은 `wt done` 또는 `wt stack complete`처럼 source별
-completion 명령이 맡는다.
+좌표로만 보여준다. 실제 완료 기록은 `wt done` 또는 workflow completion command처럼
+source별 completion 명령이 맡는다.
 
 `wt send`도 상태 전이 명령이 아니다. `wt review`와 같은 target 해석으로 현재 cmux
 surface를 찾아 메시지를 보내는 transport 명령이다. 메시지를 보냈다는 사실을 TaskRun
-상태로 저장하지 않고, 완료 여부는 여전히 TaskRun status와 stack completion 명령으로만
+상태로 저장하지 않고, 완료 여부는 여전히 TaskRun status와 workflow completion command로만
 표현한다.
 
 `wt status <target>`도 상태 전이 명령이 아니다. `target`은 `wt review`와 `wt send`가
@@ -367,6 +341,9 @@ Claude Code는 cmux의 Claude 통합에서 status/sidebar 신호가 나오고, C
 `wt`는 아직 1.0에 도달하지 않았으므로 CLI, config, 상태 파일 모델이 안정화될 때까지
 breaking change를 `x.0.0` major로 표현하지 않는다. 새 기능과 breaking user-facing
 정리는 `0.x.0` minor로 올리고, 버그 수정이나 내부 로직 변경은 `0.x.y` patch로 올린다.
+예를 들어 prepared-task `wt new`, `wt batch`, `wt stack` 표면을 `wt workflow`와
+`.local/workflows`로 수렴시키는 변경은 CLI와 상태 파일 계약을 바꾸므로 patch가 아니라
+pre-1.0 minor 변경이다.
 
 1.0 이후에만 기존 사용자-facing 계약을 깨는 변경을 major bump로 표현한다.
 

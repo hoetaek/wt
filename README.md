@@ -182,7 +182,7 @@ wt task publish
 wt task publish add-profile-docs
 ```
 
-Prepare issue work in bulk:
+Prepare issue work in bulk with the current pre-migration commands:
 
 ```bash
 wt batch issue
@@ -192,6 +192,11 @@ wt stack show latest
 wt stack run
 wt stack complete latest PROJ-123 --run-next
 ```
+
+The workflow model below is the canonical target for prepared work. New
+implementation should converge `single`, `batch`, and `stack` execution under
+`wt workflow` and `.local/workflows` instead of adding new contracts to
+prepared-task `wt new`, `wt batch`, or `wt stack`.
 
 Open an existing worktree, or pick a local/remote branch and create its worktree:
 
@@ -231,11 +236,50 @@ local branch; it does not merge the branch into `master`.
 When a command omits a value that can be chosen safely, `wt` shows a compact
 terminal prompt instead of guessing. Selectors are filterable, cap the visible
 list to ten rows, and keep the row label focused on the resource being chosen:
-tasks, PRs, branches, batches, stacks, config sections, or worktrees.
+tasks, PRs, branches, workflows, config sections, or worktrees.
 
 Single-select prompts choose one resource and continue. Multi-select prompts
 use checkbox-style rows; selecting no rows is only accepted by commands whose
 documented behavior treats an empty selection as a no-op.
+
+## Workflow Model
+
+The target prepared-work contract is a Workflow: a saved execution plan under
+`.local/workflows/<id>.toml`. A Workflow is the user-facing container for
+running one or more prepared TaskDocuments, and `wt workflow` is the canonical
+surface for preparing, showing, editing, running, and completing that work.
+
+Each Workflow has exactly one execution-shape switch:
+
+- `mode = "single"` runs one or more TaskDocuments in one branch workspace.
+- `mode = "batch"` runs multiple independent TaskDocuments from the same base.
+- `mode = "stack"` runs ordered TaskDocuments as a branch parent chain.
+
+`batch` and `stack` remain mode values, not top-level state-file nouns.
+`.local/workflows` replaces `.local/batches` and `.local/stacks` because the
+same stored concept now covers single, independent, and ordered task execution.
+Keeping separate batch and stack directories as new canonical state would make
+users choose between three names for the same prepared-work container. Old
+batch and stack files can be treated as migration context while the command
+surface changes, but new persisted workflow state should converge on
+`.local/workflows`.
+
+A Workflow file stores workflow-level orchestration: `mode`, base, optional
+profile, optional color, timestamps, and `[[tasks]]` rows that link to
+TaskDocuments and TaskRuns. The branch name source of truth stays in each
+TaskDocument's `branch` field. Workflow task rows must not copy branch names;
+they only link to the task and its execution record, plus mode-specific
+instructions such as stack parents or pull-request handoff intent.
+
+When a Workflow does not specify a color, `wt` chooses the next color from its
+built-in cmux named-color palette and writes that color back to the workflow
+file. The color marks workspaces opened for the same Workflow; it is not a task
+or mode meaning.
+
+Replacing prepared-task `wt new`, `wt batch`, and `wt stack` with
+`wt workflow` is a user-facing CLI and persisted state-model change. While
+`wt` is pre-1.0, that migration should be released as a `0.x.0` minor version,
+not as a patch.
 
 ## Configuration
 
@@ -734,6 +778,10 @@ it fails without sending and prints the exact raw `cmux send` commands.
 
 ## Batches
 
+This section describes the current pre-migration command surface. The canonical
+target for new prepared-work implementation is the Workflow model above, where
+`batch` is `mode = "batch"` inside `.local/workflows`.
+
 Batches split planning from execution. `task` prepares local tasks and `issue`
 imports provider issues as tasks without creating worktrees:
 
@@ -829,6 +877,10 @@ refuses batches with linked TaskRuns still in `prepared`, `running`, or
 reports deleted, skipped, and already-missing task files.
 
 ## Stacks
+
+This section describes the current pre-migration command surface. The canonical
+target for new prepared-work implementation is the Workflow model above, where
+`stack` is `mode = "stack"` inside `.local/workflows`.
 
 Stacks are ordered work where each task branch is based on the previous
 completed task branch.
