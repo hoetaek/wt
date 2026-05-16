@@ -3,7 +3,7 @@ use crate::error::WtError;
 use anyhow::{Result, anyhow};
 use cliclack::{Theme, ThemeState};
 use console::{Style, measure_text_width, style};
-use std::io;
+use std::io::{self, IsTerminal};
 
 const PROMPT_MAX_ROWS: usize = 10;
 const PROMPT_HINT_GAP: usize = 2;
@@ -47,6 +47,10 @@ impl UserInterface for TerminalUi {
             .map(PromptItem::new)
             .collect::<Vec<_>>();
         self.multi_select_items(prompt, &items)
+    }
+
+    fn can_prompt(&self) -> bool {
+        io::stdin().is_terminal()
     }
 
     fn select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<usize> {

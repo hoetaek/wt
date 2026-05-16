@@ -34,6 +34,9 @@ pub trait CommandRunner: Send + Sync {
 pub trait UserInterface: Send + Sync {
     fn select(&self, prompt: &str, items: &[String]) -> Result<usize>;
     fn multi_select(&self, prompt: &str, items: &[String]) -> Result<Vec<usize>>;
+    fn can_prompt(&self) -> bool {
+        true
+    }
     fn select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<usize> {
         let rendered = render_prompt_items(items);
         self.select(prompt, &rendered)
@@ -285,6 +288,7 @@ pub mod mock {
         pub steps: Mutex<Vec<String>>,
         pub dims: Mutex<Vec<String>>,
         pub warnings: Mutex<Vec<String>>,
+        prompt_available: bool,
     }
 
     impl Default for MockUi {
@@ -306,7 +310,12 @@ pub mod mock {
                 steps: Mutex::new(Vec::new()),
                 dims: Mutex::new(Vec::new()),
                 warnings: Mutex::new(Vec::new()),
+                prompt_available: true,
             }
+        }
+
+        pub fn set_prompt_available(&mut self, prompt_available: bool) {
+            self.prompt_available = prompt_available;
         }
 
         pub fn add_select(&mut self, index: usize) {
@@ -356,6 +365,10 @@ pub mod mock {
                 .ok_or_else(|| anyhow::anyhow!("MockUi: no multi_select response"))
         }
 
+        fn can_prompt(&self) -> bool {
+            self.prompt_available
+        }
+
         fn confirm(&self, prompt: &str, _default: bool) -> Result<bool> {
             self.prompts
                 .lock()
@@ -403,6 +416,10 @@ pub mod mock {
 
         fn multi_select(&self, prompt: &str, items: &[String]) -> Result<Vec<usize>> {
             self.as_ref().multi_select(prompt, items)
+        }
+
+        fn can_prompt(&self) -> bool {
+            self.as_ref().can_prompt()
         }
 
         fn confirm(&self, prompt: &str, default: bool) -> Result<bool> {

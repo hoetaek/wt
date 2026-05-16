@@ -389,8 +389,11 @@ pub enum WorkflowCommand {
         pull_request: bool,
     },
     /// Start runnable tasks from a workflow
+    #[command(
+        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts."
+    )]
     Run {
-        /// Workflow TOML path or shorthand id
+        /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
         workflow: Option<String>,
         /// Maximum number of runnable batch-mode tasks to execute concurrently
         #[arg(long, default_value_t = 1, value_parser = parse_positive_usize)]
