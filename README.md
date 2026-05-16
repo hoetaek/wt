@@ -242,6 +242,9 @@ When a command omits a value that can be chosen safely, `wt` shows a compact
 terminal prompt instead of guessing. Selectors are filterable, cap the visible
 list to ten rows, and keep the row label focused on the resource being chosen:
 tasks, PRs, branches, workflows, config sections, or worktrees.
+Rows with supporting metadata keep that metadata in an aligned hint column
+within the prompt page; filtering still uses both the resource label and the
+metadata text. Plain label-only selectors stay unpadded.
 
 Single-select prompts choose one resource and continue. Multi-select prompts
 use checkbox-style rows; selecting no rows is only accepted by commands whose

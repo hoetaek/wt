@@ -116,7 +116,10 @@ command는 무엇을 고르는지, 한 개를 고르는지 여러 개를 고르�
 문서와 help text에서 같은 말로 설명해야 한다. Selector는 작은 terminal prompt로
 동작하고, filterable list와 최대 10개 visible row 안에서 task, branch, PR, workflow,
 config section 같은 현재 concept label만 보여준다. 색상, symbol, checkbox는 보조
-표현일 뿐이고 의미는 text label에 남아야 한다.
+표현일 뿐이고 의미는 text label에 남아야 한다. 보조 metadata가 있는 row는 같은 prompt
+page 안에서 hint column을 맞춰 보여주되, filter 대상은 padding이 아니라 concept label과
+metadata text여야 한다. Metadata가 없는 plain label selector에는 가짜 column을 만들지
+않는다.
 
 ### Progressive Disclosure
 

@@ -2,10 +2,12 @@ use crate::context::{PromptItem, UserInterface};
 use crate::error::WtError;
 use anyhow::{Result, anyhow};
 use cliclack::{Theme, ThemeState};
-use console::{Style, style};
+use console::{Style, measure_text_width, style};
 use std::io;
 
 const PROMPT_MAX_ROWS: usize = 10;
+const PROMPT_HINT_GAP: usize = 2;
+const PROMPT_SEARCH_SEPARATOR: char = '\x1f';
 const BAR: &str = "│";
 const RADIO_SELECTED: &str = "◉";
 const RADIO_UNSELECTED: &str = "○";
@@ -48,23 +50,24 @@ impl UserInterface for TerminalUi {
     }
 
     fn select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<usize> {
+        let items = prompt_entries(items);
         let mut select = cliclack::select(prompt)
             .max_rows(PROMPT_MAX_ROWS)
             .filter_mode();
         for (index, item) in items.iter().enumerate() {
-            select = select.item(index, &item.label, item.hint.as_deref().unwrap_or(""));
+            select = select.item(index, &item.label, &item.hint);
         }
         prompt_result(prompt, select.interact())
     }
 
     fn multi_select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<Vec<usize>> {
+        let items = prompt_entries(items);
         let mut multi_select = cliclack::multiselect(prompt)
             .max_rows(PROMPT_MAX_ROWS)
             .required(false)
             .filter_mode();
         for (index, item) in items.iter().enumerate() {
-            multi_select =
-                multi_select.item(index, &item.label, item.hint.as_deref().unwrap_or(""));
+            multi_select = multi_select.item(index, &item.label, &item.hint);
         }
         prompt_result(prompt, multi_select.interact())
     }
@@ -122,6 +125,51 @@ impl UserInterface for TerminalUi {
 }
 
 struct WtPromptTheme;
+
+struct PromptEntry {
+    label: String,
+    hint: String,
+}
+
+fn prompt_entries(items: &[PromptItem]) -> Vec<PromptEntry> {
+    let hint_label_width = items
+        .iter()
+        .filter(|item| has_prompt_hint(item))
+        .map(|item| measure_text_width(&item.label))
+        .max();
+
+    items
+        .iter()
+        .map(|item| {
+            let hint = item.hint.as_deref().unwrap_or("").trim().to_string();
+            let mut label = item.label.clone();
+            if !hint.is_empty() {
+                if let Some(target_width) = hint_label_width {
+                    label.push_str(
+                        &" ".repeat(target_width.saturating_sub(measure_text_width(&label))),
+                    );
+                }
+                // Cliclack filters only labels, so carry hint text in a suffix
+                // that the theme strips before rendering.
+                label.push(PROMPT_SEARCH_SEPARATOR);
+                label.push_str(&hint);
+            }
+            PromptEntry { label, hint }
+        })
+        .collect()
+}
+
+fn has_prompt_hint(item: &PromptItem) -> bool {
+    item.hint
+        .as_deref()
+        .is_some_and(|hint| !hint.trim().is_empty())
+}
+
+fn display_label(label: &str) -> &str {
+    label
+        .split_once(PROMPT_SEARCH_SEPARATOR)
+        .map_or(label, |(display, _)| display)
+}
 
 impl Theme for WtPromptTheme {
     fn bar_color(&self, state: &ThemeState) -> Style {
@@ -259,6 +307,7 @@ fn format_prompt_row(
     label: &str,
     hint: &str,
 ) -> String {
+    let label = display_label(label);
     let hint = format_hint(state, hint);
     format!(
         "{bar}  {marker}  {label}{hint}\n",
@@ -273,7 +322,11 @@ fn format_hint(state: &ThemeState, hint: &str) -> String {
         String::new()
     } else {
         let hint = hint.replace(" | ", " · ");
-        format!("  {}", hint_style(state).apply_to(hint))
+        format!(
+            "{}{}",
+            " ".repeat(PROMPT_HINT_GAP),
+            hint_style(state).apply_to(hint)
+        )
     }
 }
 
@@ -355,5 +408,105 @@ mod tests {
         let plain = strip_ansi_codes(&rendered);
         assert!(plain.contains("☑  Publish docs"));
         assert!(plain.contains("PROJ-123 · Todo · alice"));
+    }
+
+    #[test]
+    fn prompt_theme_aligns_select_hint_columns_after_stripping_ansi() {
+        console::set_colors_enabled(true);
+        let items = prompt_entries(&[
+            PromptItem::with_hint("Fix", "task PROJ-123"),
+            PromptItem::with_hint("Publish documentation", "task PROJ-456"),
+        ]);
+        let short = strip_ansi_codes(&WtPromptTheme.format_select_item(
+            &ThemeState::Active,
+            true,
+            &items[0].label,
+            &items[0].hint,
+        ))
+        .into_owned();
+        let long = strip_ansi_codes(&WtPromptTheme.format_select_item(
+            &ThemeState::Active,
+            false,
+            &items[1].label,
+            &items[1].hint,
+        ))
+        .into_owned();
+        console::set_colors_enabled(true);
+
+        assert_eq!(
+            hint_column(&short, "task PROJ-123"),
+            hint_column(&long, "task PROJ-456")
+        );
+    }
+
+    #[test]
+    fn prompt_theme_aligns_multiselect_hint_columns_after_stripping_ansi() {
+        console::set_colors_enabled(true);
+        let items = prompt_entries(&[
+            PromptItem::with_hint("Fix", "task PROJ-123"),
+            PromptItem::with_hint("Publish documentation", "task PROJ-456"),
+        ]);
+        let short = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            true,
+            true,
+            &items[0].label,
+            &items[0].hint,
+        ))
+        .into_owned();
+        let long = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            false,
+            false,
+            &items[1].label,
+            &items[1].hint,
+        ))
+        .into_owned();
+        console::set_colors_enabled(true);
+
+        assert_eq!(
+            hint_column(&short, "task PROJ-123"),
+            hint_column(&long, "task PROJ-456")
+        );
+    }
+
+    #[test]
+    fn prompt_entries_keep_hint_text_searchable_without_rendering_search_suffix() {
+        let items = prompt_entries(&[PromptItem::with_hint(
+            "Fix editor",
+            "task PROJ-123 | Linear",
+        )]);
+
+        assert!(items[0].label.contains("Fix editor"));
+        assert!(items[0].label.contains("task PROJ-123 | Linear"));
+
+        let rendered = WtPromptTheme.format_select_item(
+            &ThemeState::Active,
+            true,
+            &items[0].label,
+            &items[0].hint,
+        );
+        let plain = strip_ansi_codes(&rendered);
+        assert!(!plain.contains(PROMPT_SEARCH_SEPARATOR));
+        assert!(!plain.contains("task PROJ-123 | Linear"));
+        assert!(plain.contains("task PROJ-123 · Linear"));
+    }
+
+    #[test]
+    fn prompt_entries_leave_plain_labels_unpadded() {
+        let items = prompt_entries(&[
+            PromptItem::new("Fix"),
+            PromptItem::new("Publish documentation"),
+        ]);
+
+        assert_eq!(items[0].label, "Fix");
+        assert_eq!(items[0].hint, "");
+        assert_eq!(items[1].label, "Publish documentation");
+        assert_eq!(items[1].hint, "");
+    }
+
+    fn hint_column(row: &str, hint: &str) -> usize {
+        row.find(hint)
+            .unwrap_or_else(|| panic!("row did not contain hint {hint:?}: {row:?}"))
     }
 }
