@@ -131,23 +131,24 @@ fn run_selected_task(
         let results = match results {
             Ok(results) => results,
             Err(err) => {
-                record_new_task_failure(ctx, &selected, &err);
+                if let Some(partial) = err.downcast_ref::<issue::IssueRunPartialFailure>() {
+                    if let Err(record_err) =
+                        record_new_task_profile_results(ctx, &selected, partial)
+                    {
+                        return Err(anyhow::anyhow!(
+                            "Failed to record partial profile TaskRuns after profile run failed ({err}): {record_err}"
+                        ));
+                    }
+                } else {
+                    record_new_task_failure(ctx, &selected, &err);
+                }
                 return Err(err);
             }
         };
         if results.is_empty() {
             bail!("No profile worktrees created");
         }
-        for result in &results {
-            task_run::create(
-                ctx,
-                &selected.key,
-                &result.branch_name,
-                task_run::SOURCE_NEW,
-                None,
-                task_run::STATUS_RUNNING,
-            )?;
-        }
+        record_new_task_profile_successes(ctx, &selected, &results)?;
         return results
             .into_iter()
             .last()
@@ -238,6 +239,50 @@ fn record_new_task_failure(ctx: &Ctx, selected: &task::SelectedTask, err: &anyho
     ) {
         let _ = task_run::update(ctx, &run.id, status, None, Some(&message));
     }
+}
+
+fn record_new_task_profile_successes(
+    ctx: &Ctx,
+    selected: &task::SelectedTask,
+    results: &[issue::IssueRunResult],
+) -> Result<()> {
+    for result in results {
+        task_run::create(
+            ctx,
+            &selected.key,
+            &result.branch_name,
+            task_run::SOURCE_NEW,
+            None,
+            task_run::STATUS_RUNNING,
+        )?;
+    }
+    Ok(())
+}
+
+fn record_new_task_profile_results(
+    ctx: &Ctx,
+    selected: &task::SelectedTask,
+    partial: &issue::IssueRunPartialFailure,
+) -> Result<()> {
+    record_new_task_profile_successes(ctx, selected, &partial.completed)?;
+    if let Some(failed) = &partial.failed {
+        let run = task_run::create(
+            ctx,
+            &selected.key,
+            &failed.branch_name,
+            task_run::SOURCE_NEW,
+            None,
+            task_run::STATUS_FAILED,
+        )?;
+        task_run::update(
+            ctx,
+            &run.id,
+            task_run::STATUS_FAILED,
+            None,
+            Some(partial.message()),
+        )?;
+    }
+    Ok(())
 }
 
 pub(crate) fn branch_name_from_words(name_words: &[String]) -> Result<String> {
@@ -634,6 +679,153 @@ mod tests {
         assert_eq!(latest.run.source, task_run::SOURCE_NEW);
         assert_eq!(latest.run.status, task_run::STATUS_RUNNING);
         assert_eq!(latest.run.branch, "add-schema");
+    }
+
+    #[test]
+    fn task_option_matrix_records_created_profile_runs_after_later_profile_failure() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+
+        let alpha_dir = repo.path().join(".local/profiles/alpha");
+        std::fs::create_dir_all(&alpha_dir).unwrap();
+        std::fs::write(alpha_dir.join("profile.toml"), "").unwrap();
+
+        let beta_dir = repo.path().join(".local/profiles/beta");
+        std::fs::create_dir_all(beta_dir.join("scaffold/AGENTS.override.md")).unwrap();
+        std::fs::write(
+            beta_dir.join("profile.toml"),
+            r#"
+[worktree]
+inject_local_context = "context"
+
+[agent]
+cli = "codex"
+"#,
+        )
+        .unwrap();
+
+        let mut config = Config::default();
+        config.worktree.path = Some("worktrees/{{branch_sanitized}}".into());
+
+        let mut runner = MockRunner::new();
+        runner.add_response("", false); // alpha profile branch local_branch_exists
+        runner.add_response("", true); // alpha worktree_add_new_branch
+        runner.add_response("", true); // alpha parent local_branch_exists
+        runner.add_response("", true); // alpha set parent config
+        runner.add_response("", false); // beta profile branch local_branch_exists
+        runner.add_response("", true); // beta worktree_add_new_branch
+        runner.add_response("", true); // beta parent local_branch_exists
+        runner.add_response("", true); // beta set parent config
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            config.clone(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        let result = run(
+            &ctx,
+            &[],
+            Some(Some("add-schema")),
+            &Some("main".into()),
+            None,
+            true,
+        );
+
+        assert!(result.is_err());
+        let calls = runner.calls.lock().unwrap();
+        let added_branches = calls
+            .iter()
+            .filter(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 4
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .map(|(_, args, _)| args[3].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            added_branches,
+            vec![
+                "add-schema-alpha".to_string(),
+                "add-schema-beta".to_string()
+            ]
+        );
+        drop(calls);
+
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 2);
+        let alpha = runs
+            .iter()
+            .find(|record| record.run.branch == "add-schema-alpha")
+            .expect("expected alpha profile TaskRun");
+        assert_eq!(alpha.run.task, "add-schema");
+        assert_eq!(alpha.run.source, task_run::SOURCE_NEW);
+        assert_eq!(alpha.run.status, task_run::STATUS_RUNNING);
+        assert!(alpha.run.error.is_none());
+
+        let beta = runs
+            .iter()
+            .find(|record| record.run.branch == "add-schema-beta")
+            .expect("expected beta profile TaskRun");
+        assert_eq!(beta.run.task, "add-schema");
+        assert_eq!(beta.run.source, task_run::SOURCE_NEW);
+        assert_eq!(beta.run.status, task_run::STATUS_FAILED);
+        assert!(beta.run.error.is_some());
+        assert!(task_run::task_is_selectable(&ctx, "add-schema").unwrap());
+
+        let alpha_path = repo.path().join("worktrees/add-schema-alpha");
+        let mut clean_runner = MockRunner::new();
+        clean_runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\nbranch refs/heads/add-schema-alpha\n\n",
+                repo.path().display(),
+                alpha_path.display()
+            ),
+            true,
+        );
+        clean_runner.add_response("", true); // worktree remove
+        clean_runner.add_response("", true); // branch delete
+        clean_runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+        let clean_ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            config,
+            Box::new(clean_runner),
+            Box::new(MockUi::new()),
+        );
+
+        crate::commands::clean::run_with_targets(&clean_ctx, &["add-schema-alpha".into()]).unwrap();
+
+        let runs = task_run::list(&clean_ctx).unwrap();
+        let alpha = runs
+            .iter()
+            .find(|record| record.run.branch == "add-schema-alpha")
+            .expect("expected alpha profile TaskRun");
+        assert_eq!(alpha.run.status, task_run::STATUS_DONE);
+        let beta = runs
+            .iter()
+            .find(|record| record.run.branch == "add-schema-beta")
+            .expect("expected beta profile TaskRun");
+        assert_eq!(beta.run.status, task_run::STATUS_FAILED);
     }
 
     #[test]

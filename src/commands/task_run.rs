@@ -2,6 +2,7 @@ use crate::commands::task;
 use crate::context::Ctx;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -27,8 +28,16 @@ pub(crate) struct TaskRun {
     pub(crate) group: Option<String>,
     #[serde(default)]
     pub(crate) error: Option<String>,
+    #[serde(default)]
+    pub(crate) creation_order: Option<u64>,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskRunCreationOrder {
+    #[serde(default)]
+    creation_order: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +59,7 @@ pub(crate) fn create(
     validate_status(status)?;
 
     let now = current_utc_timestamp();
+    let creation_order = next_creation_order(ctx)?;
     let run = TaskRun {
         task: task::safe_task_key(task),
         branch: branch.to_string(),
@@ -57,6 +67,7 @@ pub(crate) fn create(
         source: source.to_string(),
         group: group.and_then(optional_string),
         error: None,
+        creation_order: Some(creation_order),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -157,18 +168,22 @@ pub(crate) fn update(
     })
 }
 
+pub(crate) fn delete_record(record: &TaskRunRecord) -> Result<()> {
+    match fs::remove_file(&record.path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err)
+            .with_context(|| format!("Failed to delete task run: {}", record.path.display())),
+    }
+}
+
 pub(crate) fn latest_for_task(ctx: &Ctx, task: &str) -> Result<Option<TaskRunRecord>> {
     let task = task::safe_task_key(task);
     let mut runs = list(ctx)?
         .into_iter()
         .filter(|record| record.run.task == task)
         .collect::<Vec<_>>();
-    runs.sort_by(|left, right| {
-        left.run
-            .created_at
-            .cmp(&right.run.created_at)
-            .then_with(|| left.id.cmp(&right.id))
-    });
+    runs.sort_by(compare_task_run_records);
     Ok(runs.pop())
 }
 
@@ -248,6 +263,9 @@ fn write(path: &Path, run: &TaskRun) -> Result<()> {
     if let Some(error) = run.error.as_deref() {
         content.push_str(&format!("error = {}\n", toml_quote(error)));
     }
+    if let Some(creation_order) = run.creation_order {
+        content.push_str(&format!("creation_order = {creation_order}\n"));
+    }
     content.push_str(&format!("created_at = {}\n", toml_quote(&run.created_at)));
     content.push_str(&format!("updated_at = {}\n", toml_quote(&run.updated_at)));
 
@@ -261,18 +279,68 @@ fn validate_run(run: &TaskRun) -> Result<()> {
     }
     validate_status(&run.status)?;
     validate_source(&run.source)?;
+    if matches!(run.creation_order, Some(0)) {
+        bail!("Task run creation_order must be greater than 0");
+    }
     Ok(())
 }
 
 fn latest_path(ctx: &Ctx) -> Result<PathBuf> {
-    let mut paths = list(ctx)?
-        .into_iter()
-        .map(|record| record.path)
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths
+    let mut records = list(ctx)?;
+    records.sort_by(compare_task_run_records);
+    records
         .pop()
+        .map(|record| record.path)
         .ok_or_else(|| anyhow::anyhow!("No task run files found in .local/task-runs"))
+}
+
+fn compare_task_run_records(left: &TaskRunRecord, right: &TaskRunRecord) -> Ordering {
+    if let (Some(left_order), Some(right_order)) =
+        (left.run.creation_order, right.run.creation_order)
+    {
+        let order = left_order.cmp(&right_order);
+        if order != Ordering::Equal {
+            return order;
+        }
+    }
+
+    normalized_utc_timestamp(&left.run.created_at)
+        .cmp(&normalized_utc_timestamp(&right.run.created_at))
+        .then_with(|| {
+            left.run
+                .creation_order
+                .unwrap_or(0)
+                .cmp(&right.run.creation_order.unwrap_or(0))
+        })
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn next_creation_order(ctx: &Ctx) -> Result<u64> {
+    let task_runs_dir = ctx.repo_root.join(".local/task-runs");
+    if !task_runs_dir.exists() {
+        return Ok(1);
+    }
+
+    let mut max_order = 0_u64;
+    for entry in fs::read_dir(&task_runs_dir)
+        .with_context(|| "Failed to read task run directory: .local/task-runs")?
+    {
+        let path = entry?.path();
+        if path.extension().is_none_or(|ext| ext != "toml") {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read task run: {}", path.display()))?;
+        let order: TaskRunCreationOrder = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse task run: {}", path.display()))?;
+        if let Some(order) = order.creation_order {
+            max_order = max_order.max(order);
+        }
+    }
+
+    max_order
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("Task run creation_order overflow"))
 }
 
 fn next_available_task_run_path(dir: &Path, id_base: &str) -> (String, PathBuf) {
@@ -318,17 +386,49 @@ fn optional_string(value: &str) -> Option<String> {
 }
 
 fn current_utc_timestamp() -> String {
-    let seconds = SystemTime::now()
+    let (seconds, nanos) = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0);
+        .map(|duration| (duration.as_secs() as i64, duration.subsec_nanos()))
+        .unwrap_or((0, 0));
     let days = seconds.div_euclid(86_400);
     let seconds_of_day = seconds.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);
     let hour = seconds_of_day / 3_600;
     let minute = (seconds_of_day % 3_600) / 60;
     let second = seconds_of_day % 60;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{nanos:09}Z")
+}
+
+fn normalized_utc_timestamp(timestamp: &str) -> Option<String> {
+    let without_zone = timestamp.trim().strip_suffix('Z')?;
+    let (base, fraction) = without_zone
+        .split_once('.')
+        .map_or((without_zone, ""), |(base, fraction)| (base, fraction));
+    if !is_utc_timestamp_base(base) {
+        return None;
+    }
+    if fraction.len() > 9 || !fraction.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let mut nanos = fraction.to_string();
+    while nanos.len() < 9 {
+        nanos.push('0');
+    }
+    Some(format!("{base}.{nanos}Z"))
+}
+
+fn is_utc_timestamp_base(base: &str) -> bool {
+    let bytes = base.as_bytes();
+    bytes.len() == 19
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[10] == b'T'
+        && bytes[13] == b':'
+        && bytes[16] == b':'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(idx, byte)| matches!(idx, 4 | 7 | 10 | 13 | 16) || byte.is_ascii_digit())
 }
 
 fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
@@ -401,6 +501,7 @@ mod tests {
         assert_eq!(parsed.source, SOURCE_BATCH);
         assert_eq!(parsed.group.as_deref(), Some("2026-05-16-001"));
         assert!(parsed.error.is_none());
+        assert_eq!(parsed.creation_order, Some(1));
 
         let records = list(&ctx).unwrap();
         assert_eq!(records.len(), 1);
@@ -423,6 +524,7 @@ mod tests {
         assert!(content.contains("source = \"batch\""));
         assert!(content.contains("group = \"2026-05-16-001\""));
         assert!(content.contains("error = \"setup failed\""));
+        assert!(content.contains("creation_order = 1"));
     }
 
     #[test]
@@ -483,6 +585,8 @@ updated_at = "2026-05-16T00:00:00Z"
 
         assert_eq!(first.id, "new-add-schema");
         assert_eq!(second.id, "new-add-schema-002");
+        assert_eq!(first.run.creation_order, Some(1));
+        assert_eq!(second.run.creation_order, Some(2));
         assert!(first.path.exists());
         assert!(second.path.exists());
         assert_eq!(list(&ctx).unwrap().len(), 2);
@@ -514,5 +618,77 @@ updated_at = "2026-05-16T00:00:00Z"
         )
         .unwrap();
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
+    }
+
+    #[test]
+    fn latest_for_task_uses_creation_order_when_created_at_ties() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let task_runs_dir = dir.path().join(".local/task-runs");
+        std::fs::create_dir_all(&task_runs_dir).unwrap();
+
+        write(
+            &task_runs_dir.join("z-earlier-id.toml"),
+            &run_with_order("add-schema", STATUS_DONE, Some(1), "2026-05-16T00:00:00Z"),
+        )
+        .unwrap();
+        write(
+            &task_runs_dir.join("a-later-id.toml"),
+            &run_with_order("add-schema", STATUS_FAILED, Some(2), "2026-05-16T00:00:00Z"),
+        )
+        .unwrap();
+
+        let latest = latest_for_task(&ctx, "add-schema").unwrap().unwrap();
+        assert_eq!(latest.id, "a-later-id");
+        assert_eq!(latest.run.status, STATUS_FAILED);
+        assert!(task_is_selectable(&ctx, "add-schema").unwrap());
+    }
+
+    #[test]
+    fn latest_for_task_sorts_fractional_timestamps_after_legacy_seconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let task_runs_dir = dir.path().join(".local/task-runs");
+        std::fs::create_dir_all(&task_runs_dir).unwrap();
+
+        write(
+            &task_runs_dir.join("z-legacy.toml"),
+            &run_with_order("add-schema", STATUS_DONE, None, "2026-05-16T00:00:00Z"),
+        )
+        .unwrap();
+        write(
+            &task_runs_dir.join("a-fractional.toml"),
+            &run_with_order(
+                "add-schema",
+                STATUS_FAILED,
+                Some(1),
+                "2026-05-16T00:00:00.000000001Z",
+            ),
+        )
+        .unwrap();
+
+        let latest = latest_for_task(&ctx, "add-schema").unwrap().unwrap();
+        assert_eq!(latest.id, "a-fractional");
+        assert_eq!(latest.run.status, STATUS_FAILED);
+        assert!(task_is_selectable(&ctx, "add-schema").unwrap());
+    }
+
+    fn run_with_order(
+        task: &str,
+        status: &str,
+        creation_order: Option<u64>,
+        created_at: &str,
+    ) -> TaskRun {
+        TaskRun {
+            task: task.into(),
+            branch: task.into(),
+            status: status.into(),
+            source: SOURCE_NEW.into(),
+            group: None,
+            error: None,
+            creation_order,
+            created_at: created_at.into(),
+            updated_at: created_at.into(),
+        }
     }
 }

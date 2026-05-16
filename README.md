@@ -131,7 +131,8 @@ workspace tabs, and agent launch. When a cmux workspace already exists for the
 selected worktree path, `wt open` focuses that workspace instead of opening a
 duplicate.
 
-List and clean worktrees:
+List worktrees, and remove a finished worktree after its branch has landed or
+is intentionally disposable:
 
 ```bash
 wt list
@@ -145,7 +146,8 @@ wt done PROJ-123
 inspect the current branch, or pass a branch, worktree path/name, or TaskRun id.
 
 When a cmux workspace was opened for the same worktree path, `wt done` attempts
-to close it before removing the worktree.
+to close it before removing the worktree. `wt done` also deletes the matching
+local branch; it does not merge the branch into `master`.
 
 ## Configuration
 
@@ -492,7 +494,11 @@ Prepared local tasks use two persisted concepts. A TaskDocument under
 `.local/tasks/<task>.toml` describes what the work is: title, branch, body, and
 optional issue origin. A TaskRun under `.local/task-runs/<id>.toml` records one
 attempt to execute that task: task key, branch, status, source, optional group,
-optional error, and timestamps.
+optional error, creation order, and timestamps. New TaskRun files include a
+monotonic `creation_order` value so latest-run selection follows execution
+creation order even when multiple runs share the same timestamp second.
+Existing TaskRun files without `creation_order` remain readable and use their
+timestamps as the legacy ordering fallback.
 
 When `wt new --task` starts a selected task, it writes a TaskRun with
 `source = "new"`. Successful starts remain `running` until the matching
@@ -551,10 +557,10 @@ array-of-tables syntax, equivalent to a `tasks: [...]` list in JSON. Each task
 row stores only the task key and the linked TaskRun id created during
 preparation. The TaskRun TOML is the execution-instance record: it stores the
 task key, branch, status, `source = "batch"`, `group` derived from the batch
-file stem, optional error, and timestamps. The TaskDocument stores the title,
-branch, body, and optional issue origin. A prepared TaskDocument can also be
-started directly with `wt new --task <task>`, without creating or running a
-batch file.
+file stem, optional error, creation order, and timestamps. The TaskDocument
+stores the title, branch, body, and optional issue origin. A prepared
+TaskDocument can also be started directly with `wt new --task <task>`, without
+creating or running a batch file.
 
 Run a prepared batch explicitly:
 
@@ -669,8 +675,9 @@ branch = "add-schema"
 status = "prepared"
 source = "stack"
 group = "manual"
-created_at = "2026-05-16T00:00:00Z"
-updated_at = "2026-05-16T00:00:00Z"
+creation_order = 1
+created_at = "2026-05-16T00:00:00.000000000Z"
+updated_at = "2026-05-16T00:00:00.000000000Z"
 ```
 
 Run `wt new --task <task>` to select and start one of these prepared task
@@ -727,6 +734,52 @@ state while TaskRun remains the execution-state source of truth.
 Stack TaskRuns are completed by `wt stack complete`, not by `wt done`, because a
 stack task must be checked against its parent branch before the next task can
 start.
+
+## Landing Completed Task Branches
+
+`complete`, `done`, `merge`, and local task cleanup are separate lifecycle
+steps. A TaskRun with `status = "done"` says the execution instance is finished;
+it does not prove that the branch has landed on `master`.
+
+The current command surface stays explicit: there is no `wt land` command yet.
+Landing uses normal Git commands so `wt done` and `wt stack complete` do not get
+hidden merge side effects.
+
+For a batch-produced branch or a branch started with `wt new --task`:
+
+1. Review and test the branch while its worktree exists, or through a pushed
+   branch or PR. `wt batch show <batch>` shows linked TaskRun status for batch
+   tasks.
+2. Land the branch with the repository's normal Git or PR policy, for example
+   `git switch master`, `git pull --ff-only`, and
+   `git merge --ff-only <task-branch>`. Do this before `wt done` when the local
+   branch is the branch you intend to merge.
+3. Run `wt done <target>` after the branch has landed or is intentionally
+   disposable. It removes the worktree, cleans matching integrations, deletes
+   the local branch, and marks matching `source = "new"` or `source = "batch"`
+   running TaskRuns `done`.
+4. Keep `.local/tasks/<task>.toml` when the task is reusable or referenced by
+   another batch or stack. For one-shot batch tasks, run
+   `wt batch clean <batch>` after linked TaskRuns are `done` or `skipped`; it
+   deletes unreferenced TaskDocuments while keeping batch and TaskRun history.
+
+For stack-produced branches:
+
+1. Review and test the running task branch.
+2. Run `wt stack complete <stack> <task> [--run-next]`. It verifies the task
+   branch is clean and ahead of its parent, then marks the linked
+   `source = "stack"` TaskRun `done`. It does not remove the worktree or merge
+   the branch.
+3. Land stack branches in the base-to-top order shown by
+   `wt stack show <stack>`, because each higher branch is based on the completed
+   branch below it. Merge is still a Git or PR step, not `wt stack complete`.
+4. After `wt stack complete` and landing, run `wt done <target>` only for
+   worktree and local branch cleanup. It will not mark stack TaskRuns done;
+   that remains `wt stack complete`.
+5. Keep stack TaskDocuments when they are reusable or needed as local history.
+   There is no stack cleanup command today; remove one-shot
+   `.local/tasks/<task>.toml` files manually only after the stack has landed and
+   no other batch or stack references them.
 
 ## Site Provider Helpers
 

@@ -101,9 +101,9 @@ pub enum Commands {
         /// Branch or worktree directory name to open directly
         target: Option<String>,
     },
-    /// Finish worktrees and attempt matching cmux workspace cleanup
+    /// Remove worktrees, clean integrations, and delete local branches
     Done {
-        /// Branch, issue number/key, or worktree directory names to finish
+        /// Branch, issue number/key, or worktree directory names to remove
         targets: Vec<String>,
     },
     /// Inspect a worktree, branch, or TaskRun before review or landing

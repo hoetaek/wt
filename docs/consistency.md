@@ -124,10 +124,12 @@ TaskDocument는 작업이 무엇인지를 담는 정의다. `.local/tasks/<task>
 아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
 
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
-task, branch, status, source, group, error, created_at, updated_at을 저장한다. status는
-`prepared`, `running`, `done`, `failed`, `skipped`만 canonical이고, source는 `new`,
-`batch`, `stack`만 canonical이다. 알 수 없는 status/source 값은 조용히 해석하지 않고
-파싱 단계에서 실패시킨다.
+task, branch, status, source, group, error, creation_order, created_at,
+updated_at을 저장한다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
+초 단위 timestamp 우연성에 기대지 않도록 새 TaskRun마다 증가하는 실행 생성 순서다.
+status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이고, source는
+`new`, `batch`, `stack`만 canonical이다. 알 수 없는 status/source 값은 조용히
+해석하지 않고 파싱 단계에서 실패시킨다.
 
 통합 실행 상태 모델은 TaskDocument와 TaskRun의 책임을 나누는 데서 시작한다.
 TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, TaskRun은 그 설명을 한 번
@@ -135,20 +137,24 @@ TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, Tas
 읽어 실행 context로 쓰고, 실행 상태는 `.local/task-runs`의 TaskRun에만 쓴다.
 
 Batch가 어떤 task를 준비했고, 어떤 task가 끝났고, 어떤 task가 실패했는지는 저장할
-가치가 있다. Batch의 canonical 상태 목록은 `[[tasks]]`이고, 각 row는 `.local/tasks`
-아래의 task 문서와 `.local/task-runs` 아래의 TaskRun을 가리킨다. Batch row는 어떤
-task들이 함께 시작 대상인지와 어떤 실행 기록을 읽어야 하는지만 저장하고, status/error를
-따로 가지지 않는다. 실행 인스턴스의 canonical 기록은 TaskRun이다. `[[issues]]`나
-`[[items]]`처럼 같은 상태 목록을 가리키는 다른 이름은 받지 않는다. 내부 구현 편의를 위해
-만든 가짜 이름이나 암묵적 상태를 저장하면 나중에 사용자가 파일을 읽을 때 모델을 다시
-배워야 한다.
+가치가 있다. Batch 준비는 각 task마다 `.local/tasks` 아래의 TaskDocument와
+`.local/task-runs` 아래의 `source = "batch"` TaskRun을 만든다. Batch의 canonical
+상태 목록은 `[[tasks]]`이고, 각 row는 task key와 linked TaskRun id 같은 orchestration
+link만 저장한다. Batch row는 어떤 task들이 함께 시작 대상인지와 어떤 실행 기록을
+읽어야 하는지만 저장하고, status/error를 따로 가지지 않는다. 실행 인스턴스의 canonical
+기록은 TaskRun이다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을 가리키는 다른
+이름은 받지 않는다. 내부 구현 편의를 위해 만든 가짜 이름이나 암묵적 상태를 저장하면
+나중에 사용자가 파일을 읽을 때 모델을 다시 배워야 한다.
 
-Stack이 어떤 task를 어떤 parent 위에 쌓았는지도 저장할 가치가 있다. canonical 상태
-목록은 `[[tasks]]`이고, task 문서는 issue origin이 있는 작업과 직접 작성한 branch work
-를 같은 형태로 담는다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을 가리키는 다른
-이름은 받지 않는다. parent가 아직 실행 전이라 확정되지 않았다면 가짜 값을 넣지 않고,
-실행 시 확정된 branch를 기록한다. Stack row도 실행이 시작된 경우 TaskRun을 가리키고,
-명시적 `complete` 신호가 들어오면 같은 TaskRun을 `done`으로 전이한다.
+Stack이 어떤 task를 어떤 parent 위에 쌓았는지도 저장할 가치가 있다. Stack 준비는 각
+task마다 `.local/tasks` 아래의 TaskDocument와 `.local/task-runs` 아래의
+`source = "stack"` TaskRun을 만든다. canonical 상태 목록은 `[[tasks]]`이고, task 문서는
+issue origin이 있는 작업과 직접 작성한 branch work를 같은 형태로 담는다. Stack row는
+task key, parent, linked TaskRun id 같은 orchestration link만 저장하고, status/error를
+따로 가지지 않는다. 실행 인스턴스의 canonical 기록은 TaskRun이다. `[[issues]]`나
+`[[items]]`처럼 같은 상태 목록을 가리키는 다른 이름은 받지 않는다. `run`은 다음 runnable
+TaskRun을 `running`으로 전이하고, 명시적 `complete` 신호가 들어오면 같은 TaskRun을
+`done`으로 전이한다.
 `pr`은 기존 pull request workflow를 가리키는 별도 개념이므로 stack task로 받지 않는다.
 Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 명시적
 `complete` 신호를 기다리는 상태다. 완료를 추정해서 다음 task를 시작하지 않는다.
@@ -156,10 +162,27 @@ Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 
 전이해야 한다. 다음 task 자동 시작은 명시적인 continuation 선택, 예를 들어
 `--run-next`로만 일어난다.
 
-`wt done`은 worktree cleanup 명령이므로 `source = "new"`와 `source = "batch"`인
-running TaskRun만 실제 worktree 제거와 함께 `done`으로 전이한다. Stack TaskRun은
-parent-chain 검증이 필요한 실행 순서 모델 안에 있으므로 `wt stack complete`만
-`done`으로 전이한다.
+`wt done`은 worktree와 local branch cleanup 명령이므로 `source = "new"`와
+`source = "batch"`인 running TaskRun만 실제 worktree 제거와 함께 `done`으로
+전이한다. Stack TaskRun은 parent-chain 검증이 필요한 실행 순서 모델 안에 있으므로
+`wt stack complete`만 `done`으로 전이한다.
+
+Branch landing은 TaskRun 상태와 별도 lifecycle이다. `complete`는 stack TaskRun을
+검증 후 `done`으로 바꾸는 실행 완료 신호이고, `done`은 worktree와 local branch를
+치우는 cleanup 신호이며, `merge`/`land`는 branch commit을 `master` 같은 통합 branch에
+넣는 Git workflow다. `wt done`이나 `wt stack complete`가 branch를 `master`에
+merge했다고 해석하지 않는다. 현재는 별도 `wt land` 명령을 만들지 않고,
+`git switch master`, `git pull --ff-only`, `git merge --ff-only <branch>` 같은 명시적
+Git 단계로 landing을 문서화한다. Stack branch는 `wt stack show`가 보여주는
+base-to-top 순서대로 landing한다.
+
+Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work definition이므로
+기본적으로 보존한다. 한 번 실행하고 끝난 batch task는 모든 linked TaskRun이
+`done`이나 `skipped`가 된 뒤 `wt batch clean`으로 `.local/tasks`의 TaskDocument만
+지운다. Stack task에는 아직 cleanup 명령이 없으므로 landing이 끝났고 다른 batch나
+stack이 참조하지 않는 것을 확인한 뒤 필요할 때만 `.local/tasks/<task>.toml`을
+수동 삭제한다. 나중에 `wt land`, `wt task clean`, `wt run clean` 같은 명령을 만들더라도
+`done`이나 `complete`에 merge나 task definition 삭제 의미를 섞지 않는다.
 
 `wt review`는 상태 전이 명령이 아니다. branch, worktree, TaskRun을 읽어서 parent,
 dirty 상태, commit/diff 정보, agent 완료 보고 기대치를 보여주는 점검 명령이다. cmux

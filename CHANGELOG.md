@@ -15,6 +15,17 @@ minor version instead of moving to `x.0.0`.
   checks, and risks.
 - Bumped the package version to `0.11.0` because `wt review` adds a new
   user-facing CLI command while `wt` is still pre-1.0.
+- Added monotonic TaskRun `creation_order` values so latest-run selection is
+  deterministic when multiple runs share the same timestamp second.
+- Fixed partially successful profiled `wt new --task` starts so successful
+  TaskRuns remain recorded when a later profile start fails.
+- Fixed failed batch and stack preparation to roll back TaskRun records created
+  before the preparation error.
+- Bumped the package version to `0.11.2` for the TaskRun lifecycle fixes.
+- Documented the explicit landing workflow for completed task branches:
+  review, `complete`, `done`, merge into `master`, worktree and local branch
+  cleanup, and local TaskDocument cleanup now stay separate in the README and
+  consistency notes.
 - Documented the canonical TaskDocument/TaskRun state model across README and
   consistency notes: TaskDocuments define reusable work under `.local/tasks`,
   TaskRuns record execution state under `.local/task-runs`, batch and stack

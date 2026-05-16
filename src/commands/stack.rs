@@ -67,26 +67,40 @@ fn write_prepared_stack(
 
     let resolved_base = resolve_stack_base(ctx, base)?;
     let stack_path = next_available_stack_path(ctx)?;
-    let stack_tasks = stack_tasks_from_prepared(
+    write_prepared_stack_at_path(ctx, profile, &resolved_base, &stack_path, prepared_tasks)?;
+
+    ctx.ui
+        .print_step(&format!("Created stack: {}", stack_path.display()));
+    Ok(())
+}
+
+fn write_prepared_stack_at_path(
+    ctx: &Ctx,
+    profile: Option<&str>,
+    resolved_base: &str,
+    stack_path: &Path,
+    prepared_tasks: Vec<PreparedTask>,
+) -> Result<()> {
+    let prepared = stack_tasks_from_prepared(
         ctx,
-        &stack_path,
+        stack_path,
         prepared_tasks,
-        Some(resolved_base.clone()),
+        Some(resolved_base.to_string()),
     )?;
     let now = current_utc_timestamp();
     let stack = StackMetadata {
         profile: profile.map(str::to_string),
         base_mode: "explicit".into(),
-        base: Some(resolved_base),
+        base: Some(resolved_base.to_string()),
         status: STATUS_PREPARED.into(),
         created_at: now.clone(),
         updated_at: now,
-        tasks: stack_tasks,
+        tasks: prepared.tasks,
     };
-    write_stack_metadata(&stack_path, &stack)?;
-
-    ctx.ui
-        .print_step(&format!("Created stack: {}", stack_path.display()));
+    if let Err(err) = write_stack_metadata(stack_path, &stack) {
+        rollback_task_runs(&prepared.task_runs);
+        return Err(err);
+    }
     Ok(())
 }
 
@@ -405,30 +419,49 @@ fn parse_order(raw: &str, len: usize) -> Result<Vec<usize>> {
     Ok(order)
 }
 
+struct PreparedStackTasks {
+    tasks: Vec<StackTask>,
+    task_runs: Vec<task_run::TaskRunRecord>,
+}
+
 fn stack_tasks_from_prepared(
     ctx: &Ctx,
     stack_path: &Path,
     prepared_tasks: Vec<PreparedTask>,
     initial_parent: Option<String>,
-) -> Result<Vec<StackTask>> {
+) -> Result<PreparedStackTasks> {
     let group = task_run::group_from_path(stack_path)?;
     let mut parent = initial_parent;
-    prepared_tasks
-        .into_iter()
-        .map(|task| {
-            let task_parent = parent.clone();
-            let run = task_run::create(
-                ctx,
-                &task.key,
-                &task.branch,
-                task_run::SOURCE_STACK,
-                Some(&group),
-                STATUS_PREPARED,
-            )?;
-            parent = prepared_branch_name(&task.branch).map(str::to_string);
-            Ok(StackTask::from_prepared(task, run.id, task_parent))
-        })
-        .collect()
+    let mut tasks = Vec::new();
+    let mut task_runs = Vec::new();
+    for task in prepared_tasks {
+        let task_parent = parent.clone();
+        let run = match task_run::create(
+            ctx,
+            &task.key,
+            &task.branch,
+            task_run::SOURCE_STACK,
+            Some(&group),
+            STATUS_PREPARED,
+        ) {
+            Ok(run) => run,
+            Err(err) => {
+                rollback_task_runs(&task_runs);
+                return Err(err);
+            }
+        };
+        let run_id = run.id.clone();
+        task_runs.push(run);
+        parent = prepared_branch_name(&task.branch).map(str::to_string);
+        tasks.push(StackTask::from_prepared(task, run_id, task_parent));
+    }
+    Ok(PreparedStackTasks { tasks, task_runs })
+}
+
+fn rollback_task_runs(task_runs: &[task_run::TaskRunRecord]) {
+    for run in task_runs.iter().rev() {
+        let _ = task_run::delete_record(run);
+    }
 }
 
 fn default_stack_status() -> String {
@@ -775,7 +808,8 @@ fn write_stack_metadata(path: &Path, stack: &StackMetadata) -> Result<()> {
         }
     }
 
-    fs::write(path, content)?;
+    fs::write(path, content)
+        .with_context(|| format!("Failed to write stack metadata: {}", path.display()))?;
     Ok(())
 }
 
@@ -1176,6 +1210,65 @@ mod tests {
         assert!(!task_section.contains("error ="));
         assert!(!content.contains("[[items]]"));
         assert!(!content.contains("[[issues]]"));
+    }
+
+    #[test]
+    fn prepare_rolls_back_task_runs_when_stack_metadata_write_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let existing = task_run::create(
+            &ctx,
+            "unrelated",
+            "unrelated",
+            task_run::SOURCE_NEW,
+            None,
+            STATUS_DONE,
+        )
+        .unwrap();
+        let stack_path = dir.path().join(".local/stacks/unwritable.toml");
+        std::fs::create_dir_all(&stack_path).unwrap();
+
+        let result = write_prepared_stack_at_path(
+            &ctx,
+            None,
+            "main",
+            &stack_path,
+            vec![
+                PreparedTask {
+                    key: "add-schema".into(),
+                    branch: "add-schema".into(),
+                },
+                PreparedTask {
+                    key: "wire-api".into(),
+                    branch: "wire-api".into(),
+                },
+            ],
+        );
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("Failed to write stack metadata"));
+        assert!(error.contains("unwritable.toml"));
+        let task_runs_dir = dir.path().join(".local/task-runs");
+        assert!(task_runs_dir.join(format!("{}.toml", existing.id)).exists());
+        assert!(
+            !task_runs_dir
+                .join("stack-unwritable-add-schema.toml")
+                .exists()
+        );
+        assert!(
+            !task_runs_dir
+                .join("stack-unwritable-wire-api.toml")
+                .exists()
+        );
+        let records = task_run::list(&ctx).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, existing.id);
     }
 
     #[test]
