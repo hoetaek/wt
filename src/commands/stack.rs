@@ -147,6 +147,8 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
         ctx,
         &stack_path,
         &metadata.tasks[idx],
+        idx,
+        metadata.tasks.len(),
         &parent,
         metadata.profile.as_deref(),
     );
@@ -485,6 +487,8 @@ fn run_stack_task(
     ctx: &Ctx,
     stack_path: &Path,
     stack_task: &StackTask,
+    idx: usize,
+    total_tasks: usize,
     parent: &str,
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
@@ -502,6 +506,12 @@ fn run_stack_task(
     let base = Some(parent.to_string());
     let identifier = task_doc.identifier_or_key(&stack_task.task);
     let title = task_doc.title_or_key(&stack_task.task);
+    let workspace_label = task::workspace_run_label(
+        "S",
+        idx,
+        total_tasks,
+        task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
+    );
 
     issue::run_with_issue_snapshot(
         ctx,
@@ -514,6 +524,7 @@ fn run_stack_task(
             branch_name,
             mode: task_doc.mode(),
             prompt_intro: "Use this task before changing code.",
+            workspace_label: Some(workspace_label),
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",
                 path: &task_path,
@@ -1050,7 +1061,7 @@ fn toml_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, EditorPlacement, WorktreeNamingConfig};
+    use crate::config::{Config, EditorPlacement, WorkspaceConfig, WorktreeNamingConfig};
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CmdOutput, CommandRunner, Ctx};
     use std::path::{Path, PathBuf};
@@ -1120,8 +1131,91 @@ mod tests {
         std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
     }
 
+    fn write_issue_task_file(root: &Path, key: &str, title: &str, branch: &str, issue_id: &str) {
+        let tasks_dir = root.join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join(format!("{key}.toml")),
+            format!(
+                "title = \"{title}\"\nbranch = \"{branch}\"\n\n[origin]\nprovider = \"linear\"\nid = \"{issue_id}\"\n"
+            ),
+        )
+        .unwrap();
+    }
+
     fn read_task_content(root: &Path, key: &str) -> String {
         std::fs::read_to_string(root.join(format!(".local/tasks/{key}.toml"))).unwrap()
+    }
+
+    #[test]
+    fn run_prefixes_workspace_with_short_stack_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true); // git fetch origin
+        runner.add_response("", false); // local task branch does not exist
+        runner.add_response("", false); // remote task branch does not exist
+        runner.add_response("", true); // git worktree add
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // git config branch parent
+        runner.add_response(r#"{"caller":null}"#, true); // cmux identify
+        runner.add_response("workspace:1 workspace:1", true); // cmux new-workspace
+        runner.add_response("", true); // cmux list-panes
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config {
+                workspace: Some(WorkspaceConfig::default()),
+                ..Config::default()
+            },
+            Box::new(runner),
+            Box::new(ui.clone()),
+        );
+        let stack_path = dir.path().join(".local/stacks/2026-05-16-001.toml");
+        write_issue_task_file(dir.path(), "PROJ-1", "Schema", "proj-1-schema", "PROJ-1");
+        write_issue_task_file(dir.path(), "PROJ-2", "API", "proj-2-api", "PROJ-2");
+        let task_done = stack_task_with_status(
+            &ctx,
+            &stack_path,
+            "PROJ-1",
+            "proj-1-schema",
+            Some("main"),
+            STATUS_DONE,
+            "",
+        );
+        let task_next = stack_task_with_status(
+            &ctx,
+            &stack_path,
+            "PROJ-2",
+            "proj-2-api",
+            Some("proj-1-schema"),
+            STATUS_PREPARED,
+            "",
+        );
+        let stack = StackMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-16T00:00:00Z".into(),
+            updated_at: "2026-05-16T00:00:00Z".into(),
+            tasks: vec![task_done, task_next],
+        };
+        std::fs::create_dir_all(stack_path.parent().unwrap()).unwrap();
+        write_stack_metadata(&stack_path, &stack).unwrap();
+
+        run(&ctx, stack_path.to_str().unwrap()).unwrap();
+
+        let steps = ui.steps.lock().unwrap().join("\n");
+        assert!(steps.contains("Opening cmux workspace: S2/2 PROJ-2 API"));
     }
 
     #[test]

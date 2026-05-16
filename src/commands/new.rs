@@ -121,6 +121,7 @@ fn run_selected_task(
                 branch_name,
                 mode: selected.document.mode(),
                 prompt_intro: "Use this task before changing code.",
+                workspace_label: None,
                 snapshot: issue::IssueSnapshotContext {
                     path_label: "Task path",
                     path: &selected.path,
@@ -175,6 +176,7 @@ fn run_selected_task(
             branch_name,
             mode: selected.document.mode(),
             prompt_intro: "Use this task before changing code.",
+            workspace_label: None,
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",
                 path: &selected.path,

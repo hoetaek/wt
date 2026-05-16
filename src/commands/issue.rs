@@ -28,6 +28,7 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) branch_name: Option<&'a str>,
     pub(crate) mode: &'a str,
     pub(crate) prompt_intro: &'a str,
+    pub(crate) workspace_label: Option<String>,
     pub(crate) snapshot: IssueSnapshotContext<'a>,
 }
 
@@ -198,7 +199,7 @@ pub(crate) fn planned_worktrees_for_prepared_issue(
             .collect();
     }
 
-    let names = issue_worktree_names(ctx, branch_name, title, naming)?;
+    let names = issue_worktree_names(ctx, branch_name, title, naming, None)?;
     Ok(vec![PlannedIssueWorktree {
         branch_name: branch_name.to_string(),
         path: names.path,
@@ -276,6 +277,7 @@ fn run_inner_many(
     let title = issue.title;
     let suggested_branch = issue.branch_name;
     let issue_snapshot = prepared_issue.map(|issue| &issue.snapshot);
+    let workspace_label = prepared_issue.and_then(|issue| issue.workspace_label.as_deref());
     let setup_mode = prepared_issue.map(|issue| issue.mode).unwrap_or("issue");
     let prompt_intro = prepared_issue
         .map(|issue| issue.prompt_intro)
@@ -330,7 +332,7 @@ fn run_inner_many(
         );
     }
 
-    let names = issue_worktree_names(ctx, &branch_name, &title, naming.as_ref())?;
+    let names = issue_worktree_names(ctx, &branch_name, &title, naming.as_ref(), workspace_label)?;
     let snapshot_config = issue_snapshot.map(|snapshot| {
         profile_config_with_issue_snapshot(&ctx.config, snapshot, setup_mode, prompt_intro)
     });
@@ -456,28 +458,35 @@ fn issue_worktree_names(
     branch_name: &str,
     title: &str,
     naming: Option<&WorktreeNamingResult>,
+    workspace_label: Option<&str>,
 ) -> Result<WorktreeNames> {
-    if let Some(workspace) = naming.and_then(|n| n.workspace.as_deref()) {
-        return WorktreeNames::new_with_workspace_config(
-            branch_name,
-            &ctx.parent_dir,
-            &ctx.repo_root,
-            &ctx.repo_name,
-            Some(workspace),
-            ctx.config.has_site().then_some(""),
-            ctx.config.worktree.path.as_deref(),
-        );
-    }
+    let base_workspace = naming
+        .and_then(|n| n.workspace.as_deref())
+        .map(str::to_string)
+        .unwrap_or_else(|| WorktreeNames::build_workspace_name(branch_name, Some(title)));
+    let workspace = apply_workspace_label(workspace_label, &base_workspace);
 
-    WorktreeNames::new_with_config(
+    WorktreeNames::new_with_workspace_config(
         branch_name,
         &ctx.parent_dir,
         &ctx.repo_root,
         &ctx.repo_name,
-        Some(title),
+        Some(&workspace),
         ctx.config.has_site().then_some(""),
         ctx.config.worktree.path.as_deref(),
     )
+}
+
+fn apply_workspace_label(label: Option<&str>, workspace: &str) -> String {
+    let Some(label) = label.map(str::trim).filter(|label| !label.is_empty()) else {
+        return workspace.to_string();
+    };
+    let workspace = workspace.trim();
+    if workspace.is_empty() {
+        label.to_string()
+    } else {
+        format!("{label} {workspace}")
+    }
 }
 
 fn run_profiles(
@@ -527,6 +536,12 @@ fn run_profiles(
             .unwrap_or_else(|| {
                 WorktreeNames::build_workspace_name(&profile_branch, Some(&profile_title))
             });
+        let profile_workspace = apply_workspace_label(
+            options
+                .prepared_issue
+                .and_then(|issue| issue.workspace_label.as_deref()),
+            &profile_workspace,
+        );
         let profile_extra_vars = profile_template_vars(naming, profile_name, issue_snapshot);
 
         ctx.ui

@@ -289,6 +289,7 @@ fn next_task_execution(
     Ok(Some(BatchTaskExecution {
         idx: state.idx,
         batch_task: state.batch_task.clone(),
+        total_tasks: metadata.tasks.len(),
         base: base.expect("batch base is validated before running a task"),
         profile: metadata.profile.clone(),
         allow_interactive_prompts,
@@ -867,6 +868,7 @@ struct BatchTaskState {
 struct BatchTaskExecution {
     idx: usize,
     batch_task: BatchTask,
+    total_tasks: usize,
     base: String,
     profile: Option<String>,
     allow_interactive_prompts: bool,
@@ -903,6 +905,12 @@ fn run_batch_task(ctx: &Ctx, execution: &BatchTaskExecution) -> Result<BatchTask
     }
     let identifier = task_doc.identifier_or_key(&batch_task.task);
     let title = task_doc.title_or_key(&batch_task.task);
+    let workspace_label = task::workspace_run_label(
+        "B",
+        execution.idx,
+        execution.total_tasks,
+        task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
+    );
     let base = Some(execution.base.clone());
     let profile = execution.profile.as_deref();
 
@@ -912,6 +920,7 @@ fn run_batch_task(ctx: &Ctx, execution: &BatchTaskExecution) -> Result<BatchTask
         branch_name,
         mode: task_doc.mode(),
         prompt_intro: "Use this task before changing code.",
+        workspace_label: Some(workspace_label),
         snapshot: issue::IssueSnapshotContext {
             path_label: "Task path",
             path: &task_path,
@@ -1321,14 +1330,14 @@ fn toml_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::{
-        Config, EditorPlacement, IssueProviderType, IssuesConfig, WorktreeConfig,
+        Config, EditorPlacement, IssueProviderType, IssuesConfig, WorkspaceConfig, WorktreeConfig,
         WorktreeNamingConfig,
     };
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CmdOutput, CommandRunner};
     use anyhow::Result;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn civil_date_matches_unix_epoch() {
@@ -1399,6 +1408,24 @@ mod tests {
             content.push_str(&format!("body = \"\"\"\n{body}\n\"\"\"\n"));
         }
         std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
+    }
+
+    fn write_issue_task_file(
+        root: &std::path::Path,
+        key: &str,
+        title: &str,
+        branch: &str,
+        issue_id: &str,
+    ) {
+        let tasks_dir = root.join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join(format!("{key}.toml")),
+            format!(
+                "title = \"{title}\"\nbranch = \"{branch}\"\n\n[origin]\nprovider = \"linear\"\nid = \"{issue_id}\"\n"
+            ),
+        )
+        .unwrap();
     }
 
     fn write_batch_file(path: &Path, batch: &BatchMetadata) {
@@ -1497,6 +1524,74 @@ mod tests {
             },
             ..Config::default()
         }
+    }
+
+    #[test]
+    fn run_prefixes_workspace_with_short_batch_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true); // git fetch origin
+        runner.add_response("", false); // local task branch does not exist
+        runner.add_response("", false); // remote task branch does not exist
+        runner.add_response("", true); // git worktree add
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // git config branch parent
+        runner.add_response(r#"{"caller":null}"#, true); // cmux identify
+        runner.add_response("workspace:1 workspace:1", true); // cmux new-workspace
+        runner.add_response("", true); // cmux list-panes
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config {
+                workspace: Some(WorkspaceConfig::default()),
+                ..Config::default()
+            },
+            Box::new(runner),
+            Box::new(ui.clone()),
+        );
+        let batch_path = dir.path().join(".local/batches/2026-05-16-001.toml");
+        write_issue_task_file(dir.path(), "PROJ-1", "Schema", "proj-1-schema", "PROJ-1");
+        write_issue_task_file(dir.path(), "PROJ-2", "API", "proj-2-api", "PROJ-2");
+        let task_done = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "PROJ-1",
+            "proj-1-schema",
+            STATUS_DONE,
+            "",
+        );
+        let task_next = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "PROJ-2",
+            "proj-2-api",
+            STATUS_PREPARED,
+            "",
+        );
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-16T00:00:00Z".into(),
+            updated_at: "2026-05-16T00:00:00Z".into(),
+            tasks: vec![task_done, task_next],
+        };
+        write_batch_file(&batch_path, &batch);
+
+        run(&ctx, batch_path.to_str().unwrap(), 1).unwrap();
+
+        let steps = ui.steps.lock().unwrap().join("\n");
+        assert!(steps.contains("Opening cmux workspace: B2/2 PROJ-2 API"));
     }
 
     #[test]
