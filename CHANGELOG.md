@@ -8,6 +8,11 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added a workflow-level coordinator handoff to every `wt workflow run` task
+  prompt. Single, batch, grouped single, and stack prompts now all include the
+  coordinator cmux send coordinates and the shared Agent Completion Report
+  format; single and batch prompts report `PR=none`, while stack prompts keep
+  their pull-request and `wt workflow complete ... --run-next` instructions.
 - Changed bare `wt workflow run` to select runnable workflows from
   `.local/workflows`, auto-run the only runnable workflow, and fail
   non-interactive multiple-candidate runs with explicit rerun commands before
@@ -20,6 +25,8 @@ minor version instead of moving to `x.0.0`.
 - Removed prepared TaskDocument execution from `wt new --task`; `wt new` now
   only starts one ad hoc worktree from branch-name text and guides prepared
   task execution to `wt task run`.
+- Bumped the package version to `0.23.0` because workflow task prompt handoff
+  behavior changed while `wt` is still pre-1.0.
 
 ## 0.21.0 - 2026-05-16
 

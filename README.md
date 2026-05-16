@@ -860,11 +860,26 @@ branch starts after a previous task is completed and uses the previous completed
 task branch as parent. Skipped tasks are not used as parents; if every earlier
 task was skipped, the next task uses the workflow base.
 
-When stack mode starts a task, the task-agent prompt includes a workflow
-coordinator handoff. With `pull_request = true`, the task agent pushes the
-branch and opens a draft pull request against the workflow parent branch. With
-`pull_request = false`, it reports `PR=none`. In both cases the coordinator
-reviews the report and branch state before completing the task:
+Every task prompt started by `wt workflow run` includes a `Workflow Coordinator
+Handoff` section. The section renders the current coordinator cmux coordinates
+into a `cmux send --workspace ... --surface ...` report command and a matching
+`cmux send-key ... enter` command. Agents send this report format back to the
+coordinator:
+
+```text
+Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>
+```
+
+If the coordinator cmux target is unavailable or stale, the agent leaves the
+same report in the task session and waits.
+
+Single-mode and batch-mode workflow tasks have no pull-request handoff intent
+and report `PR=none`; the coordinator reviews, lands, and cleans up explicitly.
+Stack-mode tasks keep their row-level pull-request behavior. With
+`pull_request = true`, the task agent pushes the branch and opens a draft pull
+request against the workflow parent branch. With `pull_request = false`, it
+reports `PR=none`. In both stack cases the coordinator reviews the report and
+branch state before completing the task:
 
 ```bash
 wt workflow complete 2026-05-16-001 add-schema --run-next

@@ -700,6 +700,7 @@ fn run_single_workflow_task(
     base: &Option<String>,
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
+    let content = workflow_single_task_prompt_content(&state.content);
     let branch_name = task_command::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
@@ -727,7 +728,7 @@ fn run_single_workflow_task(
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",
                 path: &state.path,
-                content: &state.content,
+                content: &content,
             },
         },
     )
@@ -745,7 +746,8 @@ fn run_single_workflow_group(
         .map(|state| state.path.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    let snapshot_content = render_single_workflow_snapshot(states);
+    let snapshot_content =
+        workflow_single_task_prompt_content(&render_single_workflow_snapshot(states));
     let title = single_workflow_group_title(states);
 
     issue::run_with_issue_snapshot(
@@ -1196,6 +1198,7 @@ fn run_batch_workflow_task(
     allow_interactive_prompts: bool,
     total: usize,
 ) -> Result<issue::IssueRunResult> {
+    let content = workflow_batch_task_prompt_content(&state.content);
     let branch_name = task_command::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
@@ -1227,7 +1230,7 @@ fn run_batch_workflow_task(
         snapshot: issue::IssueSnapshotContext {
             path_label: "Task path",
             path: &state.path,
-            content: &state.content,
+            content: &content,
         },
     };
     if allow_interactive_prompts {
@@ -1478,41 +1481,94 @@ fn run_stack_workflow_task(
     )
 }
 
+enum WorkflowCoordinatorHandoff<'a> {
+    ReportOnly,
+    Stack {
+        workflow_path: &'a Path,
+        row: &'a WorkflowTask,
+    },
+}
+
+fn workflow_single_task_prompt_content(content: &str) -> String {
+    workflow_task_prompt_content(content, WorkflowCoordinatorHandoff::ReportOnly)
+}
+
+fn workflow_batch_task_prompt_content(content: &str) -> String {
+    workflow_task_prompt_content(content, WorkflowCoordinatorHandoff::ReportOnly)
+}
+
 fn workflow_stack_task_prompt_content(
     content: &str,
     workflow_path: &Path,
     row: &WorkflowTask,
 ) -> String {
-    let parent_branch = row.parent.as_deref().unwrap_or("<workflow-parent>");
-    let pull_request = row.pull_request.unwrap_or(false);
-    let pr_report_value = if pull_request { "<pr-url>" } else { "none" };
+    workflow_task_prompt_content(
+        content,
+        WorkflowCoordinatorHandoff::Stack { workflow_path, row },
+    )
+}
+
+fn workflow_task_prompt_content(content: &str, handoff: WorkflowCoordinatorHandoff<'_>) -> String {
+    format!(
+        "{}\n\n{}",
+        content.trim_end(),
+        workflow_coordinator_handoff_section(handoff)
+    )
+}
+
+fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>) -> String {
+    let (pull_request_instructions, pr_report_value, complete_command) =
+        workflow_handoff_policy(handoff);
     let send_command = format!(
         "cmux send --workspace {{{{coordinator_cmux_workspace}}}} --surface {{{{coordinator_cmux_surface}}}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\"\n{{{{coordinator_enter_command}}}}"
     );
-    let complete_command = format!(
-        "wt workflow complete {} {} --run-next",
-        shell_arg(&workflow_path.to_string_lossy()),
-        shell_arg(workflow_task_label(row))
-    );
-    let pull_request_instructions = if pull_request {
-        let pr_command = format!(
-            "git push -u origin HEAD\ngh pr create --draft --base {} --fill",
-            shell_arg(parent_branch)
-        );
+
+    let after_send = if let Some(complete_command) = complete_command {
         format!(
-            "Workflow task metadata sets `pull_request = true`. When this task is complete and committed, push the branch and open a draft pull request against the workflow parent branch:\n\n```bash\n{pr_command}\n```"
+            "After sending the report, wait for the coordinator to review and advance the workflow. The coordinator will run:\n\n```bash\n{complete_command}\n```"
         )
     } else {
-        "Workflow task metadata sets `pull_request = false`. When this task is complete and committed, do not open a pull request for this workflow task.".into()
+        "After sending the report, wait for the coordinator to review, land, and clean up the workflow task explicitly.".into()
     };
 
     format!(
-        "{}\n\n## Workflow Coordinator Handoff\n\n{}\n\nThen send the Agent Completion Report back to the coordinator cmux surface that started this workflow:\n\n```bash\n{}\n```\n\nAfter sending the report, wait for the coordinator to review and advance the workflow. The coordinator will run:\n\n```bash\n{}\n```\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait.",
-        content.trim_end(),
-        pull_request_instructions,
-        send_command,
-        complete_command
+        "## Workflow Coordinator Handoff\n\n{}\n\nThen send the Agent Completion Report back to the coordinator cmux surface that started this workflow:\n\n```bash\n{}\n```\n\n{}\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait.",
+        pull_request_instructions, send_command, after_send
     )
+}
+
+fn workflow_handoff_policy(
+    handoff: WorkflowCoordinatorHandoff<'_>,
+) -> (String, &'static str, Option<String>) {
+    match handoff {
+        WorkflowCoordinatorHandoff::ReportOnly => (
+            "This workflow mode has no pull-request handoff intent. When this task is complete and committed, do not open a pull request for this workflow task; report `PR=none`.".into(),
+            "none",
+            None,
+        ),
+        WorkflowCoordinatorHandoff::Stack { workflow_path, row } => {
+            let parent_branch = row.parent.as_deref().unwrap_or("<workflow-parent>");
+            let pull_request = row.pull_request.unwrap_or(false);
+            let pr_report_value = if pull_request { "<pr-url>" } else { "none" };
+            let complete_command = format!(
+                "wt workflow complete {} {} --run-next",
+                shell_arg(&workflow_path.to_string_lossy()),
+                shell_arg(workflow_task_label(row))
+            );
+            let pull_request_instructions = if pull_request {
+                let pr_command = format!(
+                    "git push -u origin HEAD\ngh pr create --draft --base {} --fill",
+                    shell_arg(parent_branch)
+                );
+                format!(
+                    "Workflow task metadata sets `pull_request = true`. When this task is complete and committed, push the branch and open a draft pull request against the workflow parent branch:\n\n```bash\n{pr_command}\n```"
+                )
+            } else {
+                "Workflow task metadata sets `pull_request = false`. When this task is complete and committed, do not open a pull request for this workflow task.".into()
+            };
+            (pull_request_instructions, pr_report_value, Some(complete_command))
+        }
+    }
 }
 
 fn workflow_task_label(row: &WorkflowTask) -> &str {
@@ -1840,6 +1896,16 @@ mod tests {
             .into_iter()
             .map(|candidate| candidate.id)
             .collect()
+    }
+
+    fn assert_report_only_workflow_handoff(content: &str) {
+        assert!(content.contains("## Workflow Coordinator Handoff"));
+        assert!(content.contains("This workflow mode has no pull-request handoff intent"));
+        assert!(content.contains("PR=none"));
+        assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("{{coordinator_enter_command}}"));
+        assert!(content.contains("coordinator cmux target is unavailable or stale"));
+        assert!(!content.contains("wt workflow complete"));
     }
 
     #[test]
@@ -2173,10 +2239,114 @@ mod tests {
         assert!(content.contains("## Workflow Coordinator Handoff"));
         assert!(content.contains("Workflow task metadata sets `pull_request = true`"));
         assert!(content.contains("gh pr create --draft --base PROJ-1 --fill"));
+        assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains(
             "wt workflow complete /repo/.local/workflows/2026-05-16-001.toml PROJ-2 --run-next"
         ));
         assert!(!content.contains("wt stack complete"));
+    }
+
+    #[test]
+    fn workflow_stack_prompt_reports_none_without_pull_request_intent() {
+        let row = WorkflowTask {
+            task: "PROJ-2".into(),
+            run: "run-2".into(),
+            parent: Some("PROJ-1".into()),
+            pull_request: Some(false),
+        };
+        let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
+
+        let content = workflow_stack_task_prompt_content("title = \"API\"\n", &workflow_path, &row);
+
+        assert!(content.contains("Workflow task metadata sets `pull_request = false`"));
+        assert!(content.contains("do not open a pull request for this workflow task"));
+        assert!(content.contains("PR=none"));
+        assert!(!content.contains("gh pr create"));
+        assert!(content.contains(
+            "wt workflow complete /repo/.local/workflows/2026-05-16-001.toml PROJ-2 --run-next"
+        ));
+    }
+
+    #[test]
+    fn workflow_single_prompt_includes_report_only_coordinator_handoff() {
+        let content = workflow_single_task_prompt_content("title = \"API\"\n");
+
+        assert_report_only_workflow_handoff(&content);
+    }
+
+    #[test]
+    fn workflow_grouped_single_prompt_includes_report_only_coordinator_handoff() {
+        let states = vec![
+            WorkflowTaskState {
+                idx: 0,
+                row: WorkflowTask {
+                    task: "api".into(),
+                    run: "run-api".into(),
+                    parent: None,
+                    pull_request: None,
+                },
+                document: task_command::TaskDocument {
+                    title: "API".into(),
+                    branch: "shared".into(),
+                    body: String::new(),
+                    origin: None,
+                },
+                path: ".local/tasks/api.toml".into(),
+                content: "title = \"API\"\nbranch = \"shared\"\n".into(),
+                run: task_run::TaskRun {
+                    task: "api".into(),
+                    branch: "shared".into(),
+                    status: STATUS_PREPARED.into(),
+                    source: task_run::SOURCE_NEW.into(),
+                    group: None,
+                    error: None,
+                    creation_order: None,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                },
+            },
+            WorkflowTaskState {
+                idx: 1,
+                row: WorkflowTask {
+                    task: "docs".into(),
+                    run: "run-docs".into(),
+                    parent: None,
+                    pull_request: None,
+                },
+                document: task_command::TaskDocument {
+                    title: "Docs".into(),
+                    branch: "shared".into(),
+                    body: String::new(),
+                    origin: None,
+                },
+                path: ".local/tasks/docs.toml".into(),
+                content: "title = \"Docs\"\nbranch = \"shared\"\n".into(),
+                run: task_run::TaskRun {
+                    task: "docs".into(),
+                    branch: "shared".into(),
+                    status: STATUS_PREPARED.into(),
+                    source: task_run::SOURCE_NEW.into(),
+                    group: None,
+                    error: None,
+                    creation_order: None,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                },
+            },
+        ];
+        let content =
+            workflow_single_task_prompt_content(&render_single_workflow_snapshot(&states));
+
+        assert!(content.contains("Selected TaskDocuments:"));
+        assert_report_only_workflow_handoff(&content);
+    }
+
+    #[test]
+    fn workflow_batch_prompt_includes_report_only_coordinator_handoff() {
+        let content = workflow_batch_task_prompt_content("title = \"API\"\n");
+
+        assert_report_only_workflow_handoff(&content);
     }
 
     #[test]

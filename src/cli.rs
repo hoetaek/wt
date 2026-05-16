@@ -399,7 +399,7 @@ pub enum WorkflowCommand {
     },
     /// Start runnable tasks from a workflow
     #[command(
-        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts."
+        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. Single and batch tasks report PR=none; stack tasks keep their pull-request policy and completion command."
     )]
     Run {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -1244,6 +1244,17 @@ mod tests {
                 }
             }) if workflow.as_deref() == Some("2026-05-16-001")
         ));
+    }
+
+    #[test]
+    fn workflow_run_help_describes_coordinator_handoff() {
+        let mut command = Cli::command();
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+        let run = workflow.find_subcommand_mut("run").unwrap();
+        let help = run.render_long_help().to_string();
+        assert!(help.contains("Workflow Coordinator Handoff"));
+        assert!(help.contains("coordinator cmux send coordinates"));
+        assert!(help.contains("Single and batch tasks report PR=none"));
     }
 
     #[test]
