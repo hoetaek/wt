@@ -138,12 +138,15 @@ is intentionally disposable:
 wt list
 wt review
 wt review task-run-new-profile-partial-runs
+wt send task-run-new-profile-partial-runs "please report current status"
 wt done
 wt done PROJ-123
 ```
 
 `wt review [TARGET]` is a read-only pre-landing check. Omit the target to
 inspect the current branch, or pass a branch, worktree path/name, or TaskRun id.
+`wt send <TARGET> <MESSAGE...>` uses the same target forms to send a message to
+the matching cmux surface and press enter.
 
 When a cmux workspace was opened for the same worktree path, `wt done` attempts
 to close it before removing the worktree. `wt done` also deletes the matching
@@ -515,6 +518,12 @@ When cmux is available, it also shows the matching workspace and first surface
 for the target worktree, plus the raw `cmux send` and `cmux send-key` commands
 needed to talk to that surface. It does not mark anything done, merge branches,
 send messages, or remove worktrees.
+
+Use `wt send <branch|worktree|task-run> <message...>` when the review output
+shows a task agent surface and you want to ask for a completion report, request
+extra verification, or give a follow-up instruction. By default it sends the
+message and presses enter. Add `--no-enter` before the message to leave the
+text inserted without submitting it.
 
 ## Batches
 

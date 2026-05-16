@@ -8,6 +8,11 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added `wt send <TARGET> <MESSAGE...>` for sending a message to the cmux
+  surface discovered by the same branch/worktree/TaskRun target model used by
+  `wt review`.
+- Bumped the package version to `0.12.0` because `wt send` adds a new
+  user-facing CLI command while `wt` is still pre-1.0.
 - Added `wt review [TARGET]` for read-only branch/worktree/TaskRun inspection
   before review or landing, including matching cmux workspace/surface handles
   when cmux can find the target worktree. Task-start prompts now also ask

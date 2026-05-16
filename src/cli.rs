@@ -111,6 +111,23 @@ pub enum Commands {
         /// Branch, worktree path/name, or TaskRun id to inspect
         target: Option<String>,
     },
+    /// Send a message to a task agent's cmux surface
+    Send {
+        /// Branch, worktree path/name, or TaskRun id to contact
+        target: String,
+        /// Message to send
+        #[arg(
+            value_name = "MESSAGE",
+            required = true,
+            num_args = 1..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        message: Vec<String>,
+        /// Insert the message without pressing enter
+        #[arg(long)]
+        no_enter: bool,
+    },
     /// Check configured providers and required local tools
     Doctor,
     /// Print, edit, or refactor wt config files
@@ -596,6 +613,47 @@ mod tests {
 
         assert!(help.contains("worktree, branch, or TaskRun"));
         assert!(help.contains("Branch, worktree path/name, or TaskRun id"));
+    }
+
+    #[test]
+    fn send_accepts_target_and_message() {
+        let cli = parse(&["wt", "send", "feature", "hello", "agent"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Send {
+                ref target,
+                ref message,
+                no_enter: false,
+            }) if target == "feature" && message == &vec!["hello".to_string(), "agent".to_string()]
+        ));
+    }
+
+    #[test]
+    fn send_accepts_no_enter() {
+        let cli = parse(&["wt", "send", "feature", "--no-enter", "draft"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Send {
+                ref target,
+                ref message,
+                no_enter: true,
+            }) if target == "feature" && message == &vec!["draft".to_string()]
+        ));
+    }
+
+    #[test]
+    fn send_help_describes_target_and_message() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("send")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("task agent"));
+        assert!(help.contains("<TARGET>"));
+        assert!(help.contains("<MESSAGE>"));
+        assert!(help.contains("--no-enter"));
     }
 
     #[test]

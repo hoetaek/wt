@@ -5,16 +5,24 @@ use crate::services::git::{GitService, WorktreeEntry};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
-struct ReviewTarget {
-    label: String,
-    branch: String,
-    worktree: Option<PathBuf>,
+pub(crate) struct ReviewTarget {
+    pub(crate) label: String,
+    pub(crate) branch: String,
+    pub(crate) worktree: Option<PathBuf>,
     task_run: Option<task_run::TaskRunRecord>,
 }
 
+pub(crate) struct CmuxContact {
+    pub(crate) workspace: String,
+    pub(crate) surface: String,
+    pub(crate) pane: String,
+    title: String,
+    window: String,
+}
+
 pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
+    let target = resolve_review_target(ctx, target)?;
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
-    let target = resolve_target(ctx, &git, target)?;
     let parent = git.get_branch_parent(&target.branch)?;
     let status = match target.worktree.as_deref() {
         Some(path) => Some(git.status_porcelain(path)?),
@@ -45,7 +53,8 @@ pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn resolve_target(ctx: &Ctx, git: &GitService, target: Option<&str>) -> Result<ReviewTarget> {
+pub(crate) fn resolve_review_target(ctx: &Ctx, target: Option<&str>) -> Result<ReviewTarget> {
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
     let worktrees = git.worktree_list()?;
     match target {
         None => {
@@ -62,7 +71,7 @@ fn resolve_target(ctx: &Ctx, git: &GitService, target: Option<&str>) -> Result<R
                 task_run: None,
             })
         }
-        Some(raw) => resolve_explicit_target(ctx, git, &worktrees, raw),
+        Some(raw) => resolve_explicit_target(ctx, &git, &worktrees, raw),
     }
 }
 
@@ -258,61 +267,61 @@ fn print_cmux_contact(ctx: &Ctx, worktree: Option<&Path>) {
         return;
     };
 
-    let cmux = CmuxService::new(ctx.runner.as_ref());
-    if !cmux.is_available() {
+    if !CmuxService::new(ctx.runner.as_ref()).is_available() {
         ctx.ui.print_dim("  cmux: unavailable");
         return;
     }
 
-    let workspaces = match cmux.list_workspaces() {
-        Ok(workspaces) => workspaces,
-        Err(err) => {
-            ctx.ui
-                .print_warning(&format!("  cmux lookup failed: {err:#}"));
-            return;
-        }
-    };
-
-    let matches = workspaces
-        .iter()
-        .filter(|workspace| cmux_workspace_matches(workspace, worktree))
-        .collect::<Vec<_>>();
-    if matches.is_empty() {
-        ctx.ui.print_dim("  cmux: no workspace found for worktree");
-        return;
-    }
-
-    for workspace in matches {
-        print_cmux_workspace(ctx, &cmux, workspace);
+    match first_cmux_contact(ctx, worktree) {
+        Ok(Some(contact)) => print_cmux_workspace(ctx, &contact),
+        Ok(None) => ctx.ui.print_dim("  cmux: no workspace found for worktree"),
+        Err(err) => ctx
+            .ui
+            .print_warning(&format!("  cmux lookup failed: {err:#}")),
     }
 }
 
-fn print_cmux_workspace(ctx: &Ctx, cmux: &CmuxService<'_>, workspace: &CmuxWorkspace) {
+fn print_cmux_workspace(ctx: &Ctx, contact: &CmuxContact) {
     ctx.ui.print_dim(&format!(
         "  cmux workspace: {} \"{}\" (window {})",
-        workspace.handle, workspace.title, workspace.window_handle
+        contact.workspace, contact.title, contact.window
     ));
+    ctx.ui.print_dim(&format!(
+        "  cmux surface: {} (pane {})",
+        contact.surface, contact.pane
+    ));
+    ctx.ui.print_dim(&format!(
+        "  cmux send: cmux send --workspace {} --surface {} <message>",
+        contact.workspace, contact.surface
+    ));
+    ctx.ui.print_dim(&format!(
+        "  cmux enter: cmux send-key --workspace {} --surface {} enter",
+        contact.workspace, contact.surface
+    ));
+}
 
-    match first_cmux_surface(cmux, &workspace.handle) {
-        Ok(Some((pane, surface))) => {
-            ctx.ui
-                .print_dim(&format!("  cmux surface: {surface} (pane {pane})"));
-            ctx.ui.print_dim(&format!(
-                "  cmux send: cmux send --workspace {} --surface {} <message>",
-                workspace.handle, surface
-            ));
-            ctx.ui.print_dim(&format!(
-                "  cmux enter: cmux send-key --workspace {} --surface {} enter",
-                workspace.handle, surface
-            ));
-        }
-        Ok(None) => ctx
-            .ui
-            .print_dim("  cmux surface: no pane surface found for workspace"),
-        Err(err) => ctx
-            .ui
-            .print_warning(&format!("  cmux surface lookup failed: {err:#}")),
+pub(crate) fn first_cmux_contact(ctx: &Ctx, worktree: &Path) -> Result<Option<CmuxContact>> {
+    let cmux = CmuxService::new(ctx.runner.as_ref());
+    if !cmux.is_available() {
+        bail!("cmux command not found");
     }
+
+    let workspaces = cmux.list_workspaces()?;
+    for workspace in workspaces
+        .iter()
+        .filter(|workspace| cmux_workspace_matches(workspace, worktree))
+    {
+        if let Some((pane, surface)) = first_cmux_surface(&cmux, &workspace.handle)? {
+            return Ok(Some(CmuxContact {
+                workspace: workspace.handle.clone(),
+                surface,
+                pane,
+                title: workspace.title.clone(),
+                window: workspace.window_handle.clone(),
+            }));
+        }
+    }
+    Ok(None)
 }
 
 fn first_cmux_surface(

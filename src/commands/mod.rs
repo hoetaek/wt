@@ -15,6 +15,7 @@ pub mod pr;
 pub mod profile;
 pub mod profile_match;
 pub mod review;
+pub mod send;
 pub mod site;
 pub mod stack;
 pub mod task;

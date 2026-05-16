@@ -80,6 +80,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
         Commands::Review { target } => commands::review::run(ctx, target.as_deref()),
+        Commands::Send {
+            target,
+            message,
+            no_enter,
+        } => commands::send::run(ctx, target, message, *no_enter),
         Commands::Doctor => commands::doctor::run(ctx),
         Commands::Config { profile, command } => match command {
             Some(ConfigCommand::Edit { source }) => {

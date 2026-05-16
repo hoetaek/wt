@@ -190,6 +190,11 @@ workspace/surface 정보도 저장된 실행 상태가 아니라 현재 세션�
 좌표로만 보여준다. 실제 완료 기록은 `wt done` 또는 `wt stack complete`처럼 source별
 completion 명령이 맡는다.
 
+`wt send`도 상태 전이 명령이 아니다. `wt review`와 같은 target 해석으로 현재 cmux
+surface를 찾아 메시지를 보내는 transport 명령이다. 메시지를 보냈다는 사실을 TaskRun
+상태로 저장하지 않고, 완료 여부는 여전히 TaskRun status와 stack completion 명령으로만
+표현한다.
+
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 
 ### Agent-Neutral Names Stay Agent-Neutral
