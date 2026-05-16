@@ -696,18 +696,36 @@ fn profile_config_with_issue_snapshot(
 ) -> Config {
     let mut config = config.clone();
     if let Some(agent) = config.agent.as_mut() {
-        let completion_section = completion_section
-            .map(str::to_string)
-            .unwrap_or_else(agent_report::prompt_section);
-        let snapshot_prompt = format!(
-            "{}\n\n{}: `{}`\n\n{}\n\n{}",
-            prompt_intro, snapshot.path_label, snapshot.path, snapshot.content, completion_section
-        );
         let prompts = agent.prompt.entry(mode.into()).or_default();
-        if let Some(first_prompt) = prompts.first_mut() {
-            *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+        if let Some(completion_section) = completion_section {
+            let handoff_prompt = format!(
+                "{}\n\nThe TaskDocument prompt follows next. Do not start work until it arrives.",
+                completion_section
+            );
+            let snapshot_prompt = format!(
+                "{}\n\n{}: `{}`\n\n{}",
+                prompt_intro, snapshot.path_label, snapshot.path, snapshot.content
+            );
+            if let Some(first_prompt) = prompts.first_mut() {
+                *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+            } else {
+                prompts.push(snapshot_prompt);
+            }
+            prompts.insert(0, handoff_prompt);
         } else {
-            prompts.push(snapshot_prompt);
+            let snapshot_prompt = format!(
+                "{}\n\n{}: `{}`\n\n{}\n\n{}",
+                prompt_intro,
+                snapshot.path_label,
+                snapshot.path,
+                snapshot.content,
+                agent_report::prompt_section()
+            );
+            if let Some(first_prompt) = prompts.first_mut() {
+                *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+            } else {
+                prompts.push(snapshot_prompt);
+            }
         }
     }
     config

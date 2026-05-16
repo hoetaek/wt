@@ -700,7 +700,7 @@ fn run_single_workflow_task(
     base: &Option<String>,
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
-    let content = workflow_single_task_prompt_content(&state.content);
+    let completion_section = workflow_single_task_handoff_section();
     let branch_name = task_command::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
@@ -724,12 +724,12 @@ fn run_single_workflow_task(
                 .as_ref()
                 .map(|origin| origin.id.as_str()),
             prompt_intro: "Use this task before changing code.",
-            completion_section: None,
+            completion_section: Some(&completion_section),
             workspace_label: None,
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",
                 path: &state.path,
-                content: &content,
+                content: &state.content,
             },
         },
     )
@@ -747,8 +747,8 @@ fn run_single_workflow_group(
         .map(|state| state.path.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    let snapshot_content =
-        workflow_single_task_prompt_content(&render_single_workflow_snapshot(states));
+    let snapshot_content = render_single_workflow_snapshot(states);
+    let completion_section = workflow_single_task_handoff_section();
     let title = single_workflow_group_title(states);
 
     issue::run_with_issue_snapshot(
@@ -763,7 +763,7 @@ fn run_single_workflow_group(
             mode: "new",
             on_start_issue_id: None,
             prompt_intro: "Use these tasks before changing code. Work in this single workspace and address every selected TaskDocument.",
-            completion_section: None,
+            completion_section: Some(&completion_section),
             workspace_label: None,
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task paths",
@@ -1200,7 +1200,7 @@ fn run_batch_workflow_task(
     allow_interactive_prompts: bool,
     total: usize,
 ) -> Result<issue::IssueRunResult> {
-    let content = workflow_batch_task_prompt_content(&state.content);
+    let completion_section = workflow_batch_task_handoff_section();
     let branch_name = task_command::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
@@ -1228,12 +1228,12 @@ fn run_batch_workflow_task(
             .as_ref()
             .map(|origin| origin.id.as_str()),
         prompt_intro: "Use this task before changing code.",
-        completion_section: None,
+        completion_section: Some(&completion_section),
         workspace_label: Some(workspace_label),
         snapshot: issue::IssueSnapshotContext {
             path_label: "Task path",
             path: &state.path,
-            content: &content,
+            content: &state.content,
         },
     };
     if allow_interactive_prompts {
@@ -1448,7 +1448,7 @@ fn run_stack_workflow_task(
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
     let (task_doc, task_path, content) = task_command::read_task_file(ctx, &row.task)?;
-    let content = workflow_stack_task_prompt_content(&content, workflow_path, row);
+    let completion_section = workflow_stack_task_handoff_section(workflow_path, row);
     let branch_name = task_command::prepared_branch_name(&task_doc.branch);
     if branch_name.is_none() && task_doc.origin.is_none() {
         bail!("Workflow task {} has no branch", workflow_task_label(row));
@@ -1474,7 +1474,7 @@ fn run_stack_workflow_task(
             mode: task_doc.mode(),
             on_start_issue_id: task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
             prompt_intro: "Use this task before changing code.",
-            completion_section: None,
+            completion_section: Some(&completion_section),
             workspace_label: Some(workspace_label),
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",
@@ -1493,14 +1493,17 @@ enum WorkflowCoordinatorHandoff<'a> {
     },
 }
 
+#[cfg(test)]
 fn workflow_single_task_prompt_content(content: &str) -> String {
-    workflow_task_prompt_content(content, WorkflowCoordinatorHandoff::ReportOnly)
+    workflow_task_prompt_content(content, &workflow_single_task_handoff_section())
 }
 
+#[cfg(test)]
 fn workflow_batch_task_prompt_content(content: &str) -> String {
-    workflow_task_prompt_content(content, WorkflowCoordinatorHandoff::ReportOnly)
+    workflow_task_prompt_content(content, &workflow_batch_task_handoff_section())
 }
 
+#[cfg(test)]
 fn workflow_stack_task_prompt_content(
     content: &str,
     workflow_path: &Path,
@@ -1508,16 +1511,25 @@ fn workflow_stack_task_prompt_content(
 ) -> String {
     workflow_task_prompt_content(
         content,
-        WorkflowCoordinatorHandoff::Stack { workflow_path, row },
+        &workflow_stack_task_handoff_section(workflow_path, row),
     )
 }
 
-fn workflow_task_prompt_content(content: &str, handoff: WorkflowCoordinatorHandoff<'_>) -> String {
-    format!(
-        "{}\n\n{}",
-        content.trim_end(),
-        workflow_coordinator_handoff_section(handoff)
-    )
+fn workflow_single_task_handoff_section() -> String {
+    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::ReportOnly)
+}
+
+fn workflow_batch_task_handoff_section() -> String {
+    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::ReportOnly)
+}
+
+fn workflow_stack_task_handoff_section(workflow_path: &Path, row: &WorkflowTask) -> String {
+    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::Stack { workflow_path, row })
+}
+
+#[cfg(test)]
+fn workflow_task_prompt_content(content: &str, handoff: &str) -> String {
+    format!("{}\n\n{}", handoff, content.trim_end())
 }
 
 fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>) -> String {
@@ -1536,8 +1548,8 @@ fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>)
     };
 
     format!(
-        "## Workflow Coordinator Handoff\n\n{}\n\nThen send the Agent Completion Report back to the coordinator cmux surface that started this workflow:\n\n```bash\n{}\n```\n\n{}\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait.",
-        pull_request_instructions, send_command, after_send
+        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator cmux surface that started this workflow:\n\n```bash\n{}\n```\n\n{}\n\n{}\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait.",
+        send_command, pull_request_instructions, after_send
     )
 }
 
@@ -1912,6 +1924,21 @@ mod tests {
         assert!(!content.contains("wt workflow complete"));
     }
 
+    fn assert_workflow_handoff_precedes_task_body(content: &str, body: &str) {
+        assert!(
+            content.find("## Workflow Coordinator Handoff").unwrap() < content.find(body).unwrap()
+        );
+    }
+
+    fn assert_workflow_send_command_precedes_policy(content: &str) {
+        assert!(
+            content.find("cmux send --workspace").unwrap()
+                < content
+                    .find("Workflow task metadata sets")
+                    .unwrap_or(content.len())
+        );
+    }
+
     #[test]
     fn task_prepares_batch_mode_workflow() {
         let dir = tempfile::tempdir().unwrap();
@@ -2241,6 +2268,8 @@ mod tests {
         let content = workflow_stack_task_prompt_content("title = \"API\"\n", &workflow_path, &row);
 
         assert!(content.contains("## Workflow Coordinator Handoff"));
+        assert_workflow_handoff_precedes_task_body(&content, "title = \"API\"");
+        assert_workflow_send_command_precedes_policy(&content);
         assert!(content.contains("Workflow task metadata sets `pull_request = true`"));
         assert!(content.contains("gh pr create --draft --base PROJ-1 --fill"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
@@ -2277,6 +2306,11 @@ mod tests {
         let content = workflow_single_task_prompt_content("title = \"API\"\n");
 
         assert_report_only_workflow_handoff(&content);
+        assert_workflow_handoff_precedes_task_body(&content, "title = \"API\"");
+        assert!(
+            content.find("cmux send --workspace").unwrap()
+                < content.find("title = \"API\"").unwrap()
+        );
     }
 
     #[test]

@@ -290,14 +290,18 @@ cmux workspace/surface 좌표로 렌더링되는 `cmux send`와 `cmux send-key .
 `PR=none`인 `Agent Completion Report`를 coordinator에게 보내고, coordinator가 review,
 landing, cleanup을 명시적으로 처리할 때까지 기다린다. 좌표는 현재 transport 정보일 뿐이므로
 TaskDocument나 TaskRun에 저장하지 않는다. 좌표가 unavailable 또는 stale이면 agent는 같은
-보고를 task session에 남기고 기다린다.
+보고를 task session에 남기고 기다린다. Handoff section과 그 안의 `cmux send`/enter 명령은
+긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서 terminal prompt가 축약되어도
+coordinator 좌표가 앞쪽에 남게 한다.
 
 Workflow coordinator handoff는 `stack` 전용 개념이 아니라 `wt workflow run`이 시작하는
 모든 task prompt의 계약이다. Prompt에는 `Workflow Coordinator Handoff` section이 포함되고,
 현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
 `cmux send-key ... enter` 명령이 들어간다. 이 좌표는 현재 transport 정보일 뿐이므로
 Workflow file, TaskRun, TaskDocument에 저장하지 않는다. 좌표가 unavailable 또는 stale이면
-agent는 같은 `Agent Completion Report`를 task session에 남기고 기다린다.
+agent는 같은 `Agent Completion Report`를 task session에 남기고 기다린다. Handoff section과
+그 안의 `cmux send`/enter 명령은 긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서
+terminal prompt가 축약되어도 coordinator 좌표가 앞쪽에 남게 한다.
 
 보고 형식은 workflow mode와 무관하게
 `Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>`
