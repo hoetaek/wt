@@ -779,12 +779,17 @@ issues as TaskDocuments. Both write one Workflow file and linked TaskRun records
 without starting worktrees:
 
 ```bash
+wt workflow task --mode batch --base main
 wt workflow task "add schema" "wire API" --mode single --base main
 wt workflow task "add schema" "wire API" --mode batch --base main
 wt workflow task "add schema" "wire API" --mode stack --base main --pull-request
 wt workflow issue 123 456 789 --mode batch --base main --profile codex
 wt workflow issue 123 456 789 --mode stack --base main
 ```
+
+Bare `wt workflow task --mode <mode>` opens a multi-select list of existing
+local TaskDocuments. Pass task titles or task keys explicitly when a script or
+prepared command already knows which tasks to include.
 
 `--mode single` runs one workspace. With multiple tasks, all selected
 TaskDocuments must share one branch. `--mode batch` runs independent task

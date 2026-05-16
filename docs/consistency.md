@@ -244,6 +244,10 @@ link와 실행 지시만 저장한다. Workflow row는 status/error를 따로 �
 canonical 기록은 TaskDocument다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을
 가리키는 다른 이름은 받지 않는다.
 
+Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
+명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
+두 번째 task source를 만들지 않는다.
+
 `.local/workflows`는 `.local/batches`와 `.local/stacks`를 대체한다. 이유는 batch와 stack이
 저장소 noun이 아니라 하나의 Workflow 안에서 고르는 execution mode이기 때문이다. 새
 기능이 `.local/batches`나 `.local/stacks`에 상태를 계속 추가하면 사용자는 같은 준비 작업을
