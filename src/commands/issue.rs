@@ -12,6 +12,7 @@ use crate::setup;
 use crate::worktree_naming::{self, WorktreeNamingResult};
 use anyhow::{Result, bail};
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 
 pub(crate) struct IssueSnapshotContext<'a> {
@@ -34,6 +35,39 @@ pub(crate) struct IssueRunResult {
     pub(crate) branch_name: String,
     pub(crate) worktree_path: PathBuf,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct IssueRunPartialFailure {
+    pub(crate) completed: Vec<IssueRunResult>,
+    pub(crate) failed: Option<IssueRunResult>,
+    message: String,
+}
+
+impl IssueRunPartialFailure {
+    fn new(
+        completed: Vec<IssueRunResult>,
+        failed: Option<IssueRunResult>,
+        err: anyhow::Error,
+    ) -> Self {
+        Self {
+            completed,
+            failed,
+            message: err.to_string(),
+        }
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for IssueRunPartialFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for IssueRunPartialFailure {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PlannedIssueWorktree {
@@ -505,7 +539,8 @@ fn run_profiles(
             Some(&profile_workspace),
             profile_config.has_site().then_some(""),
             profile_config.worktree.path.as_deref(),
-        )?;
+        )
+        .map_err(|err| profile_partial_failure(&results, None, err))?;
 
         if names.path.exists() {
             ctx.ui.print_warning(&format!(
@@ -518,28 +553,43 @@ fn run_profiles(
                 "Abort all".into(),
             ];
             if options.prompt_policy == PromptPolicy::Deny {
-                bail!(
-                    "Worktree {} already exists; parallel batch workers cannot prompt to delete, skip, or abort",
-                    names.path.display()
-                );
+                return Err(profile_partial_failure(
+                    &results,
+                    None,
+                    anyhow::anyhow!(
+                        "Worktree {} already exists; parallel batch workers cannot prompt to delete, skip, or abort",
+                        names.path.display()
+                    ),
+                ));
             }
             let choice = ctx
                 .ui
-                .select(&format!("[{profile_name}] Worktree already exists"), &items)?;
+                .select(&format!("[{profile_name}] Worktree already exists"), &items)
+                .map_err(|err| profile_partial_failure(&results, None, err))?;
             match choice {
                 0 => {
                     ctx.ui.print_step("Removing existing worktree...");
                     git.worktree_remove_force(&names.path).ok();
                     if names.path.exists() {
-                        std::fs::remove_dir_all(&names.path)?;
+                        std::fs::remove_dir_all(&names.path)
+                            .map_err(|err| profile_partial_failure(&results, None, err.into()))?;
                     }
                 }
                 1 => continue,
-                _ => return Err(WtError::Cancelled.into()),
+                _ => {
+                    return Err(profile_partial_failure(
+                        &results,
+                        None,
+                        WtError::Cancelled.into(),
+                    ));
+                }
             }
         }
 
-        if git.local_branch_exists(&profile_branch)? {
+        if git
+            .local_branch_exists(&profile_branch)
+            .map_err(|err| profile_partial_failure(&results, None, err))?
+        {
             ctx.ui.print_warning(&format!(
                 "Branch {profile_branch} already exists, removing..."
             ));
@@ -553,10 +603,16 @@ fn run_profiles(
                 .ok();
         }
 
-        git.worktree_add_new_branch(&names.path, &profile_branch, &base)?;
+        git.worktree_add_new_branch(&names.path, &profile_branch, &base)
+            .map_err(|err| profile_partial_failure(&results, None, err))?;
         git.set_branch_parent(&profile_branch, &base).ok();
 
-        setup::run_setup(
+        let result = IssueRunResult {
+            branch_name: profile_branch,
+            worktree_path: names.path.clone(),
+        };
+
+        if let Err(err) = setup::run_setup(
             ctx,
             &names.path,
             &names,
@@ -564,11 +620,10 @@ fn run_profiles(
             setup_mode,
             Some(&profile_extra_vars),
             Some(profile_config),
-        )?;
-        results.push(IssueRunResult {
-            branch_name: profile_branch,
-            worktree_path: names.path,
-        });
+        ) {
+            return Err(profile_partial_failure(&results, Some(result), err));
+        }
+        results.push(result);
     }
 
     ctx.ui.print_step(&format!(
@@ -576,6 +631,17 @@ fn run_profiles(
         profiles.len()
     ));
     Ok(results)
+}
+
+fn profile_partial_failure(
+    completed: &[IssueRunResult],
+    failed: Option<IssueRunResult>,
+    err: anyhow::Error,
+) -> anyhow::Error {
+    if completed.is_empty() && failed.is_none() {
+        return err;
+    }
+    IssueRunPartialFailure::new(completed.to_vec(), failed, err).into()
 }
 
 fn profile_template_vars(
