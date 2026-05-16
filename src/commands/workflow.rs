@@ -1539,12 +1539,12 @@ fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>)
         "cmux send --workspace {{{{coordinator_cmux_workspace}}}} --surface {{{{coordinator_cmux_surface}}}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\"\n{{{{coordinator_enter_command}}}}"
     );
 
-    let after_send = if let Some(complete_command) = complete_command {
+    let after_send = if let Some((complete_command, review_followup)) = complete_command {
         format!(
-            "After sending the report, wait for the coordinator to review and advance the workflow. The coordinator will run:\n\n```bash\n{complete_command}\n```"
+            "{review_followup}\n\nWhen review passes, wait for the coordinator to advance the workflow. The coordinator will run:\n\n```bash\n{complete_command}\n```"
         )
     } else {
-        "After sending the report, wait for the coordinator to review, land, and clean up the workflow task explicitly.".into()
+        "After sending the report, wait for review. If coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push if this branch tracks a remote, and send an updated Agent Completion Report. When review passes, wait for the coordinator to land and clean up the workflow task explicitly.".into()
     };
 
     format!(
@@ -1555,7 +1555,7 @@ fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>)
 
 fn workflow_handoff_policy(
     handoff: WorkflowCoordinatorHandoff<'_>,
-) -> (String, &'static str, Option<String>) {
+) -> (String, &'static str, Option<(String, &'static str)>) {
     match handoff {
         WorkflowCoordinatorHandoff::ReportOnly => (
             "This workflow mode has no pull-request handoff intent. When this task is complete and committed, do not open a pull request for this workflow task; report `PR=none`.".into(),
@@ -1573,16 +1573,25 @@ fn workflow_handoff_policy(
             );
             let pull_request_instructions = if pull_request {
                 let pr_command = format!(
-                    "git push -u origin HEAD\ngh pr create --draft --base {} --fill",
+                    "git push -u origin HEAD\ngh pr create --draft --base {} --fill\ngh pr edit --body-file <completion-report-body-file>\ngh pr ready",
                     shell_arg(parent_branch)
                 );
                 format!(
-                    "Workflow task metadata sets `pull_request = true`. When this task is complete and committed, push the branch and open a draft pull request against the workflow parent branch:\n\n```bash\n{pr_command}\n```"
+                    "Workflow task metadata sets `pull_request = true`. When this task is complete and committed, push the branch, open a draft pull request against the workflow parent branch, update the pull request body with the Agent Completion Report details, and mark it ready for review. Create `<completion-report-body-file>` as a temporary file containing Summary, Changed files, Checks run, PR, and Risks or follow-ups:\n\n```bash\n{pr_command}\n```"
                 )
             } else {
                 "Workflow task metadata sets `pull_request = false`. When this task is complete and committed, do not open a pull request for this workflow task.".into()
             };
-            (pull_request_instructions, pr_report_value, Some(complete_command))
+            let review_followup = if pull_request {
+                "After the pull request is ready and the report is sent, keep ownership of review follow-up for this task. If Codex/GitHub review or coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push, update the pull request body, and send an updated Agent Completion Report."
+            } else {
+                "After the report is sent, keep ownership of coordinator review follow-up for this task. If coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push if this branch tracks a remote, and send an updated Agent Completion Report."
+            };
+            (
+                pull_request_instructions,
+                pr_report_value,
+                Some((complete_command, review_followup)),
+            )
         }
     }
 }
@@ -2272,6 +2281,16 @@ mod tests {
         assert_workflow_send_command_precedes_policy(&content);
         assert!(content.contains("Workflow task metadata sets `pull_request = true`"));
         assert!(content.contains("gh pr create --draft --base PROJ-1 --fill"));
+        assert!(content.contains("gh pr edit --body-file <completion-report-body-file>"));
+        assert!(content.contains("gh pr ready"));
+        assert!(
+            content
+                .contains("update the pull request body with the Agent Completion Report details")
+        );
+        assert!(
+            content.contains("If Codex/GitHub review or coordinator feedback asks for changes")
+        );
+        assert!(content.contains("commit, push, update the pull request body"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains(
@@ -2294,6 +2313,8 @@ mod tests {
 
         assert!(content.contains("Workflow task metadata sets `pull_request = false`"));
         assert!(content.contains("do not open a pull request for this workflow task"));
+        assert!(content.contains("If coordinator feedback asks for changes"));
+        assert!(!content.contains("If Codex/GitHub review"));
         assert!(content.contains("PR=none"));
         assert!(!content.contains("gh pr create"));
         assert!(content.contains(

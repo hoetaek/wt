@@ -376,7 +376,7 @@ pub enum WorkflowCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Mark stack-mode workflow tasks as requiring draft pull requests
+        /// Mark stack-mode workflow tasks as requiring pull-request handoff
         #[arg(long = "pull-request", action = ArgAction::SetTrue)]
         pull_request: bool,
     },
@@ -393,13 +393,13 @@ pub enum WorkflowCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Mark stack-mode workflow tasks as requiring draft pull requests
+        /// Mark stack-mode workflow tasks as requiring pull-request handoff
         #[arg(long = "pull-request", action = ArgAction::SetTrue)]
         pull_request: bool,
     },
     /// Start runnable tasks from a workflow
     #[command(
-        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. Single and batch tasks report PR=none; stack tasks keep their pull-request policy and completion command."
+        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. Single and batch tasks report PR=none; stack tasks keep their pull-request policy, PR review follow-up, and completion command."
     )]
     Run {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -1257,6 +1257,7 @@ mod tests {
         assert!(help.contains("Workflow Coordinator Handoff"));
         assert!(help.contains("coordinator cmux send coordinates"));
         assert!(help.contains("Single and batch tasks report PR=none"));
+        assert!(help.contains("PR review follow-up"));
     }
 
     #[test]
