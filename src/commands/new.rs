@@ -1,5 +1,5 @@
 use crate::cli::BaseMode;
-use crate::commands::{issue, task};
+use crate::commands::{issue, task, task_run};
 use crate::config::Config;
 use crate::context::Ctx;
 use crate::error::WtError;
@@ -103,6 +103,15 @@ fn run_selected_task(
         bail!("Task {} has no branch", selected.key);
     }
 
+    let run = task_run::create(
+        ctx,
+        &selected.key,
+        &selected.document.branch,
+        task_run::SOURCE_NEW,
+        None,
+        task_run::STATUS_RUNNING,
+    )?;
+
     let identifier = selected.document.identifier_or_key(&selected.key);
     let title = selected.document.title_or_key(&selected.key);
     let result = issue::run_with_issue_snapshot(
@@ -122,11 +131,43 @@ fn run_selected_task(
                 content: &selected.content,
             },
         },
-    )?;
+    );
+
+    let result = match result {
+        Ok(result) => result,
+        Err(err) => {
+            let status = if is_cancelled(&err) {
+                task_run::STATUS_SKIPPED
+            } else {
+                task_run::STATUS_FAILED
+            };
+            let message = err.to_string();
+            let _ = task_run::update(ctx, &run.id, status, None, Some(&message));
+            return Err(err);
+        }
+    };
 
     if selected.document.branch != result.branch_name {
-        task::write_task_branch(ctx, &selected.key, &result.branch_name)?;
+        if let Err(err) = task::write_task_branch(ctx, &selected.key, &result.branch_name) {
+            let message = err.to_string();
+            let _ = task_run::update(
+                ctx,
+                &run.id,
+                task_run::STATUS_FAILED,
+                Some(&result.branch_name),
+                Some(&message),
+            );
+            return Err(err);
+        }
     }
+
+    task_run::update(
+        ctx,
+        &run.id,
+        task_run::STATUS_DONE,
+        Some(&result.branch_name),
+        None,
+    )?;
 
     Ok(())
 }
@@ -259,6 +300,11 @@ fn load_selected_profiles(ctx: &Ctx, profile: Option<&str>) -> Result<Vec<(Strin
         bail!("No profile configs found in .local/profiles/*/profile.toml");
     }
     Ok(profiles)
+}
+
+fn is_cancelled(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<WtError>()
+        .is_some_and(|err| matches!(err, WtError::Cancelled))
 }
 
 fn resolve_base_branch(ctx: &Ctx, git: &GitService, mode: &BaseMode) -> Result<String> {

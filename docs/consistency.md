@@ -115,17 +115,29 @@ profile convention file merge를 모두 끝낸 뒤 최종 effective config에서
 
 저장되는 상태는 사용자가 이해할 수 있는 상태여야 한다.
 
+TaskDocument는 작업이 무엇인지를 담는 정의/스냅샷이다. `.local/tasks/<task>.toml`
+아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
+
+TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
+task, branch, status, source, group, error, created_at, updated_at을 저장한다. status는
+`prepared`, `running`, `done`, `failed`, `skipped`만 canonical이고, source는 `new`,
+`batch`, `stack`만 canonical이다. 알 수 없는 status/source 값은 조용히 해석하지 않고
+파싱 단계에서 실패시킨다.
+
 Batch가 어떤 task를 준비했고, 어떤 task가 끝났고, 어떤 task가 실패했는지는 저장할
 가치가 있다. Batch의 canonical 상태 목록은 `[[tasks]]`이고, 각 row는 `.local/tasks`
-아래의 task 문서를 가리킨다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을 가리키는
-다른 이름은 받지 않는다. 내부 구현 편의를 위해 만든 가짜 이름이나 암묵적 상태를
-저장하면 나중에 사용자가 파일을 읽을 때 모델을 다시 배워야 한다.
+아래의 task 문서와 실행이 시작된 경우 `.local/task-runs` 아래의 TaskRun을 가리킨다.
+Batch row의 status/error는 orchestration을 읽기 위한 요약이고, 실행 인스턴스의 canonical
+기록은 TaskRun이다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을 가리키는 다른 이름은
+받지 않는다. 내부 구현 편의를 위해 만든 가짜 이름이나 암묵적 상태를 저장하면 나중에
+사용자가 파일을 읽을 때 모델을 다시 배워야 한다.
 
 Stack이 어떤 task를 어떤 parent 위에 쌓았는지도 저장할 가치가 있다. canonical 상태
 목록은 `[[tasks]]`이고, task 문서는 issue origin이 있는 작업과 직접 작성한 branch work
 를 같은 형태로 담는다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을 가리키는 다른
 이름은 받지 않는다. parent가 아직 실행 전이라 확정되지 않았다면 가짜 값을 넣지 않고,
-실행 시 확정된 branch를 기록한다.
+실행 시 확정된 branch를 기록한다. Stack row도 실행이 시작된 경우 TaskRun을 가리키고,
+명시적 `complete` 신호가 들어오면 같은 TaskRun을 `done`으로 전이한다.
 `pr`은 기존 pull request workflow를 가리키는 별도 개념이므로 stack task로 받지 않는다.
 Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 명시적
 `complete` 신호를 기다리는 상태다. 완료를 추정해서 다음 task를 시작하지 않는다.

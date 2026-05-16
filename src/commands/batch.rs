@@ -2,6 +2,9 @@ use crate::cli::BaseMode;
 use crate::commands::issue;
 use crate::commands::issue_selection;
 use crate::commands::task::{self, PreparedTask};
+use crate::commands::task_run::{
+    self, STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
+};
 use crate::config::{Config, validate_profile_name};
 use crate::context::Ctx;
 use crate::error::WtError;
@@ -16,11 +19,6 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const STATUS_PREPARED: &str = "prepared";
-const STATUS_RUNNING: &str = "running";
-const STATUS_DONE: &str = "done";
-const STATUS_FAILED: &str = "failed";
-const STATUS_SKIPPED: &str = "skipped";
 const STATUS_PARTIAL: &str = "partial";
 
 pub fn issue(
@@ -490,47 +488,83 @@ fn apply_task_event(
     metadata: &mut BatchMetadata,
     event: TaskEvent,
 ) -> Result<()> {
-    match event {
+    let (idx, status, error) = match event {
         TaskEvent::Started { idx } => {
             ctx.ui
                 .print_step(&format!("Starting {}", metadata.tasks[idx].label()));
             metadata.status = STATUS_RUNNING.into();
-            metadata.tasks[idx].status = STATUS_RUNNING.into();
-            metadata.tasks[idx].error.clear();
+            (idx, STATUS_RUNNING, None)
         }
         TaskEvent::Succeeded { idx } => {
             ctx.ui
                 .print_step(&format!("Succeeded {}", metadata.tasks[idx].label()));
-            metadata.tasks[idx].status = STATUS_DONE.into();
-            metadata.tasks[idx].error.clear();
+            (idx, STATUS_DONE, None)
         }
         TaskEvent::Failed { idx, error } => {
             ctx.ui
                 .print_warning(&format!("Failed {}: {error}", metadata.tasks[idx].label()));
-            metadata.tasks[idx].status = STATUS_FAILED.into();
-            metadata.tasks[idx].error = error;
+            (idx, STATUS_FAILED, Some(error))
         }
         TaskEvent::Cancelled { idx } => {
             ctx.ui.print_warning(&format!(
                 "Cancelled {}; not starting additional batch tasks",
                 metadata.tasks[idx].label()
             ));
-            metadata.tasks[idx].status = STATUS_SKIPPED.into();
-            metadata.tasks[idx].error = "User cancelled".into();
+            (idx, STATUS_SKIPPED, Some("User cancelled".into()))
         }
         TaskEvent::Skipped { idx, error } => {
             ctx.ui.print_step(&format!(
                 "Skipping {} ({error})",
                 metadata.tasks[idx].label()
             ));
-            metadata.tasks[idx].status = STATUS_SKIPPED.into();
-            metadata.tasks[idx].error = error;
+            (idx, STATUS_SKIPPED, Some(error))
         }
-    }
+    };
+
+    metadata.tasks[idx].status = status.into();
+    metadata.tasks[idx].error = error.clone().unwrap_or_default();
+    record_batch_task_run(
+        ctx,
+        batch_path,
+        &mut metadata.tasks[idx],
+        status,
+        error.as_deref(),
+    )?;
 
     metadata.status = summarize_batch_status(&metadata.tasks);
     metadata.updated_at = current_utc_timestamp();
     write_batch_metadata(batch_path, metadata)
+}
+
+fn record_batch_task_run(
+    ctx: &Ctx,
+    batch_path: &Path,
+    item: &mut BatchTask,
+    status: &str,
+    error: Option<&str>,
+) -> Result<()> {
+    let branch = task::read_task_document(ctx, &item.task)
+        .map(|task| task.branch)
+        .unwrap_or_default();
+    let run_id = match item.run.clone() {
+        Some(run) => run,
+        None => {
+            let group = task_run::group_from_path(batch_path)?;
+            let record = task_run::create(
+                ctx,
+                &item.task,
+                &branch,
+                task_run::SOURCE_BATCH,
+                Some(&group),
+                status,
+            )?;
+            item.run = Some(record.id.clone());
+            record.id
+        }
+    };
+
+    task_run::update(ctx, &run_id, status, Some(&branch), error)?;
+    Ok(())
 }
 
 fn finish_batch_run(
@@ -718,6 +752,8 @@ struct BatchMetadata {
 #[serde(deny_unknown_fields)]
 struct BatchTask {
     task: String,
+    #[serde(default)]
+    run: Option<String>,
     #[serde(default = "default_task_status")]
     status: String,
     #[serde(default)]
@@ -739,6 +775,7 @@ impl BatchTask {
     fn from_prepared(task: PreparedTask) -> Self {
         Self {
             task: task.key,
+            run: None,
             status: STATUS_PREPARED.into(),
             error: String::new(),
         }
@@ -880,6 +917,7 @@ fn validate_batch_task(item: &BatchTask) -> Result<()> {
     if item.task.trim().is_empty() {
         bail!("Batch task is missing task");
     }
+    task_run::validate_status(&item.status)?;
     Ok(())
 }
 
@@ -899,6 +937,9 @@ fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
     for item in &batch.tasks {
         content.push_str("\n[[tasks]]\n");
         content.push_str(&format!("task = {}\n", toml_quote(&item.task)));
+        if let Some(run) = item.run.as_deref() {
+            content.push_str(&format!("run = {}\n", toml_quote(run)));
+        }
         content.push_str(&format!("status = {}\n", toml_quote(&item.status)));
         content.push_str(&format!("error = {}\n", toml_quote(&item.error)));
     }
@@ -1166,6 +1207,7 @@ mod tests {
     fn batch_task(key: &str, status: &str, error: &str) -> BatchTask {
         BatchTask {
             task: key.into(),
+            run: None,
             status: status.into(),
             error: error.into(),
         }
@@ -2090,6 +2132,18 @@ error = ""
         assert_eq!(updated.status, STATUS_FAILED);
         assert_eq!(updated.tasks[0].status, STATUS_FAILED);
         assert!(updated.tasks[0].error.contains("Failed to read task"));
+        let run_id = updated.tasks[0].run.as_deref().unwrap();
+        let run = task_run::read(
+            &dir.path()
+                .join(".local/task-runs")
+                .join(format!("{run_id}.toml")),
+        )
+        .unwrap();
+        assert_eq!(run.task, "PROJ-123");
+        assert_eq!(run.status, STATUS_FAILED);
+        assert_eq!(run.source, task_run::SOURCE_BATCH);
+        assert_eq!(run.group.as_deref(), Some("batch"));
+        assert!(run.error.unwrap().contains("Failed to read task"));
     }
 
     #[test]
@@ -2164,6 +2218,18 @@ error = ""
         assert_eq!(updated.status, STATUS_DONE);
         assert_eq!(updated.tasks[0].status, STATUS_DONE);
         assert_eq!(updated.tasks[1].status, STATUS_DONE);
+        for item in &updated.tasks {
+            let run_id = item.run.as_deref().unwrap();
+            let run = task_run::read(
+                &dir.path()
+                    .join(".local/task-runs")
+                    .join(format!("{run_id}.toml")),
+            )
+            .unwrap();
+            assert_eq!(run.status, STATUS_DONE);
+            assert_eq!(run.source, task_run::SOURCE_BATCH);
+            assert_eq!(run.group.as_deref(), Some("batch"));
+        }
         let calls = runner.calls();
         let worktree_adds = calls
             .iter()

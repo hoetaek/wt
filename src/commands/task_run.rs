@@ -1,0 +1,507 @@
+use crate::commands::task;
+use crate::context::Ctx;
+use anyhow::{Context, Result, bail};
+use serde::Deserialize;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub(crate) const STATUS_PREPARED: &str = "prepared";
+pub(crate) const STATUS_RUNNING: &str = "running";
+pub(crate) const STATUS_DONE: &str = "done";
+pub(crate) const STATUS_FAILED: &str = "failed";
+pub(crate) const STATUS_SKIPPED: &str = "skipped";
+
+pub(crate) const SOURCE_NEW: &str = "new";
+pub(crate) const SOURCE_BATCH: &str = "batch";
+pub(crate) const SOURCE_STACK: &str = "stack";
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TaskRun {
+    pub(crate) task: String,
+    pub(crate) branch: String,
+    pub(crate) status: String,
+    pub(crate) source: String,
+    #[serde(default)]
+    pub(crate) group: Option<String>,
+    #[serde(default)]
+    pub(crate) error: Option<String>,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TaskRunRecord {
+    pub(crate) id: String,
+    pub(crate) path: PathBuf,
+    pub(crate) run: TaskRun,
+}
+
+pub(crate) fn create(
+    ctx: &Ctx,
+    task: &str,
+    branch: &str,
+    source: &str,
+    group: Option<&str>,
+    status: &str,
+) -> Result<TaskRunRecord> {
+    validate_source(source)?;
+    validate_status(status)?;
+
+    let now = current_utc_timestamp();
+    let run = TaskRun {
+        task: task::safe_task_key(task),
+        branch: branch.to_string(),
+        status: status.to_string(),
+        source: source.to_string(),
+        group: group.and_then(optional_string),
+        error: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    write_new(ctx, &run)
+}
+
+pub(crate) fn read(path: &Path) -> Result<TaskRun> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read task run: {}", path.display()))?;
+    let run: TaskRun = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse task run: {}", path.display()))?;
+    validate_run(&run)?;
+    Ok(run)
+}
+
+pub(crate) fn list(ctx: &Ctx) -> Result<Vec<TaskRunRecord>> {
+    let task_runs_dir = ctx.repo_root.join(".local/task-runs");
+    if !task_runs_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&task_runs_dir)
+        .with_context(|| "Failed to read task run directory: .local/task-runs")?
+    {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    paths
+        .into_iter()
+        .map(|path| {
+            let id = task_run_id(&path)?;
+            let run = read(&path)?;
+            Ok(TaskRunRecord { id, path, run })
+        })
+        .collect()
+}
+
+pub(crate) fn resolve(ctx: &Ctx, target: &str) -> Result<PathBuf> {
+    if target == "latest" {
+        return latest_path(ctx);
+    }
+
+    let path = PathBuf::from(target);
+    if path.is_absolute() && path.exists() {
+        return Ok(path);
+    }
+
+    let invocation_path = ctx.invocation_root.join(target);
+    if invocation_path.exists() {
+        return Ok(invocation_path);
+    }
+
+    let repo_path = ctx.repo_root.join(target);
+    if repo_path.exists() {
+        return Ok(repo_path);
+    }
+
+    let file_name = if target.ends_with(".toml") {
+        target.to_string()
+    } else {
+        format!("{target}.toml")
+    };
+    let shorthand = ctx.repo_root.join(".local/task-runs").join(file_name);
+    if shorthand.exists() {
+        return Ok(shorthand);
+    }
+
+    bail!("Task run not found: {target}");
+}
+
+pub(crate) fn update(
+    ctx: &Ctx,
+    target: &str,
+    status: &str,
+    branch: Option<&str>,
+    error: Option<&str>,
+) -> Result<TaskRunRecord> {
+    validate_status(status)?;
+    let path = resolve(ctx, target)?;
+    let mut run = read(&path)?;
+    run.status = status.to_string();
+    if let Some(branch) = branch {
+        run.branch = branch.to_string();
+    }
+    run.error = error.and_then(optional_string);
+    run.updated_at = current_utc_timestamp();
+    write(&path, &run)?;
+
+    Ok(TaskRunRecord {
+        id: task_run_id(&path)?,
+        path,
+        run,
+    })
+}
+
+pub(crate) fn latest_for_task(ctx: &Ctx, task: &str) -> Result<Option<TaskRunRecord>> {
+    let task = task::safe_task_key(task);
+    let mut runs = list(ctx)?
+        .into_iter()
+        .filter(|record| record.run.task == task)
+        .collect::<Vec<_>>();
+    runs.sort_by(|left, right| {
+        left.run
+            .created_at
+            .cmp(&right.run.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(runs.pop())
+}
+
+pub(crate) fn task_is_selectable(ctx: &Ctx, task: &str) -> Result<bool> {
+    let Some(record) = latest_for_task(ctx, task)? else {
+        return Ok(true);
+    };
+    Ok(matches!(
+        record.run.status.as_str(),
+        STATUS_PREPARED | STATUS_FAILED
+    ))
+}
+
+pub(crate) fn validate_status(status: &str) -> Result<()> {
+    if matches!(
+        status,
+        STATUS_PREPARED | STATUS_RUNNING | STATUS_DONE | STATUS_FAILED | STATUS_SKIPPED
+    ) {
+        Ok(())
+    } else {
+        bail!("Unknown task run status: {status}");
+    }
+}
+
+pub(crate) fn validate_source(source: &str) -> Result<()> {
+    if matches!(source, SOURCE_NEW | SOURCE_BATCH | SOURCE_STACK) {
+        Ok(())
+    } else {
+        bail!("Unknown task run source: {source}");
+    }
+}
+
+pub(crate) fn group_from_path(path: &Path) -> Result<String> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("Task run group path is missing a file stem"))
+}
+
+fn write_new(ctx: &Ctx, run: &TaskRun) -> Result<TaskRunRecord> {
+    let task_runs_dir = ctx.repo_root.join(".local/task-runs");
+    fs::create_dir_all(&task_runs_dir)?;
+
+    let id_base = task_run_id_base(run);
+    let (id, path) = next_available_task_run_path(&task_runs_dir, &id_base);
+    write(&path, run)?;
+    Ok(TaskRunRecord {
+        id,
+        path,
+        run: run.clone(),
+    })
+}
+
+fn write(path: &Path, run: &TaskRun) -> Result<()> {
+    validate_run(run)?;
+
+    let mut content = String::new();
+    content.push_str(&format!("task = {}\n", toml_quote(&run.task)));
+    content.push_str(&format!("branch = {}\n", toml_quote(&run.branch)));
+    content.push_str(&format!("status = {}\n", toml_quote(&run.status)));
+    content.push_str(&format!("source = {}\n", toml_quote(&run.source)));
+    if let Some(group) = run.group.as_deref() {
+        content.push_str(&format!("group = {}\n", toml_quote(group)));
+    }
+    if let Some(error) = run.error.as_deref() {
+        content.push_str(&format!("error = {}\n", toml_quote(error)));
+    }
+    content.push_str(&format!("created_at = {}\n", toml_quote(&run.created_at)));
+    content.push_str(&format!("updated_at = {}\n", toml_quote(&run.updated_at)));
+
+    fs::write(path, content)?;
+    Ok(())
+}
+
+fn validate_run(run: &TaskRun) -> Result<()> {
+    if run.task.trim().is_empty() {
+        bail!("Task run is missing task");
+    }
+    validate_status(&run.status)?;
+    validate_source(&run.source)?;
+    Ok(())
+}
+
+fn latest_path(ctx: &Ctx) -> Result<PathBuf> {
+    let mut paths = list(ctx)?
+        .into_iter()
+        .map(|record| record.path)
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("No task run files found in .local/task-runs"))
+}
+
+fn next_available_task_run_path(dir: &Path, id_base: &str) -> (String, PathBuf) {
+    let mut seq = 1;
+    loop {
+        let id = if seq == 1 {
+            id_base.to_string()
+        } else {
+            format!("{id_base}-{seq:03}")
+        };
+        let path = dir.join(format!("{id}.toml"));
+        if !path.exists() {
+            return (id, path);
+        }
+        seq += 1;
+    }
+}
+
+fn task_run_id_base(run: &TaskRun) -> String {
+    let mut parts = vec![run.source.as_str()];
+    if let Some(group) = run.group.as_deref() {
+        parts.push(group);
+    }
+    parts.push(&run.task);
+    parts
+        .into_iter()
+        .map(task::safe_task_key)
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn task_run_id(path: &Path) -> Result<String> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("Task run file is missing an id: {}", path.display()))
+}
+
+fn optional_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn current_utc_timestamp() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_unix_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096).div_euclid(365);
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2).div_euclid(153);
+    let d = doy - (153 * mp + 2).div_euclid(5) + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    (year as i32, m as u32, d as u32)
+}
+
+fn toml_quote(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::context::mock::{MockRunner, MockUi};
+
+    fn ctx(root: &Path) -> Ctx {
+        Ctx::new(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        )
+    }
+
+    #[test]
+    fn task_run_toml_write_read_list_and_update_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        let record = create(
+            &ctx,
+            "add/schema",
+            "add-schema",
+            SOURCE_BATCH,
+            Some("2026-05-16-001"),
+            STATUS_RUNNING,
+        )
+        .unwrap();
+
+        assert_eq!(record.id, "batch-2026-05-16-001-add-schema");
+        let parsed = read(&record.path).unwrap();
+        assert_eq!(parsed.task, "add-schema");
+        assert_eq!(parsed.branch, "add-schema");
+        assert_eq!(parsed.status, STATUS_RUNNING);
+        assert_eq!(parsed.source, SOURCE_BATCH);
+        assert_eq!(parsed.group.as_deref(), Some("2026-05-16-001"));
+        assert!(parsed.error.is_none());
+
+        let records = list(&ctx).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, record.id);
+
+        let updated = update(
+            &ctx,
+            &record.id,
+            STATUS_FAILED,
+            Some("alice/add-schema"),
+            Some("setup failed"),
+        )
+        .unwrap();
+        assert_eq!(updated.run.status, STATUS_FAILED);
+        assert_eq!(updated.run.branch, "alice/add-schema");
+        assert_eq!(updated.run.error.as_deref(), Some("setup failed"));
+
+        let content = std::fs::read_to_string(updated.path).unwrap();
+        assert!(content.contains("task = \"add-schema\""));
+        assert!(content.contains("source = \"batch\""));
+        assert!(content.contains("group = \"2026-05-16-001\""));
+        assert!(content.contains("error = \"setup failed\""));
+    }
+
+    #[test]
+    fn read_rejects_invalid_status_and_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.toml");
+
+        std::fs::write(
+            &path,
+            r#"task = "add-schema"
+branch = "add-schema"
+status = "started"
+source = "new"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+        assert!(read(&path).unwrap_err().to_string().contains("status"));
+
+        std::fs::write(
+            &path,
+            r#"task = "add-schema"
+branch = "add-schema"
+status = "running"
+source = "queue"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+        assert!(read(&path).unwrap_err().to_string().contains("source"));
+    }
+
+    #[test]
+    fn create_uses_next_id_without_clobbering_existing_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        let first = create(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            SOURCE_NEW,
+            None,
+            STATUS_DONE,
+        )
+        .unwrap();
+        let second = create(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            SOURCE_NEW,
+            None,
+            STATUS_RUNNING,
+        )
+        .unwrap();
+
+        assert_eq!(first.id, "new-add-schema");
+        assert_eq!(second.id, "new-add-schema-002");
+        assert!(first.path.exists());
+        assert!(second.path.exists());
+        assert_eq!(list(&ctx).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn task_selectability_uses_latest_run_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        assert!(task_is_selectable(&ctx, "add-schema").unwrap());
+        create(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            SOURCE_NEW,
+            None,
+            STATUS_RUNNING,
+        )
+        .unwrap();
+        assert!(!task_is_selectable(&ctx, "add-schema").unwrap());
+        create(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            SOURCE_NEW,
+            None,
+            STATUS_FAILED,
+        )
+        .unwrap();
+        assert!(task_is_selectable(&ctx, "add-schema").unwrap());
+    }
+}

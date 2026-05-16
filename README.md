@@ -473,6 +473,11 @@ and `wt stack run`, so the agent prompt includes the selected task TOML.
 `--profile` and `--matrix` require branch-name text; bare `wt new` uses the
 effective config for the selected task.
 
+When bare `wt new` starts a selected task, it writes a TaskRun record under
+`.local/task-runs/<id>.toml` with `source = "new"`. Tasks whose latest run is
+`running`, `done`, or `skipped` are omitted from the selector; failed runs stay
+retryable.
+
 ## Batches
 
 Batches split planning from execution. `task` prepares local tasks and `issue`
@@ -499,19 +504,25 @@ When `--profile` is omitted, the batch does not store a profile field and uses
 the effective config at run time. When `--profile <name>` is provided, the
 batch stores that named profile.
 
-Task details are stored separately from batch status:
+Task definitions, execution state, and batch orchestration are stored
+separately:
 
 ```text
 .local/tasks/123.toml
+.local/task-runs/batch-2026-05-09-001-123.toml
 .local/batches/2026-05-09-001.toml
 ```
 
 The batch TOML records the optional profile, base mode, overall batch status,
 and one `[[tasks]]` table per task. The double brackets are TOML's
 array-of-tables syntax, equivalent to a `tasks: [...]` list in JSON. Each task
-row stores the task key and status; the task TOML stores the title, branch,
-body, and optional issue origin. A prepared task document can also be started
-directly with bare `wt new`, without creating or running a batch file.
+row stores the task key, the latest TaskRun id when the task has started, and a
+summary status/error. The TaskRun TOML is the execution-instance record: it
+stores the task key, branch, status, `source = "batch"`, `group` derived from
+the batch file stem, optional error, and timestamps. The task TOML stores the
+title, branch, body, and optional issue origin. A prepared task document can
+also be started directly with bare `wt new`, without creating or running a
+batch file.
 
 Run a prepared batch explicitly:
 
@@ -532,15 +543,17 @@ wt batch clean latest
 
 `run` executes only tasks with `status = "prepared"` or `status = "failed"`.
 Tasks marked `done` or `skipped` are left alone, so reruns can continue from
-the batch file's task status instead of checking a global issue state.
+the stored batch orchestration state and its linked TaskRun records instead of
+checking a global issue state.
 By default `run` uses `--jobs 1` and keeps the current sequential behavior.
-`--jobs <N>` starts at most N runnable tasks concurrently. The batch file stays
-the resumable source of truth: workers do not write batch metadata directly,
-and the coordinator records started, succeeded, failed, and skipped task
-events. Shared Git metadata writes such as `parentbranch` are serialized by the
-repo mutation guard. In parallel mode, conflict cases that would require an
-interactive worker prompt, such as an existing worktree path, are recorded as
-task failures instead.
+`--jobs <N>` starts at most N runnable tasks concurrently. The coordinator is
+the only writer for shared batch metadata: workers do not write batch metadata
+directly, and the coordinator records started, succeeded, failed, and skipped
+task events in linked TaskRun files and mirrored task-row summaries. Shared Git
+metadata writes such as `parentbranch` are serialized by the repo mutation
+guard. In parallel mode, conflict cases that would require an interactive
+worker prompt, such as an existing worktree path, are recorded as task failures
+instead.
 
 `clean` deletes task snapshot files from `.local/tasks/` for a completed batch.
 It keeps the batch TOML as the execution record, refuses batches with
@@ -659,8 +672,11 @@ wt stack complete latest 123 --run-next
 
 Omit `--run-next` to mark one task done without starting another task.
 
-The stack TOML records each task's `parent`, branch, and status so reruns can
-continue from the stored state.
+When `run` starts a task, it creates a TaskRun record with `source = "stack"`
+and `group` derived from the stack file stem, then stores that run id on the
+stack task row. `complete` updates the same TaskRun to `done`. The stack TOML
+records each task's `parent`, branch, summary status, and run id so reruns can
+continue from the stored orchestration state.
 
 ## Site Provider Helpers
 

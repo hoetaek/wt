@@ -1,5 +1,6 @@
 use crate::commands::issue;
 use crate::commands::new as new_command;
+use crate::commands::task_run;
 use crate::config::IssueProviderType;
 use crate::context::Ctx;
 use crate::worktree_naming;
@@ -99,10 +100,14 @@ pub(crate) fn list_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
     }
     paths.sort();
 
-    paths
-        .into_iter()
-        .map(|path| read_selected_task(ctx, path))
-        .collect()
+    let mut tasks = Vec::new();
+    for path in paths {
+        let task = read_selected_task(ctx, path)?;
+        if task_run::task_is_selectable(ctx, &task.key)? {
+            tasks.push(task);
+        }
+    }
+    Ok(tasks)
 }
 
 pub(crate) fn prepare_named_tasks(ctx: &Ctx, names: &[String]) -> Result<Vec<PreparedTask>> {
@@ -447,6 +452,44 @@ mod tests {
         assert_eq!(selected.document.title, "Second");
         assert_eq!(selected.document.branch, "second");
         assert!(selected.content.contains("body = \"details\""));
+    }
+
+    #[test]
+    fn list_local_tasks_omits_tasks_with_completed_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("a-first.toml"),
+            "title = \"First\"\nbranch = \"first\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("b-second.toml"),
+            "title = \"Second\"\nbranch = \"second\"\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        task_run::create(
+            &ctx,
+            "a-first",
+            "first",
+            task_run::SOURCE_NEW,
+            None,
+            task_run::STATUS_DONE,
+        )
+        .unwrap();
+
+        let tasks = list_local_tasks(&ctx).unwrap();
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].key, "b-second");
     }
 
     #[test]

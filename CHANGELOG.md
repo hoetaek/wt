@@ -8,6 +8,13 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added TaskRun execution records under `.local/task-runs/<id>.toml` for
+  prepared local tasks started by `wt new`, `wt batch run`, and `wt stack run`.
+  Batch and stack files now keep their orchestration rows while each started
+  task points at a readable run record with source, group, status, error, and
+  timestamps.
+- Bumped the package version to `0.6.0` because TaskRun adds a new persisted
+  local state-file contract while `wt` is still pre-1.0.
 - Added `wt batch run <batch|latest> --jobs <N>` for bounded concurrent batch
   execution while keeping batch metadata writes coordinated through one writer.
 - Added `wt batch clean [BATCH]` for explicitly deleting completed batch task
