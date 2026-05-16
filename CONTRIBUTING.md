@@ -26,11 +26,12 @@ License/source/bans policy is checked in CI with `cargo deny`.
 
 ## Versioning
 
-`wt` follows SemVer.
+`wt` follows pre-1.0 SemVer.
 
 - Patch: bug fixes and internal changes
-- Minor: new features or config schema additions
-- Major: breaking CLI or config changes
+- Minor: new features, config format changes, and breaking CLI/config/state
+  changes while the tool is still pre-1.0
+- Major: breaking changes after 1.0.0
 
 The version is managed in `Cargo.toml`.
 

@@ -8,6 +8,10 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+No changes yet.
+
+## 0.18.0 - 2026-05-16
+
 - Added canonical `wt init` starter presets with `--preset
   <minimal|agent|issue|app>`, `--minimal`, and `--dry-run` so the guided wizard
   and non-interactive init paths build the same typed generation plan before

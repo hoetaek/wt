@@ -8,7 +8,13 @@ local development sites, and bootstrap an agent prompt.
 
 ## Install
 
-`wt` is currently distributed from this repository:
+Install with Homebrew:
+
+```bash
+brew install hoetaek/tap/wt
+```
+
+Or install from the Git repository with Cargo:
 
 ```bash
 cargo install --git https://github.com/hoetaek/wt
@@ -23,7 +29,7 @@ cargo install --path .
 ```
 
 The crate is not published to crates.io. The `wt` package name is already used
-there by another project.
+there by another project, so Homebrew is the recommended packaged install path.
 
 ## Versioning
 
