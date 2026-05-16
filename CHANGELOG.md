@@ -10,6 +10,12 @@ minor version instead of moving to `x.0.0`.
 
 - Fixed sequential `wt workflow run <workflow> --jobs 1` cancellation so later
   runnable batch tasks are not started after the user cancels one task.
+- Added `wt task run [<task>...]` as the immediate TaskDocument execution
+  surface. Explicit task keys start one worktree per TaskDocument, while bare
+  `wt task run` opens the local TaskDocument selector.
+- Removed prepared TaskDocument execution from `wt new --task`; `wt new` now
+  only starts one ad hoc worktree from branch-name text and guides prepared
+  task execution to `wt task run`.
 
 ## 0.24.0 - 2026-05-16
 
