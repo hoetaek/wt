@@ -176,6 +176,227 @@ fn stack_run_help_explains_runnable_stack_selection() {
 }
 
 #[test]
+fn init_yes_uses_minimal_preset_without_agent() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created config:"));
+
+    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    assert!(content.contains("[workspace]"));
+    assert!(!content.contains("[profile.agent]"));
+    assert!(!content.contains("[issues]"));
+}
+
+#[test]
+fn init_preset_agent_yes_writes_agent() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "init",
+            "--preset",
+            "agent",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    assert!(content.contains("[profile.agent]"));
+    assert!(content.contains("cli = \"codex\""));
+}
+
+#[test]
+fn init_minimal_shortcut_writes_minimal_config() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "init",
+            "--minimal",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    assert!(content.contains("[workspace]"));
+    assert!(!content.contains("[profile.agent]"));
+}
+
+#[test]
+fn init_dry_run_previews_plan_without_writing_config() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::write(
+        temp.path().join("package.json"),
+        r#"{"scripts":{"test":"vitest","lint":"eslint ."}}"#,
+    )
+    .unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "init",
+            "--preset",
+            "app",
+            "--yes",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Init plan"))
+        .stdout(predicate::str::contains("==>").not())
+        .stdout(predicate::str::contains("target:"))
+        .stdout(predicate::str::contains("preset: app"))
+        .stdout(predicate::str::contains(
+            "selected sections: setup, test, workspace",
+        ))
+        .stdout(predicate::str::contains("detected signals:"))
+        .stdout(predicate::str::contains("[ok] detected setup: npm install"))
+        .stdout(predicate::str::contains("setup: npm install"))
+        .stdout(predicate::str::contains("test: npm test"))
+        .stdout(predicate::str::contains("[setup]"))
+        .stdout(predicate::str::contains("[test]"));
+
+    assert!(!temp.path().join(".wt.toml").exists());
+    assert!(!temp.path().join(".local/.wt.toml").exists());
+}
+
+#[test]
+fn init_no_color_uses_plain_plan_output() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--no-color",
+            "init",
+            "--minimal",
+            "--yes",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("Init plan\n"))
+        .stdout(predicate::str::contains("==>").not())
+        .stdout(predicate::str::contains("preset: minimal"));
+}
+
+#[test]
+fn init_quiet_suppresses_status_output_but_still_writes_config() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--quiet",
+            "init",
+            "--minimal",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout("");
+
+    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    assert!(content.contains("[workspace]"));
+}
+
+#[test]
+fn init_json_flag_rejects_init_without_status_decoration() {
+    wt_command()
+        .args(["--json", "init", "--minimal", "--yes", "--dry-run"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("JSON output is supported"))
+        .stderr(predicate::str::contains("==>").not());
+}
+
+#[test]
+fn json_output_uses_machine_readable_surface_without_status_decoration() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    let output = wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("==>").not())
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(value["checks"].as_array().is_some());
+}
+
+#[test]
+fn init_existing_config_requires_force_for_yes_and_force_overwrites() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[workspace]\ntabs = []\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Config already exists:"))
+        .stderr(predicate::str::contains("use --force to overwrite"));
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "init",
+            "--preset",
+            "agent",
+            "--yes",
+            "--force",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("WARNING:"))
+        .stdout(predicate::str::contains("Updated config:"));
+
+    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    assert!(content.contains("[profile.agent]"));
+}
+
+#[test]
+fn init_rejects_conflicting_preset_and_minimal() {
+    wt_command()
+        .args(["init", "--preset", "minimal", "--minimal"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "'--preset <PRESET>' cannot be used with '--minimal'",
+        ));
+}
+
+#[test]
 fn completion_generates_script() {
     wt_command()
         .args(["completion", "bash"])

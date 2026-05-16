@@ -54,31 +54,58 @@ wt doctor
 
 ## Quick Start
 
-Create a shared project config:
+Start the guided workspace starter wizard:
 
 ```bash
-wt init --shared --agent codex --issue-provider github --yes
+wt init
 ```
 
-This writes the selected settings to `.wt.toml` only.
+The wizard asks what starter shape this repo should use, previews the selected
+config target and generated sections, then writes only the selected config file.
 
-Create the same shape as private config for this checkout:
+Create the smallest useful config:
 
 ```bash
-wt init --local --agent codex --yes
+wt init --minimal
 ```
 
-This writes the selected settings to `.local/.wt.toml` only.
-
-Or keep the config local to your checkout:
+Use a repeatable starter preset in automation:
 
 ```bash
-wt init --local --agent codex --issue-provider github --yes
+wt init --preset agent --yes
 ```
 
-`wt init` only creates the selected config file. It does not create named
-profile directories or prompt scaffold files; use `wt config extract` or
-`wt profile create` when you want that structure.
+Canonical starter presets are `minimal`, `agent`, `issue`, and `app`. The
+`agent` preset uses Codex by default; pass `--agent <name>` to choose another
+runtime. The `app` preset scans the repo for setup commands, dev tabs, and test
+commands it can place in the generated plan. Use `--local` to target
+`.local/.wt.toml` or `--shared` to target `.wt.toml`; use `--dry-run` to preview
+the generated TOML without writing files. Dry run is the safe inspection path:
+it prints the target file, selected preset, selected sections, detected repo
+signals, and generated TOML while leaving both `.wt.toml` and `.local/.wt.toml`
+untouched.
+
+```bash
+wt init --preset app --yes --dry-run
+```
+
+Bare `wt init --yes` is non-interactive and chooses the `minimal` preset.
+Explicit starter options such as `--agent`, `--issue-provider`, and
+`--site-provider` still add their matching sections. In a non-TTY context, pass
+`--yes`, `--minimal`, or `--preset <name>` so the command never waits for
+interactive answers.
+
+For explicit config values, pass the relevant starter options:
+
+```bash
+wt init --shared --preset issue --issue-provider github --yes
+```
+
+`wt init` does not create named profile directories or prompt scaffold files;
+keep small runtime settings inline in the selected config file. Use
+`wt config extract` to move inline `[profile.*]` settings into a named profile,
+or `wt profile create` when you want to start with an explicit profile
+directory.
 
 Start a workspace from an issue:
 

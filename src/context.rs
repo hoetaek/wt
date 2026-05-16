@@ -192,6 +192,7 @@ pub mod mock {
         multi_select_responses: Mutex<VecDeque<Vec<usize>>>,
         confirm_responses: Mutex<VecDeque<bool>>,
         input_responses: Mutex<VecDeque<String>>,
+        pub prompts: Mutex<Vec<String>>,
         pub steps: Mutex<Vec<String>>,
         pub dims: Mutex<Vec<String>>,
         pub warnings: Mutex<Vec<String>>,
@@ -210,6 +211,7 @@ pub mod mock {
                 multi_select_responses: Mutex::new(VecDeque::new()),
                 confirm_responses: Mutex::new(VecDeque::new()),
                 input_responses: Mutex::new(VecDeque::new()),
+                prompts: Mutex::new(Vec::new()),
                 steps: Mutex::new(Vec::new()),
                 dims: Mutex::new(Vec::new()),
                 warnings: Mutex::new(Vec::new()),
@@ -237,7 +239,11 @@ pub mod mock {
     }
 
     impl UserInterface for MockUi {
-        fn select(&self, _prompt: &str, _items: &[String]) -> Result<usize> {
+        fn select(&self, prompt: &str, _items: &[String]) -> Result<usize> {
+            self.prompts
+                .lock()
+                .unwrap()
+                .push(format!("select: {prompt}"));
             self.select_responses
                 .lock()
                 .unwrap()
@@ -245,7 +251,11 @@ pub mod mock {
                 .ok_or_else(|| anyhow::anyhow!("MockUi: no select response"))
         }
 
-        fn multi_select(&self, _prompt: &str, _items: &[String]) -> Result<Vec<usize>> {
+        fn multi_select(&self, prompt: &str, _items: &[String]) -> Result<Vec<usize>> {
+            self.prompts
+                .lock()
+                .unwrap()
+                .push(format!("multi_select: {prompt}"));
             self.multi_select_responses
                 .lock()
                 .unwrap()
@@ -253,7 +263,11 @@ pub mod mock {
                 .ok_or_else(|| anyhow::anyhow!("MockUi: no multi_select response"))
         }
 
-        fn confirm(&self, _prompt: &str, _default: bool) -> Result<bool> {
+        fn confirm(&self, prompt: &str, _default: bool) -> Result<bool> {
+            self.prompts
+                .lock()
+                .unwrap()
+                .push(format!("confirm: {prompt}"));
             self.confirm_responses
                 .lock()
                 .unwrap()
@@ -261,7 +275,11 @@ pub mod mock {
                 .ok_or_else(|| anyhow::anyhow!("MockUi: no confirm response"))
         }
 
-        fn input(&self, _prompt: &str, default: Option<&str>) -> Result<String> {
+        fn input(&self, prompt: &str, default: Option<&str>) -> Result<String> {
+            self.prompts
+                .lock()
+                .unwrap()
+                .push(format!("input: {prompt}"));
             self.input_responses
                 .lock()
                 .unwrap()
