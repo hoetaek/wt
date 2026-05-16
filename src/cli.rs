@@ -154,7 +154,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<ProfileCommand>,
     },
-    /// Create a wt config file
+    /// Start the workspace config wizard
     Init {
         /// Write private config to .local/.wt.toml
         #[arg(long, conflicts_with = "shared")]
