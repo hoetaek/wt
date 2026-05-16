@@ -1,9 +1,10 @@
 use crate::context::CommandRunner;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CmuxWorkspace {
@@ -13,6 +14,35 @@ pub struct CmuxWorkspace {
     pub window_handle: String,
     pub title: String,
     pub current_directory: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmuxPaneSelectedSurface {
+    pub pane_id: String,
+    pub pane_handle: String,
+    pub selected_surface_id: String,
+    pub selected_surface_handle: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmuxStatusEntry {
+    pub key: String,
+    pub value: String,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CmuxEvent {
+    pub seq: u64,
+    pub name: String,
+    pub category: Option<String>,
+    pub occurred_at: Option<String>,
+    pub window_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub surface_id: Option<String>,
+    pub payload: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -219,6 +249,32 @@ impl<'a> CmuxService<'a> {
         Ok(panes)
     }
 
+    pub fn selected_surfaces(&self, workspace: &str) -> Result<Vec<CmuxPaneSelectedSurface>> {
+        let params = json!({ "workspace_id": workspace }).to_string();
+        let out = self
+            .runner
+            .run("cmux", &["rpc", "pane.list", &params], None)?;
+        if !out.success {
+            bail!("cmux pane.list failed: {}", command_error(&out));
+        }
+
+        let response: PaneListResponse = serde_json::from_str(&out.stdout)?;
+        Ok(response
+            .panes
+            .into_iter()
+            .filter_map(|pane| {
+                let selected_surface_id = pane.selected_surface_id?;
+                let selected_surface_handle = pane.selected_surface_ref?;
+                Some(CmuxPaneSelectedSurface {
+                    pane_id: pane.id,
+                    pane_handle: pane.handle,
+                    selected_surface_id,
+                    selected_surface_handle,
+                })
+            })
+            .collect())
+    }
+
     pub fn list_pane_surfaces(&self, pane: &str, workspace: &str) -> Result<Vec<String>> {
         let out = self.runner.run(
             "cmux",
@@ -310,21 +366,83 @@ impl<'a> CmuxService<'a> {
     }
 
     pub fn read_screen(&self, surface: &str, workspace: &str) -> Result<String> {
-        let out = self.runner.run(
-            "cmux",
-            &[
-                "read-screen",
-                "--surface",
-                surface,
-                "--workspace",
-                workspace,
-            ],
-            None,
-        )?;
+        self.read_screen_with_lines(surface, workspace, None)
+    }
+
+    pub fn read_screen_lines(
+        &self,
+        surface: &str,
+        workspace: &str,
+        lines: usize,
+    ) -> Result<String> {
+        self.read_screen_with_lines(surface, workspace, Some(lines))
+    }
+
+    pub fn read_screen_with_lines(
+        &self,
+        surface: &str,
+        workspace: &str,
+        lines: Option<usize>,
+    ) -> Result<String> {
+        let mut args = vec![
+            "read-screen".to_string(),
+            "--surface".into(),
+            surface.into(),
+            "--workspace".into(),
+            workspace.into(),
+        ];
+        if let Some(lines) = lines {
+            args.extend(["--lines".into(), lines.to_string()]);
+        }
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+
+        let out = self.runner.run("cmux", &arg_refs, None)?;
         if !out.success {
             bail!("cmux read-screen failed: {}", command_error(&out));
         }
         Ok(out.stdout)
+    }
+
+    pub fn list_status(&self, workspace: &str) -> Result<Vec<CmuxStatusEntry>> {
+        let out = self
+            .runner
+            .run("cmux", &["list-status", "--workspace", workspace], None)?;
+        if !out.success {
+            bail!("cmux list-status failed: {}", command_error(&out));
+        }
+        parse_status_entries(&out.stdout)
+    }
+
+    pub fn replay_events_after(
+        &self,
+        after_seq: u64,
+        limit: usize,
+        timeout: Duration,
+    ) -> Result<Vec<CmuxEvent>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let after_seq = after_seq.to_string();
+        let limit = limit.to_string();
+        let out = self.runner.run_with_timeout(
+            "cmux",
+            &[
+                "events",
+                "--after",
+                &after_seq,
+                "--limit",
+                &limit,
+                "--no-ack",
+                "--no-heartbeat",
+            ],
+            None,
+            timeout,
+        )?;
+        if !out.success && !command_timed_out(&out) {
+            bail!("cmux events failed: {}", command_error(&out));
+        }
+        parse_event_records(&out.stdout)
     }
 }
 
@@ -333,12 +451,23 @@ struct CmuxWindow {
     id: String,
 }
 
-fn command_error(out: &crate::context::CmdOutput) -> &str {
-    if out.stderr.is_empty() {
-        &out.stdout
-    } else {
-        &out.stderr
+fn command_error(out: &crate::context::CmdOutput) -> String {
+    match (out.stderr.trim().is_empty(), out.stdout.trim().is_empty()) {
+        (false, false) => format!(
+            "stderr: {}; stdout: {}",
+            out.stderr.trim(),
+            out.stdout.trim()
+        ),
+        (false, true) => out.stderr.trim().to_string(),
+        (true, false) => out.stdout.trim().to_string(),
+        (true, true) => "empty output".into(),
     }
+}
+
+fn command_timed_out(out: &crate::context::CmdOutput) -> bool {
+    out.stderr
+        .lines()
+        .any(|line| line.trim_start().starts_with("timed out after "))
 }
 
 fn extract_handle(stdout: &str, prefix: &str, operation: &str) -> Result<String> {
@@ -433,6 +562,115 @@ struct RpcWorkspace {
     current_directory: Option<PathBuf>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PaneListResponse {
+    panes: Vec<RpcPane>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcPane {
+    id: String,
+    #[serde(rename = "ref")]
+    handle: String,
+    selected_surface_id: Option<String>,
+    selected_surface_ref: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EventFrame {
+    seq: u64,
+    name: String,
+    category: Option<String>,
+    occurred_at: Option<String>,
+    window_id: Option<String>,
+    workspace_id: Option<String>,
+    pane_id: Option<String>,
+    surface_id: Option<String>,
+    #[serde(default)]
+    payload: Value,
+}
+
+impl From<EventFrame> for CmuxEvent {
+    fn from(frame: EventFrame) -> Self {
+        Self {
+            seq: frame.seq,
+            name: frame.name,
+            category: frame.category,
+            occurred_at: frame.occurred_at,
+            window_id: frame.window_id,
+            workspace_id: frame.workspace_id,
+            pane_id: frame.pane_id,
+            surface_id: frame.surface_id,
+            payload: frame.payload,
+        }
+    }
+}
+
+fn parse_status_entries(stdout: &str) -> Result<Vec<CmuxStatusEntry>> {
+    stdout
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            Some(parse_status_entry(index + 1, line))
+        })
+        .collect()
+}
+
+fn parse_status_entry(line_number: usize, line: &str) -> Result<CmuxStatusEntry> {
+    let mut parts = line.split_whitespace();
+    let first = parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("cmux list-status line {line_number} is empty"))?;
+    let (key, value) = first.split_once('=').ok_or_else(|| {
+        anyhow::anyhow!("cmux list-status line {line_number} missing status entry: {line}")
+    })?;
+    if key.is_empty() || value.is_empty() {
+        bail!("cmux list-status line {line_number} has empty status entry: {line}");
+    }
+
+    let mut entry = CmuxStatusEntry {
+        key: key.into(),
+        value: value.into(),
+        icon: None,
+        color: None,
+    };
+
+    for part in parts {
+        let Some((field, value)) = part.split_once('=') else {
+            continue;
+        };
+        match field {
+            "icon" => entry.icon = Some(value.into()),
+            "color" => entry.color = Some(value.into()),
+            _ => {}
+        }
+    }
+
+    Ok(entry)
+}
+
+fn parse_event_records(stdout: &str) -> Result<Vec<CmuxEvent>> {
+    stdout
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            Some(
+                serde_json::from_str::<EventFrame>(line)
+                    .with_context(|| format!("failed to parse cmux event frame {}", index + 1))
+                    .map(Into::into),
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,7 +746,7 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("cmux new-workspace failed"));
         assert!(message.contains("cmux workspace failed"));
-        assert!(!message.contains("ignored stdout"));
+        assert!(message.contains("ignored stdout"));
     }
 
     #[test]
@@ -696,6 +934,33 @@ mod tests {
     }
 
     #[test]
+    fn selected_surfaces_extracts_pane_selected_surface_refs() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace","workspace_ref":"workspace:2","panes":[{"id":"uuid-pane-1","ref":"pane:3","selected_surface_id":"uuid-surface-1","selected_surface_ref":"surface:4"},{"id":"uuid-pane-2","ref":"pane:4","selected_surface_id":null,"selected_surface_ref":null}]}"#,
+            true,
+        );
+
+        let svc = CmuxService::new(&runner);
+        let surfaces = svc.selected_surfaces("workspace:2").unwrap();
+
+        assert_eq!(
+            surfaces,
+            vec![CmuxPaneSelectedSurface {
+                pane_id: "uuid-pane-1".into(),
+                pane_handle: "pane:3".into(),
+                selected_surface_id: "uuid-surface-1".into(),
+                selected_surface_handle: "surface:4".into(),
+            }]
+        );
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["rpc", "pane.list", r#"{"workspace_id":"workspace:2"}"#]
+        );
+    }
+
+    #[test]
     fn list_pane_surfaces_filters_surface_ids() {
         let mut runner = MockRunner::new();
         runner.add_response("surface:0 other surface:1 data", true);
@@ -717,7 +982,7 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("cmux list-pane-surfaces failed"));
         assert!(message.contains("pane surface lookup failed"));
-        assert!(!message.contains("ignored stdout"));
+        assert!(message.contains("ignored stdout"));
     }
 
     #[test]
@@ -742,7 +1007,7 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("cmux new-surface failed"));
         assert!(message.contains("new surface failed"));
-        assert!(!message.contains("ignored stdout"));
+        assert!(message.contains("ignored stdout"));
     }
 
     #[test]
@@ -844,7 +1109,33 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("cmux workspace-action set-color failed"));
         assert!(message.contains("color rejected"));
-        assert!(!message.contains("ignored stdout"));
+        assert!(message.contains("ignored stdout"));
+    }
+
+    #[test]
+    fn read_screen_passes_line_limit() {
+        let mut runner = MockRunner::new();
+        runner.add_response("last lines", true);
+
+        let svc = CmuxService::new(&runner);
+        let screen = svc
+            .read_screen_lines("surface:4", "workspace:2", 30)
+            .unwrap();
+
+        assert_eq!(screen, "last lines");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "read-screen",
+                "--surface",
+                "surface:4",
+                "--workspace",
+                "workspace:2",
+                "--lines",
+                "30"
+            ]
+        );
     }
 
     #[test]
@@ -857,5 +1148,111 @@ mod tests {
             .read_screen("surface:0", "workspace:1")
             .expect_err("read-screen failure should propagate");
         assert!(err.to_string().contains("cmux read-screen failed"));
+    }
+
+    #[test]
+    fn list_status_parses_sidebar_status_entries() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            "codex=Idle icon=pause.circle.fill color=#8E8E93\nclaude_code=Running icon=bolt.fill color=#4C8DFF",
+            true,
+        );
+
+        let svc = CmuxService::new(&runner);
+        let entries = svc.list_status("workspace:58").unwrap();
+
+        assert_eq!(
+            entries,
+            vec![
+                CmuxStatusEntry {
+                    key: "codex".into(),
+                    value: "Idle".into(),
+                    icon: Some("pause.circle.fill".into()),
+                    color: Some("#8E8E93".into()),
+                },
+                CmuxStatusEntry {
+                    key: "claude_code".into(),
+                    value: "Running".into(),
+                    icon: Some("bolt.fill".into()),
+                    color: Some("#4C8DFF".into()),
+                },
+            ]
+        );
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec!["list-status", "--workspace", "workspace:58"]
+        );
+    }
+
+    #[test]
+    fn cmux_failures_include_stderr_and_stdout_context() {
+        let mut runner = MockRunner::new();
+        runner.add_response_with_stderr("status stdout", "status stderr", false);
+
+        let svc = CmuxService::new(&runner);
+        let err = svc
+            .list_status("workspace:58")
+            .expect_err("list-status failure should propagate");
+        let message = err.to_string();
+
+        assert!(message.contains("cmux list-status failed"));
+        assert!(message.contains("status stderr"));
+        assert!(message.contains("status stdout"));
+    }
+
+    #[test]
+    fn replay_events_after_uses_bounded_no_ack_command() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"seq":4701,"name":"surface.input_sent","category":"surface","occurred_at":"2026-05-16T07:59:09.500Z","window_id":"uuid-window","workspace_id":"uuid-workspace","pane_id":null,"surface_id":"uuid-surface","payload":{"result":{"workspace_ref":"workspace:58","surface_ref":"surface:182"}}}
+{"seq":4702,"name":"sidebar.metadata.updated","category":"sidebar","workspace_id":"uuid-workspace","surface_id":"uuid-surface","payload":{"command":"set_status codex Idle"}}"#,
+            true,
+        );
+
+        let svc = CmuxService::new(&runner);
+        let events = svc
+            .replay_events_after(4700, 25, Duration::from_secs(2))
+            .unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].seq, 4701);
+        assert_eq!(events[0].name, "surface.input_sent");
+        assert_eq!(events[0].workspace_id.as_deref(), Some("uuid-workspace"));
+        assert_eq!(events[0].surface_id.as_deref(), Some("uuid-surface"));
+        assert_eq!(events[0].payload["result"]["workspace_ref"], "workspace:58");
+        assert_eq!(events[1].category.as_deref(), Some("sidebar"));
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "events",
+                "--after",
+                "4700",
+                "--limit",
+                "25",
+                "--no-ack",
+                "--no-heartbeat"
+            ]
+        );
+    }
+
+    #[test]
+    fn replay_events_after_returns_partial_records_on_timeout() {
+        let mut runner = MockRunner::new();
+        runner.add_response_with_stderr(
+            r#"{"seq":4701,"name":"surface.input_sent","category":"surface","payload":{}}"#,
+            "timed out after 2000ms",
+            false,
+        );
+
+        let svc = CmuxService::new(&runner);
+        let events = svc
+            .replay_events_after(4700, 25, Duration::from_secs(2))
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].seq, 4701);
     }
 }
