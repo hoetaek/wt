@@ -122,6 +122,14 @@ pub enum Commands {
         /// Branch, worktree path/name, or TaskRun id to inspect
         target: Option<String>,
     },
+    /// Poll a task agent's current status
+    #[command(
+        long_about = "Poll a task agent's current status from the matching cmux surface. This is read-only: it observes cmux screen, status, and hook signals without updating TaskRuns or provider issues. Codex status is weaker until cmux Codex hooks are installed with `cmux hooks codex install --yes`."
+    )]
+    Status {
+        /// Branch, worktree path/name, or TaskRun id to poll
+        target: String,
+    },
     /// Send a message to a task agent's cmux surface
     Send {
         /// Branch, worktree path/name, or TaskRun id to contact
@@ -665,6 +673,32 @@ mod tests {
             .to_string();
 
         assert!(help.contains("worktree, branch, or TaskRun"));
+        assert!(help.contains("Branch, worktree path/name, or TaskRun id"));
+    }
+
+    #[test]
+    fn status_accepts_required_target() {
+        let cli = parse(&["wt", "status", "feature"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Status { ref target }) if target == "feature"
+        ));
+
+        let result = Cli::try_parse_from(["wt", "status"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn status_help_describes_target_types() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("status")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("task agent"));
+        assert!(help.contains("<TARGET>"));
         assert!(help.contains("Branch, worktree path/name, or TaskRun id"));
     }
 

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::config::Config;
 
@@ -14,6 +15,16 @@ pub struct CmdOutput {
 /// Trait for running external commands. Injected into Ctx for testability.
 pub trait CommandRunner: Send + Sync {
     fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput>;
+
+    fn run_with_timeout(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        cwd: Option<&Path>,
+        _timeout: Duration,
+    ) -> Result<CmdOutput> {
+        self.run(cmd, args, cwd)
+    }
 
     /// Check if a command exists on PATH.
     fn has_command(&self, cmd: &str) -> bool;

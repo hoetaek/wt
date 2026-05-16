@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod cli;
 pub mod commands;
 pub mod config;
@@ -78,6 +79,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
         Commands::Review { target } => commands::review::run(ctx, target.as_deref()),
+        Commands::Status { target } => commands::status::run(ctx, target),
         Commands::Send {
             target,
             message,

@@ -17,6 +17,9 @@ fn main() {
         if let Some(WtError::Cancelled) = e.downcast_ref::<WtError>() {
             process::exit(0);
         }
+        if let Some(WtError::Exit { code }) = e.downcast_ref::<WtError>() {
+            process::exit(*code);
+        }
         eprintln!("{} {e:#}", console::style("ERROR:").red());
         process::exit(1);
     }
@@ -34,7 +37,9 @@ fn try_main() -> Result<()> {
     };
 
     if cli.json && !supports_json(command) {
-        bail!("JSON output is supported for: wt version, wt list, wt doctor, wt profile");
+        bail!(
+            "JSON output is supported for: wt version, wt list, wt status, wt doctor, wt profile"
+        );
     }
 
     match command {
@@ -148,7 +153,11 @@ fn use_decorative_output(cli: &Cli) -> bool {
 fn supports_json(command: &Commands) -> bool {
     matches!(
         command,
-        Commands::Version | Commands::List { .. } | Commands::Doctor | Commands::Profile { .. }
+        Commands::Version
+            | Commands::List { .. }
+            | Commands::Status { .. }
+            | Commands::Doctor
+            | Commands::Profile { .. }
     )
 }
 

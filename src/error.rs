@@ -18,6 +18,9 @@ pub enum WtError {
 
     #[error("User cancelled")]
     Cancelled,
+
+    #[error("Command exited with status {code}")]
+    Exit { code: i32 },
 }
 
 #[cfg(test)]

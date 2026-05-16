@@ -2,7 +2,19 @@ use crate::config::{AgentCli, IssueProviderType, SiteProvider};
 use crate::context::Ctx;
 use anyhow::Result;
 use serde::Serialize;
+use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
+
+const CODEX_HOOK_INSTALL_HINT: &str =
+    "Run cmux hooks codex install --yes to enable reliable Codex status events.";
+const CODEX_CMUX_HOOK_EVENTS: [(&str, &str); 5] = [
+    ("PermissionRequest", "permission_request"),
+    ("PreToolUse", "pre_tool_use"),
+    ("SessionStart", "session_start"),
+    ("Stop", "stop"),
+    ("UserPromptSubmit", "user_prompt_submit"),
+];
 
 pub fn run(ctx: &Ctx) -> Result<()> {
     if ctx.is_json() {
@@ -17,6 +29,7 @@ pub fn run(ctx: &Ctx) -> Result<()> {
     check_workspace_config(ctx);
     check_worktree_naming(ctx);
     check_cmux(ctx);
+    check_codex_hook_readiness(ctx);
     Ok(())
 }
 
@@ -29,6 +42,7 @@ fn run_json(ctx: &Ctx) -> Result<()> {
     collect_workspace_config_checks(ctx, &mut checks);
     collect_worktree_naming_checks(ctx, &mut checks);
     collect_cmux_check(ctx, &mut checks);
+    collect_codex_hook_readiness_checks(ctx, &mut checks);
 
     let report = DoctorReport { checks };
     let stdout = std::io::stdout();
@@ -273,7 +287,9 @@ fn collect_workspace_config_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
 fn collect_cmux_check(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     let needs_cmux = cmux_relevant(ctx);
 
-    if needs_cmux {
+    if ctx.runner.has_command("cmux") {
+        checks.push(DoctorCheck::ok("cmux_cli", Some("ok".into())));
+    } else if needs_cmux {
         collect_required_command(
             ctx,
             checks,
@@ -281,7 +297,209 @@ fn collect_cmux_check(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
             "cmux",
             "Install cmux, or remove [workspace]/[agent.prompt] automation.",
         );
+    } else {
+        checks.push(DoctorCheck::ok(
+            "cmux_cli",
+            Some("missing; optional for wt status/review/send".into()),
+        ));
     }
+}
+
+fn collect_codex_hook_readiness_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
+    if !codex_agent_configured(ctx) {
+        return;
+    }
+
+    let codex_home = match codex_home_dir() {
+        Ok(path) => path,
+        Err(message) => {
+            checks.push(DoctorCheck::warning("codex_home", message));
+            return;
+        }
+    };
+
+    checks.extend(codex_hook_readiness_checks_for_home(&codex_home));
+}
+
+fn codex_hook_readiness_checks_for_home(codex_home: &Path) -> Vec<DoctorCheck> {
+    let hooks_path = codex_home.join("hooks.json");
+    let config_path = codex_home.join("config.toml");
+    let mut checks = Vec::new();
+
+    match missing_cmux_codex_hook_events(&hooks_path) {
+        Ok(missing) if missing.is_empty() => checks.push(DoctorCheck::ok(
+            "codex_hooks_json",
+            Some(format!("{} cmux Codex hooks", CODEX_CMUX_HOOK_EVENTS.len())),
+        )),
+        Ok(missing) => checks.push(DoctorCheck::warning(
+            "codex_hooks_json",
+            format!(
+                "missing cmux hooks for {}. {CODEX_HOOK_INSTALL_HINT}",
+                missing.join(", ")
+            ),
+        )),
+        Err(message) => checks.push(DoctorCheck::warning("codex_hooks_json", message)),
+    }
+
+    match codex_config_readiness(&config_path, &hooks_path) {
+        Ok(readiness) => {
+            if readiness.hooks_enabled {
+                checks.push(DoctorCheck::ok(
+                    "codex_config_hooks",
+                    Some("hooks enabled".into()),
+                ));
+            } else {
+                checks.push(DoctorCheck::warning(
+                    "codex_config_hooks",
+                    format!("hooks feature is not enabled. {CODEX_HOOK_INSTALL_HINT}"),
+                ));
+            }
+
+            if readiness.missing_trust_events.is_empty() {
+                checks.push(DoctorCheck::ok(
+                    "codex_hook_trust",
+                    Some(format!(
+                        "{} trusted hook entries",
+                        CODEX_CMUX_HOOK_EVENTS.len()
+                    )),
+                ));
+            } else {
+                checks.push(DoctorCheck::warning(
+                    "codex_hook_trust",
+                    format!(
+                        "missing trusted_hash entries for {}. {CODEX_HOOK_INSTALL_HINT}",
+                        readiness.missing_trust_events.join(", ")
+                    ),
+                ));
+            }
+        }
+        Err(message) => checks.push(DoctorCheck::warning("codex_config_hooks", message)),
+    }
+
+    checks
+}
+
+struct CodexConfigReadiness {
+    hooks_enabled: bool,
+    missing_trust_events: Vec<&'static str>,
+}
+
+fn missing_cmux_codex_hook_events(hooks_path: &Path) -> Result<Vec<&'static str>, String> {
+    let content = read_codex_file(hooks_path, "hooks.json")?;
+    let value = serde_json::from_str::<serde_json::Value>(&content)
+        .map_err(|err| format!("invalid JSON: {err}. {CODEX_HOOK_INSTALL_HINT}"))?;
+    let hooks = value.get("hooks");
+    let mut missing = Vec::new();
+
+    for (event, _) in CODEX_CMUX_HOOK_EVENTS {
+        if !hooks
+            .and_then(|hooks| hooks.get(event))
+            .is_some_and(value_contains_cmux_codex_hook_command)
+        {
+            missing.push(event);
+        }
+    }
+
+    Ok(missing)
+}
+
+fn codex_config_readiness(
+    config_path: &Path,
+    hooks_path: &Path,
+) -> Result<CodexConfigReadiness, String> {
+    let content = read_codex_file(config_path, "config.toml")?;
+    let value = toml::from_str::<toml::Value>(&content)
+        .map_err(|err| format!("invalid TOML: {err}. {CODEX_HOOK_INSTALL_HINT}"))?;
+
+    Ok(CodexConfigReadiness {
+        hooks_enabled: codex_hooks_feature_enabled(&value),
+        missing_trust_events: missing_trusted_hook_events(&value, hooks_path),
+    })
+}
+
+fn read_codex_file(path: &Path, label: &str) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            format!("missing {label}. {CODEX_HOOK_INSTALL_HINT}")
+        } else {
+            format!("cannot read {label}: {err}. {CODEX_HOOK_INSTALL_HINT}")
+        }
+    })
+}
+
+fn value_contains_cmux_codex_hook_command(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(value) => {
+            value.contains("cmux hooks")
+                && (value.contains("--source codex") || value.contains("hooks codex"))
+        }
+        serde_json::Value::Array(values) => {
+            values.iter().any(value_contains_cmux_codex_hook_command)
+        }
+        serde_json::Value::Object(values) => {
+            values.values().any(value_contains_cmux_codex_hook_command)
+        }
+        _ => false,
+    }
+}
+
+fn codex_hooks_feature_enabled(config: &toml::Value) -> bool {
+    config.get("hooks").and_then(toml::Value::as_bool) == Some(true)
+        || config
+            .get("features")
+            .and_then(|features| features.get("hooks"))
+            .and_then(toml::Value::as_bool)
+            == Some(true)
+}
+
+fn missing_trusted_hook_events(config: &toml::Value, hooks_path: &Path) -> Vec<&'static str> {
+    let Some(state) = config
+        .get("hooks")
+        .and_then(|hooks| hooks.get("state"))
+        .and_then(toml::Value::as_table)
+    else {
+        return CODEX_CMUX_HOOK_EVENTS
+            .iter()
+            .map(|(event, _)| *event)
+            .collect();
+    };
+
+    let hooks_path = hooks_path.to_string_lossy();
+    CODEX_CMUX_HOOK_EVENTS
+        .iter()
+        .filter_map(|(event, trust_event)| {
+            let trusted = state.iter().any(|(key, entry)| {
+                codex_trust_key_matches(key, trust_event, &hooks_path)
+                    && entry
+                        .get("trusted_hash")
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|hash| hash.starts_with("sha256:"))
+            });
+            (!trusted).then_some(*event)
+        })
+        .collect()
+}
+
+fn codex_trust_key_matches(key: &str, event: &str, hooks_path: &str) -> bool {
+    key.contains(&format!(":{event}:")) && (key.contains(hooks_path) || key.contains("hooks.json"))
+}
+
+fn codex_home_dir() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("CODEX_HOME").filter(|path| !path.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
+
+    std::env::var_os("HOME")
+        .filter(|path| !path.is_empty())
+        .map(|path| PathBuf::from(path).join(".codex"))
+        .ok_or_else(|| format!("CODEX_HOME and HOME are unset. {CODEX_HOOK_INSTALL_HINT}"))
+}
+
+fn codex_agent_configured(ctx: &Ctx) -> bool {
+    ctx.config
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.cli == AgentCli::Codex)
 }
 
 fn collect_optional_command(
@@ -525,13 +743,49 @@ fn check_workspace_config(ctx: &Ctx) {
 fn check_cmux(ctx: &Ctx) {
     let needs_cmux = cmux_relevant(ctx);
 
-    if needs_cmux {
+    if ctx.runner.has_command("cmux") {
+        ctx.ui.print_step("cmux CLI: ok");
+    } else if needs_cmux {
         check_required_command(
             ctx,
             "cmux",
             "cmux CLI",
             "Install cmux, or remove [workspace]/[agent.prompt] automation.",
         );
+    } else {
+        ctx.ui
+            .print_step("cmux CLI: missing (optional for wt status/review/send)");
+    }
+}
+
+fn check_codex_hook_readiness(ctx: &Ctx) {
+    if !codex_agent_configured(ctx) {
+        return;
+    }
+
+    let checks = match codex_home_dir() {
+        Ok(path) => codex_hook_readiness_checks_for_home(&path),
+        Err(message) => vec![DoctorCheck::warning("codex_home", message)],
+    };
+
+    for check in checks {
+        let label = codex_readiness_label(&check.name);
+        let message = check.message.as_deref().unwrap_or(check.status);
+        if check.status == "ok" {
+            ctx.ui.print_step(&format!("{label}: {message}"));
+        } else {
+            ctx.ui.print_warning(&format!("{label}: {message}"));
+        }
+    }
+}
+
+fn codex_readiness_label(name: &str) -> &str {
+    match name {
+        "codex_home" => "Codex home",
+        "codex_hooks_json" => "Codex hooks.json",
+        "codex_config_hooks" => "Codex config hooks",
+        "codex_hook_trust" => "Codex hook trust",
+        _ => name,
     }
 }
 
@@ -622,8 +876,11 @@ mod tests {
     use crate::context::mock::MockRunner;
     use crate::context::{Ctx, UserInterface};
     use anyhow::{Result, bail};
-    use std::path::PathBuf;
+    use serde_json::json;
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
 
     #[derive(Default)]
     struct RecordingUi {
@@ -675,6 +932,58 @@ mod tests {
             Box::new(runner),
             Box::new(ui),
         )
+    }
+
+    fn write_codex_hooks(home: &Path) {
+        fs::create_dir_all(home).unwrap();
+        let hooks = CODEX_CMUX_HOOK_EVENTS
+            .iter()
+            .map(|(event, _)| {
+                (
+                    event.to_string(),
+                    json!([
+                        {
+                            "hooks": [
+                                {
+                                    "command": format!(
+                                        "cmux hooks feed --source codex --event {event}"
+                                    )
+                                }
+                            ]
+                        }
+                    ]),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        fs::write(
+            home.join("hooks.json"),
+            serde_json::to_string_pretty(&json!({ "hooks": hooks })).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn write_codex_config(home: &Path, include_trust: bool) {
+        fs::create_dir_all(home).unwrap();
+        let hooks_path = home.join("hooks.json");
+        let mut content = String::from("[features]\nhooks = true\n");
+
+        if include_trust {
+            for (_, trust_event) in CODEX_CMUX_HOOK_EVENTS {
+                content.push_str(&format!(
+                    "\n[hooks.state.\"{}:{trust_event}:0:0\"]\ntrusted_hash = \"sha256:test\"\n",
+                    hooks_path.display()
+                ));
+            }
+        }
+
+        fs::write(home.join("config.toml"), content).unwrap();
+    }
+
+    fn check_by_name<'a>(checks: &'a [DoctorCheck], name: &str) -> &'a DoctorCheck {
+        checks
+            .iter()
+            .find(|check| check.name == name)
+            .unwrap_or_else(|| panic!("missing doctor check {name}"))
     }
 
     #[test]
@@ -935,6 +1244,90 @@ mod tests {
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("cmux CLI: missing"));
         assert!(warnings.contains("[workspace]"));
+    }
+
+    #[test]
+    fn codex_hook_readiness_warns_when_codex_config_is_missing() {
+        let temp = TempDir::new().unwrap();
+
+        let checks = codex_hook_readiness_checks_for_home(temp.path());
+
+        let hooks = check_by_name(&checks, "codex_hooks_json");
+        assert_eq!(hooks.status, "warning");
+        assert!(
+            hooks
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("missing hooks.json")
+        );
+
+        let config = check_by_name(&checks, "codex_config_hooks");
+        assert_eq!(config.status, "warning");
+        assert!(
+            config
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("missing config.toml")
+        );
+    }
+
+    #[test]
+    fn codex_hook_readiness_reports_installed_hooks() {
+        let temp = TempDir::new().unwrap();
+        write_codex_hooks(temp.path());
+        write_codex_config(temp.path(), true);
+
+        let checks = codex_hook_readiness_checks_for_home(temp.path());
+
+        assert_eq!(check_by_name(&checks, "codex_hooks_json").status, "ok");
+        assert_eq!(check_by_name(&checks, "codex_config_hooks").status, "ok");
+        assert_eq!(check_by_name(&checks, "codex_hook_trust").status, "ok");
+    }
+
+    #[test]
+    fn codex_hook_readiness_warns_when_trust_is_missing() {
+        let temp = TempDir::new().unwrap();
+        write_codex_hooks(temp.path());
+        write_codex_config(temp.path(), false);
+
+        let checks = codex_hook_readiness_checks_for_home(temp.path());
+
+        assert_eq!(check_by_name(&checks, "codex_hooks_json").status, "ok");
+        assert_eq!(check_by_name(&checks, "codex_config_hooks").status, "ok");
+        let trust = check_by_name(&checks, "codex_hook_trust");
+        assert_eq!(trust.status, "warning");
+        assert!(
+            trust
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("PermissionRequest")
+        );
+    }
+
+    #[test]
+    fn non_codex_agent_does_not_report_codex_hook_readiness() {
+        let config = Config {
+            agent: Some(AgentConfig {
+                cli: AgentCli::Claude,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: Default::default(),
+            }),
+            ..Default::default()
+        };
+        let ctx = ctx_with(config, MockRunner::new(), RecordingUi::new());
+        let mut checks = Vec::new();
+
+        collect_codex_hook_readiness_checks(&ctx, &mut checks);
+
+        assert!(checks.is_empty());
     }
 
     #[test]

@@ -1,28 +1,16 @@
 use crate::commands::{agent_report, task, task_run};
 use crate::context::Ctx;
-use crate::services::cmux::{CmuxService, CmuxWorkspace};
-use crate::services::git::{GitService, WorktreeEntry};
-use anyhow::{Context, Result, bail};
-use std::path::{Path, PathBuf};
+use crate::services::git::GitService;
+use crate::services::work;
+use anyhow::{Context, Result};
+use std::path::Path;
 
-pub(crate) struct ReviewTarget {
-    pub(crate) label: String,
-    pub(crate) branch: String,
-    pub(crate) worktree: Option<PathBuf>,
-    task_run: Option<task_run::TaskRunRecord>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CmuxContact {
-    pub(crate) workspace: String,
-    pub(crate) surface: String,
-    pub(crate) pane: String,
-    pub(crate) title: String,
-    pub(crate) window: String,
-}
+pub(crate) type ReviewTarget = work::WorkTarget;
+pub(crate) type CmuxContact = work::CmuxContact;
 
 pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
-    let target = resolve_review_target(ctx, target)?;
+    let work = work::observe_work(ctx, target)?;
+    let target = &work.target;
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
     let parent = git.get_branch_parent(&target.branch)?;
     let status = match target.worktree.as_deref() {
@@ -39,10 +27,10 @@ pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
             .print_dim("  Worktree: branch is not checked out in a local worktree"),
     }
 
-    print_task_runs(ctx, &task_runs_for_target(ctx, &target)?)?;
+    print_task_runs(ctx, &task_runs_for_target(ctx, target)?)?;
 
     print_worktree_status(ctx, status.as_deref());
-    print_cmux_contact(ctx, target.worktree.as_deref());
+    print_cmux_work(ctx, &work);
     print_parent_review(ctx, parent.as_deref(), &target.branch)?;
     print_agent_report_expectation(ctx);
     print_review_checklist(ctx, status.as_deref(), parent.as_deref(), &target.branch)?;
@@ -51,127 +39,7 @@ pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
 }
 
 pub(crate) fn resolve_review_target(ctx: &Ctx, target: Option<&str>) -> Result<ReviewTarget> {
-    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
-    let worktrees = git.worktree_list()?;
-    match target {
-        None => {
-            let branch = git.current_branch()?;
-            let worktree = worktrees
-                .iter()
-                .find(|entry| entry.branch == branch)
-                .map(|entry| entry.path.clone())
-                .or_else(|| Some(ctx.invocation_root.clone()));
-            Ok(ReviewTarget {
-                label: branch.clone(),
-                branch,
-                worktree,
-                task_run: None,
-            })
-        }
-        Some(raw) => resolve_explicit_target(ctx, &git, &worktrees, raw),
-    }
-}
-
-fn resolve_explicit_target(
-    ctx: &Ctx,
-    git: &GitService,
-    worktrees: &[WorktreeEntry],
-    raw: &str,
-) -> Result<ReviewTarget> {
-    if let Some(path) = existing_directory_target(ctx, raw) {
-        let branch = branch_at_path(ctx, &path)?;
-        return Ok(ReviewTarget {
-            label: raw.to_string(),
-            branch,
-            worktree: Some(path),
-            task_run: None,
-        });
-    }
-
-    if let Ok(path) = task_run::resolve(ctx, raw) {
-        if path.is_file() {
-            let run = task_run::read(&path)?;
-            let id = task_run_id(&path)?;
-            let worktree = worktree_for_branch(worktrees, &run.branch)
-                .or_else(|| git.checked_out_path(&run.branch).ok().flatten());
-            return Ok(ReviewTarget {
-                label: id.clone(),
-                branch: run.branch.clone(),
-                worktree,
-                task_run: Some(task_run::TaskRunRecord { id, path, run }),
-            });
-        }
-    }
-
-    if let Some(entry) = worktrees.iter().find(|entry| worktree_matches(entry, raw)) {
-        return Ok(ReviewTarget {
-            label: raw.to_string(),
-            branch: entry.branch.clone(),
-            worktree: Some(entry.path.clone()),
-            task_run: None,
-        });
-    }
-
-    if git.local_branch_exists(raw)? {
-        return Ok(ReviewTarget {
-            label: raw.to_string(),
-            branch: raw.to_string(),
-            worktree: git.checked_out_path(raw)?,
-            task_run: None,
-        });
-    }
-
-    bail!("Review target not found: {raw}");
-}
-
-fn existing_directory_target(ctx: &Ctx, raw: &str) -> Option<PathBuf> {
-    let raw_path = PathBuf::from(raw);
-    let mut candidates = Vec::new();
-    if raw_path.is_absolute() {
-        candidates.push(raw_path);
-    } else {
-        candidates.push(ctx.invocation_root.join(raw));
-        candidates.push(ctx.repo_root.join(raw));
-        candidates.push(ctx.parent_dir.join(raw));
-    }
-
-    candidates.into_iter().find(|path| path.is_dir())
-}
-
-fn branch_at_path(ctx: &Ctx, path: &Path) -> Result<String> {
-    let out = ctx
-        .runner
-        .run("git", &["rev-parse", "--abbrev-ref", "HEAD"], Some(path))?;
-    if out.success && !out.stdout.is_empty() {
-        Ok(out.stdout)
-    } else {
-        bail!(
-            "Failed to read worktree branch at {}: {}",
-            path.display(),
-            if out.stderr.is_empty() {
-                out.stdout
-            } else {
-                out.stderr
-            }
-        )
-    }
-}
-
-fn worktree_for_branch(worktrees: &[WorktreeEntry], branch: &str) -> Option<PathBuf> {
-    worktrees
-        .iter()
-        .find(|entry| entry.branch == branch)
-        .map(|entry| entry.path.clone())
-}
-
-fn worktree_matches(entry: &WorktreeEntry, raw: &str) -> bool {
-    entry.branch == raw
-        || entry.path.to_string_lossy() == raw
-        || entry
-            .path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == raw)
+    work::resolve_target(ctx, target)
 }
 
 fn task_runs_for_target(ctx: &Ctx, target: &ReviewTarget) -> Result<Vec<task_run::TaskRunRecord>> {
@@ -262,37 +130,41 @@ fn print_worktree_status(ctx: &Ctx, status: Option<&str>) {
     }
 }
 
-fn print_cmux_contact(ctx: &Ctx, worktree: Option<&Path>) {
-    let Some(worktree) = worktree else {
-        ctx.ui
-            .print_dim("  cmux: unavailable without a checked out worktree");
-        return;
-    };
-
-    if !CmuxService::new(ctx.runner.as_ref()).is_available() {
-        ctx.ui.print_dim("  cmux: unavailable");
-        return;
-    }
-
-    match cmux_contacts(ctx, worktree) {
-        Ok(contacts) if contacts.is_empty() => {
+fn print_cmux_work(ctx: &Ctx, work: &work::Work) {
+    match work.session_state {
+        work::WorkSessionState::NoLocalWorktree => ctx
+            .ui
+            .print_dim("  cmux: unavailable without a checked out worktree"),
+        work::WorkSessionState::CmuxUnavailable => ctx.ui.print_dim("  cmux: unavailable"),
+        work::WorkSessionState::NoCmuxWorkspace => {
             ctx.ui.print_dim("  cmux: no workspace found for worktree")
         }
-        Ok(contacts) if contacts.len() == 1 => print_cmux_workspace(ctx, &contacts[0]),
-        Ok(contacts) => print_cmux_workspaces(ctx, &contacts),
-        Err(err) => ctx
-            .ui
-            .print_warning(&format!("  cmux lookup failed: {err:#}")),
+        work::WorkSessionState::NoTerminalSurface => {
+            if let Some(cmux) = work.cmux.as_ref() {
+                print_cmux_workspace_ref(ctx, cmux);
+            }
+            ctx.ui.print_dim("  cmux: terminal surface is not ready");
+        }
+        work::WorkSessionState::TerminalSurfaceReady => {
+            if let Some(contact) = work.cmux.as_ref().and_then(work::WorkCmuxSurface::contact) {
+                print_cmux_workspace(ctx, &contact);
+            }
+        }
     }
+    print_agent_state(ctx, &work.state);
 }
 
-fn print_cmux_workspaces(ctx: &Ctx, contacts: &[CmuxContact]) {
+fn print_agent_state(ctx: &Ctx, state: &work::WorkState) {
     ctx.ui.print_dim(&format!(
-        "  cmux: ambiguous ({} matching surfaces)",
-        contacts.len()
+        "  Agent: {} ({})",
+        state.agent_kind.as_str(),
+        state.status.as_str()
     ));
-    for contact in contacts {
-        print_cmux_workspace(ctx, contact);
+    if let Some(tool) = state.last_tool.as_deref() {
+        ctx.ui.print_dim(&format!("  Agent last tool: {tool}"));
+    }
+    if let Some(warning) = state.warning.as_deref() {
+        ctx.ui.print_warning(&format!("  Agent warning: {warning}"));
     }
 }
 
@@ -315,47 +187,15 @@ fn print_cmux_workspace(ctx: &Ctx, contact: &CmuxContact) {
     ));
 }
 
+fn print_cmux_workspace_ref(ctx: &Ctx, cmux: &work::WorkCmuxSurface) {
+    ctx.ui.print_dim(&format!(
+        "  cmux workspace: {} \"{}\" (window {})",
+        cmux.workspace_ref, cmux.workspace_title, cmux.window_ref
+    ));
+}
+
 pub(crate) fn cmux_contacts(ctx: &Ctx, worktree: &Path) -> Result<Vec<CmuxContact>> {
-    let cmux = CmuxService::new(ctx.runner.as_ref());
-    if !cmux.is_available() {
-        bail!("cmux command not found");
-    }
-
-    let workspaces = cmux.list_workspaces()?;
-    let mut contacts = Vec::new();
-    for workspace in workspaces
-        .iter()
-        .filter(|workspace| cmux_workspace_matches(workspace, worktree))
-    {
-        for (pane, surface) in cmux_surfaces(&cmux, &workspace.handle)? {
-            contacts.push(CmuxContact {
-                workspace: workspace.handle.clone(),
-                surface,
-                pane,
-                title: workspace.title.clone(),
-                window: workspace.window_handle.clone(),
-            });
-        }
-    }
-    Ok(contacts)
-}
-
-fn cmux_surfaces(cmux: &CmuxService<'_>, workspace_handle: &str) -> Result<Vec<(String, String)>> {
-    let panes = cmux.list_panes(workspace_handle)?;
-    let mut contacts = Vec::new();
-    for pane in panes {
-        for surface in cmux.list_pane_surfaces(&pane, workspace_handle)? {
-            contacts.push((pane.clone(), surface));
-        }
-    }
-    Ok(contacts)
-}
-
-fn cmux_workspace_matches(workspace: &CmuxWorkspace, worktree: &Path) -> bool {
-    workspace
-        .current_directory
-        .as_deref()
-        .is_some_and(|cwd| same_path(cwd, worktree))
+    work::cmux_contacts(ctx, worktree)
 }
 
 fn print_parent_review(ctx: &Ctx, parent: Option<&str>, branch: &str) -> Result<()> {
@@ -495,21 +335,6 @@ fn is_configured_link_status_line(ctx: &Ctx, line: &str) -> bool {
         .iter()
         .map(|linked| linked.trim_end_matches('/'))
         .any(|linked| path == linked || path.starts_with(&format!("{linked}/")))
-}
-
-fn same_path(a: &Path, b: &Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
-}
-
-fn task_run_id(path: &Path) -> Result<String> {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("TaskRun path is missing a file stem: {}", path.display()))
 }
 
 #[cfg(test)]
@@ -713,8 +538,6 @@ mod tests {
             ),
             true,
         );
-        runner.add_response("main", true);
-        runner.add_response("", true);
         runner.add_response(
             r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
             true,
@@ -726,8 +549,15 @@ mod tests {
             ),
             true,
         );
-        runner.add_response("pane:3", true);
-        runner.add_response("surface:4", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        runner.add_response("ready", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("main", true);
+        runner.add_response("", true);
         runner.add_response("1", true);
         runner.add_response("def add review", true);
         runner.add_response(" src/lib.rs | 1 +\n 1 file changed, 1 insertion(+)", true);
@@ -751,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn review_prints_ambiguous_cmux_surfaces() {
+    fn review_prints_cmux_workspace_without_ready_terminal_surface() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
@@ -768,8 +598,6 @@ mod tests {
             ),
             true,
         );
-        runner.add_response("main", true);
-        runner.add_response("", true);
         runner.add_response(
             r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
             true,
@@ -781,8 +609,13 @@ mod tests {
             ),
             true,
         );
-        runner.add_response("pane:3", true);
-        runner.add_response("surface:4\nsurface:5", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        runner.add_response("Terminal surface not found", false);
+        runner.add_response("main", true);
+        runner.add_response("", true);
         runner.add_response("1", true);
         runner.add_response("def add review", true);
         runner.add_response(" src/lib.rs | 1 +\n 1 file changed, 1 insertion(+)", true);
@@ -799,9 +632,9 @@ mod tests {
         run(&ctx, Some("feature")).unwrap();
 
         let dims = ui.dims.lock().unwrap().join("\n");
-        assert!(dims.contains("cmux: ambiguous (2 matching surfaces)"));
-        assert!(dims.contains("cmux send --workspace workspace:1 --surface surface:4"));
-        assert!(dims.contains("cmux send --workspace workspace:1 --surface surface:5"));
+        assert!(dims.contains("cmux workspace: workspace:1 \"feature\" (window window:1)"));
+        assert!(dims.contains("cmux: terminal surface is not ready"));
+        assert!(!dims.contains("cmux send --workspace workspace:1 --surface surface:4"));
     }
 
     #[test]
