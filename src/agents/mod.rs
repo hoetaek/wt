@@ -60,6 +60,7 @@ pub(crate) struct WorkState {
     pub(crate) last_tool: Option<String>,
     pub(crate) session_id: Option<String>,
     pub(crate) last_event_at: Option<String>,
+    pub(crate) needs_input_since: Option<String>,
     pub(crate) warning: Option<String>,
     pub(crate) metadata: BTreeMap<String, String>,
 }
@@ -72,6 +73,7 @@ impl WorkState {
             last_tool: None,
             session_id: None,
             last_event_at: None,
+            needs_input_since: None,
             warning: None,
             metadata: BTreeMap::new(),
         }
@@ -184,6 +186,9 @@ pub(super) fn enrich_state(mut state: WorkState, observation: &AgentObservation<
     state.last_tool = latest_tool_name(observation.events);
     state.session_id = latest_string_payload(observation.events, "session_id");
     state.last_event_at = latest_relevant_event_at(observation.events);
+    if state.status == AgentStatus::NeedsInput && state.needs_input_since.is_none() {
+        state.needs_input_since = latest_needs_input_at(observation.events);
+    }
     state
 }
 
@@ -333,6 +338,27 @@ fn latest_relevant_event_at(events: &[CmuxEvent]) -> Option<String> {
                 .occurred_at
                 .as_ref()
                 .map(|occurred_at| (event.seq, occurred_at))
+        })
+        .max_by_key(|(seq, _)| *seq)
+        .map(|(_, occurred_at)| occurred_at.clone())
+}
+
+fn latest_needs_input_at(events: &[CmuxEvent]) -> Option<String> {
+    events
+        .iter()
+        .filter_map(|event| {
+            let is_needs_input = hook_name(event).is_some_and(|name| name == "PermissionRequest")
+                || sidebar_status_command(event)
+                    .and_then(|(_, value)| normalize_status(&value))
+                    .is_some_and(|status| status == AgentStatus::NeedsInput);
+            if is_needs_input {
+                event
+                    .occurred_at
+                    .as_ref()
+                    .map(|occurred_at| (event.seq, occurred_at))
+            } else {
+                None
+            }
         })
         .max_by_key(|(seq, _)| *seq)
         .map(|(_, occurred_at)| occurred_at.clone())

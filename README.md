@@ -647,6 +647,22 @@ target worktree, plus the raw `cmux send` and `cmux send-key` commands needed to
 talk to each surface. Multiple matches are reported as ambiguous. It does not
 mark anything done, merge branches, send messages, or remove worktrees.
 
+Use `wt status <branch|worktree|task-run>` to poll the current agent session for
+a worktree. The command uses the same target model as `review` and `send`, reads
+the matching cmux workspace/surface when available, and reports the observed
+agent, status, last tool, session, event time, and warnings without updating
+TaskRuns or provider issues.
+
+```bash
+wt status feature
+wt --json status feature
+```
+
+The JSON form is the scriptable surface. `needs_input` exits with status code
+2, `failed` exits 3, missing work exits 1, and normal observed states exit 0.
+If cmux itself is unavailable, `status` fails clearly instead of returning a
+misleading successful `no_session` result.
+
 Use `wt send <branch|worktree|task-run> <message...>` when the review output
 shows a task agent surface and you want to ask for a completion report, request
 extra verification, or give a follow-up instruction. By default it sends the

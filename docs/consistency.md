@@ -310,6 +310,15 @@ surface를 찾아 메시지를 보내는 transport 명령이다. 메시지를 �
 상태로 저장하지 않고, 완료 여부는 여전히 TaskRun status와 stack completion 명령으로만
 표현한다.
 
+`wt status <target>`도 상태 전이 명령이 아니다. `target`은 `wt review`와 `wt send`가
+받는 branch, worktree path/name, TaskRun id와 같은 work selector다. 이 명령은 현재
+cmux workspace/surface와 agent 화면/이벤트를 관찰해서 agent-friendly JSON 상태를
+돌려주며, TaskRun status나 provider issue status를 쓰지 않는다. JSON 필드는 current
+observation contract이므로 `status`, `agent`, cmux id/ref, 마지막 tool/session/event,
+warnings/meta처럼 agent가 polling할 수 있는 값을 안정적인 snake_case 이름으로 노출한다.
+사람용 출력은 같은 관찰 결과를 얇게 읽기 좋게 보여주는 layer일 뿐 별도 의미를 만들지
+않는다. cmux 자체를 사용할 수 없으면 성공한 `no_session`처럼 보이지 않도록 실패한다.
+
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 
 ### Agent-Neutral Names Stay Agent-Neutral

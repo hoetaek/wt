@@ -48,6 +48,18 @@ pub(crate) enum WorkSessionState {
     TerminalSurfaceReady,
 }
 
+impl WorkSessionState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::NoLocalWorktree => "no_local_worktree",
+            Self::CmuxUnavailable => "cmux_unavailable",
+            Self::NoCmuxWorkspace => "no_cmux_workspace",
+            Self::NoTerminalSurface => "no_terminal_surface",
+            Self::TerminalSurfaceReady => "terminal_surface_ready",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WorkCmuxSurface {
     pub(crate) workspace_id: String,

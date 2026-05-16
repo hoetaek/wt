@@ -8,6 +8,14 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added `wt status <TARGET>` and `wt --json status <TARGET>` for read-only
+  polling of a branch, worktree path/name, or TaskRun with cmux workspace,
+  surface, agent, status, last tool, session, warning, and fallback metadata.
+  `needs_input` exits 2, `failed` exits 3, missing work exits 1, and cmux
+  unavailability now fails instead of looking like a successful no-session
+  poll.
+- Bumped the package version to `0.20.0` because `wt status` adds a new
+  user-facing CLI command while `wt` is still pre-1.0.
 - Added canonical `wt init` starter presets with `--preset
   <minimal|agent|issue|app>`, `--minimal`, and `--dry-run` so the guided wizard
   and non-interactive init paths build the same typed generation plan before

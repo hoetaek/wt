@@ -176,6 +176,19 @@ fn stack_run_help_explains_runnable_stack_selection() {
 }
 
 #[test]
+fn status_help_explains_polling_target() {
+    wt_command()
+        .args(["status", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("task agent"))
+        .stdout(predicate::str::contains("<TARGET>"))
+        .stdout(predicate::str::contains(
+            "Branch, worktree path/name, or TaskRun id",
+        ));
+}
+
+#[test]
 fn init_yes_uses_minimal_preset_without_agent() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -346,6 +359,26 @@ fn json_output_uses_machine_readable_surface_without_status_decoration() {
 
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert!(value["checks"].as_array().is_some());
+}
+
+#[test]
+fn status_supports_json_global_flag() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "status",
+            "missing",
+        ])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("Work target not found: missing"))
+        .stderr(predicate::str::contains("JSON output is supported").not());
 }
 
 #[test]
