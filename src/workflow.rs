@@ -1,0 +1,752 @@
+use crate::context::Ctx;
+use anyhow::{Context, Result, bail};
+use serde::Deserialize;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub const WORKFLOW_COLOR_ROTATION: &[&str] = &[
+    "red", "crimson", "orange", "amber", "olive", "green", "teal", "aqua", "blue", "navy",
+    "indigo", "purple", "magenta", "rose", "brown", "charcoal",
+];
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowMode {
+    Single,
+    Batch,
+    Stack,
+}
+
+impl WorkflowMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WorkflowMode::Single => "single",
+            WorkflowMode::Batch => "batch",
+            WorkflowMode::Stack => "stack",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowMetadata {
+    pub mode: WorkflowMode,
+    #[serde(default)]
+    pub profile: Option<String>,
+    pub base_mode: String,
+    #[serde(default)]
+    pub base: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub tasks: Vec<WorkflowTask>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowTask {
+    pub task: String,
+    pub run: String,
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub pull_request: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkflowRecord {
+    pub id: String,
+    pub path: PathBuf,
+    pub workflow: WorkflowMetadata,
+}
+
+impl WorkflowMetadata {
+    pub fn new(
+        mode: WorkflowMode,
+        base_mode: impl Into<String>,
+        base: Option<String>,
+        tasks: Vec<WorkflowTask>,
+    ) -> Self {
+        let now = current_utc_timestamp();
+        Self {
+            mode,
+            profile: None,
+            base_mode: base_mode.into(),
+            base,
+            color: None,
+            created_at: now.clone(),
+            updated_at: now,
+            tasks,
+        }
+    }
+}
+
+pub fn touch(workflow: &mut WorkflowMetadata) {
+    workflow.updated_at = current_utc_timestamp();
+}
+
+impl WorkflowTask {
+    pub fn new(task: impl Into<String>, run: impl Into<String>) -> Self {
+        Self {
+            task: task.into(),
+            run: run.into(),
+            parent: None,
+            pull_request: None,
+        }
+    }
+
+    fn label(&self) -> &str {
+        if self.task.trim().is_empty() {
+            "workflow-task"
+        } else {
+            self.task.trim()
+        }
+    }
+}
+
+pub fn create(ctx: &Ctx, mut workflow: WorkflowMetadata) -> Result<WorkflowRecord> {
+    let path = next_available_path(ctx)?;
+    write(ctx, &path, &mut workflow)?;
+    Ok(WorkflowRecord {
+        id: workflow_id(&path)?,
+        path,
+        workflow,
+    })
+}
+
+pub fn read(path: &Path) -> Result<WorkflowMetadata> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read workflow: {}", path.display()))?;
+    let workflow: WorkflowMetadata = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse workflow: {}", path.display()))?;
+    validate_workflow(&workflow)
+        .with_context(|| format!("Invalid workflow: {}", path.display()))?;
+    Ok(workflow)
+}
+
+pub fn list(ctx: &Ctx) -> Result<Vec<WorkflowRecord>> {
+    let workflows_dir = workflows_dir(ctx);
+    if !workflows_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&workflows_dir)
+        .with_context(|| "Failed to read workflow directory: .local/workflows")?
+    {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    paths
+        .into_iter()
+        .map(|path| {
+            let id = workflow_id(&path)?;
+            let workflow = read(&path)?;
+            Ok(WorkflowRecord { id, path, workflow })
+        })
+        .collect()
+}
+
+pub fn resolve(ctx: &Ctx, target: &str) -> Result<PathBuf> {
+    if target == "latest" {
+        return latest_path(ctx);
+    }
+
+    let path = PathBuf::from(target);
+    if path.is_absolute() && path.exists() {
+        return Ok(path);
+    }
+
+    let invocation_path = ctx.invocation_root.join(target);
+    if invocation_path.exists() {
+        return Ok(invocation_path);
+    }
+
+    let repo_path = ctx.repo_root.join(target);
+    if repo_path.exists() {
+        return Ok(repo_path);
+    }
+
+    let file_name = if target.ends_with(".toml") {
+        target.to_string()
+    } else {
+        format!("{target}.toml")
+    };
+    let shorthand = workflows_dir(ctx).join(file_name);
+    if shorthand.exists() {
+        return Ok(shorthand);
+    }
+
+    bail!("Workflow not found: {target}");
+}
+
+pub fn latest_path(ctx: &Ctx) -> Result<PathBuf> {
+    let mut paths = Vec::new();
+    let workflows_dir = workflows_dir(ctx);
+    if workflows_dir.exists() {
+        for entry in fs::read_dir(&workflows_dir)
+            .with_context(|| "Failed to read workflow directory: .local/workflows")?
+        {
+            let path = entry?.path();
+            if path.extension().is_some_and(|ext| ext == "toml") {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    paths
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("No workflow files found in .local/workflows"))
+}
+
+pub fn write(ctx: &Ctx, path: &Path, workflow: &mut WorkflowMetadata) -> Result<()> {
+    ensure_color(ctx, path, workflow)?;
+    write_metadata(path, workflow)
+}
+
+fn write_metadata(path: &Path, workflow: &WorkflowMetadata) -> Result<()> {
+    validate_workflow(workflow)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!("Failed to create workflow directory: {}", parent.display())
+        })?;
+    }
+
+    fs::write(path, render_workflow_metadata(workflow))
+        .with_context(|| format!("Failed to write workflow metadata: {}", path.display()))?;
+    Ok(())
+}
+
+fn ensure_color(ctx: &Ctx, path: &Path, workflow: &mut WorkflowMetadata) -> Result<()> {
+    if workflow
+        .color
+        .as_deref()
+        .is_some_and(|color| !color.trim().is_empty())
+    {
+        return Ok(());
+    }
+
+    workflow.color = Some(next_workflow_color(ctx, Some(path))?);
+    Ok(())
+}
+
+pub fn next_available_path(ctx: &Ctx) -> Result<PathBuf> {
+    let workflows_dir = workflows_dir(ctx);
+    fs::create_dir_all(&workflows_dir)
+        .with_context(|| "Failed to create workflow directory: .local/workflows")?;
+
+    let date = current_utc_date();
+    let mut seq = 1;
+    loop {
+        let candidate = workflows_dir.join(format!("{date}-{seq:03}.toml"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+        seq += 1;
+    }
+}
+
+fn next_workflow_color(ctx: &Ctx, excluded_path: Option<&Path>) -> Result<String> {
+    let excluded_path = excluded_path.map(|path| comparable_path(ctx, path));
+    let mut records = list(ctx)?
+        .into_iter()
+        .filter(|record| {
+            excluded_path
+                .as_ref()
+                .is_none_or(|excluded| comparable_path(ctx, &record.path) != *excluded)
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| left.path.cmp(&right.path));
+
+    if let Some(color) = records
+        .iter()
+        .rev()
+        .filter_map(|record| record.workflow.color.as_deref())
+        .map(str::trim)
+        .find(|color| !color.is_empty())
+    {
+        if let Some(idx) = palette_index(color) {
+            return Ok(WORKFLOW_COLOR_ROTATION[(idx + 1) % WORKFLOW_COLOR_ROTATION.len()].into());
+        }
+    }
+
+    Ok(WORKFLOW_COLOR_ROTATION[records.len() % WORKFLOW_COLOR_ROTATION.len()].into())
+}
+
+fn palette_index(color: &str) -> Option<usize> {
+    WORKFLOW_COLOR_ROTATION
+        .iter()
+        .position(|candidate| candidate.eq_ignore_ascii_case(color))
+}
+
+fn validate_workflow(workflow: &WorkflowMetadata) -> Result<()> {
+    if workflow.base_mode.trim().is_empty() {
+        bail!("Workflow is missing base_mode");
+    }
+    if workflow.tasks.is_empty() {
+        bail!("Workflow has no tasks");
+    }
+    if workflow.created_at.trim().is_empty() {
+        bail!("Workflow is missing created_at");
+    }
+    if workflow.updated_at.trim().is_empty() {
+        bail!("Workflow is missing updated_at");
+    }
+    if workflow
+        .color
+        .as_deref()
+        .is_some_and(|color| color.trim().is_empty())
+    {
+        bail!("Workflow color cannot be empty");
+    }
+
+    for item in &workflow.tasks {
+        validate_workflow_task(&workflow.mode, item)?;
+    }
+    Ok(())
+}
+
+fn validate_workflow_task(mode: &WorkflowMode, item: &WorkflowTask) -> Result<()> {
+    if item.task.trim().is_empty() {
+        bail!("Workflow task is missing task");
+    }
+    if item.run.trim().is_empty() {
+        bail!("Workflow task {} is missing TaskRun id", item.label());
+    }
+    if item
+        .parent
+        .as_deref()
+        .is_some_and(|parent| parent.trim().is_empty())
+    {
+        bail!("Workflow task {} has an empty parent", item.label());
+    }
+    if !matches!(mode, WorkflowMode::Stack) {
+        if item.parent.is_some() {
+            bail!(
+                "{} mode workflow task {} cannot store parent",
+                mode.as_str(),
+                item.label()
+            );
+        }
+        if item.pull_request.is_some() {
+            bail!(
+                "{} mode workflow task {} cannot store pull_request",
+                mode.as_str(),
+                item.label()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
+    let mut content = String::new();
+    content.push_str(&format!("mode = {}\n", toml_quote(workflow.mode.as_str())));
+    if let Some(profile) = workflow.profile.as_deref() {
+        content.push_str(&format!("profile = {}\n", toml_quote(profile)));
+    }
+    content.push_str(&format!(
+        "base_mode = {}\n",
+        toml_quote(&workflow.base_mode)
+    ));
+    if let Some(base) = workflow.base.as_deref() {
+        content.push_str(&format!("base = {}\n", toml_quote(base)));
+    }
+    if let Some(color) = workflow.color.as_deref() {
+        content.push_str(&format!("color = {}\n", toml_quote(color)));
+    }
+    content.push_str(&format!(
+        "created_at = {}\n",
+        toml_quote(&workflow.created_at)
+    ));
+    content.push_str(&format!(
+        "updated_at = {}\n",
+        toml_quote(&workflow.updated_at)
+    ));
+
+    for item in &workflow.tasks {
+        content.push_str("\n[[tasks]]\n");
+        content.push_str(&format!("task = {}\n", toml_quote(&item.task)));
+        content.push_str(&format!("run = {}\n", toml_quote(&item.run)));
+        if let Some(parent) = item.parent.as_deref() {
+            content.push_str(&format!("parent = {}\n", toml_quote(parent)));
+        }
+        if let Some(pull_request) = item.pull_request {
+            content.push_str(&format!("pull_request = {pull_request}\n"));
+        }
+    }
+
+    content
+}
+
+fn workflows_dir(ctx: &Ctx) -> PathBuf {
+    ctx.repo_root.join(".local/workflows")
+}
+
+fn workflow_id(path: &Path) -> Result<String> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("Workflow file is missing an id: {}", path.display()))
+}
+
+fn comparable_path(ctx: &Ctx, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        ctx.repo_root.join(path)
+    }
+}
+
+fn current_utc_timestamp() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn current_utc_date() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    let days = seconds.div_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_unix_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096).div_euclid(365);
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2).div_euclid(153);
+    let d = doy - (153 * mp + 2).div_euclid(5) + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    (year as i32, m as u32, d as u32)
+}
+
+fn toml_quote(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::context::mock::{MockRunner, MockUi};
+
+    fn ctx(root: &Path) -> Ctx {
+        Ctx::new(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        )
+    }
+
+    fn task(task: &str, run: &str) -> WorkflowTask {
+        WorkflowTask::new(task, run)
+    }
+
+    #[test]
+    fn workflow_write_and_read_round_trip_uses_canonical_task_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let path = dir.path().join(".local/workflows/2026-05-16-001.toml");
+        let mut workflow = WorkflowMetadata {
+            mode: WorkflowMode::Stack,
+            profile: Some("codex".into()),
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            color: Some("blue".into()),
+            created_at: "2026-05-16T00:00:00Z".into(),
+            updated_at: "2026-05-16T00:00:00Z".into(),
+            tasks: vec![WorkflowTask {
+                task: "add-schema".into(),
+                run: "stack-2026-05-16-001-add-schema".into(),
+                parent: Some("main".into()),
+                pull_request: Some(false),
+            }],
+        };
+
+        write(&ctx, &path, &mut workflow).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            content.starts_with("mode = \"stack\"\nprofile = \"codex\"\nbase_mode = \"explicit\"")
+        );
+        assert!(content.contains("base = \"main\""));
+        assert!(content.contains("color = \"blue\""));
+        assert!(content.contains("[[tasks]]"));
+        assert!(content.contains("task = \"add-schema\""));
+        assert!(content.contains("run = \"stack-2026-05-16-001-add-schema\""));
+        assert!(content.contains("parent = \"main\""));
+        assert!(content.contains("pull_request = false"));
+        assert!(!content.contains("branch ="));
+        assert!(!content.contains("status ="));
+        assert!(!content.contains("error ="));
+
+        let parsed = read(&path).unwrap();
+        assert_eq!(parsed, workflow);
+    }
+
+    #[test]
+    fn read_rejects_invalid_and_missing_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflow.toml");
+
+        fs::write(
+            &path,
+            r#"mode = "queue"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+"#,
+        )
+        .unwrap();
+        assert!(error_report(read(&path)).contains("mode"));
+
+        fs::write(
+            &path,
+            r#"base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+"#,
+        )
+        .unwrap();
+        assert!(error_report(read(&path)).contains("mode"));
+    }
+
+    #[test]
+    fn read_rejects_ambiguous_task_row_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflow.toml");
+
+        fs::write(
+            &path,
+            r#"mode = "batch"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+status = "prepared"
+"#,
+        )
+        .unwrap();
+        assert!(error_report(read(&path)).contains("status"));
+
+        fs::write(
+            &path,
+            r#"mode = "batch"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+branch = "feature/add-schema"
+"#,
+        )
+        .unwrap();
+        assert!(error_report(read(&path)).contains("branch"));
+    }
+
+    #[test]
+    fn read_rejects_stack_task_fields_on_non_stack_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflow.toml");
+
+        fs::write(
+            &path,
+            r#"mode = "batch"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+parent = "main"
+"#,
+        )
+        .unwrap();
+        assert!(error_report(read(&path)).contains("parent"));
+
+        fs::write(
+            &path,
+            r#"mode = "single"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+pull_request = false
+"#,
+        )
+        .unwrap();
+        assert!(error_report(read(&path)).contains("pull_request"));
+    }
+
+    #[test]
+    fn create_allocates_deterministic_workflow_colors_and_persists_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        let first = create(
+            &ctx,
+            WorkflowMetadata::new(
+                WorkflowMode::Batch,
+                "explicit",
+                Some("main".into()),
+                vec![task("schema", "workflow-schema")],
+            ),
+        )
+        .unwrap();
+        let second = create(
+            &ctx,
+            WorkflowMetadata::new(
+                WorkflowMode::Batch,
+                "explicit",
+                Some("main".into()),
+                vec![task("api", "workflow-api")],
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(first.workflow.color.as_deref(), Some("red"));
+        assert_eq!(second.workflow.color.as_deref(), Some("crimson"));
+        assert_eq!(
+            first.path.parent().unwrap(),
+            dir.path().join(".local/workflows")
+        );
+        assert!(first.path < second.path);
+
+        let first_content = fs::read_to_string(&first.path).unwrap();
+        let second_content = fs::read_to_string(&second.path).unwrap();
+        assert!(first_content.contains("color = \"red\""));
+        assert!(second_content.contains("color = \"crimson\""));
+        assert_eq!(read(&first.path).unwrap().color.as_deref(), Some("red"));
+        assert_eq!(
+            read(&second.path).unwrap().color.as_deref(),
+            Some("crimson")
+        );
+    }
+
+    #[test]
+    fn create_keeps_explicit_workflow_color() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let mut workflow = WorkflowMetadata::new(
+            WorkflowMode::Single,
+            "explicit",
+            Some("main".into()),
+            vec![task("schema", "workflow-schema")],
+        );
+        workflow.color = Some("#ff00aa".into());
+
+        let record = create(&ctx, workflow).unwrap();
+
+        assert_eq!(record.workflow.color.as_deref(), Some("#ff00aa"));
+        let content = fs::read_to_string(record.path).unwrap();
+        assert!(content.contains("color = \"#ff00aa\""));
+    }
+
+    #[test]
+    fn resolve_supports_latest_absolute_relative_and_shorthand_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let workflows_dir = dir.path().join(".local/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let old = workflows_dir.join("2026-05-16-001.toml");
+        let new = workflows_dir.join("2026-05-16-002.toml");
+        fs::write(&old, valid_workflow_toml("old")).unwrap();
+        fs::write(&new, valid_workflow_toml("new")).unwrap();
+
+        assert_eq!(resolve(&ctx, "latest").unwrap(), new);
+        assert_eq!(resolve(&ctx, old.to_str().unwrap()).unwrap(), old);
+        assert_eq!(
+            resolve(&ctx, ".local/workflows/2026-05-16-001.toml").unwrap(),
+            dir.path().join(".local/workflows/2026-05-16-001.toml")
+        );
+        assert_eq!(resolve(&ctx, "2026-05-16-001").unwrap(), old);
+    }
+
+    fn valid_workflow_toml(task_key: &str) -> String {
+        format!(
+            r#"mode = "single"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[[tasks]]
+task = "{task_key}"
+run = "workflow-{task_key}"
+"#
+        )
+    }
+
+    fn error_report(result: Result<WorkflowMetadata>) -> String {
+        format!("{:#}", result.unwrap_err())
+    }
+}

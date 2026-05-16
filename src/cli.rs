@@ -86,7 +86,8 @@ pub enum Commands {
         #[arg(long, conflicts_with = "profile")]
         matrix: bool,
     },
-    /// Prepare, inspect, edit, run, or clean batches
+    /// Legacy batch command; use wt workflow --mode batch
+    #[command(hide = true)]
     Batch {
         #[command(subcommand)]
         command: BatchCommand,
@@ -96,7 +97,13 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Prepare, inspect, edit, run, or complete stacks
+    /// Prepare, inspect, edit, run, or complete workflows
+    Workflow {
+        #[command(subcommand)]
+        command: WorkflowCommand,
+    },
+    /// Legacy stack command; use wt workflow --mode stack
+    #[command(hide = true)]
     Stack {
         #[command(subcommand)]
         command: StackCommand,
@@ -336,13 +343,87 @@ pub enum BatchCommand {
 pub enum TaskCommand {
     /// Publish local TaskDocuments as provider issues
     #[command(
-        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run batch or stack work.\n\nAfter [origin] is written, later wt new --task, wt batch run, and wt stack run treat the task as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt workflow run treats that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
     )]
     Publish {
         /// Local task keys from .local/tasks/<task>.toml
         #[arg(value_name = "TASK")]
         tasks: Vec<String>,
     },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum WorkflowCommand {
+    /// Prepare local tasks as a workflow file without starting workspaces
+    Task {
+        /// Task titles or existing task keys to prepare
+        #[arg(required = true)]
+        tasks: Vec<String>,
+        /// Workflow execution shape
+        #[arg(long, value_enum)]
+        mode: WorkflowModeArg,
+        /// Named profile from .local/profiles/<name> for all tasks
+        #[arg(long)]
+        profile: Option<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Mark stack-mode workflow tasks as requiring draft pull requests
+        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
+        pull_request: bool,
+    },
+    /// Prepare issues as a workflow file without starting workspaces
+    Issue {
+        /// Issue identifiers to import as tasks (omit to select interactively)
+        issues: Vec<String>,
+        /// Workflow execution shape
+        #[arg(long, value_enum)]
+        mode: WorkflowModeArg,
+        /// Named profile from .local/profiles/<name> for all tasks
+        #[arg(long)]
+        profile: Option<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Mark stack-mode workflow tasks as requiring draft pull requests
+        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
+        pull_request: bool,
+    },
+    /// Start runnable tasks from a workflow
+    Run {
+        /// Workflow TOML path or shorthand id
+        workflow: Option<String>,
+        /// Maximum number of runnable batch-mode tasks to execute concurrently
+        #[arg(long, default_value_t = 1, value_parser = parse_positive_usize)]
+        jobs: usize,
+    },
+    /// Show workflow metadata and task statuses
+    Show {
+        /// Workflow TOML path, shorthand id, or "latest" (default)
+        workflow: Option<String>,
+    },
+    /// Open workflow TOML in the configured editor
+    Edit {
+        /// Workflow TOML path, shorthand id, or "latest" (default)
+        workflow: Option<String>,
+    },
+    /// Mark the running task in a stack-mode workflow as complete
+    Complete {
+        /// Workflow TOML path or shorthand id
+        workflow: String,
+        /// Running workflow task identifier to complete
+        task: Option<String>,
+        /// Start the next workflow task after marking this one complete
+        #[arg(long)]
+        run_next: bool,
+    },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowModeArg {
+    Single,
+    Batch,
+    Stack,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
@@ -818,12 +899,12 @@ mod tests {
             })
         ));
 
-        let cli = parse(&["wt", "batch", "run", ".local/batches/2026-05-16-001.toml"]);
+        let cli = parse(&["wt", "batch", "run", "2026-05-16-001"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Batch {
                 command: BatchCommand::Run { ref batch, jobs }
-            }) if batch.as_deref() == Some(".local/batches/2026-05-16-001.toml") && jobs == 1
+            }) if batch.as_deref() == Some("2026-05-16-001") && jobs == 1
         ));
     }
 
@@ -892,12 +973,12 @@ mod tests {
             }) if batch.as_deref() == Some("latest")
         ));
 
-        let cli = parse(&["wt", "batch", "clean", ".local/batches/2026-05-09-001.toml"]);
+        let cli = parse(&["wt", "batch", "clean", "2026-05-09-001"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Batch {
                 command: BatchCommand::Clean { ref batch }
-            }) if batch.as_deref() == Some(".local/batches/2026-05-09-001.toml")
+            }) if batch.as_deref() == Some("2026-05-09-001")
         ));
     }
 
@@ -906,7 +987,7 @@ mod tests {
         let mut command = Cli::command();
         let batch = command.find_subcommand_mut("batch").unwrap();
         let help = batch.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, edit, run, or clean batches"));
+        assert!(help.contains("Legacy batch command"));
         assert!(help.contains("clean"));
         assert!(help.contains("show"));
     }
@@ -979,13 +1060,93 @@ mod tests {
         assert!(help.contains("provider issue"));
         assert!(help.contains("write [origin]"));
         assert!(help.contains("does not start workspaces"));
-        assert!(help.contains("later wt new --task, wt batch run, and wt stack run"));
+        assert!(help.contains("later wt workflow run"));
         assert!(help.contains("Omit task keys to choose unprocessed local TaskDocuments"));
         assert!(help.contains("tasks that already have [origin] are excluded"));
         assert!(!help.contains("--stack <STACK>"));
         assert!(!help.contains("--batch <BATCH>"));
         assert!(help.contains("no issue provider"));
         assert!(help.contains("already has origin"));
+    }
+
+    #[test]
+    fn workflow_task_requires_mode() {
+        let err = Cli::try_parse_from(["wt", "workflow", "task", "add-schema"]).unwrap_err();
+        assert!(err.to_string().contains("--mode <MODE>"));
+    }
+
+    #[test]
+    fn workflow_task_accepts_mode_profile_and_base() {
+        let cli = parse(&[
+            "wt",
+            "workflow",
+            "task",
+            "add-schema",
+            "wire-api",
+            "--mode",
+            "stack",
+            "--profile",
+            "codex",
+            "--base",
+            "main",
+            "--pull-request",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Task {
+                    ref tasks,
+                    mode: WorkflowModeArg::Stack,
+                    profile: Some(ref profile),
+                    base: Some(ref base),
+                    pull_request: true,
+                }
+            }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
+                && profile == "codex"
+                && base == "main"
+        ));
+    }
+
+    #[test]
+    fn workflow_issue_accepts_no_issue_args_for_interactive_selection() {
+        let cli = parse(&["wt", "workflow", "issue", "--mode", "batch"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Issue {
+                    ref issues,
+                    mode: WorkflowModeArg::Batch,
+                    profile: None,
+                    base: None,
+                    pull_request: false,
+                }
+            }) if issues.is_empty()
+        ));
+    }
+
+    #[test]
+    fn workflow_run_accepts_jobs() {
+        let cli = parse(&["wt", "workflow", "run", "2026-05-16-001", "--jobs", "3"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Run {
+                    ref workflow,
+                    jobs: 3,
+                }
+            }) if workflow.as_deref() == Some("2026-05-16-001")
+        ));
+    }
+
+    #[test]
+    fn workflow_help_uses_canonical_description() {
+        let mut command = Cli::command();
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+        let help = workflow.render_help().to_string();
+        assert!(help.contains("Prepare, inspect, edit, run, or complete workflows"));
+        assert!(help.contains("task"));
+        assert!(help.contains("issue"));
+        assert!(help.contains("complete"));
     }
 
     #[test]
@@ -1095,12 +1256,12 @@ mod tests {
             })
         ));
 
-        let cli = parse(&["wt", "stack", "run", ".local/stacks/manual.toml"]);
+        let cli = parse(&["wt", "stack", "run", "manual"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Stack {
                 command: StackCommand::Run { ref stack }
-            }) if stack.as_deref() == Some(".local/stacks/manual.toml")
+            }) if stack.as_deref() == Some("manual")
         ));
     }
 
@@ -1139,7 +1300,7 @@ mod tests {
         let mut command = Cli::command();
         let stack = command.find_subcommand_mut("stack").unwrap();
         let help = stack.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, edit, run, or complete stacks"));
+        assert!(help.contains("Legacy stack command"));
         assert!(help.contains("Start the next prepared or failed task"));
         assert!(help.contains("Mark the running task"));
         assert!(!help.contains("failed item"));
