@@ -124,7 +124,8 @@ handoff instructions when cmux coordinates are available. The prompt gives the
 agent a `cmux send --workspace ... --surface ...` report command and a matching
 `cmux send-key ... enter` command.
 
-Agents report back in this shape and then wait for review, landing, and cleanup:
+Agents report back in this shape and then keep ownership of review follow-up
+for their task:
 
 ```text
 Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>
@@ -132,7 +133,13 @@ Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<c
 
 Immediate `wt task run` work reports `PR=none`. Workflow single and batch tasks
 also report `PR=none`; stack tasks follow the workflow row's pull-request
-handoff intent.
+handoff intent. When stack task metadata sets `pull_request = true`, the task
+agent pushes the branch, opens a draft pull request against the workflow parent
+branch, updates the pull request body with the completion report, marks the pull
+request ready for review, and reports `PR=<pr-url>`. If Codex/GitHub review or
+coordinator feedback asks for changes, the same agent updates the branch, reruns
+checks, pushes, refreshes the PR body when needed, and sends an updated report.
+The coordinator advances, lands, and cleans up only after review passes.
 
 ## Configuration
 
