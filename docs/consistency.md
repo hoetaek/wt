@@ -162,10 +162,27 @@ Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 
 전이해야 한다. 다음 task 자동 시작은 명시적인 continuation 선택, 예를 들어
 `--run-next`로만 일어난다.
 
-`wt done`은 worktree cleanup 명령이므로 `source = "new"`와 `source = "batch"`인
-running TaskRun만 실제 worktree 제거와 함께 `done`으로 전이한다. Stack TaskRun은
-parent-chain 검증이 필요한 실행 순서 모델 안에 있으므로 `wt stack complete`만
-`done`으로 전이한다.
+`wt done`은 worktree와 local branch cleanup 명령이므로 `source = "new"`와
+`source = "batch"`인 running TaskRun만 실제 worktree 제거와 함께 `done`으로
+전이한다. Stack TaskRun은 parent-chain 검증이 필요한 실행 순서 모델 안에 있으므로
+`wt stack complete`만 `done`으로 전이한다.
+
+Branch landing은 TaskRun 상태와 별도 lifecycle이다. `complete`는 stack TaskRun을
+검증 후 `done`으로 바꾸는 실행 완료 신호이고, `done`은 worktree와 local branch를
+치우는 cleanup 신호이며, `merge`/`land`는 branch commit을 `master` 같은 통합 branch에
+넣는 Git workflow다. `wt done`이나 `wt stack complete`가 branch를 `master`에
+merge했다고 해석하지 않는다. 현재는 별도 `wt land` 명령을 만들지 않고,
+`git switch master`, `git pull --ff-only`, `git merge --ff-only <branch>` 같은 명시적
+Git 단계로 landing을 문서화한다. Stack branch는 `wt stack show`가 보여주는
+base-to-top 순서대로 landing한다.
+
+Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work definition이므로
+기본적으로 보존한다. 한 번 실행하고 끝난 batch task는 모든 linked TaskRun이
+`done`이나 `skipped`가 된 뒤 `wt batch clean`으로 `.local/tasks`의 TaskDocument만
+지운다. Stack task에는 아직 cleanup 명령이 없으므로 landing이 끝났고 다른 batch나
+stack이 참조하지 않는 것을 확인한 뒤 필요할 때만 `.local/tasks/<task>.toml`을
+수동 삭제한다. 나중에 `wt land`, `wt task clean`, `wt run clean` 같은 명령을 만들더라도
+`done`이나 `complete`에 merge나 task definition 삭제 의미를 섞지 않는다.
 
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 

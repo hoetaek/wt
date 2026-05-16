@@ -8,6 +8,10 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Documented the explicit landing workflow for completed task branches:
+  review, `complete`, `done`, merge into `master`, worktree and local branch
+  cleanup, and local TaskDocument cleanup now stay separate in the README and
+  consistency notes.
 - Documented the canonical TaskDocument/TaskRun state model across README and
   consistency notes: TaskDocuments define reusable work under `.local/tasks`,
   TaskRuns record execution state under `.local/task-runs`, batch and stack
