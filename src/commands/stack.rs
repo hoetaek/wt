@@ -22,10 +22,11 @@ pub fn task(
     tasks: &[String],
     profile: Option<&str>,
     base: &Option<String>,
+    pull_request: bool,
 ) -> Result<()> {
     validate_profile(ctx, profile)?;
     let prepared_tasks = task::prepare_named_tasks(ctx, tasks)?;
-    write_prepared_stack(ctx, profile, base, prepared_tasks)
+    write_prepared_stack(ctx, profile, base, prepared_tasks, pull_request)
 }
 
 pub fn issue(
@@ -33,6 +34,7 @@ pub fn issue(
     issues: &[String],
     profile: Option<&str>,
     base: &Option<String>,
+    pull_request: bool,
 ) -> Result<()> {
     validate_profile(ctx, profile)?;
 
@@ -51,7 +53,7 @@ pub fn issue(
     }
 
     let prepared_tasks = task::prepare_issue_tasks(ctx, &selected_issues)?;
-    write_prepared_stack(ctx, profile, base, prepared_tasks)
+    write_prepared_stack(ctx, profile, base, prepared_tasks, pull_request)
 }
 
 fn write_prepared_stack(
@@ -59,6 +61,7 @@ fn write_prepared_stack(
     profile: Option<&str>,
     base: &Option<String>,
     prepared_tasks: Vec<PreparedTask>,
+    pull_request: bool,
 ) -> Result<()> {
     if prepared_tasks.is_empty() {
         ctx.ui.print_warning("No tasks selected");
@@ -67,7 +70,14 @@ fn write_prepared_stack(
 
     let resolved_base = resolve_stack_base(ctx, base)?;
     let stack_path = next_available_stack_path(ctx)?;
-    write_prepared_stack_at_path(ctx, profile, &resolved_base, &stack_path, prepared_tasks)?;
+    write_prepared_stack_at_path(
+        ctx,
+        profile,
+        &resolved_base,
+        &stack_path,
+        prepared_tasks,
+        pull_request,
+    )?;
 
     ctx.ui
         .print_step(&format!("Created stack: {}", stack_path.display()));
@@ -80,12 +90,14 @@ fn write_prepared_stack_at_path(
     resolved_base: &str,
     stack_path: &Path,
     prepared_tasks: Vec<PreparedTask>,
+    pull_request: bool,
 ) -> Result<()> {
     let prepared = stack_tasks_from_prepared(
         ctx,
         stack_path,
         prepared_tasks,
         Some(resolved_base.to_string()),
+        pull_request,
     )?;
     let now = current_utc_timestamp();
     let stack = StackMetadata {
@@ -271,6 +283,10 @@ pub fn show(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
         if let Some(parent) = item.parent.as_deref() {
             ctx.ui.print_dim(&format!("     Parent: {parent}"));
         }
+        ctx.ui.print_dim(&format!(
+            "     Pull request: {}",
+            if item.pull_request { "yes" } else { "no" }
+        ));
         if let Some(error) = state.run.error.as_deref() {
             if !error.trim().is_empty() {
                 ctx.ui.print_dim(&format!("     Error: {error}"));
@@ -352,14 +368,22 @@ struct StackTask {
     task: String,
     run: String,
     #[serde(default)]
+    pull_request: bool,
+    #[serde(default)]
     parent: Option<String>,
 }
 
 impl StackTask {
-    fn from_prepared(task: PreparedTask, run: String, parent: Option<String>) -> Self {
+    fn from_prepared(
+        task: PreparedTask,
+        run: String,
+        parent: Option<String>,
+        pull_request: bool,
+    ) -> Self {
         Self {
             task: task.key,
             run,
+            pull_request,
             parent,
         }
     }
@@ -437,6 +461,7 @@ fn stack_tasks_from_prepared(
     stack_path: &Path,
     prepared_tasks: Vec<PreparedTask>,
     initial_parent: Option<String>,
+    pull_request: bool,
 ) -> Result<PreparedStackTasks> {
     let group = task_run::group_from_path(stack_path)?;
     let mut parent = initial_parent;
@@ -461,7 +486,12 @@ fn stack_tasks_from_prepared(
         let run_id = run.id.clone();
         task_runs.push(run);
         parent = prepared_branch_name(&task.branch).map(str::to_string);
-        tasks.push(StackTask::from_prepared(task, run_id, task_parent));
+        tasks.push(StackTask::from_prepared(
+            task,
+            run_id,
+            task_parent,
+            pull_request,
+        ));
     }
     Ok(PreparedStackTasks { tasks, task_runs })
 }
@@ -538,21 +568,35 @@ fn run_stack_task(
 
 fn stack_task_prompt_content(content: &str, stack_path: &Path, stack_task: &StackTask) -> String {
     let parent_branch = stack_task.parent.as_deref().unwrap_or("<stack-parent>");
-    let pr_command = format!(
-        "git push -u origin HEAD\ngh pr create --draft --base {} --fill",
-        shell_arg(parent_branch)
+    let pr_report_value = if stack_task.pull_request {
+        "<pr-url>"
+    } else {
+        "none"
+    };
+    let send_command = format!(
+        "cmux send --workspace {{{{coordinator_cmux_workspace}}}} --surface {{{{coordinator_cmux_surface}}}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\"\n{{{{coordinator_enter_command}}}}"
     );
-    let send_command = "cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>\"\n{{coordinator_enter_command}}";
     let complete_command = format!(
         "wt stack complete {} {} --run-next",
         shell_arg(&stack_path.to_string_lossy()),
         shell_arg(stack_task.label())
     );
+    let pull_request_instructions = if stack_task.pull_request {
+        let pr_command = format!(
+            "git push -u origin HEAD\ngh pr create --draft --base {} --fill",
+            shell_arg(parent_branch)
+        );
+        format!(
+            "Stack task metadata sets `pull_request = true`. When this task is complete and committed, push the branch and open a draft pull request against the stack parent branch:\n\n```bash\n{pr_command}\n```"
+        )
+    } else {
+        "Stack task metadata sets `pull_request = false`. When this task is complete and committed, do not open a pull request for this stack task.".into()
+    };
 
     format!(
-        "{}\n\n## Stack Coordinator Handoff\n\nWhen this task is complete and committed, check whether this repository or coordinator workflow expects a pull request before stack review. If it does, push the branch and open a draft pull request against the stack parent branch:\n\n```bash\n{}\n```\n\nThen send the Agent Completion Report back to the coordinator cmux surface that started this stack. Include the pull request URL, or `PR=none` when no pull request was opened:\n\n```bash\n{}\n```\n\nAfter sending the report, wait for the coordinator to review and advance the stack. The coordinator will run:\n\n```bash\n{}\n```\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait.",
+        "{}\n\n## Stack Coordinator Handoff\n\n{}\n\nThen send the Agent Completion Report back to the coordinator cmux surface that started this stack:\n\n```bash\n{}\n```\n\nAfter sending the report, wait for the coordinator to review and advance the stack. The coordinator will run:\n\n```bash\n{}\n```\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait.",
         content.trim_end(),
-        pr_command,
+        pull_request_instructions,
         send_command,
         complete_command
     )
@@ -855,6 +899,7 @@ fn write_stack_metadata(path: &Path, stack: &StackMetadata) -> Result<()> {
         content.push_str("\n[[tasks]]\n");
         content.push_str(&format!("task = {}\n", toml_quote(&item.task)));
         content.push_str(&format!("run = {}\n", toml_quote(&item.run)));
+        content.push_str(&format!("pull_request = {}\n", item.pull_request));
         if let Some(parent) = item.parent.as_deref() {
             content.push_str(&format!("parent = {}\n", toml_quote(parent)));
         }
@@ -1268,6 +1313,7 @@ mod tests {
         StackTask {
             task: key.into(),
             run: run.into(),
+            pull_request: true,
             parent: parent.map(str::to_string),
         }
     }
@@ -1406,6 +1452,7 @@ mod tests {
         let stack_task = StackTask {
             task: "PROJ-2".into(),
             run: "run-2".into(),
+            pull_request: true,
             parent: Some("PROJ-1".into()),
         };
         let stack_path = PathBuf::from("/repo/.local/stacks/2026-05-16-001.toml");
@@ -1417,11 +1464,9 @@ mod tests {
         );
 
         assert!(content.contains("## Stack Coordinator Handoff"));
-        assert!(content.contains(
-            "check whether this repository or coordinator workflow expects a pull request"
-        ));
+        assert!(content.contains("Stack task metadata sets `pull_request = true`"));
         assert!(content.contains("gh pr create --draft --base PROJ-1 --fill"));
-        assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains(
             "wt stack complete /repo/.local/stacks/2026-05-16-001.toml PROJ-2 --run-next"
@@ -1430,10 +1475,33 @@ mod tests {
     }
 
     #[test]
+    fn stack_prompt_respects_pull_request_false() {
+        let stack_task = StackTask {
+            task: "PROJ-2".into(),
+            run: "run-2".into(),
+            pull_request: false,
+            parent: Some("PROJ-1".into()),
+        };
+        let stack_path = PathBuf::from("/repo/.local/stacks/2026-05-16-001.toml");
+
+        let content = stack_task_prompt_content(
+            "title = \"API\"\nbranch = \"proj-2-api\"\n",
+            &stack_path,
+            &stack_task,
+        );
+
+        assert!(content.contains("Stack task metadata sets `pull_request = false`"));
+        assert!(content.contains("do not open a pull request for this stack task"));
+        assert!(!content.contains("gh pr create"));
+        assert!(content.contains("PR=none"));
+    }
+
+    #[test]
     fn stack_prompt_shell_quotes_stack_commands_when_needed() {
         let stack_task = StackTask {
             task: "task with space".into(),
             run: "run".into(),
+            pull_request: true,
             parent: None,
         };
         let stack_path = PathBuf::from("/repo path/.local/stacks/stack.toml");
@@ -1496,7 +1564,7 @@ mod tests {
         );
         let tasks = vec!["Add schema".into(), "Wire API".into()];
 
-        task(&ctx, &tasks, None, &Some("main".into())).unwrap();
+        task(&ctx, &tasks, None, &Some("main".into()), false).unwrap();
 
         let stack_path = latest_stack_path(&ctx).unwrap();
         let stack = read_stack_metadata(&stack_path).unwrap();
@@ -1528,11 +1596,33 @@ mod tests {
         assert!(content.contains("[[tasks]]"));
         assert!(content.contains("task = \"add-schema\""));
         assert!(content.contains("run = \""));
+        assert!(content.contains("pull_request = false"));
         let task_section = content.split("[[tasks]]").nth(1).unwrap();
         assert!(!task_section.contains("status ="));
         assert!(!task_section.contains("error ="));
         assert!(!content.contains("[[items]]"));
         assert!(!content.contains("[[issues]]"));
+    }
+
+    #[test]
+    fn task_can_create_stack_tasks_that_require_pull_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let tasks = vec!["Add schema".into()];
+
+        task(&ctx, &tasks, None, &Some("main".into()), true).unwrap();
+
+        let stack_path = latest_stack_path(&ctx).unwrap();
+        let stack = read_stack_metadata(&stack_path).unwrap();
+        assert!(stack.tasks[0].pull_request);
+        let content = std::fs::read_to_string(stack_path).unwrap();
+        assert!(content.contains("pull_request = true"));
     }
 
     #[test]
@@ -1572,6 +1662,7 @@ mod tests {
                     branch: "wire-api".into(),
                 },
             ],
+            false,
         );
 
         let error = result.unwrap_err().to_string();
@@ -1608,7 +1699,7 @@ mod tests {
         );
         let tasks = vec!["Add schema".into()];
 
-        task(&ctx, &tasks, None, &Some(".".into())).unwrap();
+        task(&ctx, &tasks, None, &Some(".".into()), false).unwrap();
 
         let stack_path = latest_stack_path(&ctx).unwrap();
         let content = std::fs::read_to_string(stack_path).unwrap();
@@ -1633,7 +1724,7 @@ mod tests {
         );
         let tasks = vec!["Add schema".into()];
 
-        task(&ctx, &tasks, None, &None).unwrap();
+        task(&ctx, &tasks, None, &None, false).unwrap();
 
         let stack_path = latest_stack_path(&ctx).unwrap();
         let stack = read_stack_metadata(&stack_path).unwrap();
@@ -1768,7 +1859,7 @@ mod tests {
         );
         let tasks = vec!["Add schema".into(), "add schema".into()];
 
-        let err = task(&ctx, &tasks, None, &None).unwrap_err();
+        let err = task(&ctx, &tasks, None, &None, false).unwrap_err();
         assert!(err.to_string().contains("Duplicate task: add-schema"));
     }
 
@@ -1806,7 +1897,7 @@ mod tests {
             Box::new(ui),
         );
 
-        issue(&ctx, &[], None, &Some("main".into())).unwrap();
+        issue(&ctx, &[], None, &Some("main".into()), false).unwrap();
 
         let stack_path = latest_stack_path(&ctx).unwrap();
         let stack = read_stack_metadata(&stack_path).unwrap();
@@ -1873,6 +1964,7 @@ mod tests {
             &["PROJ-1".into(), "PROJ-2".into()],
             None,
             &Some("main".into()),
+            false,
         )
         .unwrap();
 
@@ -1938,6 +2030,7 @@ mod tests {
         assert!(details.contains("Task: .local/tasks/PROJ-1.toml"));
         assert!(details.contains("Branch: alice/proj-1-schema"));
         assert!(details.contains("Parent: main"));
+        assert!(details.contains("Pull request: yes"));
         assert!(details.contains("Error: missing task"));
     }
 
@@ -2034,6 +2127,56 @@ error = ""
         .unwrap();
 
         assert!(read_stack_metadata(&stack_path).is_err());
+    }
+
+    #[test]
+    fn read_stack_metadata_defaults_missing_pull_request_to_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let stack_path = dir.path().join("stack.toml");
+        std::fs::write(
+            &stack_path,
+            r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[tasks]]
+task = "add-schema"
+run = "stack-manual-add-schema"
+parent = "main"
+"#,
+        )
+        .unwrap();
+
+        let stack = read_stack_metadata(&stack_path).unwrap();
+
+        assert!(!stack.tasks[0].pull_request);
+    }
+
+    #[test]
+    fn read_and_write_stack_metadata_preserves_pull_request_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let stack_path = dir.path().join("stack.toml");
+        std::fs::write(
+            &stack_path,
+            r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[tasks]]
+task = "add-schema"
+run = "stack-manual-add-schema"
+pull_request = false
+parent = "main"
+"#,
+        )
+        .unwrap();
+
+        let stack = read_stack_metadata(&stack_path).unwrap();
+
+        assert!(!stack.tasks[0].pull_request);
+        write_stack_metadata(&stack_path, &stack).unwrap();
+        let content = std::fs::read_to_string(stack_path).unwrap();
+        assert!(content.contains("pull_request = false"));
     }
 
     #[test]

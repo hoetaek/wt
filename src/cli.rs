@@ -350,6 +350,9 @@ pub enum StackCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
+        /// Mark prepared stack tasks as requiring draft pull requests
+        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
+        pull_request: bool,
     },
     /// Prepare issues as a stack file without starting workspaces
     Issue {
@@ -361,6 +364,9 @@ pub enum StackCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
+        /// Mark prepared stack tasks as requiring draft pull requests
+        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
+        pull_request: bool,
     },
     /// Start the next prepared or failed task from a selected runnable stack
     #[command(
@@ -968,6 +974,7 @@ mod tests {
                     ref issues,
                     profile: Some(ref profile),
                     base: Some(ref base),
+                    pull_request: false,
                 }
             }) if issues == &vec!["PROJ-123".to_string(), "PROJ-456".to_string()]
                 && profile == "codex"
@@ -995,6 +1002,7 @@ mod tests {
                     ref tasks,
                     profile: Some(ref profile),
                     base: Some(ref base),
+                    pull_request: false,
                 }
             }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
@@ -1012,8 +1020,34 @@ mod tests {
                     ref issues,
                     profile: None,
                     base: None,
+                    pull_request: false,
                 }
             }) if issues.is_empty()
+        ));
+    }
+
+    #[test]
+    fn stack_prepare_accepts_pull_request_flag() {
+        let cli = parse(&["wt", "stack", "task", "add-schema", "--pull-request"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::Task {
+                    pull_request: true,
+                    ..
+                }
+            })
+        ));
+
+        let cli = parse(&["wt", "stack", "issue", "PROJ-123", "--pull-request"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::Issue {
+                    pull_request: true,
+                    ..
+                }
+            })
         ));
     }
 

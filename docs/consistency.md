@@ -249,8 +249,13 @@ Stack이 어떤 task를 어떤 parent 위에 쌓았는지도 저장할 가치가
 task마다 `.local/tasks` 아래의 TaskDocument와 `.local/task-runs` 아래의
 `source = "stack"` TaskRun을 만든다. canonical 상태 목록은 `[[tasks]]`이고, task 문서는
 issue origin이 있는 작업과 직접 작성한 branch work를 같은 형태로 담는다. Stack row는
-task key, parent, linked TaskRun id 같은 orchestration link만 저장하고, status/error를
-따로 가지지 않는다. 실행 인스턴스의 canonical 기록은 TaskRun이다. `[[issues]]`나
+task key, parent, linked TaskRun id, pull request handoff intent 같은 orchestration
+link와 실행 지시만 저장하고, status/error를 따로 가지지 않는다. 실행 인스턴스의
+canonical 기록은 TaskRun이다. `pull_request = true|false`는 각 stack task가 작업 완료
+뒤 draft pull request를 열어야 하는지에 대한 명시적 handoff intent다. 이것은 PR 자체나
+review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. `wt stack task`와
+`wt stack issue`는 `--pull-request`가 있을 때만 `pull_request = true`를 쓰고, 생략하면
+`false`를 쓴다. `[[issues]]`나
 `[[items]]`처럼 같은 상태 목록을 가리키는 다른 이름은 받지 않는다. Bare `run`은 runnable
 stack 목록을 selector로 보여준다. Runnable stack은 다음 `prepared` 또는 `failed` TaskRun이
 있고 current `running` TaskRun은 없는 stack이다. Selector label은 task titles/keys, next
@@ -269,12 +274,12 @@ Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 
 전이해야 한다. 다음 task 자동 시작은 명시적인 continuation 선택, 예를 들어
 `--run-next`로만 일어난다.
 Stack task prompt는 작업 agent가 자기 판단만으로 stack을 전진시키기보다, 작업과
-commit을 끝낸 뒤 repo나 coordinator workflow가 pull request review를 기대하는지
-확인하도록 안내한다. PR workflow가 필요한 경우에만 branch를 push하고 stack parent
-branch를 base로 draft pull request를 열게 한다. 그 다음 `wt send <coordinator-worktree>
-...`로 실행자 worktree에 pull request URL 또는 `PR=none`을 포함한 Agent Completion
-Report를 보내도록 안내한다. 이 보고 전송은 transport일 뿐 상태 전이가 아니다. 실행자나
-master agent가 `wt review`, 필요한 경우 pull request, 보고를 확인한 뒤
+commit을 끝낸 뒤 stack row의 `pull_request` 값에 맞춰 handoff하도록 안내한다.
+`pull_request = true`면 branch를 push하고 stack parent branch를 base로 draft pull
+request를 열게 한다. `pull_request = false`면 pull request를 열지 않고 `PR=none`으로
+보고하게 한다. 그 다음 `wt send <coordinator-worktree> ...`로 실행자 worktree에 pull
+request URL 또는 `PR=none`을 포함한 Agent Completion Report를 보내도록 안내한다. 이
+보고 전송은 transport일 뿐 상태 전이가 아니다. 실행자나 master agent가 `wt review`, 필요한 경우 pull request, 보고를 확인한 뒤
 `wt stack complete ... --run-next`를 실행할 때 TaskRun 상태가 전이된다.
 
 `wt done`은 worktree와 local branch cleanup 명령이므로 `source = "new"`와

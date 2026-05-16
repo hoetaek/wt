@@ -8,7 +8,13 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
-No changes yet.
+- Changed stack TOML to record per-task `pull_request = true|false` handoff
+  intent. Prepared stack tasks write `false` by default, `wt stack task
+  --pull-request` and `wt stack issue --pull-request` write `true`, and stack
+  task prompts now either require a draft PR against the stack parent branch or
+  explicitly report `PR=none` based on that row value.
+- Bumped the package version to `0.19.0` because stack persisted state and task
+  handoff behavior changed while `wt` is still pre-1.0.
 
 ## 0.18.0 - 2026-05-16
 

@@ -766,6 +766,7 @@ Create a stack from branch-name text without creating worktrees:
 ```bash
 wt stack task "add schema" "wire API" --base main
 wt stack task "add schema" "wire API" --base .
+wt stack task "add schema" "wire API" --base main --pull-request
 ```
 
 `issue` imports provider issues as tasks and writes a stack file without
@@ -776,6 +777,7 @@ wt stack issue
 wt stack issue 123 456 789 --base main
 wt stack issue 123 456 789 --base .
 wt stack issue 123 456 789 --base main --profile codex
+wt stack issue 123 456 789 --base main --pull-request
 ```
 
 When issue identifiers are omitted, `issue` opens the provider issue list,
@@ -790,6 +792,8 @@ Both commands ask once for the base branch and store the resolved branch in the
 stack file. `--base .` stores the current branch without prompting, `--base`
 with no value opens the local branch selector, and `--base <branch>` stores the
 named branch explicitly. The first task uses that stored base as its parent.
+Both commands write `pull_request = false` by default. Pass `--pull-request`
+to write `pull_request = true` for every prepared task row.
 
 You can also edit stack TOML directly:
 
@@ -802,11 +806,13 @@ status = "prepared"
 [[tasks]]
 task = "add-schema"
 run = "stack-manual-add-schema"
+pull_request = false
 parent = "main"
 
 [[tasks]]
 task = "wire-api"
 run = "stack-manual-wire-api"
+pull_request = true
 parent = "add-schema"
 ```
 
@@ -838,8 +844,12 @@ updated_at = "2026-05-16T00:00:00.000000000Z"
 Run `wt new --task` or `wt new --task <task>` to select and start prepared task
 documents outside the stack state machine.
 
-`[[tasks]]` is the canonical stack list. Pull requests remain a separate
-workflow and are not stack tasks.
+`[[tasks]]` is the canonical stack list. `pull_request = true` means the task
+agent should open a draft pull request against the stack parent branch after
+committing; `pull_request = false` means it should report `PR=none` without
+opening a pull request. Omitted `--pull-request` on the stack creation command
+writes `false`. Pull requests remain a separate workflow and are not stack
+tasks.
 
 Start the next runnable stack task:
 
@@ -872,20 +882,19 @@ Stack-created cmux workspace names start with a compact order label, for example
 `S2/5 PROJ-123 Wire API`, so narrow workspace tabs still show both stack position
 and issue or task content.
 
-When `run` starts a task, the agent prompt includes a coordinator handoff. After
-committing the task work, the task agent is asked to check whether this
-repository or coordinator workflow expects a pull request before stack review. If
-it does, the task agent pushes the branch and opens a draft pull request against
-the stack parent branch:
+When `run` starts a task, the agent prompt includes a coordinator handoff based
+on the task row's `pull_request` value. With `pull_request = true`, after
+committing the task work, the task agent pushes the branch and opens a draft
+pull request against the stack parent branch:
 
 ```bash
 git push -u origin HEAD
 gh pr create --draft --base <parent-branch> --fill
 ```
 
-Then it sends its completion report back to the coordinator cmux surface that
-started the stack, including the pull request URL or `PR=none` when no pull
-request was opened:
+With `pull_request = false`, it skips the pull request and reports `PR=none`.
+In both cases it sends its completion report back to the coordinator cmux
+surface that started the stack:
 
 ```bash
 cmux send --workspace <coordinator-workspace> --surface <coordinator-surface> "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>"
@@ -914,8 +923,9 @@ Stack preparation creates one TaskRun record per task with `source = "stack"`
 and `group` derived from the stack file stem, then stores each run id on the
 stack task row. `run` updates the next runnable TaskRun to `running` and
 `complete` updates the same TaskRun to `done`. The stack TOML records each
-task's `parent` and run id so reruns can continue from the stored ordering
-state while TaskRun remains the execution-state source of truth.
+task's `parent`, run id, and `pull_request` handoff intent so reruns can
+continue from the stored ordering state while TaskRun remains the
+execution-state source of truth.
 Stack TaskRuns are completed by `wt stack complete`, not by `wt done`, because a
 stack task must be checked against its parent branch before the next task can
 start.
