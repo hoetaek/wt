@@ -12,7 +12,7 @@ pub(crate) enum PromptPolicy {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ProfileBranchDecision {
-    CreateNew,
+    CreateNew { branch_existed: bool },
     ReuseExisting { path: PathBuf },
     Skip,
 }
@@ -38,7 +38,9 @@ pub(crate) fn resolve_profile_branch(
     }
 
     if !git.local_branch_exists(branch)? {
-        return Ok(ProfileBranchDecision::CreateNew);
+        return Ok(ProfileBranchDecision::CreateNew {
+            branch_existed: false,
+        });
     }
 
     if path_decision == ProfilePathDecision::Recreate {
@@ -46,7 +48,9 @@ pub(crate) fn resolve_profile_branch(
             "Branch {branch} already exists; deleting because recreate was selected."
         ));
         delete_profile_branch(ctx, git, branch)?;
-        return Ok(ProfileBranchDecision::CreateNew);
+        return Ok(ProfileBranchDecision::CreateNew {
+            branch_existed: true,
+        });
     }
 
     handle_existing_profile_branch(ctx, git, profile_name, branch, path, prompt_policy)
@@ -129,7 +133,9 @@ fn handle_existing_profile_branch(
         0 => reuse_profile_branch(ctx, git, branch, path, checked_out_path),
         1 => {
             delete_profile_branch(ctx, git, branch)?;
-            Ok(ProfileBranchDecision::CreateNew)
+            Ok(ProfileBranchDecision::CreateNew {
+                branch_existed: true,
+            })
         }
         2 => Ok(ProfileBranchDecision::Skip),
         _ => Err(WtError::Cancelled.into()),

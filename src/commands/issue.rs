@@ -83,6 +83,7 @@ pub(crate) struct PlannedIssueWorktree {
 
 struct ProfileRunOptions<'a> {
     prepared_issue: Option<&'a PreparedIssueContext<'a>>,
+    on_start_issue_id: Option<&'a str>,
     prompt_policy: PromptPolicy,
 }
 
@@ -315,6 +316,10 @@ fn run_inner_many(
     };
     let branch_name = ensured_branch.name;
 
+    let on_start_issue_id = prepared_issue
+        .map(|issue| issue.on_start_issue_id)
+        .unwrap_or(Some(raw_id));
+
     if matrix || profile.is_some() {
         return run_profiles(
             ctx,
@@ -325,6 +330,7 @@ fn run_inner_many(
             profile,
             ProfileRunOptions {
                 prepared_issue,
+                on_start_issue_id,
                 prompt_policy,
             },
         );
@@ -426,17 +432,7 @@ fn run_inner_many(
 
     // 5. Update issue status for new branches
     if create_type == CreateType::New {
-        let on_start_issue_id = prepared_issue
-            .map(|issue| issue.on_start_issue_id)
-            .unwrap_or(Some(raw_id));
-        if let Some(on_start_issue_id) = on_start_issue_id {
-            if let Ok(provider) = build_provider(ctx) {
-                if let Err(e) = provider.on_start(on_start_issue_id) {
-                    ctx.ui
-                        .print_warning(&format!("Failed to update issue status: {e}"));
-                }
-            }
-        }
+        update_issue_start_status(ctx, on_start_issue_id);
     }
 
     // 6. Setup
@@ -525,6 +521,7 @@ fn run_profiles(
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
     let base = resolve_base_branch(ctx, &git, base_raw)?;
     let mut results = Vec::new();
+    let mut start_status_attempted = false;
 
     for (profile_name, profile_config) in &profiles {
         let snapshot_config = issue_snapshot.map(|snapshot| {
@@ -561,7 +558,7 @@ fn run_profiles(
         )
         .map_err(|err| profile_partial_failure(&results, None, err))?;
 
-        match resolve_profile_branch(
+        let profile_branch_existed = match resolve_profile_branch(
             ctx,
             &git,
             profile_name,
@@ -571,7 +568,7 @@ fn run_profiles(
         )
         .map_err(|err| profile_partial_failure(&results, None, err))?
         {
-            ProfileBranchDecision::CreateNew => {}
+            ProfileBranchDecision::CreateNew { branch_existed } => branch_existed,
             ProfileBranchDecision::ReuseExisting { path } => {
                 let result = IssueRunResult {
                     branch_name: profile_branch,
@@ -592,11 +589,17 @@ fn run_profiles(
                 continue;
             }
             ProfileBranchDecision::Skip => continue,
-        }
+        };
 
         git.worktree_add_new_branch(&names.path, &profile_branch, &base)
             .map_err(|err| profile_partial_failure(&results, None, err))?;
         git.set_branch_parent(&profile_branch, &base).ok();
+
+        if !profile_branch_existed && !start_status_attempted && options.on_start_issue_id.is_some()
+        {
+            update_issue_start_status(ctx, options.on_start_issue_id);
+            start_status_attempted = true;
+        }
 
         let result = IssueRunResult {
             branch_name: profile_branch,
@@ -622,6 +625,19 @@ fn run_profiles(
         profiles.len()
     ));
     Ok(results)
+}
+
+fn update_issue_start_status(ctx: &Ctx, on_start_issue_id: Option<&str>) {
+    let Some(on_start_issue_id) = on_start_issue_id else {
+        return;
+    };
+
+    if let Ok(provider) = build_provider(ctx) {
+        if let Err(e) = provider.on_start(on_start_issue_id) {
+            ctx.ui
+                .print_warning(&format!("Failed to update issue status: {e}"));
+        }
+    }
 }
 
 fn profile_partial_failure(
@@ -835,7 +851,7 @@ mod tests {
     use crate::config::{
         AgentCli, AgentConfig, Config, IssueProviderType, IssuesConfig, ReadyMode, SubmitMode,
     };
-    use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::mock::{CommandCall, MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
     use anyhow::Result;
     use std::path::{Path, PathBuf};
@@ -859,6 +875,26 @@ mod tests {
             }),
             ..Config::default()
         }
+    }
+
+    fn write_empty_profile(root: &Path, name: &str) {
+        let profile_dir = root.join(".local/profiles").join(name);
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+    }
+
+    fn count_linear_start_updates(calls: &[CommandCall], issue_id: &str) -> usize {
+        let expected = vec![
+            "issue".to_string(),
+            "update".to_string(),
+            issue_id.to_string(),
+            "--state".to_string(),
+            "In Progress".to_string(),
+        ];
+        calls
+            .iter()
+            .filter(|(cmd, args, _)| cmd == "linear" && args == &expected)
+            .count()
     }
 
     struct SharedRunner {
@@ -1590,6 +1626,161 @@ mod tests {
         }));
 
         std::fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn issue_with_profile_updates_start_status_for_new_profile_branch() {
+        let repo = tempfile::tempdir().unwrap();
+        write_empty_profile(repo.path(), "codex");
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor"}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor"}"#,
+            true,
+        );
+        runner.add_response("", false); // profile branch local_branch_exists
+        runner.add_response("", true); // worktree_add_new_branch
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // set parent config
+        runner.add_response("", true); // on_start
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            linear_config(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        let results = run_inner_many(
+            &ctx,
+            Some("123"),
+            &Some("main".into()),
+            Some("codex"),
+            false,
+            None,
+            PromptPolicy::Allow,
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].branch_name, "alice/proj-123-fix-editor-codex");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(count_linear_start_updates(&calls, "PROJ-123"), 1);
+    }
+
+    #[test]
+    fn issue_matrix_updates_start_status_once_for_created_profile_branches() {
+        let repo = tempfile::tempdir().unwrap();
+        write_empty_profile(repo.path(), "alpha");
+        write_empty_profile(repo.path(), "beta");
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor"}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor"}"#,
+            true,
+        );
+        runner.add_response("", false); // alpha branch local_branch_exists
+        runner.add_response("", true); // alpha worktree_add_new_branch
+        runner.add_response("", true); // alpha parent branch exists
+        runner.add_response("", true); // alpha set parent config
+        runner.add_response("", true); // on_start
+        runner.add_response("", false); // beta branch local_branch_exists
+        runner.add_response("", true); // beta worktree_add_new_branch
+        runner.add_response("", true); // beta parent branch exists
+        runner.add_response("", true); // beta set parent config
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            linear_config(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        let results = run_inner_many(
+            &ctx,
+            Some("123"),
+            &Some("main".into()),
+            None,
+            true,
+            None,
+            PromptPolicy::Allow,
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 2);
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(count_linear_start_updates(&calls, "PROJ-123"), 1);
+    }
+
+    #[test]
+    fn issue_with_preexisting_profile_branch_does_not_update_start_status() {
+        let repo = tempfile::tempdir().unwrap();
+        write_empty_profile(repo.path(), "codex");
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor"}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor"}"#,
+            true,
+        );
+        runner.add_response("", true); // profile branch local_branch_exists
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        ); // checked_out_path
+        runner.add_response("", true); // branch -D
+        runner.add_response("", true); // worktree_add_new_branch
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // set parent config
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_select(1); // delete and recreate existing branch
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            linear_config(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run_inner_many(
+            &ctx,
+            Some("123"),
+            &Some("main".into()),
+            Some("codex"),
+            false,
+            None,
+            PromptPolicy::Allow,
+        )
+        .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(count_linear_start_updates(&calls, "PROJ-123"), 0);
     }
 
     #[test]
