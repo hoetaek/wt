@@ -268,12 +268,9 @@ fn run_single_workflow(
         workflow_store::write(ctx, workflow_path, metadata)?;
     }
 
-    let states = read_workflow_task_states(ctx, metadata)?;
+    let states = read_single_workflow_task_states(ctx, workflow_path, metadata)?;
     if states.is_empty() {
         bail!("Workflow has no tasks: {}", workflow_path.display());
-    }
-    for state in &states {
-        validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_NEW)?;
     }
     if states
         .iter()
@@ -313,7 +310,7 @@ fn run_single_workflow(
     Ok(())
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct WorkflowTaskState {
     idx: usize,
     row: WorkflowTask,
@@ -323,10 +320,24 @@ struct WorkflowTaskState {
     run: task_run::TaskRun,
 }
 
-fn read_workflow_task_states(
+fn read_single_workflow_task_states(
     ctx: &Ctx,
+    workflow_path: &Path,
     metadata: &WorkflowMetadata,
 ) -> Result<Vec<WorkflowTaskState>> {
+    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
+    for state in &states {
+        validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_NEW)?;
+    }
+    Ok(states)
+}
+
+fn read_workflow_task_states(
+    ctx: &Ctx,
+    workflow_path: &Path,
+    metadata: &WorkflowMetadata,
+) -> Result<Vec<WorkflowTaskState>> {
+    let group = task_run::group_from_path(workflow_path)?;
     metadata
         .tasks
         .iter()
@@ -341,6 +352,7 @@ fn read_workflow_task_states(
             })?;
             let run = task_run::read(&run_path)?;
             validate_workflow_task_run(row, &run)?;
+            validate_workflow_task_run_group(row, &run, &group)?;
             Ok(WorkflowTaskState {
                 idx,
                 row: row.clone(),
@@ -360,6 +372,22 @@ fn validate_workflow_task_run(row: &WorkflowTask, run: &task_run::TaskRun) -> Re
             row.task,
             row.run,
             run.task
+        );
+    }
+    Ok(())
+}
+
+fn validate_workflow_task_run_group(
+    row: &WorkflowTask,
+    run: &task_run::TaskRun,
+    group: &str,
+) -> Result<()> {
+    if run.group.as_deref() != Some(group) {
+        bail!(
+            "Workflow task {} references TaskRun {} outside workflow group {}",
+            row.task,
+            row.run,
+            group
         );
     }
     Ok(())
@@ -566,7 +594,7 @@ fn run_batch_workflow(
         workflow_store::write(ctx, workflow_path, metadata)?;
     }
 
-    let states = read_batch_workflow_task_states(ctx, metadata)?;
+    let states = read_batch_workflow_task_states(ctx, workflow_path, metadata)?;
     if states.is_empty() {
         bail!("Workflow has no tasks: {}", workflow_path.display());
     }
@@ -595,9 +623,10 @@ fn run_batch_workflow(
 
 fn read_batch_workflow_task_states(
     ctx: &Ctx,
+    workflow_path: &Path,
     metadata: &WorkflowMetadata,
 ) -> Result<Vec<WorkflowTaskState>> {
-    let states = read_workflow_task_states(ctx, metadata)?;
+    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
     for state in &states {
         validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_BATCH)?;
     }
@@ -1048,18 +1077,9 @@ fn read_stack_workflow_task_states(
     workflow_path: &Path,
     metadata: &WorkflowMetadata,
 ) -> Result<Vec<WorkflowTaskState>> {
-    let group = task_run::group_from_path(workflow_path)?;
-    let states = read_workflow_task_states(ctx, metadata)?;
+    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
     for state in &states {
         validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_STACK)?;
-        if state.run.group.as_deref() != Some(group.as_str()) {
-            bail!(
-                "Workflow task {} references TaskRun {} outside workflow group {}",
-                state.row.task,
-                state.row.run,
-                group
-            );
-        }
     }
     Ok(states)
 }
@@ -1576,13 +1596,79 @@ mod tests {
         .unwrap();
 
         let record = workflow_store::list(&ctx).unwrap().remove(0);
-        let states = read_batch_workflow_task_states(&ctx, &record.workflow).unwrap();
+        let states = read_batch_workflow_task_states(&ctx, &record.path, &record.workflow).unwrap();
 
         assert_eq!(states.len(), 2);
         assert!(
             states
                 .iter()
                 .all(|state| state.run.source == task_run::SOURCE_BATCH)
+        );
+    }
+
+    #[test]
+    fn single_workflow_state_reader_rejects_task_run_from_other_workflow_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        task(
+            &ctx,
+            &["workflow docs".into()],
+            WorkflowModeArg::Single,
+            None,
+            &Some("main".into()),
+            false,
+        )
+        .unwrap();
+
+        let mut record = workflow_store::list(&ctx).unwrap().remove(0);
+        let foreign_run = replace_first_workflow_run_with_foreign_group(
+            &ctx,
+            &mut record.workflow,
+            task_run::SOURCE_NEW,
+        );
+
+        let err =
+            read_single_workflow_task_states(&ctx, &record.path, &record.workflow).unwrap_err();
+
+        assert!(err.to_string().contains("outside workflow group"));
+        assert!(err.to_string().contains(&foreign_run));
+        assert!(
+            err.to_string()
+                .contains(&task_run::group_from_path(&record.path).unwrap())
+        );
+    }
+
+    #[test]
+    fn batch_workflow_state_reader_rejects_task_run_from_other_workflow_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        task(
+            &ctx,
+            &["workflow docs".into(), "workflow state".into()],
+            WorkflowModeArg::Batch,
+            None,
+            &Some("main".into()),
+            false,
+        )
+        .unwrap();
+
+        let mut record = workflow_store::list(&ctx).unwrap().remove(0);
+        let foreign_run = replace_first_workflow_run_with_foreign_group(
+            &ctx,
+            &mut record.workflow,
+            task_run::SOURCE_BATCH,
+        );
+
+        let err =
+            read_batch_workflow_task_states(&ctx, &record.path, &record.workflow).unwrap_err();
+
+        assert!(err.to_string().contains("outside workflow group"));
+        assert!(err.to_string().contains(&foreign_run));
+        assert!(
+            err.to_string()
+                .contains(&task_run::group_from_path(&record.path).unwrap())
         );
     }
 
@@ -1712,5 +1798,25 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("--mode stack"));
+    }
+
+    fn replace_first_workflow_run_with_foreign_group(
+        ctx: &Ctx,
+        workflow: &mut WorkflowMetadata,
+        source: &str,
+    ) -> String {
+        let row = workflow.tasks.first_mut().unwrap();
+        let document = task_command::read_task_document(ctx, &row.task).unwrap();
+        let run = task_run::create(
+            ctx,
+            &row.task,
+            &document.branch,
+            source,
+            Some("foreign-workflow"),
+            STATUS_PREPARED,
+        )
+        .unwrap();
+        row.run = run.id.clone();
+        run.id
     }
 }
