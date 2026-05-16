@@ -493,11 +493,11 @@ fn run_stack_task(
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
     let (task_doc, task_path, content) = task::read_task_file(ctx, &stack_task.task)?;
-    let content = format!(
-        "{}\n\n## Stack Completion\n\nWhen this task is complete and committed, run:\n\n```bash\nwt stack complete {} {} --run-next\n```",
-        content.trim_end(),
-        stack_path.display(),
-        stack_task.label()
+    let content = stack_task_prompt_content(
+        &content,
+        stack_path,
+        stack_task,
+        &ctx.invocation_root.to_string_lossy(),
     );
     let branch_name = prepared_branch_name(&task_doc.branch);
     if branch_name.is_none() && task_doc.origin.is_none() {
@@ -532,6 +532,41 @@ fn run_stack_task(
             },
         },
     )
+}
+
+fn stack_task_prompt_content(
+    content: &str,
+    stack_path: &Path,
+    stack_task: &StackTask,
+    coordinator_target: &str,
+) -> String {
+    let send_command = format!(
+        "wt send {} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; Risks or follow-ups=<risks>\"",
+        shell_arg(coordinator_target)
+    );
+    let complete_command = format!(
+        "wt stack complete {} {} --run-next",
+        shell_arg(&stack_path.to_string_lossy()),
+        shell_arg(stack_task.label())
+    );
+
+    format!(
+        "{}\n\n## Stack Coordinator Handoff\n\nWhen this task is complete and committed, send the Agent Completion Report back to the coordinator worktree that started this stack:\n\n```bash\n{}\n```\n\nAfter sending the report, wait for the coordinator to review and advance the stack. The coordinator will run:\n\n```bash\n{}\n```\n\nIf `wt send` cannot find the coordinator surface, leave the same report in this task session and wait.",
+        content.trim_end(),
+        send_command,
+        complete_command
+    )
+}
+
+fn shell_arg(value: &str) -> String {
+    let safe = value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | ':' | '='));
+    if safe && !value.is_empty() {
+        return value.to_string();
+    }
+
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 #[derive(Clone)]
@@ -1216,6 +1251,48 @@ mod tests {
 
         let steps = ui.steps.lock().unwrap().join("\n");
         assert!(steps.contains("Opening cmux workspace: S2/2 PROJ-2 API"));
+    }
+
+    #[test]
+    fn stack_prompt_asks_task_agent_to_send_completion_report_to_coordinator() {
+        let stack_task = StackTask {
+            task: "PROJ-2".into(),
+            run: "run-2".into(),
+            parent: Some("PROJ-1".into()),
+        };
+        let stack_path = PathBuf::from("/repo/.local/stacks/2026-05-16-001.toml");
+
+        let content = stack_task_prompt_content(
+            "title = \"API\"\nbranch = \"proj-2-api\"\n",
+            &stack_path,
+            &stack_task,
+            "/repo",
+        );
+
+        assert!(content.contains("## Stack Coordinator Handoff"));
+        assert!(content.contains("wt send /repo \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; Risks or follow-ups=<risks>\""));
+        assert!(content.contains(
+            "wt stack complete /repo/.local/stacks/2026-05-16-001.toml PROJ-2 --run-next"
+        ));
+        assert!(content.contains("wait for the coordinator to review and advance the stack"));
+    }
+
+    #[test]
+    fn stack_prompt_shell_quotes_coordinator_target_when_needed() {
+        let stack_task = StackTask {
+            task: "task with space".into(),
+            run: "run".into(),
+            parent: None,
+        };
+        let stack_path = PathBuf::from("/repo path/.local/stacks/stack.toml");
+
+        let content =
+            stack_task_prompt_content("title = \"Task\"\n", &stack_path, &stack_task, "/repo path");
+
+        assert!(content.contains("wt send '/repo path' \"Agent Completion Report:"));
+        assert!(content.contains(
+            "wt stack complete '/repo path/.local/stacks/stack.toml' 'task with space' --run-next"
+        ));
     }
 
     #[test]

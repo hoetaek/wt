@@ -8,6 +8,9 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Changed stack task prompts to ask task agents to `wt send` their Agent
+  Completion Report back to the coordinator worktree before waiting for review;
+  the coordinator still advances the stack with `wt stack complete --run-next`.
 - Added `wt send <TARGET> <MESSAGE...>` for sending a message to the cmux
   surface discovered by the same branch/worktree/TaskRun target model used by
   `wt review`.

@@ -723,7 +723,16 @@ Stack-created cmux workspace names start with a compact order label, for example
 `S2/5 PROJ-123 Wire API`, so narrow workspace tabs still show both stack position
 and issue or task content.
 
-When `run` starts a task, the agent prompt includes the completion command:
+When `run` starts a task, the agent prompt includes a coordinator handoff. The
+task agent is asked to send its completion report back to the worktree that ran
+the stack:
+
+```bash
+wt send /path/to/repo "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; Risks or follow-ups=<risks>"
+```
+
+The coordinator reviews that report and the branch state, then advances the
+stack with the completion command:
 
 ```bash
 wt stack complete .local/stacks/2026-05-12-001.toml 123 --run-next
