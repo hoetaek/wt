@@ -8,10 +8,26 @@ local development sites, and bootstrap an agent prompt.
 
 ## Install
 
-Install with Homebrew:
+The recommended install path is Homebrew. The public tap is updated by the
+release workflow and installs prebuilt binaries for Apple Silicon macOS, Intel
+macOS, and x64 Linux.
 
 ```bash
 brew install hoetaek/tap/wt
+wt --version
+```
+
+Update an existing Homebrew install with:
+
+```bash
+brew update
+brew upgrade hoetaek/tap/wt
+```
+
+You can also install the latest GitHub Release with the shell installer:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/hoetaek/wt/releases/latest/download/wt-installer.sh | sh
 ```
 
 Or install from the Git repository with Cargo:
@@ -31,11 +47,15 @@ cargo install --path .
 The crate is not published to crates.io. The `wt` package name is already used
 there by another project, so Homebrew is the recommended packaged install path.
 
-## Versioning
+## Project Status
 
 `wt` is still pre-1.0. Until the CLI, config format, and persisted state files
 stabilize, breaking user-facing changes are represented as `0.x.0` minor
 bumps, not `x.0.0` major releases.
+
+Public releases are available through GitHub Releases and Homebrew. If you are
+trying `wt` in another project, start with `wt init --dry-run` or `wt doctor` to
+inspect what `wt` would use before changing repository config.
 
 ## Requirements
 
