@@ -96,6 +96,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    /// Prepare, inspect, edit, run, or complete workflows
+    Workflow {
+        #[command(subcommand)]
+        command: WorkflowCommand,
+    },
     /// Prepare, inspect, edit, run, or complete stacks
     Stack {
         #[command(subcommand)]
@@ -343,6 +348,77 @@ pub enum TaskCommand {
         #[arg(value_name = "TASK")]
         tasks: Vec<String>,
     },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum WorkflowCommand {
+    /// Prepare local tasks as a workflow file without starting workspaces
+    Task {
+        /// Task titles or existing task keys to prepare
+        #[arg(required = true)]
+        tasks: Vec<String>,
+        /// Workflow execution shape
+        #[arg(long, value_enum)]
+        mode: WorkflowModeArg,
+        /// Named profile from .local/profiles/<name> for all tasks
+        #[arg(long)]
+        profile: Option<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Mark stack-mode workflow tasks as requiring draft pull requests
+        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
+        pull_request: bool,
+    },
+    /// Prepare issues as a workflow file without starting workspaces
+    Issue {
+        /// Issue identifiers to import as tasks (omit to select interactively)
+        issues: Vec<String>,
+        /// Workflow execution shape
+        #[arg(long, value_enum)]
+        mode: WorkflowModeArg,
+        /// Named profile from .local/profiles/<name> for all tasks
+        #[arg(long)]
+        profile: Option<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Mark stack-mode workflow tasks as requiring draft pull requests
+        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
+        pull_request: bool,
+    },
+    /// Start runnable tasks from a workflow
+    Run {
+        /// Workflow TOML path or shorthand id
+        workflow: Option<String>,
+    },
+    /// Show workflow metadata and task statuses
+    Show {
+        /// Workflow TOML path, shorthand id, or "latest" (default)
+        workflow: Option<String>,
+    },
+    /// Open workflow TOML in the configured editor
+    Edit {
+        /// Workflow TOML path, shorthand id, or "latest" (default)
+        workflow: Option<String>,
+    },
+    /// Mark the running task in a stack-mode workflow as complete
+    Complete {
+        /// Workflow TOML path or shorthand id
+        workflow: String,
+        /// Running workflow task identifier to complete
+        task: Option<String>,
+        /// Start the next workflow task after marking this one complete
+        #[arg(long)]
+        run_next: bool,
+    },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowModeArg {
+    Single,
+    Batch,
+    Stack,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
@@ -986,6 +1062,72 @@ mod tests {
         assert!(!help.contains("--batch <BATCH>"));
         assert!(help.contains("no issue provider"));
         assert!(help.contains("already has origin"));
+    }
+
+    #[test]
+    fn workflow_task_requires_mode() {
+        let err = Cli::try_parse_from(["wt", "workflow", "task", "add-schema"]).unwrap_err();
+        assert!(err.to_string().contains("--mode <MODE>"));
+    }
+
+    #[test]
+    fn workflow_task_accepts_mode_profile_and_base() {
+        let cli = parse(&[
+            "wt",
+            "workflow",
+            "task",
+            "add-schema",
+            "wire-api",
+            "--mode",
+            "stack",
+            "--profile",
+            "codex",
+            "--base",
+            "main",
+            "--pull-request",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Task {
+                    ref tasks,
+                    mode: WorkflowModeArg::Stack,
+                    profile: Some(ref profile),
+                    base: Some(ref base),
+                    pull_request: true,
+                }
+            }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
+                && profile == "codex"
+                && base == "main"
+        ));
+    }
+
+    #[test]
+    fn workflow_issue_accepts_no_issue_args_for_interactive_selection() {
+        let cli = parse(&["wt", "workflow", "issue", "--mode", "batch"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Issue {
+                    ref issues,
+                    mode: WorkflowModeArg::Batch,
+                    profile: None,
+                    base: None,
+                    pull_request: false,
+                }
+            }) if issues.is_empty()
+        ));
+    }
+
+    #[test]
+    fn workflow_help_uses_canonical_description() {
+        let mut command = Cli::command();
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+        let help = workflow.render_help().to_string();
+        assert!(help.contains("Prepare, inspect, edit, run, or complete workflows"));
+        assert!(help.contains("task"));
+        assert!(help.contains("issue"));
+        assert!(help.contains("complete"));
     }
 
     #[test]

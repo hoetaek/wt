@@ -15,7 +15,7 @@ pub mod workflow;
 pub mod worktree_naming;
 
 use anyhow::Result;
-use cli::{BatchCommand, Commands, ConfigCommand, StackCommand, TaskCommand};
+use cli::{BatchCommand, Commands, ConfigCommand, StackCommand, TaskCommand, WorkflowCommand};
 use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
@@ -53,6 +53,43 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         },
         Commands::Task { command } => match command {
             TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
+        },
+        Commands::Workflow { command } => match command {
+            WorkflowCommand::Task {
+                tasks,
+                mode,
+                profile,
+                base,
+                pull_request,
+            } => {
+                commands::workflow::task(ctx, tasks, *mode, profile.as_deref(), base, *pull_request)
+            }
+            WorkflowCommand::Issue {
+                issues,
+                mode,
+                profile,
+                base,
+                pull_request,
+            } => commands::workflow::issue(
+                ctx,
+                issues,
+                *mode,
+                profile.as_deref(),
+                base,
+                *pull_request,
+            ),
+            WorkflowCommand::Run { workflow } => commands::workflow::run(ctx, workflow.as_deref()),
+            WorkflowCommand::Show { workflow } => {
+                commands::workflow::show(ctx, workflow.as_deref())
+            }
+            WorkflowCommand::Edit { workflow } => {
+                commands::workflow::edit(ctx, workflow.as_deref())
+            }
+            WorkflowCommand::Complete {
+                workflow,
+                task,
+                run_next,
+            } => commands::workflow::complete(ctx, workflow, task.as_deref(), *run_next),
         },
         Commands::Stack { command } => match command {
             StackCommand::Task {

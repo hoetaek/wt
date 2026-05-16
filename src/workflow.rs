@@ -104,7 +104,7 @@ impl WorkflowTask {
 }
 
 pub fn create(ctx: &Ctx, mut workflow: WorkflowMetadata) -> Result<WorkflowRecord> {
-    let path = next_available_workflow_path(ctx)?;
+    let path = next_available_path(ctx)?;
     write(ctx, &path, &mut workflow)?;
     Ok(WorkflowRecord {
         id: workflow_id(&path)?,
@@ -233,7 +233,7 @@ fn ensure_color(ctx: &Ctx, path: &Path, workflow: &mut WorkflowMetadata) -> Resu
     Ok(())
 }
 
-fn next_available_workflow_path(ctx: &Ctx) -> Result<PathBuf> {
+pub fn next_available_path(ctx: &Ctx) -> Result<PathBuf> {
     let workflows_dir = workflows_dir(ctx);
     fs::create_dir_all(&workflows_dir)
         .with_context(|| "Failed to create workflow directory: .local/workflows")?;
