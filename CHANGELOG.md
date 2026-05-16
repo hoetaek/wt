@@ -8,7 +8,8 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
-No changes yet.
+- Fixed sequential `wt workflow run <workflow> --jobs 1` cancellation so later
+  runnable batch tasks are not started after the user cancels one task.
 
 ## 0.21.0 - 2026-05-16
 

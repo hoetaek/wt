@@ -641,13 +641,26 @@ fn run_batch_workflow_sequential(
 ) -> Result<bool> {
     let mut failed = false;
     let total = metadata.tasks.len();
-    for state in states {
+    for (idx, state) in states.iter().enumerate() {
         ctx.ui.print_step(&format!("Starting {}", state.row.task));
         task_run::update(ctx, &state.row.run, STATUS_RUNNING, None, None)?;
         let result =
-            run_batch_workflow_task(ctx, &state, &base, metadata.profile.as_deref(), true, total);
-        if apply_batch_workflow_result(ctx, &state, result, metadata.color.as_deref())? {
-            failed = true;
+            run_batch_workflow_task(ctx, state, &base, metadata.profile.as_deref(), true, total);
+        match apply_batch_workflow_result(ctx, state, result, metadata.color.as_deref())? {
+            BatchWorkflowTaskOutcome::Started => {}
+            BatchWorkflowTaskOutcome::Failed => failed = true,
+            BatchWorkflowTaskOutcome::Cancelled => {
+                failed = true;
+                for skipped in states.iter().skip(idx + 1) {
+                    record_batch_workflow_failure(
+                        ctx,
+                        skipped,
+                        task_run::STATUS_SKIPPED,
+                        "Skipped after user cancellation",
+                    )?;
+                }
+                break;
+            }
         }
     }
     Ok(failed)
@@ -766,6 +779,12 @@ struct BatchWorkflowFailure {
 struct BatchWorkflowCompletion {
     state: WorkflowTaskState,
     result: Result<issue::IssueRunResult>,
+}
+
+enum BatchWorkflowTaskOutcome {
+    Started,
+    Failed,
+    Cancelled,
 }
 
 fn failed_indices(failures: &[BatchWorkflowFailure]) -> HashSet<String> {
@@ -938,20 +957,20 @@ fn apply_batch_workflow_result(
     state: &WorkflowTaskState,
     result: Result<issue::IssueRunResult>,
     color: Option<&str>,
-) -> Result<bool> {
+) -> Result<BatchWorkflowTaskOutcome> {
     match result {
         Ok(result) => {
             record_batch_workflow_success(ctx, state, result, color)?;
-            Ok(false)
+            Ok(BatchWorkflowTaskOutcome::Started)
         }
         Err(err) if is_cancelled(&err) => {
             record_batch_workflow_failure(ctx, state, task_run::STATUS_SKIPPED, "User cancelled")?;
-            Ok(true)
+            Ok(BatchWorkflowTaskOutcome::Cancelled)
         }
         Err(err) => {
             let message = err.to_string();
             record_batch_workflow_failure(ctx, state, STATUS_FAILED, &message)?;
-            Ok(true)
+            Ok(BatchWorkflowTaskOutcome::Failed)
         }
     }
 }
@@ -1669,6 +1688,62 @@ mod tests {
         assert!(
             err.to_string()
                 .contains(&task_run::group_from_path(&record.path).unwrap())
+        );
+    }
+
+    #[test]
+    fn sequential_batch_workflow_stops_after_user_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response("", true); // checked_out_path for the cancelled task
+        let mut ui = MockUi::new();
+        ui.add_select(2); // Abort at the existing-worktree prompt
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        task(
+            &ctx,
+            &["cancel first".into(), "should wait".into()],
+            WorkflowModeArg::Batch,
+            None,
+            &Some("main".into()),
+            false,
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        let first_task =
+            task_command::read_task_document(&ctx, &record.workflow.tasks[0].task).unwrap();
+        let first_worktree = crate::names::WorktreeNames::new_with_workspace_config(
+            &first_task.branch,
+            &ctx.parent_dir,
+            &ctx.repo_root,
+            &ctx.repo_name,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .path;
+        std::fs::create_dir_all(first_worktree).unwrap();
+
+        let err = run(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap_err();
+
+        assert!(err.to_string().contains("Workflow batch failed"));
+        let first_run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
+        let second_run = task_run_record(&ctx, &record.workflow.tasks[1].run).unwrap();
+        assert_eq!(first_run.status, STATUS_SKIPPED);
+        assert_eq!(first_run.error.as_deref(), Some("User cancelled"));
+        assert_eq!(second_run.status, STATUS_SKIPPED);
+        assert_eq!(
+            second_run.error.as_deref(),
+            Some("Skipped after user cancellation")
         );
     }
 
