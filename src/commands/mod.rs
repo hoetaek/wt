@@ -14,6 +14,7 @@ pub mod open;
 pub mod pr;
 pub mod profile;
 pub mod profile_match;
+pub(crate) mod profile_workspace;
 pub mod review;
 pub mod send;
 pub mod site;

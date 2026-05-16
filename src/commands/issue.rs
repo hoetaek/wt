@@ -1,5 +1,8 @@
 use crate::cli::BaseMode;
 use crate::commands::agent_report;
+use crate::commands::profile_workspace::{
+    ProfileBranchDecision, PromptPolicy, resolve_profile_branch,
+};
 use crate::config::Config;
 use crate::config::IssueProviderType;
 use crate::context::Ctx;
@@ -76,12 +79,6 @@ impl std::error::Error for IssueRunPartialFailure {}
 pub(crate) struct PlannedIssueWorktree {
     pub(crate) branch_name: String,
     pub(crate) path: PathBuf,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PromptPolicy {
-    Allow,
-    Deny,
 }
 
 struct ProfileRunOptions<'a> {
@@ -564,65 +561,37 @@ fn run_profiles(
         )
         .map_err(|err| profile_partial_failure(&results, None, err))?;
 
-        if names.path.exists() {
-            ctx.ui.print_warning(&format!(
-                "Worktree {} already exists.",
-                names.path.display()
-            ));
-            let items = vec![
-                "Delete and recreate".into(),
-                "Skip".into(),
-                "Abort all".into(),
-            ];
-            if options.prompt_policy == PromptPolicy::Deny {
-                return Err(profile_partial_failure(
-                    &results,
-                    None,
-                    anyhow::anyhow!(
-                        "Worktree {} already exists; parallel batch workers cannot prompt to delete, skip, or abort",
-                        names.path.display()
-                    ),
-                ));
-            }
-            let choice = ctx
-                .ui
-                .select(&format!("[{profile_name}] Worktree already exists"), &items)
-                .map_err(|err| profile_partial_failure(&results, None, err))?;
-            match choice {
-                0 => {
-                    ctx.ui.print_step("Removing existing worktree...");
-                    git.worktree_remove_force(&names.path).ok();
-                    if names.path.exists() {
-                        std::fs::remove_dir_all(&names.path)
-                            .map_err(|err| profile_partial_failure(&results, None, err.into()))?;
-                    }
-                }
-                1 => continue,
-                _ => {
-                    return Err(profile_partial_failure(
-                        &results,
-                        None,
-                        WtError::Cancelled.into(),
-                    ));
-                }
-            }
-        }
-
-        if git
-            .local_branch_exists(&profile_branch)
-            .map_err(|err| profile_partial_failure(&results, None, err))?
+        match resolve_profile_branch(
+            ctx,
+            &git,
+            profile_name,
+            &profile_branch,
+            &names.path,
+            options.prompt_policy,
+        )
+        .map_err(|err| profile_partial_failure(&results, None, err))?
         {
-            ctx.ui.print_warning(&format!(
-                "Branch {profile_branch} already exists, removing..."
-            ));
-            git.worktree_remove_force(&names.path).ok();
-            ctx.runner
-                .run(
-                    "git",
-                    &["branch", "-D", &profile_branch],
-                    Some(&ctx.repo_root),
-                )
-                .ok();
+            ProfileBranchDecision::CreateNew => {}
+            ProfileBranchDecision::ReuseExisting { path } => {
+                let result = IssueRunResult {
+                    branch_name: profile_branch,
+                    worktree_path: path.clone(),
+                };
+                if let Err(err) = setup::run_setup(
+                    ctx,
+                    &path,
+                    &names,
+                    Some(&profile_title),
+                    setup_mode,
+                    Some(&profile_extra_vars),
+                    Some(profile_config),
+                ) {
+                    return Err(profile_partial_failure(&results, Some(result), err));
+                }
+                results.push(result);
+                continue;
+            }
+            ProfileBranchDecision::Skip => continue,
         }
 
         git.worktree_add_new_branch(&names.path, &profile_branch, &base)
@@ -649,7 +618,7 @@ fn run_profiles(
     }
 
     ctx.ui.print_step(&format!(
-        "All {} profiles created successfully",
+        "All {} profiles processed successfully",
         profiles.len()
     ));
     Ok(results)
@@ -1001,6 +970,148 @@ mod tests {
         assert!(new_prompts[0].contains("Changed files"));
         assert!(new_prompts[0].contains("New branch prompt"));
         assert_eq!(agent.prompt.remove("issue").unwrap(), vec!["Issue prompt"]);
+    }
+
+    #[test]
+    fn issue_profile_existing_branch_without_worktree_reuses_branch() {
+        let repo = tempfile::tempdir().unwrap();
+        let profile_dir = repo.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response("", true); // profile branch local_branch_exists
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        ); // checked_out_path
+        runner.add_response("", true); // worktree_add existing branch
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_select(0); // reuse existing branch
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+        let base = Some("main".to_string());
+
+        let results = run_with_issue_snapshot_many(
+            &ctx,
+            &base,
+            Some("codex"),
+            false,
+            PreparedIssueContext {
+                identifier: "add-schema",
+                title: "Add schema",
+                branch_name: Some("add-schema"),
+                mode: "issue",
+                on_start_issue_id: None,
+                prompt_intro: "Use this issue snapshot before changing code.",
+                workspace_label: None,
+                snapshot: IssueSnapshotContext {
+                    path_label: "Task path",
+                    path: ".local/tasks/add-schema.toml",
+                    content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+                },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].branch_name, "add-schema-codex");
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "git"
+                && args.len() == 4
+                && args[0] == "worktree"
+                && args[1] == "add"
+                && args[3] == "add-schema-codex"
+        }));
+        assert!(calls.iter().all(|(cmd, args, _)| {
+            !(cmd == "git"
+                && args
+                    == &vec![
+                        "branch".to_string(),
+                        "-D".to_string(),
+                        "add-schema-codex".to_string(),
+                    ])
+        }));
+    }
+
+    #[test]
+    fn issue_profile_existing_branch_non_interactive_fails_without_prompt_or_delete() {
+        let repo = tempfile::tempdir().unwrap();
+        let profile_dir = repo.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response("", true); // profile branch local_branch_exists
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let base = Some("main".to_string());
+
+        let result = run_with_issue_snapshot_non_interactive(
+            &ctx,
+            &base,
+            Some("codex"),
+            false,
+            PreparedIssueContext {
+                identifier: "add-schema",
+                title: "Add schema",
+                branch_name: Some("add-schema"),
+                mode: "issue",
+                on_start_issue_id: None,
+                prompt_intro: "Use this issue snapshot before changing code.",
+                workspace_label: None,
+                snapshot: IssueSnapshotContext {
+                    path_label: "Task path",
+                    path: ".local/tasks/add-schema.toml",
+                    content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+                },
+            },
+        );
+
+        assert!(result.is_err());
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("Branch add-schema-codex already exists"));
+        assert!(message.contains("cannot prompt"));
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().all(|(cmd, args, _)| {
+            !(cmd == "git"
+                && args.first().is_some_and(|arg| {
+                    arg == "worktree" && args.get(1).is_some_and(|arg| arg == "add")
+                }))
+        }));
+        assert!(calls.iter().all(|(cmd, args, _)| {
+            !(cmd == "git"
+                && args
+                    == &vec![
+                        "branch".to_string(),
+                        "-D".to_string(),
+                        "add-schema-codex".to_string(),
+                    ])
+        }));
     }
 
     #[test]
