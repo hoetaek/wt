@@ -472,6 +472,7 @@ mod tests {
         let mut runner = MockRunner::new();
         runner.add_command("cmux");
         add_worktree_list(&mut runner, &fixture);
+        runner.add_response("", false);
         add_matching_workspace(&mut runner, &fixture);
         add_selected_surface(&mut runner);
         runner.add_response("Ready", true);

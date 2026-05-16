@@ -495,6 +495,7 @@ mod tests {
             ),
             true,
         );
+        runner.add_response("", false);
         runner.add_response("main", true);
         runner.add_response("", true);
         runner.add_response("1", true);
