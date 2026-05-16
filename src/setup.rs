@@ -16,6 +16,25 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 const DEFAULT_SITE_NAME_TEMPLATE: &str = "{{repo}}-{{branch_slug}}";
+const CMUX_BACKGROUND_AGENT_PROBE_SECS: u64 = 10;
+const CMUX_FOCUS_SETTLE_SECS: u64 = 3;
+
+#[derive(Clone, Copy)]
+pub(crate) struct SetupOptions {
+    pub(crate) focus_workspace: bool,
+    pub(crate) restore_caller_after_workspace_open: bool,
+    pub(crate) focus_restore_if_workspace_cold: bool,
+}
+
+impl Default for SetupOptions {
+    fn default() -> Self {
+        Self {
+            focus_workspace: false,
+            restore_caller_after_workspace_open: true,
+            focus_restore_if_workspace_cold: true,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct SiteDescriptor {
@@ -39,6 +58,7 @@ pub fn run_setup(
     extra_vars: Option<&HashMap<String, String>>,
     config_override: Option<&Config>,
 ) -> Result<()> {
+    let options = SetupOptions::default();
     let config = config_override.unwrap_or(&ctx.config);
 
     copy_files(ctx, config, wt_path)?;
@@ -93,7 +113,15 @@ pub fn run_setup(
         .and_then(|ws| ws.colors.get(mode))
         .cloned()
         .unwrap_or_default();
-    let ws_handle = open_workspace(ctx, config, wt_path, names, &template_vars, &ws_color)?;
+    let ws_handle = open_workspace(
+        ctx,
+        config,
+        wt_path,
+        names,
+        &template_vars,
+        &ws_color,
+        options,
+    )?;
 
     inject_local_context(
         ctx,
@@ -365,8 +393,9 @@ fn open_workspace(
     names: &WorktreeNames,
     template_vars: &HashMap<String, String>,
     color: &str,
+    options: SetupOptions,
 ) -> Result<Option<String>> {
-    let cmux = CmuxService::new(ctx.runner.as_ref());
+    let cmux = CmuxService::new_with_workspace_focus(ctx.runner.as_ref(), options.focus_workspace);
     if !cmux.is_available() {
         ctx.ui
             .print_step(&format!("Worktree path: {}", wt_path.display()));
@@ -391,7 +420,47 @@ fn open_workspace(
             .unwrap_or_default(),
         None => String::new(),
     };
+    let should_probe_workspace_start = options.focus_restore_if_workspace_cold
+        && (!command.trim().is_empty() || !ws_config.tabs.is_empty());
+    let caller_workspace = (options.restore_caller_after_workspace_open
+        && (options.focus_workspace || should_probe_workspace_start))
+        .then(|| cmux.caller_context().and_then(|caller| caller.workspace))
+        .flatten();
     let ws_handle = cmux.new_workspace(wt_path, &names.workspace, &command)?;
+    let mut focus_was_moved = options.focus_workspace;
+
+    if should_probe_workspace_start {
+        let ready_marker = config
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.effective_ready());
+        ctx.ui.print_step(&format!(
+            "Waiting up to {CMUX_BACKGROUND_AGENT_PROBE_SECS}s for cmux to start the agent in the background..."
+        ));
+        let started = wait_for_workspace_agent_start(
+            &cmux,
+            &ws_handle,
+            ready_marker.as_deref(),
+            CMUX_BACKGROUND_AGENT_PROBE_SECS,
+        );
+
+        if !started {
+            ctx.ui.print_step(
+                "cmux did not start the agent in the background; focusing briefly, then returning",
+            );
+            match cmux.select_workspace(&ws_handle) {
+                Ok(()) => {
+                    focus_was_moved = true;
+                    wait_for_workspace_terminal(&cmux, &ws_handle, CMUX_FOCUS_SETTLE_SECS);
+                }
+                Err(err) => {
+                    ctx.ui.print_warning(&format!(
+                        "Failed to focus cmux workspace for PTY initialization: {err}"
+                    ));
+                }
+            }
+        }
+    }
 
     if !color.is_empty() {
         cmux.set_color(&ws_handle, color)?;
@@ -405,7 +474,84 @@ fn open_workspace(
         }
     }
 
+    if options.restore_caller_after_workspace_open && focus_was_moved {
+        if let Some(caller_workspace) = caller_workspace
+            .as_deref()
+            .filter(|workspace| !workspace.trim().is_empty() && *workspace != ws_handle)
+        {
+            // Temporary cmux 0.64.x workaround: focus starts the offscreen PTY
+            // (manaflow-ai/cmux#4187/#4193), then we restore the caller workspace.
+            if let Err(err) = cmux.select_workspace(caller_workspace) {
+                ctx.ui
+                    .print_warning(&format!("Failed to restore cmux workspace focus: {err}"));
+            } else if should_probe_workspace_start {
+                ctx.ui.print_step("Returned to previous cmux workspace");
+            }
+        }
+    }
+
     Ok(Some(ws_handle))
+}
+
+fn workspace_terminal_ready(cmux: &CmuxService<'_>, ws_handle: &str) -> bool {
+    let Some(surface) = first_workspace_surface(cmux, ws_handle) else {
+        return false;
+    };
+    cmux.read_screen(&surface, ws_handle).is_ok()
+}
+
+fn workspace_agent_started(
+    cmux: &CmuxService<'_>,
+    ws_handle: &str,
+    ready_marker: Option<&str>,
+) -> bool {
+    let Some(surface) = first_workspace_surface(cmux, ws_handle) else {
+        return false;
+    };
+    let Ok(screen) = cmux.read_screen(&surface, ws_handle) else {
+        return false;
+    };
+
+    ready_marker.is_none_or(|marker| screen.contains(marker))
+}
+
+fn wait_for_workspace_agent_start(
+    cmux: &CmuxService<'_>,
+    ws_handle: &str,
+    ready_marker: Option<&str>,
+    timeout_secs: u64,
+) -> bool {
+    let attempts = timeout_secs.saturating_mul(4).max(1);
+    for attempt in 0..attempts {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        if workspace_agent_started(cmux, ws_handle, ready_marker) {
+            return true;
+        }
+    }
+    false
+}
+
+fn wait_for_workspace_terminal(cmux: &CmuxService<'_>, ws_handle: &str, timeout_secs: u64) -> bool {
+    let attempts = timeout_secs.saturating_mul(4).max(1);
+    for attempt in 0..attempts {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        if workspace_terminal_ready(cmux, ws_handle) {
+            return true;
+        }
+    }
+    false
+}
+
+fn first_workspace_surface(cmux: &CmuxService<'_>, ws_handle: &str) -> Option<String> {
+    let pane = cmux.list_panes(ws_handle).ok()?.into_iter().next()?;
+    cmux.list_pane_surfaces(&pane, ws_handle)
+        .ok()?
+        .into_iter()
+        .next()
 }
 
 fn install_deps(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
@@ -1711,8 +1857,15 @@ mod tests {
 
         let mut runner = MockRunner::new();
         runner.add_command("cmux");
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:0"}}"#,
+            true,
+        );
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response("ready ›", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
 
@@ -1767,6 +1920,12 @@ mod tests {
             .position(|arg| arg == "--command")
             .and_then(|idx| workspace_call.1.get(idx + 1))
             .unwrap();
+        let focus_arg = workspace_call
+            .1
+            .iter()
+            .position(|arg| arg == "--focus")
+            .and_then(|idx| workspace_call.1.get(idx + 1))
+            .unwrap();
         assert_eq!(
             command_arg,
             &format!(
@@ -1774,6 +1933,7 @@ mod tests {
                 wt.display()
             )
         );
+        assert_eq!(focus_arg, "false");
 
         fs::remove_dir_all(&repo).ok();
         fs::remove_dir_all(&wt).ok();

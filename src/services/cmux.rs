@@ -24,11 +24,25 @@ pub struct CmuxCaller {
 
 pub struct CmuxService<'a> {
     runner: &'a dyn CommandRunner,
+    focus_new_workspace: bool,
 }
 
 impl<'a> CmuxService<'a> {
     pub fn new(runner: &'a dyn CommandRunner) -> Self {
-        Self { runner }
+        Self {
+            runner,
+            focus_new_workspace: true,
+        }
+    }
+
+    pub fn new_with_workspace_focus(
+        runner: &'a dyn CommandRunner,
+        focus_new_workspace: bool,
+    ) -> Self {
+        Self {
+            runner,
+            focus_new_workspace,
+        }
     }
 
     pub fn is_available(&self) -> bool {
@@ -49,7 +63,7 @@ impl<'a> CmuxService<'a> {
         if let Some(window) = self.caller_context().and_then(|caller| caller.window) {
             args.extend(["--window".into(), window]);
         }
-        args.extend(["--focus".into(), "true".into()]);
+        args.extend(["--focus".into(), self.focus_new_workspace.to_string()]);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
         let out = self.runner.run("cmux", &arg_refs, None)?;
@@ -205,16 +219,19 @@ impl<'a> CmuxService<'a> {
     }
 
     pub fn send(&self, surface: &str, workspace: &str, text: &str) -> Result<()> {
-        self.runner.run(
+        let out = self.runner.run(
             "cmux",
             &["send", "--surface", surface, "--workspace", workspace, text],
             None,
         )?;
+        if !out.success {
+            bail!("cmux send failed: {}", command_error(&out));
+        }
         Ok(())
     }
 
     pub fn send_key(&self, surface: &str, workspace: &str, key: &str) -> Result<()> {
-        self.runner.run(
+        let out = self.runner.run(
             "cmux",
             &[
                 "send-key",
@@ -226,6 +243,9 @@ impl<'a> CmuxService<'a> {
             ],
             None,
         )?;
+        if !out.success {
+            bail!("cmux send-key failed: {}", command_error(&out));
+        }
         Ok(())
     }
 
@@ -258,6 +278,9 @@ impl<'a> CmuxService<'a> {
             ],
             None,
         )?;
+        if !out.success {
+            bail!("cmux read-screen failed: {}", command_error(&out));
+        }
         Ok(out.stdout)
     }
 }
@@ -564,5 +587,17 @@ mod tests {
                 "enter"
             ]
         );
+    }
+
+    #[test]
+    fn read_screen_reports_cmux_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response("Terminal surface not found", false);
+
+        let svc = CmuxService::new(&runner);
+        let err = svc
+            .read_screen("surface:0", "workspace:1")
+            .expect_err("read-screen failure should propagate");
+        assert!(err.to_string().contains("cmux read-screen failed"));
     }
 }
