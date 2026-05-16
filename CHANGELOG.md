@@ -8,6 +8,14 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Changed interactive terminal prompts to a polished selector UI with
+  filterable single-select and multi-select lists, compact ten-row menus,
+  checkbox-style multi-selects, and actionable non-TTY prompt errors.
+- Refined task, publish, worktree, branch, PR, batch, and stack selector labels
+  so interactive rows show the selected resource and high-signal state instead
+  of implementation-shaped file names.
+- Bumped the package version to `0.20.0` because prompt rendering and selector
+  presentation changed the user-facing CLI surface while `wt` is still pre-1.0.
 - Changed stack TOML to record per-task `pull_request = true|false` handoff
   intent. Prepared stack tasks write `false` by default, `wt stack task
   --pull-request` and `wt stack issue --pull-request` write `true`, and stack

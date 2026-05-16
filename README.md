@@ -129,8 +129,8 @@ wt pr 42
 wt pr 42 43 44
 ```
 
-When pull request numbers are omitted, `pr` opens the GitHub PR list and lets
-you select multiple PRs interactively. Each selected PR starts sequentially.
+When pull request numbers are omitted, `pr` opens a filterable GitHub PR
+multi-select list. Each selected PR starts sequentially.
 
 Start a workspace from branch-name text, or explicitly choose prepared local
 tasks:
@@ -193,6 +193,17 @@ the matching cmux surface and press enter.
 When a cmux workspace was opened for the same worktree path, `wt done` attempts
 to close it before removing the worktree. `wt done` also deletes the matching
 local branch; it does not merge the branch into `master`.
+
+## Interactive Prompts
+
+When a command omits a value that can be chosen safely, `wt` shows a compact
+terminal prompt instead of guessing. Selectors are filterable, cap the visible
+list to ten rows, and keep the row label focused on the resource being chosen:
+tasks, PRs, branches, batches, stacks, config sections, or worktrees.
+
+Single-select prompts choose one resource and continue. Multi-select prompts
+use checkbox-style rows; selecting no rows is only accepted by commands whose
+documented behavior treats an empty selection as a no-op.
 
 ## Configuration
 
@@ -533,9 +544,10 @@ wt new --task add-profile-docs --profile codex
 wt new --task add-profile-docs --matrix
 ```
 
-Bare `wt new --task` opens a multi-select list. Selecting one task starts that
-task on its prepared branch. Selecting multiple tasks asks for one workspace
-branch name and starts all selected TaskDocuments in that single workspace.
+Bare `wt new --task` opens a filterable multi-select task list. Selecting one
+task starts that task on its prepared branch. Selecting multiple tasks asks for
+one workspace branch name and starts all selected TaskDocuments in that single
+workspace.
 
 Repeat `--task <task>` with branch-name text to run multiple prepared
 TaskDocuments in one workspace without opening the selector:
@@ -623,8 +635,9 @@ id = "123"
 
 Publish does not store TaskRun execution state, batch or stack orchestration,
 profile selection, retry status, or branch landing state in the TaskDocument.
-Bare `wt task publish` opens a multi-select list of local TaskDocuments that do
-not have `[origin]`. Selecting no tasks prints a warning and exits successfully.
+Bare `wt task publish` opens a filterable multi-select list of local
+TaskDocuments that do not have `[origin]`. Selecting no tasks prints a warning
+and exits successfully.
 Explicit task keys remain available for scripts and are published once in first
 visible order. The command prints a summary of published, skipped, and failed
 task keys.
@@ -674,8 +687,8 @@ wt batch issue 123 456 789 --base main
 wt batch issue 123 456 789 --profile codex
 ```
 
-When issue identifiers are omitted, `issue` opens the provider issue list and
-lets you select multiple issues interactively.
+When issue identifiers are omitted, `issue` opens a filterable provider issue
+multi-select list.
 
 Batch preparation asks once for the base branch and stores the resolved branch
 in the batch file. `--base .` stores the current branch without prompting,
@@ -725,12 +738,12 @@ wt batch clean latest
 statuses from the linked TaskRun records.
 `edit` opens the batch TOML file without changing task state.
 
-Bare `run` opens a selector for runnable batches. A runnable batch has at least
-one linked TaskRun with `status = "prepared"` or `status = "failed"`. Running
-sibling TaskRuns do not block the batch selector because batch tasks are
-independent; the selector label shows running counts so in-flight work remains
-visible. Passing a batch TOML path or shorthand id keeps the command scriptable.
-`latest` is not a `run` target.
+Bare `run` opens a filterable selector for runnable batches. A runnable batch
+has at least one linked TaskRun with `status = "prepared"` or
+`status = "failed"`. Running sibling TaskRuns do not block the batch selector
+because batch tasks are independent; the selector label shows running counts so
+in-flight work remains visible. Passing a batch TOML path or shorthand id keeps
+the command scriptable. `latest` is not a `run` target.
 
 `run` executes only linked TaskRuns with `status = "prepared"` or
 `status = "failed"`. TaskRuns marked `running`, `done`, or `skipped` are left
@@ -780,9 +793,9 @@ wt stack issue 123 456 789 --base main --profile codex
 wt stack issue 123 456 789 --base main --pull-request
 ```
 
-When issue identifiers are omitted, `issue` opens the provider issue list,
-lets you select multiple issues, then asks for the base-to-top order. When
-identifiers are provided, their argument order is the stack order.
+When issue identifiers are omitted, `issue` opens a filterable provider issue
+multi-select list, then asks for the base-to-top order. When identifiers are
+provided, their argument order is the stack order.
 
 Both `task` and `issue` create stack TOML plus linked TaskRun records under
 `.local/task-runs/`. `task` writes local task documents from branch-name text.
@@ -867,11 +880,11 @@ the recorded parent chain. Status and error details are derived from linked
 TaskRun records.
 `edit` opens the stack TOML file without changing task state.
 
-Bare `run` opens a selector for runnable stacks. A runnable stack has a next
-`prepared` or `failed` TaskRun and no current `running` TaskRun. The selector
-labels include task titles or keys, the next runnable task, status counts, base,
-profile, and stack path so the intended stack is recognizable. Passing a stack
-TOML path or shorthand id keeps the command scriptable.
+Bare `run` opens a filterable selector for runnable stacks. A runnable stack
+has a next `prepared` or `failed` TaskRun and no current `running` TaskRun. The
+selector labels include task titles or keys, the next runnable task, status
+counts, base, profile, and stack path so the intended stack is recognizable.
+Passing a stack TOML path or shorthand id keeps the command scriptable.
 
 `run` starts one prepared or failed task at a time and leaves it marked
 `running`. The first task branch uses the stack base branch. Each following
