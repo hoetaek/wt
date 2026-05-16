@@ -168,6 +168,15 @@ pub(crate) fn update(
     })
 }
 
+pub(crate) fn delete_record(record: &TaskRunRecord) -> Result<()> {
+    match fs::remove_file(&record.path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err)
+            .with_context(|| format!("Failed to delete task run: {}", record.path.display())),
+    }
+}
+
 pub(crate) fn latest_for_task(ctx: &Ctx, task: &str) -> Result<Option<TaskRunRecord>> {
     let task = task::safe_task_key(task);
     let mut runs = list(ctx)?

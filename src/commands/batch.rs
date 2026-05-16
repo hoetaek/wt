@@ -71,44 +71,77 @@ fn write_prepared_batch(
 
     let resolved_base = resolve_batch_base(ctx, base)?;
     let batch_path = next_available_batch_path(ctx)?;
-    let batch_tasks = batch_tasks_from_prepared(ctx, &batch_path, prepared_tasks)?;
-    let now = current_utc_timestamp();
-    let batch = BatchMetadata {
-        profile: profile.map(str::to_string),
-        base_mode: "explicit".into(),
-        base: Some(resolved_base),
-        status: STATUS_PREPARED.into(),
-        created_at: now.clone(),
-        updated_at: now,
-        tasks: batch_tasks,
-    };
-    write_batch_metadata(&batch_path, &batch)?;
+    write_prepared_batch_at_path(ctx, profile, &resolved_base, &batch_path, prepared_tasks)?;
 
     ctx.ui
         .print_step(&format!("Prepared batch: {}", batch_path.display()));
     Ok(())
 }
 
+fn write_prepared_batch_at_path(
+    ctx: &Ctx,
+    profile: Option<&str>,
+    resolved_base: &str,
+    batch_path: &Path,
+    prepared_tasks: Vec<PreparedTask>,
+) -> Result<()> {
+    let prepared = batch_tasks_from_prepared(ctx, batch_path, prepared_tasks)?;
+    let now = current_utc_timestamp();
+    let batch = BatchMetadata {
+        profile: profile.map(str::to_string),
+        base_mode: "explicit".into(),
+        base: Some(resolved_base.to_string()),
+        status: STATUS_PREPARED.into(),
+        created_at: now.clone(),
+        updated_at: now,
+        tasks: prepared.tasks,
+    };
+    if let Err(err) = write_batch_metadata(batch_path, &batch) {
+        rollback_task_runs(&prepared.task_runs);
+        return Err(err);
+    }
+    Ok(())
+}
+
+struct PreparedBatchTasks {
+    tasks: Vec<BatchTask>,
+    task_runs: Vec<task_run::TaskRunRecord>,
+}
+
 fn batch_tasks_from_prepared(
     ctx: &Ctx,
     batch_path: &Path,
     prepared_tasks: Vec<PreparedTask>,
-) -> Result<Vec<BatchTask>> {
+) -> Result<PreparedBatchTasks> {
     let group = task_run::group_from_path(batch_path)?;
-    prepared_tasks
-        .into_iter()
-        .map(|task| {
-            let run = task_run::create(
-                ctx,
-                &task.key,
-                &task.branch,
-                task_run::SOURCE_BATCH,
-                Some(&group),
-                STATUS_PREPARED,
-            )?;
-            Ok(BatchTask::from_prepared(task, run.id))
-        })
-        .collect()
+    let mut tasks = Vec::new();
+    let mut task_runs = Vec::new();
+    for task in prepared_tasks {
+        let run = match task_run::create(
+            ctx,
+            &task.key,
+            &task.branch,
+            task_run::SOURCE_BATCH,
+            Some(&group),
+            STATUS_PREPARED,
+        ) {
+            Ok(run) => run,
+            Err(err) => {
+                rollback_task_runs(&task_runs);
+                return Err(err);
+            }
+        };
+        let run_id = run.id.clone();
+        task_runs.push(run);
+        tasks.push(BatchTask::from_prepared(task, run_id));
+    }
+    Ok(PreparedBatchTasks { tasks, task_runs })
+}
+
+fn rollback_task_runs(task_runs: &[task_run::TaskRunRecord]) {
+    for run in task_runs.iter().rev() {
+        let _ = task_run::delete_record(run);
+    }
 }
 
 fn resolve_batch_base(ctx: &Ctx, base: &Option<String>) -> Result<String> {
@@ -1029,7 +1062,8 @@ fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
         content.push_str(&format!("run = {}\n", toml_quote(&item.run)));
     }
 
-    fs::write(path, content)?;
+    fs::write(path, content)
+        .with_context(|| format!("Failed to write batch metadata: {}", path.display()))?;
     Ok(())
 }
 
@@ -1597,6 +1631,65 @@ mod tests {
         assert!(task_section.contains("run = \""));
         assert!(!task_section.contains("status ="));
         assert!(!task_section.contains("error ="));
+    }
+
+    #[test]
+    fn prepare_rolls_back_task_runs_when_batch_metadata_write_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let existing = task_run::create(
+            &ctx,
+            "unrelated",
+            "unrelated",
+            task_run::SOURCE_NEW,
+            None,
+            STATUS_DONE,
+        )
+        .unwrap();
+        let batch_path = dir.path().join(".local/batches/unwritable.toml");
+        std::fs::create_dir_all(&batch_path).unwrap();
+
+        let result = write_prepared_batch_at_path(
+            &ctx,
+            None,
+            "main",
+            &batch_path,
+            vec![
+                PreparedTask {
+                    key: "add-schema".into(),
+                    branch: "add-schema".into(),
+                },
+                PreparedTask {
+                    key: "wire-api".into(),
+                    branch: "wire-api".into(),
+                },
+            ],
+        );
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("Failed to write batch metadata"));
+        assert!(error.contains("unwritable.toml"));
+        let task_runs_dir = dir.path().join(".local/task-runs");
+        assert!(task_runs_dir.join(format!("{}.toml", existing.id)).exists());
+        assert!(
+            !task_runs_dir
+                .join("batch-unwritable-add-schema.toml")
+                .exists()
+        );
+        assert!(
+            !task_runs_dir
+                .join("batch-unwritable-wire-api.toml")
+                .exists()
+        );
+        let records = task_run::list(&ctx).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, existing.id);
     }
 
     #[test]
