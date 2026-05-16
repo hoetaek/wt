@@ -7,7 +7,7 @@ use crate::commands::task_run::{
     self, STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
 use crate::config::{Config, validate_profile_name};
-use crate::context::Ctx;
+use crate::context::{Ctx, PromptItem};
 use crate::error::WtError;
 use crate::services::cmux::CmuxService;
 use crate::services::git::GitService;
@@ -155,18 +155,303 @@ pub fn edit(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
 }
 
 pub fn run(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
-    let Some(workflow) = workflow else {
-        bail!(
-            "wt workflow run requires a workflow id or path until runnable selection is implemented"
-        );
+    let Some(path) = resolve_run_workflow_path(ctx, workflow)? else {
+        return Ok(());
     };
-    let path = resolve_mutating_target(ctx, workflow, "run")?;
     let mut metadata = workflow_store::read(&path)?;
     match metadata.mode {
         WorkflowMode::Single => run_single_workflow(ctx, &path, &mut metadata),
         WorkflowMode::Batch => run_batch_workflow(ctx, &path, &mut metadata, jobs),
         WorkflowMode::Stack => run_stack_workflow(ctx, &path, &mut metadata),
     }
+}
+
+struct RunnableWorkflowCandidate {
+    id: String,
+    path: PathBuf,
+    item: PromptItem,
+    label: String,
+}
+
+struct RunnableWorkflowInfo {
+    runnable_count: usize,
+    next_idx: Option<usize>,
+}
+
+fn resolve_run_workflow_path(ctx: &Ctx, workflow: Option<&str>) -> Result<Option<PathBuf>> {
+    match workflow {
+        Some(target) => Ok(Some(resolve_mutating_target(ctx, target, "run")?)),
+        None => select_runnable_workflow_path(ctx),
+    }
+}
+
+fn select_runnable_workflow_path(ctx: &Ctx) -> Result<Option<PathBuf>> {
+    let candidates = list_runnable_workflow_candidates(ctx)?;
+    match candidates.len() {
+        0 => {
+            ctx.ui.print_warning("No runnable workflows found");
+            Ok(None)
+        }
+        1 => Ok(Some(candidates[0].path.clone())),
+        _ if !ctx.ui.can_prompt() => {
+            bail!("{}", multiple_runnable_workflows_message(ctx, &candidates))
+        }
+        _ => {
+            let items = candidates
+                .iter()
+                .map(|candidate| candidate.item.clone())
+                .collect::<Vec<_>>();
+            let idx = ctx.ui.select_items("Workflow to run", &items)?;
+            let candidate = candidates
+                .get(idx)
+                .ok_or_else(|| anyhow::anyhow!("Selected workflow index out of range: {idx}"))?;
+            Ok(Some(candidate.path.clone()))
+        }
+    }
+}
+
+fn list_runnable_workflow_candidates(ctx: &Ctx) -> Result<Vec<RunnableWorkflowCandidate>> {
+    let mut candidates = Vec::new();
+    for record in workflow_store::list(ctx)? {
+        let states = read_workflow_candidate_states(ctx, &record.path, &record.workflow)
+            .with_context(|| {
+                format!(
+                    "Failed to read workflow task state: {}",
+                    record.path.display()
+                )
+            })?;
+        let Some(info) = runnable_workflow_info(&record.workflow.mode, &states) else {
+            continue;
+        };
+        let item = workflow_selection_item(
+            ctx,
+            &record.path,
+            &record.id,
+            &record.workflow,
+            &states,
+            &info,
+        );
+        let label = item.render_plain();
+        candidates.push(RunnableWorkflowCandidate {
+            id: record.id,
+            path: record.path,
+            item,
+            label,
+        });
+    }
+
+    candidates.sort_by(|left, right| {
+        left.label
+            .cmp(&right.label)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    Ok(candidates)
+}
+
+fn read_workflow_candidate_states(
+    ctx: &Ctx,
+    workflow_path: &Path,
+    metadata: &WorkflowMetadata,
+) -> Result<Vec<WorkflowTaskState>> {
+    match metadata.mode {
+        WorkflowMode::Single => read_single_workflow_task_states(ctx, workflow_path, metadata),
+        WorkflowMode::Batch => read_batch_workflow_task_states(ctx, workflow_path, metadata),
+        WorkflowMode::Stack => read_stack_workflow_task_states(ctx, workflow_path, metadata),
+    }
+}
+
+fn runnable_workflow_info(
+    mode: &WorkflowMode,
+    states: &[WorkflowTaskState],
+) -> Option<RunnableWorkflowInfo> {
+    match mode {
+        WorkflowMode::Single => {
+            if !states.is_empty()
+                && states
+                    .iter()
+                    .all(|state| is_runnable_status(&state.run.status))
+            {
+                Some(RunnableWorkflowInfo {
+                    runnable_count: states.len(),
+                    next_idx: None,
+                })
+            } else {
+                None
+            }
+        }
+        WorkflowMode::Batch => {
+            let runnable_count = states
+                .iter()
+                .filter(|state| is_runnable_status(&state.run.status))
+                .count();
+            (runnable_count > 0).then_some(RunnableWorkflowInfo {
+                runnable_count,
+                next_idx: None,
+            })
+        }
+        WorkflowMode::Stack => {
+            if states
+                .iter()
+                .any(|state| state.run.status == STATUS_RUNNING)
+            {
+                return None;
+            }
+            next_runnable_workflow_stack_task(states).map(|next_idx| RunnableWorkflowInfo {
+                runnable_count: 1,
+                next_idx: Some(next_idx),
+            })
+        }
+    }
+}
+
+fn workflow_selection_item(
+    ctx: &Ctx,
+    workflow_path: &Path,
+    workflow_id: &str,
+    metadata: &WorkflowMetadata,
+    states: &[WorkflowTaskState],
+    info: &RunnableWorkflowInfo,
+) -> PromptItem {
+    let mut fields = vec![format!("mode {}", metadata.mode.as_str())];
+    match metadata.mode {
+        WorkflowMode::Single | WorkflowMode::Batch => {
+            fields.push(format!("{} runnable", info.runnable_count));
+            fields.push(format!(
+                "tasks {}",
+                workflow_filtered_task_summary(ctx, states, |state| {
+                    is_runnable_status(&state.run.status)
+                })
+                .unwrap_or_else(|| "none".into())
+            ));
+        }
+        WorkflowMode::Stack => {
+            if let Some(next_idx) = info.next_idx {
+                let state = &states[next_idx];
+                fields.push(format!(
+                    "next {} [{}]",
+                    workflow_task_title_label(ctx, &state.row.task),
+                    state.run.status
+                ));
+            }
+        }
+    }
+    fields.push(format!(
+        "status {}",
+        workflow_selection_status_counts(states)
+    ));
+    fields.push(format!("base {}", base_label(metadata)));
+    if let Some(profile) = metadata.profile.as_deref() {
+        fields.push(format!("profile {profile}"));
+    }
+    fields.push(format!(
+        "path {}",
+        workflow_relative_path(ctx, workflow_path)
+    ));
+
+    PromptItem::from_hint_parts(workflow_id, fields)
+}
+
+fn workflow_filtered_task_summary<F>(
+    ctx: &Ctx,
+    states: &[WorkflowTaskState],
+    include: F,
+) -> Option<String>
+where
+    F: Fn(&WorkflowTaskState) -> bool,
+{
+    let matching = states
+        .iter()
+        .filter(|state| include(state))
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return None;
+    }
+
+    let visible = matching
+        .iter()
+        .take(3)
+        .map(|state| workflow_task_title_label(ctx, &state.row.task))
+        .collect::<Vec<_>>();
+    let mut summary = visible.join(", ");
+    if matching.len() > visible.len() {
+        summary.push_str(&format!(", ...(+{})", matching.len() - visible.len()));
+    }
+    Some(summary)
+}
+
+fn workflow_task_title_label(ctx: &Ctx, key: &str) -> String {
+    match task_command::read_task_document(ctx, key) {
+        Ok(document) => {
+            let title = document.title_or_key(key);
+            if title == key {
+                key.to_string()
+            } else {
+                format!("{title} ({key})")
+            }
+        }
+        Err(_) => format!("{key} (missing)"),
+    }
+}
+
+fn workflow_selection_status_counts(items: &[WorkflowTaskState]) -> String {
+    let counts = [
+        STATUS_PREPARED,
+        STATUS_RUNNING,
+        STATUS_DONE,
+        STATUS_FAILED,
+        STATUS_SKIPPED,
+    ]
+    .iter()
+    .map(|status| {
+        let count = items
+            .iter()
+            .filter(|item| item.run.status == *status)
+            .count();
+        (status, count)
+    })
+    .filter(|(_, count)| *count > 0)
+    .map(|(status, count)| format!("{count} {status}"))
+    .collect::<Vec<_>>()
+    .join(" / ");
+
+    if counts.is_empty() {
+        "none".into()
+    } else {
+        counts
+    }
+}
+
+fn workflow_relative_path(ctx: &Ctx, path: &Path) -> String {
+    path.strip_prefix(&ctx.repo_root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn multiple_runnable_workflows_message(
+    ctx: &Ctx,
+    candidates: &[RunnableWorkflowCandidate],
+) -> String {
+    let mut rows = candidates
+        .iter()
+        .take(10)
+        .map(|candidate| {
+            format!(
+                "  wt workflow run {}  # {}",
+                shell_arg(&candidate.id),
+                workflow_relative_path(ctx, &candidate.path)
+            )
+        })
+        .collect::<Vec<_>>();
+
+    if candidates.len() > rows.len() {
+        rows.push(format!("  ...(+{} more)", candidates.len() - rows.len()));
+    }
+
+    format!(
+        "Multiple runnable workflows found; pass one explicitly:\n{}",
+        rows.join("\n")
+    )
 }
 
 pub fn complete(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
@@ -1509,6 +1794,8 @@ mod tests {
     use crate::config::Config;
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
+    use std::fs;
+    use std::sync::Arc;
 
     fn ctx(root: &Path) -> Ctx {
         Ctx::new(
@@ -1518,6 +1805,41 @@ mod tests {
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
         )
+    }
+
+    fn ctx_with_ui(root: &Path, ui: Arc<MockUi>) -> Ctx {
+        Ctx::new(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        )
+    }
+
+    fn prepare_workflow(
+        ctx: &Ctx,
+        mode: WorkflowModeArg,
+        task_titles: &[&str],
+    ) -> workflow_store::WorkflowRecord {
+        let tasks = task_titles
+            .iter()
+            .map(|title| title.to_string())
+            .collect::<Vec<_>>();
+        task(ctx, &tasks, mode, None, &Some("main".into()), false).unwrap();
+        workflow_store::list(ctx).unwrap().pop().unwrap()
+    }
+
+    fn update_task_run(ctx: &Ctx, row: &WorkflowTask, status: &str, branch: Option<&str>) {
+        task_run::update(ctx, &row.run, status, branch, None).unwrap();
+    }
+
+    fn candidate_ids(ctx: &Ctx) -> Vec<String> {
+        list_runnable_workflow_candidates(ctx)
+            .unwrap()
+            .into_iter()
+            .map(|candidate| candidate.id)
+            .collect()
     }
 
     #[test]
@@ -1893,5 +2215,210 @@ mod tests {
         .unwrap();
         row.run = run.id.clone();
         run.id
+    }
+
+    #[test]
+    fn runnable_workflow_candidates_filter_single_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        let prepared = prepare_workflow(&ctx, WorkflowModeArg::Single, &["ready single"]);
+        let done = prepare_workflow(&ctx, WorkflowModeArg::Single, &["done single"]);
+        update_task_run(
+            &ctx,
+            &done.workflow.tasks[0],
+            STATUS_DONE,
+            Some("done-single"),
+        );
+        let running = prepare_workflow(&ctx, WorkflowModeArg::Single, &["running single"]);
+        update_task_run(
+            &ctx,
+            &running.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("running-single"),
+        );
+
+        assert_eq!(candidate_ids(&ctx), vec![prepared.id]);
+    }
+
+    #[test]
+    fn runnable_workflow_candidates_filter_batch_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        let mixed = prepare_workflow(
+            &ctx,
+            WorkflowModeArg::Batch,
+            &["running batch", "ready batch"],
+        );
+        update_task_run(
+            &ctx,
+            &mixed.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("running-batch"),
+        );
+        let done_only = prepare_workflow(
+            &ctx,
+            WorkflowModeArg::Batch,
+            &["done batch", "skipped batch"],
+        );
+        update_task_run(
+            &ctx,
+            &done_only.workflow.tasks[0],
+            STATUS_DONE,
+            Some("done-batch"),
+        );
+        update_task_run(
+            &ctx,
+            &done_only.workflow.tasks[1],
+            STATUS_SKIPPED,
+            Some("skipped-batch"),
+        );
+
+        assert_eq!(candidate_ids(&ctx), vec![mixed.id]);
+    }
+
+    #[test]
+    fn runnable_workflow_candidates_filter_stack_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        let first_ready = prepare_workflow(
+            &ctx,
+            WorkflowModeArg::Stack,
+            &["first ready", "second ready"],
+        );
+        let running = prepare_workflow(
+            &ctx,
+            WorkflowModeArg::Stack,
+            &["running stack", "blocked stack"],
+        );
+        update_task_run(
+            &ctx,
+            &running.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("running-stack"),
+        );
+        let retry_second = prepare_workflow(
+            &ctx,
+            WorkflowModeArg::Stack,
+            &["finished stack", "retry stack"],
+        );
+        update_task_run(
+            &ctx,
+            &retry_second.workflow.tasks[0],
+            STATUS_DONE,
+            Some("finished-stack"),
+        );
+        update_task_run(&ctx, &retry_second.workflow.tasks[1], STATUS_FAILED, None);
+        let done_only = prepare_workflow(
+            &ctx,
+            WorkflowModeArg::Stack,
+            &["done stack", "skipped stack"],
+        );
+        update_task_run(
+            &ctx,
+            &done_only.workflow.tasks[0],
+            STATUS_DONE,
+            Some("done-stack"),
+        );
+        update_task_run(
+            &ctx,
+            &done_only.workflow.tasks[1],
+            STATUS_SKIPPED,
+            Some("skipped-stack"),
+        );
+
+        assert_eq!(candidate_ids(&ctx), vec![first_ready.id, retry_second.id]);
+    }
+
+    #[test]
+    fn bare_workflow_run_with_one_candidate_returns_it_without_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
+        let workflow = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["only runnable"]);
+
+        let path = resolve_run_workflow_path(&ctx, None).unwrap().unwrap();
+
+        assert_eq!(path, workflow.path);
+        assert!(ui.prompts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn bare_workflow_run_with_multiple_candidates_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(1);
+        let ui = Arc::new(ui);
+        let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
+        let first = prepare_workflow(&ctx, WorkflowModeArg::Single, &["first workflow"]);
+        let second = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["second workflow"]);
+
+        let path = resolve_run_workflow_path(&ctx, None).unwrap().unwrap();
+
+        assert_eq!(path, second.path);
+        assert_eq!(
+            ui.prompts.lock().unwrap().as_slice(),
+            ["select: Workflow to run"]
+        );
+        let items = ui.select_items.lock().unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(items[0][0].contains(&first.id));
+        assert!(items[0][0].contains("mode single"));
+        assert!(items[0][1].contains(&second.id));
+        assert!(items[0][1].contains("mode batch"));
+    }
+
+    #[test]
+    fn bare_workflow_run_with_multiple_candidates_non_interactive_lists_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.set_prompt_available(false);
+        let ui = Arc::new(ui);
+        let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
+        let first = prepare_workflow(&ctx, WorkflowModeArg::Single, &["first noninteractive"]);
+        let second = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["second noninteractive"]);
+        let first_run_path = task_run::resolve(&ctx, &first.workflow.tasks[0].run).unwrap();
+        let second_run_path = task_run::resolve(&ctx, &second.workflow.tasks[0].run).unwrap();
+        let first_before = fs::read_to_string(&first_run_path).unwrap();
+        let second_before = fs::read_to_string(&second_run_path).unwrap();
+
+        let err = resolve_run_workflow_path(&ctx, None).unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("Multiple runnable workflows found"));
+        assert!(message.contains(&format!("wt workflow run {}", first.id)));
+        assert!(message.contains(&format!("wt workflow run {}", second.id)));
+        assert!(message.contains(".local/workflows/"));
+        assert!(ui.prompts.lock().unwrap().is_empty());
+        assert_eq!(fs::read_to_string(first_run_path).unwrap(), first_before);
+        assert_eq!(fs::read_to_string(second_run_path).unwrap(), second_before);
+    }
+
+    #[test]
+    fn bare_workflow_run_without_runnable_workflows_warns_without_state_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
+        let workflow = prepare_workflow(&ctx, WorkflowModeArg::Single, &["already done"]);
+        update_task_run(
+            &ctx,
+            &workflow.workflow.tasks[0],
+            STATUS_DONE,
+            Some("already-done"),
+        );
+        let run_path = task_run::resolve(&ctx, &workflow.workflow.tasks[0].run).unwrap();
+        let workflow_before = fs::read_to_string(&workflow.path).unwrap();
+        let run_before = fs::read_to_string(&run_path).unwrap();
+
+        run(&ctx, None, 1).unwrap();
+
+        assert_eq!(
+            ui.warnings.lock().unwrap().as_slice(),
+            ["No runnable workflows found"]
+        );
+        assert_eq!(fs::read_to_string(workflow.path).unwrap(), workflow_before);
+        assert_eq!(fs::read_to_string(run_path).unwrap(), run_before);
     }
 }

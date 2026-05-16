@@ -150,6 +150,19 @@ fn task_publish_help_explains_behavior() {
 }
 
 #[test]
+fn workflow_run_help_explains_omitted_target_selection() {
+    wt_command()
+        .args(["workflow", "run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Omit WORKFLOW"))
+        .stdout(predicate::str::contains("choose from runnable workflows"))
+        .stdout(predicate::str::contains(
+            "omit to select a runnable workflow",
+        ));
+}
+
+#[test]
 fn legacy_batch_command_fails_with_workflow_guidance() {
     wt_command()
         .args(["batch", "run"])

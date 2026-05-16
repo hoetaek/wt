@@ -195,6 +195,7 @@ wt workflow task "add schema" "wire API" --mode batch --base main
 wt workflow issue 123 456 789 --mode batch --base main
 wt workflow issue 123 456 789 --mode stack --base main
 wt workflow show 2026-05-16-001
+wt workflow run
 wt workflow run 2026-05-16-001
 wt workflow complete 2026-05-16-001 PROJ-123 --run-next
 ```
@@ -836,9 +837,16 @@ opens the workflow TOML file without changing task state.
 Run a workflow:
 
 ```bash
+wt workflow run
 wt workflow run 2026-05-16-001
 wt workflow run 2026-05-16-001 --jobs 3
 ```
+
+Bare `wt workflow run` selects from runnable workflows. If exactly one
+workflow can run, it starts that workflow without prompting. If several can run,
+interactive terminals choose one from a selector; non-interactive shells fail
+before changing state and print explicit `wt workflow run <workflow>` rerun
+commands. Pass a workflow id or TOML path for scripts.
 
 `single` mode starts all selected tasks in one branch workspace and marks the
 linked TaskRuns `running`. `batch` mode starts prepared or failed tasks; running
