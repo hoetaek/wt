@@ -1,5 +1,5 @@
 use crate::commands::{issue, task};
-use crate::context::Ctx;
+use crate::context::{Ctx, PromptItem};
 use crate::services::issues::CreateIssueRequest;
 use crate::services::issues::IssueProvider;
 use anyhow::{Context, Result, bail};
@@ -78,9 +78,9 @@ fn select_publish_task_keys(ctx: &Ctx) -> Result<Vec<String>> {
 
     let items = candidates
         .iter()
-        .map(publish_candidate_label)
+        .map(publish_candidate_item)
         .collect::<Vec<_>>();
-    let selections = ctx.ui.multi_select("Tasks to publish", &items)?;
+    let selections = ctx.ui.multi_select_items("Tasks to publish", &items)?;
     let mut keys = Vec::new();
     for idx in selections {
         let candidate = candidates
@@ -148,8 +148,13 @@ fn publish_task_relative_path(ctx: &Ctx, path: &Path) -> String {
         .into_owned()
 }
 
+#[cfg(test)]
 fn publish_candidate_label(candidate: &PublishCandidate) -> String {
-    task::task_resource_label(&candidate.task_key, &candidate.document, "origin:none")
+    publish_candidate_item(candidate).render_plain()
+}
+
+fn publish_candidate_item(candidate: &PublishCandidate) -> PromptItem {
+    task::task_resource_item(&candidate.task_key, &candidate.document, "origin:none")
 }
 
 fn preflight_task_documents(
@@ -613,7 +618,7 @@ mod tests {
 
         assert_eq!(
             publish_candidate_label(&candidate),
-            "Add publish  task:add-publish  origin:none  branch:team/add-publish"
+            "Add publish  task add-publish | not published | branch team/add-publish"
         );
     }
 

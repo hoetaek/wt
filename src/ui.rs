@@ -1,7 +1,8 @@
-use crate::context::UserInterface;
+use crate::context::{PromptItem, UserInterface};
 use crate::error::WtError;
 use anyhow::{Result, anyhow};
-use console::style;
+use cliclack::{Theme, ThemeState};
+use console::{Style, style};
 use std::io;
 
 const PROMPT_MAX_ROWS: usize = 10;
@@ -13,35 +14,52 @@ pub struct TerminalUi {
 
 impl TerminalUi {
     pub fn new(quiet: bool) -> Self {
-        Self {
-            quiet,
-            decorated: true,
-        }
+        Self::with_decoration(quiet, true)
     }
 
     pub fn with_decoration(quiet: bool, decorated: bool) -> Self {
+        cliclack::set_theme(WtPromptTheme);
         Self { quiet, decorated }
     }
 }
 
 impl UserInterface for TerminalUi {
     fn select(&self, prompt: &str, items: &[String]) -> Result<usize> {
+        let items = items
+            .iter()
+            .cloned()
+            .map(PromptItem::new)
+            .collect::<Vec<_>>();
+        self.select_items(prompt, &items)
+    }
+
+    fn multi_select(&self, prompt: &str, items: &[String]) -> Result<Vec<usize>> {
+        let items = items
+            .iter()
+            .cloned()
+            .map(PromptItem::new)
+            .collect::<Vec<_>>();
+        self.multi_select_items(prompt, &items)
+    }
+
+    fn select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<usize> {
         let mut select = cliclack::select(prompt)
             .max_rows(PROMPT_MAX_ROWS)
             .filter_mode();
         for (index, item) in items.iter().enumerate() {
-            select = select.item(index, item, "");
+            select = select.item(index, &item.label, item.hint.as_deref().unwrap_or(""));
         }
         prompt_result(prompt, select.interact())
     }
 
-    fn multi_select(&self, prompt: &str, items: &[String]) -> Result<Vec<usize>> {
+    fn multi_select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<Vec<usize>> {
         let mut multi_select = cliclack::multiselect(prompt)
             .max_rows(PROMPT_MAX_ROWS)
             .required(false)
             .filter_mode();
         for (index, item) in items.iter().enumerate() {
-            multi_select = multi_select.item(index, item, "");
+            multi_select =
+                multi_select.item(index, &item.label, item.hint.as_deref().unwrap_or(""));
         }
         prompt_result(prompt, multi_select.interact())
     }
@@ -98,6 +116,46 @@ impl UserInterface for TerminalUi {
     }
 }
 
+struct WtPromptTheme;
+
+impl Theme for WtPromptTheme {
+    fn bar_color(&self, state: &ThemeState) -> Style {
+        match state {
+            ThemeState::Active => Style::new().cyan(),
+            ThemeState::Cancel => Style::new().red(),
+            ThemeState::Submit => Style::new().bright().black(),
+            ThemeState::Error(_) => Style::new().yellow(),
+        }
+    }
+
+    fn state_symbol_color(&self, state: &ThemeState) -> Style {
+        match state {
+            ThemeState::Submit => Style::new().green(),
+            _ => self.bar_color(state),
+        }
+    }
+
+    fn radio_symbol(&self, state: &ThemeState, selected: bool) -> String {
+        match state {
+            ThemeState::Active | ThemeState::Error(_) if selected => style(">").cyan(),
+            ThemeState::Active | ThemeState::Error(_) => style(" ").dim(),
+            _ => style(""),
+        }
+        .to_string()
+    }
+
+    fn checkbox_symbol(&self, state: &ThemeState, selected: bool, active: bool) -> String {
+        match state {
+            ThemeState::Active | ThemeState::Error(_) if selected => style("[x]").cyan(),
+            ThemeState::Active | ThemeState::Error(_) if active => style("[ ]").cyan(),
+            ThemeState::Active | ThemeState::Error(_) => style("[ ]").dim(),
+            ThemeState::Submit if selected => style("[x]").dim(),
+            _ => style(""),
+        }
+        .to_string()
+    }
+}
+
 fn prompt_result<T>(prompt: &str, result: io::Result<T>) -> Result<T> {
     result.map_err(|err| match err.kind() {
         io::ErrorKind::Interrupted => anyhow::Error::new(WtError::Cancelled),
@@ -112,6 +170,7 @@ fn prompt_result<T>(prompt: &str, result: io::Result<T>) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use console::strip_ansi_codes;
 
     #[test]
     fn interrupted_prompt_maps_to_cancelled_error() {
@@ -142,5 +201,21 @@ mod tests {
             err.to_string(),
             "interactive prompt 'Select item' requires a terminal; rerun in an interactive shell or pass the value explicitly"
         );
+    }
+
+    #[test]
+    fn prompt_theme_remains_readable_without_color() {
+        console::set_colors_enabled(false);
+        let rendered = WtPromptTheme.format_select_item(
+            &ThemeState::Active,
+            true,
+            "Fix editor",
+            "task PROJ-123 | Linear",
+        );
+        console::set_colors_enabled(true);
+
+        assert_eq!(strip_ansi_codes(&rendered), rendered);
+        assert!(rendered.contains("> Fix editor"));
+        assert!(rendered.contains("(task PROJ-123 | Linear)"));
     }
 }

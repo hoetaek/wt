@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::context::Ctx;
+use crate::context::{Ctx, PromptItem};
 use crate::error::WtError;
 use crate::names::WorktreeNames;
 use crate::services::git::GitService;
@@ -39,8 +39,8 @@ fn select_prs(ctx: &Ctx, github: &GithubService<'_>) -> Result<Vec<PullRequest>>
         bail!("No open PRs found");
     }
 
-    let items = format_pr_select_items(&prs);
-    let selected_indices = ctx.ui.multi_select("PRs to start", &items)?;
+    let items = format_pr_select_prompt_items(&prs);
+    let selected_indices = ctx.ui.multi_select_items("PRs to start", &items)?;
     if selected_indices.is_empty() {
         ctx.ui.print_warning("No PRs selected");
         return Ok(Vec::new());
@@ -200,29 +200,30 @@ fn format_pr_summary(pr: &PullRequest) -> String {
     format!("PR {number}  {author}  {} ({})", pr.title, pr.state)
 }
 
+#[cfg(test)]
 fn format_pr_select_items(prs: &[PullRequest]) -> Vec<String> {
-    let number_width = prs
+    format_pr_select_prompt_items(prs)
         .iter()
-        .map(|pr| pr_number_label(pr).len())
-        .max()
-        .unwrap_or(0);
-    let author_width = prs
-        .iter()
-        .map(|pr| author_label(pr).len())
-        .max()
-        .unwrap_or(0);
-
-    prs.iter()
-        .map(|pr| format_pr_select_item(pr, number_width, author_width))
+        .map(PromptItem::render_plain)
         .collect()
 }
 
-fn format_pr_select_item(pr: &PullRequest, number_width: usize, author_width: usize) -> String {
+fn format_pr_select_prompt_items(prs: &[PullRequest]) -> Vec<PromptItem> {
+    prs.iter().map(format_pr_select_item).collect()
+}
+
+fn format_pr_select_item(pr: &PullRequest) -> PromptItem {
     let number = pr_number_label(pr);
     let author = author_label(pr);
-    format!(
-        "{number:<number_width$}  {author:<author_width$}  {}  head:{}  base:{}",
-        pr.title, pr.head_ref_name, pr.base_ref_name
+    PromptItem::from_hint_parts(
+        pr.title.clone(),
+        vec![
+            format!("PR {number}"),
+            author,
+            pr.state.clone(),
+            format!("head {}", pr.head_ref_name),
+            format!("base {}", pr.base_ref_name),
+        ],
     )
 }
 
@@ -598,7 +599,7 @@ cli = "codex"
         assert_eq!(format_pr_summary(&pr), "PR #42  @alice  Add feature (OPEN)");
         assert_eq!(
             format_pr_select_items(&[pr]),
-            vec!["#42  @alice  Add feature  head:alice/feature  base:main"]
+            vec!["Add feature  PR #42 | @alice | OPEN | head alice/feature | base main"]
         );
     }
 
@@ -619,12 +620,12 @@ cli = "codex"
         );
         assert_eq!(
             format_pr_select_items(&[pr]),
-            vec!["#42  unknown author  Add feature  head:alice/feature  base:main"]
+            vec!["Add feature  PR #42 | unknown author | OPEN | head alice/feature | base main"]
         );
     }
 
     #[test]
-    fn formats_pr_select_items_with_aligned_author_column() {
+    fn formats_pr_select_items_with_title_labels_and_metadata_hints() {
         let prs = vec![
             PullRequest {
                 number: 9,
@@ -649,8 +650,8 @@ cli = "codex"
         assert_eq!(
             format_pr_select_items(&prs),
             vec![
-                "#9    @a        Short author  head:alice/short  base:main",
-                "#123  @octocat  Long author  head:octocat/long  base:main"
+                "Short author  PR #9 | @a | OPEN | head alice/short | base main",
+                "Long author  PR #123 | @octocat | OPEN | head octocat/long | base main"
             ]
         );
     }

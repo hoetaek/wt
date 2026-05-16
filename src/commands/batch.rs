@@ -6,7 +6,7 @@ use crate::commands::task_run::{
     self, STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
 use crate::config::{Config, validate_profile_name};
-use crate::context::Ctx;
+use crate::context::{Ctx, PromptItem};
 use crate::error::WtError;
 use crate::services::git::GitService;
 use crate::worktree_naming;
@@ -879,6 +879,7 @@ struct BatchTaskExecution {
 
 struct RunnableBatchCandidate {
     path: PathBuf,
+    item: PromptItem,
     label: String,
 }
 
@@ -1101,9 +1102,9 @@ fn select_runnable_batch_path(ctx: &Ctx) -> Result<Option<PathBuf>> {
 
     let items = candidates
         .iter()
-        .map(|candidate| candidate.label.clone())
+        .map(|candidate| candidate.item.clone())
         .collect::<Vec<_>>();
-    let idx = ctx.ui.select("Batch to run", &items)?;
+    let idx = ctx.ui.select_items("Batch to run", &items)?;
     let candidate = candidates
         .get(idx)
         .ok_or_else(|| anyhow::anyhow!("Selected batch index out of range: {idx}"))?;
@@ -1139,8 +1140,9 @@ fn list_runnable_batch_candidates(ctx: &Ctx) -> Result<Vec<RunnableBatchCandidat
         {
             continue;
         }
-        let label = batch_selection_label(ctx, &path, &metadata, &states)?;
-        candidates.push(RunnableBatchCandidate { path, label });
+        let item = batch_selection_item(ctx, &path, &metadata, &states)?;
+        let label = item.render_plain();
+        candidates.push(RunnableBatchCandidate { path, item, label });
     }
 
     candidates.sort_by(|left, right| {
@@ -1151,12 +1153,12 @@ fn list_runnable_batch_candidates(ctx: &Ctx) -> Result<Vec<RunnableBatchCandidat
     Ok(candidates)
 }
 
-fn batch_selection_label(
+fn batch_selection_item(
     ctx: &Ctx,
     batch_path: &Path,
     batch: &BatchMetadata,
     states: &[BatchTaskState],
-) -> Result<String> {
+) -> Result<PromptItem> {
     let batch_id = batch_selector_id(batch_path);
     let runnable = states
         .iter()
@@ -1169,24 +1171,21 @@ fn batch_selection_label(
         batch_filtered_task_summary(ctx, states, |state| state.run.status == STATUS_RUNNING);
     let status_counts = batch_selection_status_counts(states);
     let base = describe_batch_base(batch)?;
-    let path = relative_batch_path(ctx, batch_path);
     let mut fields = vec![
-        format!("batch:{batch_id}"),
-        format!("runnable:{runnable}"),
-        format!("runnable_tasks:{ready_summary}"),
-        format!("status:{status_counts}"),
-        format!("base:{base}"),
+        format!("{runnable} runnable"),
+        format!("tasks {ready_summary}"),
+        status_counts,
+        format!("base {base}"),
     ];
 
     if let Some(running_summary) = running_summary {
-        fields.push(format!("running:{running_summary}"));
+        fields.push(format!("running {running_summary}"));
     }
     if let Some(profile) = batch.profile.as_deref() {
-        fields.push(format!("profile:{profile}"));
+        fields.push(format!("profile {profile}"));
     }
-    fields.push(format!("path:{path}"));
 
-    Ok(fields.join("  "))
+    Ok(PromptItem::from_hint_parts(batch_id, fields))
 }
 
 fn batch_filtered_task_summary<F>(
@@ -1238,14 +1237,6 @@ fn batch_selector_id(batch_path: &Path) -> String {
         .filter(|stem| !stem.trim().is_empty())
         .unwrap_or("batch")
         .to_string()
-}
-
-fn relative_batch_path(ctx: &Ctx, batch_path: &Path) -> String {
-    batch_path
-        .strip_prefix(&ctx.repo_root)
-        .unwrap_or(batch_path)
-        .to_string_lossy()
-        .into_owned()
 }
 
 fn resolve_batch_path(ctx: &Ctx, target: &str) -> Result<PathBuf> {
@@ -1353,7 +1344,7 @@ fn batch_status_counts(items: &[BatchTaskState]) -> String {
 }
 
 fn batch_selection_status_counts(items: &[BatchTaskState]) -> String {
-    [
+    let counts = [
         STATUS_PREPARED,
         STATUS_RUNNING,
         STATUS_DONE,
@@ -1366,10 +1357,18 @@ fn batch_selection_status_counts(items: &[BatchTaskState]) -> String {
             .iter()
             .filter(|item| item.run.status == *status)
             .count();
-        format!("{status}={count}")
+        (status, count)
     })
+    .filter(|(_, count)| *count > 0)
+    .map(|(status, count)| format!("{count} {status}"))
     .collect::<Vec<_>>()
-    .join(",")
+    .join(" / ");
+
+    if counts.is_empty() {
+        "none".into()
+    } else {
+        counts
+    }
 }
 
 fn batch_base_option(batch: &BatchMetadata) -> Result<Option<String>> {
@@ -2660,19 +2659,17 @@ error = ""
             .map(|candidate| candidate.label.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(labels.contains("batch:running-and-prepared-batch"));
+        assert!(labels.contains("running-and-prepared-batch"));
         assert!(labels.contains("Prepared task title (prepared-task)"));
         assert!(labels.contains("missing-task (missing)"));
-        assert!(labels.contains("status:prepared=1,running=1,done=0,failed=0,skipped=0"));
-        assert!(labels.contains("runnable_tasks:Prepared task title (prepared-task)"));
-        assert!(labels.contains("running:sibling-running-task"));
-        assert!(labels.contains("failed=1"));
-        assert!(labels.contains("running=0"));
-        assert!(labels.contains("running=1"));
-        assert!(labels.contains("runnable:1"));
-        assert!(labels.contains("base:main"));
-        assert!(labels.contains("profile:codex"));
-        assert!(labels.contains("path:.local/batches/running-and-prepared-batch.toml"));
+        assert!(labels.contains("1 prepared / 1 running"));
+        assert!(labels.contains("tasks Prepared task title (prepared-task)"));
+        assert!(labels.contains("running sibling-running-task"));
+        assert!(labels.contains("1 failed"));
+        assert!(labels.contains("1 running"));
+        assert!(labels.contains("1 runnable"));
+        assert!(labels.contains("base main"));
+        assert!(labels.contains("profile codex"));
     }
 
     #[test]

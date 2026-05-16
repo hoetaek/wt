@@ -23,12 +23,88 @@ pub trait CommandRunner: Send + Sync {
 pub trait UserInterface: Send + Sync {
     fn select(&self, prompt: &str, items: &[String]) -> Result<usize>;
     fn multi_select(&self, prompt: &str, items: &[String]) -> Result<Vec<usize>>;
+    fn select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<usize> {
+        let rendered = render_prompt_items(items);
+        self.select(prompt, &rendered)
+    }
+    fn multi_select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<Vec<usize>> {
+        let rendered = render_prompt_items(items);
+        self.multi_select(prompt, &rendered)
+    }
     fn confirm(&self, prompt: &str, default: bool) -> Result<bool>;
     fn input(&self, prompt: &str, default: Option<&str>) -> Result<String>;
     fn print_step(&self, msg: &str);
     fn print_dim(&self, msg: &str);
     fn print_warning(&self, msg: &str);
     fn print_error(&self, msg: &str);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptItem {
+    pub label: String,
+    pub hint: Option<String>,
+}
+
+impl PromptItem {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            hint: None,
+        }
+    }
+
+    pub fn with_hint(label: impl Into<String>, hint: impl Into<String>) -> Self {
+        let hint = hint.into();
+        Self {
+            label: label.into(),
+            hint: non_empty_hint(hint),
+        }
+    }
+
+    pub fn from_hint_parts(label: impl Into<String>, parts: Vec<String>) -> Self {
+        Self::with_hint(label, join_prompt_hint(parts))
+    }
+
+    pub fn render_plain(&self) -> String {
+        match self.hint.as_deref() {
+            Some(hint) => format!("{}  {}", self.label, hint),
+            None => self.label.clone(),
+        }
+    }
+}
+
+impl From<String> for PromptItem {
+    fn from(label: String) -> Self {
+        Self::new(label)
+    }
+}
+
+impl From<&str> for PromptItem {
+    fn from(label: &str) -> Self {
+        Self::new(label)
+    }
+}
+
+pub fn join_prompt_hint(parts: Vec<String>) -> String {
+    parts
+        .into_iter()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+pub fn render_prompt_items(items: &[PromptItem]) -> Vec<String> {
+    items.iter().map(PromptItem::render_plain).collect()
+}
+
+fn non_empty_hint(hint: String) -> Option<String> {
+    let hint = hint.trim();
+    if hint.is_empty() {
+        None
+    } else {
+        Some(hint.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +269,8 @@ pub mod mock {
         confirm_responses: Mutex<VecDeque<bool>>,
         input_responses: Mutex<VecDeque<String>>,
         pub prompts: Mutex<Vec<String>>,
+        pub select_items: Mutex<Vec<Vec<String>>>,
+        pub multi_select_items: Mutex<Vec<Vec<String>>>,
         pub steps: Mutex<Vec<String>>,
         pub dims: Mutex<Vec<String>>,
         pub warnings: Mutex<Vec<String>>,
@@ -212,6 +290,8 @@ pub mod mock {
                 confirm_responses: Mutex::new(VecDeque::new()),
                 input_responses: Mutex::new(VecDeque::new()),
                 prompts: Mutex::new(Vec::new()),
+                select_items: Mutex::new(Vec::new()),
+                multi_select_items: Mutex::new(Vec::new()),
                 steps: Mutex::new(Vec::new()),
                 dims: Mutex::new(Vec::new()),
                 warnings: Mutex::new(Vec::new()),
@@ -239,11 +319,12 @@ pub mod mock {
     }
 
     impl UserInterface for MockUi {
-        fn select(&self, prompt: &str, _items: &[String]) -> Result<usize> {
+        fn select(&self, prompt: &str, items: &[String]) -> Result<usize> {
             self.prompts
                 .lock()
                 .unwrap()
                 .push(format!("select: {prompt}"));
+            self.select_items.lock().unwrap().push(items.to_vec());
             self.select_responses
                 .lock()
                 .unwrap()
@@ -251,11 +332,12 @@ pub mod mock {
                 .ok_or_else(|| anyhow::anyhow!("MockUi: no select response"))
         }
 
-        fn multi_select(&self, prompt: &str, _items: &[String]) -> Result<Vec<usize>> {
+        fn multi_select(&self, prompt: &str, items: &[String]) -> Result<Vec<usize>> {
             self.prompts
                 .lock()
                 .unwrap()
                 .push(format!("multi_select: {prompt}"));
+            self.multi_select_items.lock().unwrap().push(items.to_vec());
             self.multi_select_responses
                 .lock()
                 .unwrap()
@@ -380,6 +462,35 @@ mod tests {
         let items = vec!["a".into(), "b".into(), "c".into()];
         assert_eq!(ui.select("pick", &items).unwrap(), 2);
         assert!(ui.confirm("ok?", false).unwrap());
+    }
+
+    #[test]
+    fn mock_ui_records_prompt_item_plain_fallbacks() {
+        let mut ui = MockUi::new();
+        ui.add_select(0);
+        ui.add_multi_select(vec![1]);
+
+        let items = vec![
+            PromptItem::with_hint("Fix editor", "task PROJ-123 | Linear"),
+            PromptItem::new("Local cleanup"),
+        ];
+
+        assert_eq!(ui.select_items("pick one", &items).unwrap(), 0);
+        assert_eq!(ui.multi_select_items("pick many", &items).unwrap(), vec![1]);
+        assert_eq!(
+            ui.select_items.lock().unwrap().as_slice(),
+            [vec![
+                "Fix editor  task PROJ-123 | Linear".to_string(),
+                "Local cleanup".to_string()
+            ]]
+        );
+        assert_eq!(
+            ui.multi_select_items.lock().unwrap().as_slice(),
+            [vec![
+                "Fix editor  task PROJ-123 | Linear".to_string(),
+                "Local cleanup".to_string()
+            ]]
+        );
     }
 
     #[test]
