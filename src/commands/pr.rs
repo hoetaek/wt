@@ -40,7 +40,7 @@ fn select_prs(ctx: &Ctx, github: &GithubService<'_>) -> Result<Vec<PullRequest>>
     }
 
     let items = format_pr_select_items(&prs);
-    let selected_indices = ctx.ui.multi_select("Select PRs to start", &items)?;
+    let selected_indices = ctx.ui.multi_select("PRs to start", &items)?;
     if selected_indices.is_empty() {
         ctx.ui.print_warning("No PRs selected");
         return Ok(Vec::new());
@@ -221,8 +221,8 @@ fn format_pr_select_item(pr: &PullRequest, number_width: usize, author_width: us
     let number = pr_number_label(pr);
     let author = author_label(pr);
     format!(
-        "{number:<number_width$}  {author:<author_width$}  {}",
-        pr.title
+        "{number:<number_width$}  {author:<author_width$}  {}  head:{}  base:{}",
+        pr.title, pr.head_ref_name, pr.base_ref_name
     )
 }
 
@@ -598,7 +598,7 @@ cli = "codex"
         assert_eq!(format_pr_summary(&pr), "PR #42  @alice  Add feature (OPEN)");
         assert_eq!(
             format_pr_select_items(&[pr]),
-            vec!["#42  @alice  Add feature"]
+            vec!["#42  @alice  Add feature  head:alice/feature  base:main"]
         );
     }
 
@@ -619,7 +619,7 @@ cli = "codex"
         );
         assert_eq!(
             format_pr_select_items(&[pr]),
-            vec!["#42  unknown author  Add feature"]
+            vec!["#42  unknown author  Add feature  head:alice/feature  base:main"]
         );
     }
 
@@ -649,8 +649,8 @@ cli = "codex"
         assert_eq!(
             format_pr_select_items(&prs),
             vec![
-                "#9    @a        Short author",
-                "#123  @octocat  Long author"
+                "#9    @a        Short author  head:alice/short  base:main",
+                "#123  @octocat  Long author  head:octocat/long  base:main"
             ]
         );
     }

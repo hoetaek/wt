@@ -1103,7 +1103,7 @@ fn select_runnable_batch_path(ctx: &Ctx) -> Result<Option<PathBuf>> {
         .iter()
         .map(|candidate| candidate.label.clone())
         .collect::<Vec<_>>();
-    let idx = ctx.ui.select("Select batch to run", &items)?;
+    let idx = ctx.ui.select("Batch to run", &items)?;
     let candidate = candidates
         .get(idx)
         .ok_or_else(|| anyhow::anyhow!("Selected batch index out of range: {idx}"))?;
@@ -1157,36 +1157,64 @@ fn batch_selection_label(
     batch: &BatchMetadata,
     states: &[BatchTaskState],
 ) -> Result<String> {
-    let summary = batch_task_summary(ctx, states);
+    let batch_id = batch_selector_id(batch_path);
     let runnable = states
         .iter()
         .filter(|state| is_runnable_status(&state.run.status))
         .count();
+    let ready_summary =
+        batch_filtered_task_summary(ctx, states, |state| is_runnable_status(&state.run.status))
+            .unwrap_or_else(|| "none".into());
+    let running_summary =
+        batch_filtered_task_summary(ctx, states, |state| state.run.status == STATUS_RUNNING);
     let status_counts = batch_selection_status_counts(states);
     let base = describe_batch_base(batch)?;
-    let profile = batch.profile.as_deref().unwrap_or("effective config");
     let path = relative_batch_path(ctx, batch_path);
+    let mut fields = vec![
+        format!("batch:{batch_id}"),
+        format!("runnable:{runnable}"),
+        format!("runnable_tasks:{ready_summary}"),
+        format!("status:{status_counts}"),
+        format!("base:{base}"),
+    ];
 
-    Ok(format!(
-        "{summary} | runnable: {runnable} | {status_counts} | base: {base} | profile: {profile} | {path}"
-    ))
+    if let Some(running_summary) = running_summary {
+        fields.push(format!("running:{running_summary}"));
+    }
+    if let Some(profile) = batch.profile.as_deref() {
+        fields.push(format!("profile:{profile}"));
+    }
+    fields.push(format!("path:{path}"));
+
+    Ok(fields.join("  "))
 }
 
-fn batch_task_summary(ctx: &Ctx, states: &[BatchTaskState]) -> String {
-    let visible = states
+fn batch_filtered_task_summary<F>(
+    ctx: &Ctx,
+    states: &[BatchTaskState],
+    include: F,
+) -> Option<String>
+where
+    F: Fn(&BatchTaskState) -> bool,
+{
+    let matching = states
+        .iter()
+        .filter(|state| include(state))
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return None;
+    }
+
+    let visible = matching
         .iter()
         .take(3)
         .map(|state| batch_task_title_label(ctx, &state.batch_task.task))
         .collect::<Vec<_>>();
     let mut summary = visible.join(", ");
-    if states.len() > visible.len() {
-        summary.push_str(&format!(", ... (+{} more)", states.len() - visible.len()));
+    if matching.len() > visible.len() {
+        summary.push_str(&format!(", ...(+{})", matching.len() - visible.len()));
     }
-    if summary.is_empty() {
-        "(empty batch)".into()
-    } else {
-        summary
-    }
+    Some(summary)
 }
 
 fn batch_task_title_label(ctx: &Ctx, key: &str) -> String {
@@ -1196,11 +1224,20 @@ fn batch_task_title_label(ctx: &Ctx, key: &str) -> String {
             if title == key {
                 key.to_string()
             } else {
-                format!("{key} - {title}")
+                format!("{title} ({key})")
             }
         }
-        Err(_) => format!("{key} (missing task)"),
+        Err(_) => format!("{key} (missing)"),
     }
+}
+
+fn batch_selector_id(batch_path: &Path) -> String {
+    batch_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+        .unwrap_or("batch")
+        .to_string()
 }
 
 fn relative_batch_path(ctx: &Ctx, batch_path: &Path) -> String {
@@ -1332,7 +1369,7 @@ fn batch_selection_status_counts(items: &[BatchTaskState]) -> String {
         format!("{status}={count}")
     })
     .collect::<Vec<_>>()
-    .join(", ")
+    .join(",")
 }
 
 fn batch_base_option(batch: &BatchMetadata) -> Result<Option<String>> {
@@ -2623,16 +2660,19 @@ error = ""
             .map(|candidate| candidate.label.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(labels.contains("prepared-task - Prepared task title"));
-        assert!(labels.contains("missing-task (missing task)"));
-        assert!(labels.contains("prepared=1, running=1, done=0, failed=0, skipped=0"));
+        assert!(labels.contains("batch:running-and-prepared-batch"));
+        assert!(labels.contains("Prepared task title (prepared-task)"));
+        assert!(labels.contains("missing-task (missing)"));
+        assert!(labels.contains("status:prepared=1,running=1,done=0,failed=0,skipped=0"));
+        assert!(labels.contains("runnable_tasks:Prepared task title (prepared-task)"));
+        assert!(labels.contains("running:sibling-running-task"));
         assert!(labels.contains("failed=1"));
         assert!(labels.contains("running=0"));
         assert!(labels.contains("running=1"));
-        assert!(labels.contains("runnable: 1"));
-        assert!(labels.contains("base: main"));
-        assert!(labels.contains("profile: codex"));
-        assert!(labels.contains(".local/batches/running-and-prepared-batch.toml"));
+        assert!(labels.contains("runnable:1"));
+        assert!(labels.contains("base:main"));
+        assert!(labels.contains("profile:codex"));
+        assert!(labels.contains("path:.local/batches/running-and-prepared-batch.toml"));
     }
 
     #[test]

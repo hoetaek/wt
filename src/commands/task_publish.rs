@@ -80,7 +80,7 @@ fn select_publish_task_keys(ctx: &Ctx) -> Result<Vec<String>> {
         .iter()
         .map(publish_candidate_label)
         .collect::<Vec<_>>();
-    let selections = ctx.ui.multi_select("Select tasks to publish", &items)?;
+    let selections = ctx.ui.multi_select("Tasks to publish", &items)?;
     let mut keys = Vec::new();
     for idx in selections {
         let candidate = candidates
@@ -149,14 +149,7 @@ fn publish_task_relative_path(ctx: &Ctx, path: &Path) -> String {
 }
 
 fn publish_candidate_label(candidate: &PublishCandidate) -> String {
-    let title = candidate.document.title_or_key(&candidate.task_key);
-    let branch = candidate.document.branch.trim();
-    match (title == candidate.task_key, branch.is_empty()) {
-        (true, false) => format!("{} ({branch})", candidate.task_key),
-        (false, false) => format!("{} - {} ({branch})", candidate.task_key, title),
-        (true, true) => candidate.task_key.clone(),
-        (false, true) => format!("{} - {}", candidate.task_key, title),
-    }
+    task::task_resource_label(&candidate.task_key, &candidate.document, "origin:none")
 }
 
 fn preflight_task_documents(
@@ -603,6 +596,24 @@ mod tests {
                 .unwrap()
                 .id,
             "PROJ-1"
+        );
+    }
+
+    #[test]
+    fn publish_candidate_label_shows_title_key_origin_and_branch() {
+        let candidate = PublishCandidate {
+            task_key: "add-publish".into(),
+            document: task::TaskDocument {
+                title: "Add publish".into(),
+                branch: "team/add-publish".into(),
+                body: String::new(),
+                origin: None,
+            },
+        };
+
+        assert_eq!(
+            publish_candidate_label(&candidate),
+            "Add publish  task:add-publish  origin:none  branch:team/add-publish"
         );
     }
 

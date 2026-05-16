@@ -928,7 +928,7 @@ fn select_runnable_stack_path(ctx: &Ctx) -> Result<Option<PathBuf>> {
         .iter()
         .map(|candidate| candidate.label.clone())
         .collect::<Vec<_>>();
-    let idx = ctx.ui.select("Select stack to run", &items)?;
+    let idx = ctx.ui.select("Stack to run", &items)?;
     let candidate = candidates
         .get(idx)
         .ok_or_else(|| anyhow::anyhow!("Selected stack index out of range: {idx}"))?;
@@ -986,17 +986,27 @@ fn stack_selection_label(
     states: &[StackTaskState],
     next_idx: usize,
 ) -> Result<String> {
-    let summary = stack_task_summary(ctx, states);
+    let stack_id = stack_selector_id(stack_path);
     let next = stack_task_title_label(ctx, &states[next_idx].stack_task.task);
-    let status_counts = stack_status_counts(states);
+    let status_counts = stack_selection_status_counts(states);
     let base = describe_stack_base(stack)?;
-    let profile = stack.profile.as_deref().unwrap_or("effective config");
     let path = relative_stack_path(ctx, stack_path);
+    let mut fields = vec![
+        format!("stack:{stack_id}"),
+        format!("next:{next} [{}]", states[next_idx].run.status),
+        format!("status:{status_counts}"),
+        format!("base:{base}"),
+    ];
 
-    Ok(format!(
-        "{summary} | next: {next} [{}] | {status_counts} | base: {base} | profile: {profile} | {path}",
-        states[next_idx].run.status
-    ))
+    if let Some(profile) = stack.profile.as_deref() {
+        fields.push(format!("profile:{profile}"));
+    }
+    if states.len() > 1 {
+        fields.push(format!("tasks:{}", stack_task_summary(ctx, states)));
+    }
+    fields.push(format!("path:{path}"));
+
+    Ok(fields.join("  "))
 }
 
 fn stack_task_summary(ctx: &Ctx, states: &[StackTaskState]) -> String {
@@ -1007,7 +1017,7 @@ fn stack_task_summary(ctx: &Ctx, states: &[StackTaskState]) -> String {
         .collect::<Vec<_>>();
     let mut summary = visible.join(" -> ");
     if states.len() > visible.len() {
-        summary.push_str(&format!(" -> ... (+{} more)", states.len() - visible.len()));
+        summary.push_str(&format!(" -> ...(+{})", states.len() - visible.len()));
     }
     if summary.is_empty() {
         "(empty stack)".into()
@@ -1023,11 +1033,20 @@ fn stack_task_title_label(ctx: &Ctx, key: &str) -> String {
             if title == key {
                 key.to_string()
             } else {
-                format!("{key} - {title}")
+                format!("{title} ({key})")
             }
         }
-        Err(_) => format!("{key} (missing task)"),
+        Err(_) => format!("{key} (missing)"),
     }
+}
+
+fn stack_selector_id(stack_path: &Path) -> String {
+    stack_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+        .unwrap_or("stack")
+        .to_string()
 }
 
 fn relative_stack_path(ctx: &Ctx, stack_path: &Path) -> String {
@@ -1194,6 +1213,26 @@ fn stack_status_counts(items: &[StackTaskState]) -> String {
     } else {
         counts.join(", ")
     }
+}
+
+fn stack_selection_status_counts(items: &[StackTaskState]) -> String {
+    [
+        STATUS_PREPARED,
+        STATUS_RUNNING,
+        STATUS_DONE,
+        STATUS_FAILED,
+        STATUS_SKIPPED,
+    ]
+    .iter()
+    .map(|status| {
+        let count = items
+            .iter()
+            .filter(|item| item.run.status == *status)
+            .count();
+        format!("{status}={count}")
+    })
+    .collect::<Vec<_>>()
+    .join(",")
 }
 
 fn is_runnable_status(status: &str) -> bool {
@@ -2305,23 +2344,23 @@ parent = "main"
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].path, runnable_path);
+        assert!(candidates[0].label.contains("stack:runnable-stack"));
         assert!(
             candidates[0]
                 .label
-                .contains("runnable-task - Runnable task")
+                .contains("next:Runnable task (runnable-task) [prepared]")
         );
         assert!(
             candidates[0]
                 .label
-                .contains("next: runnable-task - Runnable task [prepared]")
+                .contains("status:prepared=1,running=0,done=0,failed=0,skipped=0")
         );
-        assert!(candidates[0].label.contains("prepared=1"));
-        assert!(candidates[0].label.contains("base: main"));
-        assert!(candidates[0].label.contains("profile: codex"));
+        assert!(candidates[0].label.contains("base:main"));
+        assert!(candidates[0].label.contains("profile:codex"));
         assert!(
             candidates[0]
                 .label
-                .contains(".local/stacks/runnable-stack.toml")
+                .contains("path:.local/stacks/runnable-stack.toml")
         );
     }
 

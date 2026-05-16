@@ -77,7 +77,7 @@ pub(crate) fn select_local_task(ctx: &Ctx) -> Result<SelectedTask> {
     }
 
     let items = tasks.iter().map(task_selection_label).collect::<Vec<_>>();
-    let idx = ctx.ui.select("Select a local task", &items)?;
+    let idx = ctx.ui.select("Task to start", &items)?;
     let task = tasks
         .get(idx)
         .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
@@ -91,7 +91,7 @@ pub(crate) fn select_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
     }
 
     let items = tasks.iter().map(task_selection_label).collect::<Vec<_>>();
-    let selections = ctx.ui.multi_select("Select local tasks to start", &items)?;
+    let selections = ctx.ui.multi_select("Tasks to start", &items)?;
     let mut selected = Vec::new();
     for idx in selections {
         let task = tasks
@@ -307,14 +307,38 @@ fn read_selected_task(ctx: &Ctx, path: PathBuf) -> Result<SelectedTask> {
 }
 
 fn task_selection_label(task: &SelectedTask) -> String {
-    let title = task.document.title_or_key(&task.key);
-    let branch = prepared_branch_name(&task.document.branch);
-    match (title == task.key, branch) {
-        (true, Some(branch)) => format!("{} ({branch})", task.key),
-        (false, Some(branch)) => format!("{} - {} ({branch})", task.key, title),
-        (true, None) => task.key.clone(),
-        (false, None) => format!("{} - {}", task.key, title),
+    task_resource_label(
+        &task.key,
+        &task.document,
+        &task_origin_status(&task.document),
+    )
+}
+
+pub(crate) fn task_resource_label(key: &str, document: &TaskDocument, status: &str) -> String {
+    let title = document.title_or_key(key);
+    let title = title.trim();
+    let key = key.trim();
+    let mut fields = vec![if title.is_empty() { key } else { title }.to_string()];
+
+    if !key.is_empty() && fields[0] != key {
+        fields.push(format!("task:{key}"));
     }
+    if !status.trim().is_empty() {
+        fields.push(status.trim().to_string());
+    }
+    if let Some(branch) = prepared_branch_name(&document.branch) {
+        fields.push(format!("branch:{branch}"));
+    }
+
+    fields.join("  ")
+}
+
+fn task_origin_status(document: &TaskDocument) -> String {
+    document
+        .origin
+        .as_ref()
+        .map(|origin| format!("origin:{}:{}", origin.provider, origin.id))
+        .unwrap_or_else(|| "origin:none".into())
 }
 
 pub(crate) fn safe_task_key(value: &str) -> String {
@@ -416,6 +440,49 @@ mod tests {
             "S2/5 PROJ-123"
         );
         assert_eq!(workspace_run_label("B", 0, 3, None), "B1/3");
+    }
+
+    #[test]
+    fn task_selection_label_keeps_title_key_origin_and_branch_separate() {
+        let task = SelectedTask {
+            key: "PROJ-123".into(),
+            path: ".local/tasks/PROJ-123.toml".into(),
+            content: String::new(),
+            document: TaskDocument {
+                title: "Fix editor".into(),
+                branch: "alice/proj-123-fix-editor".into(),
+                body: String::new(),
+                origin: Some(TaskOrigin {
+                    provider: "linear".into(),
+                    id: "PROJ-123".into(),
+                }),
+            },
+        };
+
+        assert_eq!(
+            task_selection_label(&task),
+            "Fix editor  task:PROJ-123  origin:linear:PROJ-123  branch:alice/proj-123-fix-editor"
+        );
+    }
+
+    #[test]
+    fn task_selection_label_omits_duplicate_key_when_title_is_missing() {
+        let task = SelectedTask {
+            key: "local-task".into(),
+            path: ".local/tasks/local-task.toml".into(),
+            content: String::new(),
+            document: TaskDocument {
+                title: String::new(),
+                branch: "local-task".into(),
+                body: String::new(),
+                origin: None,
+            },
+        };
+
+        assert_eq!(
+            task_selection_label(&task),
+            "local-task  origin:none  branch:local-task"
+        );
     }
 
     #[test]

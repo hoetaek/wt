@@ -23,7 +23,7 @@ pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
         Some(target) => find_candidate(&candidates, target)?,
         None => {
             let items: Vec<String> = candidates.iter().map(OpenCandidate::label).collect();
-            ctx.ui.select("Select a workspace to open", &items)?
+            ctx.ui.select("Workspace to open", &items)?
         }
     };
     let entry = ensure_candidate_worktree(ctx, &git, &candidates[idx])?;
@@ -42,10 +42,14 @@ impl OpenCandidate {
     fn label(&self) -> String {
         match self {
             Self::Existing(entry) => {
-                format!("existing  {}  {}", entry.branch, entry.path.display())
+                format!(
+                    "existing  branch:{}  path:{}",
+                    entry.branch,
+                    entry.path.display()
+                )
             }
-            Self::Local { branch } => format!("local     {branch}"),
-            Self::Remote { branch } => format!("remote    origin/{branch}"),
+            Self::Local { branch } => format!("local  branch:{branch}"),
+            Self::Remote { branch } => format!("remote  branch:origin/{branch}"),
         }
     }
 
@@ -1053,9 +1057,9 @@ args = ["--yolo"]
         assert_eq!(
             labels,
             vec![
-                "existing  alice/feature  /tmp/repo-feature",
-                "local     local-only",
-                "remote    origin/remote-only"
+                "existing  branch:alice/feature  path:/tmp/repo-feature",
+                "local  branch:local-only",
+                "remote  branch:origin/remote-only"
             ]
         );
     }
