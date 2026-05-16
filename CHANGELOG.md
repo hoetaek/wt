@@ -8,6 +8,14 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Documented the canonical TaskDocument/TaskRun state model across README and
+  consistency notes: TaskDocuments define reusable work under `.local/tasks`,
+  TaskRuns record execution state under `.local/task-runs`, batch and stack
+  rows link to TaskRuns instead of owning task status, `wt done` completes
+  `new` and `batch` TaskRuns, and stack completion stays under
+  `wt stack complete`.
+- Bumped the package version to `0.10.0` because the TaskRun persisted state
+  model is a breaking state-file contract change while `wt` is still pre-1.0.
 - Changed stack task progress to use linked TaskRun records as the source of
   truth. `wt stack task` and `wt stack issue` now create stack TaskRuns during
   preparation, stack task rows keep only task ordering data plus the run id, and
@@ -26,8 +34,8 @@ minor version instead of moving to `x.0.0`.
   still pre-1.0.
 - Added `wt batch run <batch|latest> --jobs <N>` for bounded concurrent batch
   execution while keeping batch metadata writes coordinated through one writer.
-- Added `wt batch clean [BATCH]` for explicitly deleting completed batch task
-  snapshot files while keeping the batch metadata record.
+- Added `wt batch clean [BATCH]` for explicitly deleting completed batch
+  TaskDocument files while keeping the batch metadata record.
 - Bumped the package version to `0.5.0`; current `wt` development is still
   pre-1.0 because CLI, config, and persisted state contracts are still being
   stabilized.
@@ -36,8 +44,8 @@ minor version instead of moving to `x.0.0`.
   explicit single-PR path, and `wt pr 42 43 44` starts multiple explicit PR
   worktrees in order.
 - Added `wt new --task [<task-key>]` support for selecting one prepared local
-  task from `.local/tasks/*.toml` and starting it through the same task snapshot
-  path used by batch and stack runs. Bare `wt new` is rejected so branch-name
+  task from `.local/tasks/*.toml` and starting it with the same TaskDocument
+  context used by batch and stack runs. Bare `wt new` is rejected so branch-name
   workspaces and prepared-task execution stay explicit.
 - Renamed `wt issue --parallel` and `wt new --parallel` to `--matrix`, without a
   compatibility alias, to describe profile-matrix workspace creation instead of

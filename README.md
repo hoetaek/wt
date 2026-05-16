@@ -465,7 +465,7 @@ wt new add profile docs --profile codex
 wt new add profile docs --matrix
 ```
 
-Use `--task` to select one prepared task document from `.local/tasks/*.toml`
+Use `--task` to select one prepared TaskDocument from `.local/tasks/*.toml`
 and start it immediately:
 
 ```bash
@@ -476,17 +476,23 @@ wt new --task add-profile-docs --profile codex
 wt new --task add-profile-docs --matrix
 ```
 
-The selected task uses the same task snapshot startup path as `wt batch run`
-and `wt stack run`, so the agent prompt includes the selected task TOML.
+The agent prompt includes the selected TaskDocument content, matching the task
+context used by `wt batch run` and `wt stack run`.
 Bare `wt new` is rejected; pass branch-name text for a new branch workspace or
 `--task` for a prepared local task.
 
-When `wt new --task` starts a selected task, it writes TaskRun records under
-`.local/task-runs/<id>.toml` with `source = "new"`. Successful starts remain
-`running` until the matching worktree is cleaned up with `wt done`, which marks
-the run `done`. Tasks whose latest run is `running`, `done`, or `skipped` are
-omitted from the selector; failed runs stay retryable. With `--profile` or
-`--matrix`, each created profile worktree gets its own TaskRun record.
+Prepared local tasks use two persisted concepts. A TaskDocument under
+`.local/tasks/<task>.toml` describes what the work is: title, branch, body, and
+optional issue origin. A TaskRun under `.local/task-runs/<id>.toml` records one
+attempt to execute that task: task key, branch, status, source, optional group,
+optional error, and timestamps.
+
+When `wt new --task` starts a selected task, it writes a TaskRun with
+`source = "new"`. Successful starts remain `running` until the matching
+worktree is cleaned up with `wt done`, which marks the run `done`. Bare
+`wt new --task` hides tasks whose latest run is `running`, `done`, or
+`skipped`; failed runs stay retryable. With `--profile` or `--matrix`, each
+created profile worktree gets its own TaskRun record.
 
 ## Batches
 
@@ -529,8 +535,8 @@ array-of-tables syntax, equivalent to a `tasks: [...]` list in JSON. Each task
 row stores only the task key and the linked TaskRun id created during
 preparation. The TaskRun TOML is the execution-instance record: it stores the
 task key, branch, status, `source = "batch"`, `group` derived from the batch
-file stem, optional error, and timestamps. The task TOML stores the title,
-branch, body, and optional issue origin. A prepared task document can also be
+file stem, optional error, and timestamps. The TaskDocument stores the title,
+branch, body, and optional issue origin. A prepared TaskDocument can also be
 started directly with `wt new --task <task>`, without creating or running a
 batch file.
 
@@ -556,7 +562,8 @@ statuses from the linked TaskRun records.
 `status = "failed"`. TaskRuns marked `running`, `done`, or `skipped` are left
 alone, so reruns can continue from the linked execution records instead of
 checking a global issue state. A successfully created workspace leaves the
-TaskRun `running`; `wt done` records actual completion.
+TaskRun `running`; `wt done` records actual completion for batch TaskRuns by
+marking matching `running` records `done`.
 By default `run` uses `--jobs 1` and keeps the current sequential behavior.
 `--jobs <N>` starts at most N runnable tasks concurrently. The coordinator is
 the only writer for shared batch metadata: workers do not write batch metadata
@@ -566,11 +573,11 @@ serialized by the repo mutation guard. In parallel mode, conflict cases that
 would require an interactive worker prompt, such as an existing worktree path,
 are recorded as task failures instead.
 
-`clean` deletes task snapshot files from `.local/tasks/` for a completed batch.
-It keeps the batch TOML as the execution record, refuses batches with
-linked TaskRuns still in `prepared`, `running`, or `failed`, skips task files
-still referenced by another batch or stack, and reports deleted, skipped, and
-already-missing task files.
+`clean` deletes TaskDocument files from `.local/tasks/` for a completed batch.
+It keeps the batch TOML orchestration record and TaskRun execution history,
+refuses batches with linked TaskRuns still in `prepared`, `running`, or
+`failed`, skips TaskDocuments still referenced by another batch or stack, and
+reports deleted, skipped, and already-missing task files.
 
 ## Stacks
 
@@ -701,6 +708,9 @@ stack task row. `run` updates the next runnable TaskRun to `running` and
 `complete` updates the same TaskRun to `done`. The stack TOML records each
 task's `parent` and run id so reruns can continue from the stored ordering
 state while TaskRun remains the execution-state source of truth.
+Stack TaskRuns are completed by `wt stack complete`, not by `wt done`, because a
+stack task must be checked against its parent branch before the next task can
+start.
 
 ## Site Provider Helpers
 
