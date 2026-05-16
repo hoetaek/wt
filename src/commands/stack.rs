@@ -104,16 +104,22 @@ fn write_prepared_stack_at_path(
     Ok(())
 }
 
-pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
-    let stack_path = resolve_stack_path(ctx, stack)?;
-    let mut metadata = read_stack_metadata(&stack_path)?;
+pub fn run(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
+    let Some(stack_path) = resolve_run_stack_path(ctx, stack)? else {
+        return Ok(());
+    };
+    run_stack_path(ctx, &stack_path)
+}
+
+fn run_stack_path(ctx: &Ctx, stack_path: &Path) -> Result<()> {
+    let mut metadata = read_stack_metadata(stack_path)?;
     validate_profile(ctx, metadata.profile.as_deref())?;
 
     if metadata.tasks.is_empty() {
         bail!("Stack has no tasks: {}", stack_path.display());
     }
 
-    let task_states = read_stack_task_states(ctx, &stack_path, &metadata)?;
+    let task_states = read_stack_task_states(ctx, stack_path, &metadata)?;
 
     if let Some(state) = task_states
         .iter()
@@ -132,7 +138,7 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
             .print_step("No prepared or failed tasks to run in this stack.");
         metadata.status = summarize_stack_status(&task_states);
         metadata.updated_at = current_utc_timestamp();
-        write_stack_metadata(&stack_path, &metadata)?;
+        write_stack_metadata(stack_path, &metadata)?;
         return Ok(());
     };
 
@@ -140,12 +146,12 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
     metadata.status = STATUS_RUNNING.into();
     metadata.updated_at = current_utc_timestamp();
     metadata.tasks[idx].parent = Some(parent.clone());
-    update_stack_task_run(ctx, &stack_path, &metadata.tasks[idx], STATUS_RUNNING, None)?;
-    write_stack_metadata(&stack_path, &metadata)?;
+    update_stack_task_run(ctx, stack_path, &metadata.tasks[idx], STATUS_RUNNING, None)?;
+    write_stack_metadata(stack_path, &metadata)?;
 
     let result = run_stack_task(
         ctx,
-        &stack_path,
+        stack_path,
         &metadata.tasks[idx],
         idx,
         metadata.tasks.len(),
@@ -156,7 +162,7 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
     match result {
         Ok(result) => {
             task::write_task_branch(ctx, &metadata.tasks[idx].task, &result.branch_name)?;
-            update_stack_task_run(ctx, &stack_path, &metadata.tasks[idx], STATUS_RUNNING, None)?;
+            update_stack_task_run(ctx, stack_path, &metadata.tasks[idx], STATUS_RUNNING, None)?;
             ctx.ui.print_step(&format!(
                 "Started stack task {}. Mark it complete with: wt stack complete {} {}",
                 metadata.tasks[idx].label(),
@@ -171,21 +177,21 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
             {
                 update_stack_task_run(
                     ctx,
-                    &stack_path,
+                    stack_path,
                     &metadata.tasks[idx],
                     STATUS_SKIPPED,
                     Some("User cancelled"),
                 )?;
-                metadata.status = summarize_current_stack_status(ctx, &stack_path, &metadata)?;
+                metadata.status = summarize_current_stack_status(ctx, stack_path, &metadata)?;
                 metadata.updated_at = current_utc_timestamp();
-                write_stack_metadata(&stack_path, &metadata)?;
+                write_stack_metadata(stack_path, &metadata)?;
                 return Ok(());
             }
 
             let error = err.to_string();
             update_stack_task_run(
                 ctx,
-                &stack_path,
+                stack_path,
                 &metadata.tasks[idx],
                 STATUS_FAILED,
                 Some(&error),
@@ -193,9 +199,9 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
         }
     }
 
-    metadata.status = summarize_current_stack_status(ctx, &stack_path, &metadata)?;
+    metadata.status = summarize_current_stack_status(ctx, stack_path, &metadata)?;
     metadata.updated_at = current_utc_timestamp();
-    write_stack_metadata(&stack_path, &metadata)?;
+    write_stack_metadata(stack_path, &metadata)?;
     ctx.ui
         .print_step(&format!("Stack status: {}", metadata.status));
 
@@ -317,7 +323,7 @@ pub fn complete(ctx: &Ctx, stack: &str, task: Option<&str>, run_next: bool) -> R
     ctx.ui
         .print_step(&format!("Marked {} done", metadata.tasks[idx].label()));
     if run_next {
-        run(ctx, stack_path.to_string_lossy().as_ref())?;
+        run(ctx, Some(stack_path.to_string_lossy().as_ref()))?;
     }
     Ok(())
 }
@@ -574,6 +580,12 @@ struct StackTaskState {
     idx: usize,
     stack_task: StackTask,
     run: task_run::TaskRun,
+}
+
+#[derive(Clone, Debug)]
+struct RunnableStackCandidate {
+    path: PathBuf,
+    label: String,
 }
 
 fn update_stack_task_run(
@@ -859,19 +871,150 @@ fn write_stack_metadata(path: &Path, stack: &StackMetadata) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn task_keys_for_selector(ctx: &Ctx, target: &str) -> Result<Vec<String>> {
-    let stack_path = resolve_stack_path(ctx, target)?;
-    let metadata = read_stack_metadata(&stack_path)
-        .with_context(|| format!("Failed to read stack: {}", stack_path.display()))?;
-    Ok(metadata
-        .tasks
+fn resolve_run_stack_path(ctx: &Ctx, stack: Option<&str>) -> Result<Option<PathBuf>> {
+    match stack {
+        Some(target) => Ok(Some(resolve_stack_path_for_run(ctx, target)?)),
+        None => select_runnable_stack_path(ctx),
+    }
+}
+
+fn select_runnable_stack_path(ctx: &Ctx) -> Result<Option<PathBuf>> {
+    let candidates = list_runnable_stack_candidates(ctx)?;
+    if candidates.is_empty() {
+        ctx.ui.print_warning("No runnable stacks found");
+        return Ok(None);
+    }
+
+    let items = candidates
         .iter()
-        .map(|item| task::safe_task_key(&item.task))
-        .collect())
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    let idx = ctx.ui.select("Select stack to run", &items)?;
+    let candidate = candidates
+        .get(idx)
+        .ok_or_else(|| anyhow::anyhow!("Selected stack index out of range: {idx}"))?;
+    Ok(Some(candidate.path.clone()))
+}
+
+fn list_runnable_stack_candidates(ctx: &Ctx) -> Result<Vec<RunnableStackCandidate>> {
+    let stacks_dir = ctx.repo_root.join(".local/stacks");
+    if !stacks_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&stacks_dir)
+        .with_context(|| "Failed to read stack directory: .local/stacks")?
+    {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let mut candidates = Vec::new();
+    for path in paths {
+        let metadata = read_stack_metadata(&path)
+            .with_context(|| format!("Failed to read stack: {}", path.display()))?;
+        let states = read_stack_task_states(ctx, &path, &metadata)
+            .with_context(|| format!("Failed to read stack task state: {}", path.display()))?;
+        if states
+            .iter()
+            .any(|state| state.run.status == STATUS_RUNNING)
+        {
+            continue;
+        }
+        let Some(next_idx) = next_runnable_task(&states) else {
+            continue;
+        };
+        let label = stack_selection_label(ctx, &path, &metadata, &states, next_idx)?;
+        candidates.push(RunnableStackCandidate { path, label });
+    }
+
+    candidates.sort_by(|left, right| {
+        left.label
+            .cmp(&right.label)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    Ok(candidates)
+}
+
+fn stack_selection_label(
+    ctx: &Ctx,
+    stack_path: &Path,
+    stack: &StackMetadata,
+    states: &[StackTaskState],
+    next_idx: usize,
+) -> Result<String> {
+    let summary = stack_task_summary(ctx, states);
+    let next = stack_task_title_label(ctx, &states[next_idx].stack_task.task);
+    let status_counts = stack_status_counts(states);
+    let base = describe_stack_base(stack)?;
+    let profile = stack.profile.as_deref().unwrap_or("effective config");
+    let path = relative_stack_path(ctx, stack_path);
+
+    Ok(format!(
+        "{summary} | next: {next} [{}] | {status_counts} | base: {base} | profile: {profile} | {path}",
+        states[next_idx].run.status
+    ))
+}
+
+fn stack_task_summary(ctx: &Ctx, states: &[StackTaskState]) -> String {
+    let visible = states
+        .iter()
+        .take(3)
+        .map(|state| stack_task_title_label(ctx, &state.stack_task.task))
+        .collect::<Vec<_>>();
+    let mut summary = visible.join(" -> ");
+    if states.len() > visible.len() {
+        summary.push_str(&format!(" -> ... (+{} more)", states.len() - visible.len()));
+    }
+    if summary.is_empty() {
+        "(empty stack)".into()
+    } else {
+        summary
+    }
+}
+
+fn stack_task_title_label(ctx: &Ctx, key: &str) -> String {
+    match task::read_task_document(ctx, key) {
+        Ok(document) => {
+            let title = document.title_or_key(key);
+            if title == key {
+                key.to_string()
+            } else {
+                format!("{key} - {title}")
+            }
+        }
+        Err(_) => format!("{key} (missing task)"),
+    }
+}
+
+fn relative_stack_path(ctx: &Ctx, stack_path: &Path) -> String {
+    stack_path
+        .strip_prefix(&ctx.repo_root)
+        .unwrap_or(stack_path)
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn resolve_stack_path(ctx: &Ctx, target: &str) -> Result<PathBuf> {
+    resolve_stack_path_with_latest(ctx, target, true)
+}
+
+fn resolve_stack_path_for_run(ctx: &Ctx, target: &str) -> Result<PathBuf> {
     if target == "latest" {
+        bail!(
+            "wt stack run latest is no longer supported; omit STACK to select a runnable stack or pass a stack path/id"
+        );
+    }
+
+    resolve_stack_path_with_latest(ctx, target, false)
+}
+
+fn resolve_stack_path_with_latest(ctx: &Ctx, target: &str, allow_latest: bool) -> Result<PathBuf> {
+    if allow_latest && target == "latest" {
         return latest_stack_path(ctx);
     }
 
@@ -1258,7 +1401,7 @@ mod tests {
         std::fs::create_dir_all(stack_path.parent().unwrap()).unwrap();
         write_stack_metadata(&stack_path, &stack).unwrap();
 
-        run(&ctx, stack_path.to_str().unwrap()).unwrap();
+        run(&ctx, Some(stack_path.to_str().unwrap())).unwrap();
 
         let steps = ui.steps.lock().unwrap().join("\n");
         assert!(steps.contains("Opening cmux workspace: S2/2 PROJ-2 API"));
@@ -1922,6 +2065,217 @@ error = ""
     }
 
     #[test]
+    fn runnable_stack_candidates_exclude_running_and_done_stacks_with_semantic_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        write_task_file(dir.path(), "done-task", "Done task", "done-task", "");
+        write_task_file(
+            dir.path(),
+            "running-task",
+            "Running task",
+            "running-task",
+            "",
+        );
+        write_task_file(
+            dir.path(),
+            "runnable-task",
+            "Runnable task",
+            "runnable-task",
+            "",
+        );
+
+        let stacks_dir = dir.path().join(".local/stacks");
+        std::fs::create_dir_all(&stacks_dir).unwrap();
+        let done_path = stacks_dir.join("done-stack.toml");
+        let running_path = stacks_dir.join("running-stack.toml");
+        let runnable_path = stacks_dir.join("runnable-stack.toml");
+
+        write_stack_metadata(
+            &done_path,
+            &StackMetadata {
+                profile: None,
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_DONE.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![stack_task_with_status(
+                    &ctx,
+                    &done_path,
+                    "done-task",
+                    "done-task",
+                    Some("main"),
+                    STATUS_DONE,
+                    "",
+                )],
+            },
+        )
+        .unwrap();
+        write_stack_metadata(
+            &running_path,
+            &StackMetadata {
+                profile: None,
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_RUNNING.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![stack_task_with_status(
+                    &ctx,
+                    &running_path,
+                    "running-task",
+                    "running-task",
+                    Some("main"),
+                    STATUS_RUNNING,
+                    "",
+                )],
+            },
+        )
+        .unwrap();
+        write_stack_metadata(
+            &runnable_path,
+            &StackMetadata {
+                profile: Some("codex".into()),
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_PREPARED.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![stack_task_with_status(
+                    &ctx,
+                    &runnable_path,
+                    "runnable-task",
+                    "runnable-task",
+                    Some("main"),
+                    STATUS_PREPARED,
+                    "",
+                )],
+            },
+        )
+        .unwrap();
+
+        let candidates = list_runnable_stack_candidates(&ctx).unwrap();
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].path, runnable_path);
+        assert!(
+            candidates[0]
+                .label
+                .contains("runnable-task - Runnable task")
+        );
+        assert!(
+            candidates[0]
+                .label
+                .contains("next: runnable-task - Runnable task [prepared]")
+        );
+        assert!(candidates[0].label.contains("prepared=1"));
+        assert!(candidates[0].label.contains("base: main"));
+        assert!(candidates[0].label.contains("profile: codex"));
+        assert!(
+            candidates[0]
+                .label
+                .contains(".local/stacks/runnable-stack.toml")
+        );
+    }
+
+    #[test]
+    fn bare_run_selects_runnable_stack() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task_file(
+            dir.path(),
+            "runnable-task",
+            "Runnable task",
+            "runnable-task",
+            "",
+        );
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let mut ui = MockUi::new();
+        ui.add_select(0);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+        let stack_path = dir.path().join(".local/stacks/runnable-stack.toml");
+        std::fs::create_dir_all(stack_path.parent().unwrap()).unwrap();
+        let stack_task = stack_task_with_status(
+            &ctx,
+            &stack_path,
+            "runnable-task",
+            "runnable-task",
+            Some("main"),
+            STATUS_PREPARED,
+            "",
+        );
+        write_stack_metadata(
+            &stack_path,
+            &StackMetadata {
+                profile: None,
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_PREPARED.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![stack_task.clone()],
+            },
+        )
+        .unwrap();
+
+        run(&ctx, None).unwrap();
+
+        let updated = read_stack_metadata(&stack_path).unwrap();
+        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(read_run(dir.path(), &stack_task.run).status, STATUS_RUNNING);
+    }
+
+    #[test]
+    fn run_does_not_resolve_latest_alias_for_explicit_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let stacks_dir = dir.path().join(".local/stacks");
+        std::fs::create_dir_all(&stacks_dir).unwrap();
+        std::fs::write(
+            stacks_dir.join("2026-05-16-001.toml"),
+            "base_mode = \"explicit\"\nbase = \"main\"\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let err = resolve_stack_path_for_run(&ctx, "latest").unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("wt stack run latest is no longer supported")
+        );
+    }
+
+    #[test]
     fn run_starts_one_task_and_complete_allows_next_parent() {
         let dir = tempfile::tempdir().unwrap();
         write_task_file(dir.path(), "PROJ-1", "Schema", "alice/proj-1-schema", "");
@@ -2006,7 +2360,7 @@ error = ""
         };
         write_stack_metadata(&stack_path, &stack).unwrap();
 
-        run(&ctx, stack_path.to_str().unwrap()).unwrap();
+        run(&ctx, Some(stack_path.to_str().unwrap())).unwrap();
 
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
@@ -2026,7 +2380,7 @@ error = ""
         let first_run = read_run(dir.path(), &first_run_id);
         assert_eq!(first_run.status, STATUS_DONE);
 
-        run(&ctx, stack_path.to_str().unwrap()).unwrap();
+        run(&ctx, Some(stack_path.to_str().unwrap())).unwrap();
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
         assert_eq!(
@@ -2136,7 +2490,7 @@ error = ""
         let first_run_id = stack.tasks[0].run.clone();
         let second_run_id = stack.tasks[1].run.clone();
 
-        run(&ctx, stack_path.to_str().unwrap()).unwrap();
+        run(&ctx, Some(stack_path.to_str().unwrap())).unwrap();
         complete(&ctx, stack_path.to_str().unwrap(), Some("PROJ-1"), true).unwrap();
 
         let updated = read_stack_metadata(&stack_path).unwrap();
@@ -2307,7 +2661,7 @@ run = "{}"
         )
         .unwrap();
 
-        run(&ctx, stack_path.to_str().unwrap()).unwrap();
+        run(&ctx, Some(stack_path.to_str().unwrap())).unwrap();
 
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);

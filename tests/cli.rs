@@ -116,9 +116,25 @@ fn task_publish_help_explains_behavior() {
         .stdout(predicate::str::contains("write [origin]"))
         .stdout(predicate::str::contains("does not start workspaces"))
         .stdout(predicate::str::contains("wt new --task"))
-        .stdout(predicate::str::contains("--stack <STACK>"))
-        .stdout(predicate::str::contains("--batch <BATCH>"))
+        .stdout(predicate::str::contains("Omit task keys"))
+        .stdout(predicate::str::contains(
+            "already have [origin] are excluded",
+        ))
         .stdout(predicate::str::contains("already has origin"));
+}
+
+#[test]
+fn stack_run_help_explains_runnable_stack_selection() {
+    Command::cargo_bin("wt")
+        .unwrap()
+        .args(["stack", "run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("omit to select a runnable stack"))
+        .stdout(predicate::str::contains("next prepared or failed task"))
+        .stdout(predicate::str::contains("no currently running task"))
+        .stdout(predicate::str::contains("shorthand id"))
+        .stdout(predicate::str::contains("latest").not());
 }
 
 #[test]

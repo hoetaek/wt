@@ -1,9 +1,11 @@
-use crate::commands::{batch, issue, stack, task};
+use crate::commands::{issue, task};
 use crate::context::Ctx;
 use crate::services::issues::CreateIssueRequest;
 use crate::services::issues::IssueProvider;
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PublishResult {
@@ -31,13 +33,13 @@ struct PublishSummary {
     failed: Vec<PublishFailure>,
 }
 
-pub(crate) fn run(
-    ctx: &Ctx,
-    task_keys: &[String],
-    stack: Option<&str>,
-    batch: Option<&str>,
-) -> Result<()> {
-    let keys = resolve_task_keys(ctx, task_keys, stack, batch)?;
+pub(crate) fn run(ctx: &Ctx, task_keys: &[String]) -> Result<()> {
+    let keys = resolve_task_keys(ctx, task_keys)?;
+    if keys.is_empty() {
+        ctx.ui.print_warning("No tasks selected to publish");
+        return Ok(());
+    }
+
     let provider_name = task::issue_provider_name(ctx)?;
     let mut candidates = preflight_task_documents(ctx, &keys, &provider_name)?;
     let provider = issue::build_provider(ctx)?;
@@ -46,37 +48,12 @@ pub(crate) fn run(
     fail_if_needed(&summary)
 }
 
-fn resolve_task_keys(
-    ctx: &Ctx,
-    task_keys: &[String],
-    stack: Option<&str>,
-    batch: Option<&str>,
-) -> Result<Vec<String>> {
-    let has_explicit_tasks = !task_keys.is_empty();
-    let source_count = usize::from(has_explicit_tasks)
-        + usize::from(stack.is_some())
-        + usize::from(batch.is_some());
-
-    if source_count == 0 {
-        bail!("Provide task keys, --stack <STACK>, or --batch <BATCH>");
-    }
-    if source_count > 1 {
-        bail!("Choose one task source: explicit task keys, --stack, or --batch");
+fn resolve_task_keys(ctx: &Ctx, task_keys: &[String]) -> Result<Vec<String>> {
+    if task_keys.is_empty() {
+        return select_publish_task_keys(ctx);
     }
 
-    let keys = if let Some(target) = stack {
-        stack::task_keys_for_selector(ctx, target)?
-    } else if let Some(target) = batch {
-        batch::task_keys_for_selector(ctx, target)?
-    } else {
-        task_keys.to_vec()
-    };
-
-    let keys = dedupe_task_keys(keys);
-    if keys.is_empty() {
-        bail!("No tasks selected to publish");
-    }
-    Ok(keys)
+    Ok(dedupe_task_keys(task_keys.to_vec()))
 }
 
 fn dedupe_task_keys(task_keys: Vec<String>) -> Vec<String> {
@@ -91,6 +68,95 @@ fn dedupe_task_keys(task_keys: Vec<String>) -> Vec<String> {
     }
 
     deduped
+}
+
+fn select_publish_task_keys(ctx: &Ctx) -> Result<Vec<String>> {
+    let candidates = list_publish_candidates(ctx)?;
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let items = candidates
+        .iter()
+        .map(publish_candidate_label)
+        .collect::<Vec<_>>();
+    let selections = ctx.ui.multi_select("Select tasks to publish", &items)?;
+    let mut keys = Vec::new();
+    for idx in selections {
+        let candidate = candidates
+            .get(idx)
+            .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
+        keys.push(candidate.task_key.clone());
+    }
+    Ok(keys)
+}
+
+fn list_publish_candidates(ctx: &Ctx) -> Result<Vec<PublishCandidate>> {
+    let tasks_dir = ctx.repo_root.join(".local/tasks");
+    if !tasks_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in
+        fs::read_dir(&tasks_dir).with_context(|| "Failed to read task directory: .local/tasks")?
+    {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let mut candidates = Vec::new();
+    for path in paths {
+        let (key, document) = read_publish_candidate(ctx, &path)?;
+        if document.origin.is_some() {
+            continue;
+        }
+        candidates.push(PublishCandidate {
+            task_key: key,
+            document,
+        });
+    }
+    Ok(candidates)
+}
+
+fn read_publish_candidate(ctx: &Ctx, path: &Path) -> Result<(String, task::TaskDocument)> {
+    let key = task_key_from_path(ctx, path)?;
+    let relative_path = publish_task_relative_path(ctx, path);
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read task: {relative_path}"))?;
+    let document: task::TaskDocument = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse task: {relative_path}"))?;
+    Ok((key, document))
+}
+
+fn task_key_from_path(ctx: &Ctx, path: &Path) -> Result<String> {
+    let relative_path = publish_task_relative_path(ctx, path);
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("Task file is missing a key: {relative_path}"))
+}
+
+fn publish_task_relative_path(ctx: &Ctx, path: &Path) -> String {
+    path.strip_prefix(&ctx.repo_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn publish_candidate_label(candidate: &PublishCandidate) -> String {
+    let title = candidate.document.title_or_key(&candidate.task_key);
+    let branch = candidate.document.branch.trim();
+    match (title == candidate.task_key, branch.is_empty()) {
+        (true, false) => format!("{} ({branch})", candidate.task_key),
+        (false, false) => format!("{} - {} ({branch})", candidate.task_key, title),
+        (true, true) => candidate.task_key.clone(),
+        (false, true) => format!("{} - {}", candidate.task_key, title),
+    }
 }
 
 fn preflight_task_documents(
@@ -385,40 +451,17 @@ mod tests {
         std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
     }
 
-    fn write_batch(root: &std::path::Path, name: &str, tasks: &[&str]) {
-        let batches_dir = root.join(".local/batches");
-        std::fs::create_dir_all(&batches_dir).unwrap();
-        let mut content =
-            String::from("base_mode = \"explicit\"\nbase = \"main\"\nstatus = \"prepared\"\n");
-        for task in tasks {
-            content.push_str("\n[[tasks]]\n");
-            content.push_str(&format!("task = \"{task}\"\n"));
-            content.push_str(&format!("run = \"run-{task}\"\n"));
-        }
-        std::fs::write(batches_dir.join(name), content).unwrap();
-    }
-
-    fn write_stack(root: &std::path::Path, name: &str, tasks: &[&str]) {
-        let stacks_dir = root.join(".local/stacks");
-        std::fs::create_dir_all(&stacks_dir).unwrap();
-        let mut content =
-            String::from("base_mode = \"explicit\"\nbase = \"main\"\nstatus = \"prepared\"\n");
-        for task in tasks {
-            content.push_str("\n[[tasks]]\n");
-            content.push_str(&format!("task = \"{task}\"\n"));
-            content.push_str(&format!("run = \"run-{task}\"\n"));
-        }
-        std::fs::write(stacks_dir.join(name), content).unwrap();
-    }
-
     fn publish_with_fake_provider(
         ctx: &Ctx,
         tasks: &[String],
-        stack: Option<&str>,
-        batch: Option<&str>,
         provider: &FakeIssueProvider,
     ) -> Result<PublishSummary> {
-        let keys = resolve_task_keys(ctx, tasks, stack, batch)?;
+        let keys = resolve_task_keys(ctx, tasks)?;
+        if keys.is_empty() {
+            ctx.ui.print_warning("No tasks selected to publish");
+            return Ok(PublishSummary::default());
+        }
+
         let mut candidates = preflight_task_documents(ctx, &keys, "linear")?;
         let summary = publish_candidates(ctx, &mut candidates, "linear", provider);
         print_summary(ctx, &summary);
@@ -437,7 +480,7 @@ mod tests {
         let ctx = ctx_with_config(dir.path(), Config::default());
         let tasks = vec!["add-publish".to_string()];
 
-        let err = run(&ctx, &tasks, None, None).unwrap_err();
+        let err = run(&ctx, &tasks).unwrap_err();
 
         assert!(err.to_string().contains("No [issues] section in .wt.toml"));
     }
@@ -448,7 +491,7 @@ mod tests {
         let ctx = ctx_with_config(dir.path(), linear_config());
         let tasks = vec!["missing".to_string()];
 
-        let err = run(&ctx, &tasks, None, None).unwrap_err();
+        let err = run(&ctx, &tasks).unwrap_err();
 
         assert!(
             err.to_string()
@@ -474,7 +517,7 @@ mod tests {
         let provider = FakeIssueProvider::default();
         let tasks = vec!["task-a".to_string(), "task-b".to_string()];
 
-        let summary = publish_with_fake_provider(&ctx, &tasks, None, None, &provider).unwrap();
+        let summary = publish_with_fake_provider(&ctx, &tasks, &provider).unwrap();
 
         assert_eq!(
             summary
@@ -519,30 +562,30 @@ mod tests {
     }
 
     #[test]
-    fn publish_stack_latest_tasks_in_stack_order() {
+    fn bare_publish_selects_unprocessed_local_tasks() {
         let dir = tempfile::tempdir().unwrap();
         write_task(
             dir.path(),
-            "old-task",
-            "title = \"Old\"\nbranch = \"old-task\"\n",
+            "task-a",
+            "title = \"Task A\"\nbranch = \"task-a\"\n",
         );
         write_task(
             dir.path(),
-            "stack-a",
-            "title = \"Stack A\"\nbranch = \"stack-a\"\n",
+            "published-task",
+            "title = \"Published\"\nbranch = \"published-task\"\n\n[origin]\nprovider = \"linear\"\nid = \"PROJ-1\"\n",
         );
         write_task(
             dir.path(),
-            "stack-b",
-            "title = \"Stack B\"\nbranch = \"stack-b\"\n",
+            "task-b",
+            "title = \"Task B\"\nbranch = \"task-b\"\n",
         );
-        write_stack(dir.path(), "2026-05-15-001.toml", &["old-task"]);
-        write_stack(dir.path(), "2026-05-16-001.toml", &["stack-a", "stack-b"]);
-        let ctx = ctx_with_config(dir.path(), linear_config());
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0, 1]);
+        let ui = Arc::new(ui);
+        let ctx = ctx_with_config_and_ui(dir.path(), linear_config(), ui);
         let provider = FakeIssueProvider::default();
 
-        let summary =
-            publish_with_fake_provider(&ctx, &[], Some("latest"), None, &provider).unwrap();
+        let summary = publish_with_fake_provider(&ctx, &[], &provider).unwrap();
 
         assert_eq!(
             summary
@@ -550,55 +593,46 @@ mod tests {
                 .iter()
                 .map(|result| result.task_key.as_str())
                 .collect::<Vec<_>>(),
-            vec!["stack-a", "stack-b"]
+            vec!["task-a", "task-b"]
         );
-        assert!(
-            task::read_task_document(&ctx, "old-task")
+        assert_eq!(provider.created_requests().len(), 2);
+        assert_eq!(
+            task::read_task_document(&ctx, "published-task")
                 .unwrap()
                 .origin
-                .is_none()
+                .unwrap()
+                .id,
+            "PROJ-1"
         );
     }
 
     #[test]
-    fn publish_batch_latest_tasks_in_batch_order() {
+    fn bare_publish_empty_selection_exits_successfully() {
         let dir = tempfile::tempdir().unwrap();
         write_task(
             dir.path(),
-            "old-task",
-            "title = \"Old\"\nbranch = \"old-task\"\n",
+            "task-a",
+            "title = \"Task A\"\nbranch = \"task-a\"\n",
         );
-        write_task(
-            dir.path(),
-            "batch-a",
-            "title = \"Batch A\"\nbranch = \"batch-a\"\n",
-        );
-        write_task(
-            dir.path(),
-            "batch-b",
-            "title = \"Batch B\"\nbranch = \"batch-b\"\n",
-        );
-        write_batch(dir.path(), "2026-05-15-001.toml", &["old-task"]);
-        write_batch(dir.path(), "2026-05-16-001.toml", &["batch-a", "batch-b"]);
-        let ctx = ctx_with_config(dir.path(), linear_config());
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![]);
+        let ui = Arc::new(ui);
+        let ctx = ctx_with_config_and_ui(dir.path(), linear_config(), Arc::clone(&ui));
         let provider = FakeIssueProvider::default();
 
-        let summary =
-            publish_with_fake_provider(&ctx, &[], None, Some("latest"), &provider).unwrap();
+        let summary = publish_with_fake_provider(&ctx, &[], &provider).unwrap();
 
-        assert_eq!(
-            summary
-                .published
-                .iter()
-                .map(|result| result.task_key.as_str())
-                .collect::<Vec<_>>(),
-            vec!["batch-a", "batch-b"]
-        );
+        assert!(summary.published.is_empty());
+        assert!(provider.created_requests().is_empty());
         assert!(
-            task::read_task_document(&ctx, "old-task")
+            task::read_task_document(&ctx, "task-a")
                 .unwrap()
                 .origin
                 .is_none()
+        );
+        assert_eq!(
+            ui.warnings.lock().unwrap().as_slice(),
+            ["No tasks selected to publish"]
         );
     }
 
@@ -624,7 +658,7 @@ mod tests {
             "task-a".to_string(),
         ];
 
-        let summary = publish_with_fake_provider(&ctx, &tasks, None, None, &provider).unwrap();
+        let summary = publish_with_fake_provider(&ctx, &tasks, &provider).unwrap();
 
         assert_eq!(
             summary
@@ -649,7 +683,7 @@ mod tests {
         let provider = FakeIssueProvider::default();
         let tasks = vec!["task-a".to_string(), "missing-task".to_string()];
 
-        let err = publish_with_fake_provider(&ctx, &tasks, None, None, &provider).unwrap_err();
+        let err = publish_with_fake_provider(&ctx, &tasks, &provider).unwrap_err();
 
         assert!(
             err.to_string()
@@ -686,7 +720,7 @@ mod tests {
             "task-b".to_string(),
         ];
 
-        let err = publish_with_fake_provider(&ctx, &tasks, None, None, &provider).unwrap_err();
+        let err = publish_with_fake_provider(&ctx, &tasks, &provider).unwrap_err();
 
         assert!(err.to_string().contains("invalid-task has empty title"));
         assert!(provider.created_requests().is_empty());
@@ -730,7 +764,7 @@ mod tests {
             "task-b".to_string(),
         ];
 
-        let err = publish_with_fake_provider(&ctx, &tasks, None, None, &provider).unwrap_err();
+        let err = publish_with_fake_provider(&ctx, &tasks, &provider).unwrap_err();
 
         assert!(err.to_string().contains("already has origin linear:PROJ-1"));
         assert!(provider.created_requests().is_empty());
@@ -753,20 +787,6 @@ mod tests {
                 .unwrap()
                 .origin
                 .is_none()
-        );
-    }
-
-    #[test]
-    fn publish_rejects_mixed_task_sources() {
-        let dir = tempfile::tempdir().unwrap();
-        let ctx = ctx_with_config(dir.path(), linear_config());
-        let tasks = vec!["task-a".to_string()];
-
-        let err = resolve_task_keys(&ctx, &tasks, Some("latest"), None).unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("Choose one task source: explicit task keys, --stack, or --batch")
         );
     }
 

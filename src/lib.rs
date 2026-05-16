@@ -50,11 +50,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             BatchCommand::Clean { batch } => commands::batch::clean(ctx, batch.as_deref()),
         },
         Commands::Task { command } => match command {
-            TaskCommand::Publish {
-                tasks,
-                stack,
-                batch,
-            } => commands::task_publish::run(ctx, tasks, stack.as_deref(), batch.as_deref()),
+            TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
         },
         Commands::Stack { command } => match command {
             StackCommand::Task {
@@ -67,7 +63,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 profile,
                 base,
             } => commands::stack::issue(ctx, issues, profile.as_deref(), base),
-            StackCommand::Run { stack } => commands::stack::run(ctx, stack),
+            StackCommand::Run { stack } => commands::stack::run(ctx, stack.as_deref()),
             StackCommand::Show { stack } => commands::stack::show(ctx, stack.as_deref()),
             StackCommand::Edit { stack } => commands::stack::edit(ctx, stack.as_deref()),
             StackCommand::Complete {

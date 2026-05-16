@@ -308,18 +308,12 @@ pub enum BatchCommand {
 pub enum TaskCommand {
     /// Publish local TaskDocuments as provider issues
     #[command(
-        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run batch or stack work.\n\nAfter [origin] is written, later wt new --task, wt batch run, and wt stack run treat the task as provider-origin issue work.\n\nSelect tasks with explicit task keys, --stack <STACK>, or --batch <BATCH>. Stack and batch selectors accept a TOML path, shorthand id, or \"latest\". Mixed sources are rejected before creating issues.\n\nFails before creating an issue for a task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run batch or stack work.\n\nAfter [origin] is written, later wt new --task, wt batch run, and wt stack run treat the task as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
     )]
     Publish {
         /// Local task keys from .local/tasks/<task>.toml
         #[arg(value_name = "TASK")]
         tasks: Vec<String>,
-        /// Publish tasks referenced by a stack TOML path, shorthand id, or "latest"
-        #[arg(long, value_name = "STACK")]
-        stack: Option<String>,
-        /// Publish tasks referenced by a batch TOML path, shorthand id, or "latest"
-        #[arg(long, value_name = "BATCH")]
-        batch: Option<String>,
     },
 }
 
@@ -348,10 +342,13 @@ pub enum StackCommand {
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
     },
-    /// Start the next prepared or failed task from a stack file
+    /// Start the next prepared or failed task from a selected runnable stack
+    #[command(
+        long_about = "Start the next prepared or failed TaskRun from a stack and mark it running.\n\nOmit STACK to choose from runnable stacks: stacks with a next prepared or failed task and no currently running task. Passing STACK accepts a TOML path or shorthand id for scripts."
+    )]
     Run {
-        /// Stack TOML path, or "latest" for the newest local stack
-        stack: String,
+        /// Stack TOML path or shorthand id (omit to select a runnable stack)
+        stack: Option<String>,
     },
     /// Show stack metadata and task statuses
     Show {
@@ -859,11 +856,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Task {
-                command: TaskCommand::Publish {
-                    ref tasks,
-                    stack: None,
-                    batch: None
-                }
+                command: TaskCommand::Publish { ref tasks }
             }) if tasks == &vec!["add-profile-docs".to_string()]
         ));
     }
@@ -874,43 +867,28 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Task {
-                command: TaskCommand::Publish {
-                    ref tasks,
-                    stack: None,
-                    batch: None
-                }
+                command: TaskCommand::Publish { ref tasks }
             }) if tasks == &vec!["task-a".to_string(), "task-b".to_string()]
         ));
     }
 
     #[test]
-    fn task_publish_accepts_stack_selector() {
-        let cli = parse(&["wt", "task", "publish", "--stack", "latest"]);
+    fn task_publish_accepts_no_task_keys_for_interactive_selection() {
+        let cli = parse(&["wt", "task", "publish"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Task {
-                command: TaskCommand::Publish {
-                    ref tasks,
-                    stack: Some(ref stack),
-                    batch: None
-                }
-            }) if tasks.is_empty() && stack == "latest"
+                command: TaskCommand::Publish { ref tasks }
+            }) if tasks.is_empty()
         ));
     }
 
     #[test]
-    fn task_publish_accepts_batch_selector() {
-        let cli = parse(&["wt", "task", "publish", "--batch", "latest"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Task {
-                command: TaskCommand::Publish {
-                    ref tasks,
-                    stack: None,
-                    batch: Some(ref batch)
-                }
-            }) if tasks.is_empty() && batch == "latest"
-        ));
+    fn task_publish_rejects_stack_selector() {
+        let err = Cli::try_parse_from(["wt", "task", "publish", "--stack", "latest"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unexpected argument '--stack'"));
     }
 
     #[test]
@@ -928,9 +906,10 @@ mod tests {
         assert!(help.contains("write [origin]"));
         assert!(help.contains("does not start workspaces"));
         assert!(help.contains("later wt new --task, wt batch run, and wt stack run"));
-        assert!(help.contains("--stack <STACK>"));
-        assert!(help.contains("--batch <BATCH>"));
-        assert!(help.contains("Mixed sources are rejected"));
+        assert!(help.contains("Omit task keys to choose unprocessed local TaskDocuments"));
+        assert!(help.contains("tasks that already have [origin] are excluded"));
+        assert!(!help.contains("--stack <STACK>"));
+        assert!(!help.contains("--batch <BATCH>"));
         assert!(help.contains("no issue provider"));
         assert!(help.contains("already has origin"));
     }
@@ -1005,13 +984,21 @@ mod tests {
     }
 
     #[test]
-    fn stack_run_accepts_latest() {
-        let cli = parse(&["wt", "stack", "run", "latest"]);
+    fn stack_run_accepts_optional_target() {
+        let cli = parse(&["wt", "stack", "run"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack {
+                command: StackCommand::Run { stack: None }
+            })
+        ));
+
+        let cli = parse(&["wt", "stack", "run", ".local/stacks/manual.toml"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Stack {
                 command: StackCommand::Run { ref stack }
-            }) if stack == "latest"
+            }) if stack.as_deref() == Some(".local/stacks/manual.toml")
         ));
     }
 

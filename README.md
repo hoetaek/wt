@@ -113,9 +113,8 @@ Publish prepared local tasks to the configured issue provider without starting
 workspaces:
 
 ```bash
+wt task publish
 wt task publish add-profile-docs
-wt task publish --stack latest
-wt task publish --batch latest
 ```
 
 Prepare issue work in bulk:
@@ -125,7 +124,7 @@ wt batch issue
 wt batch run latest
 wt stack issue
 wt stack show latest
-wt stack run latest
+wt stack run
 wt stack complete latest PROJ-123 --run-next
 ```
 
@@ -540,14 +539,14 @@ tasks, each task gets its own TaskRun record on the same created branch.
 
 ## Publishing Local Tasks
 
-Use `wt task publish <task>...` to create provider issues from local
-TaskDocuments without starting workspaces:
+Use `wt task publish` to choose unprocessed local TaskDocuments and create
+provider issues without starting workspaces. Pass explicit task keys when a
+script already knows which tasks to publish:
 
 ```bash
+wt task publish
 wt task publish add-profile-docs
 wt task publish add-profile-docs wire-publish-api
-wt task publish --stack latest
-wt task publish --batch latest
 ```
 
 This is the reverse direction from `wt batch issue` and `wt stack issue`, which
@@ -586,15 +585,11 @@ id = "123"
 
 Publish does not store TaskRun execution state, batch or stack orchestration,
 profile selection, retry status, or branch landing state in the TaskDocument.
-Batch and stack selectors choose which TaskDocuments to publish; each provider
-link still belongs only in the selected TaskDocument's `origin`.
-
-`--stack` and `--batch` accept a TOML path, shorthand id, or `latest`, using
-the same latest-resolution rule as the matching stack or batch command. Mixed
-sources are rejected, so use explicit task keys, `--stack <stack>`, or
-`--batch <batch>` for one publish command. Duplicate task keys are published
-once in first visible order. The command prints a summary of published,
-skipped, and failed task keys.
+Bare `wt task publish` opens a multi-select list of local TaskDocuments that do
+not have `[origin]`. Selecting no tasks prints a warning and exits successfully.
+Explicit task keys remain available for scripts and are published once in first
+visible order. The command prints a summary of published, skipped, and failed
+task keys.
 
 Ambiguity fails before any provider write:
 
@@ -806,14 +801,20 @@ wt stack show
 wt stack show latest
 wt stack edit
 wt stack edit latest
+wt stack run
 wt stack run .local/stacks/2026-05-12-001.toml
-wt stack run latest
 ```
 
 `show` prints the stored base branch, profile, stack status, task statuses, and
 the recorded parent chain. Status and error details are derived from linked
 TaskRun records.
 `edit` opens the stack TOML file without changing task state.
+
+Bare `run` opens a selector for runnable stacks. A runnable stack has a next
+`prepared` or `failed` TaskRun and no current `running` TaskRun. The selector
+labels include task titles or keys, the next runnable task, status counts, base,
+profile, and stack path so the intended stack is recognizable. Passing a stack
+TOML path or shorthand id keeps the command scriptable.
 
 `run` starts one prepared or failed task at a time and leaves it marked
 `running`. The first task branch uses the stack base branch. Each following

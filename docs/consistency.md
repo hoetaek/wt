@@ -128,12 +128,13 @@ TaskDocument는 작업이 무엇인지를 담는 정의다. `.local/tasks/<task>
 아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
 
 TaskDocument publish는 local task 정의를 configured issue provider의 issue로 만드는
-side effect다. Canonical command shape는 `wt task publish <task>...`,
-`wt task publish --stack <stack>`, 또는 `wt task publish --batch <batch>`다. `publish`는
-각 task의 provider issue 생성과 `.local/tasks/<task>.toml`의 `origin` 업데이트가 모두
-끝났을 때만 해당 task를 성공으로 보고한다. 둘 중 하나만 끝난 상태를 성공으로 보고하지
-않는다. `origin`은 external issue와의 durable link이지, 아직 publish해야 한다는 pending
-request가 아니다.
+side effect다. Canonical command shape는 `wt task publish` 또는
+`wt task publish <task>...`다. Bare `wt task publish`는 아직 `[origin]`이 없는 local
+TaskDocument를 multi-select로 고르게 하고, 명시 task key는 scriptable path로 남긴다.
+`publish`는 각 task의 provider issue 생성과 `.local/tasks/<task>.toml`의 `origin`
+업데이트가 모두 끝났을 때만 해당 task를 성공으로 보고한다. 둘 중 하나만 끝난 상태를
+성공으로 보고하지 않는다. `origin`은 external issue와의 durable link이지, 아직
+publish해야 한다는 pending request가 아니다.
 
 `wt issue`는 이미 존재하는 provider issue에서 worktree를 시작하는 명령으로 남긴다.
 Local TaskDocument를 provider issue로 만드는 흐름을 `wt issue create`, `import`,
@@ -142,18 +143,19 @@ Local TaskDocument를 provider issue로 만드는 흐름을 `wt issue create`, `
 
 Publish는 TaskDocument의 schema를 넓히지 않는다. TaskDocument에는 계속 title, branch,
 body, optional origin만 둔다. TaskRun, batch, stack, profile, retry status, pending
-publish state는 TaskDocument에 저장하지 않는다. Batch나 stack task를 publish하더라도
-selector는 어떤 TaskDocument를 고를지에만 관여하고, provider issue link는 선택된 각
-TaskDocument의 `origin`에만 기록한다.
+publish state는 TaskDocument에 저장하지 않는다. Publish selector는 어떤 local
+TaskDocument를 고를지에만 관여하고, provider issue link는 선택된 각 TaskDocument의
+`origin`에만 기록한다.
 
 Publish ambiguity는 provider side effect 전에 실패해야 한다. Explicit task keys,
-`--stack`, `--batch`처럼 task source가 둘 이상이면 실패한다. Configured issue provider가
-없으면 실패한다. TaskDocument에 이미 `origin`이 있으면 기본 동작은 해당 task의 실패이며,
-같은 task를 조용히 다시 publish해서 duplicate issue를 만들지 않는다. 이미 publish된 task는
-`--skip-existing` 같은 명시적 옵션이 있을 때만 skip할 수 있다. 기존 `origin.provider`가
-configured issue provider와 다르면 provider mismatch로 실패한다. Provider issue title로 쓸
-`title`은 필요하므로 비어 있으면 실패한다. `body`는 없거나 비어 있어도 empty issue body로
-publish한다.
+bare selector 외에 batch나 stack alias 같은 두 번째 task source를 만들면 안 된다.
+Configured issue provider가 없으면 실패한다. Bare selector에서는 이미 `origin`이 있는
+TaskDocument를 보여주지 않는다. 명시 task key에 이미 `origin`이 있으면 해당 task는
+실패이며, 같은 task를 조용히 다시 publish해서 duplicate issue를 만들지 않는다. 이미
+publish된 task는 `--skip-existing` 같은 명시적 옵션이 있을 때만 skip할 수 있다. 기존
+`origin.provider`가 configured issue provider와 다르면 provider mismatch로 실패한다.
+Provider issue title로 쓸 `title`은 필요하므로 비어 있으면 실패한다. `body`는 없거나
+비어 있어도 empty issue body로 publish한다.
 
 Dry-run은 첫 write-path의 필수 표면이 아니다. 추가한다면 실제 publish와 같은 validation을
 거친 뒤 생성될 provider, title, body, branch metadata, 업데이트될 `origin` 위치를 보여주는
@@ -161,9 +163,9 @@ plan이어야 하고, TaskDocument에 pending state를 저장해서 dry-run 결�
 
 `wt task publish --help`는 이 side effect를 그대로 설명해야 한다. 즉 provider issue를
 생성하고 local TaskDocument origin을 기록한다는 점, 이미 origin이 있거나 provider가
-불명확하면 실패한다는 점, batch/stack selector는 task 선택만 한다는 점을 보여줘야 한다.
-Worktree 시작, TaskRun 생성, batch/stack 실행, branch landing처럼 다른 lifecycle을 publish
-도움말에 섞지 않는다.
+불명확하면 실패한다는 점, bare publish는 아직 origin이 없는 TaskDocument를 고른다는 점을
+보여줘야 한다. Worktree 시작, TaskRun 생성, batch/stack 실행, branch landing처럼 다른
+lifecycle을 publish 도움말에 섞지 않는다.
 
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
 task, branch, status, source, group, error, creation_order, created_at,
@@ -200,7 +202,12 @@ task마다 `.local/tasks` 아래의 TaskDocument와 `.local/task-runs` 아래의
 issue origin이 있는 작업과 직접 작성한 branch work를 같은 형태로 담는다. Stack row는
 task key, parent, linked TaskRun id 같은 orchestration link만 저장하고, status/error를
 따로 가지지 않는다. 실행 인스턴스의 canonical 기록은 TaskRun이다. `[[issues]]`나
-`[[items]]`처럼 같은 상태 목록을 가리키는 다른 이름은 받지 않는다. `run`은 다음 runnable
+`[[items]]`처럼 같은 상태 목록을 가리키는 다른 이름은 받지 않는다. Bare `run`은 runnable
+stack 목록을 selector로 보여준다. Runnable stack은 다음 `prepared` 또는 `failed` TaskRun이
+있고 current `running` TaskRun은 없는 stack이다. Selector label은 task titles/keys, next
+task, status counts, base, profile 같은 semantic summary를 담아서 `.local/stacks/<date>.toml`
+같은 파일명만 보고 고르게 하지 않는다. Explicit `wt stack run <path-or-id>`는 scripts를 위해
+남기지만 `latest`는 run target contract가 아니다. `run`은 선택된 stack의 다음 runnable
 TaskRun을 `running`으로 전이하고, 명시적 `complete` 신호가 들어오면 같은 TaskRun을
 `done`으로 전이한다.
 `pr`은 기존 pull request workflow를 가리키는 별도 개념이므로 stack task로 받지 않는다.

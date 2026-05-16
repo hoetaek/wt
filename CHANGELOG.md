@@ -16,13 +16,20 @@ minor version instead of moving to `x.0.0`.
   with separate task records.
 - Bumped the package version to `0.15.0` because multi-task `wt new` changes
   the user-facing CLI and TaskRun state model while `wt` is still pre-1.0.
+- Changed bare `wt task publish` to open a multi-select list of unprocessed
+  local TaskDocuments, removed the stack/batch publish selectors from the public
+  command surface, and kept explicit `wt task publish <task>...` for scripts.
+- Changed bare `wt stack run` to select from runnable stacks with semantic
+  labels, kept explicit stack path/id targets for scripts, and removed
+  `wt stack run latest` from the run contract.
+- Bumped the package version to `0.16.0` because task publish and stack run
+  changed user-facing CLI behavior while `wt` is still pre-1.0.
 - Changed stack task prompts to ask task agents to `wt send` their Agent
   Completion Report back to the coordinator worktree before waiting for review;
   the coordinator still advances the stack with `wt stack complete --run-next`.
-- Added `wt task publish <task>...`, `wt task publish --stack <stack>`, and
-  `wt task publish --batch <batch>` for publishing local TaskDocuments to the
-  configured issue provider and writing created issue origins back to selected
-  task files without creating TaskRuns or worktrees.
+- Added `wt task publish` and `wt task publish <task>...` for publishing local
+  TaskDocuments to the configured issue provider and writing created issue
+  origins back to selected task files without creating TaskRuns or worktrees.
 - Bumped the package version to `0.14.0` because `wt task publish` adds a new
   user-facing CLI command surface while `wt` is still pre-1.0.
 - Added `wt send <TARGET> <MESSAGE...>` for sending a message to the cmux
