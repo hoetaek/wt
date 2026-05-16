@@ -10,21 +10,21 @@ repos:
     hooks:
       - id: cargo-fmt
         name: cargo fmt --check
-        entry: cargo fmt --all --check
+        entry: bash -c 'unset $(git rev-parse --local-env-vars); cargo fmt --all --check'
         language: system
         pass_filenames: false
         files: ^(Cargo\.toml|Cargo\.lock|src/.*\.rs)$
 
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --all-targets --all-features -- -D warnings
+        entry: bash -c 'unset $(git rev-parse --local-env-vars); cargo clippy --all-targets --all-features -- -D warnings'
         language: system
         pass_filenames: false
         files: ^(Cargo\.toml|Cargo\.lock|src/.*\.rs)$
 
       - id: cargo-test
         name: cargo test
-        entry: cargo test --locked --all-features
+        entry: bash -c 'unset $(git rev-parse --local-env-vars); cargo test --locked --all-features'
         language: system
         pass_filenames: false
         files: ^(Cargo\.toml|Cargo\.lock|src/.*\.rs)$

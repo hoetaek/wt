@@ -1,12 +1,55 @@
 use assert_cmd::Command;
 use assert_fs::TempDir;
 use predicates::prelude::*;
+use std::path::Path;
 use std::process::Command as StdCommand;
+
+const GIT_LOCAL_ENV_KEYS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
+
+fn git_command() -> StdCommand {
+    let mut command = StdCommand::new("git");
+    for key in GIT_LOCAL_ENV_KEYS {
+        command.env_remove(key);
+    }
+    command
+}
+
+fn wt_command() -> Command {
+    let mut command = Command::cargo_bin("wt").unwrap();
+    for key in GIT_LOCAL_ENV_KEYS {
+        command.env_remove(key);
+    }
+    command
+}
+
+fn git_init(path: &Path) {
+    let status = git_command()
+        .arg("init")
+        .current_dir(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
 
 #[test]
 fn version_flag_prints_package_version() {
-    Command::cargo_bin("wt")
-        .unwrap()
+    wt_command()
         .arg("--version")
         .assert()
         .success()
@@ -15,8 +58,7 @@ fn version_flag_prints_package_version() {
 
 #[test]
 fn version_subcommand_prints_package_version() {
-    Command::cargo_bin("wt")
-        .unwrap()
+    wt_command()
         .arg("version")
         .assert()
         .success()
@@ -25,8 +67,7 @@ fn version_subcommand_prints_package_version() {
 
 #[test]
 fn version_subcommand_supports_json() {
-    let output = Command::cargo_bin("wt")
-        .unwrap()
+    let output = wt_command()
         .args(["--json", "version"])
         .assert()
         .success()
@@ -41,8 +82,7 @@ fn version_subcommand_supports_json() {
 
 #[test]
 fn no_args_prints_help_successfully() {
-    Command::cargo_bin("wt")
-        .unwrap()
+    wt_command()
         .assert()
         .success()
         .stdout(predicate::str::contains("Usage: wt [OPTIONS] [COMMAND]"))
@@ -54,15 +94,9 @@ fn no_args_prints_help_successfully() {
 #[test]
 fn new_without_args_requires_branch_text_or_task_option() {
     let temp = TempDir::new().unwrap();
-    let status = StdCommand::new("git")
-        .arg("init")
-        .current_dir(temp.path())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    git_init(temp.path());
 
-    Command::cargo_bin("wt")
-        .unwrap()
+    wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "new"])
         .assert()
         .failure()
@@ -74,15 +108,9 @@ fn new_without_args_requires_branch_text_or_task_option() {
 #[test]
 fn new_task_option_without_value_enters_task_selection() {
     let temp = TempDir::new().unwrap();
-    let status = StdCommand::new("git")
-        .arg("init")
-        .current_dir(temp.path())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    git_init(temp.path());
 
-    Command::cargo_bin("wt")
-        .unwrap()
+    wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "new", "--task"])
         .assert()
         .failure()
@@ -93,8 +121,7 @@ fn new_task_option_without_value_enters_task_selection() {
 
 #[test]
 fn new_help_explains_branch_text_and_task_selection() {
-    Command::cargo_bin("wt")
-        .unwrap()
+    wt_command()
         .args(["new", "--help"])
         .assert()
         .success()
@@ -107,8 +134,7 @@ fn new_help_explains_branch_text_and_task_selection() {
 
 #[test]
 fn task_publish_help_explains_behavior() {
-    Command::cargo_bin("wt")
-        .unwrap()
+    wt_command()
         .args(["task", "publish", "--help"])
         .assert()
         .success()
@@ -125,8 +151,7 @@ fn task_publish_help_explains_behavior() {
 
 #[test]
 fn stack_run_help_explains_runnable_stack_selection() {
-    Command::cargo_bin("wt")
-        .unwrap()
+    wt_command()
         .args(["stack", "run", "--help"])
         .assert()
         .success()
@@ -139,8 +164,7 @@ fn stack_run_help_explains_runnable_stack_selection() {
 
 #[test]
 fn completion_generates_script() {
-    Command::cargo_bin("wt")
-        .unwrap()
+    wt_command()
         .args(["completion", "bash"])
         .assert()
         .success()
@@ -149,8 +173,7 @@ fn completion_generates_script() {
 
 #[test]
 fn completions_alias_is_rejected() {
-    Command::cargo_bin("wt")
-        .unwrap()
+    wt_command()
         .args(["completions", "bash"])
         .assert()
         .failure()
@@ -160,15 +183,9 @@ fn completions_alias_is_rejected() {
 #[test]
 fn doctor_supports_json_and_directory_override() {
     let temp = TempDir::new().unwrap();
-    let status = StdCommand::new("git")
-        .arg("init")
-        .current_dir(temp.path())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    git_init(temp.path());
 
-    let output = Command::cargo_bin("wt")
-        .unwrap()
+    let output = wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "--json", "doctor"])
         .assert()
         .success()
@@ -187,20 +204,14 @@ fn doctor_supports_json_and_directory_override() {
 #[test]
 fn doctor_uses_config_override() {
     let temp = TempDir::new().unwrap();
-    let status = StdCommand::new("git")
-        .arg("init")
-        .current_dir(temp.path())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    git_init(temp.path());
     std::fs::write(
         temp.path().join("override.toml"),
         "[issues]\nprovider = \"github\"\n",
     )
     .unwrap();
 
-    let output = Command::cargo_bin("wt")
-        .unwrap()
+    let output = wt_command()
         .args([
             "-C",
             temp.path().to_str().unwrap(),
@@ -228,12 +239,7 @@ fn doctor_uses_config_override() {
 #[test]
 fn config_renders_effective_profile_layers_and_conventions() {
     let temp = TempDir::new().unwrap();
-    let status = StdCommand::new("git")
-        .arg("init")
-        .current_dir(temp.path())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    git_init(temp.path());
 
     std::fs::write(
         temp.path().join(".wt.toml"),
@@ -330,8 +336,7 @@ CODEX_MODE = "1"
     )
     .unwrap();
 
-    let explicit = Command::cargo_bin("wt")
-        .unwrap()
+    let explicit = wt_command()
         .args([
             "-C",
             temp.path().to_str().unwrap(),
@@ -345,8 +350,7 @@ CODEX_MODE = "1"
         .stdout
         .clone();
 
-    let implicit = Command::cargo_bin("wt")
-        .unwrap()
+    let implicit = wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "config"])
         .assert()
         .success()
@@ -401,15 +405,9 @@ CODEX_MODE = "1"
 #[test]
 fn list_supports_json_and_directory_override() {
     let temp = TempDir::new().unwrap();
-    let status = StdCommand::new("git")
-        .arg("init")
-        .current_dir(temp.path())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    git_init(temp.path());
 
-    let output = Command::cargo_bin("wt")
-        .unwrap()
+    let output = wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "--json", "list"])
         .assert()
         .success()
