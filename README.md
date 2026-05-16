@@ -518,11 +518,14 @@ created profile worktree gets its own TaskRun record.
 
 ## Publishing Local Tasks
 
-Use `wt task publish <task>` to create a provider issue from one local
-TaskDocument:
+Use `wt task publish <task>...` to create provider issues from local
+TaskDocuments:
 
 ```bash
 wt task publish add-profile-docs
+wt task publish add-profile-docs wire-publish-api
+wt task publish --stack latest
+wt task publish --batch latest
 ```
 
 This is the reverse direction from `wt batch issue` and `wt stack issue`, which
@@ -552,16 +555,22 @@ id = "123"
 
 Publish does not store TaskRun execution state, batch or stack orchestration,
 profile selection, retry status, or branch landing state in the TaskDocument.
-Future batch or stack selectors may choose more than one TaskDocument to
-publish, but each provider link still belongs only in the selected
-TaskDocument's `origin`.
+Batch and stack selectors choose which TaskDocuments to publish; each provider
+link still belongs only in the selected TaskDocument's `origin`.
+
+`--stack` and `--batch` accept a TOML path, shorthand id, or `latest`, using
+the same latest-resolution rule as the matching stack or batch command. Mixed
+sources are rejected, so use explicit task keys, `--stack <stack>`, or
+`--batch <batch>` for one publish command. Duplicate task keys are published
+once in first visible order. The command prints a summary of published,
+skipped, and failed task keys.
 
 Ambiguity fails before any provider write:
 
 - No configured issue provider: fail with a clear error.
 - Existing `origin`: fail by default and do not silently create a duplicate
-  issue. A future multi-task selector may add an explicit `--skip-existing`
-  option, but skipping is not implicit.
+  issue. A future option may add explicit skipping, but skipping is not
+  implicit.
 - Existing `origin.provider` differs from the configured issue provider: fail
   as a provider mismatch.
 - Empty `title`: fail because the provider issue needs a title.

@@ -859,6 +859,17 @@ fn write_stack_metadata(path: &Path, stack: &StackMetadata) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn task_keys_for_selector(ctx: &Ctx, target: &str) -> Result<Vec<String>> {
+    let stack_path = resolve_stack_path(ctx, target)?;
+    let metadata = read_stack_metadata(&stack_path)
+        .with_context(|| format!("Failed to read stack: {}", stack_path.display()))?;
+    Ok(metadata
+        .tasks
+        .iter()
+        .map(|item| task::safe_task_key(&item.task))
+        .collect())
+}
+
 fn resolve_stack_path(ctx: &Ctx, target: &str) -> Result<PathBuf> {
     if target == "latest" {
         return latest_stack_path(ctx);

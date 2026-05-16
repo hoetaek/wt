@@ -57,7 +57,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             BatchCommand::Clean { batch } => commands::batch::clean(ctx, batch.as_deref()),
         },
         Commands::Task { command } => match command {
-            TaskCommand::Publish { task } => commands::task_publish::run(ctx, task),
+            TaskCommand::Publish {
+                tasks,
+                stack,
+                batch,
+            } => commands::task_publish::run(ctx, tasks, stack.as_deref(), batch.as_deref()),
         },
         Commands::Stack { command } => match command {
             StackCommand::Task {

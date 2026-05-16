@@ -300,13 +300,20 @@ pub enum BatchCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum TaskCommand {
-    /// Publish one local TaskDocument as a provider issue
+    /// Publish local TaskDocuments as provider issues
     #[command(
-        long_about = "Create a provider issue from .local/tasks/<task>.toml, then write [origin] with the configured provider and created issue id.\n\nFails before creating an issue when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id.\n\nSelect tasks with explicit task keys, --stack <STACK>, or --batch <BATCH>. Stack and batch selectors accept a TOML path, shorthand id, or \"latest\". Mixed sources are rejected before creating issues.\n\nFails before creating an issue for a task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
     )]
     Publish {
-        /// Local task key from .local/tasks/<task>.toml
-        task: String,
+        /// Local task keys from .local/tasks/<task>.toml
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+        /// Publish tasks referenced by a stack TOML path, shorthand id, or "latest"
+        #[arg(long, value_name = "STACK")]
+        stack: Option<String>,
+        /// Publish tasks referenced by a batch TOML path, shorthand id, or "latest"
+        #[arg(long, value_name = "BATCH")]
+        batch: Option<String>,
     },
 }
 
@@ -846,8 +853,57 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Task {
-                command: TaskCommand::Publish { ref task }
-            }) if task == "add-profile-docs"
+                command: TaskCommand::Publish {
+                    ref tasks,
+                    stack: None,
+                    batch: None
+                }
+            }) if tasks == &vec!["add-profile-docs".to_string()]
+        ));
+    }
+
+    #[test]
+    fn task_publish_accepts_multiple_task_keys() {
+        let cli = parse(&["wt", "task", "publish", "task-a", "task-b"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Publish {
+                    ref tasks,
+                    stack: None,
+                    batch: None
+                }
+            }) if tasks == &vec!["task-a".to_string(), "task-b".to_string()]
+        ));
+    }
+
+    #[test]
+    fn task_publish_accepts_stack_selector() {
+        let cli = parse(&["wt", "task", "publish", "--stack", "latest"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Publish {
+                    ref tasks,
+                    stack: Some(ref stack),
+                    batch: None
+                }
+            }) if tasks.is_empty() && stack == "latest"
+        ));
+    }
+
+    #[test]
+    fn task_publish_accepts_batch_selector() {
+        let cli = parse(&["wt", "task", "publish", "--batch", "latest"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Publish {
+                    ref tasks,
+                    stack: None,
+                    batch: Some(ref batch)
+                }
+            }) if tasks.is_empty() && batch == "latest"
         ));
     }
 
@@ -864,6 +920,9 @@ mod tests {
 
         assert!(help.contains("provider issue"));
         assert!(help.contains("write [origin]"));
+        assert!(help.contains("--stack <STACK>"));
+        assert!(help.contains("--batch <BATCH>"));
+        assert!(help.contains("Mixed sources are rejected"));
         assert!(help.contains("no issue provider"));
         assert!(help.contains("already has origin"));
     }

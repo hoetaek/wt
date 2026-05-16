@@ -114,6 +114,8 @@ fn task_publish_help_explains_behavior() {
         .success()
         .stdout(predicate::str::contains("provider issue"))
         .stdout(predicate::str::contains("write [origin]"))
+        .stdout(predicate::str::contains("--stack <STACK>"))
+        .stdout(predicate::str::contains("--batch <BATCH>"))
         .stdout(predicate::str::contains("already has origin"));
 }
 

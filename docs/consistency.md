@@ -124,10 +124,12 @@ TaskDocument는 작업이 무엇인지를 담는 정의다. `.local/tasks/<task>
 아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
 
 TaskDocument publish는 local task 정의를 configured issue provider의 issue로 만드는
-side effect다. Canonical command shape는 `wt task publish <task>`다. `publish`는
-provider issue 생성과 `.local/tasks/<task>.toml`의 `origin` 업데이트가 모두 끝났을
-때만 성공한다. 둘 중 하나만 끝난 상태를 성공으로 보고하지 않는다. `origin`은 external
-issue와의 durable link이지, 아직 publish해야 한다는 pending request가 아니다.
+side effect다. Canonical command shape는 `wt task publish <task>...`,
+`wt task publish --stack <stack>`, 또는 `wt task publish --batch <batch>`다. `publish`는
+각 task의 provider issue 생성과 `.local/tasks/<task>.toml`의 `origin` 업데이트가 모두
+끝났을 때만 해당 task를 성공으로 보고한다. 둘 중 하나만 끝난 상태를 성공으로 보고하지
+않는다. `origin`은 external issue와의 durable link이지, 아직 publish해야 한다는 pending
+request가 아니다.
 
 `wt issue`는 이미 존재하는 provider issue에서 worktree를 시작하는 명령으로 남긴다.
 Local TaskDocument를 provider issue로 만드는 흐름을 `wt issue create`, `import`,
@@ -140,13 +142,14 @@ publish state는 TaskDocument에 저장하지 않는다. Batch나 stack task를 
 selector는 어떤 TaskDocument를 고를지에만 관여하고, provider issue link는 선택된 각
 TaskDocument의 `origin`에만 기록한다.
 
-Publish ambiguity는 provider side effect 전에 실패해야 한다. Configured issue provider가
-없으면 실패한다. TaskDocument에 이미 `origin`이 있으면 기본 동작은 실패이며, 같은 task를
-조용히 다시 publish해서 duplicate issue를 만들지 않는다. 나중에 여러 task selector를
-추가하더라도 이미 publish된 task는 `--skip-existing` 같은 명시적 옵션이 있을 때만 skip할
-수 있다. 기존 `origin.provider`가 configured issue provider와 다르면 provider mismatch로
-실패한다. Provider issue title로 쓸 `title`은 필요하므로 비어 있으면 실패한다. `body`는
-없거나 비어 있어도 empty issue body로 publish한다.
+Publish ambiguity는 provider side effect 전에 실패해야 한다. Explicit task keys,
+`--stack`, `--batch`처럼 task source가 둘 이상이면 실패한다. Configured issue provider가
+없으면 실패한다. TaskDocument에 이미 `origin`이 있으면 기본 동작은 해당 task의 실패이며,
+같은 task를 조용히 다시 publish해서 duplicate issue를 만들지 않는다. 이미 publish된 task는
+`--skip-existing` 같은 명시적 옵션이 있을 때만 skip할 수 있다. 기존 `origin.provider`가
+configured issue provider와 다르면 provider mismatch로 실패한다. Provider issue title로 쓸
+`title`은 필요하므로 비어 있으면 실패한다. `body`는 없거나 비어 있어도 empty issue body로
+publish한다.
 
 Dry-run은 첫 write-path의 필수 표면이 아니다. 추가한다면 실제 publish와 같은 validation을
 거친 뒤 생성될 provider, title, body, branch metadata, 업데이트될 `origin` 위치를 보여주는
@@ -154,8 +157,9 @@ plan이어야 하고, TaskDocument에 pending state를 저장해서 dry-run 결�
 
 `wt task publish --help`는 이 side effect를 그대로 설명해야 한다. 즉 provider issue를
 생성하고 local TaskDocument origin을 기록한다는 점, 이미 origin이 있거나 provider가
-불명확하면 실패한다는 점을 보여줘야 한다. Worktree 시작, TaskRun 생성, batch/stack 실행,
-branch landing처럼 다른 lifecycle을 publish 도움말에 섞지 않는다.
+불명확하면 실패한다는 점, batch/stack selector는 task 선택만 한다는 점을 보여줘야 한다.
+Worktree 시작, TaskRun 생성, batch/stack 실행, branch landing처럼 다른 lifecycle을 publish
+도움말에 섞지 않는다.
 
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
 task, branch, status, source, group, error, creation_order, created_at,

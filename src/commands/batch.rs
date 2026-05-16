@@ -1076,6 +1076,17 @@ fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn task_keys_for_selector(ctx: &Ctx, target: &str) -> Result<Vec<String>> {
+    let batch_path = resolve_batch_path(ctx, target)?;
+    let metadata = read_batch_metadata(&batch_path)
+        .with_context(|| format!("Failed to read batch: {}", batch_path.display()))?;
+    Ok(metadata
+        .tasks
+        .iter()
+        .map(|item| task::safe_task_key(&item.task))
+        .collect())
+}
+
 fn resolve_batch_path(ctx: &Ctx, target: &str) -> Result<PathBuf> {
     if target == "latest" {
         return latest_batch_path(ctx);
