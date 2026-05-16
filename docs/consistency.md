@@ -131,11 +131,12 @@ task, branch, status, source, group, error, created_at, updated_at을 저장한�
 
 Batch가 어떤 task를 준비했고, 어떤 task가 끝났고, 어떤 task가 실패했는지는 저장할
 가치가 있다. Batch의 canonical 상태 목록은 `[[tasks]]`이고, 각 row는 `.local/tasks`
-아래의 task 문서와 실행이 시작된 경우 `.local/task-runs` 아래의 TaskRun을 가리킨다.
-Batch row의 status/error는 orchestration을 읽기 위한 요약이고, 실행 인스턴스의 canonical
-기록은 TaskRun이다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을 가리키는 다른 이름은
-받지 않는다. 내부 구현 편의를 위해 만든 가짜 이름이나 암묵적 상태를 저장하면 나중에
-사용자가 파일을 읽을 때 모델을 다시 배워야 한다.
+아래의 task 문서와 `.local/task-runs` 아래의 TaskRun을 가리킨다. Batch row는 어떤
+task들이 함께 시작 대상인지와 어떤 실행 기록을 읽어야 하는지만 저장하고, status/error를
+따로 가지지 않는다. 실행 인스턴스의 canonical 기록은 TaskRun이다. `[[issues]]`나
+`[[items]]`처럼 같은 상태 목록을 가리키는 다른 이름은 받지 않는다. 내부 구현 편의를 위해
+만든 가짜 이름이나 암묵적 상태를 저장하면 나중에 사용자가 파일을 읽을 때 모델을 다시
+배워야 한다.
 
 Stack이 어떤 task를 어떤 parent 위에 쌓았는지도 저장할 가치가 있다. canonical 상태
 목록은 `[[tasks]]`이고, task 문서는 issue origin이 있는 작업과 직접 작성한 branch work

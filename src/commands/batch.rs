@@ -10,7 +10,7 @@ use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::git::GitService;
 use crate::worktree_naming;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -70,6 +70,8 @@ fn write_prepared_batch(
     }
 
     let resolved_base = resolve_batch_base(ctx, base)?;
+    let batch_path = next_available_batch_path(ctx)?;
+    let batch_tasks = batch_tasks_from_prepared(ctx, &batch_path, prepared_tasks)?;
     let now = current_utc_timestamp();
     let batch = BatchMetadata {
         profile: profile.map(str::to_string),
@@ -78,16 +80,35 @@ fn write_prepared_batch(
         status: STATUS_PREPARED.into(),
         created_at: now.clone(),
         updated_at: now,
-        tasks: prepared_tasks
-            .into_iter()
-            .map(BatchTask::from_prepared)
-            .collect(),
+        tasks: batch_tasks,
     };
-    let batch_path = write_new_batch_metadata(ctx, &batch)?;
+    write_batch_metadata(&batch_path, &batch)?;
 
     ctx.ui
         .print_step(&format!("Prepared batch: {}", batch_path.display()));
     Ok(())
+}
+
+fn batch_tasks_from_prepared(
+    ctx: &Ctx,
+    batch_path: &Path,
+    prepared_tasks: Vec<PreparedTask>,
+) -> Result<Vec<BatchTask>> {
+    let group = task_run::group_from_path(batch_path)?;
+    prepared_tasks
+        .into_iter()
+        .map(|task| {
+            let run = task_run::create(
+                ctx,
+                &task.key,
+                &task.branch,
+                task_run::SOURCE_BATCH,
+                Some(&group),
+                STATUS_PREPARED,
+            )?;
+            Ok(BatchTask::from_prepared(task, run.id))
+        })
+        .collect()
 }
 
 fn resolve_batch_base(ctx: &Ctx, base: &Option<String>) -> Result<String> {
@@ -125,19 +146,19 @@ pub fn run(ctx: &Ctx, batch: &str, jobs: usize) -> Result<()> {
         bail!("Batch has no tasks: {}", batch_path.display());
     }
 
-    let has_runnable_task = metadata
-        .tasks
+    let task_states = read_batch_task_states(ctx, &batch_path, &metadata)?;
+    let has_runnable_task = task_states
         .iter()
-        .any(|task| is_runnable_status(&task.status));
+        .any(|state| is_runnable_status(&state.run.status));
     let base = if has_runnable_task {
         batch_base_option(&metadata)?
     } else {
         None
     };
     let ran_any = if jobs == 1 {
-        run_batch_sequential(ctx, &batch_path, &mut metadata, base)?
+        run_batch_sequential(ctx, &batch_path, &mut metadata, &task_states, base)?
     } else {
-        run_batch_parallel(ctx, &batch_path, &mut metadata, base, jobs)?
+        run_batch_parallel(ctx, &batch_path, &mut metadata, &task_states, base, jobs)?
     };
 
     finish_batch_run(ctx, &batch_path, &mut metadata, ran_any)
@@ -147,12 +168,13 @@ fn run_batch_sequential(
     ctx: &Ctx,
     batch_path: &Path,
     metadata: &mut BatchMetadata,
+    task_states: &[BatchTaskState],
     base: Option<String>,
 ) -> Result<bool> {
     let mut ran_any = false;
 
-    for idx in 0..metadata.tasks.len() {
-        let Some(execution) = next_task_execution(ctx, metadata, idx, base.clone(), true)? else {
+    for state in task_states {
+        let Some(execution) = next_task_execution(ctx, metadata, state, base.clone(), true)? else {
             continue;
         };
 
@@ -178,14 +200,16 @@ fn run_batch_parallel(
     ctx: &Ctx,
     batch_path: &Path,
     metadata: &mut BatchMetadata,
+    task_states: &[BatchTaskState],
     base: Option<String>,
     jobs: usize,
 ) -> Result<bool> {
     let mut touched_any = false;
     let mut executions = Vec::new();
 
-    for idx in 0..metadata.tasks.len() {
-        let Some(execution) = next_task_execution(ctx, metadata, idx, base.clone(), false)? else {
+    for state in task_states {
+        let Some(execution) = next_task_execution(ctx, metadata, state, base.clone(), false)?
+        else {
             continue;
         };
         touched_any = true;
@@ -216,22 +240,22 @@ fn run_batch_parallel(
 fn next_task_execution(
     ctx: &Ctx,
     metadata: &BatchMetadata,
-    idx: usize,
+    state: &BatchTaskState,
     base: Option<String>,
     allow_interactive_prompts: bool,
 ) -> Result<Option<BatchTaskExecution>> {
-    let current_status = metadata.tasks[idx].status.as_str();
+    let current_status = state.run.status.as_str();
     if !is_runnable_status(current_status) {
         ctx.ui.print_step(&format!(
             "Skipping {} ({current_status})",
-            metadata.tasks[idx].label()
+            state.batch_task.label()
         ));
         return Ok(None);
     }
 
     Ok(Some(BatchTaskExecution {
-        idx,
-        batch_task: metadata.tasks[idx].clone(),
+        idx: state.idx,
+        batch_task: state.batch_task.clone(),
         base: base.expect("batch base is validated before running a task"),
         profile: metadata.profile.clone(),
         allow_interactive_prompts,
@@ -497,8 +521,8 @@ fn apply_task_event(
         }
         TaskEvent::Succeeded { idx } => {
             ctx.ui
-                .print_step(&format!("Succeeded {}", metadata.tasks[idx].label()));
-            (idx, STATUS_DONE, None)
+                .print_step(&format!("Started {}", metadata.tasks[idx].label()));
+            (idx, STATUS_RUNNING, None)
         }
         TaskEvent::Failed { idx, error } => {
             ctx.ui
@@ -521,17 +545,15 @@ fn apply_task_event(
         }
     };
 
-    metadata.tasks[idx].status = status.into();
-    metadata.tasks[idx].error = error.clone().unwrap_or_default();
     record_batch_task_run(
         ctx,
         batch_path,
-        &mut metadata.tasks[idx],
+        &metadata.tasks[idx],
         status,
         error.as_deref(),
     )?;
 
-    metadata.status = summarize_batch_status(&metadata.tasks);
+    metadata.status = summarize_current_batch_status(ctx, batch_path, metadata)?;
     metadata.updated_at = current_utc_timestamp();
     write_batch_metadata(batch_path, metadata)
 }
@@ -539,31 +561,25 @@ fn apply_task_event(
 fn record_batch_task_run(
     ctx: &Ctx,
     batch_path: &Path,
-    item: &mut BatchTask,
+    item: &BatchTask,
     status: &str,
     error: Option<&str>,
 ) -> Result<()> {
-    let branch = task::read_task_document(ctx, &item.task)
-        .map(|task| task.branch)
-        .unwrap_or_default();
-    let run_id = match item.run.clone() {
-        Some(run) => run,
-        None => {
-            let group = task_run::group_from_path(batch_path)?;
-            let record = task_run::create(
-                ctx,
-                &item.task,
-                &branch,
-                task_run::SOURCE_BATCH,
-                Some(&group),
-                status,
-            )?;
-            item.run = Some(record.id.clone());
-            record.id
-        }
-    };
+    let path = task_run::resolve(ctx, &item.run).with_context(|| {
+        format!(
+            "Batch task {} references missing TaskRun {}",
+            item.label(),
+            item.run
+        )
+    })?;
+    let run = task_run::read(&path)?;
+    validate_batch_task_run(batch_path, item, &run)?;
 
-    task_run::update(ctx, &run_id, status, Some(&branch), error)?;
+    let branch = task::read_task_document(ctx, &item.task)
+        .ok()
+        .map(|task| task.branch);
+    let updated = task_run::update(ctx, &item.run, status, branch.as_deref(), error)?;
+    validate_batch_task_run(batch_path, item, &updated.run)?;
     Ok(())
 }
 
@@ -578,7 +594,7 @@ fn finish_batch_run(
             .print_step("No prepared or failed tasks to run in this batch.");
     }
 
-    metadata.status = summarize_batch_status(&metadata.tasks);
+    metadata.status = summarize_current_batch_status(ctx, batch_path, metadata)?;
     metadata.updated_at = current_utc_timestamp();
     write_batch_metadata(batch_path, metadata)?;
     ctx.ui
@@ -602,10 +618,12 @@ pub fn show(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
         None => latest_batch_path(ctx)?,
     };
     let metadata = read_batch_metadata(&batch_path)?;
+    let task_states = read_batch_task_states(ctx, &batch_path, &metadata)?;
+    let status = summarize_batch_status(&task_states);
 
     ctx.ui
         .print_step(&format!("Batch: {}", batch_path.display()));
-    ctx.ui.print_dim(&format!("  Status: {}", metadata.status));
+    ctx.ui.print_dim(&format!("  Status: {status}"));
     ctx.ui
         .print_dim(&format!("  Base: {}", describe_batch_base(&metadata)?));
     ctx.ui.print_dim(&format!(
@@ -615,23 +633,25 @@ pub fn show(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
     ctx.ui.print_dim(&format!(
         "  Tasks: {} ({})",
         metadata.tasks.len(),
-        batch_status_counts(&metadata.tasks)
+        batch_status_counts(&task_states)
     ));
 
-    for (idx, item) in metadata.tasks.iter().enumerate() {
+    for state in &task_states {
+        let item = &state.batch_task;
+        let status = state.run.status.as_str();
         let task_doc = task::read_task_document(ctx, &item.task);
         let title = task_doc
             .as_ref()
             .map(|doc| doc.title_or_key(&item.task))
             .unwrap_or_else(|_| "(missing task)".into());
         let summary = if title.is_empty() {
-            format!("  {}. {} [{}]", idx + 1, item.label(), item.status)
+            format!("  {}. {} [{}]", state.idx + 1, item.label(), status)
         } else {
             format!(
                 "  {}. {} [{}] {}",
-                idx + 1,
+                state.idx + 1,
                 item.label(),
-                item.status,
+                status,
                 title
             )
         };
@@ -648,8 +668,10 @@ pub fn show(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
             }
             Err(err) => ctx.ui.print_dim(&format!("     Task error: {err}")),
         }
-        if !item.error.trim().is_empty() {
-            ctx.ui.print_dim(&format!("     Error: {}", item.error));
+        if let Some(error) = state.run.error.as_deref() {
+            if !error.trim().is_empty() {
+                ctx.ui.print_dim(&format!("     Error: {error}"));
+            }
         }
     }
 
@@ -675,11 +697,11 @@ pub fn clean(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
         bail!("Batch has no tasks: {}", batch_path.display());
     }
 
-    let blocked = metadata
-        .tasks
+    let task_states = read_batch_task_states(ctx, &batch_path, &metadata)?;
+    let blocked = task_states
         .iter()
-        .filter(|item| !is_cleanable_status(&item.status))
-        .map(|item| format!("{} [{}]", item.label(), item.status))
+        .filter(|state| !is_cleanable_status(&state.run.status))
+        .map(|state| format!("{} [{}]", state.batch_task.label(), state.run.status))
         .collect::<Vec<_>>();
     if !blocked.is_empty() {
         bail!(
@@ -694,7 +716,8 @@ pub fn clean(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
     let mut skipped = Vec::new();
     let mut missing = Vec::new();
 
-    for item in &metadata.tasks {
+    for state in &task_states {
+        let item = &state.batch_task;
         let key = task::safe_task_key(&item.task);
         if !seen.insert(key.clone()) {
             continue;
@@ -752,12 +775,7 @@ struct BatchMetadata {
 #[serde(deny_unknown_fields)]
 struct BatchTask {
     task: String,
-    #[serde(default)]
-    run: Option<String>,
-    #[serde(default = "default_task_status")]
-    status: String,
-    #[serde(default)]
-    error: String,
+    run: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -772,12 +790,10 @@ struct TaskReference {
 }
 
 impl BatchTask {
-    fn from_prepared(task: PreparedTask) -> Self {
+    fn from_prepared(task: PreparedTask, run: String) -> Self {
         Self {
             task: task.key,
-            run: None,
-            status: STATUS_PREPARED.into(),
-            error: String::new(),
+            run,
         }
     }
 
@@ -794,10 +810,6 @@ fn default_batch_status() -> String {
     STATUS_PREPARED.into()
 }
 
-fn default_task_status() -> String {
-    STATUS_PREPARED.into()
-}
-
 fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     let Some(profile) = profile else {
         return Ok(());
@@ -809,6 +821,13 @@ fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Clone)]
+struct BatchTaskState {
+    idx: usize,
+    batch_task: BatchTask,
+    run: task_run::TaskRun,
 }
 
 #[derive(Clone)]
@@ -886,22 +905,19 @@ fn prepared_branch_name(branch: &str) -> Option<&str> {
     }
 }
 
-fn write_new_batch_metadata(ctx: &Ctx, batch: &BatchMetadata) -> Result<PathBuf> {
+fn next_available_batch_path(ctx: &Ctx) -> Result<PathBuf> {
     let batches_dir = ctx.repo_root.join(".local/batches");
     fs::create_dir_all(&batches_dir)?;
 
     let date = current_utc_date();
     let mut seq = 1;
-    let path = loop {
+    loop {
         let candidate = batches_dir.join(format!("{date}-{seq:03}.toml"));
         if !candidate.exists() {
-            break candidate;
+            return Ok(candidate);
         }
         seq += 1;
-    };
-
-    write_batch_metadata(&path, batch)?;
-    Ok(path)
+    }
 }
 
 fn read_batch_metadata(path: &Path) -> Result<BatchMetadata> {
@@ -913,11 +929,84 @@ fn read_batch_metadata(path: &Path) -> Result<BatchMetadata> {
     Ok(metadata)
 }
 
+fn read_batch_task_states(
+    ctx: &Ctx,
+    batch_path: &Path,
+    metadata: &BatchMetadata,
+) -> Result<Vec<BatchTaskState>> {
+    let group = task_run::group_from_path(batch_path)?;
+    metadata
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let path = task_run::resolve(ctx, &item.run).with_context(|| {
+                format!(
+                    "Batch task {} references missing TaskRun {}",
+                    item.label(),
+                    item.run
+                )
+            })?;
+            let run = task_run::read(&path)?;
+            validate_batch_task_run_with_group(&group, item, &run)?;
+            Ok(BatchTaskState {
+                idx,
+                batch_task: item.clone(),
+                run,
+            })
+        })
+        .collect()
+}
+
+fn validate_batch_task_run(
+    batch_path: &Path,
+    item: &BatchTask,
+    run: &task_run::TaskRun,
+) -> Result<()> {
+    let group = task_run::group_from_path(batch_path)?;
+    validate_batch_task_run_with_group(&group, item, run)
+}
+
+fn validate_batch_task_run_with_group(
+    group: &str,
+    item: &BatchTask,
+    run: &task_run::TaskRun,
+) -> Result<()> {
+    let expected_task = task::safe_task_key(&item.task);
+    if run.task != expected_task {
+        bail!(
+            "Batch task {} references TaskRun {} for task {}",
+            item.label(),
+            item.run,
+            run.task
+        );
+    }
+    if run.source != task_run::SOURCE_BATCH {
+        bail!(
+            "Batch task {} references TaskRun {} with source {}",
+            item.label(),
+            item.run,
+            run.source
+        );
+    }
+    if run.group.as_deref() != Some(group) {
+        bail!(
+            "Batch task {} references TaskRun {} outside batch group {}",
+            item.label(),
+            item.run,
+            group
+        );
+    }
+    Ok(())
+}
+
 fn validate_batch_task(item: &BatchTask) -> Result<()> {
     if item.task.trim().is_empty() {
         bail!("Batch task is missing task");
     }
-    task_run::validate_status(&item.status)?;
+    if item.run.trim().is_empty() {
+        bail!("Batch task {} is missing TaskRun id", item.label());
+    }
     Ok(())
 }
 
@@ -937,11 +1026,7 @@ fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
     for item in &batch.tasks {
         content.push_str("\n[[tasks]]\n");
         content.push_str(&format!("task = {}\n", toml_quote(&item.task)));
-        if let Some(run) = item.run.as_deref() {
-            content.push_str(&format!("run = {}\n", toml_quote(run)));
-        }
-        content.push_str(&format!("status = {}\n", toml_quote(&item.status)));
-        content.push_str(&format!("error = {}\n", toml_quote(&item.error)));
+        content.push_str(&format!("run = {}\n", toml_quote(&item.run)));
     }
 
     fs::write(path, content)?;
@@ -1012,7 +1097,7 @@ fn describe_batch_base(batch: &BatchMetadata) -> Result<String> {
     }
 }
 
-fn batch_status_counts(items: &[BatchTask]) -> String {
+fn batch_status_counts(items: &[BatchTaskState]) -> String {
     let statuses = [
         STATUS_PREPARED,
         STATUS_RUNNING,
@@ -1023,7 +1108,10 @@ fn batch_status_counts(items: &[BatchTask]) -> String {
     let counts = statuses
         .iter()
         .filter_map(|status| {
-            let count = items.iter().filter(|item| item.status == *status).count();
+            let count = items
+                .iter()
+                .filter(|item| item.run.status == *status)
+                .count();
             (count > 0).then(|| format!("{status}={count}"))
         })
         .collect::<Vec<_>>();
@@ -1109,23 +1197,32 @@ fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn summarize_batch_status(items: &[BatchTask]) -> String {
+fn summarize_current_batch_status(
+    ctx: &Ctx,
+    batch_path: &Path,
+    metadata: &BatchMetadata,
+) -> Result<String> {
+    let states = read_batch_task_states(ctx, batch_path, metadata)?;
+    Ok(summarize_batch_status(&states))
+}
+
+fn summarize_batch_status(items: &[BatchTaskState]) -> String {
     if items.is_empty() {
         return STATUS_DONE.into();
     }
-    if items.iter().any(|item| item.status == STATUS_FAILED) {
+    if items.iter().any(|item| item.run.status == STATUS_FAILED) {
         return STATUS_FAILED.into();
     }
-    if items.iter().any(|item| item.status == STATUS_RUNNING) {
+    if items.iter().any(|item| item.run.status == STATUS_RUNNING) {
         return STATUS_RUNNING.into();
     }
     if items
         .iter()
-        .all(|item| matches!(item.status.as_str(), STATUS_DONE | STATUS_SKIPPED))
+        .all(|item| matches!(item.run.status.as_str(), STATUS_DONE | STATUS_SKIPPED))
     {
         return STATUS_DONE.into();
     }
-    if items.iter().all(|item| item.status == STATUS_PREPARED) {
+    if items.iter().all(|item| item.run.status == STATUS_PREPARED) {
         return STATUS_PREPARED.into();
     }
     STATUS_PARTIAL.into()
@@ -1204,12 +1301,55 @@ mod tests {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
     }
 
-    fn batch_task(key: &str, status: &str, error: &str) -> BatchTask {
+    fn batch_task(key: &str, run: &str) -> BatchTask {
         BatchTask {
             task: key.into(),
-            run: None,
-            status: status.into(),
-            error: error.into(),
+            run: run.into(),
+        }
+    }
+
+    fn batch_task_with_status(
+        ctx: &Ctx,
+        batch_path: &Path,
+        key: &str,
+        branch: &str,
+        status: &str,
+        error: &str,
+    ) -> BatchTask {
+        let group = task_run::group_from_path(batch_path).unwrap();
+        let record = task_run::create(
+            ctx,
+            key,
+            branch,
+            task_run::SOURCE_BATCH,
+            Some(&group),
+            status,
+        )
+        .unwrap();
+        if !error.is_empty() {
+            task_run::update(ctx, &record.id, status, Some(branch), Some(error)).unwrap();
+        }
+        batch_task(key, &record.id)
+    }
+
+    fn read_run(root: &std::path::Path, run_id: &str) -> task_run::TaskRun {
+        task_run::read(&root.join(".local/task-runs").join(format!("{run_id}.toml"))).unwrap()
+    }
+
+    fn batch_state_with_status(idx: usize, key: &str, status: &str) -> BatchTaskState {
+        BatchTaskState {
+            idx,
+            batch_task: batch_task(key, &format!("run-{idx}")),
+            run: task_run::TaskRun {
+                task: key.into(),
+                branch: key.into(),
+                status: status.into(),
+                source: task_run::SOURCE_BATCH.into(),
+                group: Some("batch".into()),
+                error: None,
+                created_at: "2026-05-11T00:00:00Z".into(),
+                updated_at: "2026-05-11T00:00:00Z".into(),
+            },
         }
     }
 
@@ -1395,21 +1535,67 @@ mod tests {
         issue(&ctx, &["PROJ-123".into()], None, &None).unwrap();
 
         let batch_path = latest_batch_path(&ctx).unwrap();
-        let content = std::fs::read_to_string(batch_path).unwrap();
+        let content = std::fs::read_to_string(&batch_path).unwrap();
         assert!(!content.contains("profile ="));
         assert!(content.contains("base_mode = \"explicit\""));
         assert!(content.contains("base = \"main\""));
         assert!(content.contains("status = \"prepared\""));
         assert!(content.contains("[[tasks]]"));
         assert!(content.contains("task = \"PROJ-123\""));
+        assert!(content.contains("run = \"batch-"));
+        let task_section = content.split("[[tasks]]").nth(1).unwrap();
+        assert!(!task_section.contains("status ="));
+        assert!(!task_section.contains("error ="));
         assert!(!content.contains("[[items]]"));
         assert!(!content.contains("[[issues]]"));
+        let metadata = read_batch_metadata(&batch_path).unwrap();
+        let run = read_run(dir.path(), &metadata.tasks[0].run);
+        assert_eq!(run.task, "PROJ-123");
+        assert_eq!(run.status, STATUS_PREPARED);
+        assert_eq!(run.source, task_run::SOURCE_BATCH);
+        let group = task_run::group_from_path(&batch_path).unwrap();
+        assert_eq!(run.group.as_deref(), Some(group.as_str()));
 
         let task_content =
             std::fs::read_to_string(dir.path().join(".local/tasks/PROJ-123.toml")).unwrap();
         assert!(task_content.contains("title = \"Fix editor\""));
         assert!(task_content.contains("branch = \"alice/proj-123-fix-editor\""));
         assert!(task_content.contains("id = \"PROJ-123\""));
+    }
+
+    #[test]
+    fn task_preparation_creates_batch_task_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        super::task(&ctx, &["add schema".into()], None, &Some("main".into())).unwrap();
+
+        let batch_path = latest_batch_path(&ctx).unwrap();
+        let metadata = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(metadata.tasks.len(), 1);
+        assert_eq!(metadata.tasks[0].task, "add-schema");
+        assert!(metadata.tasks[0].run.starts_with("batch-"));
+
+        let run = read_run(dir.path(), &metadata.tasks[0].run);
+        assert_eq!(run.task, "add-schema");
+        assert_eq!(run.branch, "add-schema");
+        assert_eq!(run.status, STATUS_PREPARED);
+        assert_eq!(run.source, task_run::SOURCE_BATCH);
+        let group = task_run::group_from_path(&batch_path).unwrap();
+        assert_eq!(run.group.as_deref(), Some(group.as_str()));
+
+        let content = std::fs::read_to_string(&batch_path).unwrap();
+        let task_section = content.split("[[tasks]]").nth(1).unwrap();
+        assert!(task_section.contains("task = \"add-schema\""));
+        assert!(task_section.contains("run = \""));
+        assert!(!task_section.contains("status ="));
+        assert!(!task_section.contains("error ="));
     }
 
     #[test]
@@ -1603,6 +1789,14 @@ mod tests {
             "",
         );
         let batch_path = dir.path().join("batch.toml");
+        let task = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "PROJ-123",
+            "alice/proj-123-fix-editor",
+            STATUS_FAILED,
+            "missing task",
+        );
         let batch = BatchMetadata {
             profile: Some("codex".into()),
             base_mode: "explicit".into(),
@@ -1610,7 +1804,7 @@ mod tests {
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![batch_task("PROJ-123", STATUS_FAILED, "missing task")],
+            tasks: vec![task],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -1619,7 +1813,7 @@ mod tests {
         let steps = ui.steps.lock().unwrap();
         assert!(steps[0].contains("Batch:"));
         let details = ui.dims.lock().unwrap().join("\n");
-        assert!(details.contains("Status: partial"));
+        assert!(details.contains("Status: failed"));
         assert!(details.contains("Base: main"));
         assert!(details.contains("Profile: codex"));
         assert!(details.contains("Tasks: 1 (failed=1)"));
@@ -1664,6 +1858,35 @@ mod tests {
     }
 
     #[test]
+    fn show_rejects_missing_task_run_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        write_task_file(dir.path(), "PROJ-123", "Fix editor", "PROJ-123", "");
+        let batch_path = dir.path().join("batch.toml");
+        let batch = BatchMetadata {
+            profile: None,
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            status: STATUS_PREPARED.into(),
+            created_at: "2026-05-11T00:00:00Z".into(),
+            updated_at: "2026-05-11T00:00:00Z".into(),
+            tasks: vec![batch_task("PROJ-123", "missing-run")],
+        };
+        write_batch_metadata(&batch_path, &batch).unwrap();
+
+        let result = show(&ctx, Some(batch_path.to_str().unwrap()));
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing TaskRun"));
+    }
+
+    #[test]
     fn issue_with_no_args_selects_issues_from_provider_list() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
@@ -1702,7 +1925,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_metadata_round_trips_status_fields() {
+    fn batch_metadata_round_trips_task_run_links() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("batch.toml");
         let batch = BatchMetadata {
@@ -1712,7 +1935,7 @@ mod tests {
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:01:00Z".into(),
-            tasks: vec![batch_task("PROJ-123", STATUS_DONE, "")],
+            tasks: vec![batch_task("PROJ-123", "batch-batch-PROJ-123")],
         };
 
         write_batch_metadata(&path, &batch).unwrap();
@@ -1722,11 +1945,15 @@ mod tests {
         assert_eq!(parsed.base.as_deref(), Some("main"));
         assert_eq!(parsed.status, STATUS_PARTIAL);
         assert_eq!(parsed.tasks[0].task, "PROJ-123");
-        assert_eq!(parsed.tasks[0].status, STATUS_DONE);
+        assert_eq!(parsed.tasks[0].run, "batch-batch-PROJ-123");
 
         let content = std::fs::read_to_string(path).unwrap();
         assert!(content.contains("[[tasks]]"));
         assert!(content.contains("task = \"PROJ-123\""));
+        assert!(content.contains("run = \"batch-batch-PROJ-123\""));
+        let task_section = content.split("[[tasks]]").nth(1).unwrap();
+        assert!(!task_section.contains("status ="));
+        assert!(!task_section.contains("error ="));
         assert!(!content.contains("[[issues]]"));
     }
 
@@ -1746,6 +1973,28 @@ source = "1"
 title = "Fix editor"
 branch = "alice/proj-1-fix-editor"
 snapshot = ".local/issues/PROJ-1.md"
+status = "prepared"
+error = ""
+"#,
+        )
+        .unwrap();
+
+        assert!(read_batch_metadata(&batch_path).is_err());
+    }
+
+    #[test]
+    fn read_batch_metadata_rejects_task_row_status_and_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch_path = dir.path().join("batch.toml");
+        std::fs::write(
+            &batch_path,
+            r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[tasks]]
+task = "PROJ-1"
+run = "batch-batch-PROJ-1"
 status = "prepared"
 error = ""
 "#,
@@ -1870,6 +2119,16 @@ error = ""
             "",
         );
         let batch_path = dir.path().join(".local/batches/2026-05-11-001.toml");
+        let done_task =
+            batch_task_with_status(&ctx, &batch_path, "done-task", "done-task", STATUS_DONE, "");
+        let skipped_task = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "skipped-task",
+            "skipped-task",
+            STATUS_SKIPPED,
+            "",
+        );
         let batch = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -1877,10 +2136,7 @@ error = ""
             status: STATUS_DONE.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![
-                batch_task("done-task", STATUS_DONE, ""),
-                batch_task("skipped-task", STATUS_SKIPPED, ""),
-            ],
+            tasks: vec![done_task, skipped_task],
         };
         write_batch_file(&batch_path, &batch);
 
@@ -1908,6 +2164,30 @@ error = ""
             write_task_file(dir.path(), key, key, key, "");
         }
         let batch_path = dir.path().join(".local/batches/2026-05-11-001.toml");
+        let prepared_task = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "prepared-task",
+            "prepared-task",
+            STATUS_PREPARED,
+            "",
+        );
+        let running_task = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "running-task",
+            "running-task",
+            STATUS_RUNNING,
+            "",
+        );
+        let failed_task = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "failed-task",
+            "failed-task",
+            STATUS_FAILED,
+            "",
+        );
         let batch = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -1915,11 +2195,7 @@ error = ""
             status: STATUS_FAILED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![
-                batch_task("prepared-task", STATUS_PREPARED, ""),
-                batch_task("running-task", STATUS_RUNNING, ""),
-                batch_task("failed-task", STATUS_FAILED, ""),
-            ],
+            tasks: vec![prepared_task, running_task, failed_task],
         };
         write_batch_file(&batch_path, &batch);
 
@@ -1951,6 +2227,30 @@ error = ""
             write_task_file(dir.path(), key, key, key, "");
         }
         let target_path = dir.path().join(".local/batches/2026-05-11-001.toml");
+        let target_only = batch_task_with_status(
+            &ctx,
+            &target_path,
+            "target-only",
+            "target-only",
+            STATUS_DONE,
+            "",
+        );
+        let shared_batch = batch_task_with_status(
+            &ctx,
+            &target_path,
+            "shared-batch",
+            "shared-batch",
+            STATUS_DONE,
+            "",
+        );
+        let shared_stack = batch_task_with_status(
+            &ctx,
+            &target_path,
+            "shared-stack",
+            "shared-stack",
+            STATUS_DONE,
+            "",
+        );
         let target = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -1958,14 +2258,18 @@ error = ""
             status: STATUS_DONE.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![
-                batch_task("target-only", STATUS_DONE, ""),
-                batch_task("shared-batch", STATUS_DONE, ""),
-                batch_task("shared-stack", STATUS_DONE, ""),
-            ],
+            tasks: vec![target_only, shared_batch, shared_stack],
         };
         write_batch_file(&target_path, &target);
         let other_batch_path = dir.path().join(".local/batches/2026-05-11-002.toml");
+        let other_shared_batch = batch_task_with_status(
+            &ctx,
+            &other_batch_path,
+            "shared-batch",
+            "shared-batch",
+            STATUS_DONE,
+            "",
+        );
         let other_batch = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -1973,7 +2277,7 @@ error = ""
             status: STATUS_DONE.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![batch_task("shared-batch", STATUS_DONE, "")],
+            tasks: vec![other_shared_batch],
         };
         write_batch_file(&other_batch_path, &other_batch);
         let stacks_dir = dir.path().join(".local/stacks");
@@ -2026,6 +2330,22 @@ error = ""
             "",
         );
         let batch_path = dir.path().join(".local/batches/2026-05-11-001.toml");
+        let present_task = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "present-task",
+            "present-task",
+            STATUS_DONE,
+            "",
+        );
+        let missing_task = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "missing-task",
+            "missing-task",
+            STATUS_DONE,
+            "",
+        );
         let batch = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -2033,10 +2353,7 @@ error = ""
             status: STATUS_DONE.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![
-                batch_task("present-task", STATUS_DONE, ""),
-                batch_task("missing-task", STATUS_DONE, ""),
-            ],
+            tasks: vec![present_task, missing_task],
         };
         write_batch_file(&batch_path, &batch);
 
@@ -2052,22 +2369,22 @@ error = ""
 
     #[test]
     fn summarize_status_distinguishes_batch_and_task_state() {
-        let task = |status: &str| batch_task("PROJ-123", status, "");
+        let task = |idx, status: &str| batch_state_with_status(idx, "PROJ-123", status);
 
         assert_eq!(
-            summarize_batch_status(&[task(STATUS_PREPARED)]),
+            summarize_batch_status(&[task(0, STATUS_PREPARED)]),
             STATUS_PREPARED
         );
         assert_eq!(
-            summarize_batch_status(&[task(STATUS_DONE), task(STATUS_PREPARED)]),
+            summarize_batch_status(&[task(0, STATUS_DONE), task(1, STATUS_PREPARED)]),
             STATUS_PARTIAL
         );
         assert_eq!(
-            summarize_batch_status(&[task(STATUS_DONE), task(STATUS_FAILED)]),
+            summarize_batch_status(&[task(0, STATUS_DONE), task(1, STATUS_FAILED)]),
             STATUS_FAILED
         );
         assert_eq!(
-            summarize_batch_status(&[task(STATUS_DONE), task(STATUS_SKIPPED)]),
+            summarize_batch_status(&[task(0, STATUS_DONE), task(1, STATUS_SKIPPED)]),
             STATUS_DONE
         );
     }
@@ -2083,6 +2400,8 @@ error = ""
             Box::new(MockUi::new()),
         );
         let batch_path = dir.path().join("batch.toml");
+        let done_task =
+            batch_task_with_status(&ctx, &batch_path, "PROJ-123", "PROJ-123", STATUS_DONE, "");
         let batch = BatchMetadata {
             profile: None,
             base_mode: "default".into(),
@@ -2090,7 +2409,7 @@ error = ""
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![batch_task("PROJ-123", STATUS_DONE, "")],
+            tasks: vec![done_task],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -2098,7 +2417,10 @@ error = ""
 
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.status, STATUS_DONE);
-        assert_eq!(updated.tasks[0].status, STATUS_DONE);
+        assert_eq!(
+            read_run(dir.path(), &updated.tasks[0].run).status,
+            STATUS_DONE
+        );
     }
 
     #[test]
@@ -2112,6 +2434,14 @@ error = ""
             Box::new(MockUi::new()),
         );
         let batch_path = dir.path().join("batch.toml");
+        let task = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "PROJ-123",
+            "PROJ-123",
+            STATUS_PREPARED,
+            "",
+        );
         let batch = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -2119,7 +2449,7 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![batch_task("PROJ-123", STATUS_PREPARED, "")],
+            tasks: vec![task],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -2130,15 +2460,7 @@ error = ""
         assert_eq!(updated.base_mode, "explicit");
         assert_eq!(updated.base.as_deref(), Some("main"));
         assert_eq!(updated.status, STATUS_FAILED);
-        assert_eq!(updated.tasks[0].status, STATUS_FAILED);
-        assert!(updated.tasks[0].error.contains("Failed to read task"));
-        let run_id = updated.tasks[0].run.as_deref().unwrap();
-        let run = task_run::read(
-            &dir.path()
-                .join(".local/task-runs")
-                .join(format!("{run_id}.toml")),
-        )
-        .unwrap();
+        let run = read_run(dir.path(), &updated.tasks[0].run);
         assert_eq!(run.task, "PROJ-123");
         assert_eq!(run.status, STATUS_FAILED);
         assert_eq!(run.source, task_run::SOURCE_BATCH);
@@ -2157,6 +2479,14 @@ error = ""
             Box::new(MockUi::new()),
         );
         let batch_path = dir.path().join("batch.toml");
+        let task = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "PROJ-123",
+            "PROJ-123",
+            STATUS_PREPARED,
+            "",
+        );
         let batch = BatchMetadata {
             profile: None,
             base_mode: "interactive".into(),
@@ -2164,7 +2494,7 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![batch_task("PROJ-123", STATUS_PREPARED, "")],
+            tasks: vec![task],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -2180,12 +2510,13 @@ error = ""
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.base_mode, "interactive");
         assert_eq!(updated.status, STATUS_PREPARED);
-        assert_eq!(updated.tasks[0].status, STATUS_PREPARED);
-        assert!(updated.tasks[0].error.is_empty());
+        let run = read_run(dir.path(), &updated.tasks[0].run);
+        assert_eq!(run.status, STATUS_PREPARED);
+        assert!(run.error.is_none());
     }
 
     #[test]
-    fn run_parallel_marks_multiple_tasks_done_through_writer() {
+    fn run_parallel_marks_multiple_tasks_running_through_writer() {
         let dir = tempfile::tempdir().unwrap();
         write_task_file(dir.path(), "task-one", "Task one", "alice/task-one", "");
         write_task_file(dir.path(), "task-two", "Task two", "alice/task-two", "");
@@ -2198,6 +2529,22 @@ error = ""
             Box::new(MockUi::new()),
         );
         let batch_path = dir.path().join("batch.toml");
+        let task_one = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "task-one",
+            "alice/task-one",
+            STATUS_PREPARED,
+            "",
+        );
+        let task_two = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "task-two",
+            "alice/task-two",
+            STATUS_PREPARED,
+            "",
+        );
         let batch = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -2205,28 +2552,17 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![
-                batch_task("task-one", STATUS_PREPARED, ""),
-                batch_task("task-two", STATUS_PREPARED, ""),
-            ],
+            tasks: vec![task_one, task_two],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
         run(&ctx, batch_path.to_str().unwrap(), 2).unwrap();
 
         let updated = read_batch_metadata(&batch_path).unwrap();
-        assert_eq!(updated.status, STATUS_DONE);
-        assert_eq!(updated.tasks[0].status, STATUS_DONE);
-        assert_eq!(updated.tasks[1].status, STATUS_DONE);
+        assert_eq!(updated.status, STATUS_RUNNING);
         for item in &updated.tasks {
-            let run_id = item.run.as_deref().unwrap();
-            let run = task_run::read(
-                &dir.path()
-                    .join(".local/task-runs")
-                    .join(format!("{run_id}.toml")),
-            )
-            .unwrap();
-            assert_eq!(run.status, STATUS_DONE);
+            let run = read_run(dir.path(), &item.run);
+            assert_eq!(run.status, STATUS_RUNNING);
             assert_eq!(run.source, task_run::SOURCE_BATCH);
             assert_eq!(run.group.as_deref(), Some("batch"));
         }
@@ -2253,6 +2589,22 @@ error = ""
             Box::new(MockUi::new()),
         );
         let batch_path = dir.path().join("batch.toml");
+        let task_ok = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "task-ok",
+            "alice/task-ok",
+            STATUS_PREPARED,
+            "",
+        );
+        let task_fail = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "task-fail",
+            "alice/task-fail",
+            STATUS_PREPARED,
+            "",
+        );
         let batch = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -2260,10 +2612,7 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![
-                batch_task("task-ok", STATUS_PREPARED, ""),
-                batch_task("task-fail", STATUS_PREPARED, ""),
-            ],
+            tasks: vec![task_ok, task_fail],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -2272,9 +2621,11 @@ error = ""
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.status, STATUS_FAILED);
-        assert_eq!(updated.tasks[0].status, STATUS_DONE);
-        assert_eq!(updated.tasks[1].status, STATUS_FAILED);
-        assert!(updated.tasks[1].error.contains("worktree add failed"));
+        let ok_run = read_run(dir.path(), &updated.tasks[0].run);
+        let failed_run = read_run(dir.path(), &updated.tasks[1].run);
+        assert_eq!(ok_run.status, STATUS_RUNNING);
+        assert_eq!(failed_run.status, STATUS_FAILED);
+        assert!(failed_run.error.unwrap().contains("worktree add failed"));
     }
 
     #[test]
@@ -2291,6 +2642,22 @@ error = ""
             Box::new(MockUi::new()),
         );
         let batch_path = dir.path().join("batch.toml");
+        let task_one = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "task-one",
+            "alice/task-one",
+            STATUS_PREPARED,
+            "",
+        );
+        let task_done = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "task-done",
+            "alice/task-done",
+            STATUS_DONE,
+            "",
+        );
         let batch = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -2298,19 +2665,22 @@ error = ""
             status: STATUS_PARTIAL.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![
-                batch_task("task-one", STATUS_PREPARED, ""),
-                batch_task("task-done", STATUS_DONE, ""),
-            ],
+            tasks: vec![task_one, task_done],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
         run(&ctx, batch_path.to_str().unwrap(), 2).unwrap();
 
         let updated = read_batch_metadata(&batch_path).unwrap();
-        assert_eq!(updated.status, STATUS_DONE);
-        assert_eq!(updated.tasks[0].status, STATUS_DONE);
-        assert_eq!(updated.tasks[1].status, STATUS_DONE);
+        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(
+            read_run(dir.path(), &updated.tasks[0].run).status,
+            STATUS_RUNNING
+        );
+        assert_eq!(
+            read_run(dir.path(), &updated.tasks[1].run).status,
+            STATUS_DONE
+        );
         let calls = runner.calls();
         let worktree_adds = calls
             .iter()
@@ -2334,6 +2704,14 @@ error = ""
             Box::new(MockUi::new()),
         );
         let batch_path = dir.path().join("batch.toml");
+        let task_one = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "task-one",
+            "alice/task-one",
+            STATUS_PREPARED,
+            "",
+        );
         let batch = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -2341,7 +2719,7 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![batch_task("task-one", STATUS_PREPARED, "")],
+            tasks: vec![task_one],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -2350,10 +2728,11 @@ error = ""
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.status, STATUS_FAILED);
-        assert_eq!(updated.tasks[0].status, STATUS_FAILED);
+        let run = read_run(dir.path(), &updated.tasks[0].run);
+        assert_eq!(run.status, STATUS_FAILED);
         assert!(
-            updated.tasks[0]
-                .error
+            run.error
+                .unwrap()
                 .contains("parallel batch workers cannot prompt")
         );
         assert!(runner.calls().is_empty());
@@ -2373,6 +2752,22 @@ error = ""
             Box::new(MockUi::new()),
         );
         let batch_path = dir.path().join("batch.toml");
+        let task_one = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "task-one",
+            "alice/same-task",
+            STATUS_PREPARED,
+            "",
+        );
+        let task_two = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "task-two",
+            "alice/same-task",
+            STATUS_PREPARED,
+            "",
+        );
         let batch = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -2380,10 +2775,7 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![
-                batch_task("task-one", STATUS_PREPARED, ""),
-                batch_task("task-two", STATUS_PREPARED, ""),
-            ],
+            tasks: vec![task_one, task_two],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -2392,16 +2784,20 @@ error = ""
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.status, STATUS_FAILED);
-        assert_eq!(updated.tasks[0].status, STATUS_FAILED);
-        assert_eq!(updated.tasks[1].status, STATUS_FAILED);
+        let first_run = read_run(dir.path(), &updated.tasks[0].run);
+        let second_run = read_run(dir.path(), &updated.tasks[1].run);
+        assert_eq!(first_run.status, STATUS_FAILED);
+        assert_eq!(second_run.status, STATUS_FAILED);
         assert!(
-            updated.tasks[0]
+            first_run
                 .error
+                .unwrap()
                 .contains("target branch alice/same-task")
         );
         assert!(
-            updated.tasks[1]
+            second_run
                 .error
+                .unwrap()
                 .contains("target branch alice/same-task")
         );
         assert!(runner.calls().is_empty());
@@ -2440,6 +2836,14 @@ error = ""
             Box::new(MockUi::new()),
         );
         let batch_path = dir.path().join("batch.toml");
+        let task = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "PROJ-123",
+            "alice/proj-123-fix-editor",
+            STATUS_PREPARED,
+            "",
+        );
         let batch = BatchMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -2447,7 +2851,7 @@ error = ""
             status: STATUS_PREPARED.into(),
             created_at: "2026-05-11T00:00:00Z".into(),
             updated_at: "2026-05-11T00:00:00Z".into(),
-            tasks: vec![batch_task("PROJ-123", STATUS_PREPARED, "")],
+            tasks: vec![task],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
@@ -2456,7 +2860,10 @@ error = ""
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.base_mode, "explicit");
         assert_eq!(updated.base.as_deref(), Some("main"));
-        assert_eq!(updated.status, STATUS_DONE);
-        assert_eq!(updated.tasks[0].status, STATUS_DONE);
+        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(
+            read_run(dir.path(), &updated.tasks[0].run).status,
+            STATUS_RUNNING
+        );
     }
 }

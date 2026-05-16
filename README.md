@@ -508,7 +508,7 @@ Batch preparation asks once for the base branch and stores the resolved branch
 in the batch file. `--base .` stores the current branch without prompting,
 `--base` with no value opens the local branch selector, and `--base <branch>`
 stores the named branch explicitly.
-`run` requires that stored explicit base before it marks any task `running`.
+`run` requires that stored explicit base before it starts any linked TaskRun.
 
 When `--profile` is omitted, the batch does not store a profile field and uses
 the effective config at run time. When `--profile <name>` is provided, the
@@ -526,13 +526,13 @@ separately:
 The batch TOML records the optional profile, base mode, overall batch status,
 and one `[[tasks]]` table per task. The double brackets are TOML's
 array-of-tables syntax, equivalent to a `tasks: [...]` list in JSON. Each task
-row stores the task key, the latest TaskRun id when the task has started, and a
-summary status/error. The TaskRun TOML is the execution-instance record: it
-stores the task key, branch, status, `source = "batch"`, `group` derived from
-the batch file stem, optional error, and timestamps. The task TOML stores the
-title, branch, body, and optional issue origin. A prepared task document can
-also be started directly with `wt new --task <task>`, without creating or
-running a batch file.
+row stores only the task key and the linked TaskRun id created during
+preparation. The TaskRun TOML is the execution-instance record: it stores the
+task key, branch, status, `source = "batch"`, `group` derived from the batch
+file stem, optional error, and timestamps. The task TOML stores the title,
+branch, body, and optional issue origin. A prepared task document can also be
+started directly with `wt new --task <task>`, without creating or running a
+batch file.
 
 Run a prepared batch explicitly:
 
@@ -548,28 +548,29 @@ wt batch clean
 wt batch clean latest
 ```
 
-`show` prints the stored base branch, profile, batch status, and task statuses.
+`show` prints the stored base branch and profile, then derives batch and task
+statuses from the linked TaskRun records.
 `edit` opens the batch TOML file without changing task state.
 
-`run` executes only tasks with `status = "prepared"` or `status = "failed"`.
-Tasks marked `done` or `skipped` are left alone, so reruns can continue from
-the stored batch orchestration state and its linked TaskRun records instead of
-checking a global issue state.
+`run` executes only linked TaskRuns with `status = "prepared"` or
+`status = "failed"`. TaskRuns marked `running`, `done`, or `skipped` are left
+alone, so reruns can continue from the linked execution records instead of
+checking a global issue state. A successfully created workspace leaves the
+TaskRun `running`; `wt done` records actual completion.
 By default `run` uses `--jobs 1` and keeps the current sequential behavior.
 `--jobs <N>` starts at most N runnable tasks concurrently. The coordinator is
 the only writer for shared batch metadata: workers do not write batch metadata
-directly, and the coordinator records started, succeeded, failed, and skipped
-task events in linked TaskRun files and mirrored task-row summaries. Shared Git
-metadata writes such as `parentbranch` are serialized by the repo mutation
-guard. In parallel mode, conflict cases that would require an interactive
-worker prompt, such as an existing worktree path, are recorded as task failures
-instead.
+directly, and the coordinator records started, failed, and skipped task events
+in linked TaskRun files. Shared Git metadata writes such as `parentbranch` are
+serialized by the repo mutation guard. In parallel mode, conflict cases that
+would require an interactive worker prompt, such as an existing worktree path,
+are recorded as task failures instead.
 
 `clean` deletes task snapshot files from `.local/tasks/` for a completed batch.
 It keeps the batch TOML as the execution record, refuses batches with
-`prepared`, `running`, or `failed` tasks, skips task files still referenced by
-another batch or stack, and reports deleted, skipped, and already-missing task
-files.
+linked TaskRuns still in `prepared`, `running`, or `failed`, skips task files
+still referenced by another batch or stack, and reports deleted, skipped, and
+already-missing task files.
 
 ## Stacks
 
