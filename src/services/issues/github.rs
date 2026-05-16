@@ -101,6 +101,7 @@ impl IssueProvider for GithubIssueProvider<'_> {
                 display: format!("#{} {}", i.number, i.title),
                 identifier: i.number.to_string(),
                 title: i.title,
+                hint: Some("GitHub".into()),
             })
             .collect())
     }
@@ -336,6 +337,7 @@ mod tests {
         assert_eq!(items[0].display, "#1 Issue 1");
         assert_eq!(items[1].display, "#2 Issue 2");
         assert_eq!(items[2].display, "#3 Issue 3");
+        assert_eq!(items[0].hint.as_deref(), Some("GitHub"));
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
@@ -353,6 +355,7 @@ mod tests {
         let provider = GithubIssueProvider::new(&runner, None, None);
         let items = provider.list_issues().unwrap();
         assert_eq!(items.len(), 1);
+        assert_eq!(items[0].hint.as_deref(), Some("GitHub"));
 
         let calls = runner.calls.lock().unwrap();
         assert!(!calls[0].1.contains(&"-a".to_string()));

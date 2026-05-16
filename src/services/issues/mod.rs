@@ -16,6 +16,7 @@ pub struct IssueListItem {
     pub identifier: String,
     pub title: String,
     pub display: String,
+    pub hint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -6,6 +6,11 @@ use console::{Style, style};
 use std::io;
 
 const PROMPT_MAX_ROWS: usize = 10;
+const BAR: &str = "│";
+const RADIO_SELECTED: &str = "◉";
+const RADIO_UNSELECTED: &str = "○";
+const CHECKBOX_SELECTED: &str = "☑";
+const CHECKBOX_UNSELECTED: &str = "☐";
 
 pub struct TerminalUi {
     quiet: bool,
@@ -121,38 +126,154 @@ struct WtPromptTheme;
 impl Theme for WtPromptTheme {
     fn bar_color(&self, state: &ThemeState) -> Style {
         match state {
-            ThemeState::Active => Style::new().cyan(),
+            ThemeState::Active => accent_style(),
             ThemeState::Cancel => Style::new().red(),
-            ThemeState::Submit => Style::new().bright().black(),
+            ThemeState::Submit => muted_style(),
             ThemeState::Error(_) => Style::new().yellow(),
         }
     }
 
     fn state_symbol_color(&self, state: &ThemeState) -> Style {
         match state {
-            ThemeState::Submit => Style::new().green(),
+            ThemeState::Submit => selected_style(),
             _ => self.bar_color(state),
         }
     }
 
     fn radio_symbol(&self, state: &ThemeState, selected: bool) -> String {
         match state {
-            ThemeState::Active | ThemeState::Error(_) if selected => style(">").cyan(),
-            ThemeState::Active | ThemeState::Error(_) => style(" ").dim(),
-            _ => style(""),
+            ThemeState::Active | ThemeState::Error(_) if selected => {
+                accent_style().apply_to(RADIO_SELECTED)
+            }
+            ThemeState::Active | ThemeState::Error(_) => muted_style().apply_to(RADIO_UNSELECTED),
+            ThemeState::Submit if selected => selected_style().apply_to(RADIO_SELECTED),
+            ThemeState::Cancel if selected => muted_style().apply_to(RADIO_SELECTED),
+            _ => Style::new().apply_to(""),
         }
         .to_string()
     }
 
     fn checkbox_symbol(&self, state: &ThemeState, selected: bool, active: bool) -> String {
         match state {
-            ThemeState::Active | ThemeState::Error(_) if selected => style("[x]").cyan(),
-            ThemeState::Active | ThemeState::Error(_) if active => style("[ ]").cyan(),
-            ThemeState::Active | ThemeState::Error(_) => style("[ ]").dim(),
-            ThemeState::Submit if selected => style("[x]").dim(),
-            _ => style(""),
+            ThemeState::Active | ThemeState::Error(_) if selected => {
+                selected_style().apply_to(CHECKBOX_SELECTED)
+            }
+            ThemeState::Active | ThemeState::Error(_) if active => {
+                accent_style().apply_to(CHECKBOX_UNSELECTED)
+            }
+            ThemeState::Active | ThemeState::Error(_) => {
+                muted_style().apply_to(CHECKBOX_UNSELECTED)
+            }
+            ThemeState::Submit if selected => selected_style().apply_to(CHECKBOX_SELECTED),
+            ThemeState::Cancel if selected => muted_style().apply_to(CHECKBOX_SELECTED),
+            _ => Style::new().apply_to(""),
         }
         .to_string()
+    }
+
+    fn checkbox_style(&self, state: &ThemeState, selected: bool, active: bool) -> Style {
+        match state {
+            ThemeState::Cancel if selected => Style::new().dim().strikethrough(),
+            ThemeState::Submit if selected => muted_style(),
+            ThemeState::Active | ThemeState::Error(_) if active => Style::new().bold(),
+            ThemeState::Active | ThemeState::Error(_) if selected => Style::new(),
+            _ => muted_style(),
+        }
+    }
+
+    fn format_select_item(
+        &self,
+        state: &ThemeState,
+        selected: bool,
+        label: &str,
+        hint: &str,
+    ) -> String {
+        match state {
+            ThemeState::Cancel | ThemeState::Submit if !selected => return String::new(),
+            _ => {}
+        }
+
+        format_prompt_row(
+            state,
+            self.bar_color(state),
+            self.radio_symbol(state, selected),
+            if selected {
+                Style::new().bold()
+            } else {
+                muted_style()
+            },
+            label,
+            hint,
+        )
+    }
+
+    fn format_multiselect_item(
+        &self,
+        state: &ThemeState,
+        selected: bool,
+        active: bool,
+        label: &str,
+        hint: &str,
+    ) -> String {
+        match state {
+            ThemeState::Cancel | ThemeState::Submit if !selected => return String::new(),
+            _ => {}
+        }
+
+        format_prompt_row(
+            state,
+            self.bar_color(state),
+            self.checkbox_symbol(state, selected, active),
+            self.checkbox_style(state, selected, active),
+            label,
+            hint,
+        )
+    }
+}
+
+fn accent_style() -> Style {
+    Style::new().color256(110).bold()
+}
+
+fn selected_style() -> Style {
+    Style::new().color256(114).bold()
+}
+
+fn muted_style() -> Style {
+    Style::new().color256(245)
+}
+
+fn hint_style(state: &ThemeState) -> Style {
+    match state {
+        ThemeState::Cancel => Style::new().dim().strikethrough(),
+        ThemeState::Submit => Style::new().dim(),
+        _ => muted_style(),
+    }
+}
+
+fn format_prompt_row(
+    state: &ThemeState,
+    bar_style: Style,
+    marker: String,
+    label_style: Style,
+    label: &str,
+    hint: &str,
+) -> String {
+    let hint = format_hint(state, hint);
+    format!(
+        "{bar}  {marker}  {label}{hint}\n",
+        bar = bar_style.apply_to(BAR),
+        label = label_style.apply_to(label),
+    )
+}
+
+fn format_hint(state: &ThemeState, hint: &str) -> String {
+    let hint = hint.trim();
+    if hint.is_empty() {
+        String::new()
+    } else {
+        let hint = hint.replace(" | ", " · ");
+        format!("  {}", hint_style(state).apply_to(hint))
     }
 }
 
@@ -214,8 +335,25 @@ mod tests {
         );
         console::set_colors_enabled(true);
 
-        assert_eq!(strip_ansi_codes(&rendered), rendered);
-        assert!(rendered.contains("> Fix editor"));
-        assert!(rendered.contains("(task PROJ-123 | Linear)"));
+        let plain = strip_ansi_codes(&rendered);
+        assert!(plain.contains("◉  Fix editor"));
+        assert!(plain.contains("task PROJ-123 · Linear"));
+    }
+
+    #[test]
+    fn prompt_theme_renders_checkbox_rows_without_color() {
+        console::set_colors_enabled(false);
+        let rendered = WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            true,
+            true,
+            "Publish docs",
+            "PROJ-123 | Todo | alice",
+        );
+        console::set_colors_enabled(true);
+
+        let plain = strip_ansi_codes(&rendered);
+        assert!(plain.contains("☑  Publish docs"));
+        assert!(plain.contains("PROJ-123 · Todo · alice"));
     }
 }

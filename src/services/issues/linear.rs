@@ -39,6 +39,11 @@ impl IssueProvider for LinearIssueProvider<'_> {
                     .as_ref()
                     .map(|a| a.display_name.as_str())
                     .unwrap_or("-");
+                let hint = if assignee == "-" {
+                    i.state.name.clone()
+                } else {
+                    format!("{} | {}", i.state.name, assignee)
+                };
                 IssueListItem {
                     display: format!(
                         "{:<9} {:<12} {:<8} {}",
@@ -46,6 +51,7 @@ impl IssueProvider for LinearIssueProvider<'_> {
                     ),
                     identifier: i.identifier,
                     title: i.title,
+                    hint: Some(hint),
                 }
             })
             .collect())
@@ -144,6 +150,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].identifier, "PROJ-1");
         assert_eq!(items[0].display, "PROJ-1    Started      alice    Issue 1");
+        assert_eq!(items[0].hint.as_deref(), Some("Started | alice"));
     }
 
     #[test]

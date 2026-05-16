@@ -1,8 +1,8 @@
 use crate::cli::BaseMode;
-use crate::commands::agent_report;
 use crate::commands::profile_workspace::{
     ProfileBranchDecision, PromptPolicy, resolve_profile_branch,
 };
+use crate::commands::{agent_report, issue_selection};
 use crate::config::Config;
 use crate::config::IssueProviderType;
 use crate::context::Ctx;
@@ -258,8 +258,7 @@ fn run_inner_many(
             bail!("No issues found");
         }
 
-        let items: Vec<String> = issues.iter().map(|i| i.display.clone()).collect();
-        let idx = ctx.ui.select("Select an issue", &items)?;
+        let idx = issue_selection::select_issue_index(ctx, "Select an issue", &issues)?;
         let selected = &issues[idx];
         if naming_enabled {
             provider.get_issue(&selected.identifier)?
