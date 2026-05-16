@@ -53,6 +53,12 @@ there by another project, so Homebrew is the recommended packaged install path.
 stabilize, breaking user-facing changes are represented as `0.x.0` minor
 bumps, not `x.0.0` major releases.
 
+Development happens on `develop`. `master` is the release branch and should only
+receive release PRs. Regular development commits do not bump `Cargo.toml`;
+release PRs bump `Cargo.toml` and `Cargo.lock` once, using the largest SemVer
+scope included in that release, then the release commit is merged back into
+`develop`.
+
 Public releases are available through GitHub Releases and Homebrew. If you are
 trying `wt` in another project, start with `wt init --dry-run` or `wt doctor` to
 inspect what `wt` would use before changing repository config.

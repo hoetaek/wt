@@ -11,4 +11,10 @@
 아직 `wt`는 1.0에 도달하지 않은 도구로 본다. 사용자-facing CLI, config,
 상태 파일 모델이 안정화되기 전까지는 breaking change도 `0.x.0` minor로 표현한다.
 
-버전은 `Cargo.toml`의 `version` 필드에서 관리. 해당하는 변경이 있으면 커밋 시 함께 올린다.
+버전은 `Cargo.toml`의 `version` 필드에서 관리하되, 일반 개발 커밋에서는 올리지 않는다.
+기본 개발 브랜치는 `develop`이고, `master`는 릴리즈된 코드만 담는 브랜치다.
+릴리즈할 때 `develop`에서 release 브랜치를 만들고, 릴리즈 PR이 `master`로 merge되기 전에
+그 릴리즈에 포함된 변경 중 가장 큰 범위에 맞춰 version을 한 번 올린다.
+
+릴리즈 PR이 `master`에 merge되고 tag가 생성되면, version bump commit을 다시 `develop`에
+merge해서 다음 릴리즈 기준점이 두 브랜치에서 어긋나지 않게 한다.
