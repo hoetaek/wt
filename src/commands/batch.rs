@@ -914,7 +914,6 @@ fn run_batch_task(ctx: &Ctx, execution: &BatchTaskExecution) -> Result<BatchTask
     let identifier = task_doc.identifier_or_key(&batch_task.task);
     let title = task_doc.title_or_key(&batch_task.task);
     let workspace_label = task::workspace_run_label(
-        "B",
         execution.idx,
         execution.total_tasks,
         task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
@@ -1760,7 +1759,7 @@ mod tests {
         run(&ctx, Some(batch_path.to_str().unwrap()), 1).unwrap();
 
         let steps = ui.steps.lock().unwrap().join("\n");
-        assert!(steps.contains("Opening cmux workspace: B2/2 PROJ-2 API"));
+        assert!(steps.contains("Opening cmux workspace: 2/2 PROJ-2 API"));
     }
 
     #[test]

@@ -759,8 +759,9 @@ checking a global issue state. A successfully created workspace leaves the
 TaskRun `running`; `wt done` records actual completion for batch TaskRuns by
 marking matching `running` records `done`.
 Batch-created cmux workspace names start with a compact order label, for example
-`B2/5 PROJ-123 Fix editor`, so narrow workspace tabs still show both the batch
-position and the issue or task being edited.
+`2/5 PROJ-123 Fix editor`, so narrow workspace tabs still show both the batch
+position and the issue or task being edited without carrying a batch-specific
+letter prefix.
 By default `run` uses `--jobs 1` and keeps the current sequential behavior.
 `--jobs <N>` starts at most N runnable tasks concurrently. The coordinator is
 the only writer for shared batch metadata: workers do not write batch metadata
@@ -899,8 +900,8 @@ task branch starts only after the previous task is completed, and uses that
 previous completed task branch as its parent. Skipped tasks are not used as
 parents; if every earlier task was skipped, the next task uses the stack base.
 Stack-created cmux workspace names start with a compact order label, for example
-`S2/5 PROJ-123 Wire API`, so narrow workspace tabs still show both stack position
-and issue or task content.
+`2/5 PROJ-123 Wire API`, so narrow workspace tabs still show both stack position
+and issue or task content without carrying a stack-specific letter prefix.
 
 When `run` starts a task, the agent prompt includes a coordinator handoff based
 on the task row's `pull_request` value. With `pull_request = true`, after

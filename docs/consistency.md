@@ -235,7 +235,7 @@ link만 저장한다. Batch row는 어떤 task들이 함께 시작 대상인지�
 이름은 받지 않는다. 내부 구현 편의를 위해 만든 가짜 이름이나 암묵적 상태를 저장하면
 나중에 사용자가 파일을 읽을 때 모델을 다시 배워야 한다.
 Batch가 만든 cmux workspace 이름은 저장 상태가 아니라 현재 실행을 찾기 위한 표시다.
-좁은 탭에서 잘려도 의미가 남도록 `B2/5 PROJ-123 Title`처럼 짧은 source/order 라벨을
+좁은 탭에서 잘려도 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을
 앞에 붙이고, branch/path/site 이름에는 batch label을 섞지 않는다.
 Bare `run`은 runnable batch 목록을 selector로 보여준다. Runnable batch는
 `prepared` 또는 `failed` TaskRun이 하나 이상 있는 batch다. Batch task들은 독립적이므로
@@ -266,7 +266,7 @@ TaskRun을 `running`으로 전이하고, 명시적 `complete` 신호가 들어�
 `done`으로 전이한다.
 `pr`은 기존 pull request workflow를 가리키는 별도 개념이므로 stack task로 받지 않는다.
 Stack이 만든 cmux workspace 이름도 저장 상태가 아니라 현재 실행을 찾기 위한 표시다.
-좁은 탭에서 잘려도 의미가 남도록 `S2/5 PROJ-123 Title`처럼 짧은 source/order 라벨을
+좁은 탭에서 잘려도 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을
 앞에 붙이고, branch/path/site 이름에는 stack label을 섞지 않는다.
 Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 명시적
 `complete` 신호를 기다리는 상태다. 완료를 추정해서 다음 task를 시작하지 않는다.

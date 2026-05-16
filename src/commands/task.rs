@@ -334,14 +334,9 @@ pub(crate) fn safe_task_key(value: &str) -> String {
     if key.is_empty() { "task".into() } else { key }
 }
 
-pub(crate) fn workspace_run_label(
-    source: &str,
-    idx: usize,
-    total: usize,
-    identifier: Option<&str>,
-) -> String {
+pub(crate) fn workspace_run_label(idx: usize, total: usize, identifier: Option<&str>) -> String {
     let total = total.max(1);
-    let mut label = format!("{}{}/{}", source, idx + 1, total);
+    let mut label = format!("{}/{}", idx + 1, total);
     if let Some(identifier) = identifier
         .map(str::trim)
         .filter(|identifier| !identifier.is_empty())
@@ -411,11 +406,8 @@ mod tests {
 
     #[test]
     fn workspace_run_label_keeps_order_and_identifier_short() {
-        assert_eq!(
-            workspace_run_label("S", 1, 5, Some("PROJ-123")),
-            "S2/5 PROJ-123"
-        );
-        assert_eq!(workspace_run_label("B", 0, 3, None), "B1/3");
+        assert_eq!(workspace_run_label(1, 5, Some("PROJ-123")), "2/5 PROJ-123");
+        assert_eq!(workspace_run_label(0, 3, None), "1/3");
     }
 
     #[test]
