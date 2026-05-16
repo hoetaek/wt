@@ -220,7 +220,7 @@ fn append_optional_scaffold(s: &mut String) {
     s.push_str("# [worktree.naming]\n");
     s.push_str("# command = \"claude -p\"\n");
     s.push_str("# branch = \"{{branch_prefix}}{{issue_key_lower}}-{{english_slug}}\"\n");
-    s.push_str("# workspace = \"{{english_title}}\"\n\n");
+    s.push('\n');
 
     s.push_str("# Optional setup commands run inside each worktree.\n");
     s.push_str(
@@ -1031,6 +1031,11 @@ mod tests {
         assert!(content.contains("# copy_as = ["));
         assert!(content.contains("# inject_local_context = \"\"\""));
         assert!(content.contains("# [worktree.naming]"));
+        assert!(
+            content
+                .contains("# branch = \"{{branch_prefix}}{{issue_key_lower}}-{{english_slug}}\"")
+        );
+        assert!(!content.contains("{{english_title}}"));
         assert!(content.contains("# [setup.env]"));
         assert!(content.contains("# [setup.env_files.\".env.local\"]"));
         assert!(content.contains("# [editor]"));
