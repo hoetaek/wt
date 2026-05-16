@@ -135,7 +135,7 @@ fn run_stack_path(ctx: &Ctx, stack_path: &Path) -> Result<()> {
 
     if let Some(state) = task_states
         .iter()
-        .find(|state| state.run.status == STATUS_RUNNING)
+        .find(|state| state.run.is_stack_completable())
     {
         bail!(
             "Stack task {} is already running. Mark it complete with: wt stack complete {} {}",
@@ -217,7 +217,7 @@ fn run_stack_path(ctx: &Ctx, stack_path: &Path) -> Result<()> {
     ctx.ui
         .print_step(&format!("Stack status: {}", metadata.status));
 
-    if metadata.status == STATUS_FAILED {
+    if metadata.status == STATUS_FAILED.as_str() {
         bail!("Stack failed: {}", stack_path.display());
     }
 
@@ -312,7 +312,7 @@ pub fn complete(ctx: &Ctx, stack: &str, task: Option<&str>, run_next: bool) -> R
 
     let Some(state) = task_states
         .iter()
-        .find(|state| state.run.status == STATUS_RUNNING)
+        .find(|state| state.run.is_stack_completable())
     else {
         ctx.ui.print_warning("No running stack task found");
         return Ok(());
@@ -631,7 +631,7 @@ fn update_stack_task_run(
     ctx: &Ctx,
     stack_path: &Path,
     item: &StackTask,
-    status: &str,
+    status: task_run::TaskRunStatus,
     error: Option<&str>,
 ) -> Result<()> {
     let path = task_run::resolve(ctx, &item.run).with_context(|| {
@@ -726,9 +726,9 @@ fn porcelain_status_path(line: &str) -> Option<&str> {
 
 fn next_runnable_task(items: &[StackTaskState]) -> Option<usize> {
     for item in items {
-        match item.run.status.as_str() {
+        match item.run.status {
             STATUS_DONE | STATUS_SKIPPED => continue,
-            status if is_runnable_status(status) => return Some(item.idx),
+            status if status.is_runnable() => return Some(item.idx),
             _ => return None,
         }
     }
@@ -746,7 +746,7 @@ fn parent_for_task(
     }
 
     for previous in states.iter().rev().filter(|state| state.idx < idx) {
-        match previous.run.status.as_str() {
+        match previous.run.status {
             STATUS_DONE => {
                 let task_doc = task::read_task_document(ctx, &previous.stack_task.task)?;
                 return prepared_branch_name(&task_doc.branch)
@@ -959,10 +959,7 @@ fn list_runnable_stack_candidates(ctx: &Ctx) -> Result<Vec<RunnableStackCandidat
             .with_context(|| format!("Failed to read stack: {}", path.display()))?;
         let states = read_stack_task_states(ctx, &path, &metadata)
             .with_context(|| format!("Failed to read stack task state: {}", path.display()))?;
-        if states
-            .iter()
-            .any(|state| state.run.status == STATUS_RUNNING)
-        {
+        if states.iter().any(|state| state.run.is_stack_completable()) {
             continue;
         }
         let Some(next_idx) = next_runnable_task(&states) else {
@@ -1234,10 +1231,6 @@ fn stack_selection_status_counts(items: &[StackTaskState]) -> String {
     }
 }
 
-fn is_runnable_status(status: &str) -> bool {
-    matches!(status, STATUS_PREPARED | STATUS_FAILED)
-}
-
 fn summarize_current_stack_status(
     ctx: &Ctx,
     stack_path: &Path,
@@ -1257,10 +1250,7 @@ fn summarize_stack_status(items: &[StackTaskState]) -> String {
     if items.iter().any(|item| item.run.status == STATUS_RUNNING) {
         return STATUS_RUNNING.into();
     }
-    if items
-        .iter()
-        .all(|item| matches!(item.run.status.as_str(), STATUS_DONE | STATUS_SKIPPED))
-    {
+    if items.iter().all(|item| item.run.status.is_cleanable()) {
         return STATUS_DONE.into();
     }
     if items.iter().all(|item| item.run.status == STATUS_PREPARED) {
@@ -1362,7 +1352,7 @@ mod tests {
         key: &str,
         branch: &str,
         parent: Option<&str>,
-        status: &str,
+        status: task_run::TaskRunStatus,
         error: &str,
     ) -> StackTask {
         let group = task_run::group_from_path(stack_path).unwrap();
@@ -2415,7 +2405,7 @@ parent = "main"
         run(&ctx, None).unwrap();
 
         let updated = read_stack_metadata(&stack_path).unwrap();
-        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.status, STATUS_RUNNING.as_str());
         assert_eq!(read_run(dir.path(), &stack_task.run).status, STATUS_RUNNING);
     }
 
@@ -2533,7 +2523,7 @@ parent = "main"
         run(&ctx, Some(stack_path.to_str().unwrap())).unwrap();
 
         let updated = read_stack_metadata(&stack_path).unwrap();
-        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.status, STATUS_RUNNING.as_str());
         assert_eq!(updated.tasks[0].parent.as_deref(), Some("main"));
         let first_run_id = updated.tasks[0].run.clone();
         let second_run_id = updated.tasks[1].run.clone();
@@ -2552,7 +2542,7 @@ parent = "main"
 
         run(&ctx, Some(stack_path.to_str().unwrap())).unwrap();
         let updated = read_stack_metadata(&stack_path).unwrap();
-        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.status, STATUS_RUNNING.as_str());
         assert_eq!(
             updated.tasks[1].parent.as_deref(),
             Some("alice/proj-1-schema")
@@ -2664,7 +2654,7 @@ parent = "main"
         complete(&ctx, stack_path.to_str().unwrap(), Some("PROJ-1"), true).unwrap();
 
         let updated = read_stack_metadata(&stack_path).unwrap();
-        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.status, STATUS_RUNNING.as_str());
         assert_eq!(read_run(dir.path(), &first_run_id).status, STATUS_DONE);
         assert_eq!(read_run(dir.path(), &second_run_id).status, STATUS_RUNNING);
         assert_eq!(
@@ -2834,7 +2824,7 @@ run = "{}"
         run(&ctx, Some(stack_path.to_str().unwrap())).unwrap();
 
         let updated = read_stack_metadata(&stack_path).unwrap();
-        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.status, STATUS_RUNNING.as_str());
         assert_eq!(updated.tasks[0].task, "add-schema");
         assert_eq!(updated.tasks[0].parent.as_deref(), Some("main"));
         assert_eq!(

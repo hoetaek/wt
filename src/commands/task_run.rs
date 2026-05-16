@@ -3,35 +3,189 @@ use crate::context::Ctx;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::cmp::Ordering;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) const STATUS_PREPARED: &str = "prepared";
-pub(crate) const STATUS_RUNNING: &str = "running";
-pub(crate) const STATUS_DONE: &str = "done";
-pub(crate) const STATUS_FAILED: &str = "failed";
-pub(crate) const STATUS_SKIPPED: &str = "skipped";
+pub(crate) const STATUS_PREPARED: TaskRunStatus = TaskRunStatus::Prepared;
+pub(crate) const STATUS_RUNNING: TaskRunStatus = TaskRunStatus::Running;
+pub(crate) const STATUS_DONE: TaskRunStatus = TaskRunStatus::Done;
+pub(crate) const STATUS_FAILED: TaskRunStatus = TaskRunStatus::Failed;
+pub(crate) const STATUS_SKIPPED: TaskRunStatus = TaskRunStatus::Skipped;
 
-pub(crate) const SOURCE_NEW: &str = "new";
-pub(crate) const SOURCE_BATCH: &str = "batch";
-pub(crate) const SOURCE_STACK: &str = "stack";
+pub(crate) const SOURCE_NEW: TaskRunSource = TaskRunSource::New;
+pub(crate) const SOURCE_BATCH: TaskRunSource = TaskRunSource::Batch;
+pub(crate) const SOURCE_STACK: TaskRunSource = TaskRunSource::Stack;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum TaskRunStatus {
+    Prepared,
+    Running,
+    Done,
+    Failed,
+    Skipped,
+}
+
+impl TaskRunStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Prepared => "prepared",
+            Self::Running => "running",
+            Self::Done => "done",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+        }
+    }
+
+    pub(crate) fn parse(status: &str) -> Result<Self> {
+        match status {
+            "prepared" => Ok(Self::Prepared),
+            "running" => Ok(Self::Running),
+            "done" => Ok(Self::Done),
+            "failed" => Ok(Self::Failed),
+            "skipped" => Ok(Self::Skipped),
+            _ => bail!("Unknown task run status: {status}"),
+        }
+    }
+
+    pub(crate) fn is_runnable(self) -> bool {
+        matches!(self, Self::Prepared | Self::Failed)
+    }
+
+    pub(crate) fn is_task_selectable(self) -> bool {
+        matches!(self, Self::Prepared | Self::Failed | Self::Skipped)
+    }
+
+    pub(crate) fn is_cleanable(self) -> bool {
+        matches!(self, Self::Done | Self::Skipped)
+    }
+
+    pub(crate) fn is_stack_completable(self) -> bool {
+        self == Self::Running
+    }
+
+    pub(crate) fn is_cleanup_completable(self) -> bool {
+        self == Self::Running
+    }
+}
+
+impl fmt::Display for TaskRunStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<TaskRunStatus> for String {
+    fn from(status: TaskRunStatus) -> Self {
+        status.as_str().to_string()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum TaskRunSource {
+    New,
+    Batch,
+    Stack,
+}
+
+impl TaskRunSource {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Batch => "batch",
+            Self::Stack => "stack",
+        }
+    }
+
+    pub(crate) fn parse(source: &str) -> Result<Self> {
+        match source {
+            "new" => Ok(Self::New),
+            "batch" => Ok(Self::Batch),
+            "stack" => Ok(Self::Stack),
+            _ => bail!("Unknown task run source: {source}"),
+        }
+    }
+
+    pub(crate) fn is_cleanup_completable(self) -> bool {
+        matches!(self, Self::New | Self::Batch)
+    }
+}
+
+impl fmt::Display for TaskRunSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<TaskRunSource> for String {
+    fn from(source: TaskRunSource) -> Self {
+        source.as_str().to_string()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TaskRun {
     pub(crate) task: String,
     pub(crate) branch: String,
-    pub(crate) status: String,
-    pub(crate) source: String,
-    #[serde(default)]
+    pub(crate) status: TaskRunStatus,
+    pub(crate) source: TaskRunSource,
     pub(crate) group: Option<String>,
-    #[serde(default)]
     pub(crate) error: Option<String>,
-    #[serde(default)]
     pub(crate) creation_order: Option<u64>,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
+}
+
+impl TaskRun {
+    pub(crate) fn is_runnable(&self) -> bool {
+        self.status.is_runnable()
+    }
+
+    pub(crate) fn is_cleanup_completable(&self) -> bool {
+        self.status.is_cleanup_completable() && self.source.is_cleanup_completable()
+    }
+
+    pub(crate) fn is_stack_completable(&self) -> bool {
+        self.status.is_stack_completable() && self.source == SOURCE_STACK
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTaskRun {
+    task: String,
+    branch: String,
+    status: String,
+    source: String,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    creation_order: Option<u64>,
+    created_at: String,
+    updated_at: String,
+}
+
+impl TryFrom<RawTaskRun> for TaskRun {
+    type Error = anyhow::Error;
+
+    fn try_from(raw: RawTaskRun) -> Result<Self> {
+        let run = TaskRun {
+            task: raw.task,
+            branch: raw.branch,
+            status: TaskRunStatus::parse(&raw.status)?,
+            source: TaskRunSource::parse(&raw.source)?,
+            group: raw.group,
+            error: raw.error,
+            creation_order: raw.creation_order,
+            created_at: raw.created_at,
+            updated_at: raw.updated_at,
+        };
+        validate_run(&run)?;
+        Ok(run)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,20 +205,17 @@ pub(crate) fn create(
     ctx: &Ctx,
     task: &str,
     branch: &str,
-    source: &str,
+    source: TaskRunSource,
     group: Option<&str>,
-    status: &str,
+    status: TaskRunStatus,
 ) -> Result<TaskRunRecord> {
-    validate_source(source)?;
-    validate_status(status)?;
-
     let now = current_utc_timestamp();
     let creation_order = next_creation_order(ctx)?;
     let run = TaskRun {
         task: task::safe_task_key(task),
         branch: branch.to_string(),
-        status: status.to_string(),
-        source: source.to_string(),
+        status,
+        source,
         group: group.and_then(optional_string),
         error: None,
         creation_order: Some(creation_order),
@@ -77,10 +228,9 @@ pub(crate) fn create(
 pub(crate) fn read(path: &Path) -> Result<TaskRun> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read task run: {}", path.display()))?;
-    let run: TaskRun = toml::from_str(&content)
+    let raw: RawTaskRun = toml::from_str(&content)
         .with_context(|| format!("Failed to parse task run: {}", path.display()))?;
-    validate_run(&run)?;
-    Ok(run)
+    TaskRun::try_from(raw)
 }
 
 pub(crate) fn list(ctx: &Ctx) -> Result<Vec<TaskRunRecord>> {
@@ -146,14 +296,13 @@ pub(crate) fn resolve(ctx: &Ctx, target: &str) -> Result<PathBuf> {
 pub(crate) fn update(
     ctx: &Ctx,
     target: &str,
-    status: &str,
+    status: TaskRunStatus,
     branch: Option<&str>,
     error: Option<&str>,
 ) -> Result<TaskRunRecord> {
-    validate_status(status)?;
     let path = resolve(ctx, target)?;
     let mut run = read(&path)?;
-    run.status = status.to_string();
+    run.status = status;
     if let Some(branch) = branch {
         run.branch = branch.to_string();
     }
@@ -191,40 +340,14 @@ pub(crate) fn task_is_selectable(ctx: &Ctx, task: &str) -> Result<bool> {
     let Some(record) = latest_for_task(ctx, task)? else {
         return Ok(true);
     };
-    Ok(matches!(
-        record.run.status.as_str(),
-        STATUS_PREPARED | STATUS_FAILED | STATUS_SKIPPED
-    ))
+    Ok(record.run.status.is_task_selectable())
 }
 
 pub(crate) fn running_cleanup_matches(ctx: &Ctx, branch: &str) -> Result<Vec<TaskRunRecord>> {
     Ok(list(ctx)?
         .into_iter()
-        .filter(|record| {
-            record.run.branch == branch
-                && record.run.status == STATUS_RUNNING
-                && matches!(record.run.source.as_str(), SOURCE_NEW | SOURCE_BATCH)
-        })
+        .filter(|record| record.run.branch == branch && record.run.is_cleanup_completable())
         .collect())
-}
-
-pub(crate) fn validate_status(status: &str) -> Result<()> {
-    if matches!(
-        status,
-        STATUS_PREPARED | STATUS_RUNNING | STATUS_DONE | STATUS_FAILED | STATUS_SKIPPED
-    ) {
-        Ok(())
-    } else {
-        bail!("Unknown task run status: {status}");
-    }
-}
-
-pub(crate) fn validate_source(source: &str) -> Result<()> {
-    if matches!(source, SOURCE_NEW | SOURCE_BATCH | SOURCE_STACK) {
-        Ok(())
-    } else {
-        bail!("Unknown task run source: {source}");
-    }
 }
 
 pub(crate) fn group_from_path(path: &Path) -> Result<String> {
@@ -255,8 +378,8 @@ fn write(path: &Path, run: &TaskRun) -> Result<()> {
     let mut content = String::new();
     content.push_str(&format!("task = {}\n", toml_quote(&run.task)));
     content.push_str(&format!("branch = {}\n", toml_quote(&run.branch)));
-    content.push_str(&format!("status = {}\n", toml_quote(&run.status)));
-    content.push_str(&format!("source = {}\n", toml_quote(&run.source)));
+    content.push_str(&format!("status = {}\n", toml_quote(run.status.as_str())));
+    content.push_str(&format!("source = {}\n", toml_quote(run.source.as_str())));
     if let Some(group) = run.group.as_deref() {
         content.push_str(&format!("group = {}\n", toml_quote(group)));
     }
@@ -277,8 +400,6 @@ fn validate_run(run: &TaskRun) -> Result<()> {
     if run.task.trim().is_empty() {
         bail!("Task run is missing task");
     }
-    validate_status(&run.status)?;
-    validate_source(&run.source)?;
     if matches!(run.creation_order, Some(0)) {
         bail!("Task run creation_order must be greater than 0");
     }
@@ -749,15 +870,15 @@ updated_at = "2026-05-16T00:00:00Z"
 
     fn run_with_order(
         task: &str,
-        status: &str,
+        status: TaskRunStatus,
         creation_order: Option<u64>,
         created_at: &str,
     ) -> TaskRun {
         TaskRun {
             task: task.into(),
             branch: task.into(),
-            status: status.into(),
-            source: SOURCE_NEW.into(),
+            status,
+            source: SOURCE_NEW,
             group: None,
             error: None,
             creation_order,

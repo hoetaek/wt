@@ -266,11 +266,7 @@ fn runnable_workflow_info(
 ) -> Option<RunnableWorkflowInfo> {
     match mode {
         WorkflowMode::Single => {
-            if !states.is_empty()
-                && states
-                    .iter()
-                    .all(|state| is_runnable_status(&state.run.status))
-            {
+            if !states.is_empty() && states.iter().all(|state| state.run.is_runnable()) {
                 Some(RunnableWorkflowInfo {
                     runnable_count: states.len(),
                     next_idx: None,
@@ -282,7 +278,7 @@ fn runnable_workflow_info(
         WorkflowMode::Batch => {
             let runnable_count = states
                 .iter()
-                .filter(|state| is_runnable_status(&state.run.status))
+                .filter(|state| state.run.is_runnable())
                 .count();
             (runnable_count > 0).then_some(RunnableWorkflowInfo {
                 runnable_count,
@@ -290,10 +286,7 @@ fn runnable_workflow_info(
             })
         }
         WorkflowMode::Stack => {
-            if states
-                .iter()
-                .any(|state| state.run.status == STATUS_RUNNING)
-            {
+            if states.iter().any(|state| state.run.is_stack_completable()) {
                 return None;
             }
             next_runnable_workflow_stack_task(states).map(|next_idx| RunnableWorkflowInfo {
@@ -318,10 +311,8 @@ fn workflow_selection_item(
             fields.push(format!("{} runnable", info.runnable_count));
             fields.push(format!(
                 "tasks {}",
-                workflow_filtered_task_summary(ctx, states, |state| {
-                    is_runnable_status(&state.run.status)
-                })
-                .unwrap_or_else(|| "none".into())
+                workflow_filtered_task_summary(ctx, states, |state| { state.run.is_runnable() })
+                    .unwrap_or_else(|| "none".into())
             ));
         }
         WorkflowMode::Stack => {
@@ -462,10 +453,7 @@ pub fn complete(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -
     }
 
     let states = read_stack_workflow_task_states(ctx, &path, &metadata)?;
-    let Some(state) = states
-        .iter()
-        .find(|state| state.run.status == STATUS_RUNNING)
-    else {
+    let Some(state) = states.iter().find(|state| state.run.is_stack_completable()) else {
         ctx.ui.print_warning("No running workflow stack task found");
         return Ok(());
     };
@@ -557,10 +545,7 @@ fn run_single_workflow(
     if states.is_empty() {
         bail!("Workflow has no tasks: {}", workflow_path.display());
     }
-    if states
-        .iter()
-        .any(|state| !is_runnable_status(&state.run.status))
-    {
+    if states.iter().any(|state| !state.run.is_runnable()) {
         bail!("single mode workflow can only run prepared or failed TaskRuns");
     }
 
@@ -681,7 +666,7 @@ fn validate_workflow_task_run_group(
 fn validate_workflow_task_run_source(
     row: &WorkflowTask,
     run: &task_run::TaskRun,
-    source: &str,
+    source: task_run::TaskRunSource,
 ) -> Result<()> {
     if run.source != source {
         bail!(
@@ -820,10 +805,6 @@ fn workflow_base_raw(metadata: &WorkflowMetadata) -> Result<Option<String>> {
     }
 }
 
-fn is_runnable_status(status: &str) -> bool {
-    matches!(status, STATUS_PREPARED | STATUS_FAILED)
-}
-
 fn mark_single_workflow_failed(ctx: &Ctx, states: &[WorkflowTaskState], err: &anyhow::Error) {
     let status = if is_cancelled(err) {
         task_run::STATUS_SKIPPED
@@ -889,7 +870,7 @@ fn run_batch_workflow(
     }
     let runnable = states
         .into_iter()
-        .filter(|state| is_runnable_status(&state.run.status))
+        .filter(|state| state.run.is_runnable())
         .collect::<Vec<_>>();
     if runnable.is_empty() {
         ctx.ui
@@ -1290,7 +1271,7 @@ fn record_batch_workflow_success(
 fn record_batch_workflow_failure(
     ctx: &Ctx,
     state: &WorkflowTaskState,
-    status: &str,
+    status: task_run::TaskRunStatus,
     error: &str,
 ) -> Result<()> {
     ctx.ui
@@ -1318,10 +1299,7 @@ fn run_stack_workflow(
         bail!("Workflow has no tasks: {}", workflow_path.display());
     }
 
-    if let Some(state) = states
-        .iter()
-        .find(|state| state.run.status == STATUS_RUNNING)
-    {
+    if let Some(state) = states.iter().find(|state| state.run.is_stack_completable()) {
         bail!(
             "Workflow stack task {} is already running. Mark it complete with: wt workflow complete {} {}",
             workflow_task_label(&state.row),
@@ -1396,9 +1374,9 @@ fn read_stack_workflow_task_states(
 
 fn next_runnable_workflow_stack_task(items: &[WorkflowTaskState]) -> Option<usize> {
     for item in items {
-        match item.run.status.as_str() {
+        match item.run.status {
             STATUS_DONE | STATUS_SKIPPED => continue,
-            status if is_runnable_status(status) => return Some(item.idx),
+            status if status.is_runnable() => return Some(item.idx),
             _ => return None,
         }
     }
@@ -1416,7 +1394,7 @@ fn parent_for_workflow_stack_task(
     }
 
     for previous in states.iter().rev().filter(|state| state.idx < idx) {
-        match previous.run.status.as_str() {
+        match previous.run.status {
             STATUS_DONE => {
                 return task_command::prepared_branch_name(&previous.document.branch)
                     .map(str::to_string)
@@ -1610,7 +1588,7 @@ fn workflow_task_matches(ctx: &Ctx, row: &WorkflowTask, target: &str) -> bool {
 fn update_workflow_task_run(
     ctx: &Ctx,
     row: &WorkflowTask,
-    status: &str,
+    status: task_run::TaskRunStatus,
     error: Option<&str>,
 ) -> Result<()> {
     let path = task_run::resolve(ctx, &row.run).with_context(|| {
@@ -1839,7 +1817,7 @@ fn workflow_mode(mode: WorkflowModeArg) -> WorkflowMode {
     }
 }
 
-fn source_for_mode(mode: WorkflowModeArg) -> &'static str {
+fn source_for_mode(mode: WorkflowModeArg) -> task_run::TaskRunSource {
     match mode {
         WorkflowModeArg::Single => task_run::SOURCE_NEW,
         WorkflowModeArg::Batch => task_run::SOURCE_BATCH,
@@ -1902,7 +1880,12 @@ mod tests {
         workflow_store::list(ctx).unwrap().pop().unwrap()
     }
 
-    fn update_task_run(ctx: &Ctx, row: &WorkflowTask, status: &str, branch: Option<&str>) {
+    fn update_task_run(
+        ctx: &Ctx,
+        row: &WorkflowTask,
+        status: task_run::TaskRunStatus,
+        branch: Option<&str>,
+    ) {
         task_run::update(ctx, &row.run, status, branch, None).unwrap();
     }
 
@@ -2335,8 +2318,8 @@ mod tests {
                 run: task_run::TaskRun {
                     task: "api".into(),
                     branch: "shared".into(),
-                    status: STATUS_PREPARED.into(),
-                    source: task_run::SOURCE_NEW.into(),
+                    status: STATUS_PREPARED,
+                    source: task_run::SOURCE_NEW,
                     group: None,
                     error: None,
                     creation_order: None,
@@ -2363,8 +2346,8 @@ mod tests {
                 run: task_run::TaskRun {
                     task: "docs".into(),
                     branch: "shared".into(),
-                    status: STATUS_PREPARED.into(),
-                    source: task_run::SOURCE_NEW.into(),
+                    status: STATUS_PREPARED,
+                    source: task_run::SOURCE_NEW,
                     group: None,
                     error: None,
                     creation_order: None,
@@ -2408,7 +2391,7 @@ mod tests {
     fn replace_first_workflow_run_with_foreign_group(
         ctx: &Ctx,
         workflow: &mut WorkflowMetadata,
-        source: &str,
+        source: task_run::TaskRunSource,
     ) -> String {
         let row = workflow.tasks.first_mut().unwrap();
         let document = task_command::read_task_document(ctx, &row.task).unwrap();
