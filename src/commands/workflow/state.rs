@@ -1,0 +1,163 @@
+use super::render::workflow_task_label;
+use crate::commands::task as task_command;
+use crate::commands::task_run;
+use crate::context::Ctx;
+use crate::workflow::{WorkflowMetadata, WorkflowTask};
+use anyhow::{Context, Result, bail};
+use std::path::Path;
+
+#[derive(Clone, Debug)]
+pub(super) struct WorkflowTaskState {
+    pub(super) idx: usize,
+    pub(super) row: WorkflowTask,
+    pub(super) document: task_command::TaskDocument,
+    pub(super) path: String,
+    pub(super) content: String,
+    pub(super) run: task_run::TaskRun,
+}
+
+pub(super) fn read_single_workflow_task_states(
+    ctx: &Ctx,
+    workflow_path: &Path,
+    metadata: &WorkflowMetadata,
+) -> Result<Vec<WorkflowTaskState>> {
+    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
+    for state in &states {
+        validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_NEW)?;
+    }
+    Ok(states)
+}
+
+pub(super) fn read_batch_workflow_task_states(
+    ctx: &Ctx,
+    workflow_path: &Path,
+    metadata: &WorkflowMetadata,
+) -> Result<Vec<WorkflowTaskState>> {
+    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
+    for state in &states {
+        validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_BATCH)?;
+    }
+    Ok(states)
+}
+
+pub(super) fn read_stack_workflow_task_states(
+    ctx: &Ctx,
+    workflow_path: &Path,
+    metadata: &WorkflowMetadata,
+) -> Result<Vec<WorkflowTaskState>> {
+    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
+    for state in &states {
+        validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_STACK)?;
+    }
+    Ok(states)
+}
+
+fn read_workflow_task_states(
+    ctx: &Ctx,
+    workflow_path: &Path,
+    metadata: &WorkflowMetadata,
+) -> Result<Vec<WorkflowTaskState>> {
+    let group = task_run::group_from_path(workflow_path)?;
+    metadata
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(idx, row)| {
+            let (document, path, content) = task_command::read_task_file(ctx, &row.task)?;
+            let run_path = task_run::resolve(ctx, &row.run).with_context(|| {
+                format!(
+                    "Workflow task {} references missing TaskRun {}",
+                    row.task, row.run
+                )
+            })?;
+            let run = task_run::read(&run_path)?;
+            validate_workflow_task_run(row, &run)?;
+            validate_workflow_task_run_group(row, &run, &group)?;
+            Ok(WorkflowTaskState {
+                idx,
+                row: row.clone(),
+                document,
+                path,
+                content,
+                run,
+            })
+        })
+        .collect()
+}
+
+pub(super) fn validate_workflow_task_run(
+    row: &WorkflowTask,
+    run: &task_run::TaskRun,
+) -> Result<()> {
+    if run.task != row.task {
+        bail!(
+            "Workflow task {} references TaskRun {} for task {}",
+            row.task,
+            row.run,
+            run.task
+        );
+    }
+    Ok(())
+}
+
+fn validate_workflow_task_run_group(
+    row: &WorkflowTask,
+    run: &task_run::TaskRun,
+    group: &str,
+) -> Result<()> {
+    if run.group.as_deref() != Some(group) {
+        bail!(
+            "Workflow task {} references TaskRun {} outside workflow group {}",
+            row.task,
+            row.run,
+            group
+        );
+    }
+    Ok(())
+}
+
+fn validate_workflow_task_run_source(
+    row: &WorkflowTask,
+    run: &task_run::TaskRun,
+    source: task_run::TaskRunSource,
+) -> Result<()> {
+    if run.source != source {
+        bail!(
+            "Workflow task {} references TaskRun {} with source {}",
+            row.task,
+            row.run,
+            run.source
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn update_workflow_task_run(
+    ctx: &Ctx,
+    row: &WorkflowTask,
+    status: task_run::TaskRunStatus,
+    error: Option<&str>,
+) -> Result<()> {
+    let path = task_run::resolve(ctx, &row.run).with_context(|| {
+        format!(
+            "Workflow task {} references missing TaskRun {}",
+            workflow_task_label(row),
+            row.run
+        )
+    })?;
+    let run = task_run::read(&path)?;
+    validate_workflow_task_run(row, &run)?;
+
+    let branch = task_command::read_task_document(ctx, &row.task)
+        .ok()
+        .map(|task| task.branch);
+    let updated = task_run::update(ctx, &row.run, status, branch.as_deref(), error)?;
+    validate_workflow_task_run(row, &updated.run)?;
+    Ok(())
+}
+
+pub(super) fn task_run_record(ctx: &Ctx, run: &str) -> Option<task_run::TaskRun> {
+    task_run::resolve(ctx, run)
+        .and_then(|path| task_run::read(&path))
+        .ok()
+}
