@@ -6,14 +6,14 @@ use std::collections::HashSet;
 
 const TASK_RUN_COORDINATOR_HANDOFF_SECTION: &str = r#"## Task Run Coordinator Handoff
 
-This immediate TaskDocument run has no Workflow orchestration or pull-request handoff intent. When this task is complete and committed, do not open a pull request from the task agent; report `PR=none`.
-
-Then send the Agent Completion Report back to the coordinator cmux surface that started this task run:
+Send the Agent Completion Report back to the coordinator cmux surface that started this task run:
 
 ```bash
 cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
 {{coordinator_enter_command}}
 ```
+
+This immediate TaskDocument run has no Workflow orchestration or pull-request handoff intent. When this task is complete and committed, do not open a pull request from the task agent; report `PR=none`.
 
 After sending the report, wait for the coordinator to review, land, and clean up the task run explicitly.
 
@@ -474,6 +474,9 @@ mod tests {
         runner.add_response("pane:1", true);
         runner.add_response("surface:999", true);
         runner.add_response("", true);
+        runner.add_response("handoff prompt", true);
+        runner.add_response("task prompt ready", true);
+        runner.add_response("", true);
         let runner = Arc::new(runner);
 
         let ctx = Ctx::new(
@@ -487,7 +490,7 @@ mod tests {
                     command: None,
                     ready: ReadyMode::Auto,
                     submit: SubmitMode::None,
-                    timeout: 0,
+                    timeout: 1,
                     send_after: 0,
                     prompt: HashMap::from([("new".into(), vec!["Existing prompt".into()])]),
                 }),
@@ -502,19 +505,34 @@ mod tests {
         run(&ctx, &["add-schema".into()], &None, None, false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        let send_call = calls
+        let send_calls = calls
             .iter()
-            .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|arg| arg == "send"))
-            .expect("expected agent prompt cmux send call");
-        let prompt = send_call.1.last().unwrap();
-        assert!(prompt.contains("## Task Run Coordinator Handoff"));
-        assert!(prompt.contains("cmux send --workspace workspace:34 --surface surface:103 \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
+            .filter(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|arg| arg == "send"))
+            .collect::<Vec<_>>();
+        assert_eq!(send_calls.len(), 2);
+
+        let handoff_prompt = send_calls[0].1.last().unwrap();
+        assert!(handoff_prompt.contains("## Task Run Coordinator Handoff"));
         assert!(
-            prompt.contains("cmux send-key --workspace workspace:34 --surface surface:103 enter")
+            handoff_prompt.find("cmux send --workspace").unwrap()
+                < handoff_prompt
+                    .find("This immediate TaskDocument run")
+                    .unwrap()
         );
-        assert!(prompt.contains("If the coordinator cmux target is unavailable or stale"));
-        assert!(prompt.contains("Existing prompt"));
-        assert!(!prompt.contains("wt workflow complete"));
+        assert!(handoff_prompt.contains("cmux send --workspace workspace:34 --surface surface:103 \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
+        assert!(
+            handoff_prompt
+                .contains("cmux send-key --workspace workspace:34 --surface surface:103 enter")
+        );
+        assert!(handoff_prompt.contains("If the coordinator cmux target is unavailable or stale"));
+        assert!(!handoff_prompt.contains("Task path: `.local/tasks/add-schema.toml`"));
+        assert!(!handoff_prompt.contains("Create the schema first."));
+        assert!(!handoff_prompt.contains("wt workflow complete"));
+
+        let task_prompt = send_calls[1].1.last().unwrap();
+        assert!(task_prompt.contains("Task path: `.local/tasks/add-schema.toml`"));
+        assert!(task_prompt.contains("Create the schema first."));
+        assert!(task_prompt.contains("Existing prompt"));
     }
 
     #[test]
