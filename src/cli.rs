@@ -334,7 +334,7 @@ pub enum BatchCommand {
 pub enum TaskCommand {
     /// Start one worktree per selected local TaskDocument
     #[command(
-        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a source = \"new\" TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
+        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a source = \"new\" TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
     )]
     Run {
         /// Local task keys from .local/tasks/<task>.toml
@@ -1156,6 +1156,8 @@ mod tests {
         assert!(help.contains("one worktree per selected"));
         assert!(help.contains("source = \"new\" TaskRun"));
         assert!(help.contains("Omit task keys"));
+        assert!(help.contains("Task Run Coordinator Handoff"));
+        assert!(help.contains("Task-run agents report PR=none"));
         assert!(help.contains("wt workflow task --mode batch"));
         assert!(help.contains("wt workflow task --mode single"));
     }

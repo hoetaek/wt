@@ -135,6 +135,8 @@ fn task_run_help_explains_task_execution() {
         .success()
         .stdout(predicate::str::contains("one worktree per selected"))
         .stdout(predicate::str::contains("source = \"new\" TaskRun"))
+        .stdout(predicate::str::contains("Task Run Coordinator Handoff"))
+        .stdout(predicate::str::contains("Task-run agents report PR=none"))
         .stdout(predicate::str::contains("wt workflow task --mode batch"))
         .stdout(predicate::str::contains("wt workflow task --mode single"));
 }

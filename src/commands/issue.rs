@@ -32,6 +32,7 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) mode: &'a str,
     pub(crate) on_start_issue_id: Option<&'a str>,
     pub(crate) prompt_intro: &'a str,
+    pub(crate) completion_section: Option<&'a str>,
     pub(crate) workspace_label: Option<String>,
     pub(crate) snapshot: IssueSnapshotContext<'a>,
 }
@@ -281,6 +282,7 @@ fn run_inner_many(
     let prompt_intro = prepared_issue
         .map(|issue| issue.prompt_intro)
         .unwrap_or("Use this issue snapshot before changing code.");
+    let completion_section = prepared_issue.and_then(|issue| issue.completion_section);
 
     ctx.ui.print_step(&format!("{identifier}: {title}"));
 
@@ -338,7 +340,13 @@ fn run_inner_many(
 
     let names = issue_worktree_names(ctx, &branch_name, &title, naming.as_ref(), workspace_label)?;
     let snapshot_config = issue_snapshot.map(|snapshot| {
-        profile_config_with_issue_snapshot(&ctx.config, snapshot, setup_mode, prompt_intro)
+        profile_config_with_issue_snapshot(
+            &ctx.config,
+            snapshot,
+            setup_mode,
+            prompt_intro,
+            completion_section,
+        )
     });
 
     // 2. Check if branch is already checked out elsewhere
@@ -510,6 +518,9 @@ fn run_profiles(
         .prepared_issue
         .map(|issue| issue.prompt_intro)
         .unwrap_or("Use this issue snapshot before changing code.");
+    let completion_section = options
+        .prepared_issue
+        .and_then(|issue| issue.completion_section);
     let profiles = load_selected_profiles(ctx, profile)?;
 
     ctx.ui.print_step(&format!(
@@ -529,7 +540,13 @@ fn run_profiles(
 
     for (profile_name, profile_config) in &profiles {
         let snapshot_config = issue_snapshot.map(|snapshot| {
-            profile_config_with_issue_snapshot(profile_config, snapshot, setup_mode, prompt_intro)
+            profile_config_with_issue_snapshot(
+                profile_config,
+                snapshot,
+                setup_mode,
+                prompt_intro,
+                completion_section,
+            )
         });
         let profile_config = snapshot_config.as_ref().unwrap_or(profile_config);
         let profile_branch = format!("{branch_name}-{profile_name}");
@@ -675,16 +692,16 @@ fn profile_config_with_issue_snapshot(
     snapshot: &IssueSnapshotContext<'_>,
     mode: &str,
     prompt_intro: &str,
+    completion_section: Option<&str>,
 ) -> Config {
     let mut config = config.clone();
     if let Some(agent) = config.agent.as_mut() {
+        let completion_section = completion_section
+            .map(str::to_string)
+            .unwrap_or_else(agent_report::prompt_section);
         let snapshot_prompt = format!(
             "{}\n\n{}: `{}`\n\n{}\n\n{}",
-            prompt_intro,
-            snapshot.path_label,
-            snapshot.path,
-            snapshot.content,
-            agent_report::prompt_section()
+            prompt_intro, snapshot.path_label, snapshot.path, snapshot.content, completion_section
         );
         let prompts = agent.prompt.entry(mode.into()).or_default();
         if let Some(first_prompt) = prompts.first_mut() {
@@ -954,6 +971,7 @@ mod tests {
             &snapshot,
             "issue",
             "Use this issue snapshot before changing code.",
+            None,
         );
 
         let mut agent = config.agent.unwrap();
@@ -1001,6 +1019,7 @@ mod tests {
             &snapshot,
             "new",
             "Use this task before changing code.",
+            None,
         );
 
         let mut agent = config.agent.unwrap();
@@ -1058,6 +1077,7 @@ mod tests {
                 mode: "issue",
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",
+                completion_section: None,
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",
@@ -1124,6 +1144,7 @@ mod tests {
                 mode: "issue",
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",
+                completion_section: None,
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",

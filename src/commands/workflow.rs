@@ -724,6 +724,7 @@ fn run_single_workflow_task(
                 .as_ref()
                 .map(|origin| origin.id.as_str()),
             prompt_intro: "Use this task before changing code.",
+            completion_section: None,
             workspace_label: None,
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",
@@ -762,6 +763,7 @@ fn run_single_workflow_group(
             mode: "new",
             on_start_issue_id: None,
             prompt_intro: "Use these tasks before changing code. Work in this single workspace and address every selected TaskDocument.",
+            completion_section: None,
             workspace_label: None,
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task paths",
@@ -1226,6 +1228,7 @@ fn run_batch_workflow_task(
             .as_ref()
             .map(|origin| origin.id.as_str()),
         prompt_intro: "Use this task before changing code.",
+        completion_section: None,
         workspace_label: Some(workspace_label),
         snapshot: issue::IssueSnapshotContext {
             path_label: "Task path",
@@ -1471,6 +1474,7 @@ fn run_stack_workflow_task(
             mode: task_doc.mode(),
             on_start_issue_id: task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
             prompt_intro: "Use this task before changing code.",
+            completion_section: None,
             workspace_label: Some(workspace_label),
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",

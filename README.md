@@ -652,6 +652,22 @@ The agent prompt includes the selected TaskDocument content and asks the agent
 to finish with a compact completion report: summary, changed files, checks run,
 and risks or follow-ups.
 
+Every `wt task run` prompt also includes a `Task Run Coordinator Handoff`
+section. This is the immediate TaskDocument execution handoff, separate from
+Workflow orchestration. It renders the current coordinator cmux coordinates into
+a `cmux send --workspace ... --surface ...` report command and a matching
+`cmux send-key ... enter` command. Task-run agents send this exact report format
+back to the coordinator and then wait for review, landing, and cleanup:
+
+```text
+Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>
+```
+
+If the coordinator cmux target is unavailable or stale, the agent leaves the
+same report in the task session and waits. `wt task run` has no Workflow
+completion command and does not add coordinator coordinates to TaskDocument or
+TaskRun state.
+
 Prepared local tasks use two persisted concepts. A TaskDocument under
 `.local/tasks/<task>.toml` describes what the work is: title, branch, body, and
 optional issue origin. A TaskRun under `.local/task-runs/<id>.toml` records one
