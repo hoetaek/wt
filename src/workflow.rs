@@ -84,6 +84,10 @@ impl WorkflowMetadata {
     }
 }
 
+pub fn touch(workflow: &mut WorkflowMetadata) {
+    workflow.updated_at = current_utc_timestamp();
+}
+
 impl WorkflowTask {
     pub fn new(task: impl Into<String>, run: impl Into<String>) -> Self {
         Self {
