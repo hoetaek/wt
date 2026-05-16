@@ -193,7 +193,7 @@ pub(crate) fn task_is_selectable(ctx: &Ctx, task: &str) -> Result<bool> {
     };
     Ok(matches!(
         record.run.status.as_str(),
-        STATUS_PREPARED | STATUS_FAILED
+        STATUS_PREPARED | STATUS_FAILED | STATUS_SKIPPED
     ))
 }
 
@@ -618,6 +618,26 @@ updated_at = "2026-05-16T00:00:00Z"
         )
         .unwrap();
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
+        create(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            SOURCE_NEW,
+            None,
+            STATUS_SKIPPED,
+        )
+        .unwrap();
+        assert!(task_is_selectable(&ctx, "add-schema").unwrap());
+        create(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            SOURCE_NEW,
+            None,
+            STATUS_DONE,
+        )
+        .unwrap();
+        assert!(!task_is_selectable(&ctx, "add-schema").unwrap());
     }
 
     #[test]

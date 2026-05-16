@@ -647,6 +647,39 @@ mod tests {
     }
 
     #[test]
+    fn list_local_tasks_keeps_skipped_runs_selectable() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("a-first.toml"),
+            "title = \"First\"\nbranch = \"first\"\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        task_run::create(
+            &ctx,
+            "a-first",
+            "first",
+            task_run::SOURCE_NEW,
+            None,
+            task_run::STATUS_SKIPPED,
+        )
+        .unwrap();
+
+        let tasks = list_local_tasks(&ctx).unwrap();
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].key, "a-first");
+    }
+
+    #[test]
     fn list_local_tasks_rejects_unknown_task_fields() {
         let dir = tempfile::tempdir().unwrap();
         let tasks_dir = dir.path().join(".local/tasks");
