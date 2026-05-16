@@ -99,19 +99,23 @@ wt pr 42 43 44
 When pull request numbers are omitted, `pr` opens the GitHub PR list and lets
 you select multiple PRs interactively. Each selected PR starts sequentially.
 
-Start a workspace from branch-name text, or explicitly choose one prepared
-local task:
+Start a workspace from branch-name text, or explicitly choose prepared local
+tasks:
 
 ```bash
 wt new add profile docs
 wt new --task
 wt new --task add-profile-docs
+wt new publish issue tasks --task add-schema --task publish-issues
 ```
 
-Publish a prepared local task to the configured issue provider:
+Publish prepared local tasks to the configured issue provider without starting
+workspaces:
 
 ```bash
 wt task publish add-profile-docs
+wt task publish --stack latest
+wt task publish --batch latest
 ```
 
 Prepare issue work in bulk:
@@ -299,14 +303,14 @@ name, so default behavior is not stored as `profile = "default"`.
 Explicit `--profile` has command-specific scope:
 
 - `wt issue --profile <name>`, `wt new <words...> --profile <name>`, and
-  `wt new --task <task> --profile <name>` create profiled worktrees. The branch
+  `wt new --task [<task>] --profile <name>` create profiled worktrees. The branch
   and workspace names include the profile name so the profiled run is separate
   from the unprofiled workspace.
 - `wt pr --profile <name>` applies the named profile config to every selected
   PR worktree. It uses each PR branch name as-is because the branch already
   exists.
 
-Use `--matrix` on `wt issue`, `wt new <words...>`, or `wt new --task <task>` to
+Use `--matrix` on `wt issue`, `wt new <words...>`, or `wt new --task [<task>]` to
 expand one issue, branch-name input, or prepared task across all named profiles.
 `wt issue 123 --matrix` creates one issue worktree per profile,
 `wt new add search --matrix` creates one branch worktree per profile from the
@@ -481,8 +485,8 @@ wt new add profile docs --profile codex
 wt new add profile docs --matrix
 ```
 
-Use `--task` to select one prepared TaskDocument from `.local/tasks/*.toml`
-and start it immediately:
+Use `--task` to select prepared TaskDocuments from `.local/tasks/*.toml` and
+start them immediately:
 
 ```bash
 wt new --task
@@ -492,12 +496,29 @@ wt new --task add-profile-docs --profile codex
 wt new --task add-profile-docs --matrix
 ```
 
+Bare `wt new --task` opens a multi-select list. Selecting one task starts that
+task on its prepared branch. Selecting multiple tasks asks for one workspace
+branch name and starts all selected TaskDocuments in that single workspace.
+
+Repeat `--task <task>` with branch-name text to run multiple prepared
+TaskDocuments in one workspace without opening the selector:
+
+```bash
+wt new publish issue tasks --task add-schema --task publish-issues --task notify-users
+wt new publish issue tasks --task add-schema --task publish-issues --profile claude-teams
+```
+
+This creates one worktree branch from the branch-name text and writes one
+`source = "new"` TaskRun per selected TaskDocument. Multi-task workspace runs
+also assign the TaskRuns a shared `group`, so review and cleanup can show that
+the separate task records belong to the same workspace run.
+
 The agent prompt includes the selected TaskDocument content, matching the task
 context used by `wt batch run` and `wt stack run`. It also asks the agent to
 finish with a compact completion report: summary, changed files, checks run,
 and risks or follow-ups.
 Bare `wt new` is rejected; pass branch-name text for a new branch workspace or
-`--task` for a prepared local task.
+`--task`/`--task <task>` for prepared local tasks.
 
 Prepared local tasks use two persisted concepts. A TaskDocument under
 `.local/tasks/<task>.toml` describes what the work is: title, branch, body, and
@@ -509,17 +530,18 @@ creation order even when multiple runs share the same timestamp second.
 Existing TaskRun files without `creation_order` remain readable and use their
 timestamps as the legacy ordering fallback.
 
-When `wt new --task` starts a selected task, it writes a TaskRun with
+When `wt new --task` starts selected tasks, it writes TaskRuns with
 `source = "new"`. Successful starts remain `running` until the matching
-worktree is cleaned up with `wt done`, which marks the run `done`. Bare
-`wt new --task` hides tasks whose latest run is `running`, `done`, or
+worktree is cleaned up with `wt done`, which marks the matching runs `done`.
+The task selector hides tasks whose latest run is `running`, `done`, or
 `skipped`; failed runs stay retryable. With `--profile` or `--matrix`, each
-created profile worktree gets its own TaskRun record.
+created profile worktree gets its own TaskRun record. With multiple selected
+tasks, each task gets its own TaskRun record on the same created branch.
 
 ## Publishing Local Tasks
 
 Use `wt task publish <task>...` to create provider issues from local
-TaskDocuments:
+TaskDocuments without starting workspaces:
 
 ```bash
 wt task publish add-profile-docs
@@ -533,7 +555,8 @@ import provider issues into `.local/tasks/`. `wt issue` remains focused on
 starting work from existing provider issues; it is not the issue-creation
 surface for local tasks.
 
-Publishing is a provider side effect with a durable local link. The command
+Publishing is a provider side effect with a durable local link. It does not
+start workspaces, create TaskRuns, or run batch or stack work. The command
 succeeds only after the provider issue is created and the selected
 `.local/tasks/<task>.toml` file is updated with `[origin]`. If either step
 fails, the command must not report success. The `origin` table is the durable
@@ -637,9 +660,9 @@ row stores only the task key and the linked TaskRun id created during
 preparation. The TaskRun TOML is the execution-instance record: it stores the
 task key, branch, status, `source = "batch"`, `group` derived from the batch
 file stem, optional error, creation order, and timestamps. The TaskDocument
-stores the title, branch, body, and optional issue origin. A prepared
-TaskDocument can also be started directly with `wt new --task <task>`, without
-creating or running a batch file.
+stores the title, branch, body, and optional issue origin. Prepared
+TaskDocuments can also be started directly with `wt new --task` or
+`wt new --task <task>`, without creating or running a batch file.
 
 Run a prepared batch explicitly:
 
@@ -762,7 +785,7 @@ created_at = "2026-05-16T00:00:00.000000000Z"
 updated_at = "2026-05-16T00:00:00.000000000Z"
 ```
 
-Run `wt new --task <task>` to select and start one of these prepared task
+Run `wt new --task` or `wt new --task <task>` to select and start prepared task
 documents outside the stack state machine.
 
 `[[tasks]]` is the canonical stack list. Pull requests remain a separate

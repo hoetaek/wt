@@ -294,7 +294,7 @@ fn latest_path(ctx: &Ctx) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("No task run files found in .local/task-runs"))
 }
 
-fn compare_task_run_records(left: &TaskRunRecord, right: &TaskRunRecord) -> Ordering {
+pub(crate) fn compare_task_run_records(left: &TaskRunRecord, right: &TaskRunRecord) -> Ordering {
     if let (Some(left_order), Some(right_order)) =
         (left.run.creation_order, right.run.creation_order)
     {

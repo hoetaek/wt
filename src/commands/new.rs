@@ -7,25 +7,68 @@ use crate::names::WorktreeNames;
 use crate::services::git::GitService;
 use crate::setup;
 use anyhow::{Result, bail};
+use std::collections::HashSet;
 
 pub fn run(
     ctx: &Ctx,
     name_words: &[String],
-    task_key: Option<Option<&str>>,
+    task_args: &[String],
     base_raw: &Option<String>,
     profile: Option<&str>,
     matrix: bool,
 ) -> Result<()> {
-    if let Some(task_key) = task_key {
-        if !name_words.is_empty() {
-            bail!("wt new accepts branch-name text or --task, not both");
+    if !task_args.is_empty() {
+        let interactive_selection = task_args.iter().all(|task| task.trim().is_empty());
+        let selected = if interactive_selection {
+            if task_args.len() > 1 {
+                bail!("Use either one bare --task selector or explicit --task <task> values");
+            }
+            task::select_local_tasks(ctx)?
+        } else {
+            if task_args.iter().any(|task| task.trim().is_empty()) {
+                bail!("Use either one bare --task selector or explicit --task <task> values");
+            }
+            select_named_tasks(ctx, task_args)?
+        };
+        if selected.is_empty() {
+            bail!("No local tasks selected");
         }
-        let task_key = task_key.filter(|key| !key.trim().is_empty());
-        return run_selected_task(ctx, task_key, base_raw, profile, matrix).map(|_| ());
+        if name_words.is_empty() {
+            if selected.len() == 1 {
+                return run_single_selected_task(ctx, &selected[0], base_raw, profile, matrix)
+                    .map(|_| ());
+            }
+            if !interactive_selection {
+                bail!("wt new with multiple --task values requires branch-name text");
+            }
+            let branch_name = prompt_workspace_branch(ctx, &selected)?;
+            return run_selected_tasks_workspace(
+                ctx,
+                &branch_name,
+                &branch_name_words(&branch_name),
+                &selected,
+                base_raw,
+                profile,
+                matrix,
+            )
+            .map(|_| ());
+        }
+
+        let branch_name = branch_name_from_words(name_words)?;
+        return run_selected_tasks_workspace(
+            ctx,
+            &branch_name,
+            name_words,
+            &selected,
+            base_raw,
+            profile,
+            matrix,
+        )
+        .map(|_| ());
     }
 
     if name_words.is_empty() {
-        bail!("wt new requires branch-name text or --task [<task-key>]");
+        bail!("wt new requires branch-name text or --task <task-key>");
     }
 
     let branch_name = branch_name_from_words(name_words)?;
@@ -89,18 +132,48 @@ pub fn run(
     Ok(())
 }
 
-fn run_selected_task(
+fn select_named_tasks(ctx: &Ctx, task_keys: &[String]) -> Result<Vec<task::SelectedTask>> {
+    let mut seen = HashSet::new();
+    let mut selected = Vec::new();
+    for task_key in task_keys {
+        let task_key = task_key.trim();
+        if task_key.is_empty() {
+            bail!("Task key cannot be empty");
+        }
+        let safe_key = task::safe_task_key(task_key);
+        if !seen.insert(safe_key.clone()) {
+            bail!("Duplicate task: {safe_key}");
+        }
+        selected.push(task::select_local_task_by_key(ctx, &safe_key)?);
+    }
+    Ok(selected)
+}
+
+fn prompt_workspace_branch(ctx: &Ctx, selected: &[task::SelectedTask]) -> Result<String> {
+    let default = branch_name_from_words(&[selected
+        .iter()
+        .map(|task| task.key.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")])?;
+    let input = ctx.ui.input("Workspace branch name", Some(&default))?;
+    branch_name_from_words(&[input])
+}
+
+fn branch_name_words(branch_name: &str) -> Vec<String> {
+    branch_name
+        .split('-')
+        .filter(|part| !part.trim().is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn run_single_selected_task(
     ctx: &Ctx,
-    task_key: Option<&str>,
+    selected: &task::SelectedTask,
     base_raw: &Option<String>,
     profile: Option<&str>,
     matrix: bool,
 ) -> Result<issue::IssueRunResult> {
-    let selected = if let Some(task_key) = task_key {
-        task::select_local_task_by_key(ctx, task_key)?
-    } else {
-        task::select_local_task(ctx)?
-    };
     let branch_name = task::prepared_branch_name(&selected.document.branch);
     if branch_name.is_none() && selected.document.origin.is_none() {
         bail!("Task {} has no branch", selected.key);
@@ -134,14 +207,14 @@ fn run_selected_task(
             Err(err) => {
                 if let Some(partial) = err.downcast_ref::<issue::IssueRunPartialFailure>() {
                     if let Err(record_err) =
-                        record_new_task_profile_results(ctx, &selected, partial)
+                        record_new_task_profile_results(ctx, selected, partial, None)
                     {
                         return Err(anyhow::anyhow!(
                             "Failed to record partial profile TaskRuns after profile run failed ({err}): {record_err}"
                         ));
                     }
                 } else {
-                    record_new_task_failure(ctx, &selected, &err);
+                    record_new_task_failure(ctx, selected, &err);
                 }
                 return Err(err);
             }
@@ -149,7 +222,7 @@ fn run_selected_task(
         if results.is_empty() {
             bail!("No profile worktrees created");
         }
-        record_new_task_profile_successes(ctx, &selected, &results)?;
+        record_new_task_profile_successes(ctx, selected, &results, None)?;
         return results
             .into_iter()
             .last()
@@ -224,6 +297,116 @@ fn run_selected_task(
     Ok(result)
 }
 
+fn run_selected_tasks_workspace(
+    ctx: &Ctx,
+    branch_name: &str,
+    name_words: &[String],
+    selected: &[task::SelectedTask],
+    base_raw: &Option<String>,
+    profile: Option<&str>,
+    matrix: bool,
+) -> Result<Vec<issue::IssueRunResult>> {
+    let title = name_words.join(" ");
+    let snapshot_path = selected
+        .iter()
+        .map(|task| task.path.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let snapshot_content = render_selected_tasks_snapshot(selected);
+    let prompt_intro = if selected.len() == 1 {
+        "Use this task before changing code."
+    } else {
+        "Use these tasks before changing code. Work in this single workspace and address every selected TaskDocument."
+    };
+    let workspace_label = (selected.len() > 1).then(|| format!("{} tasks", selected.len()));
+    let group = (selected.len() > 1)
+        .then(|| next_new_task_group(ctx, branch_name))
+        .transpose()?;
+
+    let results = issue::run_with_issue_snapshot_many(
+        ctx,
+        base_raw,
+        profile,
+        matrix,
+        issue::PreparedIssueContext {
+            identifier: branch_name,
+            title: &title,
+            branch_name: Some(branch_name),
+            mode: "new",
+            prompt_intro,
+            workspace_label,
+            snapshot: issue::IssueSnapshotContext {
+                path_label: "Task paths",
+                path: &snapshot_path,
+                content: &snapshot_content,
+            },
+        },
+    );
+
+    let results = match results {
+        Ok(results) => results,
+        Err(err) => {
+            if let Some(partial) = err.downcast_ref::<issue::IssueRunPartialFailure>() {
+                if let Err(record_err) =
+                    record_new_tasks_profile_results(ctx, selected, partial, group.as_deref())
+                {
+                    return Err(anyhow::anyhow!(
+                        "Failed to record partial TaskRuns after profile run failed ({err}): {record_err}"
+                    ));
+                }
+            } else if let Err(record_err) =
+                record_new_tasks_failure(ctx, selected, branch_name, &err, group.as_deref())
+            {
+                return Err(anyhow::anyhow!(
+                    "Failed to record failed TaskRuns after run failed ({err}): {record_err}"
+                ));
+            }
+            return Err(err);
+        }
+    };
+
+    if results.is_empty() {
+        bail!("No worktrees created");
+    }
+    record_new_tasks_profile_successes(ctx, selected, &results, group.as_deref())?;
+    Ok(results)
+}
+
+fn next_new_task_group(ctx: &Ctx, branch_name: &str) -> Result<String> {
+    let prefix = task::safe_task_key(branch_name);
+    let next = task_run::list(ctx)?
+        .into_iter()
+        .filter(|record| record.run.source == task_run::SOURCE_NEW)
+        .filter_map(|record| record.run.group)
+        .filter_map(|group| group_sequence(&group, &prefix))
+        .max()
+        .unwrap_or(0)
+        + 1;
+    Ok(format!("{prefix}-{next:03}"))
+}
+
+fn group_sequence(group: &str, prefix: &str) -> Option<u64> {
+    group
+        .strip_prefix(prefix)?
+        .strip_prefix('-')?
+        .parse::<u64>()
+        .ok()
+}
+
+fn render_selected_tasks_snapshot(selected: &[task::SelectedTask]) -> String {
+    let mut content = String::new();
+    content.push_str("Selected TaskDocuments:\n");
+    for task in selected {
+        content.push_str(&format!("- {}: {}\n", task.key, task.path));
+    }
+    for task in selected {
+        content.push_str(&format!("\n--- {} ({}) ---\n", task.key, task.path));
+        content.push_str(task.content.trim_end());
+        content.push('\n');
+    }
+    content
+}
+
 fn record_new_task_failure(ctx: &Ctx, selected: &task::SelectedTask, err: &anyhow::Error) {
     let status = if is_cancelled(err) {
         task_run::STATUS_SKIPPED
@@ -247,6 +430,7 @@ fn record_new_task_profile_successes(
     ctx: &Ctx,
     selected: &task::SelectedTask,
     results: &[issue::IssueRunResult],
+    group: Option<&str>,
 ) -> Result<()> {
     for result in results {
         task_run::create(
@@ -254,9 +438,21 @@ fn record_new_task_profile_successes(
             &selected.key,
             &result.branch_name,
             task_run::SOURCE_NEW,
-            None,
+            group,
             task_run::STATUS_RUNNING,
         )?;
+    }
+    Ok(())
+}
+
+fn record_new_tasks_profile_successes(
+    ctx: &Ctx,
+    selected: &[task::SelectedTask],
+    results: &[issue::IssueRunResult],
+    group: Option<&str>,
+) -> Result<()> {
+    for task in selected {
+        record_new_task_profile_successes(ctx, task, results, group)?;
     }
     Ok(())
 }
@@ -265,15 +461,16 @@ fn record_new_task_profile_results(
     ctx: &Ctx,
     selected: &task::SelectedTask,
     partial: &issue::IssueRunPartialFailure,
+    group: Option<&str>,
 ) -> Result<()> {
-    record_new_task_profile_successes(ctx, selected, &partial.completed)?;
+    record_new_task_profile_successes(ctx, selected, &partial.completed, group)?;
     if let Some(failed) = &partial.failed {
         let run = task_run::create(
             ctx,
             &selected.key,
             &failed.branch_name,
             task_run::SOURCE_NEW,
-            None,
+            group,
             task_run::STATUS_FAILED,
         )?;
         task_run::update(
@@ -283,6 +480,38 @@ fn record_new_task_profile_results(
             None,
             Some(partial.message()),
         )?;
+    }
+    Ok(())
+}
+
+fn record_new_tasks_profile_results(
+    ctx: &Ctx,
+    selected: &[task::SelectedTask],
+    partial: &issue::IssueRunPartialFailure,
+    group: Option<&str>,
+) -> Result<()> {
+    for task in selected {
+        record_new_task_profile_results(ctx, task, partial, group)?;
+    }
+    Ok(())
+}
+
+fn record_new_tasks_failure(
+    ctx: &Ctx,
+    selected: &[task::SelectedTask],
+    branch: &str,
+    err: &anyhow::Error,
+    group: Option<&str>,
+) -> Result<()> {
+    let status = if is_cancelled(err) {
+        task_run::STATUS_SKIPPED
+    } else {
+        task_run::STATUS_FAILED
+    };
+    let message = err.to_string();
+    for task in selected {
+        let run = task_run::create(ctx, &task.key, branch, task_run::SOURCE_NEW, group, status)?;
+        task_run::update(ctx, &run.id, status, None, Some(&message))?;
     }
     Ok(())
 }
@@ -499,7 +728,7 @@ mod tests {
         let ui = MockUi::new();
         let ctx = make_ctx(runner, ui);
 
-        let result = run(&ctx, &[], None, &None, None, false);
+        let result = run(&ctx, &[], &[], &None, None, false);
         assert!(result.is_err());
         assert!(
             result
@@ -510,32 +739,32 @@ mod tests {
     }
 
     #[test]
-    fn task_option_without_value_reaches_local_task_selection() {
-        let runner = MockRunner::new();
-        let ui = MockUi::new();
-        let ctx = make_ctx(runner, ui);
-
-        let result = run(&ctx, &[], Some(None), &None, None, false);
-
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("No task files found in .local/tasks")
+    fn multiple_task_values_require_branch_name_text() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("publish-issues.toml"),
+            "title = \"Publish issues\"\nbranch = \"publish-issues\"\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
         );
-    }
-
-    #[test]
-    fn task_option_rejects_branch_name_text() {
-        let runner = MockRunner::new();
-        let ui = MockUi::new();
-        let ctx = make_ctx(runner, ui);
 
         let result = run(
             &ctx,
-            &["add".into(), "schema".into()],
-            Some(Some("add-schema")),
+            &[],
+            &["add-schema".into(), "publish-issues".into()],
             &None,
             None,
             false,
@@ -546,12 +775,48 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("wt new accepts branch-name text or --task, not both")
+                .contains("wt new with multiple --task values requires branch-name text")
         );
     }
 
     #[test]
-    fn task_option_selects_local_task_and_runs_task_snapshot() {
+    fn duplicate_task_values_are_rejected() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let result = run(
+            &ctx,
+            &["workspace".into()],
+            &["add-schema".into(), "add-schema".into()],
+            &None,
+            None,
+            false,
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Duplicate task: add-schema")
+        );
+    }
+
+    #[test]
+    fn task_option_with_key_runs_named_task_snapshot() {
         let repo = tempfile::tempdir().unwrap();
         let tasks_dir = repo.path().join(".local/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -575,8 +840,6 @@ mod tests {
         runner.add_response("", true);
         let runner = Arc::new(runner);
 
-        let mut ui = MockUi::new();
-        ui.add_select(0);
         let ctx = Ctx::new(
             repo.path().to_path_buf(),
             repo.path().to_path_buf(),
@@ -584,10 +847,10 @@ mod tests {
             Box::new(SharedRunner {
                 inner: Arc::clone(&runner),
             }),
-            Box::new(ui),
+            Box::new(MockUi::new()),
         );
 
-        run(&ctx, &[], Some(None), &None, None, false).unwrap();
+        run(&ctx, &[], &["add-schema".into()], &None, None, false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -612,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn task_option_with_key_runs_named_task_snapshot() {
+    fn task_option_with_key_records_new_run_after_prior_done() {
         let repo = tempfile::tempdir().unwrap();
         let tasks_dir = repo.path().join(".local/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -656,7 +919,7 @@ mod tests {
         )
         .unwrap();
 
-        run(&ctx, &[], Some(Some("add-schema")), &None, None, false).unwrap();
+        run(&ctx, &[], &["add-schema".into()], &None, None, false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -681,6 +944,243 @@ mod tests {
         assert_eq!(latest.run.source, task_run::SOURCE_NEW);
         assert_eq!(latest.run.status, task_run::STATUS_RUNNING);
         assert_eq!(latest.run.branch, "add-schema");
+    }
+
+    #[test]
+    fn task_option_without_value_selects_one_local_task() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("a-first.toml"),
+            "title = \"First\"\nbranch = \"first\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("b-second.toml"),
+            "title = \"Second\"\nbranch = \"second\"\nbody = \"details\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("main", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![1]);
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(&ctx, &[], &["".into()], &None, None, false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let worktree_add_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .expect("expected git worktree add -b call");
+        assert_eq!(worktree_add_call.1[3], "second");
+        assert_eq!(worktree_add_call.1[5], "main");
+
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run.task, "b-second");
+        assert_eq!(runs[0].run.source, task_run::SOURCE_NEW);
+        assert_eq!(runs[0].run.status, task_run::STATUS_RUNNING);
+        assert_eq!(runs[0].run.branch, "second");
+        assert_eq!(runs[0].run.group, None);
+    }
+
+    #[test]
+    fn bare_task_multi_select_prompts_branch_and_records_group() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("publish-issues.toml"),
+            "title = \"Publish issues\"\nbranch = \"publish-issues\"\nbody = \"Publish the issue tasks.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0, 1]);
+        ui.add_input("team-run");
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(&ctx, &[], &["".into()], &Some("main".into()), None, false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let worktree_add_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .expect("expected git worktree add -b call");
+        assert_eq!(worktree_add_call.1[3], "team-run");
+        assert_eq!(worktree_add_call.1[5], "main");
+
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 2);
+        assert!(runs.iter().all(|record| record.run.branch == "team-run"));
+        assert!(
+            runs.iter()
+                .all(|record| record.run.group.as_deref() == Some("team-run-001"))
+        );
+        assert!(
+            runs.iter()
+                .all(|record| record.id.starts_with("new-team-run-001-"))
+        );
+    }
+
+    #[test]
+    fn named_workspace_records_one_task_run_per_selected_task() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("publish-issues.toml"),
+            "title = \"Publish issues\"\nbranch = \"publish-issues\"\nbody = \"Publish the issue tasks.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true); // fetch
+        runner.add_response("", false); // local branch exists
+        runner.add_response("", false); // remote branch exists
+        runner.add_response("", true); // worktree add
+        runner.add_response("", true); // parent local branch exists
+        runner.add_response("", true); // set parent config
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(
+            &ctx,
+            &["publish".into(), "tasks".into()],
+            &["add-schema".into(), "publish-issues".into()],
+            &Some("main".into()),
+            None,
+            false,
+        )
+        .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let worktree_add_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .expect("expected git worktree add -b call");
+        assert_eq!(worktree_add_call.1[3], "publish-tasks");
+        assert_eq!(worktree_add_call.1[5], "main");
+
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 2);
+        let task_keys = runs
+            .iter()
+            .map(|record| record.run.task.as_str())
+            .collect::<Vec<_>>();
+        assert!(task_keys.contains(&"add-schema"));
+        assert!(task_keys.contains(&"publish-issues"));
+        assert!(
+            runs.iter()
+                .all(|record| record.run.branch == "publish-tasks")
+        );
+        assert!(
+            runs.iter()
+                .all(|record| record.run.source == task_run::SOURCE_NEW)
+        );
+        assert!(
+            runs.iter()
+                .all(|record| record.run.status == task_run::STATUS_RUNNING)
+        );
+        assert!(
+            runs.iter()
+                .all(|record| record.run.group.as_deref() == Some("publish-tasks-001"))
+        );
+        assert!(
+            runs.iter()
+                .all(|record| record.id.starts_with("new-publish-tasks-001-"))
+        );
     }
 
     #[test]
@@ -739,7 +1239,7 @@ cli = "codex"
         let result = run(
             &ctx,
             &[],
-            Some(Some("add-schema")),
+            &["add-schema".into()],
             &Some("main".into()),
             None,
             true,
@@ -885,7 +1385,7 @@ id = "PROJ-123"
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, &[], Some(Some("PROJ-123")), &None, None, false).unwrap();
+        run(&ctx, &[], &["PROJ-123".into()], &None, None, false).unwrap();
 
         let task_content =
             std::fs::read_to_string(repo.path().join(".local/tasks/PROJ-123.toml")).unwrap();
@@ -920,7 +1420,7 @@ id = "PROJ-123"
         );
 
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, None, &None, None, false);
+        let result = run(&ctx, &words, &[], &None, None, false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
 
         let calls = runner.calls.lock().unwrap();
@@ -967,7 +1467,7 @@ id = "PROJ-123"
 
         let ctx = make_ctx(runner, ui);
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, None, &None, None, false);
+        let result = run(&ctx, &words, &[], &None, None, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }
@@ -1003,7 +1503,7 @@ id = "PROJ-123"
         let ui = MockUi::new();
         let ctx = make_ctx(runner, ui);
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, None, &Some("develop".into()), None, false);
+        let result = run(&ctx, &words, &[], &Some("develop".into()), None, false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
     }
 
@@ -1033,7 +1533,7 @@ id = "PROJ-123"
             Box::new(ui),
         );
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        run(&ctx, &words, None, &Some(".".into()), None, false).unwrap();
+        run(&ctx, &words, &[], &Some(".".into()), None, false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -1089,7 +1589,7 @@ id = "PROJ-123"
         run(
             &ctx,
             &["my".into(), "feature".into()],
-            None,
+            &[],
             &Some("main".into()),
             Some("codex-yolo"),
             false,
@@ -1131,7 +1631,7 @@ id = "PROJ-123"
         run(
             &ctx,
             &["my".into(), "feature".into()],
-            None,
+            &[],
             &Some("develop".into()),
             None,
             false,
@@ -1179,7 +1679,7 @@ id = "PROJ-123"
         run(
             &ctx,
             &["my".into(), "feature".into()],
-            None,
+            &[],
             &Some("develop".into()),
             None,
             false,

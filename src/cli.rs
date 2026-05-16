@@ -62,14 +62,20 @@ pub enum Commands {
         #[arg(long)]
         profile: Option<String>,
     },
-    /// Start a workspace from branch-name text or a prepared local task
+    /// Start a workspace from branch-name text or prepared local tasks
     New {
         /// Branch name words
         #[arg(num_args = 0..)]
         name: Vec<String>,
-        /// Prepared local task key (omit value to select from .local/tasks/*.toml)
-        #[arg(long, value_name = "TASK", num_args = 0..=1, conflicts_with = "name")]
-        task: Option<Option<String>>,
+        /// Prepared local task key (repeat for multiple; omit value to select)
+        #[arg(
+            long,
+            value_name = "TASK",
+            num_args = 0..=1,
+            default_missing_value = "",
+            action = ArgAction::Append
+        )]
+        task: Vec<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
@@ -1095,7 +1101,7 @@ mod tests {
         }) = &cli.command
         {
             assert_eq!(name, &vec!["some".to_string(), "feature".to_string()]);
-            assert_eq!(task, &None);
+            assert!(task.is_empty());
             assert!(*matrix);
         } else {
             panic!("expected New");
@@ -1103,17 +1109,17 @@ mod tests {
     }
 
     #[test]
-    fn new_task_without_value_selects_local_task() {
+    fn new_task_without_value_enters_task_selection() {
         let cli = parse(&["wt", "new", "--task"]);
         assert!(matches!(
             cli.command,
             Some(Commands::New {
                 ref name,
-                task: Some(None),
+                ref task,
                 base: None,
                 profile: None,
                 matrix: false,
-            }) if name.is_empty()
+            }) if name.is_empty() && task == &vec!["".to_string()]
         ));
     }
 
@@ -1124,11 +1130,36 @@ mod tests {
             cli.command,
             Some(Commands::New {
                 ref name,
-                task: Some(Some(ref task)),
+                ref task,
                 base: None,
                 profile: None,
                 matrix: false,
-            }) if name.is_empty() && task == "add-schema"
+            }) if name.is_empty() && task == &vec!["add-schema".to_string()]
+        ));
+    }
+
+    #[test]
+    fn new_task_accepts_multiple_values_with_branch_text() {
+        let cli = parse(&[
+            "wt",
+            "new",
+            "team",
+            "run",
+            "--task",
+            "add-schema",
+            "--task",
+            "publish",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::New {
+                ref name,
+                ref task,
+                base: None,
+                profile: None,
+                matrix: false,
+            }) if name == &vec!["team".to_string(), "run".to_string()]
+                && task == &vec!["add-schema".to_string(), "publish".to_string()]
         ));
     }
 
@@ -1148,11 +1179,12 @@ mod tests {
             cli.command,
             Some(Commands::New {
                 ref name,
-                task: None,
+                ref task,
                 base: Some(ref base),
                 profile: Some(ref profile),
                 matrix: false,
             }) if name == &vec!["some".to_string(), "feature".to_string()]
+                && task.is_empty()
                 && base == "main"
                 && profile == "codex"
         ));
@@ -1173,9 +1205,17 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_task_with_branch_text() {
-        let result = Cli::try_parse_from(["wt", "new", "--task", "add-schema", "branch-text"]);
-        assert!(result.is_err());
+    fn new_task_accepts_branch_words_after_single_task_value() {
+        let cli = parse(&["wt", "new", "--task", "add-schema", "branch-text"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::New {
+                ref name,
+                ref task,
+                ..
+            }) if name == &vec!["branch-text".to_string()]
+                && task == &vec!["add-schema".to_string()]
+        ));
     }
 
     #[test]
@@ -1191,7 +1231,7 @@ mod tests {
         let help = new.render_help().to_string();
         assert!(help.contains("Start a workspace from branch-name text"));
         assert!(help.contains("--task [<TASK>]"));
-        assert!(help.contains("omit value to select from .local/tasks/*.toml"));
+        assert!(help.contains("repeat for multiple; omit value to select"));
     }
 
     #[test]

@@ -32,14 +32,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             base,
             profile,
             matrix,
-        } => commands::new::run(
-            ctx,
-            name,
-            task.as_ref().map(|value| value.as_deref()),
-            base,
-            profile.as_deref(),
-            *matrix,
-        ),
+        } => commands::new::run(ctx, name, task, base, profile.as_deref(), *matrix),
         Commands::Batch { command } => match command {
             BatchCommand::Task {
                 tasks,
