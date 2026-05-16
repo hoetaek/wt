@@ -485,7 +485,11 @@ Prepared local tasks use two persisted concepts. A TaskDocument under
 `.local/tasks/<task>.toml` describes what the work is: title, branch, body, and
 optional issue origin. A TaskRun under `.local/task-runs/<id>.toml` records one
 attempt to execute that task: task key, branch, status, source, optional group,
-optional error, and timestamps.
+optional error, creation order, and timestamps. New TaskRun files include a
+monotonic `creation_order` value so latest-run selection follows execution
+creation order even when multiple runs share the same timestamp second.
+Existing TaskRun files without `creation_order` remain readable and use their
+timestamps as the legacy ordering fallback.
 
 When `wt new --task` starts a selected task, it writes a TaskRun with
 `source = "new"`. Successful starts remain `running` until the matching
@@ -535,10 +539,10 @@ array-of-tables syntax, equivalent to a `tasks: [...]` list in JSON. Each task
 row stores only the task key and the linked TaskRun id created during
 preparation. The TaskRun TOML is the execution-instance record: it stores the
 task key, branch, status, `source = "batch"`, `group` derived from the batch
-file stem, optional error, and timestamps. The TaskDocument stores the title,
-branch, body, and optional issue origin. A prepared TaskDocument can also be
-started directly with `wt new --task <task>`, without creating or running a
-batch file.
+file stem, optional error, creation order, and timestamps. The TaskDocument
+stores the title, branch, body, and optional issue origin. A prepared
+TaskDocument can also be started directly with `wt new --task <task>`, without
+creating or running a batch file.
 
 Run a prepared batch explicitly:
 
@@ -653,8 +657,9 @@ branch = "add-schema"
 status = "prepared"
 source = "stack"
 group = "manual"
-created_at = "2026-05-16T00:00:00Z"
-updated_at = "2026-05-16T00:00:00Z"
+creation_order = 1
+created_at = "2026-05-16T00:00:00.000000000Z"
+updated_at = "2026-05-16T00:00:00.000000000Z"
 ```
 
 Run `wt new --task <task>` to select and start one of these prepared task

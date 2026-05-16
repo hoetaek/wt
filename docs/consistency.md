@@ -124,10 +124,12 @@ TaskDocument는 작업이 무엇인지를 담는 정의다. `.local/tasks/<task>
 아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
 
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
-task, branch, status, source, group, error, created_at, updated_at을 저장한다. status는
-`prepared`, `running`, `done`, `failed`, `skipped`만 canonical이고, source는 `new`,
-`batch`, `stack`만 canonical이다. 알 수 없는 status/source 값은 조용히 해석하지 않고
-파싱 단계에서 실패시킨다.
+task, branch, status, source, group, error, creation_order, created_at,
+updated_at을 저장한다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
+초 단위 timestamp 우연성에 기대지 않도록 새 TaskRun마다 증가하는 실행 생성 순서다.
+status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이고, source는
+`new`, `batch`, `stack`만 canonical이다. 알 수 없는 status/source 값은 조용히
+해석하지 않고 파싱 단계에서 실패시킨다.
 
 통합 실행 상태 모델은 TaskDocument와 TaskRun의 책임을 나누는 데서 시작한다.
 TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, TaskRun은 그 설명을 한 번
