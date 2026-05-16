@@ -2441,8 +2441,14 @@ error = ""
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
         );
-        for key in [
+        write_task_file(
+            dir.path(),
             "prepared-task",
+            "Prepared task title",
+            "prepared-task",
+            "",
+        );
+        for key in [
             "failed-task",
             "done-task",
             "running-task",
@@ -2457,6 +2463,7 @@ error = ""
         let done_path = batches_dir.join("done-batch.toml");
         let running_path = batches_dir.join("running-batch.toml");
         let mixed_path = batches_dir.join("running-and-prepared-batch.toml");
+        let missing_task_path = batches_dir.join("missing-task-batch.toml");
 
         write_batch_file(
             &prepared_path,
@@ -2562,6 +2569,25 @@ error = ""
                 tasks: vec![mixed_running, mixed_prepared],
             },
         );
+        write_batch_file(
+            &missing_task_path,
+            &BatchMetadata {
+                profile: None,
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_PREPARED.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![batch_task_with_status(
+                    &ctx,
+                    &missing_task_path,
+                    "missing-task",
+                    "missing-task",
+                    STATUS_PREPARED,
+                    "",
+                )],
+            },
+        );
 
         let candidates = list_runnable_batch_candidates(&ctx).unwrap();
         let candidate_paths = candidates
@@ -2576,23 +2602,37 @@ error = ""
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(candidates.len(), 3);
+        assert_eq!(candidates.len(), 4);
         assert!(candidate_paths.contains(&"prepared-batch.toml".into()));
         assert!(candidate_paths.contains(&"failed-batch.toml".into()));
         assert!(candidate_paths.contains(&"running-and-prepared-batch.toml".into()));
+        assert!(candidate_paths.contains(&"missing-task-batch.toml".into()));
         assert!(!candidate_paths.contains(&"done-batch.toml".into()));
         assert!(!candidate_paths.contains(&"running-batch.toml".into()));
+
+        let candidate_labels = candidates
+            .iter()
+            .map(|candidate| candidate.label.clone())
+            .collect::<Vec<_>>();
+        let mut sorted_labels = candidate_labels.clone();
+        sorted_labels.sort();
+        assert_eq!(candidate_labels, sorted_labels);
 
         let labels = candidates
             .iter()
             .map(|candidate| candidate.label.as_str())
             .collect::<Vec<_>>()
             .join("\n");
+        assert!(labels.contains("prepared-task - Prepared task title"));
+        assert!(labels.contains("missing-task (missing task)"));
+        assert!(labels.contains("prepared=1, running=1, done=0, failed=0, skipped=0"));
         assert!(labels.contains("failed=1"));
         assert!(labels.contains("running=0"));
         assert!(labels.contains("running=1"));
         assert!(labels.contains("runnable: 1"));
+        assert!(labels.contains("base: main"));
         assert!(labels.contains("profile: codex"));
+        assert!(labels.contains(".local/batches/running-and-prepared-batch.toml"));
     }
 
     #[test]
