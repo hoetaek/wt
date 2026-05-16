@@ -86,7 +86,8 @@ pub enum Commands {
         #[arg(long, conflicts_with = "profile")]
         matrix: bool,
     },
-    /// Prepare, inspect, edit, run, or clean batches
+    /// Legacy batch command; use wt workflow --mode batch
+    #[command(hide = true)]
     Batch {
         #[command(subcommand)]
         command: BatchCommand,
@@ -101,7 +102,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: WorkflowCommand,
     },
-    /// Prepare, inspect, edit, run, or complete stacks
+    /// Legacy stack command; use wt workflow --mode stack
+    #[command(hide = true)]
     Stack {
         #[command(subcommand)]
         command: StackCommand,
@@ -341,7 +343,7 @@ pub enum BatchCommand {
 pub enum TaskCommand {
     /// Publish local TaskDocuments as provider issues
     #[command(
-        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run batch or stack work.\n\nAfter [origin] is written, later wt new --task, wt batch run, and wt stack run treat the task as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt workflow run treats that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
     )]
     Publish {
         /// Local task keys from .local/tasks/<task>.toml
@@ -897,12 +899,12 @@ mod tests {
             })
         ));
 
-        let cli = parse(&["wt", "batch", "run", ".local/batches/2026-05-16-001.toml"]);
+        let cli = parse(&["wt", "batch", "run", "2026-05-16-001"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Batch {
                 command: BatchCommand::Run { ref batch, jobs }
-            }) if batch.as_deref() == Some(".local/batches/2026-05-16-001.toml") && jobs == 1
+            }) if batch.as_deref() == Some("2026-05-16-001") && jobs == 1
         ));
     }
 
@@ -971,12 +973,12 @@ mod tests {
             }) if batch.as_deref() == Some("latest")
         ));
 
-        let cli = parse(&["wt", "batch", "clean", ".local/batches/2026-05-09-001.toml"]);
+        let cli = parse(&["wt", "batch", "clean", "2026-05-09-001"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Batch {
                 command: BatchCommand::Clean { ref batch }
-            }) if batch.as_deref() == Some(".local/batches/2026-05-09-001.toml")
+            }) if batch.as_deref() == Some("2026-05-09-001")
         ));
     }
 
@@ -985,7 +987,7 @@ mod tests {
         let mut command = Cli::command();
         let batch = command.find_subcommand_mut("batch").unwrap();
         let help = batch.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, edit, run, or clean batches"));
+        assert!(help.contains("Legacy batch command"));
         assert!(help.contains("clean"));
         assert!(help.contains("show"));
     }
@@ -1058,7 +1060,7 @@ mod tests {
         assert!(help.contains("provider issue"));
         assert!(help.contains("write [origin]"));
         assert!(help.contains("does not start workspaces"));
-        assert!(help.contains("later wt new --task, wt batch run, and wt stack run"));
+        assert!(help.contains("later wt workflow run"));
         assert!(help.contains("Omit task keys to choose unprocessed local TaskDocuments"));
         assert!(help.contains("tasks that already have [origin] are excluded"));
         assert!(!help.contains("--stack <STACK>"));
@@ -1254,12 +1256,12 @@ mod tests {
             })
         ));
 
-        let cli = parse(&["wt", "stack", "run", ".local/stacks/manual.toml"]);
+        let cli = parse(&["wt", "stack", "run", "manual"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Stack {
                 command: StackCommand::Run { ref stack }
-            }) if stack.as_deref() == Some(".local/stacks/manual.toml")
+            }) if stack.as_deref() == Some("manual")
         ));
     }
 
@@ -1298,7 +1300,7 @@ mod tests {
         let mut command = Cli::command();
         let stack = command.find_subcommand_mut("stack").unwrap();
         let help = stack.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, edit, run, or complete stacks"));
+        assert!(help.contains("Legacy stack command"));
         assert!(help.contains("Start the next prepared or failed task"));
         assert!(help.contains("Mark the running task"));
         assert!(!help.contains("failed item"));

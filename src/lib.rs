@@ -14,8 +14,8 @@ pub mod ui;
 pub mod workflow;
 pub mod worktree_naming;
 
-use anyhow::Result;
-use cli::{BatchCommand, Commands, ConfigCommand, StackCommand, TaskCommand, WorkflowCommand};
+use anyhow::{Result, bail};
+use cli::{Commands, ConfigCommand, TaskCommand, WorkflowCommand};
 use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
@@ -35,22 +35,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             profile,
             matrix,
         } => commands::new::run(ctx, name, task, base, profile.as_deref(), *matrix),
-        Commands::Batch { command } => match command {
-            BatchCommand::Task {
-                tasks,
-                profile,
-                base,
-            } => commands::batch::task(ctx, tasks, profile.as_deref(), base),
-            BatchCommand::Issue {
-                issues,
-                profile,
-                base,
-            } => commands::batch::issue(ctx, issues, profile.as_deref(), base),
-            BatchCommand::Run { batch, jobs } => commands::batch::run(ctx, batch.as_deref(), *jobs),
-            BatchCommand::Show { batch } => commands::batch::show(ctx, batch.as_deref()),
-            BatchCommand::Edit { batch } => commands::batch::edit(ctx, batch.as_deref()),
-            BatchCommand::Clean { batch } => commands::batch::clean(ctx, batch.as_deref()),
-        },
+        Commands::Batch { .. } => legacy_batch_command_error(),
         Commands::Task { command } => match command {
             TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
         },
@@ -93,28 +78,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 run_next,
             } => commands::workflow::complete(ctx, workflow, task.as_deref(), *run_next),
         },
-        Commands::Stack { command } => match command {
-            StackCommand::Task {
-                tasks,
-                profile,
-                base,
-                pull_request,
-            } => commands::stack::task(ctx, tasks, profile.as_deref(), base, *pull_request),
-            StackCommand::Issue {
-                issues,
-                profile,
-                base,
-                pull_request,
-            } => commands::stack::issue(ctx, issues, profile.as_deref(), base, *pull_request),
-            StackCommand::Run { stack } => commands::stack::run(ctx, stack.as_deref()),
-            StackCommand::Show { stack } => commands::stack::show(ctx, stack.as_deref()),
-            StackCommand::Edit { stack } => commands::stack::edit(ctx, stack.as_deref()),
-            StackCommand::Complete {
-                stack,
-                task,
-                run_next,
-            } => commands::stack::complete(ctx, stack, task.as_deref(), *run_next),
-        },
+        Commands::Stack { .. } => legacy_stack_command_error(),
         Commands::List { wide } => commands::list::run(ctx, *wide),
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
@@ -173,4 +137,16 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             },
         ),
     }
+}
+
+fn legacy_batch_command_error() -> Result<()> {
+    bail!(
+        "wt batch has been replaced by wt workflow --mode batch. Use `wt workflow task ... --mode batch`, `wt workflow issue ... --mode batch`, `wt workflow run <workflow> --jobs <n>`, and `wt workflow show <workflow>`. Existing .local/batches files are old migration context, not the canonical state surface."
+    )
+}
+
+fn legacy_stack_command_error() -> Result<()> {
+    bail!(
+        "wt stack has been replaced by wt workflow --mode stack. Use `wt workflow task ... --mode stack`, `wt workflow issue ... --mode stack`, `wt workflow run <workflow>`, and `wt workflow complete <workflow> <task> [--run-next]`. Existing .local/stacks files are old migration context, not the canonical state surface."
+    )
 }

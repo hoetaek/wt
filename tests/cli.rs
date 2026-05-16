@@ -141,7 +141,7 @@ fn task_publish_help_explains_behavior() {
         .stdout(predicate::str::contains("provider issue"))
         .stdout(predicate::str::contains("write [origin]"))
         .stdout(predicate::str::contains("does not start workspaces"))
-        .stdout(predicate::str::contains("wt new --task"))
+        .stdout(predicate::str::contains("wt workflow run"))
         .stdout(predicate::str::contains("Omit task keys"))
         .stdout(predicate::str::contains(
             "already have [origin] are excluded",
@@ -150,29 +150,23 @@ fn task_publish_help_explains_behavior() {
 }
 
 #[test]
-fn batch_run_help_explains_runnable_batch_selection() {
+fn legacy_batch_command_fails_with_workflow_guidance() {
     wt_command()
-        .args(["batch", "run", "--help"])
+        .args(["batch", "run"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("omit to select a runnable batch"))
-        .stdout(predicate::str::contains("prepared or failed task"))
-        .stdout(predicate::str::contains("running siblings stay visible"))
-        .stdout(predicate::str::contains("shorthand id"))
-        .stdout(predicate::str::contains("latest").not());
+        .failure()
+        .stderr(predicate::str::contains("wt batch has been replaced"))
+        .stderr(predicate::str::contains("wt workflow --mode batch"));
 }
 
 #[test]
-fn stack_run_help_explains_runnable_stack_selection() {
+fn legacy_stack_command_fails_with_workflow_guidance() {
     wt_command()
-        .args(["stack", "run", "--help"])
+        .args(["stack", "run"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("omit to select a runnable stack"))
-        .stdout(predicate::str::contains("next prepared or failed task"))
-        .stdout(predicate::str::contains("no currently running task"))
-        .stdout(predicate::str::contains("shorthand id"))
-        .stdout(predicate::str::contains("latest").not());
+        .failure()
+        .stderr(predicate::str::contains("wt stack has been replaced"))
+        .stderr(predicate::str::contains("wt workflow --mode stack"));
 }
 
 #[test]
