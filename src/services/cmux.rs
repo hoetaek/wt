@@ -85,13 +85,10 @@ impl<'a> CmuxService<'a> {
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
         let out = self.runner.run("cmux", &arg_refs, None)?;
-        let handle = out
-            .stdout
-            .split_whitespace()
-            .nth(1)
-            .unwrap_or(&out.stdout)
-            .to_string();
-        Ok(handle)
+        if !out.success {
+            bail!("cmux new-workspace failed: {}", command_error(&out));
+        }
+        extract_handle(&out.stdout, "workspace:", "new-workspace")
     }
 
     pub fn caller_context(&self) -> Option<CmuxCaller> {
@@ -210,6 +207,9 @@ impl<'a> CmuxService<'a> {
         let out = self
             .runner
             .run("cmux", &["list-panes", "--workspace", workspace], None)?;
+        if !out.success {
+            bail!("cmux list-panes failed: {}", command_error(&out));
+        }
         let panes: Vec<String> = out
             .stdout
             .split_whitespace()
@@ -231,6 +231,9 @@ impl<'a> CmuxService<'a> {
             ],
             None,
         )?;
+        if !out.success {
+            bail!("cmux list-pane-surfaces failed: {}", command_error(&out));
+        }
         let surfaces: Vec<String> = out
             .stdout
             .split_whitespace()
@@ -246,13 +249,10 @@ impl<'a> CmuxService<'a> {
             &["new-surface", "--pane", pane, "--workspace", workspace],
             None,
         )?;
-        let handle = out
-            .stdout
-            .split_whitespace()
-            .nth(1)
-            .unwrap_or(&out.stdout)
-            .to_string();
-        Ok(handle)
+        if !out.success {
+            bail!("cmux new-surface failed: {}", command_error(&out));
+        }
+        extract_handle(&out.stdout, "surface:", "new-surface")
     }
 
     pub fn send(&self, surface: &str, workspace: &str, text: &str) -> Result<()> {
@@ -287,7 +287,7 @@ impl<'a> CmuxService<'a> {
     }
 
     pub fn set_color(&self, workspace: &str, color: &str) -> Result<()> {
-        self.runner.run(
+        let out = self.runner.run(
             "cmux",
             &[
                 "workspace-action",
@@ -300,6 +300,12 @@ impl<'a> CmuxService<'a> {
             ],
             None,
         )?;
+        if !out.success {
+            bail!(
+                "cmux workspace-action set-color failed: {}",
+                command_error(&out)
+            );
+        }
         Ok(())
     }
 
@@ -333,6 +339,32 @@ fn command_error(out: &crate::context::CmdOutput) -> &str {
     } else {
         &out.stderr
     }
+}
+
+fn extract_handle(stdout: &str, prefix: &str, operation: &str) -> Result<String> {
+    let handle_name = prefix.trim_end_matches(':');
+    let output = stdout.trim();
+    let output = if output.is_empty() {
+        "empty output"
+    } else {
+        output
+    };
+    let parts: Vec<&str> = stdout.split_whitespace().collect();
+    let handle = parts
+        .get(1)
+        .copied()
+        .filter(|part| part.starts_with(prefix))
+        .or_else(|| {
+            parts
+                .first()
+                .copied()
+                .filter(|part| part.starts_with(prefix))
+        })
+        .or_else(|| parts.iter().copied().find(|part| part.starts_with(prefix)));
+
+    handle.map(String::from).ok_or_else(|| {
+        anyhow::anyhow!("cmux {operation} did not return {handle_name} handle: {output}")
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -465,6 +497,35 @@ mod tests {
     }
 
     #[test]
+    fn new_workspace_with_caller_reports_cmux_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response_with_stderr("ignored stdout", "cmux workspace failed", false);
+
+        let svc = CmuxService::new(&runner);
+        let err = svc
+            .new_workspace_with_caller(Path::new("/tmp"), "my ws", "bash", None)
+            .expect_err("new-workspace failure should propagate");
+        let message = err.to_string();
+        assert!(message.contains("cmux new-workspace failed"));
+        assert!(message.contains("cmux workspace failed"));
+        assert!(!message.contains("ignored stdout"));
+    }
+
+    #[test]
+    fn new_workspace_with_caller_rejects_missing_handle() {
+        let mut runner = MockRunner::new();
+        runner.add_response("created workspace without handle", true);
+
+        let svc = CmuxService::new(&runner);
+        let err = svc
+            .new_workspace_with_caller(Path::new("/tmp"), "my ws", "bash", None)
+            .expect_err("new-workspace output without a workspace handle should fail");
+        let message = err.to_string();
+        assert!(message.contains("cmux new-workspace did not return workspace handle"));
+        assert!(message.contains("created workspace without handle"));
+    }
+
+    #[test]
     fn caller_context_reads_surface_ref() {
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -510,6 +571,20 @@ mod tests {
         let svc = CmuxService::new(&runner);
         let panes = svc.list_panes("workspace:1").unwrap();
         assert_eq!(panes, vec!["pane:0", "pane:1"]);
+    }
+
+    #[test]
+    fn list_panes_reports_cmux_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response("workspace missing", false);
+
+        let svc = CmuxService::new(&runner);
+        let err = svc
+            .list_panes("workspace:1")
+            .expect_err("list-panes failure should propagate");
+        let message = err.to_string();
+        assert!(message.contains("cmux list-panes failed"));
+        assert!(message.contains("workspace missing"));
     }
 
     #[test]
@@ -621,6 +696,70 @@ mod tests {
     }
 
     #[test]
+    fn list_pane_surfaces_filters_surface_ids() {
+        let mut runner = MockRunner::new();
+        runner.add_response("surface:0 other surface:1 data", true);
+
+        let svc = CmuxService::new(&runner);
+        let surfaces = svc.list_pane_surfaces("pane:1", "workspace:1").unwrap();
+        assert_eq!(surfaces, vec!["surface:0", "surface:1"]);
+    }
+
+    #[test]
+    fn list_pane_surfaces_reports_cmux_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response_with_stderr("ignored stdout", "pane surface lookup failed", false);
+
+        let svc = CmuxService::new(&runner);
+        let err = svc
+            .list_pane_surfaces("pane:1", "workspace:1")
+            .expect_err("list-pane-surfaces failure should propagate");
+        let message = err.to_string();
+        assert!(message.contains("cmux list-pane-surfaces failed"));
+        assert!(message.contains("pane surface lookup failed"));
+        assert!(!message.contains("ignored stdout"));
+    }
+
+    #[test]
+    fn new_surface_extracts_handle() {
+        let mut runner = MockRunner::new();
+        runner.add_response("surface:4 surface:4", true);
+
+        let svc = CmuxService::new(&runner);
+        let surface = svc.new_surface("pane:3", "workspace:2").unwrap();
+        assert_eq!(surface, "surface:4");
+    }
+
+    #[test]
+    fn new_surface_reports_cmux_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response_with_stderr("ignored stdout", "new surface failed", false);
+
+        let svc = CmuxService::new(&runner);
+        let err = svc
+            .new_surface("pane:3", "workspace:2")
+            .expect_err("new-surface failure should propagate");
+        let message = err.to_string();
+        assert!(message.contains("cmux new-surface failed"));
+        assert!(message.contains("new surface failed"));
+        assert!(!message.contains("ignored stdout"));
+    }
+
+    #[test]
+    fn new_surface_rejects_malformed_output() {
+        let mut runner = MockRunner::new();
+        runner.add_response("created surface without handle", true);
+
+        let svc = CmuxService::new(&runner);
+        let err = svc
+            .new_surface("pane:3", "workspace:2")
+            .expect_err("new-surface output without a surface handle should fail");
+        let message = err.to_string();
+        assert!(message.contains("cmux new-surface did not return surface handle"));
+        assert!(message.contains("created surface without handle"));
+    }
+
+    #[test]
     fn open_command_surface_uses_caller_workspace_and_pane() {
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -691,6 +830,21 @@ mod tests {
                 "enter"
             ]
         );
+    }
+
+    #[test]
+    fn set_color_reports_cmux_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response_with_stderr("ignored stdout", "color rejected", false);
+
+        let svc = CmuxService::new(&runner);
+        let err = svc
+            .set_color("workspace:1", "#ff00aa")
+            .expect_err("set-color failure should propagate");
+        let message = err.to_string();
+        assert!(message.contains("cmux workspace-action set-color failed"));
+        assert!(message.contains("color rejected"));
+        assert!(!message.contains("ignored stdout"));
     }
 
     #[test]
