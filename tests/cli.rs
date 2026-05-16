@@ -208,6 +208,81 @@ fn init_minimal_shortcut_writes_minimal_config() {
 }
 
 #[test]
+fn init_dry_run_previews_plan_without_writing_config() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::write(
+        temp.path().join("package.json"),
+        r#"{"scripts":{"test":"vitest","lint":"eslint ."}}"#,
+    )
+    .unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "init",
+            "--preset",
+            "app",
+            "--yes",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Init plan"))
+        .stdout(predicate::str::contains("target:"))
+        .stdout(predicate::str::contains("preset: app"))
+        .stdout(predicate::str::contains(
+            "selected sections: setup, test, workspace",
+        ))
+        .stdout(predicate::str::contains("detected signals:"))
+        .stdout(predicate::str::contains("setup: npm install"))
+        .stdout(predicate::str::contains("test: npm test"))
+        .stdout(predicate::str::contains("[setup]"))
+        .stdout(predicate::str::contains("[test]"));
+
+    assert!(!temp.path().join(".wt.toml").exists());
+    assert!(!temp.path().join(".local/.wt.toml").exists());
+}
+
+#[test]
+fn init_existing_config_requires_force_for_yes_and_force_overwrites() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[workspace]\ntabs = []\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Config already exists:"))
+        .stderr(predicate::str::contains("use --force to overwrite"));
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "init",
+            "--preset",
+            "agent",
+            "--yes",
+            "--force",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("WARNING:"))
+        .stdout(predicate::str::contains("Updated config:"));
+
+    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    assert!(content.contains("[profile.agent]"));
+}
+
+#[test]
 fn init_rejects_conflicting_preset_and_minimal() {
     wt_command()
         .args(["init", "--preset", "minimal", "--minimal"])

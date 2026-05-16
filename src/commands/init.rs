@@ -43,8 +43,10 @@ struct InitProfile {
 struct InitPlan {
     target_path: PathBuf,
     target_kind: InitTargetKind,
+    target_exists: bool,
     preset: InitPreset,
     sections: Vec<InitSection>,
+    detected_signals: Vec<String>,
     content: String,
 }
 
@@ -117,24 +119,33 @@ impl Default for InitCommonConfig {
 pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     validate_options(&options)?;
     let target = resolve_target(ctx, &options)?;
-    if target.path.exists() && !options.force && !options.dry_run {
-        bail!(
-            "Config already exists: {} (use --force to overwrite)",
-            target.path.display()
-        );
-    }
-
     let plan = build_plan(ctx, &options, target)?;
+    if plan.target_exists {
+        print_existing_target_warning(ctx, &plan, &options);
+    }
 
     if options.dry_run {
         print_plan(ctx, &plan);
         return Ok(());
     }
 
+    if plan.target_exists && options.yes && !options.force {
+        bail!(
+            "Config already exists: {} (use --force to overwrite)",
+            plan.target_path.display()
+        );
+    }
+
     if !options.yes {
         print_plan(ctx, &plan);
     }
-    if !options.yes && !ctx.ui.confirm("Create config?", true)? {
+    let confirm_prompt = if plan.target_exists {
+        "Overwrite config?"
+    } else {
+        "Create config?"
+    };
+    let confirm_default = !plan.target_exists;
+    if !options.yes && !ctx.ui.confirm(confirm_prompt, confirm_default)? {
         return Err(WtError::Cancelled.into());
     }
 
@@ -142,8 +153,13 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&plan.target_path, &plan.content)?;
+    let action = if plan.target_exists {
+        "Updated config"
+    } else {
+        "Created config"
+    };
     ctx.ui
-        .print_step(&format!("Created config: {}", plan.target_path.display()));
+        .print_step(&format!("{action}: {}", plan.target_path.display()));
 
     Ok(())
 }
@@ -231,6 +247,7 @@ fn preset_from_explicit_overrides(options: &InitOptions) -> Option<InitPreset> {
 
 fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<InitPlan> {
     validate_options(options)?;
+    let target_exists = target.path.exists();
     let preset = resolve_preset(ctx, options)?;
     let profile = resolve_profile(ctx, options, preset)?;
     let issue_provider = resolve_issue_provider(ctx, options, preset)?;
@@ -297,22 +314,26 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     Ok(InitPlan {
         target_path: target.path,
         target_kind: target.kind,
+        target_exists,
         preset,
         sections,
+        detected_signals: detect_signals(&ctx.repo_root),
         content: s,
     })
 }
 
 fn print_plan(ctx: &Ctx, plan: &InitPlan) {
     ctx.ui.print_step("Init plan");
-    ctx.ui
-        .print_dim(&format!("  target: {}", plan.target_path.display()));
-    ctx.ui.print_dim(&format!(
-        "  target kind: {}",
-        target_kind_name(plan.target_kind)
-    ));
-    ctx.ui
-        .print_dim(&format!("  preset: {}", preset_name(plan.preset)));
+    for line in render_plan_summary(plan) {
+        ctx.ui.print_dim(&format!("  {line}"));
+    }
+    ctx.ui.print_dim("  toml:");
+    for line in plan.content.lines() {
+        ctx.ui.print_dim(&format!("    {line}"));
+    }
+}
+
+fn render_plan_summary(plan: &InitPlan) -> Vec<String> {
     let sections = if plan.sections.is_empty() {
         "none".to_string()
     } else {
@@ -322,11 +343,41 @@ fn print_plan(ctx: &Ctx, plan: &InitPlan) {
             .collect::<Vec<_>>()
             .join(", ")
     };
-    ctx.ui.print_dim(&format!("  sections: {sections}"));
-    ctx.ui.print_dim("  toml:");
-    for line in plan.content.lines() {
-        ctx.ui.print_dim(&format!("    {line}"));
-    }
+    let detected_signals = if plan.detected_signals.is_empty() {
+        "none".to_string()
+    } else {
+        plan.detected_signals.join("; ")
+    };
+    let planned_write = if plan.target_exists {
+        "overwrite existing config"
+    } else {
+        "create config"
+    };
+
+    vec![
+        format!("target: {}", plan.target_path.display()),
+        format!("target kind: {}", target_kind_name(plan.target_kind)),
+        format!("planned write: {planned_write}"),
+        format!("preset: {}", preset_name(plan.preset)),
+        format!("selected sections: {sections}"),
+        format!("detected signals: {detected_signals}"),
+    ]
+}
+
+fn print_existing_target_warning(ctx: &Ctx, plan: &InitPlan, options: &InitOptions) {
+    let suffix = if options.dry_run {
+        "dry run will not overwrite"
+    } else if options.force {
+        "--force will overwrite"
+    } else if options.yes {
+        "use --force to overwrite"
+    } else {
+        "confirm overwrite to continue"
+    };
+    ctx.ui.print_warning(&format!(
+        "Config already exists: {} ({suffix})",
+        plan.target_path.display()
+    ));
 }
 
 fn append_optional_scaffold(s: &mut String) {
@@ -523,6 +574,29 @@ fn default_enabled_test_commands(repo_root: &Path) -> Vec<InitCommand> {
         .into_iter()
         .filter(|command| command.default_enabled)
         .collect()
+}
+
+fn detect_signals(repo_root: &Path) -> Vec<String> {
+    let mut signals = Vec::new();
+    for command in detect_setup_deps(repo_root) {
+        push_signal(
+            &mut signals,
+            format!("setup: {}", command_display(&command)),
+        );
+    }
+    for tab in detect_post_deps_tabs(repo_root) {
+        push_signal(&mut signals, format!("post-deps tab: {tab}"));
+    }
+    for command in detect_test_commands(repo_root) {
+        push_signal(&mut signals, format!("test: {}", command_display(&command)));
+    }
+    signals
+}
+
+fn push_signal(signals: &mut Vec<String>, signal: String) {
+    if !signals.contains(&signal) {
+        signals.push(signal);
+    }
 }
 
 fn resolve_worktree_path(ctx: &Ctx) -> Result<Option<String>> {
@@ -1275,11 +1349,36 @@ mod tests {
 
         assert_eq!(plan.target_path, dir.path().join(".local/.wt.toml"));
         assert_eq!(plan.target_kind, InitTargetKind::Local);
+        assert!(!plan.target_exists);
         assert_eq!(plan.preset, InitPreset::Minimal);
         assert_eq!(plan.sections, vec![InitSection::Workspace]);
+        assert!(plan.detected_signals.is_empty());
         assert!(!plan.content.contains("[profile.agent]"));
         assert!(!plan.content.contains("[issues]"));
         assert!(!plan.content.contains("[site]"));
+    }
+
+    #[test]
+    fn init_minimal_plan_summary_shows_selected_sections_and_no_signals() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::Minimal),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let summary = render_plan_summary(&plan).join("\n");
+
+        assert!(summary.contains("planned write: create config"));
+        assert!(summary.contains("preset: minimal"));
+        assert!(summary.contains("selected sections: workspace"));
+        assert!(summary.contains("detected signals: none"));
     }
 
     #[test]
@@ -1361,10 +1460,47 @@ mod tests {
                 InitSection::Workspace
             ]
         );
+        assert!(
+            plan.detected_signals
+                .contains(&"setup: npm install".to_string())
+        );
+        assert!(
+            plan.detected_signals
+                .contains(&"test: npm test".to_string())
+        );
         assert!(plan.content.contains("[setup]"));
         assert!(plan.content.contains("run = \"npm install\""));
         assert!(plan.content.contains("[test]"));
         assert!(plan.content.contains("run = \"npm test\""));
+    }
+
+    #[test]
+    fn init_app_plan_summary_shows_detected_signals() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"test":"vitest","lint":"eslint ."}}"#,
+        )
+        .unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::App),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let summary = render_plan_summary(&plan).join("\n");
+
+        assert!(summary.contains("preset: app"));
+        assert!(summary.contains("selected sections: setup, test, workspace"));
+        assert!(summary.contains("detected signals: setup: npm install"));
+        assert!(summary.contains("test: npm test"));
+        assert!(summary.contains("test: npm run lint"));
     }
 
     #[test]

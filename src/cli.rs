@@ -186,13 +186,13 @@ pub enum Commands {
         /// GitHub user for issue list filtering
         #[arg(long)]
         gh_user: Option<String>,
-        /// Skip interactive prompts and use defaults
+        /// Skip interactive prompts, use defaults, and write unless target exists
         #[arg(long)]
         yes: bool,
-        /// Preview the generated init plan without writing files
+        /// Preview target, preset, detected signals, and TOML without writing files
         #[arg(long)]
         dry_run: bool,
-        /// Overwrite existing config file
+        /// Overwrite an existing config file during non-interactive writes
         #[arg(long)]
         force: bool,
     },

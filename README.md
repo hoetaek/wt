@@ -79,6 +79,13 @@ Canonical starter presets are `minimal`, `agent`, `issue`, and `app`. The
 `agent` preset uses Codex by default; pass `--agent <name>` to choose another
 runtime. Use `--local` to target `.local/.wt.toml` or `--shared` to target
 `.wt.toml`; use `--dry-run` to preview the generated TOML without writing files.
+Dry run is the safe inspection path: it prints the target file, selected preset,
+selected sections, detected repo signals, and generated TOML while leaving both
+`.wt.toml` and `.local/.wt.toml` untouched.
+
+```bash
+wt init --preset app --yes --dry-run
+```
 
 Bare `wt init --yes` is non-interactive and chooses the `minimal` preset.
 Explicit starter options such as `--agent`, `--issue-provider`, and
