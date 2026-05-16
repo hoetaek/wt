@@ -308,11 +308,14 @@ terminal prompt가 축약되어도 coordinator 좌표가 앞쪽에 남게 한다
 이다. `single`과 `batch` mode는 pull-request handoff intent가 없으므로 `PR=none`으로
 보고하고, coordinator가 review, landing, cleanup을 명시적으로 처리한다. Stack-mode handoff
 intent는 workflow task row에 저장할 수 있다. `pull_request = true`면 작업 agent가 branch를
-push하고 stack parent branch를 base로 draft pull request를 열어야 한다.
+push하고 stack parent branch를 base로 draft pull request를 연 뒤, completion report 내용으로
+PR 본문을 갱신하고 ready for review로 전환한 다음 `PR=<pr-url>`로 보고해야 한다.
 `pull_request = false`면 pull request를 열지 않고 `PR=none`으로 보고한다. 이것은 PR 자체나
 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은 transport일 뿐 상태
-전이가 아니다. 실행자나 coordinator가 `wt review`, 필요한 경우 pull request, 보고를 확인한
-뒤 workflow completion command를 실행할 때 stack TaskRun 상태가 전이된다.
+전이가 아니다. Codex/GitHub review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고,
+필요한 check를 다시 돌린 뒤 commit/push하고 PR 본문과 Agent Completion Report를 갱신한다.
+실행자나 coordinator가 `wt review`, 필요한 경우 pull request, 보고를 확인한 뒤 workflow
+completion command를 실행할 때 stack TaskRun 상태가 전이된다.
 
 `wt done`은 worktree와 local branch cleanup 명령이다. `done`은 cleanup 신호이고,
 workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch commit을 `master` 같은
