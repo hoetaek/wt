@@ -264,7 +264,7 @@ pub enum BatchCommand {
         /// Batch TOML path, shorthand id, or "latest" (default)
         batch: Option<String>,
     },
-    /// Delete completed batch task snapshot files
+    /// Delete completed batch TaskDocument files
     Clean {
         /// Batch TOML path, shorthand id, or "latest" (default)
         batch: Option<String>,

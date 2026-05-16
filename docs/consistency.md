@@ -120,7 +120,7 @@ profile convention file merge를 모두 끝낸 뒤 최종 effective config에서
 
 저장되는 상태는 사용자가 이해할 수 있는 상태여야 한다.
 
-TaskDocument는 작업이 무엇인지를 담는 정의/스냅샷이다. `.local/tasks/<task>.toml`
+TaskDocument는 작업이 무엇인지를 담는 정의다. `.local/tasks/<task>.toml`
 아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
 
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
@@ -128,6 +128,11 @@ task, branch, status, source, group, error, created_at, updated_at을 저장한�
 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이고, source는 `new`,
 `batch`, `stack`만 canonical이다. 알 수 없는 status/source 값은 조용히 해석하지 않고
 파싱 단계에서 실패시킨다.
+
+통합 실행 상태 모델은 TaskDocument와 TaskRun의 책임을 나누는 데서 시작한다.
+TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, TaskRun은 그 설명을 한 번
+실행한 기록이다. `wt new --task`, `wt batch run`, `wt stack run`은 모두 TaskDocument를
+읽어 실행 context로 쓰고, 실행 상태는 `.local/task-runs`의 TaskRun에만 쓴다.
 
 Batch가 어떤 task를 준비했고, 어떤 task가 끝났고, 어떤 task가 실패했는지는 저장할
 가치가 있다. Batch의 canonical 상태 목록은 `[[tasks]]`이고, 각 row는 `.local/tasks`
@@ -150,6 +155,11 @@ Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 
 `complete`는 branch가 clean이고 parent보다 앞선 commit이 있을 때만 `done`으로
 전이해야 한다. 다음 task 자동 시작은 명시적인 continuation 선택, 예를 들어
 `--run-next`로만 일어난다.
+
+`wt done`은 worktree cleanup 명령이므로 `source = "new"`와 `source = "batch"`인
+running TaskRun만 실제 worktree 제거와 함께 `done`으로 전이한다. Stack TaskRun은
+parent-chain 검증이 필요한 실행 순서 모델 안에 있으므로 `wt stack complete`만
+`done`으로 전이한다.
 
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 
