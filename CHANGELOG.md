@@ -10,6 +10,20 @@ minor version instead of moving to `x.0.0`.
 
 No changes yet.
 
+## 0.20.0 - 2026-05-16
+
+- Changed interactive terminal prompts to a polished selector UI with
+  filterable single-select and multi-select lists, compact ten-row menus,
+  checkbox-style multi-selects, and actionable non-TTY prompt errors.
+- Refined task, publish, worktree, branch, PR, batch, and stack selector labels
+  so interactive rows show the selected resource and high-signal state instead
+  of implementation-shaped file names.
+- Added label/hint prompt items and a restrained cyan-accent cliclack theme so
+  primary resource names and secondary metadata render with clearer visual
+  hierarchy while remaining readable without color.
+- Bumped the package version to `0.20.0` because prompt rendering and selector
+  presentation changed the user-facing CLI surface while `wt` is still pre-1.0.
+
 ## 0.19.0 - 2026-05-16
 
 - Changed stack TOML to record per-task `pull_request = true|false` handoff

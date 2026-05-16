@@ -1,6 +1,6 @@
 [package]
 name = "wt"
-version = "0.19.0"
+version = "0.20.0"
 edition = "2024"
 rust-version = "1.85"
 publish = false
@@ -28,8 +28,8 @@ include = [
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+cliclack = "0.5.4"
 console = "0.16"
-dialoguer = { version = "0.12", features = ["fuzzy-select"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

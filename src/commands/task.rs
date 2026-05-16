@@ -2,7 +2,7 @@ use crate::commands::issue;
 use crate::commands::new as new_command;
 use crate::commands::task_run;
 use crate::config::IssueProviderType;
-use crate::context::Ctx;
+use crate::context::{Ctx, PromptItem};
 use crate::worktree_naming;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -76,8 +76,8 @@ pub(crate) fn select_local_task(ctx: &Ctx) -> Result<SelectedTask> {
         bail!("No task files found in .local/tasks");
     }
 
-    let items = tasks.iter().map(task_selection_label).collect::<Vec<_>>();
-    let idx = ctx.ui.select("Select a local task", &items)?;
+    let items = tasks.iter().map(task_selection_item).collect::<Vec<_>>();
+    let idx = ctx.ui.select_items("Task to start", &items)?;
     let task = tasks
         .get(idx)
         .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
@@ -90,8 +90,8 @@ pub(crate) fn select_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
         bail!("No task files found in .local/tasks");
     }
 
-    let items = tasks.iter().map(task_selection_label).collect::<Vec<_>>();
-    let selections = ctx.ui.multi_select("Select local tasks to start", &items)?;
+    let items = tasks.iter().map(task_selection_item).collect::<Vec<_>>();
+    let selections = ctx.ui.multi_select_items("Tasks to start", &items)?;
     let mut selected = Vec::new();
     for idx in selections {
         let task = tasks
@@ -306,15 +306,76 @@ fn read_selected_task(ctx: &Ctx, path: PathBuf) -> Result<SelectedTask> {
     })
 }
 
+#[cfg(test)]
 fn task_selection_label(task: &SelectedTask) -> String {
-    let title = task.document.title_or_key(&task.key);
-    let branch = prepared_branch_name(&task.document.branch);
-    match (title == task.key, branch) {
-        (true, Some(branch)) => format!("{} ({branch})", task.key),
-        (false, Some(branch)) => format!("{} - {} ({branch})", task.key, title),
-        (true, None) => task.key.clone(),
-        (false, None) => format!("{} - {}", task.key, title),
+    task_selection_item(task).render_plain()
+}
+
+fn task_selection_item(task: &SelectedTask) -> PromptItem {
+    task_resource_item(
+        &task.key,
+        &task.document,
+        &task_origin_status(&task.document),
+    )
+}
+
+pub(crate) fn task_resource_item(key: &str, document: &TaskDocument, status: &str) -> PromptItem {
+    let title = document.title_or_key(key);
+    let label = title.trim();
+    let key = key.trim();
+    let label = if label.is_empty() { key } else { label };
+    let mut hint_parts = Vec::new();
+
+    if !key.is_empty() && label != key {
+        hint_parts.push(format!("task {key}"));
     }
+    hint_parts.extend(task_status_hint_parts(status, key));
+    if let Some(branch) = prepared_branch_name(&document.branch) {
+        hint_parts.push(format!("branch {branch}"));
+    }
+
+    PromptItem::from_hint_parts(label.to_string(), hint_parts)
+}
+
+fn task_status_hint_parts(status: &str, key: &str) -> Vec<String> {
+    let status = status.trim();
+    if status.is_empty() {
+        return Vec::new();
+    }
+
+    if status == "origin:none" {
+        return vec!["not published".into()];
+    }
+
+    if let Some(origin) = status.strip_prefix("origin:") {
+        let mut parts = origin.splitn(2, ':');
+        let provider = parts.next().unwrap_or_default();
+        let id = parts.next().unwrap_or_default();
+        let provider = provider_display_label(provider);
+        if id.trim().is_empty() || id == key {
+            return vec![provider];
+        }
+        return vec![format!("{provider} {id}")];
+    }
+
+    vec![status.replace(':', " ")]
+}
+
+fn provider_display_label(provider: &str) -> String {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "github" => "GitHub".into(),
+        "linear" => "Linear".into(),
+        "" => "external".into(),
+        other => other.to_string(),
+    }
+}
+
+fn task_origin_status(document: &TaskDocument) -> String {
+    document
+        .origin
+        .as_ref()
+        .map(|origin| format!("origin:{}:{}", origin.provider, origin.id))
+        .unwrap_or_else(|| "origin:none".into())
 }
 
 pub(crate) fn safe_task_key(value: &str) -> String {
@@ -408,6 +469,49 @@ mod tests {
     fn workspace_run_label_keeps_order_and_identifier_short() {
         assert_eq!(workspace_run_label(1, 5, Some("PROJ-123")), "2/5 PROJ-123");
         assert_eq!(workspace_run_label(0, 3, None), "1/3");
+    }
+
+    #[test]
+    fn task_selection_label_keeps_title_key_origin_and_branch_separate() {
+        let task = SelectedTask {
+            key: "PROJ-123".into(),
+            path: ".local/tasks/PROJ-123.toml".into(),
+            content: String::new(),
+            document: TaskDocument {
+                title: "Fix editor".into(),
+                branch: "alice/proj-123-fix-editor".into(),
+                body: String::new(),
+                origin: Some(TaskOrigin {
+                    provider: "linear".into(),
+                    id: "PROJ-123".into(),
+                }),
+            },
+        };
+
+        assert_eq!(
+            task_selection_label(&task),
+            "Fix editor  task PROJ-123 | Linear | branch alice/proj-123-fix-editor"
+        );
+    }
+
+    #[test]
+    fn task_selection_label_omits_duplicate_key_when_title_is_missing() {
+        let task = SelectedTask {
+            key: "local-task".into(),
+            path: ".local/tasks/local-task.toml".into(),
+            content: String::new(),
+            document: TaskDocument {
+                title: String::new(),
+                branch: "local-task".into(),
+                body: String::new(),
+                origin: None,
+            },
+        };
+
+        assert_eq!(
+            task_selection_label(&task),
+            "local-task  not published | branch local-task"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::commands::profile_match;
 use crate::config::{Config, IssueProviderType};
-use crate::context::Ctx;
+use crate::context::{Ctx, PromptItem};
 use crate::names::WorktreeNames;
 use crate::services::cmux::CmuxService;
 use crate::services::git::GitService;
@@ -22,8 +22,11 @@ pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     let idx = match target {
         Some(target) => find_candidate(&candidates, target)?,
         None => {
-            let items: Vec<String> = candidates.iter().map(OpenCandidate::label).collect();
-            ctx.ui.select("Select a workspace to open", &items)?
+            let items = candidates
+                .iter()
+                .map(OpenCandidate::prompt_item)
+                .collect::<Vec<_>>();
+            ctx.ui.select_items("Workspace to open", &items)?
         }
     };
     let entry = ensure_candidate_worktree(ctx, &git, &candidates[idx])?;
@@ -39,13 +42,25 @@ enum OpenCandidate {
 }
 
 impl OpenCandidate {
+    #[cfg(test)]
     fn label(&self) -> String {
+        self.prompt_item().render_plain()
+    }
+
+    fn prompt_item(&self) -> PromptItem {
         match self {
-            Self::Existing(entry) => {
-                format!("existing  {}  {}", entry.branch, entry.path.display())
-            }
-            Self::Local { branch } => format!("local     {branch}"),
-            Self::Remote { branch } => format!("remote    origin/{branch}"),
+            Self::Existing(entry) => PromptItem::from_hint_parts(
+                entry.branch.clone(),
+                vec![
+                    "existing worktree".into(),
+                    format!("path {}", entry.path.display()),
+                ],
+            ),
+            Self::Local { branch } => PromptItem::with_hint(branch.clone(), "local branch"),
+            Self::Remote { branch } => PromptItem::from_hint_parts(
+                branch.clone(),
+                vec!["remote branch".into(), format!("origin/{branch}")],
+            ),
         }
     }
 
@@ -1053,9 +1068,9 @@ args = ["--yolo"]
         assert_eq!(
             labels,
             vec![
-                "existing  alice/feature  /tmp/repo-feature",
-                "local     local-only",
-                "remote    origin/remote-only"
+                "alice/feature  existing worktree | path /tmp/repo-feature",
+                "local-only  local branch",
+                "remote-only  remote branch | origin/remote-only"
             ]
         );
     }

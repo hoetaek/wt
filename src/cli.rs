@@ -420,7 +420,7 @@ pub enum SiteCommand {
 pub enum BaseMode {
     /// No --base flag: prompt user to confirm current branch
     Default,
-    /// --base with no value: interactive select via dialoguer
+    /// --base with no value: interactive branch selector
     Interactive,
     /// --base .: use current branch without prompting
     Current,

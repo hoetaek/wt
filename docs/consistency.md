@@ -103,6 +103,13 @@ profile로 확장”을 뜻한다면, 둘을 동시에 받은 상태에서 임�
 
 도움말을 읽고 생긴 기대와 실제 동작이 다르면 구현이 아니라 UX가 깨진 것이다.
 
+Interactive prompt도 CLI contract다. 사용자가 값을 생략해서 selector가 열리는
+command는 무엇을 고르는지, 한 개를 고르는지 여러 개를 고르는지, 빈 선택이 허용되는지
+문서와 help text에서 같은 말로 설명해야 한다. Selector는 작은 terminal prompt로
+동작하고, filterable list와 최대 10개 visible row 안에서 task, branch, PR, batch, stack,
+config section 같은 현재 concept label만 보여준다. 색상, symbol, checkbox는 보조
+표현일 뿐이고 의미는 text label에 남아야 한다.
+
 ### Progressive Disclosure
 
 처음 쓰는 경로는 짧아야 하고, 복잡한 경로는 필요해질 때 드러나야 한다.
@@ -237,7 +244,7 @@ link만 저장한다. Batch row는 어떤 task들이 함께 시작 대상인지�
 Batch가 만든 cmux workspace 이름은 저장 상태가 아니라 현재 실행을 찾기 위한 표시다.
 좁은 탭에서 잘려도 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을
 앞에 붙이고, branch/path/site 이름에는 batch label을 섞지 않는다.
-Bare `run`은 runnable batch 목록을 selector로 보여준다. Runnable batch는
+Bare `run`은 runnable batch 목록을 filterable selector로 보여준다. Runnable batch는
 `prepared` 또는 `failed` TaskRun이 하나 이상 있는 batch다. Batch task들은 독립적이므로
 이미 `running`인 TaskRun이 있어도 prepared/failed sibling이 있으면 runnable로 남는다.
 Selector label은 task titles/keys, runnable count, running count를 포함한 status counts,
@@ -257,13 +264,13 @@ review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다.
 `wt stack issue`는 `--pull-request`가 있을 때만 `pull_request = true`를 쓰고, 생략하면
 `false`를 쓴다. `[[issues]]`나
 `[[items]]`처럼 같은 상태 목록을 가리키는 다른 이름은 받지 않는다. Bare `run`은 runnable
-stack 목록을 selector로 보여준다. Runnable stack은 다음 `prepared` 또는 `failed` TaskRun이
-있고 current `running` TaskRun은 없는 stack이다. Selector label은 task titles/keys, next
-task, status counts, base, profile 같은 semantic summary를 담아서 `.local/stacks/<date>.toml`
-같은 파일명만 보고 고르게 하지 않는다. Explicit `wt stack run <path-or-id>`는 scripts를 위해
-남기지만 `latest`는 run target contract가 아니다. `run`은 선택된 stack의 다음 runnable
-TaskRun을 `running`으로 전이하고, 명시적 `complete` 신호가 들어오면 같은 TaskRun을
-`done`으로 전이한다.
+stack 목록을 filterable selector로 보여준다. Runnable stack은 다음 `prepared` 또는
+`failed` TaskRun이 있고 current `running` TaskRun은 없는 stack이다. Selector label은 task
+titles/keys, next task, status counts, base, profile 같은 semantic summary를 담아서
+`.local/stacks/<date>.toml` 같은 파일명만 보고 고르게 하지 않는다. Explicit
+`wt stack run <path-or-id>`는 scripts를 위해 남기지만 `latest`는 run target contract가
+아니다. `run`은 선택된 stack의 다음 runnable TaskRun을 `running`으로 전이하고, 명시적
+`complete` 신호가 들어오면 같은 TaskRun을 `done`으로 전이한다.
 `pr`은 기존 pull request workflow를 가리키는 별도 개념이므로 stack task로 받지 않는다.
 Stack이 만든 cmux workspace 이름도 저장 상태가 아니라 현재 실행을 찾기 위한 표시다.
 좁은 탭에서 잘려도 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을
