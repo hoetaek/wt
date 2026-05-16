@@ -283,12 +283,23 @@ Workspace label은 저장 상태가 아니라 현재 실행을 찾기 위한 표
 이름에는 `batch`나 `stack` 같은 mode label을 섞지 않는다. `B`/`S` prefix는 workflow
 contract에 포함하지 않는다.
 
-Stack-mode handoff intent는 workflow task row에 저장할 수 있다. `pull_request = true`면
-작업 agent가 branch를 push하고 stack parent branch를 base로 draft pull request를 열어야
-한다. `pull_request = false`면 pull request를 열지 않고 `PR=none`으로 보고한다. 이것은 PR
-자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은 transport일
-뿐 상태 전이가 아니다. 실행자나 coordinator가 `wt review`, 필요한 경우 pull request, 보고를
-확인한 뒤 workflow completion command를 실행할 때 TaskRun 상태가 전이된다.
+Workflow coordinator handoff는 `stack` 전용 개념이 아니라 `wt workflow run`이 시작하는
+모든 task prompt의 계약이다. Prompt에는 `Workflow Coordinator Handoff` section이 포함되고,
+현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
+`cmux send-key ... enter` 명령이 들어간다. 이 좌표는 현재 transport 정보일 뿐이므로
+Workflow file, TaskRun, TaskDocument에 저장하지 않는다. 좌표가 unavailable 또는 stale이면
+agent는 같은 `Agent Completion Report`를 task session에 남기고 기다린다.
+
+보고 형식은 workflow mode와 무관하게
+`Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>`
+이다. `single`과 `batch` mode는 pull-request handoff intent가 없으므로 `PR=none`으로
+보고하고, coordinator가 review, landing, cleanup을 명시적으로 처리한다. Stack-mode handoff
+intent는 workflow task row에 저장할 수 있다. `pull_request = true`면 작업 agent가 branch를
+push하고 stack parent branch를 base로 draft pull request를 열어야 한다.
+`pull_request = false`면 pull request를 열지 않고 `PR=none`으로 보고한다. 이것은 PR 자체나
+review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은 transport일 뿐 상태
+전이가 아니다. 실행자나 coordinator가 `wt review`, 필요한 경우 pull request, 보고를 확인한
+뒤 workflow completion command를 실행할 때 stack TaskRun 상태가 전이된다.
 
 `wt done`은 worktree와 local branch cleanup 명령이다. `done`은 cleanup 신호이고,
 workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch commit을 `master` 같은
