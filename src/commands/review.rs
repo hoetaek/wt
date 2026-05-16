@@ -12,12 +12,13 @@ pub(crate) struct ReviewTarget {
     task_run: Option<task_run::TaskRunRecord>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CmuxContact {
     pub(crate) workspace: String,
     pub(crate) surface: String,
     pub(crate) pane: String,
-    title: String,
-    window: String,
+    pub(crate) title: String,
+    pub(crate) window: String,
 }
 
 pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
@@ -273,12 +274,25 @@ fn print_cmux_contact(ctx: &Ctx, worktree: Option<&Path>) {
         return;
     }
 
-    match first_cmux_contact(ctx, worktree) {
-        Ok(Some(contact)) => print_cmux_workspace(ctx, &contact),
-        Ok(None) => ctx.ui.print_dim("  cmux: no workspace found for worktree"),
+    match cmux_contacts(ctx, worktree) {
+        Ok(contacts) if contacts.is_empty() => {
+            ctx.ui.print_dim("  cmux: no workspace found for worktree")
+        }
+        Ok(contacts) if contacts.len() == 1 => print_cmux_workspace(ctx, &contacts[0]),
+        Ok(contacts) => print_cmux_workspaces(ctx, &contacts),
         Err(err) => ctx
             .ui
             .print_warning(&format!("  cmux lookup failed: {err:#}")),
+    }
+}
+
+fn print_cmux_workspaces(ctx: &Ctx, contacts: &[CmuxContact]) {
+    ctx.ui.print_dim(&format!(
+        "  cmux: ambiguous ({} matching surfaces)",
+        contacts.len()
+    ));
+    for contact in contacts {
+        print_cmux_workspace(ctx, contact);
     }
 }
 
@@ -301,43 +315,40 @@ fn print_cmux_workspace(ctx: &Ctx, contact: &CmuxContact) {
     ));
 }
 
-pub(crate) fn first_cmux_contact(ctx: &Ctx, worktree: &Path) -> Result<Option<CmuxContact>> {
+pub(crate) fn cmux_contacts(ctx: &Ctx, worktree: &Path) -> Result<Vec<CmuxContact>> {
     let cmux = CmuxService::new(ctx.runner.as_ref());
     if !cmux.is_available() {
         bail!("cmux command not found");
     }
 
     let workspaces = cmux.list_workspaces()?;
+    let mut contacts = Vec::new();
     for workspace in workspaces
         .iter()
         .filter(|workspace| cmux_workspace_matches(workspace, worktree))
     {
-        if let Some((pane, surface)) = first_cmux_surface(&cmux, &workspace.handle)? {
-            return Ok(Some(CmuxContact {
+        for (pane, surface) in cmux_surfaces(&cmux, &workspace.handle)? {
+            contacts.push(CmuxContact {
                 workspace: workspace.handle.clone(),
                 surface,
                 pane,
                 title: workspace.title.clone(),
                 window: workspace.window_handle.clone(),
-            }));
+            });
         }
     }
-    Ok(None)
+    Ok(contacts)
 }
 
-fn first_cmux_surface(
-    cmux: &CmuxService<'_>,
-    workspace_handle: &str,
-) -> Result<Option<(String, String)>> {
+fn cmux_surfaces(cmux: &CmuxService<'_>, workspace_handle: &str) -> Result<Vec<(String, String)>> {
     let panes = cmux.list_panes(workspace_handle)?;
-    let Some(pane) = panes.first() else {
-        return Ok(None);
-    };
-    let surfaces = cmux.list_pane_surfaces(pane, workspace_handle)?;
-    let Some(surface) = surfaces.first() else {
-        return Ok(None);
-    };
-    Ok(Some((pane.clone(), surface.clone())))
+    let mut contacts = Vec::new();
+    for pane in panes {
+        for surface in cmux.list_pane_surfaces(&pane, workspace_handle)? {
+            contacts.push((pane.clone(), surface));
+        }
+    }
+    Ok(contacts)
 }
 
 fn cmux_workspace_matches(workspace: &CmuxWorkspace, worktree: &Path) -> bool {
@@ -737,6 +748,60 @@ mod tests {
         assert!(dims.contains("cmux surface: surface:4 (pane pane:3)"));
         assert!(dims.contains("cmux send --workspace workspace:1 --surface surface:4"));
         assert!(dims.contains("cmux send-key --workspace workspace:1 --surface surface:4 enter"));
+    }
+
+    #[test]
+    fn review_prints_ambiguous_cmux_surfaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("sample");
+        let worktree = dir.path().join("sample-feature");
+        std::fs::create_dir_all(repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/master\n\nworktree {}\nHEAD def\nbranch refs/heads/feature\n\n",
+                repo.display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("main", true);
+        runner.add_response("", true);
+        runner.add_response(
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
+        runner.add_response(
+            &format!(
+                r#"{{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{{"id":"uuid-workspace-1","ref":"workspace:1","title":"feature","current_directory":"{}"}}]}}"#,
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4\nsurface:5", true);
+        runner.add_response("1", true);
+        runner.add_response("def add review", true);
+        runner.add_response(" src/lib.rs | 1 +\n 1 file changed, 1 insertion(+)", true);
+        runner.add_response("1", true);
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo,
+            worktree,
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui.clone()),
+        );
+
+        run(&ctx, Some("feature")).unwrap();
+
+        let dims = ui.dims.lock().unwrap().join("\n");
+        assert!(dims.contains("cmux: ambiguous (2 matching surfaces)"));
+        assert!(dims.contains("cmux send --workspace workspace:1 --surface surface:4"));
+        assert!(dims.contains("cmux send --workspace workspace:1 --surface surface:5"));
     }
 
     #[test]

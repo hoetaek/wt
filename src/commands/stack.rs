@@ -499,12 +499,7 @@ fn run_stack_task(
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
     let (task_doc, task_path, content) = task::read_task_file(ctx, &stack_task.task)?;
-    let content = stack_task_prompt_content(
-        &content,
-        stack_path,
-        stack_task,
-        &ctx.invocation_root.to_string_lossy(),
-    );
+    let content = stack_task_prompt_content(&content, stack_path, stack_task);
     let branch_name = prepared_branch_name(&task_doc.branch);
     if branch_name.is_none() && task_doc.origin.is_none() {
         bail!("Stack task {} has no branch", stack_task.label());
@@ -540,21 +535,13 @@ fn run_stack_task(
     )
 }
 
-fn stack_task_prompt_content(
-    content: &str,
-    stack_path: &Path,
-    stack_task: &StackTask,
-    coordinator_target: &str,
-) -> String {
+fn stack_task_prompt_content(content: &str, stack_path: &Path, stack_task: &StackTask) -> String {
     let parent_branch = stack_task.parent.as_deref().unwrap_or("<stack-parent>");
     let pr_command = format!(
         "git push -u origin HEAD\ngh pr create --draft --base {} --fill",
         shell_arg(parent_branch)
     );
-    let send_command = format!(
-        "wt send {} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>\"",
-        shell_arg(coordinator_target)
-    );
+    let send_command = "cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>\"\n{{coordinator_enter_command}}";
     let complete_command = format!(
         "wt stack complete {} {} --run-next",
         shell_arg(&stack_path.to_string_lossy()),
@@ -562,7 +549,7 @@ fn stack_task_prompt_content(
     );
 
     format!(
-        "{}\n\n## Stack Coordinator Handoff\n\nWhen this task is complete and committed, check whether this repository or coordinator workflow expects a pull request before stack review. If it does, push the branch and open a draft pull request against the stack parent branch:\n\n```bash\n{}\n```\n\nThen send the Agent Completion Report back to the coordinator worktree that started this stack. Include the pull request URL, or `PR=none` when no pull request was opened:\n\n```bash\n{}\n```\n\nAfter sending the report, wait for the coordinator to review and advance the stack. The coordinator will run:\n\n```bash\n{}\n```\n\nIf `gh pr create` reports that a pull request already exists, include the existing pull request URL in the report. If `wt send` cannot find the coordinator surface, leave the same report in this task session and wait.",
+        "{}\n\n## Stack Coordinator Handoff\n\nWhen this task is complete and committed, check whether this repository or coordinator workflow expects a pull request before stack review. If it does, push the branch and open a draft pull request against the stack parent branch:\n\n```bash\n{}\n```\n\nThen send the Agent Completion Report back to the coordinator cmux surface that started this stack. Include the pull request URL, or `PR=none` when no pull request was opened:\n\n```bash\n{}\n```\n\nAfter sending the report, wait for the coordinator to review and advance the stack. The coordinator will run:\n\n```bash\n{}\n```\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait.",
         content.trim_end(),
         pr_command,
         send_command,
@@ -1426,7 +1413,6 @@ mod tests {
             "title = \"API\"\nbranch = \"proj-2-api\"\n",
             &stack_path,
             &stack_task,
-            "/repo",
         );
 
         assert!(content.contains("## Stack Coordinator Handoff"));
@@ -1434,7 +1420,8 @@ mod tests {
             "check whether this repository or coordinator workflow expects a pull request"
         ));
         assert!(content.contains("gh pr create --draft --base PROJ-1 --fill"));
-        assert!(content.contains("wt send /repo \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains(
             "wt stack complete /repo/.local/stacks/2026-05-16-001.toml PROJ-2 --run-next"
         ));
@@ -1442,7 +1429,7 @@ mod tests {
     }
 
     #[test]
-    fn stack_prompt_shell_quotes_coordinator_target_when_needed() {
+    fn stack_prompt_shell_quotes_stack_commands_when_needed() {
         let stack_task = StackTask {
             task: "task with space".into(),
             run: "run".into(),
@@ -1450,11 +1437,10 @@ mod tests {
         };
         let stack_path = PathBuf::from("/repo path/.local/stacks/stack.toml");
 
-        let content =
-            stack_task_prompt_content("title = \"Task\"\n", &stack_path, &stack_task, "/repo path");
+        let content = stack_task_prompt_content("title = \"Task\"\n", &stack_path, &stack_task);
 
         assert!(content.contains("gh pr create --draft --base '<stack-parent>' --fill"));
-        assert!(content.contains("wt send '/repo path' \"Agent Completion Report:"));
+        assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}}"));
         assert!(content.contains(
             "wt stack complete '/repo path/.local/stacks/stack.toml' 'task with space' --run-next"
         ));

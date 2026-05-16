@@ -20,6 +20,7 @@ pub struct CmuxCaller {
     pub window: Option<String>,
     pub workspace: Option<String>,
     pub pane: Option<String>,
+    pub surface: Option<String>,
 }
 
 pub struct CmuxService<'a> {
@@ -50,6 +51,17 @@ impl<'a> CmuxService<'a> {
     }
 
     pub fn new_workspace(&self, cwd: &Path, name: &str, command: &str) -> Result<String> {
+        let caller = self.caller_context();
+        self.new_workspace_with_caller(cwd, name, command, caller.as_ref())
+    }
+
+    pub fn new_workspace_with_caller(
+        &self,
+        cwd: &Path,
+        name: &str,
+        command: &str,
+        caller: Option<&CmuxCaller>,
+    ) -> Result<String> {
         let cwd = cwd.to_string_lossy().into_owned();
         let mut args = vec![
             "new-workspace".to_string(),
@@ -60,8 +72,8 @@ impl<'a> CmuxService<'a> {
             "--command".into(),
             command.into(),
         ];
-        if let Some(window) = self.caller_context().and_then(|caller| caller.window) {
-            args.extend(["--window".into(), window]);
+        if let Some(window) = caller.and_then(|caller| caller.window.as_deref()) {
+            args.extend(["--window".into(), window.into()]);
         }
         args.extend(["--focus".into(), self.focus_new_workspace.to_string()]);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -324,6 +336,7 @@ struct IdentifyCaller {
     window_ref: Option<String>,
     workspace_ref: Option<String>,
     pane_ref: Option<String>,
+    surface_ref: Option<String>,
 }
 
 impl From<IdentifyCaller> for CmuxCaller {
@@ -332,6 +345,7 @@ impl From<IdentifyCaller> for CmuxCaller {
             window: caller.window_ref,
             workspace: caller.workspace_ref,
             pane: caller.pane_ref,
+            surface: caller.surface_ref,
         }
     }
 }
@@ -413,6 +427,23 @@ mod tests {
                 "true"
             ]
         );
+    }
+
+    #[test]
+    fn caller_context_reads_surface_ref() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:2","pane_ref":"pane:3","surface_ref":"surface:4"}}"#,
+            true,
+        );
+
+        let svc = CmuxService::new(&runner);
+        let caller = svc.caller_context().unwrap();
+
+        assert_eq!(caller.window.as_deref(), Some("window:1"));
+        assert_eq!(caller.workspace.as_deref(), Some("workspace:2"));
+        assert_eq!(caller.pane.as_deref(), Some("pane:3"));
+        assert_eq!(caller.surface.as_deref(), Some("surface:4"));
     }
 
     #[test]

@@ -376,7 +376,12 @@ command = "sandvault run -- codex"
 `args` and `command` are rendered with the same worktree template variables
 used by setup values, including `{{repo_root}}`, `{{worktree_path}}`, and
 `{{branch_slug}}`. This can isolate per-worktree agent resources without a
-wrapper script. For example, a Codex profile can give Chrome DevTools MCP a
+wrapper script. When a cmux workspace is launched from another cmux surface,
+agent prompts also receive `{{coordinator_cmux_workspace}}`,
+`{{coordinator_cmux_surface}}`, `{{coordinator_send_command}}`, and
+`{{coordinator_enter_command}}`; the launched agent surface receives
+`{{task_agent_cmux_workspace}}` and `{{task_agent_cmux_surface}}`. For example,
+a Codex profile can give Chrome DevTools MCP a
 separate browser profile per worktree:
 
 ```toml
@@ -610,16 +615,18 @@ Use `wt review [branch|worktree|task-run]` to inspect a task run before landing
 it. The command reads the linked TaskRun and TaskDocument when available,
 reports the recorded parent branch, shows dirty worktree state, committed
 commits and diff stats, and repeats the expected agent completion report shape.
-When cmux is available, it also shows the matching workspace and first surface
-for the target worktree, plus the raw `cmux send` and `cmux send-key` commands
-needed to talk to that surface. It does not mark anything done, merge branches,
-send messages, or remove worktrees.
+When cmux is available, it also shows every matching workspace surface for the
+target worktree, plus the raw `cmux send` and `cmux send-key` commands needed to
+talk to each surface. Multiple matches are reported as ambiguous. It does not
+mark anything done, merge branches, send messages, or remove worktrees.
 
 Use `wt send <branch|worktree|task-run> <message...>` when the review output
 shows a task agent surface and you want to ask for a completion report, request
 extra verification, or give a follow-up instruction. By default it sends the
 message and presses enter. Add `--no-enter` before the message to leave the
-text inserted without submitting it.
+text inserted without submitting it. If the target worktree has more than one
+matching cmux surface, `wt send` asks which surface to use; when it cannot ask,
+it fails without sending and prints the exact raw `cmux send` commands.
 
 ## Batches
 
@@ -836,11 +843,13 @@ git push -u origin HEAD
 gh pr create --draft --base <parent-branch> --fill
 ```
 
-Then it sends its completion report back to the worktree that ran the stack,
-including the pull request URL or `PR=none` when no pull request was opened:
+Then it sends its completion report back to the coordinator cmux surface that
+started the stack, including the pull request URL or `PR=none` when no pull
+request was opened:
 
 ```bash
-wt send /path/to/repo "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>"
+cmux send --workspace <coordinator-workspace> --surface <coordinator-surface> "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>"
+cmux send-key --workspace <coordinator-workspace> --surface <coordinator-surface> enter
 ```
 
 The coordinator reviews that report, the branch state, and the pull request when

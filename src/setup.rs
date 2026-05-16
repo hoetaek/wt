@@ -5,7 +5,7 @@ use crate::config::{
 };
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
-use crate::services::cmux::CmuxService;
+use crate::services::cmux::{CmuxCaller, CmuxService};
 use crate::services::git::GitService;
 use crate::services::site::{SiteService, provider_label};
 use crate::template;
@@ -46,6 +46,11 @@ pub(crate) struct SiteDescriptor {
     pub(crate) target: Option<String>,
     pub(crate) open_browser: Option<bool>,
     pub(crate) browser: Option<String>,
+}
+
+struct OpenedWorkspace {
+    handle: String,
+    coordinator: Option<CmuxCaller>,
 }
 
 /// Run the full setup sequence on a newly created worktree.
@@ -113,7 +118,7 @@ pub fn run_setup(
         .and_then(|ws| ws.colors.get(mode))
         .cloned()
         .unwrap_or_default();
-    let ws_handle = open_workspace(
+    let opened_workspace = open_workspace(
         ctx,
         config,
         wt_path,
@@ -122,19 +127,16 @@ pub fn run_setup(
         &ws_color,
         options,
     )?;
+    insert_cmux_template_vars(&mut template_vars, opened_workspace.as_ref());
+    let ws_handle = opened_workspace
+        .as_ref()
+        .map(|workspace| workspace.handle.as_str());
 
-    inject_local_context(
-        ctx,
-        config,
-        wt_path,
-        names,
-        &template_vars,
-        ws_handle.as_deref(),
-    )?;
+    inject_local_context(ctx, config, wt_path, names, &template_vars, ws_handle)?;
 
     install_deps(ctx, config, wt_path)?;
 
-    if let (Some(handle), Some(ws_config)) = (&ws_handle, &config.workspace) {
+    if let (Some(handle), Some(ws_config)) = (ws_handle, &config.workspace) {
         if !ws_config.post_deps_tabs.is_empty() {
             let cmux = CmuxService::new(ctx.runner.as_ref());
             let panes = cmux.list_panes(handle)?;
@@ -155,7 +157,7 @@ pub fn run_setup(
 
     open_workspace_url(ctx, config, &template_vars)?;
 
-    if let (Some(handle), Some(agent)) = (&ws_handle, &config.agent) {
+    if let (Some(handle), Some(agent)) = (ws_handle, &config.agent) {
         bootstrap_agent(ctx, handle, agent, mode, &template_vars)?;
     }
 
@@ -164,6 +166,61 @@ pub fn run_setup(
     print_summary(ctx, wt_path, names, site.as_ref(), &template_vars);
 
     Ok(())
+}
+
+fn insert_cmux_template_vars(
+    vars: &mut HashMap<String, String>,
+    opened_workspace: Option<&OpenedWorkspace>,
+) {
+    let Some(opened_workspace) = opened_workspace else {
+        return;
+    };
+
+    vars.insert(
+        "task_agent_cmux_workspace".into(),
+        opened_workspace.handle.clone(),
+    );
+
+    let Some(coordinator) = opened_workspace.coordinator.as_ref() else {
+        return;
+    };
+    let (Some(workspace), Some(surface)) = (
+        coordinator.workspace.as_deref(),
+        coordinator.surface.as_deref(),
+    ) else {
+        return;
+    };
+
+    vars.insert("coordinator_cmux_workspace".into(), workspace.into());
+    vars.insert("coordinator_cmux_surface".into(), surface.into());
+    vars.insert(
+        "coordinator_send_command".into(),
+        format!(
+            "cmux send --workspace {} --surface {} {}",
+            shell_arg(workspace),
+            shell_arg(surface),
+            shell_arg("<message>")
+        ),
+    );
+    vars.insert(
+        "coordinator_enter_command".into(),
+        format!(
+            "cmux send-key --workspace {} --surface {} enter",
+            shell_arg(workspace),
+            shell_arg(surface)
+        ),
+    );
+}
+
+fn shell_arg(value: &str) -> String {
+    let safe = value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | ':' | '='));
+    if safe && !value.is_empty() {
+        return value.to_string();
+    }
+
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn copy_files(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
@@ -394,7 +451,7 @@ fn open_workspace(
     template_vars: &HashMap<String, String>,
     color: &str,
     options: SetupOptions,
-) -> Result<Option<String>> {
+) -> Result<Option<OpenedWorkspace>> {
     let cmux = CmuxService::new_with_workspace_focus(ctx.runner.as_ref(), options.focus_workspace);
     if !cmux.is_available() {
         ctx.ui
@@ -422,11 +479,21 @@ fn open_workspace(
     };
     let should_probe_workspace_start = options.focus_restore_if_workspace_cold
         && (!command.trim().is_empty() || !ws_config.tabs.is_empty());
+    let caller_context = cmux.caller_context();
     let caller_workspace = (options.restore_caller_after_workspace_open
         && (options.focus_workspace || should_probe_workspace_start))
-        .then(|| cmux.caller_context().and_then(|caller| caller.workspace))
+        .then(|| {
+            caller_context
+                .as_ref()
+                .and_then(|caller| caller.workspace.clone())
+        })
         .flatten();
-    let ws_handle = cmux.new_workspace(wt_path, &names.workspace, &command)?;
+    let ws_handle = cmux.new_workspace_with_caller(
+        wt_path,
+        &names.workspace,
+        &command,
+        caller_context.as_ref(),
+    )?;
     let mut focus_was_moved = options.focus_workspace;
 
     if should_probe_workspace_start {
@@ -490,7 +557,10 @@ fn open_workspace(
         }
     }
 
-    Ok(Some(ws_handle))
+    Ok(Some(OpenedWorkspace {
+        handle: ws_handle,
+        coordinator: caller_context,
+    }))
 }
 
 fn workspace_terminal_ready(cmux: &CmuxService<'_>, ws_handle: &str) -> bool {
@@ -689,6 +759,9 @@ fn bootstrap_agent(
         Some(surface) => surface,
         None => return Ok(()),
     };
+    let mut vars = vars.clone();
+    vars.insert("task_agent_cmux_workspace".into(), ws_handle.into());
+    vars.insert("task_agent_cmux_surface".into(), surface.into());
 
     let ready_marker = agent.effective_ready();
 
@@ -752,7 +825,7 @@ fn bootstrap_agent(
             std::thread::sleep(std::time::Duration::from_secs(agent.send_after));
         }
 
-        let rendered = template::render(prompt_template, vars);
+        let rendered = template::render(prompt_template, &vars);
         send_agent_prompt(&cmux, surface, ws_handle, agent, rendered)?;
         ctx.ui
             .print_step(&format!("Agent prompt {}/{} sent", i + 1, prompts.len()));
@@ -1242,6 +1315,45 @@ mod tests {
         assert_eq!(
             vars.get("api_port").unwrap().parse::<u32>().unwrap(),
             vars.get("vite_port").unwrap().parse::<u32>().unwrap() + 10000
+        );
+    }
+
+    #[test]
+    fn cmux_template_vars_include_coordinator_and_task_agent_context() {
+        use crate::services::cmux::CmuxCaller;
+
+        let mut vars = HashMap::new();
+        let opened = OpenedWorkspace {
+            handle: "workspace:42".into(),
+            coordinator: Some(CmuxCaller {
+                window: Some("window:1".into()),
+                workspace: Some("workspace:1".into()),
+                pane: Some("pane:1".into()),
+                surface: Some("surface:128".into()),
+            }),
+        };
+
+        insert_cmux_template_vars(&mut vars, Some(&opened));
+
+        assert_eq!(
+            vars.get("task_agent_cmux_workspace").map(String::as_str),
+            Some("workspace:42")
+        );
+        assert_eq!(
+            vars.get("coordinator_cmux_workspace").map(String::as_str),
+            Some("workspace:1")
+        );
+        assert_eq!(
+            vars.get("coordinator_cmux_surface").map(String::as_str),
+            Some("surface:128")
+        );
+        assert_eq!(
+            vars.get("coordinator_send_command").map(String::as_str),
+            Some("cmux send --workspace workspace:1 --surface surface:128 '<message>'")
+        );
+        assert_eq!(
+            vars.get("coordinator_enter_command").map(String::as_str),
+            Some("cmux send-key --workspace workspace:1 --surface surface:128 enter")
         );
     }
 
@@ -1861,7 +1973,6 @@ mod tests {
             r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:0"}}"#,
             true,
         );
-        runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
         runner.add_response("pane:0", true);
         runner.add_response("surface:0", true);
@@ -1988,7 +2099,10 @@ mod tests {
             submit: SubmitMode::Auto,
             timeout: 1,
             send_after: 0,
-            prompt: HashMap::from([("issue".into(), vec!["start {{api_url}}\n".into()])]),
+            prompt: HashMap::from([(
+                "issue".into(),
+                vec!["start {{api_url}} on {{task_agent_cmux_surface}}\n".into()],
+            )]),
         };
         let vars = HashMap::from([("api_url".into(), "http://127.0.0.1:15001".into())]);
 
@@ -1999,7 +2113,10 @@ mod tests {
             .iter()
             .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send"))
             .expect("expected cmux send call");
-        assert_eq!(send_call.1.last().unwrap(), "start http://127.0.0.1:15001");
+        assert_eq!(
+            send_call.1.last().unwrap(),
+            "start http://127.0.0.1:15001 on surface:0"
+        );
         let send_key_call = calls
             .iter()
             .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send-key"))
