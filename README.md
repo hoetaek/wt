@@ -598,9 +598,9 @@ When issue identifiers are omitted, `issue` opens the provider issue list,
 lets you select multiple issues, then asks for the base-to-top order. When
 identifiers are provided, their argument order is the stack order.
 
-Both `task` and `issue` create stack TOML. `task` writes local task documents
-from branch-name text. `issue` writes task documents with provider origin
-metadata.
+Both `task` and `issue` create stack TOML plus linked TaskRun records under
+`.local/task-runs/`. `task` writes local task documents from branch-name text.
+`issue` writes task documents with provider origin metadata.
 
 Both commands ask once for the base branch and store the resolved branch in the
 stack file. `--base .` stores the current branch without prompting, `--base`
@@ -617,15 +617,13 @@ status = "prepared"
 
 [[tasks]]
 task = "add-schema"
+run = "stack-manual-add-schema"
 parent = "main"
-status = "prepared"
-error = ""
 
 [[tasks]]
 task = "wire-api"
+run = "stack-manual-wire-api"
 parent = "add-schema"
-status = "prepared"
-error = ""
 ```
 
 The referenced task documents live under `.local/tasks/`:
@@ -637,6 +635,19 @@ branch = "add-schema"
 body = """
 Create the schema first.
 """
+```
+
+The linked TaskRun documents hold execution state:
+
+```toml
+# .local/task-runs/stack-manual-add-schema.toml
+task = "add-schema"
+branch = "add-schema"
+status = "prepared"
+source = "stack"
+group = "manual"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
 ```
 
 Run `wt new --task <task>` to select and start one of these prepared task
@@ -657,7 +668,8 @@ wt stack run latest
 ```
 
 `show` prints the stored base branch, profile, stack status, task statuses, and
-the recorded parent chain.
+the recorded parent chain. Status and error details are derived from linked
+TaskRun records.
 `edit` opens the stack TOML file without changing task state.
 
 `run` starts one prepared or failed task at a time and leaves it marked
@@ -683,11 +695,12 @@ wt stack complete latest 123 --run-next
 
 Omit `--run-next` to mark one task done without starting another task.
 
-When `run` starts a task, it creates a TaskRun record with `source = "stack"`
-and `group` derived from the stack file stem, then stores that run id on the
-stack task row. `complete` updates the same TaskRun to `done`. The stack TOML
-records each task's `parent`, branch, summary status, and run id so reruns can
-continue from the stored orchestration state.
+Stack preparation creates one TaskRun record per task with `source = "stack"`
+and `group` derived from the stack file stem, then stores each run id on the
+stack task row. `run` updates the next runnable TaskRun to `running` and
+`complete` updates the same TaskRun to `done`. The stack TOML records each
+task's `parent` and run id so reruns can continue from the stored ordering
+state while TaskRun remains the execution-state source of truth.
 
 ## Site Provider Helpers
 

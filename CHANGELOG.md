@@ -8,6 +8,13 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Changed stack task progress to use linked TaskRun records as the source of
+  truth. `wt stack task` and `wt stack issue` now create stack TaskRuns during
+  preparation, stack task rows keep only task ordering data plus the run id, and
+  `wt stack run`, `complete`, and `show` derive task status and errors from
+  those TaskRuns.
+- Bumped the package version to `0.9.0` because the persisted stack state model
+  changed while `wt` is still pre-1.0.
 - Added TaskRun execution records under `.local/task-runs/<id>.toml` for
   prepared local tasks started by `wt new --task`, `wt batch run`, and
   `wt stack run`.

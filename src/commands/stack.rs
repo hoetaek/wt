@@ -66,7 +66,13 @@ fn write_prepared_stack(
     }
 
     let resolved_base = resolve_stack_base(ctx, base)?;
-    let stack_tasks = stack_tasks_from_prepared(prepared_tasks, Some(resolved_base.clone()));
+    let stack_path = next_available_stack_path(ctx)?;
+    let stack_tasks = stack_tasks_from_prepared(
+        ctx,
+        &stack_path,
+        prepared_tasks,
+        Some(resolved_base.clone()),
+    )?;
     let now = current_utc_timestamp();
     let stack = StackMetadata {
         profile: profile.map(str::to_string),
@@ -77,7 +83,7 @@ fn write_prepared_stack(
         updated_at: now,
         tasks: stack_tasks,
     };
-    let stack_path = write_new_stack_metadata(ctx, &stack)?;
+    write_stack_metadata(&stack_path, &stack)?;
 
     ctx.ui
         .print_step(&format!("Created stack: {}", stack_path.display()));
@@ -93,41 +99,34 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
         bail!("Stack has no tasks: {}", stack_path.display());
     }
 
-    if let Some(item) = metadata
-        .tasks
+    let task_states = read_stack_task_states(ctx, &stack_path, &metadata)?;
+
+    if let Some(state) = task_states
         .iter()
-        .find(|item| item.status == STATUS_RUNNING)
+        .find(|state| state.run.status == STATUS_RUNNING)
     {
         bail!(
             "Stack task {} is already running. Mark it complete with: wt stack complete {} {}",
-            item.label(),
+            state.stack_task.label(),
             stack_path.display(),
-            item.label()
+            state.stack_task.label()
         );
     }
 
-    let Some(idx) = next_runnable_task(&metadata.tasks) else {
+    let Some(idx) = next_runnable_task(&task_states) else {
         ctx.ui
             .print_step("No prepared or failed tasks to run in this stack.");
-        metadata.status = summarize_stack_status(&metadata.tasks);
+        metadata.status = summarize_stack_status(&task_states);
         metadata.updated_at = current_utc_timestamp();
         write_stack_metadata(&stack_path, &metadata)?;
         return Ok(());
     };
 
-    let parent = parent_for_task(ctx, &metadata, idx)?;
+    let parent = parent_for_task(ctx, &metadata, &task_states, idx)?;
     metadata.status = STATUS_RUNNING.into();
     metadata.updated_at = current_utc_timestamp();
-    metadata.tasks[idx].status = STATUS_RUNNING.into();
     metadata.tasks[idx].parent = Some(parent.clone());
-    metadata.tasks[idx].error.clear();
-    record_stack_task_run(
-        ctx,
-        &stack_path,
-        &mut metadata.tasks[idx],
-        STATUS_RUNNING,
-        None,
-    )?;
+    update_stack_task_run(ctx, &stack_path, &metadata.tasks[idx], STATUS_RUNNING, None)?;
     write_stack_metadata(&stack_path, &metadata)?;
 
     let result = run_stack_task(
@@ -141,15 +140,7 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
     match result {
         Ok(result) => {
             task::write_task_branch(ctx, &metadata.tasks[idx].task, &result.branch_name)?;
-            metadata.tasks[idx].status = STATUS_RUNNING.into();
-            metadata.tasks[idx].error.clear();
-            record_stack_task_run(
-                ctx,
-                &stack_path,
-                &mut metadata.tasks[idx],
-                STATUS_RUNNING,
-                None,
-            )?;
+            update_stack_task_run(ctx, &stack_path, &metadata.tasks[idx], STATUS_RUNNING, None)?;
             ctx.ui.print_step(&format!(
                 "Started stack task {}. Mark it complete with: wt stack complete {} {}",
                 metadata.tasks[idx].label(),
@@ -162,35 +153,31 @@ pub fn run(ctx: &Ctx, stack: &str) -> Result<()> {
                 .downcast_ref::<WtError>()
                 .is_some_and(|err| matches!(err, WtError::Cancelled))
             {
-                metadata.tasks[idx].status = STATUS_SKIPPED.into();
-                metadata.tasks[idx].error = "User cancelled".into();
-                metadata.status = summarize_stack_status(&metadata.tasks);
-                metadata.updated_at = current_utc_timestamp();
-                record_stack_task_run(
+                update_stack_task_run(
                     ctx,
                     &stack_path,
-                    &mut metadata.tasks[idx],
+                    &metadata.tasks[idx],
                     STATUS_SKIPPED,
                     Some("User cancelled"),
                 )?;
+                metadata.status = summarize_current_stack_status(ctx, &stack_path, &metadata)?;
+                metadata.updated_at = current_utc_timestamp();
                 write_stack_metadata(&stack_path, &metadata)?;
                 return Ok(());
             }
 
-            metadata.tasks[idx].status = STATUS_FAILED.into();
-            metadata.tasks[idx].error = err.to_string();
-            let error = metadata.tasks[idx].error.clone();
-            record_stack_task_run(
+            let error = err.to_string();
+            update_stack_task_run(
                 ctx,
                 &stack_path,
-                &mut metadata.tasks[idx],
+                &metadata.tasks[idx],
                 STATUS_FAILED,
                 Some(&error),
             )?;
         }
     }
 
-    metadata.status = summarize_stack_status(&metadata.tasks);
+    metadata.status = summarize_current_stack_status(ctx, &stack_path, &metadata)?;
     metadata.updated_at = current_utc_timestamp();
     write_stack_metadata(&stack_path, &metadata)?;
     ctx.ui
@@ -209,10 +196,12 @@ pub fn show(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
         None => latest_stack_path(ctx)?,
     };
     let metadata = read_stack_metadata(&stack_path)?;
+    let task_states = read_stack_task_states(ctx, &stack_path, &metadata)?;
+    let status = summarize_stack_status(&task_states);
 
     ctx.ui
         .print_step(&format!("Stack: {}", stack_path.display()));
-    ctx.ui.print_dim(&format!("  Status: {}", metadata.status));
+    ctx.ui.print_dim(&format!("  Status: {status}"));
     ctx.ui
         .print_dim(&format!("  Base: {}", describe_stack_base(&metadata)?));
     ctx.ui.print_dim(&format!(
@@ -222,23 +211,25 @@ pub fn show(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
     ctx.ui.print_dim(&format!(
         "  Tasks: {} ({})",
         metadata.tasks.len(),
-        stack_status_counts(&metadata.tasks)
+        stack_status_counts(&task_states)
     ));
 
-    for (idx, item) in metadata.tasks.iter().enumerate() {
+    for state in &task_states {
+        let item = &state.stack_task;
+        let status = state.run.status.as_str();
         let task_doc = task::read_task_document(ctx, &item.task);
         let title = task_doc
             .as_ref()
             .map(|doc| doc.title_or_key(&item.task))
             .unwrap_or_else(|_| "(missing task)".into());
         let summary = if title.is_empty() {
-            format!("  {}. {} [{}]", idx + 1, item.label(), item.status)
+            format!("  {}. {} [{}]", state.idx + 1, item.label(), status)
         } else {
             format!(
                 "  {}. {} [{}] {}",
-                idx + 1,
+                state.idx + 1,
                 item.label(),
-                item.status,
+                status,
                 title
             )
         };
@@ -258,8 +249,10 @@ pub fn show(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
         if let Some(parent) = item.parent.as_deref() {
             ctx.ui.print_dim(&format!("     Parent: {parent}"));
         }
-        if !item.error.trim().is_empty() {
-            ctx.ui.print_dim(&format!("     Error: {}", item.error));
+        if let Some(error) = state.run.error.as_deref() {
+            if !error.trim().is_empty() {
+                ctx.ui.print_dim(&format!("     Error: {error}"));
+            }
         }
     }
 
@@ -277,15 +270,16 @@ pub fn edit(ctx: &Ctx, stack: Option<&str>) -> Result<()> {
 pub fn complete(ctx: &Ctx, stack: &str, task: Option<&str>, run_next: bool) -> Result<()> {
     let stack_path = resolve_stack_path(ctx, stack)?;
     let mut metadata = read_stack_metadata(&stack_path)?;
+    let task_states = read_stack_task_states(ctx, &stack_path, &metadata)?;
 
-    let Some(idx) = metadata
-        .tasks
+    let Some(state) = task_states
         .iter()
-        .position(|item| item.status == STATUS_RUNNING)
+        .find(|state| state.run.status == STATUS_RUNNING)
     else {
         ctx.ui.print_warning("No running stack task found");
         return Ok(());
     };
+    let idx = state.idx;
 
     if let Some(task) = task {
         let running = &metadata.tasks[idx];
@@ -299,17 +293,9 @@ pub fn complete(ctx: &Ctx, stack: &str, task: Option<&str>, run_next: bool) -> R
 
     validate_completable_stack_task(ctx, &metadata.tasks[idx])?;
 
-    metadata.tasks[idx].status = STATUS_DONE.into();
-    metadata.tasks[idx].error.clear();
-    metadata.status = summarize_stack_status(&metadata.tasks);
+    update_stack_task_run(ctx, &stack_path, &metadata.tasks[idx], STATUS_DONE, None)?;
+    metadata.status = summarize_current_stack_status(ctx, &stack_path, &metadata)?;
     metadata.updated_at = current_utc_timestamp();
-    record_stack_task_run(
-        ctx,
-        &stack_path,
-        &mut metadata.tasks[idx],
-        STATUS_DONE,
-        None,
-    )?;
     write_stack_metadata(&stack_path, &metadata)?;
 
     ctx.ui
@@ -342,24 +328,17 @@ struct StackMetadata {
 #[serde(deny_unknown_fields)]
 struct StackTask {
     task: String,
-    #[serde(default)]
-    run: Option<String>,
+    run: String,
     #[serde(default)]
     parent: Option<String>,
-    #[serde(default = "default_task_status")]
-    status: String,
-    #[serde(default)]
-    error: String,
 }
 
 impl StackTask {
-    fn from_prepared(task: PreparedTask, parent: Option<String>) -> Self {
+    fn from_prepared(task: PreparedTask, run: String, parent: Option<String>) -> Self {
         Self {
             task: task.key,
-            run: None,
+            run,
             parent,
-            status: STATUS_PREPARED.into(),
-            error: String::new(),
         }
     }
 
@@ -427,25 +406,32 @@ fn parse_order(raw: &str, len: usize) -> Result<Vec<usize>> {
 }
 
 fn stack_tasks_from_prepared(
+    ctx: &Ctx,
+    stack_path: &Path,
     prepared_tasks: Vec<PreparedTask>,
     initial_parent: Option<String>,
-) -> Vec<StackTask> {
+) -> Result<Vec<StackTask>> {
+    let group = task_run::group_from_path(stack_path)?;
     let mut parent = initial_parent;
     prepared_tasks
         .into_iter()
         .map(|task| {
             let task_parent = parent.clone();
+            let run = task_run::create(
+                ctx,
+                &task.key,
+                &task.branch,
+                task_run::SOURCE_STACK,
+                Some(&group),
+                STATUS_PREPARED,
+            )?;
             parent = prepared_branch_name(&task.branch).map(str::to_string);
-            StackTask::from_prepared(task, task_parent)
+            Ok(StackTask::from_prepared(task, run.id, task_parent))
         })
         .collect()
 }
 
 fn default_stack_status() -> String {
-    STATUS_PREPARED.into()
-}
-
-fn default_task_status() -> String {
     STATUS_PREPARED.into()
 }
 
@@ -504,34 +490,35 @@ fn run_stack_task(
     )
 }
 
-fn record_stack_task_run(
+#[derive(Clone)]
+struct StackTaskState {
+    idx: usize,
+    stack_task: StackTask,
+    run: task_run::TaskRun,
+}
+
+fn update_stack_task_run(
     ctx: &Ctx,
     stack_path: &Path,
-    item: &mut StackTask,
+    item: &StackTask,
     status: &str,
     error: Option<&str>,
 ) -> Result<()> {
-    let branch = task::read_task_document(ctx, &item.task)
-        .map(|task| task.branch)
-        .unwrap_or_default();
-    let run_id = match item.run.clone() {
-        Some(run) => run,
-        None => {
-            let group = task_run::group_from_path(stack_path)?;
-            let record = task_run::create(
-                ctx,
-                &item.task,
-                &branch,
-                task_run::SOURCE_STACK,
-                Some(&group),
-                status,
-            )?;
-            item.run = Some(record.id.clone());
-            record.id
-        }
-    };
+    let path = task_run::resolve(ctx, &item.run).with_context(|| {
+        format!(
+            "Stack task {} references missing TaskRun {}",
+            item.label(),
+            item.run
+        )
+    })?;
+    let run = task_run::read(&path)?;
+    validate_stack_task_run(stack_path, item, &run)?;
 
-    task_run::update(ctx, &run_id, status, Some(&branch), error)?;
+    let branch = task::read_task_document(ctx, &item.task)
+        .ok()
+        .map(|task| task.branch);
+    let updated = task_run::update(ctx, &item.run, status, branch.as_deref(), error)?;
+    validate_stack_task_run(stack_path, item, &updated.run)?;
     Ok(())
 }
 
@@ -607,34 +594,45 @@ fn porcelain_status_path(line: &str) -> Option<&str> {
     Some(path.trim_matches('"'))
 }
 
-fn next_runnable_task(items: &[StackTask]) -> Option<usize> {
-    for (idx, item) in items.iter().enumerate() {
-        match item.status.as_str() {
+fn next_runnable_task(items: &[StackTaskState]) -> Option<usize> {
+    for item in items {
+        match item.run.status.as_str() {
             STATUS_DONE | STATUS_SKIPPED => continue,
-            status if is_runnable_status(status) => return Some(idx),
+            status if is_runnable_status(status) => return Some(item.idx),
             _ => return None,
         }
     }
     None
 }
 
-fn parent_for_task(ctx: &Ctx, stack: &StackMetadata, idx: usize) -> Result<String> {
+fn parent_for_task(
+    ctx: &Ctx,
+    stack: &StackMetadata,
+    states: &[StackTaskState],
+    idx: usize,
+) -> Result<String> {
     if idx == 0 {
         return resolve_initial_base(ctx, stack);
     }
 
-    for previous in stack.tasks[..idx].iter().rev() {
-        match previous.status.as_str() {
+    for previous in states.iter().rev().filter(|state| state.idx < idx) {
+        match previous.run.status.as_str() {
             STATUS_DONE => {
-                let task_doc = task::read_task_document(ctx, &previous.task)?;
+                let task_doc = task::read_task_document(ctx, &previous.stack_task.task)?;
                 return prepared_branch_name(&task_doc.branch)
                     .map(str::to_string)
                     .ok_or_else(|| {
-                        anyhow::anyhow!("Previous stack task {} has no branch", previous.label())
+                        anyhow::anyhow!(
+                            "Previous stack task {} has no branch",
+                            previous.stack_task.label()
+                        )
                     });
             }
             STATUS_SKIPPED => continue,
-            _ => bail!("Previous stack task {} is not done", previous.label()),
+            _ => bail!(
+                "Previous stack task {} is not done",
+                previous.stack_task.label()
+            ),
         }
     }
 
@@ -650,22 +648,19 @@ fn prepared_branch_name(branch: &str) -> Option<&str> {
     }
 }
 
-fn write_new_stack_metadata(ctx: &Ctx, stack: &StackMetadata) -> Result<PathBuf> {
+fn next_available_stack_path(ctx: &Ctx) -> Result<PathBuf> {
     let stacks_dir = ctx.repo_root.join(".local/stacks");
     fs::create_dir_all(&stacks_dir)?;
 
     let date = current_utc_date();
     let mut seq = 1;
-    let path = loop {
+    loop {
         let candidate = stacks_dir.join(format!("{date}-{seq:03}.toml"));
         if !candidate.exists() {
-            break candidate;
+            return Ok(candidate);
         }
         seq += 1;
-    };
-
-    write_stack_metadata(&path, stack)?;
-    Ok(path)
+    }
 }
 
 fn read_stack_metadata(path: &Path) -> Result<StackMetadata> {
@@ -681,7 +676,80 @@ fn validate_stack_task(item: &StackTask) -> Result<()> {
     if item.task.trim().is_empty() {
         bail!("Stack task is missing task");
     }
-    task_run::validate_status(&item.status)?;
+    if item.run.trim().is_empty() {
+        bail!("Stack task {} is missing TaskRun id", item.label());
+    }
+    Ok(())
+}
+
+fn read_stack_task_states(
+    ctx: &Ctx,
+    stack_path: &Path,
+    metadata: &StackMetadata,
+) -> Result<Vec<StackTaskState>> {
+    let group = task_run::group_from_path(stack_path)?;
+    metadata
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let path = task_run::resolve(ctx, &item.run).with_context(|| {
+                format!(
+                    "Stack task {} references missing TaskRun {}",
+                    item.label(),
+                    item.run
+                )
+            })?;
+            let run = task_run::read(&path)?;
+            validate_stack_task_run_with_group(&group, item, &run)?;
+            Ok(StackTaskState {
+                idx,
+                stack_task: item.clone(),
+                run,
+            })
+        })
+        .collect()
+}
+
+fn validate_stack_task_run(
+    stack_path: &Path,
+    item: &StackTask,
+    run: &task_run::TaskRun,
+) -> Result<()> {
+    let group = task_run::group_from_path(stack_path)?;
+    validate_stack_task_run_with_group(&group, item, run)
+}
+
+fn validate_stack_task_run_with_group(
+    group: &str,
+    item: &StackTask,
+    run: &task_run::TaskRun,
+) -> Result<()> {
+    let expected_task = task::safe_task_key(&item.task);
+    if run.task != expected_task {
+        bail!(
+            "Stack task {} references TaskRun {} for task {}",
+            item.label(),
+            item.run,
+            run.task
+        );
+    }
+    if run.source != task_run::SOURCE_STACK {
+        bail!(
+            "Stack task {} references TaskRun {} with source {}",
+            item.label(),
+            item.run,
+            run.source
+        );
+    }
+    if run.group.as_deref() != Some(group) {
+        bail!(
+            "Stack task {} references TaskRun {} outside stack group {}",
+            item.label(),
+            item.run,
+            group
+        );
+    }
     Ok(())
 }
 
@@ -701,14 +769,10 @@ fn write_stack_metadata(path: &Path, stack: &StackMetadata) -> Result<()> {
     for item in &stack.tasks {
         content.push_str("\n[[tasks]]\n");
         content.push_str(&format!("task = {}\n", toml_quote(&item.task)));
-        if let Some(run) = item.run.as_deref() {
-            content.push_str(&format!("run = {}\n", toml_quote(run)));
-        }
+        content.push_str(&format!("run = {}\n", toml_quote(&item.run)));
         if let Some(parent) = item.parent.as_deref() {
             content.push_str(&format!("parent = {}\n", toml_quote(parent)));
         }
-        content.push_str(&format!("status = {}\n", toml_quote(&item.status)));
-        content.push_str(&format!("error = {}\n", toml_quote(&item.error)));
     }
 
     fs::write(path, content)?;
@@ -833,7 +897,7 @@ fn describe_stack_base(stack: &StackMetadata) -> Result<String> {
     }
 }
 
-fn stack_status_counts(items: &[StackTask]) -> String {
+fn stack_status_counts(items: &[StackTaskState]) -> String {
     let statuses = [
         STATUS_PREPARED,
         STATUS_RUNNING,
@@ -844,7 +908,10 @@ fn stack_status_counts(items: &[StackTask]) -> String {
     let counts = statuses
         .iter()
         .filter_map(|status| {
-            let count = items.iter().filter(|item| item.status == *status).count();
+            let count = items
+                .iter()
+                .filter(|item| item.run.status == *status)
+                .count();
             (count > 0).then(|| format!("{status}={count}"))
         })
         .collect::<Vec<_>>();
@@ -860,23 +927,32 @@ fn is_runnable_status(status: &str) -> bool {
     matches!(status, STATUS_PREPARED | STATUS_FAILED)
 }
 
-fn summarize_stack_status(items: &[StackTask]) -> String {
+fn summarize_current_stack_status(
+    ctx: &Ctx,
+    stack_path: &Path,
+    metadata: &StackMetadata,
+) -> Result<String> {
+    let states = read_stack_task_states(ctx, stack_path, metadata)?;
+    Ok(summarize_stack_status(&states))
+}
+
+fn summarize_stack_status(items: &[StackTaskState]) -> String {
     if items.is_empty() {
         return STATUS_DONE.into();
     }
-    if items.iter().any(|item| item.status == STATUS_FAILED) {
+    if items.iter().any(|item| item.run.status == STATUS_FAILED) {
         return STATUS_FAILED.into();
     }
-    if items.iter().any(|item| item.status == STATUS_RUNNING) {
+    if items.iter().any(|item| item.run.status == STATUS_RUNNING) {
         return STATUS_RUNNING.into();
     }
     if items
         .iter()
-        .all(|item| matches!(item.status.as_str(), STATUS_DONE | STATUS_SKIPPED))
+        .all(|item| matches!(item.run.status.as_str(), STATUS_DONE | STATUS_SKIPPED))
     {
         return STATUS_DONE.into();
     }
-    if items.iter().all(|item| item.status == STATUS_PREPARED) {
+    if items.iter().all(|item| item.run.status == STATUS_PREPARED) {
         return STATUS_PREPARED.into();
     }
     STATUS_PARTIAL.into()
@@ -960,14 +1036,41 @@ mod tests {
         }
     }
 
-    fn stack_task(key: &str, parent: Option<&str>, status: &str, error: &str) -> StackTask {
+    fn stack_task(key: &str, parent: Option<&str>, run: &str) -> StackTask {
         StackTask {
             task: key.into(),
-            run: None,
+            run: run.into(),
             parent: parent.map(str::to_string),
-            status: status.into(),
-            error: error.into(),
         }
+    }
+
+    fn stack_task_with_status(
+        ctx: &Ctx,
+        stack_path: &Path,
+        key: &str,
+        branch: &str,
+        parent: Option<&str>,
+        status: &str,
+        error: &str,
+    ) -> StackTask {
+        let group = task_run::group_from_path(stack_path).unwrap();
+        let record = task_run::create(
+            ctx,
+            key,
+            branch,
+            task_run::SOURCE_STACK,
+            Some(&group),
+            status,
+        )
+        .unwrap();
+        if !error.is_empty() {
+            task_run::update(ctx, &record.id, status, Some(branch), Some(error)).unwrap();
+        }
+        stack_task(key, parent, &record.id)
+    }
+
+    fn read_run(root: &Path, run_id: &str) -> task_run::TaskRun {
+        task_run::read(&root.join(".local/task-runs").join(format!("{run_id}.toml"))).unwrap()
     }
 
     fn write_task_file(root: &Path, key: &str, title: &str, branch: &str, body: &str) {
@@ -1045,8 +1148,20 @@ mod tests {
         assert_eq!(stack.tasks.len(), 2);
         assert_eq!(stack.tasks[0].task, "add-schema");
         assert_eq!(stack.tasks[0].parent.as_deref(), Some("main"));
+        assert!(!stack.tasks[0].run.is_empty());
         assert_eq!(stack.tasks[1].task, "wire-api");
         assert_eq!(stack.tasks[1].parent.as_deref(), Some("add-schema"));
+        assert!(!stack.tasks[1].run.is_empty());
+
+        let add_schema_run = read_run(dir.path(), &stack.tasks[0].run);
+        assert_eq!(add_schema_run.task, "add-schema");
+        assert_eq!(add_schema_run.branch, "add-schema");
+        assert_eq!(add_schema_run.status, STATUS_PREPARED);
+        assert_eq!(add_schema_run.source, task_run::SOURCE_STACK);
+        assert_eq!(
+            add_schema_run.group.as_deref(),
+            Some(task_run::group_from_path(&stack_path).unwrap().as_str())
+        );
 
         let add_schema = read_task_content(dir.path(), "add-schema");
         assert!(add_schema.contains("title = \"Add schema\""));
@@ -1055,6 +1170,10 @@ mod tests {
         let content = std::fs::read_to_string(stack_path).unwrap();
         assert!(content.contains("[[tasks]]"));
         assert!(content.contains("task = \"add-schema\""));
+        assert!(content.contains("run = \""));
+        let task_section = content.split("[[tasks]]").nth(1).unwrap();
+        assert!(!task_section.contains("status ="));
+        assert!(!task_section.contains("error ="));
         assert!(!content.contains("[[items]]"));
         assert!(!content.contains("[[issues]]"));
     }
@@ -1148,6 +1267,7 @@ mod tests {
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
         );
+        let stack_path = dir.path().join("stack.toml");
         let stack = StackMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -1156,13 +1276,30 @@ mod tests {
             created_at: "2026-05-13T00:00:00Z".into(),
             updated_at: "2026-05-13T00:00:00Z".into(),
             tasks: vec![
-                stack_task("schema", Some("main"), STATUS_DONE, ""),
-                stack_task("api", Some("schema"), STATUS_SKIPPED, "User cancelled"),
-                stack_task("ui", None, STATUS_PREPARED, ""),
+                stack_task_with_status(
+                    &ctx,
+                    &stack_path,
+                    "schema",
+                    "schema",
+                    Some("main"),
+                    STATUS_DONE,
+                    "",
+                ),
+                stack_task_with_status(
+                    &ctx,
+                    &stack_path,
+                    "api",
+                    "api",
+                    Some("schema"),
+                    STATUS_SKIPPED,
+                    "User cancelled",
+                ),
+                stack_task_with_status(&ctx, &stack_path, "ui", "ui", None, STATUS_PREPARED, ""),
             ],
         };
+        let states = read_stack_task_states(&ctx, &stack_path, &stack).unwrap();
 
-        assert_eq!(parent_for_task(&ctx, &stack, 2).unwrap(), "schema");
+        assert_eq!(parent_for_task(&ctx, &stack, &states, 2).unwrap(), "schema");
     }
 
     #[test]
@@ -1177,6 +1314,7 @@ mod tests {
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
         );
+        let stack_path = dir.path().join("stack.toml");
         let stack = StackMetadata {
             profile: None,
             base_mode: "explicit".into(),
@@ -1185,12 +1323,21 @@ mod tests {
             created_at: "2026-05-13T00:00:00Z".into(),
             updated_at: "2026-05-13T00:00:00Z".into(),
             tasks: vec![
-                stack_task("schema", Some("main"), STATUS_SKIPPED, "User cancelled"),
-                stack_task("api", None, STATUS_PREPARED, ""),
+                stack_task_with_status(
+                    &ctx,
+                    &stack_path,
+                    "schema",
+                    "schema",
+                    Some("main"),
+                    STATUS_SKIPPED,
+                    "User cancelled",
+                ),
+                stack_task_with_status(&ctx, &stack_path, "api", "api", None, STATUS_PREPARED, ""),
             ],
         };
+        let states = read_stack_task_states(&ctx, &stack_path, &stack).unwrap();
 
-        assert_eq!(parent_for_task(&ctx, &stack, 1).unwrap(), "main");
+        assert_eq!(parent_for_task(&ctx, &stack, &states, 1).unwrap(), "main");
     }
 
     #[test]
@@ -1250,11 +1397,20 @@ mod tests {
         assert_eq!(stack.base.as_deref(), Some("main"));
         assert_eq!(stack.tasks[0].task, "PROJ-2");
         assert_eq!(stack.tasks[0].parent.as_deref(), Some("main"));
+        assert_eq!(
+            read_run(dir.path(), &stack.tasks[0].run).source,
+            task_run::SOURCE_STACK
+        );
         assert_eq!(stack.tasks[1].task, "PROJ-1");
         assert_eq!(stack.tasks[1].parent.as_deref(), Some("alice/proj-2-api"));
+        assert_eq!(
+            read_run(dir.path(), &stack.tasks[1].run).status,
+            STATUS_PREPARED
+        );
         let content = std::fs::read_to_string(stack_path).unwrap();
         assert!(content.contains("[[tasks]]"));
         assert!(content.contains("task = \"PROJ-2\""));
+        assert!(content.contains("run = \""));
         assert!(!content.contains("[[issues]]"));
     }
 
@@ -1338,11 +1494,14 @@ mod tests {
             profile: Some("codex".into()),
             base_mode: "explicit".into(),
             base: Some("main".into()),
-            status: STATUS_PARTIAL.into(),
+            status: STATUS_PREPARED.into(),
             created_at: "2026-05-12T00:00:00Z".into(),
             updated_at: "2026-05-12T00:00:00Z".into(),
-            tasks: vec![stack_task(
+            tasks: vec![stack_task_with_status(
+                &ctx,
+                &stack_path,
                 "PROJ-1",
+                "alice/proj-1-schema",
                 Some("main"),
                 STATUS_FAILED,
                 "missing task",
@@ -1355,7 +1514,7 @@ mod tests {
         let steps = ui.steps.lock().unwrap();
         assert!(steps[0].contains("Stack:"));
         let details = ui.dims.lock().unwrap().join("\n");
-        assert!(details.contains("Status: partial"));
+        assert!(details.contains("Status: failed"));
         assert!(details.contains("Base: main"));
         assert!(details.contains("Profile: codex"));
         assert!(details.contains("Tasks: 1 (failed=1)"));
@@ -1429,6 +1588,29 @@ status = "prepared"
 id = "add-schema"
 title = "Add schema"
 branch = "add-schema"
+status = "prepared"
+error = ""
+"#,
+        )
+        .unwrap();
+
+        assert!(read_stack_metadata(&stack_path).is_err());
+    }
+
+    #[test]
+    fn read_stack_metadata_rejects_task_row_status_and_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let stack_path = dir.path().join("stack.toml");
+        std::fs::write(
+            &stack_path,
+            r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[tasks]]
+task = "add-schema"
+run = "stack-manual-add-schema"
+parent = "main"
 status = "prepared"
 error = ""
 "#,
@@ -1527,8 +1709,24 @@ error = ""
             created_at: "2026-05-12T00:00:00Z".into(),
             updated_at: "2026-05-12T00:00:00Z".into(),
             tasks: vec![
-                stack_task("PROJ-1", None, STATUS_PREPARED, ""),
-                stack_task("PROJ-2", None, STATUS_PREPARED, ""),
+                stack_task_with_status(
+                    &ctx,
+                    &stack_path,
+                    "PROJ-1",
+                    "alice/proj-1-schema",
+                    None,
+                    STATUS_PREPARED,
+                    "",
+                ),
+                stack_task_with_status(
+                    &ctx,
+                    &stack_path,
+                    "PROJ-2",
+                    "alice/proj-2-api",
+                    None,
+                    STATUS_PREPARED,
+                    "",
+                ),
             ],
         };
         write_stack_metadata(&stack_path, &stack).unwrap();
@@ -1538,29 +1736,19 @@ error = ""
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
         assert_eq!(updated.tasks[0].parent.as_deref(), Some("main"));
-        assert_eq!(updated.tasks[0].status, STATUS_RUNNING);
-        assert_eq!(updated.tasks[1].status, STATUS_PREPARED);
-        let first_run_id = updated.tasks[0].run.as_deref().unwrap().to_string();
-        let first_run = task_run::read(
-            &dir.path()
-                .join(".local/task-runs")
-                .join(format!("{first_run_id}.toml")),
-        )
-        .unwrap();
+        let first_run_id = updated.tasks[0].run.clone();
+        let second_run_id = updated.tasks[1].run.clone();
+        let first_run = read_run(dir.path(), &first_run_id);
+        let second_run = read_run(dir.path(), &second_run_id);
         assert_eq!(first_run.status, STATUS_RUNNING);
         assert_eq!(first_run.source, task_run::SOURCE_STACK);
         assert_eq!(first_run.group.as_deref(), Some("stack"));
+        assert_eq!(second_run.status, STATUS_PREPARED);
 
         complete(&ctx, stack_path.to_str().unwrap(), Some("PROJ-1"), false).unwrap();
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_PARTIAL);
-        assert_eq!(updated.tasks[0].status, STATUS_DONE);
-        let first_run = task_run::read(
-            &dir.path()
-                .join(".local/task-runs")
-                .join(format!("{first_run_id}.toml")),
-        )
-        .unwrap();
+        let first_run = read_run(dir.path(), &first_run_id);
         assert_eq!(first_run.status, STATUS_DONE);
 
         run(&ctx, stack_path.to_str().unwrap()).unwrap();
@@ -1570,8 +1758,9 @@ error = ""
             updated.tasks[1].parent.as_deref(),
             Some("alice/proj-1-schema")
         );
-        assert_eq!(updated.tasks[1].status, STATUS_RUNNING);
-        assert!(updated.tasks[1].run.is_some());
+        let second_run = read_run(dir.path(), &second_run_id);
+        assert_eq!(second_run.status, STATUS_RUNNING);
+        assert!(!updated.tasks[1].run.is_empty());
 
         let calls = runner.calls.lock().unwrap();
         assert!(calls.iter().any(|(_, args, _)| {
@@ -1648,19 +1837,37 @@ error = ""
             created_at: "2026-05-12T00:00:00Z".into(),
             updated_at: "2026-05-12T00:00:00Z".into(),
             tasks: vec![
-                stack_task("PROJ-1", None, STATUS_PREPARED, ""),
-                stack_task("PROJ-2", None, STATUS_PREPARED, ""),
+                stack_task_with_status(
+                    &ctx,
+                    &stack_path,
+                    "PROJ-1",
+                    "alice/proj-1-schema",
+                    None,
+                    STATUS_PREPARED,
+                    "",
+                ),
+                stack_task_with_status(
+                    &ctx,
+                    &stack_path,
+                    "PROJ-2",
+                    "alice/proj-2-api",
+                    None,
+                    STATUS_PREPARED,
+                    "",
+                ),
             ],
         };
         write_stack_metadata(&stack_path, &stack).unwrap();
+        let first_run_id = stack.tasks[0].run.clone();
+        let second_run_id = stack.tasks[1].run.clone();
 
         run(&ctx, stack_path.to_str().unwrap()).unwrap();
         complete(&ctx, stack_path.to_str().unwrap(), Some("PROJ-1"), true).unwrap();
 
         let updated = read_stack_metadata(&stack_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
-        assert_eq!(updated.tasks[0].status, STATUS_DONE);
-        assert_eq!(updated.tasks[1].status, STATUS_RUNNING);
+        assert_eq!(read_run(dir.path(), &first_run_id).status, STATUS_DONE);
+        assert_eq!(read_run(dir.path(), &second_run_id).status, STATUS_RUNNING);
         assert_eq!(
             updated.tasks[1].parent.as_deref(),
             Some("alice/proj-1-schema")
@@ -1696,15 +1903,23 @@ error = ""
             status: STATUS_RUNNING.into(),
             created_at: "2026-05-12T00:00:00Z".into(),
             updated_at: "2026-05-12T00:00:00Z".into(),
-            tasks: vec![stack_task("feature", Some("main"), STATUS_RUNNING, "")],
+            tasks: vec![stack_task_with_status(
+                &ctx,
+                &stack_path,
+                "feature",
+                "feature",
+                Some("main"),
+                STATUS_RUNNING,
+                "",
+            )],
         };
+        let run_id = stack.tasks[0].run.clone();
         write_stack_metadata(&stack_path, &stack).unwrap();
 
         let err = complete(&ctx, stack_path.to_str().unwrap(), Some("feature"), false).unwrap_err();
         assert!(err.to_string().contains("uncommitted changes"));
 
-        let updated = read_stack_metadata(&stack_path).unwrap();
-        assert_eq!(updated.tasks[0].status, STATUS_RUNNING);
+        assert_eq!(read_run(dir.path(), &run_id).status, STATUS_RUNNING);
     }
 
     #[test]
@@ -1737,15 +1952,23 @@ error = ""
             status: STATUS_RUNNING.into(),
             created_at: "2026-05-12T00:00:00Z".into(),
             updated_at: "2026-05-12T00:00:00Z".into(),
-            tasks: vec![stack_task("feature", Some("main"), STATUS_RUNNING, "")],
+            tasks: vec![stack_task_with_status(
+                &ctx,
+                &stack_path,
+                "feature",
+                "feature",
+                Some("main"),
+                STATUS_RUNNING,
+                "",
+            )],
         };
+        let run_id = stack.tasks[0].run.clone();
         write_stack_metadata(&stack_path, &stack).unwrap();
 
         let err = complete(&ctx, stack_path.to_str().unwrap(), Some("feature"), false).unwrap_err();
         assert!(err.to_string().contains("no commits ahead"));
 
-        let updated = read_stack_metadata(&stack_path).unwrap();
-        assert_eq!(updated.tasks[0].status, STATUS_RUNNING);
+        assert_eq!(read_run(dir.path(), &run_id).status, STATUS_RUNNING);
     }
 
     #[test]
@@ -1758,21 +1981,6 @@ error = ""
             "add-schema",
             "Create the schema without an issue provider.",
         );
-        let stack_path = dir.path().join("manual.toml");
-        std::fs::write(
-            &stack_path,
-            r#"base_mode = "explicit"
-base = "main"
-status = "prepared"
-
-[[tasks]]
-task = "add-schema"
-status = "prepared"
-error = ""
-"#,
-        )
-        .unwrap();
-
         let mut runner = MockRunner::new();
         runner.add_response(
             &format!(
@@ -1798,6 +2006,31 @@ error = ""
             }),
             Box::new(MockUi::new()),
         );
+        let stack_path = dir.path().join("manual.toml");
+        let stack_task = stack_task_with_status(
+            &ctx,
+            &stack_path,
+            "add-schema",
+            "add-schema",
+            None,
+            STATUS_PREPARED,
+            "",
+        );
+        std::fs::write(
+            &stack_path,
+            format!(
+                r#"base_mode = "explicit"
+base = "main"
+status = "prepared"
+
+[[tasks]]
+task = "add-schema"
+run = "{}"
+"#,
+                stack_task.run
+            ),
+        )
+        .unwrap();
 
         run(&ctx, stack_path.to_str().unwrap()).unwrap();
 
@@ -1805,7 +2038,10 @@ error = ""
         assert_eq!(updated.status, STATUS_RUNNING);
         assert_eq!(updated.tasks[0].task, "add-schema");
         assert_eq!(updated.tasks[0].parent.as_deref(), Some("main"));
-        assert_eq!(updated.tasks[0].status, STATUS_RUNNING);
+        assert_eq!(
+            read_run(dir.path(), &updated.tasks[0].run).status,
+            STATUS_RUNNING
+        );
 
         let calls = runner.calls.lock().unwrap();
         assert!(calls.iter().any(|(_, args, _)| {
