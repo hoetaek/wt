@@ -279,10 +279,13 @@ pub enum BatchCommand {
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
     },
-    /// Run prepared or failed tasks from a batch file
+    /// Start prepared or failed tasks; running siblings stay visible
+    #[command(
+        long_about = "Start prepared or failed TaskRuns from a batch and mark them running.\n\nOmit BATCH to choose from runnable batches: batches with at least one prepared or failed task. Running sibling tasks remain visible and do not block independent runnable tasks. Passing BATCH accepts a TOML path or shorthand id for scripts."
+    )]
     Run {
-        /// Batch TOML path, or "latest" for the newest local batch
-        batch: String,
+        /// Batch TOML path or shorthand id (omit to select a runnable batch; running siblings stay visible)
+        batch: Option<String>,
         /// Maximum number of runnable tasks to execute concurrently
         #[arg(long, default_value_t = 1, value_parser = parse_positive_usize)]
         jobs: usize,
@@ -746,30 +749,41 @@ mod tests {
     }
 
     #[test]
-    fn batch_run_accepts_latest() {
-        let cli = parse(&["wt", "batch", "run", "latest"]);
+    fn batch_run_accepts_optional_target() {
+        let cli = parse(&["wt", "batch", "run"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Batch {
+                command: BatchCommand::Run {
+                    batch: None,
+                    jobs: 1
+                }
+            })
+        ));
+
+        let cli = parse(&["wt", "batch", "run", ".local/batches/2026-05-16-001.toml"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Batch {
                 command: BatchCommand::Run { ref batch, jobs }
-            }) if batch == "latest" && jobs == 1
+            }) if batch.as_deref() == Some(".local/batches/2026-05-16-001.toml") && jobs == 1
         ));
     }
 
     #[test]
     fn batch_run_accepts_jobs() {
-        let cli = parse(&["wt", "batch", "run", "latest", "--jobs", "3"]);
+        let cli = parse(&["wt", "batch", "run", "--jobs", "3"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Batch {
                 command: BatchCommand::Run { ref batch, jobs }
-            }) if batch == "latest" && jobs == 3
+            }) if batch.is_none() && jobs == 3
         ));
     }
 
     #[test]
     fn batch_run_rejects_zero_jobs() {
-        let result = Cli::try_parse_from(["wt", "batch", "run", "latest", "--jobs", "0"]);
+        let result = Cli::try_parse_from(["wt", "batch", "run", "--jobs", "0"]);
         assert!(result.is_err());
     }
 
@@ -848,6 +862,9 @@ mod tests {
         let help = run.render_help().to_string();
         assert!(help.contains("--jobs <JOBS>"));
         assert!(help.contains("Maximum number of runnable tasks to execute concurrently"));
+        assert!(help.contains("omit to select a runnable batch"));
+        assert!(help.contains("running siblings stay visible"));
+        assert!(!help.contains("latest"));
     }
 
     #[test]

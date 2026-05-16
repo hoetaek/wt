@@ -195,6 +195,13 @@ link만 저장한다. Batch row는 어떤 task들이 함께 시작 대상인지�
 Batch가 만든 cmux workspace 이름은 저장 상태가 아니라 현재 실행을 찾기 위한 표시다.
 좁은 탭에서 잘려도 의미가 남도록 `B2/5 PROJ-123 Title`처럼 짧은 source/order 라벨을
 앞에 붙이고, branch/path/site 이름에는 batch label을 섞지 않는다.
+Bare `run`은 runnable batch 목록을 selector로 보여준다. Runnable batch는
+`prepared` 또는 `failed` TaskRun이 하나 이상 있는 batch다. Batch task들은 독립적이므로
+이미 `running`인 TaskRun이 있어도 prepared/failed sibling이 있으면 runnable로 남는다.
+Selector label은 task titles/keys, runnable count, running count를 포함한 status counts,
+base, profile 같은 semantic summary를 담아서 `.local/batches/<date>.toml` 같은 파일명만
+보고 고르게 하지 않는다. Explicit `wt batch run <path-or-id>`는 scripts를 위해 남기지만
+`latest`는 run target contract가 아니다.
 
 Stack이 어떤 task를 어떤 parent 위에 쌓았는지도 저장할 가치가 있다. Stack 준비는 각
 task마다 `.local/tasks` 아래의 TaskDocument와 `.local/task-runs` 아래의

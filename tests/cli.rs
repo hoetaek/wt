@@ -150,6 +150,19 @@ fn task_publish_help_explains_behavior() {
 }
 
 #[test]
+fn batch_run_help_explains_runnable_batch_selection() {
+    wt_command()
+        .args(["batch", "run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("omit to select a runnable batch"))
+        .stdout(predicate::str::contains("prepared or failed task"))
+        .stdout(predicate::str::contains("running siblings stay visible"))
+        .stdout(predicate::str::contains("shorthand id"))
+        .stdout(predicate::str::contains("latest").not());
+}
+
+#[test]
 fn stack_run_help_explains_runnable_stack_selection() {
     wt_command()
         .args(["stack", "run", "--help"])

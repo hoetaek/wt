@@ -170,8 +170,10 @@ fn resolve_batch_base(ctx: &Ctx, base: &Option<String>) -> Result<String> {
     Ok(base)
 }
 
-pub fn run(ctx: &Ctx, batch: &str, jobs: usize) -> Result<()> {
-    let batch_path = resolve_batch_path(ctx, batch)?;
+pub fn run(ctx: &Ctx, batch: Option<&str>, jobs: usize) -> Result<()> {
+    let Some(batch_path) = resolve_run_batch_path(ctx, batch)? else {
+        return Ok(());
+    };
     let mut metadata = read_batch_metadata(&batch_path)?;
     validate_profile(ctx, metadata.profile.as_deref())?;
 
@@ -183,11 +185,12 @@ pub fn run(ctx: &Ctx, batch: &str, jobs: usize) -> Result<()> {
     let has_runnable_task = task_states
         .iter()
         .any(|state| is_runnable_status(&state.run.status));
-    let base = if has_runnable_task {
-        batch_base_option(&metadata)?
-    } else {
-        None
-    };
+    if !has_runnable_task {
+        ctx.ui
+            .print_step("No prepared or failed tasks to run in this batch.");
+        return Ok(());
+    }
+    let base = batch_base_option(&metadata)?;
     let ran_any = if jobs == 1 {
         run_batch_sequential(ctx, &batch_path, &mut metadata, &task_states, base)?
     } else {
@@ -874,6 +877,11 @@ struct BatchTaskExecution {
     allow_interactive_prompts: bool,
 }
 
+struct RunnableBatchCandidate {
+    path: PathBuf,
+    label: String,
+}
+
 struct BatchTaskSuccess {
     branch_update: Option<String>,
 }
@@ -1076,8 +1084,148 @@ fn write_batch_metadata(path: &Path, batch: &BatchMetadata) -> Result<()> {
     Ok(())
 }
 
+fn resolve_run_batch_path(ctx: &Ctx, batch: Option<&str>) -> Result<Option<PathBuf>> {
+    match batch {
+        Some(target) => Ok(Some(resolve_batch_path_for_run(ctx, target)?)),
+        None => select_runnable_batch_path(ctx),
+    }
+}
+
+fn select_runnable_batch_path(ctx: &Ctx) -> Result<Option<PathBuf>> {
+    let candidates = list_runnable_batch_candidates(ctx)?;
+    if candidates.is_empty() {
+        ctx.ui.print_warning("No runnable batches found");
+        return Ok(None);
+    }
+
+    let items = candidates
+        .iter()
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    let idx = ctx.ui.select("Select batch to run", &items)?;
+    let candidate = candidates
+        .get(idx)
+        .ok_or_else(|| anyhow::anyhow!("Selected batch index out of range: {idx}"))?;
+    Ok(Some(candidate.path.clone()))
+}
+
+fn list_runnable_batch_candidates(ctx: &Ctx) -> Result<Vec<RunnableBatchCandidate>> {
+    let batches_dir = ctx.repo_root.join(".local/batches");
+    if !batches_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&batches_dir)
+        .with_context(|| "Failed to read batch directory: .local/batches")?
+    {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let mut candidates = Vec::new();
+    for path in paths {
+        let metadata = read_batch_metadata(&path)
+            .with_context(|| format!("Failed to read batch: {}", path.display()))?;
+        let states = read_batch_task_states(ctx, &path, &metadata)
+            .with_context(|| format!("Failed to read batch task state: {}", path.display()))?;
+        if !states
+            .iter()
+            .any(|state| is_runnable_status(&state.run.status))
+        {
+            continue;
+        }
+        let label = batch_selection_label(ctx, &path, &metadata, &states)?;
+        candidates.push(RunnableBatchCandidate { path, label });
+    }
+
+    candidates.sort_by(|left, right| {
+        left.label
+            .cmp(&right.label)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    Ok(candidates)
+}
+
+fn batch_selection_label(
+    ctx: &Ctx,
+    batch_path: &Path,
+    batch: &BatchMetadata,
+    states: &[BatchTaskState],
+) -> Result<String> {
+    let summary = batch_task_summary(ctx, states);
+    let runnable = states
+        .iter()
+        .filter(|state| is_runnable_status(&state.run.status))
+        .count();
+    let status_counts = batch_selection_status_counts(states);
+    let base = describe_batch_base(batch)?;
+    let profile = batch.profile.as_deref().unwrap_or("effective config");
+    let path = relative_batch_path(ctx, batch_path);
+
+    Ok(format!(
+        "{summary} | runnable: {runnable} | {status_counts} | base: {base} | profile: {profile} | {path}"
+    ))
+}
+
+fn batch_task_summary(ctx: &Ctx, states: &[BatchTaskState]) -> String {
+    let visible = states
+        .iter()
+        .take(3)
+        .map(|state| batch_task_title_label(ctx, &state.batch_task.task))
+        .collect::<Vec<_>>();
+    let mut summary = visible.join(", ");
+    if states.len() > visible.len() {
+        summary.push_str(&format!(", ... (+{} more)", states.len() - visible.len()));
+    }
+    if summary.is_empty() {
+        "(empty batch)".into()
+    } else {
+        summary
+    }
+}
+
+fn batch_task_title_label(ctx: &Ctx, key: &str) -> String {
+    match task::read_task_document(ctx, key) {
+        Ok(document) => {
+            let title = document.title_or_key(key);
+            if title == key {
+                key.to_string()
+            } else {
+                format!("{key} - {title}")
+            }
+        }
+        Err(_) => format!("{key} (missing task)"),
+    }
+}
+
+fn relative_batch_path(ctx: &Ctx, batch_path: &Path) -> String {
+    batch_path
+        .strip_prefix(&ctx.repo_root)
+        .unwrap_or(batch_path)
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn resolve_batch_path(ctx: &Ctx, target: &str) -> Result<PathBuf> {
+    resolve_batch_path_with_latest(ctx, target, true)
+}
+
+fn resolve_batch_path_for_run(ctx: &Ctx, target: &str) -> Result<PathBuf> {
     if target == "latest" {
+        bail!(
+            "wt batch run latest is no longer supported; omit BATCH to select a runnable batch or pass a batch path/id"
+        );
+    }
+
+    resolve_batch_path_with_latest(ctx, target, false)
+}
+
+fn resolve_batch_path_with_latest(ctx: &Ctx, target: &str, allow_latest: bool) -> Result<PathBuf> {
+    if allow_latest && target == "latest" {
         return latest_batch_path(ctx);
     }
 
@@ -1164,6 +1312,26 @@ fn batch_status_counts(items: &[BatchTaskState]) -> String {
     } else {
         counts.join(", ")
     }
+}
+
+fn batch_selection_status_counts(items: &[BatchTaskState]) -> String {
+    [
+        STATUS_PREPARED,
+        STATUS_RUNNING,
+        STATUS_DONE,
+        STATUS_FAILED,
+        STATUS_SKIPPED,
+    ]
+    .iter()
+    .map(|status| {
+        let count = items
+            .iter()
+            .filter(|item| item.run.status == *status)
+            .count();
+        format!("{status}={count}")
+    })
+    .collect::<Vec<_>>()
+    .join(", ")
 }
 
 fn batch_base_option(batch: &BatchMetadata) -> Result<Option<String>> {
@@ -1588,7 +1756,7 @@ mod tests {
         };
         write_batch_file(&batch_path, &batch);
 
-        run(&ctx, batch_path.to_str().unwrap(), 1).unwrap();
+        run(&ctx, Some(batch_path.to_str().unwrap()), 1).unwrap();
 
         let steps = ui.steps.lock().unwrap().join("\n");
         assert!(steps.contains("Opening cmux workspace: B2/2 PROJ-2 API"));
@@ -2263,6 +2431,280 @@ error = ""
     }
 
     #[test]
+    fn runnable_batch_candidates_use_task_run_state_and_show_running_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        for key in [
+            "prepared-task",
+            "failed-task",
+            "done-task",
+            "running-task",
+            "sibling-running-task",
+        ] {
+            write_task_file(dir.path(), key, key, key, "");
+        }
+        let batches_dir = dir.path().join(".local/batches");
+        std::fs::create_dir_all(&batches_dir).unwrap();
+        let prepared_path = batches_dir.join("prepared-batch.toml");
+        let failed_path = batches_dir.join("failed-batch.toml");
+        let done_path = batches_dir.join("done-batch.toml");
+        let running_path = batches_dir.join("running-batch.toml");
+        let mixed_path = batches_dir.join("running-and-prepared-batch.toml");
+
+        write_batch_file(
+            &prepared_path,
+            &BatchMetadata {
+                profile: None,
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_PREPARED.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![batch_task_with_status(
+                    &ctx,
+                    &prepared_path,
+                    "prepared-task",
+                    "prepared-task",
+                    STATUS_PREPARED,
+                    "",
+                )],
+            },
+        );
+        write_batch_file(
+            &failed_path,
+            &BatchMetadata {
+                profile: None,
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_FAILED.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![batch_task_with_status(
+                    &ctx,
+                    &failed_path,
+                    "failed-task",
+                    "failed-task",
+                    STATUS_FAILED,
+                    "",
+                )],
+            },
+        );
+        write_batch_file(
+            &done_path,
+            &BatchMetadata {
+                profile: None,
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_DONE.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![batch_task_with_status(
+                    &ctx,
+                    &done_path,
+                    "done-task",
+                    "done-task",
+                    STATUS_DONE,
+                    "",
+                )],
+            },
+        );
+        write_batch_file(
+            &running_path,
+            &BatchMetadata {
+                profile: None,
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_RUNNING.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![batch_task_with_status(
+                    &ctx,
+                    &running_path,
+                    "running-task",
+                    "running-task",
+                    STATUS_RUNNING,
+                    "",
+                )],
+            },
+        );
+        let mixed_running = batch_task_with_status(
+            &ctx,
+            &mixed_path,
+            "sibling-running-task",
+            "sibling-running-task",
+            STATUS_RUNNING,
+            "",
+        );
+        let mixed_prepared = batch_task_with_status(
+            &ctx,
+            &mixed_path,
+            "prepared-task",
+            "prepared-task",
+            STATUS_PREPARED,
+            "",
+        );
+        write_batch_file(
+            &mixed_path,
+            &BatchMetadata {
+                profile: Some("codex".into()),
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_PARTIAL.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![mixed_running, mixed_prepared],
+            },
+        );
+
+        let candidates = list_runnable_batch_candidates(&ctx).unwrap();
+        let candidate_paths = candidates
+            .iter()
+            .map(|candidate| {
+                candidate
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(candidates.len(), 3);
+        assert!(candidate_paths.contains(&"prepared-batch.toml".into()));
+        assert!(candidate_paths.contains(&"failed-batch.toml".into()));
+        assert!(candidate_paths.contains(&"running-and-prepared-batch.toml".into()));
+        assert!(!candidate_paths.contains(&"done-batch.toml".into()));
+        assert!(!candidate_paths.contains(&"running-batch.toml".into()));
+
+        let labels = candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(labels.contains("failed=1"));
+        assert!(labels.contains("running=0"));
+        assert!(labels.contains("running=1"));
+        assert!(labels.contains("runnable: 1"));
+        assert!(labels.contains("profile: codex"));
+    }
+
+    #[test]
+    fn bare_run_without_runnable_batches_warns_without_mutating_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = std::sync::Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui.clone()),
+        );
+        write_task_file(dir.path(), "done-task", "Done task", "done-task", "");
+        let batch_path = dir.path().join(".local/batches/done-batch.toml");
+        let done_task =
+            batch_task_with_status(&ctx, &batch_path, "done-task", "done-task", STATUS_DONE, "");
+        write_batch_file(
+            &batch_path,
+            &BatchMetadata {
+                profile: None,
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_DONE.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![done_task.clone()],
+            },
+        );
+        let run_path = dir
+            .path()
+            .join(".local/task-runs")
+            .join(format!("{}.toml", done_task.run));
+        let batch_before = std::fs::read_to_string(&batch_path).unwrap();
+        let run_before = std::fs::read_to_string(&run_path).unwrap();
+
+        run(&ctx, None, 1).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&batch_path).unwrap(), batch_before);
+        assert_eq!(std::fs::read_to_string(&run_path).unwrap(), run_before);
+        let warnings = ui.warnings.lock().unwrap().join("\n");
+        assert!(warnings.contains("No runnable batches found"));
+    }
+
+    #[test]
+    fn bare_run_selects_runnable_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task_file(dir.path(), "task-one", "Task one", "alice/task-one", "");
+        let runner = std::sync::Arc::new(ParallelBatchRunner::new());
+        let mut ui = MockUi::new();
+        ui.add_select(0);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            parallel_batch_config(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+        let batch_path = dir.path().join(".local/batches/runnable-batch.toml");
+        let task_one = batch_task_with_status(
+            &ctx,
+            &batch_path,
+            "task-one",
+            "alice/task-one",
+            STATUS_PREPARED,
+            "",
+        );
+        write_batch_file(
+            &batch_path,
+            &BatchMetadata {
+                profile: None,
+                base_mode: "explicit".into(),
+                base: Some("main".into()),
+                status: STATUS_PREPARED.into(),
+                created_at: "2026-05-16T00:00:00Z".into(),
+                updated_at: "2026-05-16T00:00:00Z".into(),
+                tasks: vec![task_one.clone()],
+            },
+        );
+
+        run(&ctx, None, 2).unwrap();
+
+        let updated = read_batch_metadata(&batch_path).unwrap();
+        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(read_run(dir.path(), &task_one.run).status, STATUS_RUNNING);
+    }
+
+    #[test]
+    fn run_resolves_shorthand_id_but_rejects_latest_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let batches_dir = dir.path().join(".local/batches");
+        std::fs::create_dir_all(&batches_dir).unwrap();
+        let batch_path = batches_dir.join("scriptable-batch.toml");
+        std::fs::write(&batch_path, "base_mode = \"explicit\"\nbase = \"main\"\n").unwrap();
+
+        let resolved = resolve_batch_path_for_run(&ctx, "scriptable-batch").unwrap();
+        assert_eq!(resolved, batch_path);
+
+        let err = resolve_batch_path_for_run(&ctx, "latest").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("wt batch run latest is no longer supported")
+        );
+    }
+
+    #[test]
     fn edit_opens_latest_batch_with_configured_editor() {
         let dir = tempfile::tempdir().unwrap();
         let batches_dir = dir.path().join(".local/batches");
@@ -2579,7 +3021,7 @@ error = ""
     }
 
     #[test]
-    fn run_skips_done_tasks_without_touching_issue_provider() {
+    fn run_skips_done_tasks_without_touching_issue_provider_or_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2601,11 +3043,19 @@ error = ""
             tasks: vec![done_task],
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
+        let run_path = dir
+            .path()
+            .join(".local/task-runs")
+            .join(format!("{}.toml", batch.tasks[0].run));
+        let batch_before = std::fs::read_to_string(&batch_path).unwrap();
+        let run_before = std::fs::read_to_string(&run_path).unwrap();
 
-        run(&ctx, batch_path.to_str().unwrap(), 1).unwrap();
+        run(&ctx, Some(batch_path.to_str().unwrap()), 1).unwrap();
 
+        assert_eq!(std::fs::read_to_string(&batch_path).unwrap(), batch_before);
+        assert_eq!(std::fs::read_to_string(&run_path).unwrap(), run_before);
         let updated = read_batch_metadata(&batch_path).unwrap();
-        assert_eq!(updated.status, STATUS_DONE);
+        assert_eq!(updated.status, STATUS_PARTIAL);
         assert_eq!(
             read_run(dir.path(), &updated.tasks[0].run).status,
             STATUS_DONE
@@ -2642,7 +3092,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        let result = run(&ctx, batch_path.to_str().unwrap(), 1);
+        let result = run(&ctx, Some(batch_path.to_str().unwrap()), 1);
 
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
@@ -2687,7 +3137,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        let result = run(&ctx, batch_path.to_str().unwrap(), 1);
+        let result = run(&ctx, Some(batch_path.to_str().unwrap()), 1);
 
         assert!(result.is_err());
         assert!(
@@ -2745,7 +3195,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        run(&ctx, batch_path.to_str().unwrap(), 2).unwrap();
+        run(&ctx, Some(batch_path.to_str().unwrap()), 2).unwrap();
 
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
@@ -2805,7 +3255,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        let result = run(&ctx, batch_path.to_str().unwrap(), 2);
+        let result = run(&ctx, Some(batch_path.to_str().unwrap()), 2);
 
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
@@ -2858,7 +3308,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        run(&ctx, batch_path.to_str().unwrap(), 2).unwrap();
+        run(&ctx, Some(batch_path.to_str().unwrap()), 2).unwrap();
 
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.status, STATUS_RUNNING);
@@ -2912,7 +3362,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        let result = run(&ctx, batch_path.to_str().unwrap(), 2);
+        let result = run(&ctx, Some(batch_path.to_str().unwrap()), 2);
 
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
@@ -2968,7 +3418,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        let result = run(&ctx, batch_path.to_str().unwrap(), 2);
+        let result = run(&ctx, Some(batch_path.to_str().unwrap()), 2);
 
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
@@ -3044,7 +3494,7 @@ error = ""
         };
         write_batch_metadata(&batch_path, &batch).unwrap();
 
-        run(&ctx, batch_path.to_str().unwrap(), 1).unwrap();
+        run(&ctx, Some(batch_path.to_str().unwrap()), 1).unwrap();
 
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.base_mode, "explicit");
