@@ -24,6 +24,11 @@ minor version instead of moving to `x.0.0`.
   `wt stack run latest` from the run contract.
 - Bumped the package version to `0.16.0` because task publish and stack run
   changed user-facing CLI behavior while `wt` is still pre-1.0.
+- Changed bare `wt batch run` to select from runnable batches with semantic
+  labels, kept explicit batch path/id targets for scripts, and removed
+  `wt batch run latest` from the run contract.
+- Bumped the package version to `0.18.0` because batch run changed user-facing
+  CLI behavior while `wt` is still pre-1.0.
 - Changed stack task prompts to include conditional draft-PR handoff guidance:
   when the repository or coordinator workflow expects PR review, task agents
   push their branch, open a draft PR against the stack parent branch, and

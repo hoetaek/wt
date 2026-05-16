@@ -44,7 +44,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 profile,
                 base,
             } => commands::batch::issue(ctx, issues, profile.as_deref(), base),
-            BatchCommand::Run { batch, jobs } => commands::batch::run(ctx, batch, *jobs),
+            BatchCommand::Run { batch, jobs } => commands::batch::run(ctx, batch.as_deref(), *jobs),
             BatchCommand::Show { batch } => commands::batch::show(ctx, batch.as_deref()),
             BatchCommand::Edit { batch } => commands::batch::edit(ctx, batch.as_deref()),
             BatchCommand::Clean { batch } => commands::batch::clean(ctx, batch.as_deref()),

@@ -121,7 +121,7 @@ Prepare issue work in bulk:
 
 ```bash
 wt batch issue
-wt batch run latest
+wt batch run
 wt stack issue
 wt stack show latest
 wt stack run
@@ -674,16 +674,16 @@ stores the title, branch, body, and optional issue origin. Prepared
 TaskDocuments can also be started directly with `wt new --task` or
 `wt new --task <task>`, without creating or running a batch file.
 
-Run a prepared batch explicitly:
+Run a prepared batch:
 
 ```bash
 wt batch show
 wt batch show latest
 wt batch edit
 wt batch edit latest
+wt batch run
 wt batch run .local/batches/2026-05-09-001.toml
-wt batch run latest
-wt batch run latest --jobs 3
+wt batch run 2026-05-09-001 --jobs 3
 wt batch clean
 wt batch clean latest
 ```
@@ -691,6 +691,13 @@ wt batch clean latest
 `show` prints the stored base branch and profile, then derives batch and task
 statuses from the linked TaskRun records.
 `edit` opens the batch TOML file without changing task state.
+
+Bare `run` opens a selector for runnable batches. A runnable batch has at least
+one linked TaskRun with `status = "prepared"` or `status = "failed"`. Running
+sibling TaskRuns do not block the batch selector because batch tasks are
+independent; the selector label shows running counts so in-flight work remains
+visible. Passing a batch TOML path or shorthand id keeps the command scriptable.
+`latest` is not a `run` target.
 
 `run` executes only linked TaskRuns with `status = "prepared"` or
 `status = "failed"`. TaskRuns marked `running`, `done`, or `skipped` are left
