@@ -118,6 +118,12 @@ impl<'a> AgentObservation<'a> {
 }
 
 pub(crate) fn classify(observation: &AgentObservation<'_>) -> WorkState {
+    if let Some((kind, status_key)) = current_known_agent_status(observation) {
+        return state_from_agent_signals(kind, status_key, observation);
+    }
+    if let Some((kind, status_key)) = latest_known_agent_sidebar_status(observation) {
+        return state_from_agent_signals(kind, status_key, observation);
+    }
     if let Some(state) = claude_code::classify(observation) {
         return state;
     }
@@ -179,6 +185,37 @@ pub(super) fn enrich_state(mut state: WorkState, observation: &AgentObservation<
     state.session_id = latest_string_payload(observation.events, "session_id");
     state.last_event_at = latest_relevant_event_at(observation.events);
     state
+}
+
+fn current_known_agent_status(
+    observation: &AgentObservation<'_>,
+) -> Option<(AgentKind, &'static str)> {
+    observation
+        .statuses
+        .iter()
+        .find_map(|entry| known_status_key(&entry.key))
+}
+
+fn latest_known_agent_sidebar_status(
+    observation: &AgentObservation<'_>,
+) -> Option<(AgentKind, &'static str)> {
+    observation
+        .events
+        .iter()
+        .filter_map(|event| {
+            let (key, _) = sidebar_status_command(event)?;
+            known_status_key(&key).map(|known| (event.seq, known))
+        })
+        .max_by_key(|(seq, _)| *seq)
+        .map(|(_, known)| known)
+}
+
+fn known_status_key(key: &str) -> Option<(AgentKind, &'static str)> {
+    match key {
+        "claude_code" => Some((AgentKind::ClaudeCode, "claude_code")),
+        "codex" => Some((AgentKind::Codex, "codex")),
+        _ => None,
+    }
 }
 
 fn current_status(status_key: &str, statuses: &[CmuxStatusEntry]) -> Option<AgentStatus> {
@@ -377,6 +414,32 @@ mod tests {
         let state = classify(&observation);
 
         assert_eq!(state.agent_kind, AgentKind::Codex);
+        assert_eq!(state.status, AgentStatus::Idle);
+    }
+
+    #[test]
+    fn current_codex_status_wins_over_claude_screen_text() {
+        let statuses = vec![status("codex", "Idle")];
+        let observation = AgentObservation::new(
+            Some("Task says Claude Code should inspect files.\nCodex Ready"),
+            &statuses,
+            &[],
+        );
+
+        let state = classify(&observation);
+
+        assert_eq!(state.agent_kind, AgentKind::Codex);
+        assert_eq!(state.status, AgentStatus::Idle);
+    }
+
+    #[test]
+    fn current_claude_status_wins_over_codex_screen_text() {
+        let statuses = vec![status("claude_code", "Idle")];
+        let observation = AgentObservation::new(Some("Codex v0.130.0\nReady"), &statuses, &[]);
+
+        let state = classify(&observation);
+
+        assert_eq!(state.agent_kind, AgentKind::ClaudeCode);
         assert_eq!(state.status, AgentStatus::Idle);
     }
 
