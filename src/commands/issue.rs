@@ -39,6 +39,7 @@ pub(crate) struct PreparedIssueContext<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct IssueRunResult {
     pub(crate) branch_name: String,
+    pub(crate) canonical_branch_name: String,
     pub(crate) worktree_path: PathBuf,
 }
 
@@ -347,6 +348,7 @@ fn run_inner_many(
             ctx.ui
                 .print_warning("이미 이 브랜치에 있습니다. 다른 브랜치로 전환 후 다시 시도하세요.");
             return Ok(vec![IssueRunResult {
+                canonical_branch_name: branch_name.clone(),
                 branch_name,
                 worktree_path: existing.clone(),
             }]);
@@ -366,6 +368,7 @@ fn run_inner_many(
                 snapshot_config.as_ref(),
             )?;
             return Ok(vec![IssueRunResult {
+                canonical_branch_name: branch_name.clone(),
                 branch_name,
                 worktree_path: existing.clone(),
             }]);
@@ -409,6 +412,7 @@ fn run_inner_many(
                     snapshot_config.as_ref(),
                 )?;
                 return Ok(vec![IssueRunResult {
+                    canonical_branch_name: branch_name.clone(),
                     branch_name,
                     worktree_path: names.path,
                 }]);
@@ -446,6 +450,7 @@ fn run_inner_many(
     )?;
 
     Ok(vec![IssueRunResult {
+        canonical_branch_name: branch_name.clone(),
         branch_name,
         worktree_path: names.path,
     }])
@@ -570,6 +575,7 @@ fn run_profiles(
             ProfileBranchDecision::CreateNew { branch_existed } => branch_existed,
             ProfileBranchDecision::ReuseExisting { path } => {
                 let result = IssueRunResult {
+                    canonical_branch_name: branch_name.to_string(),
                     branch_name: profile_branch,
                     worktree_path: path.clone(),
                 };
@@ -601,6 +607,7 @@ fn run_profiles(
         }
 
         let result = IssueRunResult {
+            canonical_branch_name: branch_name.to_string(),
             branch_name: profile_branch,
             worktree_path: names.path.clone(),
         };

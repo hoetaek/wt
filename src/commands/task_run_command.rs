@@ -157,8 +157,9 @@ fn run_selected_task(
         }
     };
 
-    if selected.document.branch != result.branch_name {
-        if let Err(err) = task::write_task_branch(ctx, &selected.key, &result.branch_name) {
+    if selected.document.branch != result.canonical_branch_name {
+        if let Err(err) = task::write_task_branch(ctx, &selected.key, &result.canonical_branch_name)
+        {
             let message = err.to_string();
             let _ = task_run::update(
                 ctx,
@@ -215,6 +216,21 @@ fn record_task_profile_successes(
             None,
             task_run::STATUS_RUNNING,
         )?;
+    }
+    write_task_branch_from_results(ctx, selected, results)?;
+    Ok(())
+}
+
+fn write_task_branch_from_results(
+    ctx: &Ctx,
+    selected: &task::SelectedTask,
+    results: &[issue::IssueRunResult],
+) -> Result<()> {
+    let Some(result) = results.first() else {
+        return Ok(());
+    };
+    if selected.document.branch != result.canonical_branch_name {
+        task::write_task_branch(ctx, &selected.key, &result.canonical_branch_name)?;
     }
     Ok(())
 }
@@ -929,6 +945,9 @@ id = "PROJ-123"
             .expect("expected latest task run");
         assert_eq!(latest.run.status, task_run::STATUS_RUNNING);
         assert_eq!(latest.run.branch, "alice/proj-123-fix-editor-codex");
+
+        let task_doc = task::read_task_document(&ctx, "PROJ-123").unwrap();
+        assert_eq!(task_doc.branch, "alice/proj-123-fix-editor");
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(count_linear_start_updates(&calls, "PROJ-123"), 1);
