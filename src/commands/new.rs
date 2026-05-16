@@ -691,7 +691,7 @@ fn resolve_base_branch(ctx: &Ctx, git: &GitService, mode: &BaseMode) -> Result<S
 mod tests {
     use super::*;
     use crate::config::{Config, IssueProviderType, IssuesConfig};
-    use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::mock::{CommandCall, MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
     use anyhow::Result;
     use std::path::{Path, PathBuf};
@@ -724,6 +724,26 @@ mod tests {
             Box::new(runner),
             Box::new(ui),
         )
+    }
+
+    fn write_empty_profile(root: &Path, name: &str) {
+        let profile_dir = root.join(".local/profiles").join(name);
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+    }
+
+    fn count_linear_start_updates(calls: &[CommandCall], issue_id: &str) -> usize {
+        let expected = vec![
+            "issue".to_string(),
+            "update".to_string(),
+            issue_id.to_string(),
+            "--state".to_string(),
+            "In Progress".to_string(),
+        ];
+        calls
+            .iter()
+            .filter(|(cmd, args, _)| cmd == "linear" && args == &expected)
+            .count()
     }
 
     #[test]
@@ -1490,6 +1510,121 @@ id = "PROJ-123"
                         "In Progress".to_string(),
                     ]
         }));
+    }
+
+    #[test]
+    fn task_option_with_provider_origin_and_profile_updates_start_status() {
+        let repo = tempfile::tempdir().unwrap();
+        write_empty_profile(repo.path(), "codex");
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("PROJ-123.toml"),
+            r#"title = "Fix editor"
+body = "Use the issue branch."
+
+[origin]
+provider = "linear"
+id = "PROJ-123"
+"#,
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor"}"#,
+            true,
+        );
+        runner.add_response("", false); // profile branch local_branch_exists
+        runner.add_response("", true); // worktree_add_new_branch
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // set parent config
+        runner.add_response("", true); // on_start
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config {
+                issues: Some(IssuesConfig {
+                    provider: IssueProviderType::Linear,
+                    gh_user: None,
+                }),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(
+            &ctx,
+            &[],
+            &["PROJ-123".into()],
+            &Some("main".into()),
+            Some("codex"),
+            false,
+        )
+        .unwrap();
+
+        let latest = task_run::latest_for_task(&ctx, "PROJ-123")
+            .unwrap()
+            .expect("expected latest task run");
+        assert_eq!(latest.run.status, task_run::STATUS_RUNNING);
+        assert_eq!(latest.run.branch, "alice/proj-123-fix-editor-codex");
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(count_linear_start_updates(&calls, "PROJ-123"), 1);
+    }
+
+    #[test]
+    fn task_option_with_local_task_and_profile_does_not_touch_issue_provider() {
+        let repo = tempfile::tempdir().unwrap();
+        write_empty_profile(repo.path(), "codex");
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response("", false); // profile branch local_branch_exists
+        runner.add_response("", true); // worktree_add_new_branch
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // set parent config
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config {
+                issues: Some(IssuesConfig {
+                    provider: IssueProviderType::Linear,
+                    gh_user: None,
+                }),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(
+            &ctx,
+            &[],
+            &["add-schema".into()],
+            &Some("main".into()),
+            Some("codex"),
+            false,
+        )
+        .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().all(|(cmd, _, _)| cmd != "linear"));
     }
 
     #[test]
