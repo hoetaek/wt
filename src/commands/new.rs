@@ -1,4 +1,7 @@
 use crate::cli::BaseMode;
+use crate::commands::profile_workspace::{
+    ProfileBranchDecision, PromptPolicy, resolve_profile_branch,
+};
 use crate::commands::{issue, task, task_run};
 use crate::config::Config;
 use crate::context::Ctx;
@@ -582,44 +585,20 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
             profile_config.worktree.path.as_deref(),
         )?;
 
-        if names.path.exists() {
-            ctx.ui.print_warning(&format!(
-                "Worktree {} already exists.",
-                names.path.display()
-            ));
-            let items = vec![
-                "Delete and recreate".into(),
-                "Skip".into(),
-                "Abort all".into(),
-            ];
-            let choice = ctx
-                .ui
-                .select(&format!("[{profile_name}] Worktree already exists"), &items)?;
-            match choice {
-                0 => {
-                    ctx.ui.print_step("Removing existing worktree...");
-                    git.worktree_remove_force(&names.path).ok();
-                    if names.path.exists() {
-                        std::fs::remove_dir_all(&names.path)?;
-                    }
-                }
-                1 => continue,
-                _ => return Err(WtError::Cancelled.into()),
+        match resolve_profile_branch(
+            ctx,
+            &git,
+            profile_name,
+            &profile_branch,
+            &names.path,
+            PromptPolicy::Allow,
+        )? {
+            ProfileBranchDecision::CreateNew => {}
+            ProfileBranchDecision::ReuseExisting { path } => {
+                setup::run_setup(ctx, &path, &names, None, "new", None, Some(profile_config))?;
+                continue;
             }
-        }
-
-        if git.local_branch_exists(&profile_branch)? {
-            ctx.ui.print_warning(&format!(
-                "Branch {profile_branch} already exists, removing..."
-            ));
-            git.worktree_remove_force(&names.path).ok();
-            ctx.runner
-                .run(
-                    "git",
-                    &["branch", "-D", &profile_branch],
-                    Some(&ctx.repo_root),
-                )
-                .ok();
+            ProfileBranchDecision::Skip => continue,
         }
 
         git.worktree_add_new_branch(&names.path, &profile_branch, base)?;
@@ -637,7 +616,7 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
     }
 
     ctx.ui.print_step(&format!(
-        "All {} profiles created successfully",
+        "All {} profiles processed successfully",
         profiles.len()
     ));
     Ok(())
@@ -1649,6 +1628,183 @@ id = "PROJ-123"
                         "branch.my-feature.parentbranch".to_string(),
                         "feature/current".to_string(),
                     ]
+        }));
+    }
+
+    #[test]
+    fn new_profile_existing_branch_without_worktree_reuses_branch() {
+        let repo = tempfile::tempdir().unwrap();
+        let profile_dir = repo.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response("", true); // profile branch local_branch_exists
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        ); // checked_out_path
+        runner.add_response("", true); // worktree_add existing branch
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_select(0); // reuse existing branch
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            &["my".into(), "feature".into()],
+            &[],
+            &Some("main".into()),
+            Some("codex"),
+            false,
+        )
+        .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "git"
+                && args.len() == 4
+                && args[0] == "worktree"
+                && args[1] == "add"
+                && args[3] == "my-feature-codex"
+        }));
+        assert!(calls.iter().all(|(cmd, args, _)| {
+            !(cmd == "git"
+                && args
+                    == &vec![
+                        "branch".to_string(),
+                        "-D".to_string(),
+                        "my-feature-codex".to_string(),
+                    ])
+        }));
+    }
+
+    #[test]
+    fn new_profile_branch_delete_failure_is_reported_directly() {
+        let repo = tempfile::tempdir().unwrap();
+        let profile_dir = repo.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response("", true); // profile branch local_branch_exists
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        ); // checked_out_path
+        runner.add_response_with_stderr("", "cannot delete protected branch", false);
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_select(1); // delete and recreate
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        let result = run(
+            &ctx,
+            &["my".into(), "feature".into()],
+            &[],
+            &Some("main".into()),
+            Some("codex"),
+            false,
+        );
+
+        assert!(result.is_err());
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("git branch -D my-feature-codex failed"));
+        assert!(message.contains("cannot delete protected branch"));
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().all(|(cmd, args, _)| {
+            !(cmd == "git"
+                && args.len() >= 3
+                && args[0] == "worktree"
+                && args[1] == "add"
+                && args[2] == "-b")
+        }));
+    }
+
+    #[test]
+    fn new_profile_path_recreate_reports_branch_delete_failure_directly() {
+        let repo = tempfile::tempdir().unwrap();
+        let profile_dir = repo.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+        std::fs::create_dir_all(repo.path().join("worktrees/my-feature-codex")).unwrap();
+
+        let mut config = Config::default();
+        config.worktree.path = Some("worktrees/{{branch_sanitized}}".into());
+
+        let mut runner = MockRunner::new();
+        runner.add_response("", true); // worktree_remove_force
+        runner.add_response("", true); // profile branch local_branch_exists
+        runner.add_response_with_stderr("", "cannot delete protected branch", false);
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_select(0); // delete and recreate existing path
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(ui),
+        );
+
+        let result = run(
+            &ctx,
+            &["my".into(), "feature".into()],
+            &[],
+            &Some("main".into()),
+            Some("codex"),
+            false,
+        );
+
+        assert!(result.is_err());
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("git branch -D my-feature-codex failed"));
+        assert!(message.contains("cannot delete protected branch"));
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "git"
+                && args
+                    == &vec![
+                        "branch".to_string(),
+                        "-D".to_string(),
+                        "my-feature-codex".to_string(),
+                    ]
+        }));
+        assert!(calls.iter().all(|(cmd, args, _)| {
+            !(cmd == "git"
+                && args.len() >= 3
+                && args[0] == "worktree"
+                && args[1] == "add"
+                && args[2] == "-b")
         }));
     }
 
