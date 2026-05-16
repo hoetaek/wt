@@ -7,6 +7,8 @@ members = ["cargo:."]
 cargo-dist-version = "0.31.0"
 # CI backends to support
 ci = "github"
+# Keep the generated release workflow hand-editable for branch-policy gates.
+allow-dirty = ["ci"]
 # The installers to generate for each app
 installers = ["shell", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
