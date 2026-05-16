@@ -1,10 +1,17 @@
+pub(crate) use crate::agents::WorkState;
+use crate::agents::{self, AgentKind, AgentObservation};
 use crate::commands::task_run;
 use crate::context::Ctx;
-use crate::services::cmux::{CmuxService, CmuxWorkspace};
+use crate::services::cmux::{CmuxEvent, CmuxPaneSelectedSurface, CmuxService, CmuxWorkspace};
 use crate::services::git::{GitService, WorktreeEntry};
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use thiserror::Error;
+
+const WORK_OBSERVATION_SCREEN_LINES: usize = 80;
+const WORK_OBSERVATION_EVENT_LIMIT: usize = 4000;
+const WORK_OBSERVATION_EVENT_TIMEOUT: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WorkTarget {
@@ -27,12 +34,13 @@ pub(crate) struct CmuxContact {
 pub(crate) struct Work {
     pub(crate) target: WorkTarget,
     pub(crate) state: WorkState,
+    pub(crate) session_state: WorkSessionState,
     pub(crate) cmux: Option<WorkCmuxSurface>,
     pub(crate) message: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WorkState {
+pub(crate) enum WorkSessionState {
     NoLocalWorktree,
     CmuxUnavailable,
     NoCmuxWorkspace,
@@ -82,7 +90,8 @@ pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
                 target.branch
             )),
             target,
-            state: WorkState::NoLocalWorktree,
+            state: WorkState::no_session(AgentKind::Unknown),
+            session_state: WorkSessionState::NoLocalWorktree,
             cmux: None,
         });
     };
@@ -91,7 +100,8 @@ pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
     if !cmux.is_available() {
         return Ok(Work {
             target,
-            state: WorkState::CmuxUnavailable,
+            state: WorkState::no_session(AgentKind::Unknown),
+            session_state: WorkSessionState::CmuxUnavailable,
             cmux: None,
             message: Some("cmux command not found".into()),
         });
@@ -102,7 +112,8 @@ pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
         Err(err) => {
             return Ok(Work {
                 target,
-                state: WorkState::CmuxUnavailable,
+                state: WorkState::no_session(AgentKind::Unknown),
+                session_state: WorkSessionState::CmuxUnavailable,
                 cmux: None,
                 message: Some(format!("cmux workspace lookup failed: {err:#}")),
             });
@@ -115,7 +126,8 @@ pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
     else {
         return Ok(Work {
             target,
-            state: WorkState::NoCmuxWorkspace,
+            state: WorkState::no_session(AgentKind::Unknown),
+            session_state: WorkSessionState::NoCmuxWorkspace,
             cmux: None,
             message: Some(format!(
                 "No cmux workspace found for worktree: {}",
@@ -130,7 +142,8 @@ pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
         Err(err) => {
             return Ok(Work {
                 target,
-                state: WorkState::NoTerminalSurface,
+                state: WorkState::no_session(AgentKind::Unknown),
+                session_state: WorkSessionState::NoTerminalSurface,
                 cmux: Some(surface),
                 message: Some(format!("cmux pane lookup failed: {err:#}")),
             });
@@ -140,7 +153,8 @@ pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
     let Some(selected) = selected_surfaces.into_iter().next() else {
         return Ok(Work {
             target,
-            state: WorkState::NoTerminalSurface,
+            state: WorkState::no_session(AgentKind::Unknown),
+            session_state: WorkSessionState::NoTerminalSurface,
             cmux: Some(surface),
             message: Some(format!(
                 "No selected cmux surface found for workspace: {}",
@@ -149,21 +163,39 @@ pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
         });
     };
 
-    surface.pane_id = Some(selected.pane_id);
-    surface.pane_ref = Some(selected.pane_handle);
-    surface.surface_id = Some(selected.selected_surface_id);
+    surface.pane_id = Some(selected.pane_id.clone());
+    surface.pane_ref = Some(selected.pane_handle.clone());
+    surface.surface_id = Some(selected.selected_surface_id.clone());
     surface.surface_ref = Some(selected.selected_surface_handle.clone());
 
-    match cmux.read_screen_lines(&selected.selected_surface_handle, &workspace.handle, 1) {
-        Ok(_) => Ok(Work {
-            target,
-            state: WorkState::TerminalSurfaceReady,
-            cmux: Some(surface),
-            message: None,
-        }),
+    match cmux.read_screen_lines(
+        &selected.selected_surface_handle,
+        &workspace.handle,
+        WORK_OBSERVATION_SCREEN_LINES,
+    ) {
+        Ok(screen) => {
+            let statuses = cmux.list_status(&workspace.handle).unwrap_or_default();
+            let events = cmux
+                .replay_events_after(
+                    0,
+                    WORK_OBSERVATION_EVENT_LIMIT,
+                    WORK_OBSERVATION_EVENT_TIMEOUT,
+                )
+                .map(|events| filter_work_events(events, &workspace, &selected))
+                .unwrap_or_default();
+            let observation = AgentObservation::new(Some(&screen), &statuses, &events);
+            Ok(Work {
+                target,
+                state: agents::classify(&observation),
+                session_state: WorkSessionState::TerminalSurfaceReady,
+                cmux: Some(surface),
+                message: None,
+            })
+        }
         Err(err) => Ok(Work {
             target,
-            state: WorkState::NoTerminalSurface,
+            state: WorkState::no_session(AgentKind::Unknown),
+            session_state: WorkSessionState::NoTerminalSurface,
             cmux: Some(surface),
             message: Some(format!("cmux terminal surface is not ready: {err:#}")),
         }),
@@ -378,6 +410,55 @@ fn work_cmux_workspace(workspace: &CmuxWorkspace) -> WorkCmuxSurface {
     }
 }
 
+fn filter_work_events(
+    events: Vec<CmuxEvent>,
+    workspace: &CmuxWorkspace,
+    surface: &CmuxPaneSelectedSurface,
+) -> Vec<CmuxEvent> {
+    events
+        .into_iter()
+        .filter(|event| event_matches_work(event, workspace, surface))
+        .collect()
+}
+
+fn event_matches_work(
+    event: &CmuxEvent,
+    workspace: &CmuxWorkspace,
+    surface: &CmuxPaneSelectedSurface,
+) -> bool {
+    let workspace_matches = event
+        .workspace_id
+        .as_deref()
+        .is_some_and(|id| id == workspace.id.as_str() || id == workspace.handle.as_str())
+        || payload_string(event, "workspace_ref")
+            .is_some_and(|value| value == workspace.handle.as_str())
+        || payload_string(event, "workspace_id")
+            .is_some_and(|value| value == workspace.id.as_str());
+    if !workspace_matches {
+        return false;
+    }
+
+    event.surface_id.as_deref().is_none_or(|id| {
+        id == surface.selected_surface_id.as_str() || id == surface.selected_surface_handle.as_str()
+    }) || payload_string(event, "surface_ref")
+        .is_some_and(|value| value == surface.selected_surface_handle.as_str())
+        || payload_string(event, "surface_id")
+            .is_some_and(|value| value == surface.selected_surface_id.as_str())
+}
+
+fn payload_string<'a>(event: &'a CmuxEvent, key: &str) -> Option<&'a str> {
+    event
+        .payload
+        .get(key)
+        .or_else(|| {
+            event
+                .payload
+                .get("result")
+                .and_then(|result| result.get(key))
+        })
+        .and_then(serde_json::Value::as_str)
+}
+
 fn same_path(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
@@ -396,6 +477,7 @@ fn task_run_id(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::{AgentKind, AgentStatus};
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
 
@@ -568,7 +650,9 @@ mod tests {
 
         let work = observe_work(&ctx, Some("feature")).unwrap();
 
-        assert_eq!(work.state, WorkState::TerminalSurfaceReady);
+        assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
+        assert_eq!(work.state.agent_kind, AgentKind::Unknown);
+        assert_eq!(work.state.status, AgentStatus::Idle);
         assert_eq!(work.target.branch, "feature");
         assert_eq!(
             work.target.worktree.as_deref(),
@@ -604,7 +688,7 @@ mod tests {
 
         let work = observe_work(&ctx, Some("feature")).unwrap();
 
-        assert_eq!(work.state, WorkState::NoCmuxWorkspace);
+        assert_eq!(work.session_state, WorkSessionState::NoCmuxWorkspace);
         assert!(work.cmux.is_none());
         assert!(work.message.unwrap().contains("No cmux workspace found"));
     }
@@ -624,7 +708,7 @@ mod tests {
 
         let work = observe_work(&ctx, Some("feature")).unwrap();
 
-        assert_eq!(work.state, WorkState::NoTerminalSurface);
+        assert_eq!(work.session_state, WorkSessionState::NoTerminalSurface);
         let cmux = work.cmux.unwrap();
         assert_eq!(cmux.workspace_ref, "workspace:1");
         assert!(cmux.surface_ref.is_none());
@@ -643,7 +727,7 @@ mod tests {
 
         let work = observe_work(&ctx, Some("feature")).unwrap();
 
-        assert_eq!(work.state, WorkState::NoTerminalSurface);
+        assert_eq!(work.session_state, WorkSessionState::NoTerminalSurface);
         let cmux = work.cmux.unwrap();
         assert_eq!(cmux.surface_ref.as_deref(), Some("surface:4"));
         assert!(
@@ -662,7 +746,7 @@ mod tests {
 
         let work = observe_work(&ctx, Some("feature")).unwrap();
 
-        assert_eq!(work.state, WorkState::CmuxUnavailable);
+        assert_eq!(work.session_state, WorkSessionState::CmuxUnavailable);
         assert!(work.message.unwrap().contains("cmux command not found"));
     }
 

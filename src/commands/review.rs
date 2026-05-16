@@ -131,25 +131,40 @@ fn print_worktree_status(ctx: &Ctx, status: Option<&str>) {
 }
 
 fn print_cmux_work(ctx: &Ctx, work: &work::Work) {
-    match work.state {
-        work::WorkState::NoLocalWorktree => ctx
+    match work.session_state {
+        work::WorkSessionState::NoLocalWorktree => ctx
             .ui
             .print_dim("  cmux: unavailable without a checked out worktree"),
-        work::WorkState::CmuxUnavailable => ctx.ui.print_dim("  cmux: unavailable"),
-        work::WorkState::NoCmuxWorkspace => {
+        work::WorkSessionState::CmuxUnavailable => ctx.ui.print_dim("  cmux: unavailable"),
+        work::WorkSessionState::NoCmuxWorkspace => {
             ctx.ui.print_dim("  cmux: no workspace found for worktree")
         }
-        work::WorkState::NoTerminalSurface => {
+        work::WorkSessionState::NoTerminalSurface => {
             if let Some(cmux) = work.cmux.as_ref() {
                 print_cmux_workspace_ref(ctx, cmux);
             }
             ctx.ui.print_dim("  cmux: terminal surface is not ready");
         }
-        work::WorkState::TerminalSurfaceReady => {
+        work::WorkSessionState::TerminalSurfaceReady => {
             if let Some(contact) = work.cmux.as_ref().and_then(work::WorkCmuxSurface::contact) {
                 print_cmux_workspace(ctx, &contact);
             }
         }
+    }
+    print_agent_state(ctx, &work.state);
+}
+
+fn print_agent_state(ctx: &Ctx, state: &work::WorkState) {
+    ctx.ui.print_dim(&format!(
+        "  Agent: {} ({})",
+        state.agent_kind.as_str(),
+        state.status.as_str()
+    ));
+    if let Some(tool) = state.last_tool.as_deref() {
+        ctx.ui.print_dim(&format!("  Agent last tool: {tool}"));
+    }
+    if let Some(warning) = state.warning.as_deref() {
+        ctx.ui.print_warning(&format!("  Agent warning: {warning}"));
     }
 }
 
@@ -539,6 +554,8 @@ mod tests {
             true,
         );
         runner.add_response("ready", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
         runner.add_response("main", true);
         runner.add_response("", true);
         runner.add_response("1", true);
