@@ -11,12 +11,21 @@ use anyhow::{Result, bail};
 pub fn run(
     ctx: &Ctx,
     name_words: &[String],
+    task_key: Option<Option<&str>>,
     base_raw: &Option<String>,
     profile: Option<&str>,
     matrix: bool,
 ) -> Result<()> {
+    if let Some(task_key) = task_key {
+        if !name_words.is_empty() {
+            bail!("wt new accepts branch-name text or --task, not both");
+        }
+        let task_key = task_key.filter(|key| !key.trim().is_empty());
+        return run_selected_task(ctx, task_key, base_raw, profile, matrix).map(|_| ());
+    }
+
     if name_words.is_empty() {
-        return run_selected_task(ctx, base_raw, profile, matrix);
+        bail!("wt new requires branch-name text or --task [<task-key>]");
     }
 
     let branch_name = branch_name_from_words(name_words)?;
@@ -82,22 +91,16 @@ pub fn run(
 
 fn run_selected_task(
     ctx: &Ctx,
+    task_key: Option<&str>,
     base_raw: &Option<String>,
     profile: Option<&str>,
     matrix: bool,
-) -> Result<()> {
-    if matrix {
-        bail!(
-            "wt new --matrix requires branch-name text; omit --matrix when selecting a local task"
-        );
-    }
-    if profile.is_some() {
-        bail!(
-            "wt new --profile requires branch-name text; omit --profile when selecting a local task"
-        );
-    }
-
-    let selected = task::select_local_task(ctx)?;
+) -> Result<issue::IssueRunResult> {
+    let selected = if let Some(task_key) = task_key {
+        task::select_local_task_by_key(ctx, task_key)?
+    } else {
+        task::select_local_task(ctx)?
+    };
     let branch_name = task::prepared_branch_name(&selected.document.branch);
     if branch_name.is_none() && selected.document.origin.is_none() {
         bail!("Task {} has no branch", selected.key);
@@ -108,8 +111,8 @@ fn run_selected_task(
     let result = issue::run_with_issue_snapshot(
         ctx,
         base_raw,
-        None,
-        false,
+        profile,
+        matrix,
         issue::PreparedIssueContext {
             identifier: &identifier,
             title: &title,
@@ -128,7 +131,7 @@ fn run_selected_task(
         task::write_task_branch(ctx, &selected.key, &result.branch_name)?;
     }
 
-    Ok(())
+    Ok(result)
 }
 
 pub(crate) fn branch_name_from_words(name_words: &[String]) -> Result<String> {
@@ -333,12 +336,29 @@ mod tests {
     }
 
     #[test]
-    fn empty_name_without_tasks_is_error() {
+    fn empty_name_requires_branch_text_or_task_option() {
         let runner = MockRunner::new();
         let ui = MockUi::new();
         let ctx = make_ctx(runner, ui);
 
-        let result = run(&ctx, &[], &None, None, false);
+        let result = run(&ctx, &[], None, &None, None, false);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("wt new requires branch-name text or --task")
+        );
+    }
+
+    #[test]
+    fn task_option_without_value_reaches_local_task_selection() {
+        let runner = MockRunner::new();
+        let ui = MockUi::new();
+        let ctx = make_ctx(runner, ui);
+
+        let result = run(&ctx, &[], Some(None), &None, None, false);
+
         assert!(result.is_err());
         assert!(
             result
@@ -349,41 +369,31 @@ mod tests {
     }
 
     #[test]
-    fn empty_name_rejects_profile_before_task_selection() {
+    fn task_option_rejects_branch_name_text() {
         let runner = MockRunner::new();
         let ui = MockUi::new();
         let ctx = make_ctx(runner, ui);
 
-        let result = run(&ctx, &[], &None, Some("codex"), false);
+        let result = run(
+            &ctx,
+            &["add".into(), "schema".into()],
+            Some(Some("add-schema")),
+            &None,
+            None,
+            false,
+        );
 
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
                 .to_string()
-                .contains("wt new --profile requires branch-name text")
+                .contains("wt new accepts branch-name text or --task, not both")
         );
     }
 
     #[test]
-    fn empty_name_rejects_matrix_before_task_selection() {
-        let runner = MockRunner::new();
-        let ui = MockUi::new();
-        let ctx = make_ctx(runner, ui);
-
-        let result = run(&ctx, &[], &None, None, true);
-
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("wt new --matrix requires branch-name text")
-        );
-    }
-
-    #[test]
-    fn empty_name_selects_local_task_and_runs_task_snapshot() {
+    fn task_option_selects_local_task_and_runs_task_snapshot() {
         let repo = tempfile::tempdir().unwrap();
         let tasks_dir = repo.path().join(".local/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -419,7 +429,59 @@ mod tests {
             Box::new(ui),
         );
 
-        run(&ctx, &[], &None, None, false).unwrap();
+        run(&ctx, &[], Some(None), &None, None, false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let worktree_add_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .expect("expected git worktree add -b call");
+        assert_eq!(worktree_add_call.1[3], "add-schema");
+        assert_eq!(worktree_add_call.1[5], "main");
+    }
+
+    #[test]
+    fn task_option_with_key_runs_named_task_snapshot() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("main", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, &[], Some(Some("add-schema")), &None, None, false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -458,7 +520,7 @@ mod tests {
         );
 
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, &None, None, false);
+        let result = run(&ctx, &words, None, &None, None, false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
 
         let calls = runner.calls.lock().unwrap();
@@ -505,7 +567,7 @@ mod tests {
 
         let ctx = make_ctx(runner, ui);
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, &None, None, false);
+        let result = run(&ctx, &words, None, &None, None, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }
@@ -541,7 +603,7 @@ mod tests {
         let ui = MockUi::new();
         let ctx = make_ctx(runner, ui);
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, &Some("develop".into()), None, false);
+        let result = run(&ctx, &words, None, &Some("develop".into()), None, false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
     }
 
@@ -571,7 +633,7 @@ mod tests {
             Box::new(ui),
         );
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        run(&ctx, &words, &Some(".".into()), None, false).unwrap();
+        run(&ctx, &words, None, &Some(".".into()), None, false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -627,6 +689,7 @@ mod tests {
         run(
             &ctx,
             &["my".into(), "feature".into()],
+            None,
             &Some("main".into()),
             Some("codex-yolo"),
             false,
@@ -668,6 +731,7 @@ mod tests {
         run(
             &ctx,
             &["my".into(), "feature".into()],
+            None,
             &Some("develop".into()),
             None,
             false,
@@ -715,6 +779,7 @@ mod tests {
         run(
             &ctx,
             &["my".into(), "feature".into()],
+            None,
             &Some("develop".into()),
             None,
             false,
