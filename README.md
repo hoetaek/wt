@@ -825,16 +825,26 @@ Stack-created cmux workspace names start with a compact order label, for example
 `S2/5 PROJ-123 Wire API`, so narrow workspace tabs still show both stack position
 and issue or task content.
 
-When `run` starts a task, the agent prompt includes a coordinator handoff. The
-task agent is asked to send its completion report back to the worktree that ran
-the stack:
+When `run` starts a task, the agent prompt includes a coordinator handoff. After
+committing the task work, the task agent is asked to check whether this
+repository or coordinator workflow expects a pull request before stack review. If
+it does, the task agent pushes the branch and opens a draft pull request against
+the stack parent branch:
 
 ```bash
-wt send /path/to/repo "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; Risks or follow-ups=<risks>"
+git push -u origin HEAD
+gh pr create --draft --base <parent-branch> --fill
 ```
 
-The coordinator reviews that report and the branch state, then advances the
-stack with the completion command:
+Then it sends its completion report back to the worktree that ran the stack,
+including the pull request URL or `PR=none` when no pull request was opened:
+
+```bash
+wt send /path/to/repo "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>"
+```
+
+The coordinator reviews that report, the branch state, and the pull request when
+one exists, then advances the stack with the completion command:
 
 ```bash
 wt stack complete .local/stacks/2026-05-12-001.toml 123 --run-next

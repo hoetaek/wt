@@ -220,9 +220,12 @@ Stack에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 
 전이해야 한다. 다음 task 자동 시작은 명시적인 continuation 선택, 예를 들어
 `--run-next`로만 일어난다.
 Stack task prompt는 작업 agent가 자기 판단만으로 stack을 전진시키기보다, 작업과
-commit을 끝낸 뒤 `wt send <coordinator-worktree> ...`로 실행자 worktree에
-Agent Completion Report를 보내도록 안내한다. 이 보고 전송은 transport일 뿐 상태
-전이가 아니다. 실행자나 master agent가 `wt review`와 보고를 확인한 뒤
+commit을 끝낸 뒤 repo나 coordinator workflow가 pull request review를 기대하는지
+확인하도록 안내한다. PR workflow가 필요한 경우에만 branch를 push하고 stack parent
+branch를 base로 draft pull request를 열게 한다. 그 다음 `wt send <coordinator-worktree>
+...`로 실행자 worktree에 pull request URL 또는 `PR=none`을 포함한 Agent Completion
+Report를 보내도록 안내한다. 이 보고 전송은 transport일 뿐 상태 전이가 아니다. 실행자나
+master agent가 `wt review`, 필요한 경우 pull request, 보고를 확인한 뒤
 `wt stack complete ... --run-next`를 실행할 때 TaskRun 상태가 전이된다.
 
 `wt done`은 worktree와 local branch cleanup 명령이므로 `source = "new"`와

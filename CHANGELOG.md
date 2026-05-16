@@ -24,9 +24,12 @@ minor version instead of moving to `x.0.0`.
   `wt stack run latest` from the run contract.
 - Bumped the package version to `0.16.0` because task publish and stack run
   changed user-facing CLI behavior while `wt` is still pre-1.0.
-- Changed stack task prompts to ask task agents to `wt send` their Agent
-  Completion Report back to the coordinator worktree before waiting for review;
-  the coordinator still advances the stack with `wt stack complete --run-next`.
+- Changed stack task prompts to include conditional draft-PR handoff guidance:
+  when the repository or coordinator workflow expects PR review, task agents
+  push their branch, open a draft PR against the stack parent branch, and
+  `wt send` a Completion Report with the PR URL back to the coordinator
+  worktree before waiting for review. The coordinator still advances the stack
+  with `wt stack complete --run-next`.
 - Added `wt task publish` and `wt task publish <task>...` for publishing local
   TaskDocuments to the configured issue provider and writing created issue
   origins back to selected task files without creating TaskRuns or worktrees.

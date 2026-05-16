@@ -546,8 +546,13 @@ fn stack_task_prompt_content(
     stack_task: &StackTask,
     coordinator_target: &str,
 ) -> String {
+    let parent_branch = stack_task.parent.as_deref().unwrap_or("<stack-parent>");
+    let pr_command = format!(
+        "git push -u origin HEAD\ngh pr create --draft --base {} --fill",
+        shell_arg(parent_branch)
+    );
     let send_command = format!(
-        "wt send {} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; Risks or follow-ups=<risks>\"",
+        "wt send {} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>\"",
         shell_arg(coordinator_target)
     );
     let complete_command = format!(
@@ -557,8 +562,9 @@ fn stack_task_prompt_content(
     );
 
     format!(
-        "{}\n\n## Stack Coordinator Handoff\n\nWhen this task is complete and committed, send the Agent Completion Report back to the coordinator worktree that started this stack:\n\n```bash\n{}\n```\n\nAfter sending the report, wait for the coordinator to review and advance the stack. The coordinator will run:\n\n```bash\n{}\n```\n\nIf `wt send` cannot find the coordinator surface, leave the same report in this task session and wait.",
+        "{}\n\n## Stack Coordinator Handoff\n\nWhen this task is complete and committed, check whether this repository or coordinator workflow expects a pull request before stack review. If it does, push the branch and open a draft pull request against the stack parent branch:\n\n```bash\n{}\n```\n\nThen send the Agent Completion Report back to the coordinator worktree that started this stack. Include the pull request URL, or `PR=none` when no pull request was opened:\n\n```bash\n{}\n```\n\nAfter sending the report, wait for the coordinator to review and advance the stack. The coordinator will run:\n\n```bash\n{}\n```\n\nIf `gh pr create` reports that a pull request already exists, include the existing pull request URL in the report. If `wt send` cannot find the coordinator surface, leave the same report in this task session and wait.",
         content.trim_end(),
+        pr_command,
         send_command,
         complete_command
     )
@@ -1424,7 +1430,11 @@ mod tests {
         );
 
         assert!(content.contains("## Stack Coordinator Handoff"));
-        assert!(content.contains("wt send /repo \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; Risks or follow-ups=<risks>\""));
+        assert!(content.contains(
+            "check whether this repository or coordinator workflow expects a pull request"
+        ));
+        assert!(content.contains("gh pr create --draft --base PROJ-1 --fill"));
+        assert!(content.contains("wt send /repo \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url-or-none>; Risks or follow-ups=<risks>\""));
         assert!(content.contains(
             "wt stack complete /repo/.local/stacks/2026-05-16-001.toml PROJ-2 --run-next"
         ));
@@ -1443,6 +1453,7 @@ mod tests {
         let content =
             stack_task_prompt_content("title = \"Task\"\n", &stack_path, &stack_task, "/repo path");
 
+        assert!(content.contains("gh pr create --draft --base '<stack-parent>' --fill"));
         assert!(content.contains("wt send '/repo path' \"Agent Completion Report:"));
         assert!(content.contains(
             "wt stack complete '/repo path/.local/stacks/stack.toml' 'task with space' --run-next"
