@@ -47,7 +47,20 @@ struct InitPlan {
     preset: InitPreset,
     sections: Vec<InitSection>,
     detected_signals: Vec<String>,
+    notices: Vec<InitNotice>,
     content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InitNotice {
+    level: InitNoticeLevel,
+    message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitNoticeLevel {
+    Hint,
+    Warn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +114,37 @@ struct InitCommand {
 enum InitCommandKind {
     NodeInstall,
     Other,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DetectedRepo {
+    setup_deps: Vec<InitCommand>,
+    post_deps_tabs: Vec<String>,
+    test_commands: Vec<InitCommand>,
+}
+
+impl DetectedRepo {
+    fn scan(repo_root: &Path) -> Self {
+        Self {
+            setup_deps: detect_setup_deps(repo_root),
+            post_deps_tabs: detect_post_deps_tabs(repo_root),
+            test_commands: detect_test_commands(repo_root),
+        }
+    }
+
+    fn signals(&self) -> Vec<String> {
+        let mut signals = Vec::new();
+        for command in &self.setup_deps {
+            push_signal(&mut signals, format!("setup: {}", command_display(command)));
+        }
+        for tab in &self.post_deps_tabs {
+            push_signal(&mut signals, format!("post-deps tab: {tab}"));
+        }
+        for command in &self.test_commands {
+            push_signal(&mut signals, format!("test: {}", command_display(command)));
+        }
+        signals
+    }
 }
 
 impl Default for InitCommonConfig {
@@ -273,6 +317,7 @@ fn preset_from_explicit_overrides(options: &InitOptions) -> Option<InitPreset> {
 fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<InitPlan> {
     validate_options(options)?;
     let target_exists = target.path.exists();
+    let detected = DetectedRepo::scan(&ctx.repo_root);
     if is_interactive_wizard(options) {
         print_wizard_step(ctx, 2, "Starter");
     }
@@ -291,19 +336,19 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     if is_interactive_wizard(options) {
         print_wizard_step(ctx, 4, "Detected commands");
     }
-    let common = resolve_common_config(ctx, options, preset)?;
+    let common = resolve_common_config(ctx, options, preset, &detected)?;
 
     let mut s = String::new();
     let mut sections = Vec::new();
 
-    if let Some(provider) = issue_provider {
+    if let Some(provider) = &issue_provider {
         sections.push(InitSection::Issues);
         s.push_str("[issues]\n");
         s.push_str(&format!(
             "provider = {}\n",
-            toml_quote(issue_provider_name(&provider))
+            toml_quote(issue_provider_name(provider))
         ));
-        if provider == InitIssueProvider::Github {
+        if *provider == InitIssueProvider::Github {
             if let Some(user) = gh_user.as_deref() {
                 s.push_str(&format!("gh_user = {}\n", toml_quote(user)));
             }
@@ -311,14 +356,14 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         s.push('\n');
     }
 
-    if let Some(provider) = site_provider {
+    if let Some(provider) = &site_provider {
         sections.push(InitSection::Site);
         s.push_str("[site]\n");
         s.push_str(&format!(
             "provider = {}\n",
-            toml_quote(site_provider_name(&provider))
+            toml_quote(site_provider_name(provider))
         ));
-        if matches!(provider, InitSiteProvider::Traefik) {
+        if matches!(*provider, InitSiteProvider::Traefik) {
             s.push_str("name = \"{{repo}}-{{branch_slug}}.l\"\n");
             s.push_str("url = \"https://{{site_name}}\"\n");
             s.push_str("target = \"http://127.0.0.1:{{vite_port}}\"\n");
@@ -326,7 +371,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
             s.push_str("name = \"{{repo}}-{{branch_slug}}\"\n");
         }
         if matches!(
-            provider,
+            *provider,
             InitSiteProvider::Herd | InitSiteProvider::Valet | InitSiteProvider::Traefik
         ) {
             s.push_str("secure = true\n");
@@ -344,6 +389,14 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     append_optional_scaffold(&mut s);
 
     toml::from_str::<Config>(&s)?;
+    let notices = build_plan_notices(
+        ctx,
+        preset,
+        profile.as_ref(),
+        issue_provider.as_ref(),
+        site_provider.as_ref(),
+        &common,
+    );
 
     Ok(InitPlan {
         target_path: target.path,
@@ -351,7 +404,8 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         target_exists,
         preset,
         sections,
-        detected_signals: detect_signals(&ctx.repo_root),
+        detected_signals: detected.signals(),
+        notices,
         content: s,
     })
 }
@@ -411,6 +465,12 @@ fn render_plan_summary(plan: &InitPlan) -> Vec<String> {
         );
     }
 
+    lines.extend(
+        plan.notices
+            .iter()
+            .map(|notice| format!("[{}] {}", notice_level_name(notice.level), notice.message)),
+    );
+
     lines
 }
 
@@ -436,6 +496,156 @@ fn print_existing_target_warning(ctx: &Ctx, plan: &InitPlan, options: &InitOptio
         "Config already exists: {} ({suffix})",
         plan.target_path.display()
     ));
+}
+
+fn build_plan_notices(
+    ctx: &Ctx,
+    preset: InitPreset,
+    profile: Option<&InitProfile>,
+    issue_provider: Option<&InitIssueProvider>,
+    site_provider: Option<&InitSiteProvider>,
+    common: &InitCommonConfig,
+) -> Vec<InitNotice> {
+    let mut notices = Vec::new();
+
+    if let Some(profile) = profile {
+        push_agent_tool_notice(ctx, &mut notices, &profile.agent);
+        push_missing_command_warning(
+            ctx,
+            &mut notices,
+            "cmux",
+            "cmux CLI missing; generated workspace config can be saved, but agent workspace launch needs cmux",
+        );
+    }
+
+    if let Some(provider) = issue_provider {
+        match provider {
+            InitIssueProvider::Github => push_missing_command_warning(
+                ctx,
+                &mut notices,
+                "gh",
+                "gh CLI missing; generated GitHub issue config can be saved, but issue selection needs gh",
+            ),
+            InitIssueProvider::Linear => push_missing_command_warning(
+                ctx,
+                &mut notices,
+                "linear",
+                "linear CLI missing; generated Linear issue config can be saved, but issue selection needs linear",
+            ),
+            InitIssueProvider::None => {}
+        }
+
+        let readiness = profile.map_or_else(
+            || {
+                "issue agent prompt: no agent runtime selected; add --agent <name> when issue work should launch an agent".to_string()
+            },
+            |profile| {
+                format!(
+                    "issue agent prompt: ready via {}",
+                    agent_cli_name(&profile.agent.cli)
+                )
+            },
+        );
+        push_notice(&mut notices, InitNoticeLevel::Hint, readiness);
+    }
+
+    if let Some(provider) = site_provider {
+        match provider {
+            InitSiteProvider::Herd => push_missing_command_warning(
+                ctx,
+                &mut notices,
+                "herd",
+                "herd CLI missing; generated Herd site config can be saved, but site setup needs herd",
+            ),
+            InitSiteProvider::Valet => push_missing_command_warning(
+                ctx,
+                &mut notices,
+                "valet",
+                "valet CLI missing; generated Valet site config can be saved, but site setup needs valet",
+            ),
+            InitSiteProvider::Traefik => push_missing_command_warning(
+                ctx,
+                &mut notices,
+                "traefik",
+                "traefik CLI missing; generated Traefik site config can be saved, but site setup needs traefik",
+            ),
+            InitSiteProvider::DockerProxy | InitSiteProvider::None => {}
+        }
+    }
+
+    if !common.post_deps_tabs.is_empty() {
+        if preset == InitPreset::App {
+            push_notice(
+                &mut notices,
+                InitNoticeLevel::Hint,
+                format!("app dev tabs: {}", common.post_deps_tabs.join("; ")),
+            );
+        }
+        push_missing_command_warning(
+            ctx,
+            &mut notices,
+            "cmux",
+            "cmux CLI missing; generated dev tabs can be saved, but automatic tab launch needs cmux",
+        );
+    }
+
+    notices
+}
+
+fn push_agent_tool_notice(ctx: &Ctx, notices: &mut Vec<InitNotice>, agent: &AgentConfig) {
+    match required_agent_command(agent) {
+        Ok(Some(command)) => push_missing_command_warning(
+            ctx,
+            notices,
+            &command,
+            format!(
+                "{} command missing; generated agent config can be saved, but agent launch needs {}",
+                command, command
+            ),
+        ),
+        Ok(None) => {}
+        Err(err) => push_notice(
+            notices,
+            InitNoticeLevel::Warn,
+            format!("agent command could not be parsed ({err}); run wt doctor after init"),
+        ),
+    }
+}
+
+fn required_agent_command(agent: &AgentConfig) -> std::result::Result<Option<String>, String> {
+    if let Some(command) = agent.command.as_deref() {
+        return shell_words::split(command)
+            .map(|parts| parts.first().cloned())
+            .map_err(|err| err.to_string());
+    }
+
+    Ok(match agent.cli {
+        AgentCli::Codex => Some("codex".into()),
+        AgentCli::Claude => Some("claude".into()),
+        AgentCli::Gemini => Some("gemini".into()),
+        AgentCli::None => None,
+    })
+}
+
+fn push_missing_command_warning(
+    ctx: &Ctx,
+    notices: &mut Vec<InitNotice>,
+    command: &str,
+    message: impl Into<String>,
+) {
+    if !ctx.runner.has_command(command) {
+        push_notice(notices, InitNoticeLevel::Warn, message.into());
+    }
+}
+
+fn push_notice(notices: &mut Vec<InitNotice>, level: InitNoticeLevel, message: String) {
+    if notices
+        .iter()
+        .any(|notice| notice.level == level && notice.message == message)
+    {
+        return;
+    }
+    notices.push(InitNotice { level, message });
 }
 
 fn append_optional_scaffold(s: &mut String) {
@@ -568,18 +778,28 @@ fn resolve_common_config(
     ctx: &Ctx,
     options: &InitOptions,
     preset: InitPreset,
+    detected: &DetectedRepo,
 ) -> Result<InitCommonConfig> {
     let mut config = InitCommonConfig::default();
-    if options.yes {
-        if preset == InitPreset::App {
-            config.setup_deps = default_enabled_setup_deps(&ctx.repo_root);
-            config.test_commands = default_enabled_test_commands(&ctx.repo_root);
+    if preset == InitPreset::App {
+        config = detected_app_common_config(detected);
+        if options.yes {
+            return Ok(config);
         }
-        return Ok(config);
+
+        let items = vec![
+            "Use detected app defaults".into(),
+            "Customize commands and tabs".into(),
+        ];
+        if ctx.ui.select("App defaults", &items)? == 0 {
+            return Ok(config);
+        }
+
+        return resolve_custom_common_config(ctx, config, detected);
     }
 
-    if preset == InitPreset::App {
-        return resolve_custom_common_config(ctx, config);
+    if options.yes {
+        return Ok(config);
     }
 
     let items = vec![
@@ -590,65 +810,60 @@ fn resolve_common_config(
         return Ok(config);
     }
 
-    resolve_custom_common_config(ctx, config)
+    resolve_custom_common_config(ctx, config, detected)
+}
+
+fn detected_app_common_config(detected: &DetectedRepo) -> InitCommonConfig {
+    InitCommonConfig {
+        setup_deps: default_enabled_setup_deps(detected),
+        post_deps_tabs: detected.post_deps_tabs.clone(),
+        test_commands: default_enabled_test_commands(detected),
+        ..InitCommonConfig::default()
+    }
 }
 
 fn resolve_custom_common_config(
     ctx: &Ctx,
     mut config: InitCommonConfig,
+    detected: &DetectedRepo,
 ) -> Result<InitCommonConfig> {
     config.worktree_path = resolve_worktree_path(ctx)?;
     config.workspace_tabs = resolve_workspace_tabs(ctx)?;
 
-    config.setup_deps = resolve_setup_deps(ctx)?;
+    config.setup_deps = resolve_setup_deps(ctx, detected)?;
 
-    let post_deps_tabs = detect_post_deps_tabs(&ctx.repo_root);
-    if !post_deps_tabs.is_empty()
+    if !detected.post_deps_tabs.is_empty()
         && ctx
             .ui
             .confirm("Start detected dev server after setup?", false)?
     {
-        config.post_deps_tabs = post_deps_tabs;
+        config.post_deps_tabs = detected.post_deps_tabs.clone();
     }
 
-    let test_commands = detect_test_commands(&ctx.repo_root);
-    if !test_commands.is_empty() && ctx.ui.confirm("Save detected test commands?", true)? {
-        config.test_commands = test_commands;
+    if !detected.test_commands.is_empty() && ctx.ui.confirm("Save detected test commands?", true)? {
+        config.test_commands = detected.test_commands.clone();
     }
 
     config.editor_command = resolve_editor_command(ctx)?;
     Ok(config)
 }
 
-fn default_enabled_setup_deps(repo_root: &Path) -> Vec<InitCommand> {
-    detect_setup_deps(repo_root)
-        .into_iter()
+fn default_enabled_setup_deps(detected: &DetectedRepo) -> Vec<InitCommand> {
+    detected
+        .setup_deps
+        .iter()
         .filter(|command| command.default_enabled)
+        .cloned()
         .collect()
 }
 
-fn default_enabled_test_commands(repo_root: &Path) -> Vec<InitCommand> {
-    detect_test_commands(repo_root)
-        .into_iter()
+fn default_enabled_test_commands(detected: &DetectedRepo) -> Vec<InitCommand> {
+    detected
+        .test_commands
+        .iter()
         .filter(|command| command.default_enabled)
+        .cloned()
         .collect()
-}
-
-fn detect_signals(repo_root: &Path) -> Vec<String> {
-    let mut signals = Vec::new();
-    for command in detect_setup_deps(repo_root) {
-        push_signal(
-            &mut signals,
-            format!("setup: {}", command_display(&command)),
-        );
-    }
-    for tab in detect_post_deps_tabs(repo_root) {
-        push_signal(&mut signals, format!("post-deps tab: {tab}"));
-    }
-    for command in detect_test_commands(repo_root) {
-        push_signal(&mut signals, format!("test: {}", command_display(&command)));
-    }
-    signals
 }
 
 fn push_signal(signals: &mut Vec<String>, signal: String) {
@@ -719,9 +934,9 @@ fn split_list(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn resolve_setup_deps(ctx: &Ctx) -> Result<Vec<InitCommand>> {
+fn resolve_setup_deps(ctx: &Ctx, detected: &DetectedRepo) -> Result<Vec<InitCommand>> {
     let mut selected = Vec::new();
-    for mut command in detect_setup_deps(&ctx.repo_root) {
+    for mut command in detected.setup_deps.clone() {
         let display = command_display(&command);
         if !ctx.ui.confirm(
             &format!("Use detected setup command ({display})?"),
@@ -1327,6 +1542,13 @@ fn target_kind_name(kind: InitTargetKind) -> &'static str {
     }
 }
 
+fn notice_level_name(level: InitNoticeLevel) -> &'static str {
+    match level {
+        InitNoticeLevel::Hint => "hint",
+        InitNoticeLevel::Warn => "warn",
+    }
+}
+
 fn issue_provider_name(provider: &InitIssueProvider) -> &'static str {
     match provider {
         InitIssueProvider::Github => "github",
@@ -1499,11 +1721,61 @@ mod tests {
     }
 
     #[test]
+    fn init_issue_plan_summary_shows_provider_and_agent_prompt_readiness() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::Issue),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let summary = render_plan_summary(&plan).join("\n");
+
+        assert!(summary.contains("selected sections: issues, workspace"));
+        assert!(summary.contains("[warn] gh CLI missing"));
+        assert!(
+            summary.contains(
+                "[hint] issue agent prompt: no agent runtime selected; add --agent <name>"
+            )
+        );
+        assert!(!plan.content.contains("[profile.agent]"));
+    }
+
+    #[test]
+    fn init_issue_with_explicit_agent_marks_agent_prompt_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::Issue),
+                agent: Some(InitAgent::Codex),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let summary = render_plan_summary(&plan).join("\n");
+
+        assert!(plan.content.contains("[issues]"));
+        assert!(plan.content.contains("[profile.agent]"));
+        assert!(summary.contains("[hint] issue agent prompt: ready via codex"));
+    }
+
+    #[test]
     fn init_app_preset_plan_writes_detected_app_sections() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("package.json"),
-            r#"{"scripts":{"test":"vitest","lint":"eslint ."}}"#,
+            r#"{"scripts":{"dev":"vite","test":"vitest","lint":"eslint ."}}"#,
         )
         .unwrap();
         let ctx = ctx_for_dir(&dir);
@@ -1535,10 +1807,346 @@ mod tests {
             plan.detected_signals
                 .contains(&"test: npm test".to_string())
         );
+        assert!(
+            plan.detected_signals
+                .contains(&"post-deps tab: npm run dev".to_string())
+        );
         assert!(plan.content.contains("[setup]"));
         assert!(plan.content.contains("run = \"npm install\""));
         assert!(plan.content.contains("[test]"));
         assert!(plan.content.contains("run = \"npm test\""));
+        assert!(plan.content.contains("post_deps_tabs = [\"npm run dev\"]"));
+    }
+
+    #[test]
+    fn init_app_preset_detects_rust_only_repo_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::App),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+
+        assert!(
+            plan.detected_signals
+                .contains(&"test: cargo test".to_string())
+        );
+        assert_eq!(
+            plan.sections,
+            vec![InitSection::Test, InitSection::Workspace]
+        );
+        assert!(config.setup.deps.is_empty());
+        let test = config.test.unwrap();
+        assert_eq!(test.commands.len(), 1);
+        assert_eq!(test.commands[0].label.as_deref(), Some("test"));
+        assert_eq!(test.commands[0].run, "cargo test");
+        assert!(test.commands[0].working_dir.is_none());
+    }
+
+    #[test]
+    fn init_app_preset_detects_node_scripts_for_setup_tests_and_dev_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"packageManager":"pnpm@9.0.0","scripts":{"dev":"vite","test":"vitest","lint":"eslint ."}}"#,
+        )
+        .unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::App),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+
+        assert!(
+            plan.detected_signals
+                .contains(&"setup: pnpm install".to_string())
+        );
+        assert!(
+            plan.detected_signals
+                .contains(&"post-deps tab: pnpm run dev".to_string())
+        );
+        assert!(
+            plan.detected_signals
+                .contains(&"test: pnpm run test".to_string())
+        );
+        assert!(
+            plan.detected_signals
+                .contains(&"test: pnpm run lint".to_string())
+        );
+        assert_eq!(config.setup.deps.len(), 1);
+        assert_eq!(config.setup.deps[0].run, "pnpm install");
+        let test = config.test.unwrap();
+        assert_eq!(test.commands.len(), 2);
+        assert!(test.commands.iter().any(|command| {
+            command.label.as_deref() == Some("test") && command.run == "pnpm run test"
+        }));
+        assert!(test.commands.iter().any(|command| {
+            command.label.as_deref() == Some("lint") && command.run == "pnpm run lint"
+        }));
+        let workspace = config.workspace.unwrap();
+        assert_eq!(workspace.post_deps_tabs, vec!["pnpm run dev".to_string()]);
+    }
+
+    #[test]
+    fn init_app_preset_detects_uv_subproject_setup() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("api")).unwrap();
+        std::fs::write(
+            dir.path().join("api/pyproject.toml"),
+            "[project]\nname = \"api\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("api/uv.lock"), "").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::App),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+
+        assert!(
+            plan.detected_signals
+                .contains(&"setup: api: uv sync".to_string())
+        );
+        assert_eq!(config.setup.deps.len(), 1);
+        assert_eq!(config.setup.deps[0].working_dir.as_deref(), Some("api"));
+        assert_eq!(config.setup.deps[0].run, "uv sync");
+        assert!(config.test.is_none());
+    }
+
+    #[test]
+    fn init_app_preset_detects_polyglot_repo_without_optional_guards() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("composer.json"), "{}").unwrap();
+        std::fs::create_dir_all(dir.path().join("api")).unwrap();
+        std::fs::write(
+            dir.path().join("api/pyproject.toml"),
+            "[project]\nname = \"api\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("api/uv.lock"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("apps/web")).unwrap();
+        std::fs::write(
+            dir.path().join("apps/web/package.json"),
+            r#"{"packageManager":"bun@1.0.0","scripts":{"dev":"vite","test":"vitest"}}"#,
+        )
+        .unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::App),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+
+        assert!(
+            plan.detected_signals
+                .contains(&"setup: composer install".to_string())
+        );
+        assert!(
+            plan.detected_signals
+                .contains(&"setup: api: uv sync".to_string())
+        );
+        assert!(
+            plan.detected_signals
+                .contains(&"setup: apps/web: bun install".to_string())
+        );
+        assert!(
+            plan.detected_signals
+                .contains(&"test: cargo test".to_string())
+        );
+        assert!(
+            plan.detected_signals
+                .contains(&"test: apps/web: bun run test".to_string())
+        );
+        assert_eq!(config.setup.deps.len(), 3);
+        assert!(
+            config
+                .setup
+                .deps
+                .iter()
+                .all(|command| command.if_exists.is_none())
+        );
+        assert!(
+            config.setup.deps.iter().any(|command| {
+                command.working_dir.is_none() && command.run == "composer install"
+            })
+        );
+        assert!(config.setup.deps.iter().any(|command| {
+            command.working_dir.as_deref() == Some("api") && command.run == "uv sync"
+        }));
+        assert!(config.setup.deps.iter().any(|command| {
+            command.working_dir.as_deref() == Some("apps/web") && command.run == "bun install"
+        }));
+        let workspace = config.workspace.unwrap();
+        assert_eq!(
+            workspace.post_deps_tabs,
+            vec!["cd apps/web && bun run dev".to_string()]
+        );
+    }
+
+    #[test]
+    fn init_minimal_preset_reports_detection_without_activating_detected_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"dev":"vite","test":"vitest","lint":"eslint ."}}"#,
+        )
+        .unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::Minimal),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+
+        assert_eq!(plan.sections, vec![InitSection::Workspace]);
+        assert!(
+            plan.detected_signals
+                .contains(&"setup: npm install".to_string())
+        );
+        assert!(
+            plan.detected_signals
+                .contains(&"post-deps tab: npm run dev".to_string())
+        );
+        assert!(config.setup.deps.is_empty());
+        assert!(config.test.is_none());
+        let workspace = config.workspace.unwrap();
+        assert!(workspace.post_deps_tabs.is_empty());
+        assert!(!plan.content.lines().any(|line| line == "[setup]"));
+        assert!(!plan.content.lines().any(|line| line == "[test]"));
+        assert!(
+            !plan
+                .content
+                .lines()
+                .any(|line| line == "post_deps_tabs = [\"npm run dev\"]")
+        );
+    }
+
+    #[test]
+    fn init_app_preset_uses_explicit_docker_proxy_site_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                preset: Some(InitPreset::App),
+                site_provider: Some(InitSiteProvider::DockerProxy),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+
+        assert!(plan.content.contains("[site]"));
+        assert!(plan.content.contains("provider = \"docker_proxy\""));
+        assert!(plan.content.contains("name = \"{{repo}}-{{branch_slug}}\""));
+        assert!(!plan.content.contains("provider = \"docker-proxy\""));
+    }
+
+    #[test]
+    fn init_interactive_app_defaults_use_detection_without_generic_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"dev":"vite","test":"vitest","lint":"eslint ."}}"#,
+        )
+        .unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // use detected app defaults
+        ui.add_confirm(true); // create config
+        let ui = Arc::new(ui);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                preset: Some(InitPreset::App),
+                agent: Some(InitAgent::None),
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                yes: false,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            *ui.prompts.lock().unwrap(),
+            vec![
+                "select: App defaults".to_string(),
+                "confirm: Create config?".to_string(),
+            ]
+        );
+
+        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        assert_eq!(config.setup.deps.len(), 1);
+        assert_eq!(config.setup.deps[0].run, "npm install");
+        let test = config.test.unwrap();
+        assert!(test.commands.iter().any(|command| {
+            command.label.as_deref() == Some("test") && command.run == "npm test"
+        }));
+        assert!(test.commands.iter().any(|command| {
+            command.label.as_deref() == Some("lint") && command.run == "npm run lint"
+        }));
+        let workspace = config.workspace.unwrap();
+        assert_eq!(workspace.post_deps_tabs, vec!["npm run dev".to_string()]);
     }
 
     #[test]
