@@ -182,6 +182,17 @@ pub(crate) fn task_is_selectable(ctx: &Ctx, task: &str) -> Result<bool> {
     ))
 }
 
+pub(crate) fn running_cleanup_matches(ctx: &Ctx, branch: &str) -> Result<Vec<TaskRunRecord>> {
+    Ok(list(ctx)?
+        .into_iter()
+        .filter(|record| {
+            record.run.branch == branch
+                && record.run.status == STATUS_RUNNING
+                && matches!(record.run.source.as_str(), SOURCE_NEW | SOURCE_BATCH)
+        })
+        .collect())
+}
+
 pub(crate) fn validate_status(status: &str) -> Result<()> {
     if matches!(
         status,

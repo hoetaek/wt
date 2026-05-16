@@ -1,5 +1,5 @@
-use crate::commands::issue::build_provider;
 use crate::commands::profile_match;
+use crate::commands::{issue::build_provider, task_run};
 use crate::config::Config;
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
@@ -72,19 +72,10 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
         }
 
         // Remove worktree
-        let remove_result = git.worktree_remove(wt_path)?;
-        if remove_result.success {
-            ctx.ui
-                .print_step(&format!("  Removed: {}", wt_path.display()));
-        } else {
-            ctx.ui
-                .print_warning(&format!("  Failed to remove {}", wt_path.display()));
-            if !remove_result.stderr.is_empty() {
-                ctx.ui.print_warning(&format!("  {}", remove_result.stderr));
-            }
-            git.worktree_remove_force(wt_path).ok();
-            ctx.ui.print_step("  Force removed");
+        if !remove_worktree(ctx, &git, wt_path)? {
+            continue;
         }
+        mark_matching_task_runs_done(ctx, entry);
 
         // Clean up leftover directory
         if wt_path.exists() {
@@ -116,6 +107,55 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn remove_worktree(ctx: &Ctx, git: &GitService<'_>, wt_path: &Path) -> Result<bool> {
+    let remove_result = git.worktree_remove(wt_path)?;
+    if remove_result.success {
+        ctx.ui
+            .print_step(&format!("  Removed: {}", wt_path.display()));
+        return Ok(true);
+    }
+
+    ctx.ui
+        .print_warning(&format!("  Failed to remove {}", wt_path.display()));
+    if !remove_result.stderr.is_empty() {
+        ctx.ui.print_warning(&format!("  {}", remove_result.stderr));
+    }
+
+    match git.worktree_remove_force(wt_path) {
+        Ok(()) => {
+            ctx.ui.print_step("  Force removed");
+            Ok(true)
+        }
+        Err(err) => {
+            ctx.ui
+                .print_warning(&format!("  Force remove failed: {err}"));
+            Ok(false)
+        }
+    }
+}
+
+fn mark_matching_task_runs_done(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) {
+    let runs = match task_run::running_cleanup_matches(ctx, &entry.branch) {
+        Ok(runs) => runs,
+        Err(err) => {
+            ctx.ui.print_warning(&format!("  TaskRun lookup: {err}"));
+            return;
+        }
+    };
+
+    for record in runs {
+        match task_run::update(ctx, &record.id, task_run::STATUS_DONE, None, None) {
+            Ok(_) => ctx
+                .ui
+                .print_step(&format!("  TaskRun marked done: {}", record.id)),
+            Err(err) => ctx.ui.print_warning(&format!(
+                "  Failed to mark TaskRun {} done: {err}",
+                record.id
+            )),
+        }
+    }
 }
 
 fn unlink_site(ctx: &Ctx, config: &Config, wt_path: &Path, branch: &str) -> Result<()> {
@@ -305,6 +345,7 @@ fn branch_issue_matches(branch: &str, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::task_run;
     use crate::config::{Config, WorkspaceConfig};
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
@@ -345,6 +386,129 @@ mod tests {
 
         let result = run(&ctx);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn clean_marks_matching_running_new_and_batch_task_runs_done() {
+        let repo = tempfile::tempdir().unwrap();
+        let worktree = repo.path().with_file_name("test-repo-add-schema");
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\nbranch refs/heads/alice/add-schema\n\n",
+                repo.path().display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("", true); // worktree remove
+        runner.add_response("", true); // branch delete
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let new_run = task_run::create(
+            &ctx,
+            "add-schema",
+            "alice/add-schema",
+            task_run::SOURCE_NEW,
+            None,
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+        let batch_run = task_run::create(
+            &ctx,
+            "batch-schema",
+            "alice/add-schema",
+            task_run::SOURCE_BATCH,
+            Some("2026-05-16-001"),
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+        let stack_run = task_run::create(
+            &ctx,
+            "stack-schema",
+            "alice/add-schema",
+            task_run::SOURCE_STACK,
+            Some("2026-05-16-001"),
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+
+        run_with_targets(&ctx, &["alice/add-schema".into()]).unwrap();
+
+        assert_eq!(
+            task_run::read(&new_run.path).unwrap().status,
+            task_run::STATUS_DONE
+        );
+        assert_eq!(
+            task_run::read(&batch_run.path).unwrap().status,
+            task_run::STATUS_DONE
+        );
+        assert_eq!(
+            task_run::read(&stack_run.path).unwrap().status,
+            task_run::STATUS_RUNNING
+        );
+    }
+
+    #[test]
+    fn clean_does_not_mark_task_run_done_when_worktree_remove_fails() {
+        let repo = tempfile::tempdir().unwrap();
+        let worktree = repo.path().with_file_name("test-repo-add-schema");
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\nbranch refs/heads/alice/add-schema\n\n",
+                repo.path().display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("", false); // worktree remove
+        runner.add_response("", false); // force worktree remove
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\nbranch refs/heads/alice/add-schema\n\n",
+                repo.path().display(),
+                worktree.display()
+            ),
+            true,
+        );
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let run = task_run::create(
+            &ctx,
+            "add-schema",
+            "alice/add-schema",
+            task_run::SOURCE_NEW,
+            None,
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+
+        run_with_targets(&ctx, &["alice/add-schema".into()]).unwrap();
+
+        assert_eq!(
+            task_run::read(&run.path).unwrap().status,
+            task_run::STATUS_RUNNING
+        );
     }
 
     #[test]

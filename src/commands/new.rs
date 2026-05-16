@@ -145,7 +145,7 @@ fn run_selected_task(
                 &result.branch_name,
                 task_run::SOURCE_NEW,
                 None,
-                task_run::STATUS_DONE,
+                task_run::STATUS_RUNNING,
             )?;
         }
         return results
@@ -160,7 +160,7 @@ fn run_selected_task(
         &selected.document.branch,
         task_run::SOURCE_NEW,
         None,
-        task_run::STATUS_RUNNING,
+        task_run::STATUS_PREPARED,
     )?;
 
     let result = issue::run_with_issue_snapshot(
@@ -213,7 +213,7 @@ fn run_selected_task(
     task_run::update(
         ctx,
         &run.id,
-        task_run::STATUS_DONE,
+        task_run::STATUS_RUNNING,
         Some(&result.branch_name),
         None,
     )?;
@@ -403,7 +403,7 @@ fn resolve_base_branch(ctx: &Ctx, git: &GitService, mode: &BaseMode) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
     use anyhow::Result;
@@ -560,7 +560,7 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].run.task, "add-schema");
         assert_eq!(runs[0].run.source, task_run::SOURCE_NEW);
-        assert_eq!(runs[0].run.status, task_run::STATUS_DONE);
+        assert_eq!(runs[0].run.status, task_run::STATUS_RUNNING);
         assert_eq!(runs[0].run.branch, "add-schema");
     }
 
@@ -599,6 +599,16 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
+        task_run::create(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            task_run::SOURCE_NEW,
+            None,
+            task_run::STATUS_DONE,
+        )
+        .unwrap();
+
         run(&ctx, &[], Some(Some("add-schema")), &None, None, false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
@@ -616,11 +626,82 @@ mod tests {
         assert_eq!(worktree_add_call.1[5], "main");
 
         let runs = task_run::list(&ctx).unwrap();
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].run.task, "add-schema");
-        assert_eq!(runs[0].run.source, task_run::SOURCE_NEW);
-        assert_eq!(runs[0].run.status, task_run::STATUS_DONE);
-        assert_eq!(runs[0].run.branch, "add-schema");
+        assert_eq!(runs.len(), 2);
+        let latest = task_run::latest_for_task(&ctx, "add-schema")
+            .unwrap()
+            .expect("expected latest task run");
+        assert_eq!(latest.run.task, "add-schema");
+        assert_eq!(latest.run.source, task_run::SOURCE_NEW);
+        assert_eq!(latest.run.status, task_run::STATUS_RUNNING);
+        assert_eq!(latest.run.branch, "add-schema");
+    }
+
+    #[test]
+    fn task_option_updates_task_and_run_branch_from_issue_origin() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("PROJ-123.toml"),
+            r#"title = "Fix editor"
+body = "Use the issue branch."
+
+[origin]
+provider = "linear"
+id = "PROJ-123"
+"#,
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor"}"#,
+            true,
+        );
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true); // fetch
+        runner.add_response("", false); // local branch exists
+        runner.add_response("", false); // remote branch exists
+        runner.add_response("main", true); // current branch
+        runner.add_response("", true); // worktree add
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // set parent config
+        runner.add_response("", true); // issue on_start
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config {
+                issues: Some(IssuesConfig {
+                    provider: IssueProviderType::Linear,
+                    gh_user: None,
+                }),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, &[], Some(Some("PROJ-123")), &None, None, false).unwrap();
+
+        let task_content =
+            std::fs::read_to_string(repo.path().join(".local/tasks/PROJ-123.toml")).unwrap();
+        assert!(task_content.contains("branch = \"alice/proj-123-fix-editor\""));
+
+        let latest = task_run::latest_for_task(&ctx, "PROJ-123")
+            .unwrap()
+            .expect("expected latest task run");
+        assert_eq!(latest.run.status, task_run::STATUS_RUNNING);
+        assert_eq!(latest.run.branch, "alice/proj-123-fix-editor");
     }
 
     #[test]

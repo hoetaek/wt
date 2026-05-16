@@ -482,10 +482,11 @@ Bare `wt new` is rejected; pass branch-name text for a new branch workspace or
 `--task` for a prepared local task.
 
 When `wt new --task` starts a selected task, it writes TaskRun records under
-`.local/task-runs/<id>.toml` with `source = "new"`. Tasks whose latest run is
-`running`, `done`, or `skipped` are omitted from the selector; failed runs stay
-retryable. With `--profile` or `--matrix`, each created profile worktree gets
-its own TaskRun record.
+`.local/task-runs/<id>.toml` with `source = "new"`. Successful starts remain
+`running` until the matching worktree is cleaned up with `wt done`, which marks
+the run `done`. Tasks whose latest run is `running`, `done`, or `skipped` are
+omitted from the selector; failed runs stay retryable. With `--profile` or
+`--matrix`, each created profile worktree gets its own TaskRun record.
 
 ## Batches
 
