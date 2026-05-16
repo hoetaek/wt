@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser};
-use std::io;
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -82,7 +82,10 @@ fn try_main() -> Result<()> {
         invocation_root,
         config,
         Box::new(RealRunner),
-        Box::new(TerminalUi::new(cli.quiet)),
+        Box::new(TerminalUi::with_decoration(
+            cli.quiet,
+            use_decorative_output(&cli),
+        )),
         CtxOptions {
             base_config,
             output_mode,
@@ -132,6 +135,14 @@ fn apply_color(color: ColorMode) {
             console::set_colors_enabled_stderr(false);
         }
     }
+}
+
+fn use_decorative_output(cli: &Cli) -> bool {
+    !cli.quiet
+        && !cli.json
+        && !cli.no_color
+        && cli.color != ColorMode::Never
+        && io::stdout().is_terminal()
 }
 
 fn supports_json(command: &Commands) -> bool {

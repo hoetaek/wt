@@ -118,6 +118,11 @@ impl Default for InitCommonConfig {
 
 pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     validate_options(&options)?;
+    let interactive_wizard = is_interactive_wizard(&options);
+    if interactive_wizard {
+        print_wizard_header(ctx);
+        print_wizard_step(ctx, 1, "Repository");
+    }
     let target = resolve_target(ctx, &options)?;
     let plan = build_plan(ctx, &options, target)?;
     if plan.target_exists {
@@ -125,7 +130,7 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     }
 
     if options.dry_run {
-        print_plan(ctx, &plan);
+        print_plan(ctx, &plan, false);
         return Ok(());
     }
 
@@ -137,7 +142,7 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     }
 
     if !options.yes {
-        print_plan(ctx, &plan);
+        print_plan(ctx, &plan, interactive_wizard);
     }
     let confirm_prompt = if plan.target_exists {
         "Overwrite config?"
@@ -145,6 +150,9 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
         "Create config?"
     };
     let confirm_default = !plan.target_exists;
+    if interactive_wizard {
+        print_wizard_step(ctx, 6, "Confirmation");
+    }
     if !options.yes && !ctx.ui.confirm(confirm_prompt, confirm_default)? {
         return Err(WtError::Cancelled.into());
     }
@@ -162,6 +170,20 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
         .print_step(&format!("{action}: {}", plan.target_path.display()));
 
     Ok(())
+}
+
+fn is_interactive_wizard(options: &InitOptions) -> bool {
+    !options.yes && !options.dry_run
+}
+
+fn print_wizard_header(ctx: &Ctx) {
+    ctx.ui.print_step("wt init");
+    ctx.ui
+        .print_dim("Workspace config starter for git worktree projects");
+}
+
+fn print_wizard_step(ctx: &Ctx, number: usize, title: &str) {
+    ctx.ui.print_step(&format!("Step {number}/6: {title}"));
 }
 
 fn validate_options(options: &InitOptions) -> Result<()> {
@@ -191,8 +213,11 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
         });
     }
 
-    let items = vec![".local/.wt.toml".into(), ".wt.toml".into()];
-    match ctx.ui.select("Where should config be created?", &items)? {
+    let items = vec![
+        "Private repo config (.local/.wt.toml)".into(),
+        "Shared project config (.wt.toml)".into(),
+    ];
+    match ctx.ui.select("Repository config file", &items)? {
         0 => Ok(InitTarget {
             path: ctx.repo_root.join(".local/.wt.toml"),
             kind: InitTargetKind::Local,
@@ -219,12 +244,12 @@ fn resolve_preset(ctx: &Ctx, options: &InitOptions) -> Result<InitPreset> {
     }
 
     let items = vec![
-        "minimal".into(),
-        "agent".into(),
-        "issue".into(),
-        "app".into(),
+        "Minimal - worktree basics".into(),
+        "Agent - worktree plus coding agent".into(),
+        "Issue - provider issue workflow".into(),
+        "App - setup, tests, site, and tabs".into(),
     ];
-    Ok(match ctx.ui.select("Starter preset", &items)? {
+    Ok(match ctx.ui.select("Starter", &items)? {
         1 => InitPreset::Agent,
         2 => InitPreset::Issue,
         3 => InitPreset::App,
@@ -248,7 +273,13 @@ fn preset_from_explicit_overrides(options: &InitOptions) -> Option<InitPreset> {
 fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<InitPlan> {
     validate_options(options)?;
     let target_exists = target.path.exists();
+    if is_interactive_wizard(options) {
+        print_wizard_step(ctx, 2, "Starter");
+    }
     let preset = resolve_preset(ctx, options)?;
+    if is_interactive_wizard(options) {
+        print_wizard_step(ctx, 3, "Integrations");
+    }
     let profile = resolve_profile(ctx, options, preset)?;
     let issue_provider = resolve_issue_provider(ctx, options, preset)?;
     let gh_user = if issue_provider == Some(InitIssueProvider::Github) {
@@ -257,6 +288,9 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         None
     };
     let site_provider = resolve_site_provider(ctx, options, preset)?;
+    if is_interactive_wizard(options) {
+        print_wizard_step(ctx, 4, "Detected commands");
+    }
     let common = resolve_common_config(ctx, options, preset)?;
 
     let mut s = String::new();
@@ -322,8 +356,12 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     })
 }
 
-fn print_plan(ctx: &Ctx, plan: &InitPlan) {
-    ctx.ui.print_step("Init plan");
+fn print_plan(ctx: &Ctx, plan: &InitPlan, interactive_wizard: bool) {
+    if interactive_wizard {
+        print_wizard_step(ctx, 5, plan_action_label(plan));
+    } else {
+        ctx.ui.print_step("Init plan");
+    }
     for line in render_plan_summary(plan) {
         ctx.ui.print_dim(&format!("  {line}"));
     }
@@ -354,14 +392,34 @@ fn render_plan_summary(plan: &InitPlan) -> Vec<String> {
         "create config"
     };
 
-    vec![
+    let mut lines = vec![
         format!("target: {}", plan.target_path.display()),
         format!("target kind: {}", target_kind_name(plan.target_kind)),
         format!("planned write: {planned_write}"),
         format!("preset: {}", preset_name(plan.preset)),
         format!("selected sections: {sections}"),
         format!("detected signals: {detected_signals}"),
-    ]
+    ];
+
+    if plan.detected_signals.is_empty() {
+        lines.push("[warn] detected commands: none".to_string());
+    } else {
+        lines.extend(
+            plan.detected_signals
+                .iter()
+                .map(|signal| format!("[ok] detected {signal}")),
+        );
+    }
+
+    lines
+}
+
+fn plan_action_label(plan: &InitPlan) -> &'static str {
+    if plan.target_exists {
+        "Will overwrite"
+    } else {
+        "Will create"
+    }
 }
 
 fn print_existing_target_warning(ctx: &Ctx, plan: &InitPlan, options: &InitOptions) {
@@ -525,10 +583,10 @@ fn resolve_common_config(
     }
 
     let items = vec![
-        "minimal".into(),
-        "customize frequently used settings".into(),
+        "Use starter defaults".into(),
+        "Customize commands and tabs".into(),
     ];
-    if ctx.ui.select("Additional settings", &items)? == 0 {
+    if ctx.ui.select("Workspace defaults", &items)? == 0 {
         return Ok(config);
     }
 
@@ -548,13 +606,13 @@ fn resolve_custom_common_config(
     if !post_deps_tabs.is_empty()
         && ctx
             .ui
-            .confirm("Start detected dev command after deps?", false)?
+            .confirm("Start detected dev server after setup?", false)?
     {
         config.post_deps_tabs = post_deps_tabs;
     }
 
     let test_commands = detect_test_commands(&ctx.repo_root);
-    if !test_commands.is_empty() && ctx.ui.confirm("Add detected test commands?", true)? {
+    if !test_commands.is_empty() && ctx.ui.confirm("Save detected test commands?", true)? {
         config.test_commands = test_commands;
     }
 
@@ -601,16 +659,16 @@ fn push_signal(signals: &mut Vec<String>, signal: String) {
 
 fn resolve_worktree_path(ctx: &Ctx) -> Result<Option<String>> {
     let items = vec![
-        "default sibling path".into(),
+        "Default sibling folder".into(),
         "$HOME/worktrees/{{default_name}}".into(),
-        "custom".into(),
+        "Custom folder template".into(),
     ];
-    match ctx.ui.select("Worktree path", &items)? {
+    match ctx.ui.select("Worktree folder", &items)? {
         0 => Ok(None),
         1 => Ok(Some("$HOME/worktrees/{{default_name}}".into())),
         _ => {
             let input = ctx.ui.input(
-                "Worktree path template",
+                "Worktree folder template",
                 Some("$HOME/worktrees/{{default_name}}"),
             )?;
             let input = input.trim();
@@ -620,7 +678,9 @@ fn resolve_worktree_path(ctx: &Ctx) -> Result<Option<String>> {
 }
 
 fn resolve_workspace_tabs(ctx: &Ctx) -> Result<Vec<String>> {
-    let input = ctx.ui.input("Workspace tabs", Some("lazygit, nvim"))?;
+    let input = ctx
+        .ui
+        .input("Default workspace tabs", Some("lazygit, nvim"))?;
     let tabs = split_list(&input);
     if tabs.is_empty() {
         Ok(Vec::new())
@@ -631,17 +691,19 @@ fn resolve_workspace_tabs(ctx: &Ctx) -> Result<Vec<String>> {
 
 fn resolve_editor_command(ctx: &Ctx) -> Result<Option<String>> {
     let items = vec![
-        "default editor".into(),
+        "Use system editor".into(),
         "nvim {{path}}".into(),
         "code {{path}}".into(),
-        "custom".into(),
+        "Custom editor command".into(),
     ];
-    match ctx.ui.select("Config editor", &items)? {
+    match ctx.ui.select("Config editor command", &items)? {
         0 => Ok(None),
         1 => Ok(Some("nvim {{path}}".into())),
         2 => Ok(Some("code {{path}}".into())),
         _ => {
-            let input = ctx.ui.input("Editor command", Some("nvim {{path}}"))?;
+            let input = ctx
+                .ui
+                .input("Custom editor command", Some("nvim {{path}}"))?;
             let input = input.trim();
             Ok((!input.is_empty()).then(|| input.to_string()))
         }
@@ -662,7 +724,7 @@ fn resolve_setup_deps(ctx: &Ctx) -> Result<Vec<InitCommand>> {
     for mut command in detect_setup_deps(&ctx.repo_root) {
         let display = command_display(&command);
         if !ctx.ui.confirm(
-            &format!("Add setup command: {display}?"),
+            &format!("Use detected setup command ({display})?"),
             command.default_enabled,
         )? {
             continue;
@@ -696,15 +758,15 @@ fn resolve_node_install_command(ctx: &Ctx, command: &InitCommand) -> Result<Stri
     items.push("custom".into());
 
     let prompt = command.working_dir.as_deref().map_or_else(
-        || "Node install command".to_string(),
-        |working_dir| format!("Node install command for {working_dir}"),
+        || "Package install command".to_string(),
+        |working_dir| format!("Package install command for {working_dir}"),
     );
     let selection = ctx.ui.select(&prompt, &items)?;
     if selection < options.len() {
         return Ok(options[selection].1.clone());
     }
 
-    let input = ctx.ui.input("Custom setup command", Some(detected))?;
+    let input = ctx.ui.input("Custom install command", Some(detected))?;
     let input = input.trim();
     Ok(if input.is_empty() {
         detected.to_string()
@@ -1028,12 +1090,12 @@ fn resolve_agent(ctx: &Ctx, options: &InitOptions) -> Result<InitAgent> {
     }
 
     let items = vec![
-        "codex".into(),
-        "claude".into(),
-        "gemini".into(),
-        "none".into(),
+        "Codex".into(),
+        "Claude".into(),
+        "Gemini".into(),
+        "No coding agent".into(),
     ];
-    let agent = match ctx.ui.select("Select coding agent", &items)? {
+    let agent = match ctx.ui.select("Coding agent", &items)? {
         0 => InitAgent::Codex,
         1 => InitAgent::Claude,
         2 => InitAgent::Gemini,
@@ -1060,11 +1122,11 @@ fn resolve_agent_args(ctx: &Ctx, agent: &InitAgent, options: &InitOptions) -> Re
         return Ok(Vec::new());
     }
 
-    let items = vec!["none".into(), "enter args".into()];
-    match ctx.ui.select("Agent args", &items)? {
+    let items = vec!["No extra args".into(), "Enter custom args".into()];
+    match ctx.ui.select("Agent launch args", &items)? {
         0 => Ok(Vec::new()),
         _ => {
-            let input = ctx.ui.input("Agent args", None)?;
+            let input = ctx.ui.input("Custom agent args", None)?;
             Ok(input
                 .split_whitespace()
                 .map(str::to_string)
@@ -1091,8 +1153,12 @@ fn resolve_issue_provider(
         return Ok(Some(InitIssueProvider::Github));
     }
 
-    let items = vec!["github".into(), "linear".into(), "none".into()];
-    Ok(match ctx.ui.select("Issue provider", &items)? {
+    let items = vec![
+        "GitHub issues".into(),
+        "Linear issues".into(),
+        "Skip issue workflow".into(),
+    ];
+    Ok(match ctx.ui.select("Issue workflow", &items)? {
         0 => Some(InitIssueProvider::Github),
         1 => Some(InitIssueProvider::Linear),
         _ => None,
@@ -1118,13 +1184,13 @@ fn resolve_site_provider(
     }
 
     let items = vec![
-        "none".into(),
-        "herd".into(),
-        "valet".into(),
-        "docker_proxy".into(),
-        "traefik".into(),
+        "No local site".into(),
+        "Herd".into(),
+        "Valet".into(),
+        "Docker proxy".into(),
+        "Traefik".into(),
     ];
-    Ok(match ctx.ui.select("Local site provider", &items)? {
+    Ok(match ctx.ui.select("Local site", &items)? {
         1 => Some(InitSiteProvider::Herd),
         2 => Some(InitSiteProvider::Valet),
         3 => Some(InitSiteProvider::DockerProxy),
@@ -1142,7 +1208,7 @@ fn resolve_gh_user(ctx: &Ctx, options: &InitOptions) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    let user = ctx.ui.input("GitHub username (optional)", Some(""))?;
+    let user = ctx.ui.input("GitHub user filter (optional)", Some(""))?;
     let user = user.trim();
     Ok((!user.is_empty()).then(|| user.to_string()))
 }
@@ -1379,6 +1445,7 @@ mod tests {
         assert!(summary.contains("preset: minimal"));
         assert!(summary.contains("selected sections: workspace"));
         assert!(summary.contains("detected signals: none"));
+        assert!(summary.contains("[warn] detected commands: none"));
     }
 
     #[test]
@@ -1501,6 +1568,9 @@ mod tests {
         assert!(summary.contains("detected signals: setup: npm install"));
         assert!(summary.contains("test: npm test"));
         assert!(summary.contains("test: npm run lint"));
+        assert!(summary.contains("[ok] detected setup: npm install"));
+        assert!(summary.contains("[ok] detected test: npm test"));
+        assert!(summary.contains("[ok] detected test: npm run lint"));
     }
 
     #[test]
@@ -1795,6 +1865,82 @@ mod tests {
     }
 
     #[test]
+    fn init_interactive_flow_renders_wizard_steps_and_prompt_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // private repo config
+        ui.add_select(1); // agent starter
+        ui.add_select(0); // codex
+        ui.add_select(0); // no agent args
+        ui.add_select(0); // use starter defaults
+        ui.add_confirm(true); // create config
+        let ui = Arc::new(ui);
+
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: false,
+                shared: false,
+                agent: None,
+                agent_args: Vec::new(),
+                agent_command: None,
+                issue_provider: None,
+                site_provider: None,
+                gh_user: None,
+                yes: false,
+                force: false,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let steps = ui.steps.lock().unwrap().clone();
+        assert_eq!(
+            &steps[..7],
+            &[
+                "wt init".to_string(),
+                "Step 1/6: Repository".to_string(),
+                "Step 2/6: Starter".to_string(),
+                "Step 3/6: Integrations".to_string(),
+                "Step 4/6: Detected commands".to_string(),
+                "Step 5/6: Will create".to_string(),
+                "Step 6/6: Confirmation".to_string(),
+            ]
+        );
+        assert!(steps[7].starts_with("Created config:"));
+
+        let dims = ui.dims.lock().unwrap().clone();
+        assert!(
+            dims.iter()
+                .any(|line| line.contains("Workspace config starter for git worktree projects"))
+        );
+        assert!(
+            dims.iter()
+                .any(|line| line.contains("[warn] detected commands: none"))
+        );
+
+        assert_eq!(
+            *ui.prompts.lock().unwrap(),
+            vec![
+                "select: Repository config file".to_string(),
+                "select: Starter".to_string(),
+                "select: Coding agent".to_string(),
+                "select: Agent launch args".to_string(),
+                "select: Workspace defaults".to_string(),
+                "confirm: Create config?".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn init_interactive_flow_accepts_manual_agent_args() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
@@ -2059,7 +2205,7 @@ mod tests {
 
         impl UserInterface for CapturingUi {
             fn select(&self, prompt: &str, items: &[String]) -> Result<usize> {
-                if prompt == "Agent args" {
+                if prompt == "Agent launch args" {
                     *self.agent_args_items.lock().unwrap() = Some(items.to_vec());
                 }
                 self.selects
@@ -2129,7 +2275,7 @@ mod tests {
 
         assert_eq!(
             agent_args_items.lock().unwrap().as_ref().unwrap(),
-            &vec!["none".to_string(), "enter args".to_string()]
+            &vec!["No extra args".to_string(), "Enter custom args".to_string()]
         );
     }
 

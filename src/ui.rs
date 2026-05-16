@@ -5,11 +5,19 @@ use dialoguer::{Confirm, FuzzySelect, Input, MultiSelect};
 
 pub struct TerminalUi {
     quiet: bool,
+    decorated: bool,
 }
 
 impl TerminalUi {
     pub fn new(quiet: bool) -> Self {
-        Self { quiet }
+        Self {
+            quiet,
+            decorated: true,
+        }
+    }
+
+    pub fn with_decoration(quiet: bool, decorated: bool) -> Self {
+        Self { quiet, decorated }
     }
 }
 
@@ -53,21 +61,37 @@ impl UserInterface for TerminalUi {
         if self.quiet {
             return;
         }
-        println!("{} {}", style("==>").green(), msg);
+        if self.decorated {
+            println!("{} {}", style("==>").green(), msg);
+        } else {
+            println!("{msg}");
+        }
     }
 
     fn print_dim(&self, msg: &str) {
         if self.quiet {
             return;
         }
-        println!("{}", style(msg).dim());
+        if self.decorated {
+            println!("{}", style(msg).dim());
+        } else {
+            println!("{msg}");
+        }
     }
 
     fn print_warning(&self, msg: &str) {
-        eprintln!("{} {}", style("WARNING:").yellow(), msg);
+        if self.decorated {
+            eprintln!("{} {}", style("WARNING:").yellow(), msg);
+        } else {
+            eprintln!("WARNING: {msg}");
+        }
     }
 
     fn print_error(&self, msg: &str) {
-        eprintln!("{} {}", style("ERROR:").red(), msg);
+        if self.decorated {
+            eprintln!("{} {}", style("ERROR:").red(), msg);
+        } else {
+            eprintln!("ERROR: {msg}");
+        }
     }
 }

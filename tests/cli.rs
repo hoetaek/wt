@@ -230,12 +230,14 @@ fn init_dry_run_previews_plan_without_writing_config() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Init plan"))
+        .stdout(predicate::str::contains("==>").not())
         .stdout(predicate::str::contains("target:"))
         .stdout(predicate::str::contains("preset: app"))
         .stdout(predicate::str::contains(
             "selected sections: setup, test, workspace",
         ))
         .stdout(predicate::str::contains("detected signals:"))
+        .stdout(predicate::str::contains("[ok] detected setup: npm install"))
         .stdout(predicate::str::contains("setup: npm install"))
         .stdout(predicate::str::contains("test: npm test"))
         .stdout(predicate::str::contains("[setup]"))
@@ -243,6 +245,79 @@ fn init_dry_run_previews_plan_without_writing_config() {
 
     assert!(!temp.path().join(".wt.toml").exists());
     assert!(!temp.path().join(".local/.wt.toml").exists());
+}
+
+#[test]
+fn init_no_color_uses_plain_plan_output() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--no-color",
+            "init",
+            "--minimal",
+            "--yes",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("Init plan\n"))
+        .stdout(predicate::str::contains("==>").not())
+        .stdout(predicate::str::contains("preset: minimal"));
+}
+
+#[test]
+fn init_quiet_suppresses_status_output_but_still_writes_config() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--quiet",
+            "init",
+            "--minimal",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout("");
+
+    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    assert!(content.contains("[workspace]"));
+}
+
+#[test]
+fn init_json_flag_rejects_init_without_status_decoration() {
+    wt_command()
+        .args(["--json", "init", "--minimal", "--yes", "--dry-run"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("JSON output is supported"))
+        .stderr(predicate::str::contains("==>").not());
+}
+
+#[test]
+fn json_output_uses_machine_readable_surface_without_status_decoration() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    let output = wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "--json", "doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("==>").not())
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(value["checks"].as_array().is_some());
 }
 
 #[test]
