@@ -122,7 +122,8 @@ fn no_args_prints_help_successfully() {
         .stdout(predicate::str::contains("Usage: wt [OPTIONS] [COMMAND]"))
         .stdout(predicate::str::contains("issue"))
         .stdout(predicate::str::contains("pr"))
-        .stdout(predicate::str::contains("new"));
+        .stdout(predicate::str::contains("new"))
+        .stdout(predicate::str::contains("agent"));
 }
 
 #[test]
@@ -226,18 +227,35 @@ fn legacy_stack_command_fails_with_workflow_guidance() {
 }
 
 #[test]
-fn status_help_explains_polling_target() {
+fn agent_status_help_explains_polling_target() {
     wt_command()
-        .args(["status", "--help"])
+        .args(["agent", "status", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("task agent"))
-        .stdout(predicate::str::contains("<TARGET>"))
+        .stdout(predicate::str::contains("[TARGET]"))
         .stdout(predicate::str::contains(
             "Branch, worktree path/name, or TaskRun id",
         ))
+        .stdout(predicate::str::contains(
+            "Omit TARGET in an interactive terminal",
+        ))
         .stdout(predicate::str::contains("read-only"))
         .stdout(predicate::str::contains("cmux hooks codex install --yes"));
+}
+
+#[test]
+fn agent_watch_help_explains_polling_target() {
+    wt_command()
+        .args(["agent", "watch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("task agent"))
+        .stdout(predicate::str::contains("[TARGET]"))
+        .stdout(predicate::str::contains("--interval"))
+        .stdout(predicate::str::contains(
+            "Omit TARGET in an interactive terminal",
+        ));
 }
 
 #[test]
@@ -479,7 +497,7 @@ fn json_output_uses_machine_readable_surface_without_status_decoration() {
 }
 
 #[test]
-fn status_supports_json_global_flag() {
+fn agent_status_supports_json_global_flag() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -488,6 +506,7 @@ fn status_supports_json_global_flag() {
             "-C",
             temp.path().to_str().unwrap(),
             "--json",
+            "agent",
             "status",
             "missing",
         ])
@@ -496,6 +515,35 @@ fn status_supports_json_global_flag() {
         .stdout("")
         .stderr(predicate::str::contains("Work target not found: missing"))
         .stderr(predicate::str::contains("JSON output is supported").not());
+}
+
+#[test]
+fn agent_status_without_target_noninteractive_requires_guidance() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "agent", "status"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt agent status requires TARGET"))
+        .stderr(predicate::str::contains("wt agent status <target>"))
+        .stderr(predicate::str::contains("wt agent watch <target>"))
+        .stderr(predicate::str::contains("wt inspect [<target>]"));
+}
+
+#[test]
+fn legacy_status_command_fails_with_agent_guidance() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "status", "feature"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt status has been replaced"))
+        .stderr(predicate::str::contains("wt agent status <target>"))
+        .stderr(predicate::str::contains("wt agent watch <target>"));
 }
 
 #[test]

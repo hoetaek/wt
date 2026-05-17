@@ -300,7 +300,7 @@ fn collect_cmux_check(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     } else {
         checks.push(DoctorCheck::ok(
             "cmux_cli",
-            Some("missing; optional for wt status/review/send".into()),
+            Some("missing; optional for wt agent status/watch, inspect, and send".into()),
         ));
     }
 }
@@ -753,8 +753,9 @@ fn check_cmux(ctx: &Ctx) {
             "Install cmux, or remove [workspace]/[agent.prompt] automation.",
         );
     } else {
-        ctx.ui
-            .print_step("cmux CLI: missing (optional for wt status/review/send)");
+        ctx.ui.print_step(
+            "cmux CLI: missing (optional for wt agent status/watch, inspect, and send)",
+        );
     }
 }
 

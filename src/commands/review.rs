@@ -1,10 +1,10 @@
 use crate::commands::{agent_report, task, task_run};
-use crate::context::{Ctx, PromptItem};
-use crate::services::git::{GitService, WorktreeEntry};
+use crate::context::Ctx;
+use crate::services::git::GitService;
 use crate::services::work;
 use crate::workflow::{self, WorkflowRecord};
-use anyhow::{Context, Result, bail};
-use std::collections::{BTreeSet, HashSet};
+use anyhow::{Context, Result};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub(crate) type ReviewTarget = work::WorkTarget;
@@ -46,110 +46,11 @@ fn resolve_inspect_target(ctx: &Ctx, target: Option<&str>) -> Result<ReviewTarge
 }
 
 fn select_inspect_target(ctx: &Ctx) -> Result<ReviewTarget> {
-    if ctx.is_json() || ctx.quiet || !ctx.ui.can_prompt() {
-        bail!(
-            "wt inspect requires TARGET when it cannot open an interactive selector. Pass a branch, worktree path/name, or TaskRun id; or run `wt inspect` in an interactive terminal to choose a work target."
-        );
-    }
-
-    let candidates = inspect_target_candidates(ctx)?;
-    if candidates.is_empty() {
-        bail!("No inspectable work targets found");
-    }
-
-    let items = candidates
-        .iter()
-        .map(|candidate| candidate.item.clone())
-        .collect::<Vec<_>>();
-    let idx = ctx.ui.select_items("Work target to inspect", &items)?;
-    candidates
-        .get(idx)
-        .map(|candidate| candidate.target.clone())
-        .ok_or_else(|| anyhow::anyhow!("Selected work target index out of range: {idx}"))
-}
-
-#[derive(Clone, Debug)]
-struct InspectTargetCandidate {
-    target: ReviewTarget,
-    item: PromptItem,
-    sort_key: String,
-}
-
-fn inspect_target_candidates(ctx: &Ctx) -> Result<Vec<InspectTargetCandidate>> {
-    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
-    let worktrees = git.worktree_list()?;
-    let local_branches = git.list_local_branches()?;
-    let task_runs = task_run::list(ctx)?;
-    let mut candidates = Vec::new();
-
-    let mut branch_names = local_branches.into_iter().collect::<BTreeSet<_>>();
-    branch_names.extend(worktrees.iter().map(|entry| entry.branch.clone()));
-    for branch in branch_names.into_iter().filter(|branch| !branch.is_empty()) {
-        candidates.push(branch_inspect_candidate(&branch, &worktrees));
-    }
-
-    let mut seen_task_runs = HashSet::new();
-    let mut task_run_candidates = task_runs
-        .into_iter()
-        .filter(|record| seen_task_runs.insert(record.id.clone()))
-        .map(|record| task_run_inspect_candidate(record, &worktrees))
-        .collect::<Vec<_>>();
-    task_run_candidates.sort_by(|left, right| left.sort_key.cmp(&right.sort_key));
-    candidates.extend(task_run_candidates);
-
-    candidates.sort_by(|left, right| left.sort_key.cmp(&right.sort_key));
-    Ok(candidates)
-}
-
-fn branch_inspect_candidate(branch: &str, worktrees: &[WorktreeEntry]) -> InspectTargetCandidate {
-    let worktree = worktree_for_branch(worktrees, branch);
-    let item = match worktree.as_ref() {
-        Some(path) => PromptItem::from_hint_parts(
-            branch.to_string(),
-            vec!["branch".into(), format!("worktree {}", path.display())],
-        ),
-        None => PromptItem::with_hint(branch.to_string(), "branch | not checked out"),
-    };
-    InspectTargetCandidate {
-        target: ReviewTarget {
-            label: branch.to_string(),
-            branch: branch.to_string(),
-            worktree,
-            task_run: None,
-        },
-        item,
-        sort_key: format!("0:{branch}"),
-    }
-}
-
-fn task_run_inspect_candidate(
-    record: task_run::TaskRunRecord,
-    worktrees: &[WorktreeEntry],
-) -> InspectTargetCandidate {
-    let hint = vec![
-        "TaskRun".into(),
-        format!("branch {}", record.run.branch),
-        format!("status {}", record.run.status),
-        format!("source {}", record.run.source),
-    ];
-    let worktree = worktree_for_branch(worktrees, &record.run.branch);
-    InspectTargetCandidate {
-        target: ReviewTarget {
-            label: record.id.clone(),
-            branch: record.run.branch.clone(),
-            worktree,
-            task_run: Some(record.clone()),
-        },
-        item: PromptItem::from_hint_parts(record.id.clone(), hint),
-        sort_key: format!("1:{}", record.id),
-    }
-}
-
-fn worktree_for_branch(worktrees: &[WorktreeEntry], branch: &str) -> Option<PathBuf> {
-    worktrees
-        .iter()
-        .find(|entry| entry.branch == branch)
-        .map(|entry| entry.path.clone())
+    work::select_target(
+        ctx,
+        "Work target to inspect",
+        "wt inspect requires TARGET when it cannot open an interactive selector. Pass a branch, worktree path/name, or TaskRun id; or run `wt inspect` in an interactive terminal to choose a work target.",
+    )
 }
 
 fn task_runs_for_target(ctx: &Ctx, target: &ReviewTarget) -> Result<Vec<task_run::TaskRunRecord>> {

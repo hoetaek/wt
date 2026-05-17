@@ -15,7 +15,7 @@ pub mod workflow;
 pub mod worktree_naming;
 
 use anyhow::{Result, bail};
-use cli::{Commands, ConfigCommand, TaskCommand, WorkflowCommand};
+use cli::{AgentCommand, Commands, ConfigCommand, TaskCommand, WorkflowCommand};
 use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
@@ -89,7 +89,13 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Done { targets } => commands::done::run(ctx, targets),
         Commands::Inspect { target } => commands::review::run(ctx, target.as_deref()),
         Commands::Review { .. } => legacy_review_command_error(),
-        Commands::Status { target } => commands::status::run(ctx, target),
+        Commands::Agent { command } => match command {
+            AgentCommand::Status { target } => commands::agent::status(ctx, target.as_deref()),
+            AgentCommand::Watch { target, interval } => {
+                commands::agent::watch(ctx, target.as_deref(), *interval)
+            }
+        },
+        Commands::Status { .. } => legacy_status_command_error(),
         Commands::Send {
             target,
             message,
@@ -160,5 +166,11 @@ fn legacy_stack_command_error() -> Result<()> {
 fn legacy_review_command_error() -> Result<()> {
     bail!(
         "wt review has been replaced by wt inspect. Use `wt inspect [<target>]` for the read-only work dossier, then complete, land, or clean up explicitly when appropriate."
+    )
+}
+
+fn legacy_status_command_error() -> Result<()> {
+    bail!(
+        "wt status has been replaced by wt agent status and wt agent watch. Use `wt agent status <target>` to observe a task agent once, `wt agent watch <target>` to poll, or `wt inspect [<target>]` for the read-only work dossier."
     )
 }
