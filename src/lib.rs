@@ -16,7 +16,7 @@ pub mod ui;
 pub mod workflow;
 pub mod worktree_naming;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use cli::{AgentCommand, Commands, ConfigCommand, TaskCommand, WorkflowCommand};
 use context::Ctx;
 
@@ -36,7 +36,6 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             profile,
             matrix,
         } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
-        Commands::Batch { .. } => removed_batch_command_error(),
         Commands::Task { command } => match command {
             TaskCommand::Run {
                 tasks,
@@ -79,19 +78,16 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 run_next,
             } => commands::workflow::complete(ctx, workflow, task.as_deref(), *run_next),
         },
-        Commands::Stack { .. } => removed_stack_command_error(),
         Commands::List { wide } => commands::list::run(ctx, *wide),
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
         Commands::Inspect { target } => commands::inspect::run(ctx, target.as_deref()),
-        Commands::Review { .. } => removed_review_command_error(),
         Commands::Agent { command } => match command {
             AgentCommand::Status { target } => commands::agent::status(ctx, target.as_deref()),
             AgentCommand::Watch { target, interval } => {
                 commands::agent::watch(ctx, target.as_deref(), *interval)
             }
         },
-        Commands::Status { .. } => removed_status_command_error(),
         Commands::Send {
             target,
             message,
@@ -145,28 +141,4 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             },
         ),
     }
-}
-
-fn removed_batch_command_error() -> Result<()> {
-    bail!(
-        "wt batch has been replaced by wt workflow --mode batch. Use `wt workflow task ... --mode batch`, `wt workflow issue ... --mode batch`, `wt workflow run <workflow> --jobs <n>`, and `wt workflow show <workflow>`."
-    )
-}
-
-fn removed_stack_command_error() -> Result<()> {
-    bail!(
-        "wt stack has been replaced by wt workflow --mode stack. Use `wt workflow task ... --mode stack`, `wt workflow issue ... --mode stack`, `wt workflow run <workflow>`, and `wt workflow complete <workflow> <task> [--run-next]`."
-    )
-}
-
-fn removed_review_command_error() -> Result<()> {
-    bail!(
-        "wt review has been replaced by wt inspect. Use `wt inspect [<target>]` for the read-only work dossier, then complete, land, or clean up explicitly when appropriate."
-    )
-}
-
-fn removed_status_command_error() -> Result<()> {
-    bail!(
-        "wt status has been replaced by wt agent status and wt agent watch. Use `wt agent status <target>` to observe a task agent once, `wt agent watch <target>` to poll, or `wt inspect [<target>]` for the read-only work dossier."
-    )
 }

@@ -8,9 +8,11 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
-- Removed inactive top-level `wt batch` and `wt stack` command implementations.
-  Those names now parse only enough to return `wt workflow` replacement
-  guidance, while canonical behavior remains under `wt workflow`.
+- Removed hidden parser and dispatch shells for top-level `wt batch`,
+  `wt stack`, `wt review`, and `wt status` names. Those names now use clap's
+  unknown-subcommand handling instead of parsing only to return replacement
+  guidance, while canonical behavior remains under `wt workflow`, `wt inspect`,
+  and `wt agent status` / `wt agent watch`.
 
 ## 0.24.0 - 2026-05-17
 
