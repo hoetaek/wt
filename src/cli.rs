@@ -88,7 +88,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Prepare, inspect, edit, run, or complete workflows
+    /// Prepare, inspect, edit, run, repair, or complete workflows
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
@@ -417,6 +417,17 @@ pub enum WorkflowCommand {
     Edit {
         /// Workflow TOML path, shorthand id, or "latest" (default)
         workflow: Option<String>,
+    },
+    /// Preview or apply workflow runtime repairs
+    #[command(
+        long_about = "Preview or apply workflow runtime repairs.\n\nBy default this command is a dry-run: it observes linked TaskRuns, local worktrees, and live cmux agent surfaces, then prints recommended repairs without changing state. Pass --apply to mark repairable inconsistent TaskRuns failed through the existing TaskRun failure model. Repair never closes cmux workspaces or removes worktrees."
+    )]
+    Repair {
+        /// Workflow TOML path or shorthand id
+        workflow: String,
+        /// Apply repairable TaskRun status changes
+        #[arg(long)]
+        apply: bool,
     },
     /// Mark the running task in a stack-mode workflow as complete
     Complete {
@@ -1249,6 +1260,31 @@ mod tests {
     }
 
     #[test]
+    fn workflow_repair_accepts_apply_flag() {
+        let cli = parse(&["wt", "workflow", "repair", "2026-05-17-002", "--apply"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Repair {
+                    ref workflow,
+                    apply: true,
+                }
+            }) if workflow == "2026-05-17-002"
+        ));
+    }
+
+    #[test]
+    fn workflow_repair_help_describes_preview_first_contract() {
+        let mut command = Cli::command();
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+        let repair = workflow.find_subcommand_mut("repair").unwrap();
+        let help = repair.render_long_help().to_string();
+        assert!(help.contains("dry-run"));
+        assert!(help.contains("--apply"));
+        assert!(help.contains("Repair never closes cmux workspaces or removes worktrees"));
+    }
+
+    #[test]
     fn workflow_run_help_describes_coordinator_handoff() {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
@@ -1265,7 +1301,8 @@ mod tests {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, edit, run, or complete workflows"));
+        assert!(help.contains("Prepare, inspect, edit, run, repair, or complete workflows"));
+        assert!(help.contains("repair"));
         assert!(help.contains("task"));
         assert!(help.contains("issue"));
         assert!(help.contains("complete"));

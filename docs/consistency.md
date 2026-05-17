@@ -358,6 +358,16 @@ Claude Code는 cmux의 Claude 통합에서 status/sidebar 신호가 나오고, C
 `wt doctor`는 이 준비도를 보고만 하고, 일반 wt 명령이 전역 Codex hook을 자동 설치하거나
 사용자 agent config를 몰래 수정하면 안 된다.
 
+`wt workflow repair <workflow>`는 관찰 side effect가 아니라 coordinator/operator가
+명시적으로 실행하는 복구 표면이다. 기본 동작은 dry-run preview이며, linked TaskRun,
+local worktree, 현재 cmux agent surface를 관찰해 어떤 TaskRun을 기존 `failed` 상태로
+기록할 수 있는지 보여준다. `--apply`를 줬을 때만 TaskRun failure model을 통해 status와
+error를 쓴다. repair는 Workflow나 TaskRun에 cmux workspace/surface 좌표를 저장하지
+않고, cmux workspace close나 worktree removal 같은 파괴적 정리는 수행하지 않는다. 그런
+정리가 필요하면 별도의 명확한 flag/confirmation이 있는 cleanup 표면에서 다뤄야 한다.
+`wt review`, `wt send`, `wt status`는 repair를 권할 수는 있지만 repair action을 대신
+실행하지 않는다.
+
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 
 ### Agent-Neutral Names Stay Agent-Neutral

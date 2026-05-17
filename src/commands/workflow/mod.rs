@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 mod batch;
 mod display;
 mod render;
+mod repair;
 mod selection;
 mod stack;
 mod stack_completion;
@@ -109,6 +110,10 @@ pub fn show(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
 pub fn edit(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
     let path = resolve_read_target(ctx, workflow)?;
     editor::open_file(ctx, &path)
+}
+
+pub fn repair(ctx: &Ctx, workflow: &str, apply: bool) -> Result<()> {
+    repair::run(ctx, workflow, apply)
 }
 
 pub fn run(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
@@ -567,6 +572,16 @@ mod tests {
         )
     }
 
+    fn ctx_with_runner_ui(root: &Path, runner: MockRunner, ui: Arc<MockUi>) -> Ctx {
+        Ctx::new(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        )
+    }
+
     fn prepare_workflow(
         ctx: &Ctx,
         mode: WorkflowModeArg,
@@ -1021,6 +1036,127 @@ mod tests {
         assert!(err.to_string().contains("no commits ahead"));
         let run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
         assert_eq!(run.status, STATUS_RUNNING);
+    }
+
+    #[test]
+    fn workflow_repair_preview_reports_running_task_without_worktree_without_mutating() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/master\n\n",
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", false);
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_runner_ui(dir.path(), runner, ui.clone());
+        let record = prepare_workflow(&ctx, WorkflowModeArg::Stack, &["feature"]);
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("feature"),
+        );
+
+        repair(&ctx, record.path.to_str().unwrap(), false).unwrap();
+
+        let run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
+        assert_eq!(run.status, STATUS_RUNNING);
+        let dims = ui.dims.lock().unwrap().join("\n");
+        let steps = ui.steps.lock().unwrap().join("\n");
+        assert!(dims.contains("Running TaskRun has no usable local worktree"));
+        assert!(dims.contains("Action: mark TaskRun failed (requires --apply)"));
+        assert!(steps.contains("Preview only; no TaskRun state changed"));
+    }
+
+    #[test]
+    fn workflow_repair_apply_marks_running_task_without_live_surface_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path().join("wt-feature");
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/master\n\nworktree {}\nHEAD def\nbranch refs/heads/feature\n\n",
+                dir.path().display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("", false);
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_runner_ui(dir.path(), runner, ui.clone());
+        let record = prepare_workflow(&ctx, WorkflowModeArg::Stack, &["feature"]);
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("feature"),
+        );
+
+        repair(&ctx, record.path.to_str().unwrap(), true).unwrap();
+
+        let run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
+        assert_eq!(run.status, STATUS_FAILED);
+        assert!(
+            run.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("no live validated agent surface")
+        );
+        let steps = ui.steps.lock().unwrap().join("\n");
+        assert!(steps.contains("Applied 1 workflow runtime repair."));
+    }
+
+    #[test]
+    fn workflow_repair_does_not_flag_ordinary_prepared_task_without_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/master\n\n",
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", false);
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_runner_ui(dir.path(), runner, ui.clone());
+        let record = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["feature"]);
+
+        repair(&ctx, record.path.to_str().unwrap(), false).unwrap();
+
+        let run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
+        assert_eq!(run.status, STATUS_PREPARED);
+        let steps = ui.steps.lock().unwrap().join("\n");
+        assert!(steps.contains("No workflow runtime repairs recommended."));
+        assert!(ui.warnings.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn workflow_repair_apply_marks_prepared_prompt_delivery_failure_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_ui(dir.path(), ui);
+        let record = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["feature"]);
+        task_run::update(
+            &ctx,
+            &record.workflow.tasks[0].run,
+            STATUS_PREPARED,
+            None,
+            Some("Agent prompt 1/1 failed: unchanged screen before delivery"),
+        )
+        .unwrap();
+
+        repair(&ctx, record.path.to_str().unwrap(), true).unwrap();
+
+        let run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
+        assert_eq!(run.status, STATUS_FAILED);
+        assert_eq!(
+            run.error.as_deref(),
+            Some("Agent prompt 1/1 failed: unchanged screen before delivery")
+        );
     }
 
     #[test]

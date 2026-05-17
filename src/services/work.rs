@@ -722,7 +722,8 @@ fn contact_validation_warning(contact: &CmuxContact) -> Option<String> {
 
 fn screen_has_known_agent(screen: &str) -> bool {
     let lower = screen.to_ascii_lowercase();
-    lower.contains("codex") || lower.contains("claude code")
+    // Codex can render only its model/status line, e.g. "gpt-5.5 ... Working".
+    lower.contains("codex") || lower.contains("claude code") || lower.contains("gpt-")
 }
 
 fn observed_cmux_contact(contacts: &[CmuxContact]) -> Option<&CmuxContact> {
@@ -1203,6 +1204,30 @@ mod tests {
         assert_eq!(cmux.pane_ref.as_deref(), Some("pane:3"));
         assert_eq!(cmux.surface_id.as_deref(), Some("uuid-surface-4"));
         assert_eq!(cmux.surface_ref.as_deref(), Some("surface:4"));
+    }
+
+    #[test]
+    fn observe_work_uses_cmux_status_when_codex_screen_lacks_literal_codex() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
+        add_selected_surface(&mut runner);
+        runner.add_response("gpt-5.5  Working", true);
+        runner.add_response("codex=Running", true);
+        runner.add_response("", true);
+        let ctx = fixture.ctx(runner);
+
+        let work = observe_work(&ctx, Some("feature")).unwrap();
+
+        assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
+        assert_eq!(work.state.agent_kind, AgentKind::Codex);
+        assert_eq!(work.state.status, AgentStatus::Running);
+        assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:4"));
+        assert!(!fixture.repo.join(".local").exists());
     }
 
     #[test]
