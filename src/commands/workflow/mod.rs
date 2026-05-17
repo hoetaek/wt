@@ -15,8 +15,10 @@ use crate::workflow as workflow_store;
 use crate::workflow::planner::parent_for_stack_task;
 #[cfg(test)]
 use crate::workflow::render::{
-    render_single_workflow_snapshot, workflow_batch_task_prompt_content,
-    workflow_single_task_prompt_content, workflow_stack_task_prompt_content,
+    render_single_workflow_snapshot, test_auto_landing_policy, test_workflow_policy,
+    workflow_batch_task_prompt_content, workflow_batch_task_prompt_content_for_policy,
+    workflow_single_task_prompt_content, workflow_single_task_prompt_content_for_policy,
+    workflow_stack_task_prompt_content, workflow_task_prompt_content_with_policy,
 };
 use crate::workflow::run as workflow_runner;
 #[cfg(test)]
@@ -139,7 +141,7 @@ pub(super) fn resolve_mutating_target(ctx: &Ctx, workflow: &str, command: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, IssueProviderType, IssuesConfig, WorkflowDefaultsConfig};
+    use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
     use std::fs;
@@ -237,7 +239,7 @@ mod tests {
 
     fn assert_report_only_workflow_handoff(content: &str) {
         assert!(content.contains("## Workflow Coordinator Handoff"));
-        assert!(content.contains("This workflow mode has no pull-request handoff intent"));
+        assert!(content.contains("Workflow policy sets `pull_request = \"none\"`"));
         assert!(content.contains("PR=none"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
@@ -255,7 +257,7 @@ mod tests {
         assert!(
             content.find("cmux send --workspace").unwrap()
                 < content
-                    .find("Workflow task metadata sets")
+                    .find("Workflow policy sets")
                     .unwrap_or(content.len())
         );
     }
@@ -283,12 +285,8 @@ mod tests {
         assert_eq!(workflow.base.as_deref(), Some("main"));
         assert_eq!(workflow.tasks.len(), 2);
         assert!(workflow.tasks.iter().all(|row| row.parent.is_none()));
-        assert!(workflow.tasks.iter().all(|row| row.pull_request.is_none()));
-        assert_eq!(
-            workflow.policy.as_ref().unwrap().landing,
-            WorkflowLandingPolicy::Manual
-        );
-        assert!(workflow.policy.as_ref().unwrap().landing_requires_approval);
+        assert_eq!(workflow.policy.pull_request, WorkflowPullRequestMode::None);
+        assert_eq!(workflow.policy.landing, WorkflowLandingPolicy::Manual);
         assert_eq!(task_run::list(&ctx).unwrap().len(), 2);
     }
 
@@ -574,15 +572,8 @@ mod tests {
         assert_eq!(workflow.mode, WorkflowMode::Stack);
         assert!(workflow.profile.is_none());
         assert_eq!(workflow.tasks[0].parent.as_deref(), Some("main"));
-        assert_eq!(
-            workflow.tasks[0].pull_request,
-            Some(WorkflowPullRequestMode::Draft)
-        );
         assert_eq!(workflow.tasks[1].parent.as_deref(), Some("contract"));
-        assert_eq!(
-            workflow.tasks[1].pull_request,
-            Some(WorkflowPullRequestMode::Draft)
-        );
+        assert_eq!(workflow.policy.pull_request, WorkflowPullRequestMode::Draft);
     }
 
     #[test]
@@ -602,36 +593,56 @@ mod tests {
         .unwrap();
 
         let record = workflow_store::list(&ctx).unwrap().remove(0);
-        assert_eq!(record.workflow.tasks[0].pull_request, None);
         assert_eq!(
-            record.workflow.policy.as_ref().unwrap().landing,
-            WorkflowLandingPolicy::Manual
+            record.workflow.policy.pull_request,
+            WorkflowPullRequestMode::None
         );
-        assert!(
-            record
-                .workflow
-                .policy
-                .as_ref()
-                .unwrap()
-                .landing_requires_approval
+        assert_eq!(
+            record.workflow.policy.landing,
+            WorkflowLandingPolicy::Manual
         );
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("[policy]"));
+        assert!(content.contains("pull_request = \"none\""));
         assert!(content.contains("landing = \"manual\""));
-        assert!(content.contains("landing_requires_approval = true"));
-        assert!(!content.contains("pull_request"));
     }
 
     #[test]
-    fn task_applies_workflow_defaults_to_stack_workflow() {
+    fn workflow_show_displays_prepared_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(
+            tasks_dir.join("api.toml"),
+            "title = \"API\"\nbranch = \"api\"\n",
+        )
+        .unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_ui(dir.path(), ui.clone());
+        let mut workflow = WorkflowMetadata::new(
+            WorkflowMode::Single,
+            "explicit",
+            Some("main".into()),
+            vec![WorkflowTask::new("api", "run-api")],
+        );
+        workflow.policy.pull_request = WorkflowPullRequestMode::None;
+        workflow.policy.landing = WorkflowLandingPolicy::Manual;
+        let record = workflow_store::create(&ctx, workflow).unwrap();
+
+        show(&ctx, Some(&record.id)).unwrap();
+
+        let dims = ui.dims.lock().unwrap().join("\n");
+        assert!(dims.contains("Pull request: none"));
+        assert!(dims.contains("Landing: manual"));
+    }
+
+    #[test]
+    fn task_snapshots_workflow_config_policy() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config {
             workflow: crate::config::WorkflowConfig {
-                defaults: WorkflowDefaultsConfig {
-                    pull_request: Some(WorkflowDefaultPullRequestMode::Draft),
-                    landing: Some(WorkflowDefaultLandingPolicy::AfterReview),
-                    landing_requires_approval: Some(false),
-                },
+                pull_request: Some(WorkflowDefaultPullRequestMode::Draft),
+                landing: Some(WorkflowDefaultLandingPolicy::Auto),
             },
             ..Config::default()
         };
@@ -650,26 +661,14 @@ mod tests {
 
         let record = workflow_store::list(&ctx).unwrap().remove(0);
         assert_eq!(
-            record.workflow.tasks[0].pull_request,
-            Some(WorkflowPullRequestMode::Draft)
+            record.workflow.policy.pull_request,
+            WorkflowPullRequestMode::Draft
         );
-        assert_eq!(
-            record.workflow.policy.as_ref().unwrap().landing,
-            WorkflowLandingPolicy::AfterReview
-        );
-        assert!(
-            !record
-                .workflow
-                .policy
-                .as_ref()
-                .unwrap()
-                .landing_requires_approval
-        );
+        assert_eq!(record.workflow.policy.landing, WorkflowLandingPolicy::Auto);
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("pull_request = \"draft\""));
         assert!(content.contains("[policy]"));
-        assert!(content.contains("landing = \"after_review\""));
-        assert!(content.contains("landing_requires_approval = false"));
+        assert!(content.contains("landing = \"auto\""));
     }
 
     #[test]
@@ -677,11 +676,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = Config {
             workflow: crate::config::WorkflowConfig {
-                defaults: WorkflowDefaultsConfig {
-                    pull_request: Some(WorkflowDefaultPullRequestMode::Ready),
-                    landing: Some(WorkflowDefaultLandingPolicy::Manual),
-                    landing_requires_approval: Some(true),
-                },
+                pull_request: Some(WorkflowDefaultPullRequestMode::Ready),
+                landing: Some(WorkflowDefaultLandingPolicy::Manual),
             },
             ..Config::default()
         };
@@ -699,9 +695,12 @@ mod tests {
         .unwrap();
 
         let record = workflow_store::list(&ctx).unwrap().remove(0);
-        assert_eq!(record.workflow.tasks[0].pull_request, None);
+        assert_eq!(
+            record.workflow.policy.pull_request,
+            WorkflowPullRequestMode::None
+        );
         let content = std::fs::read_to_string(record.path).unwrap();
-        assert!(!content.contains("pull_request"));
+        assert!(content.contains("pull_request = \"none\""));
     }
 
     #[test]
@@ -722,11 +721,8 @@ mod tests {
                 gh_user: None,
             }),
             workflow: crate::config::WorkflowConfig {
-                defaults: WorkflowDefaultsConfig {
-                    pull_request: Some(WorkflowDefaultPullRequestMode::Ready),
-                    landing: Some(WorkflowDefaultLandingPolicy::AfterReview),
-                    landing_requires_approval: Some(true),
-                },
+                pull_request: Some(WorkflowDefaultPullRequestMode::Ready),
+                landing: Some(WorkflowDefaultLandingPolicy::Auto),
             },
             ..Config::default()
         };
@@ -745,13 +741,10 @@ mod tests {
 
         let record = workflow_store::list(&ctx).unwrap().remove(0);
         assert_eq!(
-            record.workflow.tasks[0].pull_request,
-            Some(WorkflowPullRequestMode::Ready)
+            record.workflow.policy.pull_request,
+            WorkflowPullRequestMode::Ready
         );
-        assert_eq!(
-            record.workflow.policy.as_ref().unwrap().landing,
-            WorkflowLandingPolicy::AfterReview
-        );
+        assert_eq!(record.workflow.policy.landing, WorkflowLandingPolicy::Auto);
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("pull_request = \"ready\""));
         assert!(content.contains("[policy]"));
@@ -775,8 +768,8 @@ mod tests {
 
         let record = workflow_store::list(&ctx).unwrap().remove(0);
         assert_eq!(
-            record.workflow.tasks[0].pull_request,
-            Some(WorkflowPullRequestMode::Ready)
+            record.workflow.policy.pull_request,
+            WorkflowPullRequestMode::Ready
         );
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("pull_request = \"ready\""));
@@ -1100,16 +1093,23 @@ mod tests {
             task: "PROJ-2".into(),
             run: "run-2".into(),
             parent: Some("PROJ-1".into()),
-            pull_request: Some(WorkflowPullRequestMode::Draft),
         };
         let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
+        let policy = test_workflow_policy(WorkflowPullRequestMode::Draft);
 
-        let content = workflow_stack_task_prompt_content("title = \"API\"\n", &workflow_path, &row);
+        let content = workflow_task_prompt_content_with_policy(
+            "title = \"API\"\n",
+            &workflow_path,
+            &row,
+            &policy,
+        );
 
         assert!(content.contains("## Workflow Coordinator Handoff"));
         assert_workflow_handoff_precedes_task_body(&content, "title = \"API\"");
         assert_workflow_send_command_precedes_policy(&content);
-        assert!(content.contains("Workflow task metadata sets `pull_request = \"draft\"`"));
+        assert!(content.contains("Workflow policy sets `pull_request = \"draft\"`"));
+        assert!(content.contains("against the workflow parent branch"));
+        assert!(content.contains("gh pr create --draft --body-file <pr-body-file> --base PROJ-1"));
         assert!(content.contains("gh pr create --draft --body-file <pr-body-file>"));
         assert!(content.contains(".github/pull_request_template.md"));
         assert!(!content.contains("gh pr ready"));
@@ -1131,13 +1131,18 @@ mod tests {
             task: "PROJ-2".into(),
             run: "run-2".into(),
             parent: Some("PROJ-1".into()),
-            pull_request: Some(WorkflowPullRequestMode::Ready),
         };
         let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
+        let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
 
-        let content = workflow_stack_task_prompt_content("title = \"API\"\n", &workflow_path, &row);
+        let content = workflow_task_prompt_content_with_policy(
+            "title = \"API\"\n",
+            &workflow_path,
+            &row,
+            &policy,
+        );
 
-        assert!(content.contains("Workflow task metadata sets `pull_request = \"ready\"`"));
+        assert!(content.contains("Workflow policy sets `pull_request = \"ready\"`"));
         assert!(content.contains("gh pr create --body-file <pr-body-file>"));
         assert!(!content.contains("gh pr create --draft"));
         assert!(!content.contains("gh pr ready"));
@@ -1150,13 +1155,12 @@ mod tests {
             task: "PROJ-2".into(),
             run: "run-2".into(),
             parent: Some("PROJ-1".into()),
-            pull_request: None,
         };
         let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
 
         let content = workflow_stack_task_prompt_content("title = \"API\"\n", &workflow_path, &row);
 
-        assert!(content.contains("Workflow task metadata omits `pull_request`"));
+        assert!(content.contains("Workflow policy sets `pull_request = \"none\"`"));
         assert!(content.contains("do not open a pull request for this workflow task"));
         assert!(content.contains("If coordinator feedback asks for changes"));
         assert!(!content.contains("If Codex/GitHub review"));
@@ -1180,6 +1184,38 @@ mod tests {
     }
 
     #[test]
+    fn workflow_single_prompt_uses_draft_pr_handoff_policy() {
+        let policy = test_workflow_policy(WorkflowPullRequestMode::Draft);
+        let content = workflow_single_task_prompt_content_for_policy("title = \"API\"\n", &policy);
+
+        assert!(content.contains("Workflow policy sets `pull_request = \"draft\"`"));
+        assert!(content.contains("against the workflow base branch"));
+        assert!(content.contains("gh pr create --draft --body-file <pr-body-file> --base main"));
+        assert!(content.contains("PR=<pr-url>"));
+    }
+
+    #[test]
+    fn workflow_batch_prompt_uses_ready_pr_handoff_policy() {
+        let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
+        let content = workflow_batch_task_prompt_content_for_policy("title = \"API\"\n", &policy);
+
+        assert!(content.contains("Workflow policy sets `pull_request = \"ready\"`"));
+        assert!(content.contains("against the workflow base branch"));
+        assert!(content.contains("gh pr create --body-file <pr-body-file> --base main"));
+        assert!(!content.contains("gh pr create --draft"));
+        assert!(content.contains("PR=<pr-url>"));
+    }
+
+    #[test]
+    fn workflow_prompt_describes_auto_landing_policy() {
+        let policy = test_auto_landing_policy();
+        let content = workflow_batch_task_prompt_content_for_policy("title = \"API\"\n", &policy);
+
+        assert!(content.contains("landing and cleanup after its dirty-worktree"));
+        assert!(content.contains("safety checks pass"));
+    }
+
+    #[test]
     fn workflow_grouped_single_prompt_includes_report_only_coordinator_handoff() {
         let states = vec![
             WorkflowTaskState {
@@ -1188,7 +1224,6 @@ mod tests {
                     task: "api".into(),
                     run: "run-api".into(),
                     parent: None,
-                    pull_request: None,
                 },
                 document: task_store::TaskDocument {
                     title: "API".into(),
@@ -1216,7 +1251,6 @@ mod tests {
                     task: "docs".into(),
                     run: "run-docs".into(),
                     parent: None,
-                    pull_request: None,
                 },
                 document: task_store::TaskDocument {
                     title: "Docs".into(),
@@ -1254,11 +1288,11 @@ mod tests {
     }
 
     #[test]
-    fn pr_modes_require_stack_mode() {
+    fn pr_modes_apply_to_non_stack_modes() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
 
-        let err = task(
+        task(
             &ctx,
             &["workflow docs".into()],
             WorkflowModeArg::Batch,
@@ -1267,17 +1301,27 @@ mod tests {
             &Some("main".into()),
             Some(WorkflowPrModeArg::Draft),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.to_string().contains("--pr is only valid"));
+        let workflow = workflow_store::list(&ctx).unwrap().remove(0).workflow;
+        assert_eq!(workflow.policy.pull_request, WorkflowPullRequestMode::Draft);
     }
 
     #[test]
-    fn pr_none_requires_stack_mode_for_task_workflow() {
+    fn pr_none_overrides_non_stack_config_default() {
         let dir = tempfile::tempdir().unwrap();
-        let ctx = ctx(dir.path());
+        let ctx = ctx_with_config(
+            dir.path(),
+            Config {
+                workflow: crate::config::WorkflowConfig {
+                    pull_request: Some(WorkflowDefaultPullRequestMode::Ready),
+                    landing: Some(WorkflowDefaultLandingPolicy::Manual),
+                },
+                ..Config::default()
+            },
+        );
 
-        let err = task(
+        task(
             &ctx,
             &["workflow docs".into()],
             WorkflowModeArg::Single,
@@ -1286,28 +1330,10 @@ mod tests {
             &Some("main".into()),
             Some(WorkflowPrModeArg::None),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.to_string().contains("--pr is only valid"));
-    }
-
-    #[test]
-    fn pr_none_requires_stack_mode_for_issue_workflow() {
-        let dir = tempfile::tempdir().unwrap();
-        let ctx = ctx(dir.path());
-
-        let err = issue(
-            &ctx,
-            &["PROJ-123".into()],
-            WorkflowModeArg::Batch,
-            None,
-            None,
-            &Some("main".into()),
-            Some(WorkflowPrModeArg::None),
-        )
-        .unwrap_err();
-
-        assert!(err.to_string().contains("--pr is only valid"));
+        let workflow = workflow_store::list(&ctx).unwrap().remove(0).workflow;
+        assert_eq!(workflow.policy.pull_request, WorkflowPullRequestMode::None);
     }
 
     fn replace_first_workflow_run_with_foreign_group(

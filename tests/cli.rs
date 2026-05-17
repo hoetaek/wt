@@ -246,6 +246,8 @@ fn workflow_prepare_help_uses_pr_mode() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--pr <none|draft|ready>"))
+        .stdout(predicate::str::contains("[workflow].pull_request"))
+        .stdout(predicate::str::contains(format!("workflow.{}", "defaults")).not())
         .stdout(predicate::str::contains("--pull-request").not());
 
     wt_command()
@@ -253,11 +255,13 @@ fn workflow_prepare_help_uses_pr_mode() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--pr <none|draft|ready>"))
+        .stdout(predicate::str::contains("[workflow].pull_request"))
+        .stdout(predicate::str::contains(format!("workflow.{}", "defaults")).not())
         .stdout(predicate::str::contains("--pull-request").not());
 }
 
 #[test]
-fn workflow_prepare_rejects_pr_none_on_non_stack_modes() {
+fn workflow_prepare_accepts_pr_on_non_stack_modes() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -270,36 +274,22 @@ fn workflow_prepare_rejects_pr_none_on_non_stack_modes() {
             "--mode",
             "single",
             "--pr",
-            "none",
+            "draft",
             "workflow-docs",
             "--base",
             "main",
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "--pr is only valid with --mode stack",
-        ));
+        .success()
+        .stdout(predicate::str::contains("Prepared workflow:"));
 
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "workflow",
-            "issue",
-            "--mode",
-            "batch",
-            "--pr",
-            "none",
-            "PROJ-123",
-            "--base",
-            "main",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "--pr is only valid with --mode stack",
-        ));
+    let workflows = std::fs::read_dir(temp.path().join(".local/workflows"))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(workflows.len(), 1);
+    let content = std::fs::read_to_string(workflows[0].path()).unwrap();
+    assert!(content.contains("pull_request = \"draft\""));
 }
 
 #[test]
@@ -483,7 +473,11 @@ fn init_dry_run_previews_plan_without_writing_config() {
         .stdout(predicate::str::contains("setup: npm install"))
         .stdout(predicate::str::contains("test: npm test"))
         .stdout(predicate::str::contains("[setup]"))
-        .stdout(predicate::str::contains("[test]"));
+        .stdout(predicate::str::contains("[test]"))
+        .stdout(predicate::str::contains("# [workflow]"))
+        .stdout(predicate::str::contains("# pull_request = \"none\""))
+        .stdout(predicate::str::contains("# landing = \"manual\""))
+        .stdout(predicate::str::contains("\n    [workflow]\n").not());
 
     assert!(!temp.path().join(".wt.toml").exists());
     assert!(!temp.path().join(".local/.wt.toml").exists());
@@ -746,10 +740,9 @@ link = ["storage"]
 APP_ENV = "local"
 LOG_LEVEL = "info"
 
-[workflow.defaults]
+[workflow]
 pull_request = "draft"
-landing = "after_review"
-landing_requires_approval = false
+landing = "auto"
 
 [agent]
 cli = "codex"
@@ -874,9 +867,8 @@ CODEX_MODE = "1"
     );
     assert_eq!(
         policy.landing,
-        wt::config::WorkflowDefaultLandingPolicy::AfterReview
+        wt::config::WorkflowDefaultLandingPolicy::Auto
     );
-    assert!(!policy.landing_requires_approval);
 
     let agent = config.agent.unwrap();
     assert_eq!(agent.cli, wt::config::AgentCli::Codex);
@@ -906,6 +898,20 @@ CODEX_MODE = "1"
             .iter()
             .any(|entry| { entry.from == ".local/profiles/codex/scaffold" && entry.to == "." })
     );
+}
+
+#[test]
+fn config_renders_builtin_workflow_defaults() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[workflow]"))
+        .stdout(predicate::str::contains("pull_request = \"none\""))
+        .stdout(predicate::str::contains("landing = \"manual\""));
 }
 
 #[test]

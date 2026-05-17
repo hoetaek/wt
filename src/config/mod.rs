@@ -10,8 +10,7 @@ pub use schema::{
     IssueProviderType, IssuesConfig, ProfileConfig, RESERVED_PROFILE_NAME, ReadyMode, SetupConfig,
     SiteConfig, SiteProvider, SubmitMode, TestCommand, TestConfig, WorkflowConfig,
     WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
-    WorkflowDefaultsConfig, WorkspaceConfig, WorktreeConfig, WorktreeNamingConfig,
-    validate_profile_name,
+    WorkspaceConfig, WorktreeConfig, WorktreeNamingConfig, validate_profile_name,
 };
 
 #[cfg(test)]

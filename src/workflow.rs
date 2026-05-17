@@ -47,8 +47,7 @@ pub struct WorkflowMetadata {
     pub color: Option<String>,
     pub created_at: String,
     pub updated_at: String,
-    #[serde(default)]
-    pub policy: Option<WorkflowPolicy>,
+    pub policy: WorkflowPolicy,
     #[serde(default)]
     pub tasks: Vec<WorkflowTask>,
 }
@@ -60,13 +59,12 @@ pub struct WorkflowTask {
     pub run: String,
     #[serde(default)]
     pub parent: Option<String>,
-    #[serde(default)]
-    pub pull_request: Option<WorkflowPullRequestMode>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowPullRequestMode {
+    None,
     Draft,
     Ready,
 }
@@ -74,6 +72,7 @@ pub enum WorkflowPullRequestMode {
 impl WorkflowPullRequestMode {
     pub fn as_str(self) -> &'static str {
         match self {
+            WorkflowPullRequestMode::None => "none",
             WorkflowPullRequestMode::Draft => "draft",
             WorkflowPullRequestMode::Ready => "ready",
         }
@@ -83,22 +82,22 @@ impl WorkflowPullRequestMode {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowPolicy {
+    pub pull_request: WorkflowPullRequestMode,
     pub landing: WorkflowLandingPolicy,
-    pub landing_requires_approval: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowLandingPolicy {
     Manual,
-    AfterReview,
+    Auto,
 }
 
 impl WorkflowLandingPolicy {
     pub fn as_str(self) -> &'static str {
         match self {
             WorkflowLandingPolicy::Manual => "manual",
-            WorkflowLandingPolicy::AfterReview => "after_review",
+            WorkflowLandingPolicy::Auto => "auto",
         }
     }
 }
@@ -127,8 +126,17 @@ impl WorkflowMetadata {
             color: None,
             created_at: now.clone(),
             updated_at: now,
-            policy: None,
+            policy: WorkflowPolicy::default(),
             tasks,
+        }
+    }
+}
+
+impl Default for WorkflowPolicy {
+    fn default() -> Self {
+        Self {
+            pull_request: WorkflowPullRequestMode::None,
+            landing: WorkflowLandingPolicy::Manual,
         }
     }
 }
@@ -143,7 +151,6 @@ impl WorkflowTask {
             task: task.into(),
             run: run.into(),
             parent: None,
-            pull_request: None,
         }
     }
 
@@ -382,21 +389,12 @@ fn validate_workflow_task(mode: &WorkflowMode, item: &WorkflowTask) -> Result<()
     {
         bail!("Workflow task {} has an empty parent", item.label());
     }
-    if !matches!(mode, WorkflowMode::Stack) {
-        if item.parent.is_some() {
-            bail!(
-                "{} mode workflow task {} cannot store parent",
-                mode.as_str(),
-                item.label()
-            );
-        }
-        if item.pull_request.is_some() {
-            bail!(
-                "{} mode workflow task {} cannot store pull_request",
-                mode.as_str(),
-                item.label()
-            );
-        }
+    if !matches!(mode, WorkflowMode::Stack) && item.parent.is_some() {
+        bail!(
+            "{} mode workflow task {} cannot store parent",
+            mode.as_str(),
+            item.label()
+        );
     }
     Ok(())
 }
@@ -428,17 +426,15 @@ fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
         "updated_at = {}\n",
         toml_quote(&workflow.updated_at)
     ));
-    if let Some(policy) = workflow.policy.as_ref() {
-        content.push_str("\n[policy]\n");
-        content.push_str(&format!(
-            "landing = {}\n",
-            toml_quote(policy.landing.as_str())
-        ));
-        content.push_str(&format!(
-            "landing_requires_approval = {}\n",
-            policy.landing_requires_approval
-        ));
-    }
+    content.push_str("\n[policy]\n");
+    content.push_str(&format!(
+        "pull_request = {}\n",
+        toml_quote(workflow.policy.pull_request.as_str())
+    ));
+    content.push_str(&format!(
+        "landing = {}\n",
+        toml_quote(workflow.policy.landing.as_str())
+    ));
 
     for item in &workflow.tasks {
         content.push_str("\n[[tasks]]\n");
@@ -446,12 +442,6 @@ fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
         content.push_str(&format!("run = {}\n", toml_quote(&item.run)));
         if let Some(parent) = item.parent.as_deref() {
             content.push_str(&format!("parent = {}\n", toml_quote(parent)));
-        }
-        if let Some(pull_request) = item.pull_request {
-            content.push_str(&format!(
-                "pull_request = {}\n",
-                toml_quote(pull_request.as_str())
-            ));
         }
     }
 
@@ -567,15 +557,14 @@ mod tests {
             color: Some("blue".into()),
             created_at: "2026-05-16T00:00:00Z".into(),
             updated_at: "2026-05-16T00:00:00Z".into(),
-            policy: Some(WorkflowPolicy {
-                landing: WorkflowLandingPolicy::AfterReview,
-                landing_requires_approval: true,
-            }),
+            policy: WorkflowPolicy {
+                pull_request: WorkflowPullRequestMode::Draft,
+                landing: WorkflowLandingPolicy::Auto,
+            },
             tasks: vec![WorkflowTask {
                 task: "add-schema".into(),
                 run: "stack-2026-05-16-001-add-schema".into(),
                 parent: Some("main".into()),
-                pull_request: Some(WorkflowPullRequestMode::Draft),
             }],
         };
 
@@ -592,10 +581,9 @@ mod tests {
         assert!(content.contains("task = \"add-schema\""));
         assert!(content.contains("run = \"stack-2026-05-16-001-add-schema\""));
         assert!(content.contains("parent = \"main\""));
-        assert!(content.contains("pull_request = \"draft\""));
         assert!(content.contains("[policy]"));
-        assert!(content.contains("landing = \"after_review\""));
-        assert!(content.contains("landing_requires_approval = true"));
+        assert!(content.contains("pull_request = \"draft\""));
+        assert!(content.contains("landing = \"auto\""));
         assert!(!content.contains("branch ="));
         assert!(!content.contains("status ="));
         assert!(!content.contains("error ="));
@@ -618,6 +606,10 @@ color = "red"
 created_at = "2026-05-16T00:00:00Z"
 updated_at = "2026-05-16T00:00:00Z"
 
+[policy]
+pull_request = "none"
+landing = "manual"
+
 [[tasks]]
 task = "add-schema"
 run = "workflow-add-schema"
@@ -633,6 +625,10 @@ base = "main"
 color = "red"
 created_at = "2026-05-16T00:00:00Z"
 updated_at = "2026-05-16T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
 
 [[tasks]]
 task = "add-schema"
@@ -657,6 +653,10 @@ color = "red"
 created_at = "2026-05-16T00:00:00Z"
 updated_at = "2026-05-16T00:00:00Z"
 
+[policy]
+pull_request = "none"
+landing = "manual"
+
 [[tasks]]
 task = "add-schema"
 run = "workflow-add-schema"
@@ -674,6 +674,10 @@ base = "main"
 color = "red"
 created_at = "2026-05-16T00:00:00Z"
 updated_at = "2026-05-16T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
 
 [[tasks]]
 task = "add-schema"
@@ -699,6 +703,10 @@ color = "red"
 created_at = "2026-05-16T00:00:00Z"
 updated_at = "2026-05-16T00:00:00Z"
 
+[policy]
+pull_request = "none"
+landing = "manual"
+
 [[tasks]]
 task = "add-schema"
 run = "workflow-add-schema"
@@ -716,6 +724,10 @@ base = "main"
 color = "red"
 created_at = "2026-05-16T00:00:00Z"
 updated_at = "2026-05-16T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
 
 [[tasks]]
 task = "add-schema"
@@ -754,7 +766,7 @@ pull_request = true
     }
 
     #[test]
-    fn read_accepts_existing_workflow_without_policy() {
+    fn read_rejects_workflow_without_policy() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("workflow.toml");
 
@@ -775,9 +787,7 @@ parent = "main"
         )
         .unwrap();
 
-        let workflow = read(&path).unwrap();
-        assert!(workflow.policy.is_none());
-        assert!(workflow.objective.is_none());
+        assert!(error_report(read(&path)).contains("policy"));
     }
 
     #[test]
@@ -796,6 +806,10 @@ base = "main"
 color = "red"
 created_at = "2026-05-16T00:00:00Z"
 updated_at = "2026-05-16T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
 
 [[tasks]]
 task = "add-schema"

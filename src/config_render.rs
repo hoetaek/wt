@@ -122,30 +122,22 @@ fn append_setup_section(s: &mut String, setup: &SetupConfig) {
 }
 
 fn append_workflow_section(s: &mut String, workflow: &WorkflowConfig) {
-    if workflow == &WorkflowConfig::default() {
-        return;
-    }
+    let pull_request = workflow
+        .pull_request
+        .unwrap_or(WorkflowDefaultPullRequestMode::None);
+    let landing = workflow
+        .landing
+        .unwrap_or(WorkflowDefaultLandingPolicy::Manual);
 
-    if workflow.defaults != Default::default() {
-        s.push_str("\n[workflow.defaults]\n");
-        if let Some(pull_request) = workflow.defaults.pull_request {
-            s.push_str(&format!(
-                "pull_request = {}\n",
-                toml_quote(workflow_default_pull_request_name(pull_request))
-            ));
-        }
-        if let Some(landing) = workflow.defaults.landing {
-            s.push_str(&format!(
-                "landing = {}\n",
-                toml_quote(workflow_default_landing_name(landing))
-            ));
-        }
-        if let Some(landing_requires_approval) = workflow.defaults.landing_requires_approval {
-            s.push_str(&format!(
-                "landing_requires_approval = {landing_requires_approval}\n"
-            ));
-        }
-    }
+    s.push_str("\n[workflow]\n");
+    s.push_str(&format!(
+        "pull_request = {}\n",
+        toml_quote(workflow_default_pull_request_name(pull_request))
+    ));
+    s.push_str(&format!(
+        "landing = {}\n",
+        toml_quote(workflow_default_landing_name(landing))
+    ));
 }
 
 fn append_issues_section(s: &mut String, issues: &IssuesConfig) {
@@ -326,7 +318,7 @@ fn workflow_default_pull_request_name(mode: WorkflowDefaultPullRequestMode) -> &
 fn workflow_default_landing_name(policy: WorkflowDefaultLandingPolicy) -> &'static str {
     match policy {
         WorkflowDefaultLandingPolicy::Manual => "manual",
-        WorkflowDefaultLandingPolicy::AfterReview => "after_review",
+        WorkflowDefaultLandingPolicy::Auto => "auto",
     }
 }
 

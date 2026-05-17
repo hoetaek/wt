@@ -28,10 +28,9 @@ VITE_API_TARGET = "{{api_url}}"
 [setup.env_files."backend/.env"]
 DJANGO_ENV = "dev"
 
-[workflow.defaults]
+[workflow]
 pull_request = "draft"
-landing = "after_review"
-landing_requires_approval = false
+landing = "auto"
 
 [profile]
 name = "codex"
@@ -130,11 +129,7 @@ commands = [
         workflow_policy.pull_request,
         WorkflowDefaultPullRequestMode::Draft
     );
-    assert_eq!(
-        workflow_policy.landing,
-        WorkflowDefaultLandingPolicy::AfterReview
-    );
-    assert!(!workflow_policy.landing_requires_approval);
+    assert_eq!(workflow_policy.landing, WorkflowDefaultLandingPolicy::Auto);
     assert_eq!(config.profile.unwrap().name.as_deref(), Some("codex"));
 
     let site = config.site.unwrap();
@@ -259,10 +254,9 @@ fn local_config_overrides_root_config() {
 [issues]
 provider = "github"
 
-[workflow.defaults]
+[workflow]
 pull_request = "draft"
 landing = "manual"
-landing_requires_approval = true
 
 [site]
 provider = "herd"
@@ -280,10 +274,9 @@ copy = [".env"]
 [profile.agent]
 cli = "codex"
 
-[workflow.defaults]
+[workflow]
 pull_request = "none"
-landing = "after_review"
-landing_requires_approval = false
+landing = "auto"
 
 [site]
 provider = "traefik"
@@ -311,25 +304,20 @@ copy = ["CLAUDE.local.md"]
         workflow_policy.pull_request,
         WorkflowDefaultPullRequestMode::None
     );
-    assert_eq!(
-        workflow_policy.landing,
-        WorkflowDefaultLandingPolicy::AfterReview
-    );
-    assert!(!workflow_policy.landing_requires_approval);
+    assert_eq!(workflow_policy.landing, WorkflowDefaultLandingPolicy::Auto);
 }
 
 #[test]
-fn workflow_defaults_merge_per_field() {
+fn workflow_policy_merges_per_field() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".local")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
         r#"
-[workflow.defaults]
+[workflow]
 pull_request = "ready"
 landing = "manual"
-landing_requires_approval = true
 "#,
     )
     .unwrap();
@@ -337,8 +325,8 @@ landing_requires_approval = true
     std::fs::write(
         dir.path().join(".local/.wt.toml"),
         r#"
-[workflow.defaults]
-landing = "after_review"
+[workflow]
+landing = "auto"
 "#,
     )
     .unwrap();
@@ -346,21 +334,86 @@ landing = "after_review"
     let config = Config::load(dir.path()).unwrap();
     let policy = config.workflow_default_policy();
     assert_eq!(policy.pull_request, WorkflowDefaultPullRequestMode::Ready);
-    assert_eq!(policy.landing, WorkflowDefaultLandingPolicy::AfterReview);
-    assert!(policy.landing_requires_approval);
+    assert_eq!(policy.landing, WorkflowDefaultLandingPolicy::Auto);
 }
 
 #[test]
-fn workflow_defaults_reject_aliases() {
-    let err = toml::from_str::<Config>(
+fn workflow_policy_profile_overlay_merges_per_field() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".local/profiles/codex")).unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt.toml"),
         r#"
-[workflow.defaults]
-pull_request = "open"
+[workflow]
+pull_request = "draft"
+landing = "manual"
 "#,
     )
-    .unwrap_err();
+    .unwrap();
+    std::fs::write(
+        dir.path().join(".local/profiles/codex/profile.toml"),
+        r#"
+[workflow]
+landing = "auto"
+"#,
+    )
+    .unwrap();
+
+    let base = Config::load_file(&dir.path().join(".wt.toml")).unwrap();
+    let config = Config::load_profile(dir.path(), "codex", &base)
+        .unwrap()
+        .unwrap();
+    let policy = config.workflow_default_policy();
+    assert_eq!(policy.pull_request, WorkflowDefaultPullRequestMode::Draft);
+    assert_eq!(policy.landing, WorkflowDefaultLandingPolicy::Auto);
+}
+
+#[test]
+fn workflow_policy_rejects_pull_request_aliases() {
+    let err = toml::from_str::<Config>(&format!("[workflow]\npull_request = {:?}\n", "open"))
+        .unwrap_err();
 
     assert!(err.to_string().contains("open"));
+    assert!(err.to_string().contains("[workflow].pull_request"));
+}
+
+#[test]
+fn workflow_policy_rejects_nested_defaults_table() {
+    let err = toml::from_str::<Config>(&format!(
+        "[workflow.{}]\npull_request = \"draft\"\n",
+        "defaults"
+    ))
+    .unwrap_err();
+
+    assert!(err.to_string().contains("[workflow"));
+    assert!(err.to_string().contains("pull_request"));
+}
+
+#[test]
+fn workflow_policy_rejects_legacy_landing_approval_key() {
+    let key = format!("landing_requires_{}", "approval");
+    let err = toml::from_str::<Config>(&format!("[workflow]\n{key} = false\n")).unwrap_err();
+
+    assert!(err.to_string().contains(&key));
+    assert!(err.to_string().contains("[workflow].landing"));
+}
+
+#[test]
+fn workflow_policy_rejects_legacy_review_landing_value() {
+    let value = format!("after_{}", "review");
+    let err =
+        toml::from_str::<Config>(&format!("[workflow]\nlanding = {:?}\n", value)).unwrap_err();
+
+    assert!(err.to_string().contains(&value));
+    assert!(err.to_string().contains("[workflow].landing"));
+}
+
+#[test]
+fn workflow_policy_rejects_boolean_pull_request_values() {
+    let err = toml::from_str::<Config>("[workflow]\npull_request = true\n").unwrap_err();
+
+    assert!(err.to_string().contains("booleans are not aliases"));
 }
 
 #[test]

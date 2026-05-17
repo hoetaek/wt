@@ -352,7 +352,7 @@ pub enum WorkflowCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Override stack-mode pull-request handoff; omitted uses workflow.defaults.pull_request
+        /// Override [workflow].pull_request for this prepared workflow
         #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
         pr: Option<WorkflowPrModeArg>,
     },
@@ -372,13 +372,13 @@ pub enum WorkflowCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Override stack-mode pull-request handoff; omitted uses workflow.defaults.pull_request
+        /// Override [workflow].pull_request for this prepared workflow
         #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
         pr: Option<WorkflowPrModeArg>,
     },
     /// Start runnable tasks from a workflow
     #[command(
-        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. Single and batch tasks report PR=none; stack tasks keep their pull-request policy, PR review follow-up, and completion command."
+        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation. Stack tasks also include their `wt workflow complete ... --run-next` command."
     )]
     Run {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -1219,8 +1219,8 @@ mod tests {
         let help = run.render_long_help().to_string();
         assert!(help.contains("Workflow Coordinator Handoff"));
         assert!(help.contains("coordinator cmux send coordinates"));
-        assert!(help.contains("Single and batch tasks report PR=none"));
-        assert!(help.contains("PR review follow-up"));
+        assert!(help.contains("prepared [policy].pull_request"));
+        assert!(help.contains("wt workflow complete"));
     }
 
     #[test]
@@ -1262,7 +1262,8 @@ mod tests {
         assert!(help.contains("[TASKS]..."));
         assert!(help.contains("omit to select multiple existing tasks"));
         assert!(help.contains("--pr <none|draft|ready>"));
-        assert!(help.contains("workflow.defaults.pull_request"));
+        assert!(help.contains("[workflow].pull_request"));
+        assert!(!help.contains(&format!("workflow.{}", "defaults")));
         assert!(!help.contains("--pull-request"));
     }
 
@@ -1273,7 +1274,8 @@ mod tests {
         let issue = workflow.find_subcommand_mut("issue").unwrap();
         let help = issue.render_help().to_string();
         assert!(help.contains("--pr <none|draft|ready>"));
-        assert!(help.contains("workflow.defaults.pull_request"));
+        assert!(help.contains("[workflow].pull_request"));
+        assert!(!help.contains(&format!("workflow.{}", "defaults")));
         assert!(!help.contains("--pull-request"));
     }
 

@@ -70,7 +70,7 @@ struct WorkflowMatch {
     mode: String,
     task: String,
     parent: Option<String>,
-    pull_request: Option<WorkflowPullRequestMode>,
+    pull_request: WorkflowPullRequestMode,
 }
 
 fn workflows_for_task_runs(
@@ -113,7 +113,7 @@ fn add_workflow_matches(
             mode: record.workflow.mode.as_str().into(),
             task: workflow_task_label(&row.task),
             parent: row.parent.clone(),
-            pull_request: row.pull_request,
+            pull_request: record.workflow.policy.pull_request,
         });
     }
 }
@@ -184,9 +184,7 @@ fn print_workflow(ctx: &Ctx, workflow: &WorkflowMatch) {
     if let Some(parent) = workflow.parent.as_deref() {
         details.push(format!("parent={parent}"));
     }
-    if let Some(pull_request) = workflow.pull_request {
-        details.push(format!("pull_request={}", pull_request.as_str()));
-    }
+    details.push(format!("pull_request={}", workflow.pull_request.as_str()));
     ctx.ui.print_dim(&format!(
         "  Workflow: {} ({})",
         workflow.id,
@@ -615,7 +613,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             repo.join(".local/workflows/2026-05-17-001.toml"),
-            "mode = \"stack\"\nbase_mode = \"explicit\"\nbase = \"main\"\ncreated_at = \"2026-05-17T00:00:00Z\"\nupdated_at = \"2026-05-17T00:00:00Z\"\n\n[[tasks]]\ntask = \"feature\"\nrun = \"run-feature\"\nparent = \"main\"\npull_request = \"draft\"\n",
+            "mode = \"stack\"\nbase_mode = \"explicit\"\nbase = \"main\"\ncreated_at = \"2026-05-17T00:00:00Z\"\nupdated_at = \"2026-05-17T00:00:00Z\"\n\n[policy]\npull_request = \"draft\"\nlanding = \"manual\"\n\n[[tasks]]\ntask = \"feature\"\nrun = \"run-feature\"\nparent = \"main\"\n",
         )
         .unwrap();
 
@@ -727,7 +725,7 @@ mod tests {
             mode: mode.into(),
             task: "feature".into(),
             parent: None,
-            pull_request: None,
+            pull_request: WorkflowPullRequestMode::None,
         };
 
         print_next_section(&ctx, &target, &[workflow]);
