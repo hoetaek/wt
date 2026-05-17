@@ -536,6 +536,88 @@ mod tests {
     }
 
     #[test]
+    fn task_run_records_failed_when_agent_prompt_delivery_fails() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("main", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:7","workspace_ref":"workspace:34","pane_ref":"pane:8","surface_ref":"surface:103"}}"#,
+            true,
+        );
+        runner.add_response("workspace:200 workspace:200", true);
+        runner.add_response("pane:1", true);
+        runner.add_response("pane:1", true);
+        runner.add_response("surface:999", true);
+        runner.add_response("", true);
+        runner.add_response("same screen", true);
+        runner.add_response("same screen", true);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config {
+                workspace: Some(WorkspaceConfig::default()),
+                agent: Some(AgentConfig {
+                    cli: AgentCli::None,
+                    args: Vec::new(),
+                    command: None,
+                    ready: ReadyMode::Auto,
+                    submit: SubmitMode::None,
+                    timeout: 1,
+                    send_after: 0,
+                    prompt: HashMap::from([("new".into(), vec!["Existing prompt".into()])]),
+                }),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        let err = run(&ctx, &["add-schema".into()], &None, None, false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Agent prompt 2/2 failed"));
+        assert!(err.contains("unchanged screen"));
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run.status, task_run::STATUS_FAILED);
+        assert!(
+            runs[0]
+                .run
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Agent prompt 2/2 failed")
+        );
+    }
+
+    #[test]
     fn task_run_with_key_records_new_run_after_prior_done() {
         let repo = tempfile::tempdir().unwrap();
         let tasks_dir = repo.path().join(".local/tasks");

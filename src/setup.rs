@@ -139,6 +139,39 @@ pub fn run_setup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::{CmdOutput, CommandRunner};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    struct SharedMockRunner {
+        inner: Arc<MockRunner>,
+    }
+
+    impl CommandRunner for SharedMockRunner {
+        fn run(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            cwd: Option<&std::path::Path>,
+        ) -> Result<CmdOutput> {
+            self.inner.run(cmd, args, cwd)
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            self.inner.has_command(cmd)
+        }
+    }
+
+    fn bootstrap_test_ctx(runner: Arc<MockRunner>) -> Ctx {
+        Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            Config::default(),
+            Box::new(SharedMockRunner { inner: runner }),
+            Box::new(MockUi::new()),
+        )
+    }
 
     fn agent_config(cli: AgentCli) -> AgentConfig {
         AgentConfig {
@@ -1337,6 +1370,140 @@ mod tests {
                 "workspace:1",
                 "enter"
             ]
+        );
+    }
+
+    #[test]
+    fn bootstrap_agent_no_configured_prompts_is_noop() {
+        let runner = Arc::new(MockRunner::new());
+        let ctx = bootstrap_test_ctx(Arc::clone(&runner));
+        let agent = AgentConfig {
+            cli: AgentCli::Codex,
+            args: Vec::new(),
+            command: None,
+            ready: crate::config::ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 1,
+            send_after: 0,
+            prompt: HashMap::new(),
+        };
+
+        bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new()).unwrap();
+
+        assert!(runner.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn bootstrap_agent_unchanged_screen_before_later_prompt_fails() {
+        let mut runner = MockRunner::new();
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response("", true);
+        runner.add_response("same screen", true);
+        runner.add_response("same screen", true);
+        let runner = Arc::new(runner);
+        let ctx = bootstrap_test_ctx(Arc::clone(&runner));
+        let agent = AgentConfig {
+            cli: AgentCli::Gemini,
+            args: Vec::new(),
+            command: None,
+            ready: crate::config::ReadyMode::Auto,
+            submit: SubmitMode::None,
+            timeout: 1,
+            send_after: 0,
+            prompt: HashMap::from([(
+                "issue".into(),
+                vec!["first prompt".into(), "second prompt".into()],
+            )]),
+        };
+
+        let err = bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new())
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Agent prompt 2/2 failed"));
+        assert!(err.contains("unchanged screen"));
+        let send_calls = runner
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send"))
+            .count();
+        assert_eq!(send_calls, 1);
+    }
+
+    #[test]
+    fn bootstrap_agent_ready_marker_timeout_fails() {
+        let mut runner = MockRunner::new();
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response("not ready", true);
+        let runner = Arc::new(runner);
+        let ctx = bootstrap_test_ctx(Arc::clone(&runner));
+        let agent = AgentConfig {
+            cli: AgentCli::Codex,
+            args: Vec::new(),
+            command: None,
+            ready: crate::config::ReadyMode::Marker("READY".into()),
+            submit: SubmitMode::Auto,
+            timeout: 1,
+            send_after: 0,
+            prompt: HashMap::from([("issue".into(), vec!["first prompt".into()])]),
+        };
+
+        let err = bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new())
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Agent prompt 1/1 failed"));
+        assert!(err.contains("ready marker timeout"));
+        assert!(
+            runner
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(cmd, args, _)| cmd != "cmux" || args.first().is_none_or(|a| a != "send"))
+        );
+    }
+
+    #[test]
+    fn bootstrap_agent_delivers_all_configured_prompts() {
+        let mut runner = MockRunner::new();
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response("", true);
+        runner.add_response("processing first prompt", true);
+        runner.add_response("ready for second prompt", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+        let ctx = bootstrap_test_ctx(Arc::clone(&runner));
+        let agent = AgentConfig {
+            cli: AgentCli::Gemini,
+            args: Vec::new(),
+            command: None,
+            ready: crate::config::ReadyMode::Auto,
+            submit: SubmitMode::None,
+            timeout: 1,
+            send_after: 0,
+            prompt: HashMap::from([(
+                "issue".into(),
+                vec!["first prompt".into(), "second prompt".into()],
+            )]),
+        };
+
+        bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new()).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let send_prompts = calls
+            .iter()
+            .filter(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send"))
+            .map(|(_, args, _)| args.last().cloned().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            send_prompts,
+            vec!["first prompt".to_string(), "second prompt".to_string()]
         );
     }
 
