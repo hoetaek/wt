@@ -3,9 +3,9 @@ use crate::commands::editor;
 use crate::commands::issue;
 use crate::commands::issue_selection;
 use crate::commands::task::{self as task_command, PreparedTask};
-use crate::commands::task_run::{
-    self, STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
-};
+use crate::commands::task_run::{self, STATUS_PREPARED, STATUS_RUNNING};
+#[cfg(test)]
+use crate::commands::task_run::{STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED};
 use crate::config::{Config, validate_profile_name};
 use crate::context::Ctx;
 use crate::error::WtError;
@@ -18,15 +18,17 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 mod batch;
+mod display;
 mod render;
 mod selection;
+mod stack;
+mod stack_completion;
+mod stack_plan;
 mod state;
 
 use batch::run_batch_workflow;
-use render::{
-    base_label, workflow_single_task_handoff_section, workflow_stack_task_handoff_section,
-    workflow_task_label,
-};
+use display::show_workflow;
+use render::workflow_single_task_handoff_section;
 #[cfg(test)]
 use render::{
     workflow_batch_task_prompt_content, workflow_single_task_prompt_content,
@@ -34,13 +36,16 @@ use render::{
 };
 #[cfg(test)]
 use selection::list_runnable_workflow_candidates;
-use selection::{next_runnable_workflow_stack_task, resolve_run_workflow_path};
+use selection::resolve_run_workflow_path;
+use stack::run_stack_workflow;
+use stack_completion::complete_stack_workflow;
 #[cfg(test)]
 use state::read_batch_workflow_task_states;
-use state::{
-    WorkflowTaskState, read_single_workflow_task_states, read_stack_workflow_task_states,
-    task_run_record, update_workflow_task_run,
-};
+#[cfg(test)]
+use state::read_stack_workflow_task_states;
+#[cfg(test)]
+use state::task_run_record;
+use state::{WorkflowTaskState, read_single_workflow_task_states};
 
 pub fn task(
     ctx: &Ctx,
@@ -98,77 +103,7 @@ pub fn issue(
 pub fn show(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
     let path = resolve_read_target(ctx, workflow)?;
     let metadata = workflow_store::read(&path)?;
-    let display_path = path
-        .strip_prefix(&ctx.repo_root)
-        .unwrap_or(&path)
-        .display()
-        .to_string();
-
-    ctx.ui.print_step(&format!("Workflow: {display_path}"));
-    ctx.ui
-        .print_dim(&format!("  Mode: {}", metadata.mode.as_str()));
-    ctx.ui
-        .print_dim(&format!("  Base: {}", base_label(&metadata)));
-    if let Some(profile) = metadata.profile.as_deref() {
-        ctx.ui.print_dim(&format!("  Profile: {profile}"));
-    }
-    if let Some(color) = metadata.color.as_deref() {
-        ctx.ui.print_dim(&format!("  Color: {color}"));
-    }
-    ctx.ui
-        .print_dim(&format!("  Tasks: {}", metadata.tasks.len()));
-
-    for (idx, item) in metadata.tasks.iter().enumerate() {
-        let run = task_run_record(ctx, &item.run);
-        let status = run
-            .as_ref()
-            .map(|run| run.status.as_str())
-            .unwrap_or("missing");
-        let task_doc = task_command::read_task_document(ctx, &item.task);
-        let title = task_doc
-            .as_ref()
-            .map(|document| document.title_or_key(&item.task))
-            .unwrap_or_else(|_| item.task.clone());
-        ctx.ui.print_dim(&format!(
-            "  {}. {} [{}] {}",
-            idx + 1,
-            item.task,
-            status,
-            title
-        ));
-        ctx.ui.print_dim(&format!(
-            "     Task: {}",
-            task_command::task_relative_path(&item.task)
-        ));
-        match task_doc {
-            Ok(document) => {
-                if !document.branch.trim().is_empty() {
-                    ctx.ui
-                        .print_dim(&format!("     Branch: {}", document.branch));
-                }
-            }
-            Err(err) => ctx.ui.print_dim(&format!("     Task error: {err}")),
-        }
-        if let Some(parent) = item.parent.as_deref() {
-            ctx.ui.print_dim(&format!("     Parent: {parent}"));
-        }
-        if metadata.mode == WorkflowMode::Stack {
-            ctx.ui.print_dim(&format!(
-                "     Pull request: {}",
-                if item.pull_request.unwrap_or(false) {
-                    "yes"
-                } else {
-                    "no"
-                }
-            ));
-        }
-        if let Some(error) = run.and_then(|run| run.error) {
-            if !error.trim().is_empty() {
-                ctx.ui.print_dim(&format!("     Error: {error}"));
-            }
-        }
-    }
-    Ok(())
+    show_workflow(ctx, &path, &metadata)
 }
 
 pub fn edit(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
@@ -189,42 +124,7 @@ pub fn run(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
 }
 
 pub fn complete(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
-    let path = resolve_mutating_target(ctx, workflow, "complete")?;
-    let mut metadata = workflow_store::read(&path)?;
-    if metadata.mode != WorkflowMode::Stack {
-        bail!("wt workflow complete only supports mode stack");
-    }
-
-    let states = read_stack_workflow_task_states(ctx, &path, &metadata)?;
-    let Some(state) = states.iter().find(|state| state.run.is_stack_completable()) else {
-        ctx.ui.print_warning("No running workflow stack task found");
-        return Ok(());
-    };
-    let idx = state.idx;
-
-    if let Some(task) = task {
-        let running = &metadata.tasks[idx];
-        if !workflow_task_matches(ctx, running, task) {
-            bail!(
-                "Running workflow task is {}, but complete was requested for {task}",
-                workflow_task_label(running)
-            );
-        }
-    }
-
-    validate_completable_workflow_stack_task(ctx, &metadata.tasks[idx])?;
-    update_workflow_task_run(ctx, &metadata.tasks[idx], STATUS_DONE, None)?;
-    workflow_store::touch(&mut metadata);
-    workflow_store::write(ctx, &path, &mut metadata)?;
-
-    ctx.ui.print_step(&format!(
-        "Marked {} done",
-        workflow_task_label(&metadata.tasks[idx])
-    ));
-    if run_next {
-        run(ctx, Some(path.to_string_lossy().as_ref()), 1)?;
-    }
-    Ok(())
+    complete_stack_workflow(ctx, workflow, task, run_next)
 }
 
 fn write_prepared_workflow(
@@ -493,238 +393,6 @@ fn comparable_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn run_stack_workflow(
-    ctx: &Ctx,
-    workflow_path: &Path,
-    metadata: &mut WorkflowMetadata,
-) -> Result<()> {
-    validate_profile(ctx, metadata.profile.as_deref())?;
-    if metadata
-        .color
-        .as_deref()
-        .is_none_or(|color| color.trim().is_empty())
-    {
-        workflow_store::write(ctx, workflow_path, metadata)?;
-    }
-
-    let states = read_stack_workflow_task_states(ctx, workflow_path, metadata)?;
-    if states.is_empty() {
-        bail!("Workflow has no tasks: {}", workflow_path.display());
-    }
-
-    if let Some(state) = states.iter().find(|state| state.run.is_stack_completable()) {
-        bail!(
-            "Workflow stack task {} is already running. Mark it complete with: wt workflow complete {} {}",
-            workflow_task_label(&state.row),
-            workflow_path.display(),
-            workflow_task_label(&state.row)
-        );
-    }
-
-    let Some(idx) = next_runnable_workflow_stack_task(&states) else {
-        ctx.ui
-            .print_step("No prepared or failed tasks to run in this workflow.");
-        return Ok(());
-    };
-
-    let parent = parent_for_workflow_stack_task(metadata, &states, idx)?;
-    metadata.tasks[idx].parent = Some(parent.clone());
-    workflow_store::touch(metadata);
-    workflow_store::write(ctx, workflow_path, metadata)?;
-    task_run::update(ctx, &metadata.tasks[idx].run, STATUS_RUNNING, None, None)?;
-
-    let result = run_stack_workflow_task(
-        ctx,
-        workflow_path,
-        &metadata.tasks[idx],
-        idx,
-        metadata.tasks.len(),
-        &parent,
-        metadata.profile.as_deref(),
-    );
-
-    match result {
-        Ok(result) => {
-            task_command::write_task_branch(ctx, &metadata.tasks[idx].task, &result.branch_name)?;
-            update_workflow_task_run(ctx, &metadata.tasks[idx], STATUS_RUNNING, None)?;
-            apply_workflow_color(ctx, &result.worktree_path, metadata.color.as_deref());
-            ctx.ui.print_step(&format!(
-                "Started workflow task {}. Mark it complete with: wt workflow complete {} {}",
-                workflow_task_label(&metadata.tasks[idx]),
-                workflow_path.display(),
-                workflow_task_label(&metadata.tasks[idx])
-            ));
-            Ok(())
-        }
-        Err(err) if is_cancelled(&err) => {
-            update_workflow_task_run(
-                ctx,
-                &metadata.tasks[idx],
-                STATUS_SKIPPED,
-                Some("User cancelled"),
-            )?;
-            Ok(())
-        }
-        Err(err) => {
-            let error = err.to_string();
-            update_workflow_task_run(ctx, &metadata.tasks[idx], STATUS_FAILED, Some(&error))?;
-            bail!("Workflow stack failed: {}", workflow_path.display())
-        }
-    }
-}
-
-fn parent_for_workflow_stack_task(
-    metadata: &WorkflowMetadata,
-    states: &[WorkflowTaskState],
-    idx: usize,
-) -> Result<String> {
-    if idx == 0 {
-        return workflow_base_raw(metadata)?
-            .ok_or_else(|| anyhow::anyhow!("Workflow stack has no base"));
-    }
-
-    for previous in states.iter().rev().filter(|state| state.idx < idx) {
-        match previous.run.status {
-            STATUS_DONE => {
-                return task_command::prepared_branch_name(&previous.document.branch)
-                    .map(str::to_string)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Previous workflow task {} has no branch",
-                            workflow_task_label(&previous.row)
-                        )
-                    });
-            }
-            STATUS_SKIPPED => continue,
-            _ => bail!(
-                "Previous workflow task {} is not done",
-                workflow_task_label(&previous.row)
-            ),
-        }
-    }
-
-    workflow_base_raw(metadata)?.ok_or_else(|| anyhow::anyhow!("Workflow stack has no base"))
-}
-
-fn run_stack_workflow_task(
-    ctx: &Ctx,
-    workflow_path: &Path,
-    row: &WorkflowTask,
-    idx: usize,
-    total_tasks: usize,
-    parent: &str,
-    profile: Option<&str>,
-) -> Result<issue::IssueRunResult> {
-    let (task_doc, task_path, content) = task_command::read_task_file(ctx, &row.task)?;
-    let completion_section = workflow_stack_task_handoff_section(workflow_path, row);
-    let branch_name = task_command::prepared_branch_name(&task_doc.branch);
-    if branch_name.is_none() && task_doc.origin.is_none() {
-        bail!("Workflow task {} has no branch", workflow_task_label(row));
-    }
-    let base = Some(parent.to_string());
-    let identifier = task_doc.identifier_or_key(&row.task);
-    let title = task_doc.title_or_key(&row.task);
-    let workspace_label = task_command::workspace_run_label(
-        idx,
-        total_tasks,
-        task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
-    );
-
-    issue::run_with_issue_snapshot(
-        ctx,
-        &base,
-        profile,
-        false,
-        issue::PreparedIssueContext {
-            identifier: &identifier,
-            title: &title,
-            branch_name,
-            mode: task_doc.mode(),
-            on_start_issue_id: task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
-            prompt_intro: "Use this task before changing code.",
-            completion_section: Some(&completion_section),
-            workspace_label: Some(workspace_label),
-            snapshot: issue::IssueSnapshotContext {
-                path_label: "Task path",
-                path: &task_path,
-                content: &content,
-            },
-        },
-    )
-}
-
-fn workflow_task_matches(ctx: &Ctx, row: &WorkflowTask, target: &str) -> bool {
-    if row.task == target {
-        return true;
-    }
-    let Ok(task_doc) = task_command::read_task_document(ctx, &row.task) else {
-        return false;
-    };
-    task_doc.title == target
-        || task_command::prepared_branch_name(&task_doc.branch) == Some(target)
-        || task_doc.branch.rsplit('/').next() == Some(target)
-}
-
-fn validate_completable_workflow_stack_task(ctx: &Ctx, row: &WorkflowTask) -> Result<()> {
-    let task_doc = task_command::read_task_document(ctx, &row.task)?;
-    let branch = task_command::prepared_branch_name(&task_doc.branch).ok_or_else(|| {
-        anyhow::anyhow!("Workflow task {} has no branch", workflow_task_label(row))
-    })?;
-    let parent = row.parent.as_deref().ok_or_else(|| {
-        anyhow::anyhow!("Workflow task {} has no parent", workflow_task_label(row))
-    })?;
-    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
-
-    if let Some(path) = git.checked_out_path(branch)? {
-        let status = git.status_porcelain(&path)?;
-        let relevant_status = relevant_worktree_status(ctx, &status);
-        if !relevant_status.trim().is_empty() {
-            bail!(
-                "Workflow task {} has uncommitted changes in {}. Commit or stash them before completing.\n{}",
-                workflow_task_label(row),
-                path.display(),
-                relevant_status.trim_end()
-            );
-        }
-    }
-
-    if !git.branch_has_commits_ahead(parent, branch)? {
-        bail!(
-            "Workflow task {} has no commits ahead of parent {parent}. Commit the task work before completing.",
-            workflow_task_label(row)
-        );
-    }
-
-    Ok(())
-}
-
-fn relevant_worktree_status(ctx: &Ctx, status: &str) -> String {
-    status
-        .lines()
-        .filter(|line| !is_configured_link_status_line(ctx, line))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn is_configured_link_status_line(ctx: &Ctx, line: &str) -> bool {
-    let Some(path) = porcelain_status_path(line) else {
-        return false;
-    };
-
-    ctx.config
-        .worktree
-        .link
-        .iter()
-        .map(|linked| linked.trim_end_matches('/'))
-        .any(|linked| path == linked || path.starts_with(&format!("{linked}/")))
-}
-
-fn porcelain_status_path(line: &str) -> Option<&str> {
-    let path = line.get(3..)?.trim();
-    let path = path.rsplit(" -> ").next().unwrap_or(path);
-    Some(path.trim_matches('"'))
-}
-
 struct PreparedWorkflowTasks {
     tasks: Vec<WorkflowTask>,
     task_runs: Vec<task_run::TaskRunRecord>,
@@ -919,6 +587,16 @@ mod tests {
         branch: Option<&str>,
     ) {
         task_run::update(ctx, &row.run, status, branch, None).unwrap();
+    }
+
+    fn write_workflow_with_parent(
+        ctx: &Ctx,
+        record: &mut workflow_store::WorkflowRecord,
+        idx: usize,
+        parent: &str,
+    ) {
+        record.workflow.tasks[idx].parent = Some(parent.into());
+        workflow_store::write(ctx, &record.path, &mut record.workflow).unwrap();
     }
 
     fn candidate_ids(ctx: &Ctx) -> Vec<String> {
@@ -1265,9 +943,144 @@ mod tests {
         let states = read_stack_workflow_task_states(&ctx, &record.path, &record.workflow).unwrap();
 
         assert_eq!(
-            parent_for_workflow_stack_task(&record.workflow, &states, 2).unwrap(),
+            stack_plan::parent_for_stack_task(&record.workflow, &states, 2).unwrap(),
             "schema"
         );
+    }
+
+    #[test]
+    fn workflow_complete_rejects_dirty_stack_task_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}/wt-feature\nHEAD def\nbranch refs/heads/feature\n\n",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response(" M src/lib.rs", true);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let mut record = prepare_workflow(&ctx, WorkflowModeArg::Stack, &["feature"]);
+        write_workflow_with_parent(&ctx, &mut record, 0, "main");
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("feature"),
+        );
+
+        let err =
+            complete(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+
+        assert!(err.to_string().contains("uncommitted changes"));
+        let run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
+        assert_eq!(run.status, STATUS_RUNNING);
+    }
+
+    #[test]
+    fn workflow_complete_rejects_stack_task_without_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}/wt-feature\nHEAD def\nbranch refs/heads/feature\n\n",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("0", true);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let mut record = prepare_workflow(&ctx, WorkflowModeArg::Stack, &["feature"]);
+        write_workflow_with_parent(&ctx, &mut record, 0, "main");
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("feature"),
+        );
+
+        let err =
+            complete(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+
+        assert!(err.to_string().contains("no commits ahead"));
+        let run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
+        assert_eq!(run.status, STATUS_RUNNING);
+    }
+
+    #[test]
+    fn workflow_complete_with_run_next_starts_next_stack_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}/wt-schema\nHEAD def\nbranch refs/heads/schema\n\n",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("1", true);
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}/wt-schema\nHEAD def\nbranch refs/heads/schema\n\n",
+                dir.path().display(),
+                dir.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let mut record = prepare_workflow(&ctx, WorkflowModeArg::Stack, &["schema", "api"]);
+        write_workflow_with_parent(&ctx, &mut record, 0, "main");
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_RUNNING,
+            Some("schema"),
+        );
+        let first_run = record.workflow.tasks[0].run.clone();
+        let second_run = record.workflow.tasks[1].run.clone();
+
+        complete(&ctx, record.path.to_str().unwrap(), Some("schema"), true).unwrap();
+        let updated = workflow_store::read(&record.path).unwrap();
+
+        assert_eq!(
+            task_run_record(&ctx, &first_run).unwrap().status,
+            STATUS_DONE
+        );
+        assert_eq!(
+            task_run_record(&ctx, &second_run).unwrap().status,
+            STATUS_RUNNING
+        );
+        assert_eq!(updated.tasks[1].parent.as_deref(), Some("schema"));
     }
 
     #[test]

@@ -3,11 +3,11 @@ use super::render::{
     workflow_selection_status_counts, workflow_task_title_label,
 };
 use super::resolve_mutating_target;
+use super::stack_plan::next_runnable_stack_task;
 use super::state::{
     WorkflowTaskState, read_batch_workflow_task_states, read_single_workflow_task_states,
     read_stack_workflow_task_states,
 };
-use crate::commands::task_run::{STATUS_DONE, STATUS_SKIPPED};
 use crate::context::{Ctx, PromptItem};
 use crate::workflow as workflow_store;
 use crate::workflow::{WorkflowMetadata, WorkflowMode};
@@ -142,7 +142,7 @@ fn runnable_workflow_info(
             if states.iter().any(|state| state.run.is_stack_completable()) {
                 return None;
             }
-            next_runnable_workflow_stack_task(states).map(|next_idx| RunnableWorkflowInfo {
+            next_runnable_stack_task(states).map(|next_idx| RunnableWorkflowInfo {
                 runnable_count: 1,
                 next_idx: Some(next_idx),
             })
@@ -219,15 +219,4 @@ fn multiple_runnable_workflows_message(
         "Multiple runnable workflows found; pass one explicitly:\n{}",
         rows.join("\n")
     )
-}
-
-pub(super) fn next_runnable_workflow_stack_task(items: &[WorkflowTaskState]) -> Option<usize> {
-    for item in items {
-        match item.run.status {
-            STATUS_DONE | STATUS_SKIPPED => continue,
-            status if status.is_runnable() => return Some(item.idx),
-            _ => return None,
-        }
-    }
-    None
 }
