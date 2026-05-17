@@ -8,6 +8,19 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.26.1 - 2026-05-18
+
+- Fixed stack workflow handoff prompts so PR creation uses the validated
+  runtime parent branch instead of re-reading the stored task row parent.
+- Fixed workflow preparation with `--profile` so prepared `[policy]` snapshots
+  come from the selected profile's effective workflow defaults, while explicit
+  `--pr` still overrides only pull-request mode.
+- Fixed TaskDocument updates to replace files through a same-directory
+  temporary file and rename, and normalized discovered local task keys through
+  the canonical safe task key function.
+- Bumped the package version to `0.26.1` because this release contains bug
+  fixes and internal consistency follow-ups after `0.26.0`.
+
 ## 0.26.0 - 2026-05-18
 
 - Removed hidden parser and dispatch shells for top-level `wt batch`,
