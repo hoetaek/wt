@@ -50,24 +50,15 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 mode,
                 profile,
                 base,
-                pull_request,
-            } => {
-                commands::workflow::task(ctx, tasks, *mode, profile.as_deref(), base, *pull_request)
-            }
+                pr,
+            } => commands::workflow::task(ctx, tasks, *mode, profile.as_deref(), base, *pr),
             WorkflowCommand::Issue {
                 issues,
                 mode,
                 profile,
                 base,
-                pull_request,
-            } => commands::workflow::issue(
-                ctx,
-                issues,
-                *mode,
-                profile.as_deref(),
-                base,
-                *pull_request,
-            ),
+                pr,
+            } => commands::workflow::issue(ctx, issues, *mode, profile.as_deref(), base, *pr),
             WorkflowCommand::Run { workflow, jobs } => {
                 commands::workflow::run(ctx, workflow.as_deref(), *jobs)
             }

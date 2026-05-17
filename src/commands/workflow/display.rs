@@ -62,14 +62,12 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
             ctx.ui.print_dim(&format!("     Parent: {parent}"));
         }
         if metadata.mode == WorkflowMode::Stack {
-            ctx.ui.print_dim(&format!(
-                "     Pull request: {}",
-                if item.pull_request.unwrap_or(false) {
-                    "yes"
-                } else {
-                    "no"
-                }
-            ));
+            let pull_request = item
+                .pull_request
+                .map(|mode| mode.as_str())
+                .unwrap_or("none");
+            ctx.ui
+                .print_dim(&format!("     Pull request: {pull_request}"));
         }
         if let Some(error) = run.and_then(|run| run.error) {
             if !error.trim().is_empty() {

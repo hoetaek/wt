@@ -81,7 +81,7 @@ Prepare saved workflows when local tasks or issues need coordination:
 ```bash
 wt workflow task --mode single add-schema wire-api --base .
 wt workflow task --mode batch add-schema wire-api --base main
-wt workflow issue --mode stack 123 456 789 --base main
+wt workflow issue --mode stack 123 456 789 --base main --pr draft
 wt workflow run
 wt workflow complete 2026-05-16-001 add-schema --run-next
 ```
@@ -133,13 +133,17 @@ Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<c
 
 Immediate `wt task run` work reports `PR=none`. Workflow single and batch tasks
 also report `PR=none`; stack tasks follow the workflow row's pull-request
-handoff intent. When stack task metadata sets `pull_request = true`, the task
-agent pushes the branch, opens a draft pull request against the workflow parent
-branch, updates the pull request body with the completion report, marks the pull
-request ready for review, and reports `PR=<pr-url>`. If Codex/GitHub review or
+handoff intent. Omit `--pr` or pass `--pr none` to avoid opening a PR,
+`--pr draft` to create a draft PR and leave it draft, or `--pr ready` to create
+a review-ready PR directly. Workflow rows persist PR intent only as
+`pull_request = "draft"` or `pull_request = "ready"`; an omitted value means
+`PR=none`. PR-opening tasks create a body file from
+`.github/pull_request_template.md`, fill a review-focused description, and pass
+it to `gh pr create --body-file <pr-body-file>`. If Codex/GitHub review or
 coordinator feedback asks for changes, the same agent updates the branch, reruns
-checks, pushes, refreshes the PR body when needed, and sends an updated report.
-The coordinator advances, lands, and cleans up only after review passes.
+checks, pushes, refreshes the PR body only if it became stale, and sends an
+updated report. The coordinator advances, lands, and cleans up only after review
+passes.
 
 ## Configuration
 
