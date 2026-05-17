@@ -8,6 +8,14 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.26.2 - 2026-05-18
+
+- Fixed stack workflow status messages so generated `wt workflow complete`
+  hints shell-quote workflow paths and task keys that contain spaces or shell
+  metacharacters.
+- Bumped the package version to `0.26.2` because this release contains a patch
+  bug fix after `0.26.1`.
+
 ## 0.26.1 - 2026-05-18
 
 - Fixed stack workflow handoff prompts so PR creation uses the validated

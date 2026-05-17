@@ -259,8 +259,8 @@ pub(crate) fn stack_task_already_running_message(
     format!(
         "Workflow stack task {} is already running. Mark it complete with: wt workflow complete {} {}",
         workflow_task_label(row),
-        workflow_path.display(),
-        workflow_task_label(row)
+        shell_arg(&workflow_path.to_string_lossy()),
+        shell_arg(workflow_task_label(row))
     )
 }
 
@@ -268,8 +268,8 @@ pub(crate) fn started_stack_task_message(workflow_path: &Path, row: &WorkflowTas
     format!(
         "Started workflow task {}. Mark it complete with: wt workflow complete {} {}",
         workflow_task_label(row),
-        workflow_path.display(),
-        workflow_task_label(row)
+        shell_arg(&workflow_path.to_string_lossy()),
+        shell_arg(workflow_task_label(row))
     )
 }
 
