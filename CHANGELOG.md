@@ -16,8 +16,9 @@ minor version instead of moving to `x.0.0`.
   come from the selected profile's effective workflow defaults, while explicit
   `--pr` still overrides only pull-request mode.
 - Fixed TaskDocument updates to replace files through a same-directory
-  temporary file and rename, and normalized discovered local task keys through
-  the canonical safe task key function.
+  temporary file and rename while preserving existing file permissions, and
+  normalized discovered local task keys through the canonical safe task key
+  function.
 - Bumped the package version to `0.26.1` because this release contains bug
   fixes and internal consistency follow-ups after `0.26.0`.
 
