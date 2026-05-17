@@ -821,6 +821,20 @@ mod tests {
     }
 
     #[test]
+    fn workflow_complete_rejects_non_stack_workflows() {
+        for mode in [WorkflowModeArg::Single, WorkflowModeArg::Batch] {
+            let dir = tempfile::tempdir().unwrap();
+            let ctx = ctx(dir.path());
+            let record = prepare_workflow(&ctx, mode, &["feature"]);
+
+            let err =
+                complete(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+
+            assert!(err.to_string().contains("only supports mode stack"));
+        }
+    }
+
+    #[test]
     fn workflow_complete_rejects_dirty_stack_task_worktree() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();

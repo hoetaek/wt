@@ -236,7 +236,7 @@ name.
 | `wt task import` | Import provider issues as local TaskDocuments |
 | `wt task run` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
-| `wt workflow` | Prepare, inspect, run, repair, and complete saved workflows |
+| `wt workflow` | Prepare, inspect, run, and repair saved workflows; complete stack tasks |
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
 | `wt agent status` | Observe the matching task agent surface once |
 | `wt agent watch` | Poll the matching task agent surface |

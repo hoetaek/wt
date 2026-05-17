@@ -82,7 +82,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Prepare, inspect, edit, run, repair, or complete workflows
+    /// Prepare, inspect, edit, run, repair workflows, or complete stack tasks
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
@@ -1182,7 +1182,9 @@ mod tests {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, edit, run, repair, or complete workflows"));
+        assert!(
+            help.contains("Prepare, inspect, edit, run, repair workflows, or complete stack tasks")
+        );
         assert!(help.contains("repair"));
         assert!(help.contains("task"));
         assert!(help.contains("issue"));

@@ -447,8 +447,10 @@ Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work
 commit/diff 정보, Agent Completion Report 기대치, 현재 cmux contact를 보여주는 canonical
 read-only dossier다. Agent observation snapshot을 같이 보여줄 수 있지만, `inspect`의 exit
 code는 command 자체의 성공/실패만 뜻한다. 관찰된 agent가 `needs_input`이거나 `failed`여도
-그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. 실제 완료 기록은 `wt done` 또는
-workflow completion command처럼 source별 completion 명령이 맡는다.
+그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. 실제 완료 기록은 source별 명령이
+맡는다. `source = "new"`와 `source = "batch"` TaskRun은 landing/cleanup 안전 확인 뒤
+`wt done`이 정리하고, `source = "stack"` TaskRun은 stack-mode workflow completion command가
+전이한다.
 
 `wt inspect`에서 `<target>` 생략은 interactive TTY human mode에서 inspectable work target
 selector를 여는 기본 동작이다. `--json`, `--quiet`, 또는 non-TTY automation에서는 selector를

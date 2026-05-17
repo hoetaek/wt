@@ -503,14 +503,26 @@ fn print_next_section(ctx: &Ctx, target: &InspectTarget, workflows: &[WorkflowMa
         "  Review: compare the report, diff, and checks before changing lifecycle state.",
     );
     for workflow in workflows {
-        ctx.ui.print_dim(&format!(
-            "  Complete: when accepted, run `{}`.",
-            workflow_complete_command(workflow)
-        ));
+        print_workflow_next_step(ctx, workflow);
     }
     ctx.ui.print_dim(&format!(
         "  Land/cleanup: merge explicitly first; run `wt done {}` only when cleanup is safe.",
         shell_arg(&target.branch)
+    ));
+}
+
+fn print_workflow_next_step(ctx: &Ctx, workflow: &WorkflowMatch) {
+    if workflow.mode == "stack" {
+        ctx.ui.print_dim(&format!(
+            "  Complete: when accepted, run `{}`.",
+            workflow_complete_command(workflow)
+        ));
+        return;
+    }
+
+    ctx.ui.print_dim(&format!(
+        "  Workflow: mode {} has no workflow completion command; review the worktree, report, and checks, then land when policy and safety checks allow.",
+        workflow.mode
     ));
 }
 
@@ -520,9 +532,7 @@ fn workflow_complete_command(workflow: &WorkflowMatch) -> String {
         shell_arg(&workflow.path.to_string_lossy()),
         shell_arg(&workflow.task)
     );
-    if workflow.mode == "stack" {
-        command.push_str(" --run-next");
-    }
+    command.push_str(" --run-next");
     command
 }
 
@@ -660,6 +670,69 @@ mod tests {
         assert!(dims.contains("--run-next"));
         let warnings = ui.warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Cmux: cmux command not found"));
+    }
+
+    #[test]
+    fn inspect_next_omits_workflow_complete_for_single_workflow() {
+        let dims = inspect_next_section_for_mode("single");
+
+        assert!(dims.contains("mode single has no workflow completion command"));
+        assert!(dims.contains("review the worktree, report, and checks"));
+        assert!(dims.contains("land when policy and safety checks allow"));
+        assert!(dims.contains("wt done feature"));
+        assert!(!dims.contains("wt workflow complete"));
+    }
+
+    #[test]
+    fn inspect_next_omits_workflow_complete_for_batch_workflow() {
+        let dims = inspect_next_section_for_mode("batch");
+
+        assert!(dims.contains("mode batch has no workflow completion command"));
+        assert!(dims.contains("review the worktree, report, and checks"));
+        assert!(dims.contains("land when policy and safety checks allow"));
+        assert!(dims.contains("wt done feature"));
+        assert!(!dims.contains("wt workflow complete"));
+    }
+
+    #[test]
+    fn inspect_next_keeps_stack_workflow_completion_guidance() {
+        let dims = inspect_next_section_for_mode("stack");
+
+        assert!(dims.contains("Complete: when accepted"));
+        assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("--run-next"));
+        assert!(dims.contains("wt done feature"));
+    }
+
+    fn inspect_next_section_for_mode(mode: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("sample");
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui.clone()),
+        );
+        let target = InspectTarget {
+            label: "feature".into(),
+            branch: "feature".into(),
+            worktree: None,
+            task_run: None,
+        };
+        let workflow = WorkflowMatch {
+            id: "2026-05-17-001".into(),
+            path: repo.join(".local/workflows/2026-05-17-001.toml"),
+            mode: mode.into(),
+            task: "feature".into(),
+            parent: None,
+            pull_request: None,
+        };
+
+        print_next_section(&ctx, &target, &[workflow]);
+
+        ui.dims.lock().unwrap().join("\n")
     }
 
     #[test]
