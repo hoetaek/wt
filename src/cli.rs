@@ -77,27 +77,15 @@ pub enum Commands {
         #[arg(long, conflicts_with = "profile")]
         matrix: bool,
     },
-    /// Legacy batch command; use wt workflow --mode batch
-    #[command(hide = true)]
-    Batch {
-        #[command(subcommand)]
-        command: BatchCommand,
-    },
     /// Manage local TaskDocuments
     Task {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Prepare, inspect, edit, run, or complete workflows
+    /// Prepare, inspect, edit, run, repair workflows, or complete stack tasks
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
-    },
-    /// Legacy stack command; use wt workflow --mode stack
-    #[command(hide = true)]
-    Stack {
-        #[command(subcommand)]
-        command: StackCommand,
     },
     /// Show worktree, branch, site, and setup state
     List {
@@ -115,18 +103,18 @@ pub enum Commands {
         /// Branch, issue number/key, or worktree directory names to remove
         targets: Vec<String>,
     },
-    /// Inspect a worktree, branch, or TaskRun before review or landing
-    Review {
+    /// Read a work dossier for a branch, worktree, or TaskRun
+    #[command(
+        long_about = "Read a concise, read-only work dossier for a branch, worktree path/name, or TaskRun id. Omit TARGET in an interactive terminal to choose an inspectable work target; pass TARGET explicitly for scripts and non-interactive use."
+    )]
+    Inspect {
         /// Branch, worktree path/name, or TaskRun id to inspect
         target: Option<String>,
     },
-    /// Poll a task agent's current status
-    #[command(
-        long_about = "Poll a task agent's current status from the matching cmux surface. This is read-only: it observes cmux screen, status, and hook signals without updating TaskRuns or provider issues. Codex status is weaker until cmux Codex hooks are installed with `cmux hooks codex install --yes`."
-    )]
-    Status {
-        /// Branch, worktree path/name, or TaskRun id to poll
-        target: String,
+    /// Observe and watch task agent runtime state
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
     },
     /// Send a message to a task agent's cmux surface
     Send {
@@ -237,6 +225,40 @@ pub enum ProfileCommand {
     },
 }
 
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum AgentCommand {
+    /// Observe a task agent's current runtime state once
+    #[command(
+        long_about = "Observe a task agent's current runtime state from the matching cmux surface. This is read-only: it observes cmux screen, status, and hook signals without updating TaskRuns or provider issues. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use. Codex status is weaker until cmux Codex hooks are installed with `cmux hooks codex install --yes`."
+    )]
+    Status {
+        /// Branch, worktree path/name, or TaskRun id to observe
+        target: Option<String>,
+    },
+    /// Poll a task agent's runtime state until it is no longer running, becomes blocked, or reaches a bound
+    #[command(
+        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
+    )]
+    Watch {
+        /// Branch, worktree path/name, or TaskRun id to watch
+        target: Option<String>,
+        /// Seconds between observations
+        #[arg(
+            long,
+            default_value_t = 2,
+            value_name = "SECONDS",
+            value_parser = parse_positive_u64
+        )]
+        interval: u64,
+        /// Stop waiting after this many positive seconds
+        #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
+        timeout: Option<u64>,
+        /// Print unchanged running observations at this positive-second interval
+        #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
+        heartbeat: Option<u64>,
+    },
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorMode {
     Auto,
@@ -278,63 +300,19 @@ pub enum InitSiteProvider {
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum BatchCommand {
-    /// Prepare local tasks as a batch file without starting workspaces
-    Task {
-        /// Task titles or existing task keys to prepare
-        #[arg(required = true)]
-        tasks: Vec<String>,
-        /// Named profile from .local/profiles/<name> for all tasks
-        #[arg(long)]
-        profile: Option<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-    },
-    /// Prepare issues as a batch file without starting workspaces
-    Issue {
-        /// Issue identifiers to import as tasks (omit to select interactively)
-        issues: Vec<String>,
-        /// Named profile from .local/profiles/<name> for all tasks
-        #[arg(long)]
-        profile: Option<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-    },
-    /// Start prepared or failed tasks; running siblings stay visible
-    #[command(
-        long_about = "Start prepared or failed TaskRuns from a batch and mark them running.\n\nOmit BATCH to choose from runnable batches: batches with at least one prepared or failed task. Running sibling tasks remain visible and do not block independent runnable tasks. Passing BATCH accepts a TOML path or shorthand id for scripts."
-    )]
-    Run {
-        /// Batch TOML path or shorthand id (omit to select a runnable batch; running siblings stay visible)
-        batch: Option<String>,
-        /// Maximum number of runnable tasks to execute concurrently
-        #[arg(long, default_value_t = 1, value_parser = parse_positive_usize)]
-        jobs: usize,
-    },
-    /// Show batch metadata and task statuses
-    Show {
-        /// Batch TOML path, shorthand id, or "latest" (default)
-        batch: Option<String>,
-    },
-    /// Open batch TOML in the configured editor
-    Edit {
-        /// Batch TOML path, shorthand id, or "latest" (default)
-        batch: Option<String>,
-    },
-    /// Delete completed batch TaskDocument files
-    Clean {
-        /// Batch TOML path, shorthand id, or "latest" (default)
-        batch: Option<String>,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum TaskCommand {
+    /// Import provider issues as local TaskDocuments
+    #[command(
+        long_about = "Import existing provider issues into .local/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
+    )]
+    Import {
+        /// Provider issue ids to import
+        #[arg(value_name = "ISSUE")]
+        issues: Vec<String>,
+    },
     /// Start one worktree per selected local TaskDocument
     #[command(
-        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a source = \"new\" TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
+        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a source = \"new\" TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
     )]
     Run {
         /// Local task keys from .local/tasks/<task>.toml
@@ -373,12 +351,15 @@ pub enum WorkflowCommand {
         /// Named profile from .local/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
+        /// Human context explaining the larger objective this workflow is meant to complete
+        #[arg(long)]
+        objective: Option<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Mark stack-mode workflow tasks as requiring draft pull requests
-        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
-        pull_request: bool,
+        /// Override [workflow].pull_request for this prepared workflow
+        #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
+        pr: Option<WorkflowPrModeArg>,
     },
     /// Prepare issues as a workflow file without starting workspaces
     Issue {
@@ -390,16 +371,19 @@ pub enum WorkflowCommand {
         /// Named profile from .local/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
+        /// Human context explaining the larger objective this workflow is meant to complete
+        #[arg(long)]
+        objective: Option<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Mark stack-mode workflow tasks as requiring draft pull requests
-        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
-        pull_request: bool,
+        /// Override [workflow].pull_request for this prepared workflow
+        #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
+        pr: Option<WorkflowPrModeArg>,
     },
     /// Start runnable tasks from a workflow
     #[command(
-        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts."
+        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation. Stack tasks also include their `wt workflow complete ... --run-next` command."
     )]
     Run {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -417,6 +401,17 @@ pub enum WorkflowCommand {
     Edit {
         /// Workflow TOML path, shorthand id, or "latest" (default)
         workflow: Option<String>,
+    },
+    /// Preview or apply workflow runtime repairs
+    #[command(
+        long_about = "Preview or apply workflow runtime repairs.\n\nBy default this command is a dry-run: it observes linked TaskRuns, local worktrees, and live cmux agent surfaces, then prints recommended repairs without changing state. Pass --apply to mark repairable inconsistent TaskRuns failed through the existing TaskRun failure model. Repair never closes cmux workspaces or removes worktrees."
+    )]
+    Repair {
+        /// Workflow TOML path or shorthand id
+        workflow: String,
+        /// Apply repairable TaskRun status changes
+        #[arg(long)]
+        apply: bool,
     },
     /// Mark the running task in a stack-mode workflow as complete
     Complete {
@@ -437,65 +432,11 @@ pub enum WorkflowModeArg {
     Stack,
 }
 
-#[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum StackCommand {
-    /// Prepare local tasks as a stack file without starting workspaces
-    Task {
-        /// Task titles or existing task keys to prepare in base-to-top order
-        #[arg(required = true)]
-        tasks: Vec<String>,
-        /// Named profile from .local/profiles/<name> for all tasks
-        #[arg(long)]
-        profile: Option<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-        /// Mark prepared stack tasks as requiring draft pull requests
-        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
-        pull_request: bool,
-    },
-    /// Prepare issues as a stack file without starting workspaces
-    Issue {
-        /// Issue identifiers to import as tasks in base-to-top order (omit to select interactively)
-        issues: Vec<String>,
-        /// Named profile from .local/profiles/<name> for all tasks
-        #[arg(long)]
-        profile: Option<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-        /// Mark prepared stack tasks as requiring draft pull requests
-        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
-        pull_request: bool,
-    },
-    /// Start the next prepared or failed task from a selected runnable stack
-    #[command(
-        long_about = "Start the next prepared or failed TaskRun from a stack and mark it running.\n\nOmit STACK to choose from runnable stacks: stacks with a next prepared or failed task and no currently running task. Passing STACK accepts a TOML path or shorthand id for scripts."
-    )]
-    Run {
-        /// Stack TOML path or shorthand id (omit to select a runnable stack)
-        stack: Option<String>,
-    },
-    /// Show stack metadata and task statuses
-    Show {
-        /// Stack TOML path, shorthand id, or "latest" (default)
-        stack: Option<String>,
-    },
-    /// Open stack TOML in the configured editor
-    Edit {
-        /// Stack TOML path, shorthand id, or "latest" (default)
-        stack: Option<String>,
-    },
-    /// Mark the running task in a stack as complete
-    Complete {
-        /// Stack TOML path, or "latest" for the newest local stack
-        stack: String,
-        /// Running stack task identifier to complete
-        task: Option<String>,
-        /// Start the next stack task after marking this one complete
-        #[arg(long)]
-        run_next: bool,
-    },
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowPrModeArg {
+    None,
+    Draft,
+    Ready,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
@@ -542,6 +483,16 @@ impl BaseMode {
 fn parse_positive_usize(value: &str) -> std::result::Result<usize, String> {
     let parsed = value
         .parse::<usize>()
+        .map_err(|_| "must be a positive integer".to_string())?;
+    if parsed == 0 {
+        return Err("must be a positive integer".into());
+    }
+    Ok(parsed)
+}
+
+fn parse_positive_u64(value: &str) -> std::result::Result<u64, String> {
+    let parsed = value
+        .parse::<u64>()
         .map_err(|_| "must be a positive integer".to_string())?;
     if parsed == 0 {
         return Err("must be a positive integer".into());
@@ -741,57 +692,141 @@ mod tests {
     }
 
     #[test]
-    fn review_accepts_optional_target() {
-        let cli = parse(&["wt", "review"]);
+    fn inspect_accepts_optional_target() {
+        let cli = parse(&["wt", "inspect"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Review { target: None })
+            Some(Commands::Inspect { target: None })
         ));
 
-        let cli = parse(&["wt", "review", "feature"]);
+        let cli = parse(&["wt", "inspect", "feature"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Review { ref target }) if target.as_deref() == Some("feature")
+            Some(Commands::Inspect { ref target }) if target.as_deref() == Some("feature")
         ));
     }
 
     #[test]
-    fn review_help_describes_target_types() {
+    fn inspect_help_describes_optional_target_and_selector() {
         let mut command = Cli::command();
         let help = command
-            .find_subcommand_mut("review")
+            .find_subcommand_mut("inspect")
             .unwrap()
             .render_long_help()
             .to_string();
 
-        assert!(help.contains("worktree, branch, or TaskRun"));
+        assert!(help.contains("[TARGET]"));
+        assert!(help.contains("read-only work dossier"));
         assert!(help.contains("Branch, worktree path/name, or TaskRun id"));
+        assert!(help.contains("Omit TARGET in an interactive terminal"));
     }
 
     #[test]
-    fn status_accepts_required_target() {
-        let cli = parse(&["wt", "status", "feature"]);
+    fn agent_status_accepts_optional_target() {
+        let cli = parse(&["wt", "agent", "status", "feature"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Status { ref target }) if target == "feature"
+            Some(Commands::Agent {
+                command: AgentCommand::Status { ref target }
+            }) if target.as_deref() == Some("feature")
         ));
 
-        let result = Cli::try_parse_from(["wt", "status"]);
-        assert!(result.is_err());
+        let cli = parse(&["wt", "agent", "status"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Agent {
+                command: AgentCommand::Status { target: None }
+            })
+        ));
     }
 
     #[test]
-    fn status_help_describes_target_types() {
+    fn agent_status_help_describes_target_types_and_selector() {
         let mut command = Cli::command();
         let help = command
+            .find_subcommand_mut("agent")
+            .unwrap()
             .find_subcommand_mut("status")
             .unwrap()
             .render_long_help()
             .to_string();
 
         assert!(help.contains("task agent"));
-        assert!(help.contains("<TARGET>"));
+        assert!(help.contains("[TARGET]"));
         assert!(help.contains("Branch, worktree path/name, or TaskRun id"));
+        assert!(help.contains("Omit TARGET in an interactive terminal"));
+    }
+
+    #[test]
+    fn agent_watch_help_describes_bounds_and_heartbeat() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("agent")
+            .unwrap()
+            .find_subcommand_mut("watch")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("task agent"));
+        assert!(help.contains("[TARGET]"));
+        assert!(help.contains("--timeout"));
+        assert!(help.contains("--heartbeat"));
+        assert!(help.contains("unchanged running observations"));
+        assert!(help.contains("Omit TARGET in an interactive terminal"));
+    }
+
+    #[test]
+    fn agent_watch_accepts_optional_target_and_interval() {
+        let cli = parse(&[
+            "wt",
+            "agent",
+            "watch",
+            "feature",
+            "--interval",
+            "5",
+            "--timeout",
+            "60",
+            "--heartbeat",
+            "10",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Agent {
+                command: AgentCommand::Watch {
+                    ref target,
+                    interval: 5,
+                    timeout: Some(60),
+                    heartbeat: Some(10),
+                }
+            }) if target.as_deref() == Some("feature")
+        ));
+
+        let cli = parse(&["wt", "agent", "watch"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Agent {
+                command: AgentCommand::Watch {
+                    target: None,
+                    interval: 2,
+                    timeout: None,
+                    heartbeat: None,
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn agent_watch_rejects_zero_timeout_and_heartbeat() {
+        let interval = Cli::try_parse_from(["wt", "agent", "watch", "feature", "--interval", "0"]);
+        assert!(interval.is_err());
+
+        let timeout = Cli::try_parse_from(["wt", "agent", "watch", "feature", "--timeout", "0"]);
+        assert!(timeout.is_err());
+
+        let heartbeat =
+            Cli::try_parse_from(["wt", "agent", "watch", "feature", "--heartbeat", "0"]);
+        assert!(heartbeat.is_err());
     }
 
     #[test]
@@ -836,184 +871,70 @@ mod tests {
     }
 
     #[test]
-    fn batch_issue_accepts_default_profile() {
-        let cli = parse(&["wt", "batch", "issue", "PROJ-123", "PROJ-456"]);
+    fn task_import_accepts_issue_id() {
+        let cli = parse(&["wt", "task", "import", "PROJ-123"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Issue {
-                    ref issues,
-                    profile: None,
-                    base: None,
-                }
-            }) if issues == &vec!["PROJ-123".to_string(), "PROJ-456".to_string()]
+            Some(Commands::Task {
+                command: TaskCommand::Import { ref issues }
+            }) if issues == &vec!["PROJ-123".to_string()]
         ));
     }
 
     #[test]
-    fn batch_issue_accepts_no_issue_args_for_interactive_selection() {
-        let cli = parse(&["wt", "batch", "issue"]);
+    fn task_import_accepts_multiple_issue_ids() {
+        let cli = parse(&["wt", "task", "import", "PROJ-123", "#42"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Issue {
-                    ref issues,
-                    profile: None,
-                    base: None,
-                }
+            Some(Commands::Task {
+                command: TaskCommand::Import { ref issues }
+            }) if issues == &vec!["PROJ-123".to_string(), "#42".to_string()]
+        ));
+    }
+
+    #[test]
+    fn task_import_accepts_no_issue_ids_for_interactive_selection() {
+        let cli = parse(&["wt", "task", "import"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Import { ref issues }
             }) if issues.is_empty()
         ));
     }
 
     #[test]
-    fn batch_issue_accepts_profile_and_base() {
-        let cli = parse(&[
-            "wt",
-            "batch",
-            "issue",
-            "PROJ-123",
-            "--profile",
-            "codex-yolo",
-            "--base",
-            "main",
-        ]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Issue {
-                    ref issues,
-                    profile: Some(ref profile),
-                    base: Some(ref base),
-                }
-            }) if issues == &vec!["PROJ-123".to_string()]
-                && profile == "codex-yolo"
-                && base == "main"
-        ));
+    fn task_import_rejects_stack_selector() {
+        let err = Cli::try_parse_from(["wt", "task", "import", "--stack", "latest"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unexpected argument '--stack'"));
     }
 
     #[test]
-    fn batch_prepare_is_not_a_command() {
-        let result = Cli::try_parse_from(["wt", "batch", "prepare", "PROJ-123"]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn batch_run_accepts_optional_target() {
-        let cli = parse(&["wt", "batch", "run"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Run {
-                    batch: None,
-                    jobs: 1
-                }
-            })
-        ));
-
-        let cli = parse(&["wt", "batch", "run", "2026-05-16-001"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Run { ref batch, jobs }
-            }) if batch.as_deref() == Some("2026-05-16-001") && jobs == 1
-        ));
-    }
-
-    #[test]
-    fn batch_run_accepts_jobs() {
-        let cli = parse(&["wt", "batch", "run", "--jobs", "3"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Run { ref batch, jobs }
-            }) if batch.is_none() && jobs == 3
-        ));
-    }
-
-    #[test]
-    fn batch_run_rejects_zero_jobs() {
-        let result = Cli::try_parse_from(["wt", "batch", "run", "--jobs", "0"]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn batch_show_accepts_optional_target() {
-        let cli = parse(&["wt", "batch", "show"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Show { batch: None }
-            })
-        ));
-
-        let cli = parse(&["wt", "batch", "show", "latest"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Show { ref batch }
-            }) if batch.as_deref() == Some("latest")
-        ));
-    }
-
-    #[test]
-    fn batch_edit_accepts_optional_target() {
-        let cli = parse(&["wt", "batch", "edit", "latest"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Edit { ref batch }
-            }) if batch.as_deref() == Some("latest")
-        ));
-    }
-
-    #[test]
-    fn batch_clean_accepts_optional_target() {
-        let cli = parse(&["wt", "batch", "clean"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Clean { batch: None }
-            })
-        ));
-
-        let cli = parse(&["wt", "batch", "clean", "latest"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Clean { ref batch }
-            }) if batch.as_deref() == Some("latest")
-        ));
-
-        let cli = parse(&["wt", "batch", "clean", "2026-05-09-001"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Clean { ref batch }
-            }) if batch.as_deref() == Some("2026-05-09-001")
-        ));
-    }
-
-    #[test]
-    fn batch_help_uses_general_batch_description() {
+    fn task_import_help_explains_non_executing_import_and_failures() {
         let mut command = Cli::command();
-        let batch = command.find_subcommand_mut("batch").unwrap();
-        let help = batch.render_help().to_string();
-        assert!(help.contains("Legacy batch command"));
-        assert!(help.contains("clean"));
-        assert!(help.contains("show"));
-    }
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("import")
+            .unwrap()
+            .render_long_help()
+            .to_string();
 
-    #[test]
-    fn batch_run_help_explains_jobs() {
-        let mut command = Cli::command();
-        let batch = command.find_subcommand_mut("batch").unwrap();
-        let run = batch.find_subcommand_mut("run").unwrap();
-        let help = run.render_help().to_string();
-        assert!(help.contains("--jobs <JOBS>"));
-        assert!(help.contains("Maximum number of runnable tasks to execute concurrently"));
-        assert!(help.contains("omit to select a runnable batch"));
-        assert!(help.contains("running siblings stay visible"));
-        assert!(!help.contains("latest"));
+        assert!(help.contains("Import existing provider issues"));
+        assert!(help.contains(".local/tasks/<safe-issue-id>.toml"));
+        assert!(help.contains("write title, branch, body, and [origin]"));
+        assert!(help.contains("does not start workspaces"));
+        assert!(help.contains("create local branches"));
+        assert!(help.contains("create TaskRuns"));
+        assert!(help.contains("gh issue develop"));
+        assert!(help.contains("empty branch"));
+        assert!(help.contains("Omit issue ids to choose provider issues interactively"));
+        assert!(help.contains("duplicate issue ids"));
+        assert!(help.contains("overwrite an existing local TaskDocument"));
+        assert!(!help.contains("--stack <STACK>"));
+        assert!(!help.contains("--batch <BATCH>"));
     }
 
     #[test]
@@ -1156,6 +1077,8 @@ mod tests {
         assert!(help.contains("one worktree per selected"));
         assert!(help.contains("source = \"new\" TaskRun"));
         assert!(help.contains("Omit task keys"));
+        assert!(help.contains("Task Run Coordinator Handoff"));
+        assert!(help.contains("Task-run agents report PR=none"));
         assert!(help.contains("wt workflow task --mode batch"));
         assert!(help.contains("wt workflow task --mode single"));
     }
@@ -1178,9 +1101,12 @@ mod tests {
             "stack",
             "--profile",
             "codex",
+            "--objective",
+            "Ship the split workflow",
             "--base",
             "main",
-            "--pull-request",
+            "--pr",
+            "ready",
         ]);
         assert!(matches!(
             cli.command,
@@ -1189,11 +1115,13 @@ mod tests {
                     ref tasks,
                     mode: WorkflowModeArg::Stack,
                     profile: Some(ref profile),
+                    objective: Some(ref objective),
                     base: Some(ref base),
-                    pull_request: true,
+                    pr: Some(WorkflowPrModeArg::Ready),
                 }
             }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
+                && objective == "Ship the split workflow"
                 && base == "main"
         ));
     }
@@ -1208,8 +1136,9 @@ mod tests {
                     ref tasks,
                     mode: WorkflowModeArg::Batch,
                     profile: None,
+                    objective: None,
                     base: None,
-                    pull_request: false,
+                    pr: None,
                 }
             }) if tasks.is_empty()
         ));
@@ -1225,10 +1154,29 @@ mod tests {
                     ref issues,
                     mode: WorkflowModeArg::Batch,
                     profile: None,
+                    objective: None,
                     base: None,
-                    pull_request: false,
+                    pr: None,
                 }
             }) if issues.is_empty()
+        ));
+    }
+
+    #[test]
+    fn workflow_issue_accepts_pr_draft() {
+        let cli = parse(&[
+            "wt", "workflow", "issue", "--mode", "stack", "PROJ-1", "--pr", "draft",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Issue {
+                    ref issues,
+                    mode: WorkflowModeArg::Stack,
+                    pr: Some(WorkflowPrModeArg::Draft),
+                    ..
+                }
+            }) if issues == &vec!["PROJ-1".to_string()]
         ));
     }
 
@@ -1247,11 +1195,67 @@ mod tests {
     }
 
     #[test]
+    fn workflow_repair_accepts_apply_flag() {
+        let cli = parse(&["wt", "workflow", "repair", "2026-05-17-002", "--apply"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Repair {
+                    ref workflow,
+                    apply: true,
+                }
+            }) if workflow == "2026-05-17-002"
+        ));
+    }
+
+    #[test]
+    fn workflow_repair_help_describes_preview_first_contract() {
+        let mut command = Cli::command();
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+        let repair = workflow.find_subcommand_mut("repair").unwrap();
+        let help = repair.render_long_help().to_string();
+        assert!(help.contains("dry-run"));
+        assert!(help.contains("--apply"));
+        assert!(help.contains("Repair never closes cmux workspaces or removes worktrees"));
+    }
+
+    #[test]
+    fn workflow_run_help_describes_coordinator_handoff() {
+        let mut command = Cli::command();
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+        let run = workflow.find_subcommand_mut("run").unwrap();
+        let help = run.render_long_help().to_string();
+        assert!(help.contains("Workflow Coordinator Handoff"));
+        assert!(help.contains("coordinator cmux send coordinates"));
+        assert!(help.contains("prepared [policy].pull_request"));
+        assert!(help.contains("wt workflow complete"));
+    }
+
+    #[test]
+    fn workflow_prepare_help_describes_objective_option() {
+        let mut command = Cli::command();
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+
+        let task = workflow.find_subcommand_mut("task").unwrap();
+        let task_help = task.render_long_help().to_string();
+        assert!(task_help.contains("--objective"));
+        assert!(task_help.contains("larger objective"));
+
+        let issue = workflow.find_subcommand_mut("issue").unwrap();
+        let issue_help = issue.render_long_help().to_string();
+        assert!(issue_help.contains("--objective"));
+        assert!(issue_help.contains("larger objective"));
+    }
+
+    #[test]
     fn workflow_help_uses_canonical_description() {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, edit, run, or complete workflows"));
+        assert!(
+            help.contains("Prepare, inspect, edit, run, repair workflows, or complete stack tasks")
+        );
+        assert!(help.contains("repair"));
         assert!(help.contains("task"));
         assert!(help.contains("issue"));
         assert!(help.contains("complete"));
@@ -1265,202 +1269,22 @@ mod tests {
         let help = task.render_help().to_string();
         assert!(help.contains("[TASKS]..."));
         assert!(help.contains("omit to select multiple existing tasks"));
+        assert!(help.contains("--pr <none|draft|ready>"));
+        assert!(help.contains("[workflow].pull_request"));
+        assert!(!help.contains(&format!("workflow.{}", "defaults")));
+        assert!(!help.contains("--pull-request"));
     }
 
     #[test]
-    fn stack_issue_accepts_ordered_issues_profile_and_base() {
-        let cli = parse(&[
-            "wt",
-            "stack",
-            "issue",
-            "PROJ-123",
-            "PROJ-456",
-            "--profile",
-            "codex",
-            "--base",
-            "main",
-        ]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Issue {
-                    ref issues,
-                    profile: Some(ref profile),
-                    base: Some(ref base),
-                    pull_request: false,
-                }
-            }) if issues == &vec!["PROJ-123".to_string(), "PROJ-456".to_string()]
-                && profile == "codex"
-                && base == "main"
-        ));
-    }
-
-    #[test]
-    fn stack_task_accepts_tasks_profile_and_base() {
-        let cli = parse(&[
-            "wt",
-            "stack",
-            "task",
-            "add-schema",
-            "wire-api",
-            "--profile",
-            "codex",
-            "--base",
-            "main",
-        ]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Task {
-                    ref tasks,
-                    profile: Some(ref profile),
-                    base: Some(ref base),
-                    pull_request: false,
-                }
-            }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
-                && profile == "codex"
-                && base == "main"
-        ));
-    }
-
-    #[test]
-    fn stack_issue_accepts_no_issue_args_for_interactive_selection() {
-        let cli = parse(&["wt", "stack", "issue"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Issue {
-                    ref issues,
-                    profile: None,
-                    base: None,
-                    pull_request: false,
-                }
-            }) if issues.is_empty()
-        ));
-    }
-
-    #[test]
-    fn stack_prepare_accepts_pull_request_flag() {
-        let cli = parse(&["wt", "stack", "task", "add-schema", "--pull-request"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Task {
-                    pull_request: true,
-                    ..
-                }
-            })
-        ));
-
-        let cli = parse(&["wt", "stack", "issue", "PROJ-123", "--pull-request"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Issue {
-                    pull_request: true,
-                    ..
-                }
-            })
-        ));
-    }
-
-    #[test]
-    fn stack_run_accepts_optional_target() {
-        let cli = parse(&["wt", "stack", "run"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Run { stack: None }
-            })
-        ));
-
-        let cli = parse(&["wt", "stack", "run", "manual"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Run { ref stack }
-            }) if stack.as_deref() == Some("manual")
-        ));
-    }
-
-    #[test]
-    fn stack_show_accepts_optional_target() {
-        let cli = parse(&["wt", "stack", "show"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Show { stack: None }
-            })
-        ));
-
-        let cli = parse(&["wt", "stack", "show", "latest"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Show { ref stack }
-            }) if stack.as_deref() == Some("latest")
-        ));
-    }
-
-    #[test]
-    fn stack_edit_accepts_optional_target() {
-        let cli = parse(&["wt", "stack", "edit", "latest"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Edit { ref stack }
-            }) if stack.as_deref() == Some("latest")
-        ));
-    }
-
-    #[test]
-    fn stack_help_uses_general_stack_description() {
+    fn workflow_issue_help_uses_pr_mode() {
         let mut command = Cli::command();
-        let stack = command.find_subcommand_mut("stack").unwrap();
-        let help = stack.render_help().to_string();
-        assert!(help.contains("Legacy stack command"));
-        assert!(help.contains("Start the next prepared or failed task"));
-        assert!(help.contains("Mark the running task"));
-        assert!(!help.contains("failed item"));
-        assert!(!help.contains("running item"));
-        assert!(help.contains("show"));
-    }
-
-    #[test]
-    fn stack_complete_accepts_stack_and_task() {
-        let cli = parse(&["wt", "stack", "complete", "latest", "PROJ-123"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Complete {
-                    ref stack,
-                    task: Some(ref task),
-                    run_next: false,
-                }
-            }) if stack == "latest" && task == "PROJ-123"
-        ));
-    }
-
-    #[test]
-    fn stack_complete_accepts_run_next() {
-        let cli = parse(&[
-            "wt",
-            "stack",
-            "complete",
-            "latest",
-            "PROJ-123",
-            "--run-next",
-        ]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Complete {
-                    ref stack,
-                    task: Some(ref task),
-                    run_next: true,
-                }
-            }) if stack == "latest" && task == "PROJ-123"
-        ));
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+        let issue = workflow.find_subcommand_mut("issue").unwrap();
+        let help = issue.render_help().to_string();
+        assert!(help.contains("--pr <none|draft|ready>"));
+        assert!(help.contains("[workflow].pull_request"));
+        assert!(!help.contains(&format!("workflow.{}", "defaults")));
+        assert!(!help.contains("--pull-request"));
     }
 
     #[test]

@@ -1,10 +1,11 @@
 pub(crate) use crate::agents::WorkState;
-use crate::agents::{self, AgentKind, AgentObservation};
-use crate::commands::task_run;
-use crate::context::Ctx;
-use crate::services::cmux::{CmuxEvent, CmuxPaneSelectedSurface, CmuxService, CmuxWorkspace};
+use crate::agents::{self, AgentKind, AgentObservation, AgentStatus};
+use crate::context::{Ctx, PromptItem};
+use crate::services::cmux::{CmuxEvent, CmuxService, CmuxWorkspace};
 use crate::services::git::{GitService, WorktreeEntry};
+use crate::task_run;
 use anyhow::{Result, bail};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use thiserror::Error;
@@ -23,11 +24,30 @@ pub(crate) struct WorkTarget {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CmuxContact {
+    pub(crate) workspace_id: String,
     pub(crate) workspace: String,
+    pub(crate) surface_id: Option<String>,
     pub(crate) surface: String,
+    pub(crate) pane_id: Option<String>,
     pub(crate) pane: String,
     pub(crate) title: String,
+    pub(crate) window_id: String,
     pub(crate) window: String,
+    pub(crate) selected: bool,
+    pub(crate) readable: bool,
+    pub(crate) state: WorkState,
+    pub(crate) validation_warning: Option<String>,
+}
+
+impl CmuxContact {
+    pub(crate) fn is_live_agent_candidate(&self) -> bool {
+        self.readable
+            && matches!(
+                self.state.agent_kind,
+                AgentKind::ClaudeCode | AgentKind::Codex
+            )
+            && self.state.status != AgentStatus::NoSession
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +56,7 @@ pub(crate) struct Work {
     pub(crate) state: WorkState,
     pub(crate) session_state: WorkSessionState,
     pub(crate) cmux: Option<WorkCmuxSurface>,
+    pub(crate) cmux_contacts: Vec<CmuxContact>,
     pub(crate) message: Option<String>,
 }
 
@@ -45,6 +66,7 @@ pub(crate) enum WorkSessionState {
     CmuxUnavailable,
     NoCmuxWorkspace,
     NoTerminalSurface,
+    AmbiguousTerminalSurface,
     TerminalSurfaceReady,
 }
 
@@ -55,6 +77,7 @@ impl WorkSessionState {
             Self::CmuxUnavailable => "cmux_unavailable",
             Self::NoCmuxWorkspace => "no_cmux_workspace",
             Self::NoTerminalSurface => "no_terminal_surface",
+            Self::AmbiguousTerminalSurface => "ambiguous_terminal_surface",
             Self::TerminalSurfaceReady => "terminal_surface_ready",
         }
     }
@@ -76,11 +99,19 @@ pub(crate) struct WorkCmuxSurface {
 impl WorkCmuxSurface {
     pub(crate) fn contact(&self) -> Option<CmuxContact> {
         Some(CmuxContact {
+            workspace_id: self.workspace_id.clone(),
             workspace: self.workspace_ref.clone(),
+            surface_id: self.surface_id.clone(),
             surface: self.surface_ref.clone()?,
+            pane_id: self.pane_id.clone(),
             pane: self.pane_ref.clone()?,
             title: self.workspace_title.clone(),
+            window_id: self.window_id.clone(),
             window: self.window_ref.clone(),
+            selected: true,
+            readable: true,
+            state: WorkState::new(AgentKind::Unknown, AgentStatus::Unknown),
+            validation_warning: None,
         })
     }
 }
@@ -99,8 +130,20 @@ struct WorkTargetCandidate {
     matches: Vec<String>,
 }
 
-pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
+#[derive(Clone, Debug)]
+struct SelectableWorkTarget {
+    target: WorkTarget,
+    item: PromptItem,
+    sort_key: String,
+}
+
+#[cfg(test)]
+fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
     let target = resolve_target(ctx, target)?;
+    observe_target(ctx, target)
+}
+
+pub(crate) fn observe_target(ctx: &Ctx, target: WorkTarget) -> Result<Work> {
     let Some(worktree) = target.worktree.clone() else {
         return Ok(Work {
             message: Some(format!(
@@ -111,6 +154,7 @@ pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
             state: WorkState::no_session(AgentKind::Unknown),
             session_state: WorkSessionState::NoLocalWorktree,
             cmux: None,
+            cmux_contacts: Vec::new(),
         });
     };
 
@@ -121,6 +165,7 @@ pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
             state: WorkState::no_session(AgentKind::Unknown),
             session_state: WorkSessionState::CmuxUnavailable,
             cmux: None,
+            cmux_contacts: Vec::new(),
             message: Some("cmux command not found".into()),
         });
     }
@@ -133,91 +178,72 @@ pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
                 state: WorkState::no_session(AgentKind::Unknown),
                 session_state: WorkSessionState::CmuxUnavailable,
                 cmux: None,
+                cmux_contacts: Vec::new(),
                 message: Some(format!("cmux workspace lookup failed: {err:#}")),
             });
         }
     };
 
-    let Some(workspace) = workspaces
+    let matching_workspaces = workspaces
         .into_iter()
-        .find(|workspace| cmux_workspace_matches(workspace, &worktree))
-    else {
+        .filter(|workspace| cmux_workspace_matches(workspace, &worktree))
+        .collect::<Vec<_>>();
+    if matching_workspaces.is_empty() {
         return Ok(Work {
             target,
             state: WorkState::no_session(AgentKind::Unknown),
             session_state: WorkSessionState::NoCmuxWorkspace,
             cmux: None,
+            cmux_contacts: Vec::new(),
             message: Some(format!(
                 "No cmux workspace found for worktree: {}",
                 worktree.display()
             )),
         });
-    };
+    }
 
-    let mut surface = work_cmux_workspace(&workspace);
-    let selected_surfaces = match cmux.selected_surfaces(&workspace.handle) {
-        Ok(selected_surfaces) => selected_surfaces,
+    let contacts = match cmux_contacts_for_workspaces(&cmux, &matching_workspaces) {
+        Ok(contacts) => contacts,
         Err(err) => {
+            let surface = work_cmux_workspace(&matching_workspaces[0]);
             return Ok(Work {
                 target,
                 state: WorkState::no_session(AgentKind::Unknown),
                 session_state: WorkSessionState::NoTerminalSurface,
                 cmux: Some(surface),
+                cmux_contacts: Vec::new(),
                 message: Some(format!("cmux pane lookup failed: {err:#}")),
             });
         }
     };
 
-    let Some(selected) = selected_surfaces.into_iter().next() else {
+    let Some(contact) = observed_cmux_contact(&contacts).cloned() else {
+        let state = WorkState::no_session(AgentKind::Unknown);
+        let session_state = if live_agent_candidates(&contacts).len() > 1 {
+            WorkSessionState::AmbiguousTerminalSurface
+        } else {
+            WorkSessionState::NoTerminalSurface
+        };
+        let message = cmux_contact_selection_warning(&contacts);
         return Ok(Work {
             target,
-            state: WorkState::no_session(AgentKind::Unknown),
-            session_state: WorkSessionState::NoTerminalSurface,
-            cmux: Some(surface),
-            message: Some(format!(
-                "No selected cmux surface found for workspace: {}",
-                workspace.handle
-            )),
+            state,
+            session_state,
+            cmux: Some(work_cmux_workspace(&matching_workspaces[0])),
+            cmux_contacts: contacts,
+            message,
         });
     };
 
-    surface.pane_id = Some(selected.pane_id.clone());
-    surface.pane_ref = Some(selected.pane_handle.clone());
-    surface.surface_id = Some(selected.selected_surface_id.clone());
-    surface.surface_ref = Some(selected.selected_surface_handle.clone());
-
-    match cmux.read_screen_lines(
-        &selected.selected_surface_handle,
-        &workspace.handle,
-        WORK_OBSERVATION_SCREEN_LINES,
-    ) {
-        Ok(screen) => {
-            let statuses = cmux.list_status(&workspace.handle).unwrap_or_default();
-            let events = cmux
-                .replay_events_after(
-                    0,
-                    WORK_OBSERVATION_EVENT_LIMIT,
-                    WORK_OBSERVATION_EVENT_TIMEOUT,
-                )
-                .map(|events| filter_work_events(events, &workspace, &selected))
-                .unwrap_or_default();
-            let observation = AgentObservation::new(Some(&screen), &statuses, &events);
-            Ok(Work {
-                target,
-                state: agents::classify(&observation),
-                session_state: WorkSessionState::TerminalSurfaceReady,
-                cmux: Some(surface),
-                message: None,
-            })
-        }
-        Err(err) => Ok(Work {
-            target,
-            state: WorkState::no_session(AgentKind::Unknown),
-            session_state: WorkSessionState::NoTerminalSurface,
-            cmux: Some(surface),
-            message: Some(format!("cmux terminal surface is not ready: {err:#}")),
-        }),
-    }
+    let message = cmux_contact_selection_warning(&contacts);
+    Ok(Work {
+        target,
+        state: contact.state.clone(),
+        session_state: WorkSessionState::TerminalSurfaceReady,
+        cmux: Some(work_cmux_surface_from_contact(&contact)),
+        cmux_contacts: contacts,
+        message,
+    })
 }
 
 pub(crate) fn resolve_target(ctx: &Ctx, target: Option<&str>) -> Result<WorkTarget> {
@@ -242,6 +268,31 @@ pub(crate) fn resolve_target(ctx: &Ctx, target: Option<&str>) -> Result<WorkTarg
     }
 }
 
+pub(crate) fn select_target(
+    ctx: &Ctx,
+    prompt: &str,
+    non_interactive_guidance: &str,
+) -> Result<WorkTarget> {
+    if ctx.is_json() || ctx.quiet || !ctx.ui.can_prompt() {
+        bail!("{non_interactive_guidance}");
+    }
+
+    let candidates = selectable_targets(ctx)?;
+    if candidates.is_empty() {
+        bail!("No work targets found");
+    }
+
+    let items = candidates
+        .iter()
+        .map(|candidate| candidate.item.clone())
+        .collect::<Vec<_>>();
+    let idx = ctx.ui.select_items(prompt, &items)?;
+    candidates
+        .get(idx)
+        .map(|candidate| candidate.target.clone())
+        .ok_or_else(|| anyhow::anyhow!("Selected work target index out of range: {idx}"))
+}
+
 pub(crate) fn cmux_contacts(ctx: &Ctx, worktree: &Path) -> Result<Vec<CmuxContact>> {
     let cmux = CmuxService::new(ctx.runner.as_ref());
     if !cmux.is_available() {
@@ -249,22 +300,82 @@ pub(crate) fn cmux_contacts(ctx: &Ctx, worktree: &Path) -> Result<Vec<CmuxContac
     }
 
     let workspaces = cmux.list_workspaces()?;
-    let mut contacts = Vec::new();
-    for workspace in workspaces
+    let workspaces = workspaces
         .iter()
         .filter(|workspace| cmux_workspace_matches(workspace, worktree))
-    {
-        for (pane, surface) in cmux_surfaces(&cmux, &workspace.handle)? {
-            contacts.push(CmuxContact {
-                workspace: workspace.handle.clone(),
-                surface,
-                pane,
-                title: workspace.title.clone(),
-                window: workspace.window_handle.clone(),
-            });
-        }
+        .cloned()
+        .collect::<Vec<_>>();
+    cmux_contacts_for_workspaces(&cmux, &workspaces)
+}
+
+fn selectable_targets(ctx: &Ctx) -> Result<Vec<SelectableWorkTarget>> {
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+    let worktrees = git.worktree_list()?;
+    let local_branches = git.list_local_branches()?;
+    let task_runs = task_run::list(ctx)?;
+    let mut candidates = Vec::new();
+
+    let mut branch_names = local_branches.into_iter().collect::<BTreeSet<_>>();
+    branch_names.extend(worktrees.iter().map(|entry| entry.branch.clone()));
+    for branch in branch_names.into_iter().filter(|branch| !branch.is_empty()) {
+        candidates.push(branch_selectable_target(&branch, &worktrees));
     }
-    Ok(contacts)
+
+    let mut seen_task_runs = HashSet::new();
+    let mut task_run_candidates = task_runs
+        .into_iter()
+        .filter(|record| seen_task_runs.insert(record.id.clone()))
+        .map(|record| task_run_selectable_target(record, &worktrees))
+        .collect::<Vec<_>>();
+    task_run_candidates.sort_by(|left, right| left.sort_key.cmp(&right.sort_key));
+    candidates.extend(task_run_candidates);
+
+    candidates.sort_by(|left, right| left.sort_key.cmp(&right.sort_key));
+    Ok(candidates)
+}
+
+fn branch_selectable_target(branch: &str, worktrees: &[WorktreeEntry]) -> SelectableWorkTarget {
+    let worktree = worktree_for_branch(worktrees, branch);
+    let item = match worktree.as_ref() {
+        Some(path) => PromptItem::from_hint_parts(
+            branch.to_string(),
+            vec!["branch".into(), format!("worktree {}", path.display())],
+        ),
+        None => PromptItem::with_hint(branch.to_string(), "branch | not checked out"),
+    };
+    SelectableWorkTarget {
+        target: WorkTarget {
+            label: branch.to_string(),
+            branch: branch.to_string(),
+            worktree,
+            task_run: None,
+        },
+        item,
+        sort_key: format!("0:{branch}"),
+    }
+}
+
+fn task_run_selectable_target(
+    record: task_run::TaskRunRecord,
+    worktrees: &[WorktreeEntry],
+) -> SelectableWorkTarget {
+    let hint = vec![
+        "TaskRun".into(),
+        format!("branch {}", record.run.branch),
+        format!("status {}", record.run.status),
+        format!("source {}", record.run.source),
+    ];
+    let worktree = worktree_for_branch(worktrees, &record.run.branch);
+    SelectableWorkTarget {
+        target: WorkTarget {
+            label: record.id.clone(),
+            branch: record.run.branch.clone(),
+            worktree,
+            task_run: Some(record.clone()),
+        },
+        item: PromptItem::from_hint_parts(record.id.clone(), hint),
+        sort_key: format!("1:{}", record.id),
+    }
 }
 
 fn resolve_explicit_target(
@@ -584,6 +695,215 @@ fn cmux_surfaces(cmux: &CmuxService<'_>, workspace_handle: &str) -> Result<Vec<(
     Ok(contacts)
 }
 
+fn cmux_contacts_for_workspaces(
+    cmux: &CmuxService<'_>,
+    workspaces: &[CmuxWorkspace],
+) -> Result<Vec<CmuxContact>> {
+    let mut contacts = Vec::new();
+    for workspace in workspaces {
+        for (pane, surface) in cmux_surfaces(cmux, &workspace.handle)? {
+            contacts.push(CmuxContact {
+                workspace_id: workspace.id.clone(),
+                workspace: workspace.handle.clone(),
+                surface_id: None,
+                surface,
+                pane_id: None,
+                pane,
+                title: workspace.title.clone(),
+                window_id: workspace.window_id.clone(),
+                window: workspace.window_handle.clone(),
+                selected: false,
+                readable: false,
+                state: WorkState::no_session(AgentKind::Unknown),
+                validation_warning: None,
+            });
+        }
+    }
+    mark_selected_cmux_contacts(cmux, &mut contacts);
+    validate_cmux_contacts(cmux, &mut contacts);
+    Ok(contacts)
+}
+
+fn mark_selected_cmux_contacts(cmux: &CmuxService<'_>, contacts: &mut [CmuxContact]) {
+    let workspaces = contacts
+        .iter()
+        .map(|contact| contact.workspace.clone())
+        .collect::<BTreeSet<_>>();
+    for workspace in workspaces {
+        let Ok(selected_surfaces) = cmux.selected_surfaces(&workspace) else {
+            continue;
+        };
+        let selected = selected_surfaces
+            .into_iter()
+            .map(|surface| {
+                (
+                    surface.pane_id,
+                    surface.pane_handle,
+                    surface.selected_surface_id,
+                    surface.selected_surface_handle,
+                )
+            })
+            .collect::<HashSet<_>>();
+        for contact in contacts
+            .iter_mut()
+            .filter(|contact| contact.workspace == workspace)
+        {
+            let selected_surface = selected
+                .iter()
+                .find(|(_, pane, _, surface)| pane == &contact.pane && surface == &contact.surface);
+            if let Some((pane_id, _, surface_id, _)) = selected_surface {
+                contact.selected = true;
+                contact.pane_id = Some(pane_id.clone());
+                contact.surface_id = Some(surface_id.clone());
+            }
+        }
+    }
+}
+
+fn validate_cmux_contacts(cmux: &CmuxService<'_>, contacts: &mut [CmuxContact]) {
+    let mut statuses_by_workspace: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    let mut events: Option<Vec<CmuxEvent>> = None;
+    for contact in contacts {
+        let screen = match cmux.read_screen_lines(
+            &contact.surface,
+            &contact.workspace,
+            WORK_OBSERVATION_SCREEN_LINES,
+        ) {
+            Ok(screen) => screen,
+            Err(err) => {
+                contact.readable = false;
+                contact.state = WorkState::no_session(AgentKind::Unknown);
+                contact.validation_warning = Some(format!("unreadable cmux surface: {err:#}"));
+                continue;
+            }
+        };
+
+        contact.readable = true;
+        let (statuses, contact_events) = if screen_has_known_agent(&screen) {
+            let statuses = statuses_by_workspace
+                .entry(contact.workspace.clone())
+                .or_insert_with(|| cmux.list_status(&contact.workspace).unwrap_or_default())
+                .clone();
+            let all_events = events
+                .get_or_insert_with(|| {
+                    cmux.replay_events_after(
+                        0,
+                        WORK_OBSERVATION_EVENT_LIMIT,
+                        WORK_OBSERVATION_EVENT_TIMEOUT,
+                    )
+                    .unwrap_or_default()
+                })
+                .iter()
+                .filter(|event| event_matches_contact(event, contact))
+                .cloned()
+                .collect::<Vec<_>>();
+            (statuses, all_events)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let observation = AgentObservation::new(Some(&screen), &statuses, &contact_events);
+        contact.state = agents::classify(&observation);
+        contact.validation_warning = contact_validation_warning(contact);
+    }
+}
+
+fn contact_validation_warning(contact: &CmuxContact) -> Option<String> {
+    if !contact.readable {
+        return Some("unreadable cmux surface".into());
+    }
+    if let Some(warning) = contact.state.warning.as_ref() {
+        return Some(warning.clone());
+    }
+    match contact.state.agent_kind {
+        AgentKind::ClaudeCode | AgentKind::Codex => {
+            if contact.state.status == AgentStatus::NoSession {
+                Some("agent session not detected".into())
+            } else {
+                None
+            }
+        }
+        AgentKind::Shell => Some("not a live agent: shell".into()),
+        AgentKind::Unknown => Some("no live agent signal".into()),
+    }
+}
+
+fn screen_has_known_agent(screen: &str) -> bool {
+    let lower = screen.to_ascii_lowercase();
+    lower.contains("claude code") || agents::codex::screen_has_codex_ui_marker(Some(screen))
+}
+
+fn observed_cmux_contact(contacts: &[CmuxContact]) -> Option<&CmuxContact> {
+    let live = live_agent_candidates(contacts);
+    match live.as_slice() {
+        [contact] => return Some(*contact),
+        [] => {}
+        _ => {
+            let selected_live = live
+                .iter()
+                .copied()
+                .filter(|contact| contact.selected)
+                .collect::<Vec<_>>();
+            return match selected_live.as_slice() {
+                [contact] => Some(*contact),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+fn live_agent_candidates(contacts: &[CmuxContact]) -> Vec<&CmuxContact> {
+    contacts
+        .iter()
+        .filter(|contact| contact.is_live_agent_candidate())
+        .collect()
+}
+
+fn cmux_contact_selection_warning(contacts: &[CmuxContact]) -> Option<String> {
+    if contacts.is_empty() {
+        return Some("No cmux terminal surface candidates found for matching workspace".into());
+    }
+
+    let live = live_agent_candidates(contacts);
+    if live.len() > 1 {
+        return Some(format!(
+            "Multiple live agent cmux surfaces match this worktree ({} candidates); choose an explicit cmux surface before sending",
+            live.len()
+        ));
+    }
+
+    if live.len() == 1
+        && contacts
+            .iter()
+            .any(|contact| contact.selected && !contact.is_live_agent_candidate())
+    {
+        return Some(
+            "Selected cmux surface is not a live agent; using the unique live agent candidate"
+                .into(),
+        );
+    }
+
+    if live.is_empty() {
+        Some("No live agent cmux surface was validated for this worktree".into())
+    } else {
+        None
+    }
+}
+
+fn work_cmux_surface_from_contact(contact: &CmuxContact) -> WorkCmuxSurface {
+    WorkCmuxSurface {
+        workspace_id: contact.workspace_id.clone(),
+        workspace_ref: contact.workspace.clone(),
+        workspace_title: contact.title.clone(),
+        window_id: contact.window_id.clone(),
+        window_ref: contact.window.clone(),
+        pane_id: contact.pane_id.clone(),
+        pane_ref: Some(contact.pane.clone()),
+        surface_id: contact.surface_id.clone(),
+        surface_ref: Some(contact.surface.clone()),
+    }
+}
+
 fn cmux_workspace_matches(workspace: &CmuxWorkspace, worktree: &Path) -> bool {
     workspace
         .current_directory
@@ -605,40 +925,28 @@ fn work_cmux_workspace(workspace: &CmuxWorkspace) -> WorkCmuxSurface {
     }
 }
 
-fn filter_work_events(
-    events: Vec<CmuxEvent>,
-    workspace: &CmuxWorkspace,
-    surface: &CmuxPaneSelectedSurface,
-) -> Vec<CmuxEvent> {
-    events
-        .into_iter()
-        .filter(|event| event_matches_work(event, workspace, surface))
-        .collect()
+fn event_matches_contact(event: &CmuxEvent, contact: &CmuxContact) -> bool {
+    event_matches_workspace(event, &contact.workspace_id, &contact.workspace)
+        && event_matches_contact_surface(event, contact)
 }
 
-fn event_matches_work(
-    event: &CmuxEvent,
-    workspace: &CmuxWorkspace,
-    surface: &CmuxPaneSelectedSurface,
-) -> bool {
-    let workspace_matches = event
+fn event_matches_workspace(event: &CmuxEvent, workspace_id: &str, workspace_ref: &str) -> bool {
+    event
         .workspace_id
         .as_deref()
-        .is_some_and(|id| id == workspace.id.as_str() || id == workspace.handle.as_str())
-        || payload_string(event, "workspace_ref")
-            .is_some_and(|value| value == workspace.handle.as_str())
-        || payload_string(event, "workspace_id")
-            .is_some_and(|value| value == workspace.id.as_str());
-    if !workspace_matches {
-        return false;
-    }
+        .is_some_and(|id| id == workspace_id || id == workspace_ref)
+        || payload_string(event, "workspace_ref").is_some_and(|value| value == workspace_ref)
+        || payload_string(event, "workspace_id").is_some_and(|value| value == workspace_id)
+}
 
-    event.surface_id.as_deref().is_none_or(|id| {
-        id == surface.selected_surface_id.as_str() || id == surface.selected_surface_handle.as_str()
+fn event_matches_contact_surface(event: &CmuxEvent, contact: &CmuxContact) -> bool {
+    event.surface_id.as_deref().is_some_and(|id| {
+        Some(id) == contact.surface_id.as_deref() || id == contact.surface.as_str()
     }) || payload_string(event, "surface_ref")
-        .is_some_and(|value| value == surface.selected_surface_handle.as_str())
-        || payload_string(event, "surface_id")
-            .is_some_and(|value| value == surface.selected_surface_id.as_str())
+        .is_some_and(|value| value == contact.surface.as_str())
+        || payload_string(event, "surface_id").is_some_and(|value| {
+            Some(value) == contact.surface_id.as_deref() || value == contact.surface.as_str()
+        })
 }
 
 fn payload_string<'a>(event: &'a CmuxEvent, key: &str) -> Option<&'a str> {
@@ -843,20 +1151,66 @@ mod tests {
         add_matching_workspace(&mut runner, &fixture);
         runner.add_response("pane:3", true);
         runner.add_response("surface:4", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":null,"selected_surface_ref":null}]}"#,
+            true,
+        );
+        runner.add_response("zsh %", true);
+        let ctx = fixture.ctx(runner);
+
+        let contacts = cmux_contacts(&ctx, &fixture.worktree).unwrap();
+
+        assert_eq!(contacts.len(), 1);
+        let contact = &contacts[0];
+        assert_eq!(contact.workspace_id, "uuid-workspace-1");
+        assert_eq!(contact.workspace, "workspace:1");
+        assert_eq!(contact.surface, "surface:4");
+        assert_eq!(contact.pane, "pane:3");
+        assert_eq!(contact.title, "feature");
+        assert_eq!(contact.window_id, "uuid-window-1");
+        assert_eq!(contact.window, "window:1");
+        assert!(!contact.selected);
+        assert!(contact.readable);
+        assert_eq!(contact.state.agent_kind, AgentKind::Shell);
+        assert_eq!(contact.state.status, AgentStatus::Idle);
+        assert_eq!(
+            contact.validation_warning.as_deref(),
+            Some("not a live agent: shell")
+        );
+    }
+
+    #[test]
+    fn cmux_contacts_marks_the_selected_matching_surface() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4\nsurface:5\nsurface:6", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-5","selected_surface_ref":"surface:5"}]}"#,
+            true,
+        );
+        runner.add_response("zsh %", true);
+        runner.add_response("zsh %", true);
+        runner.add_response("zsh %", true);
         let ctx = fixture.ctx(runner);
 
         let contacts = cmux_contacts(&ctx, &fixture.worktree).unwrap();
 
         assert_eq!(
-            contacts,
-            vec![CmuxContact {
-                workspace: "workspace:1".into(),
-                surface: "surface:4".into(),
-                pane: "pane:3".into(),
-                title: "feature".into(),
-                window: "window:1".into(),
-            }]
+            contacts
+                .iter()
+                .map(|contact| (contact.surface.as_str(), contact.selected))
+                .collect::<Vec<_>>(),
+            vec![
+                ("surface:4", false),
+                ("surface:5", true),
+                ("surface:6", false)
+            ]
         );
+        assert_eq!(contacts[1].surface_id.as_deref(), Some("uuid-surface-5"));
+        assert!(contacts.iter().all(|contact| contact.readable));
     }
 
     #[test]
@@ -922,20 +1276,24 @@ mod tests {
     }
 
     #[test]
-    fn observe_work_returns_ready_mapping_with_selected_surface() {
+    fn observe_work_returns_ready_mapping_with_live_agent_surface() {
         let fixture = Fixture::new();
         let mut runner = MockRunner::new();
         runner.add_command("cmux");
         add_worktree_list(&mut runner, &fixture);
         add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
         add_selected_surface(&mut runner);
-        runner.add_response("ready", true);
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        runner.add_response("", true);
         let ctx = fixture.ctx(runner);
 
         let work = observe_work(&ctx, Some("feature")).unwrap();
 
         assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
-        assert_eq!(work.state.agent_kind, AgentKind::Unknown);
+        assert_eq!(work.state.agent_kind, AgentKind::Codex);
         assert_eq!(work.state.status, AgentStatus::Idle);
         assert_eq!(work.target.branch, "feature");
         assert_eq!(
@@ -952,6 +1310,133 @@ mod tests {
         assert_eq!(cmux.pane_ref.as_deref(), Some("pane:3"));
         assert_eq!(cmux.surface_id.as_deref(), Some("uuid-surface-4"));
         assert_eq!(cmux.surface_ref.as_deref(), Some("surface:4"));
+    }
+
+    #[test]
+    fn observe_work_uses_cmux_status_when_codex_screen_lacks_literal_codex() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
+        add_selected_surface(&mut runner);
+        runner.add_response("gpt-5.5  Working", true);
+        runner.add_response("codex=Running", true);
+        runner.add_response("", true);
+        let ctx = fixture.ctx(runner);
+
+        let work = observe_work(&ctx, Some("feature")).unwrap();
+
+        assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
+        assert_eq!(work.state.agent_kind, AgentKind::Codex);
+        assert_eq!(work.state.status, AgentStatus::Running);
+        assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:4"));
+        assert!(!fixture.repo.join(".local").exists());
+    }
+
+    #[test]
+    fn observe_work_does_not_bind_selected_non_agent_surface_with_gpt_text() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4\nsurface:5", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        runner.add_response("notes about gpt-5.5 model behavior", true);
+        runner.add_response("gpt-5.5  Working", true);
+        runner.add_response("codex=Running", true);
+        runner.add_response("", true);
+        let ctx = fixture.ctx(runner);
+
+        let work = observe_work(&ctx, Some("feature")).unwrap();
+
+        assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
+        assert_eq!(work.state.agent_kind, AgentKind::Codex);
+        assert_eq!(work.state.status, AgentStatus::Running);
+        assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:5"));
+        assert!(
+            work.message
+                .unwrap()
+                .contains("Selected cmux surface is not a live agent")
+        );
+        assert!(work.cmux_contacts[0].selected);
+        assert!(!work.cmux_contacts[0].is_live_agent_candidate());
+        assert_eq!(work.cmux_contacts[0].state.agent_kind, AgentKind::Unknown);
+        assert_eq!(work.cmux_contacts[0].state.status, AgentStatus::Unknown);
+        assert_eq!(work.cmux_contacts[1].state.agent_kind, AgentKind::Codex);
+        assert_eq!(work.cmux_contacts[1].state.status, AgentStatus::Running);
+    }
+
+    #[test]
+    fn observe_work_does_not_bind_non_agent_surface_with_codex_commit_text() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4\nsurface:5", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        runner.add_response("", true);
+        runner.add_response(
+            "lazygit\n3fc13dc fix: Codex model screen binding\n7f088e1 feat: workflow repair",
+            true,
+        );
+        let ctx = fixture.ctx(runner);
+
+        let work = observe_work(&ctx, Some("feature")).unwrap();
+
+        assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
+        assert_eq!(work.state.agent_kind, AgentKind::Codex);
+        assert_eq!(work.state.status, AgentStatus::Idle);
+        assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:4"));
+        assert!(work.message.is_none());
+        assert!(work.cmux_contacts[0].selected);
+        assert_eq!(work.cmux_contacts[0].state.agent_kind, AgentKind::Codex);
+        assert_eq!(work.cmux_contacts[0].state.status, AgentStatus::Idle);
+        assert_eq!(work.cmux_contacts[1].state.agent_kind, AgentKind::Unknown);
+        assert_eq!(work.cmux_contacts[1].state.status, AgentStatus::Unknown);
+        assert!(!work.cmux_contacts[1].is_live_agent_candidate());
+    }
+
+    #[test]
+    fn observe_work_does_not_bind_selected_non_agent_surface() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
+        add_selected_surface(&mut runner);
+        runner.add_response("ready", true);
+        let ctx = fixture.ctx(runner);
+
+        let work = observe_work(&ctx, Some("feature")).unwrap();
+
+        assert_eq!(work.session_state, WorkSessionState::NoTerminalSurface);
+        assert_eq!(work.state.agent_kind, AgentKind::Unknown);
+        assert_eq!(work.state.status, AgentStatus::NoSession);
+        assert!(work.message.unwrap().contains("No live agent cmux surface"));
+        let cmux = work.cmux.unwrap();
+        assert_eq!(cmux.workspace_ref, "workspace:1");
+        assert!(cmux.surface_ref.is_none());
+        assert_eq!(
+            work.cmux_contacts[0].validation_warning.as_deref(),
+            Some("no live agent signal")
+        );
     }
 
     #[test]
@@ -984,10 +1469,8 @@ mod tests {
         runner.add_command("cmux");
         add_worktree_list(&mut runner, &fixture);
         add_matching_workspace(&mut runner, &fixture);
-        runner.add_response(
-            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":null,"selected_surface_ref":null}]}"#,
-            true,
-        );
+        runner.add_response("pane:3", true);
+        runner.add_response("", true);
         let ctx = fixture.ctx(runner);
 
         let work = observe_work(&ctx, Some("feature")).unwrap();
@@ -1005,6 +1488,8 @@ mod tests {
         runner.add_command("cmux");
         add_worktree_list(&mut runner, &fixture);
         add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
         add_selected_surface(&mut runner);
         runner.add_response("Terminal surface not found", false);
         let ctx = fixture.ctx(runner);
@@ -1013,11 +1498,11 @@ mod tests {
 
         assert_eq!(work.session_state, WorkSessionState::NoTerminalSurface);
         let cmux = work.cmux.unwrap();
-        assert_eq!(cmux.surface_ref.as_deref(), Some("surface:4"));
-        assert!(
-            work.message
-                .unwrap()
-                .contains("terminal surface is not ready")
+        assert!(cmux.surface_ref.is_none());
+        assert!(work.message.unwrap().contains("No live agent cmux surface"));
+        assert_eq!(
+            work.cmux_contacts[0].validation_warning.as_deref(),
+            Some("unreadable cmux surface: cmux read-screen failed: Terminal surface not found")
         );
     }
 
