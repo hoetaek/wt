@@ -102,6 +102,7 @@ wt list
 wt inspect
 wt agent status <branch|worktree|task-run-id>
 wt agent watch <branch|worktree|task-run-id>
+wt agent watch <branch|worktree|task-run-id> --timeout 300 --heartbeat 30
 wt send <target> "please report current status"
 wt done <target>
 ```
@@ -133,8 +134,10 @@ Land reviewed work with Git or pull requests first.
 - `wt inspect [<target>]` is the read-only work dossier for a branch, worktree,
   or TaskRun.
 - `wt agent status [<target>]` observes the current agent/cmux state, and
-  `wt agent watch [<target>]` polls it. Agent state is separate from
-  `TaskRun.status`.
+  `wt agent watch [<target>]` polls it. `wt agent watch` prints state
+  transitions by default; `--timeout <seconds>` bounds the wait, and
+  `--heartbeat <seconds>` opts into unchanged running reports. Agent state is
+  separate from `TaskRun.status`.
 
 `wt workflow` is the canonical prepared-work surface. `single`, `batch`, and
 `stack` are workflow mode values, not separate command surfaces. Use
@@ -239,7 +242,7 @@ name.
 | `wt workflow` | Prepare, inspect, run, and repair saved workflows; complete stack tasks |
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
 | `wt agent status` | Observe the matching task agent surface once |
-| `wt agent watch` | Poll the matching task agent surface |
+| `wt agent watch` | Poll the matching task agent surface, with optional timeout and heartbeat |
 | `wt send` | Send a message to the matching task agent surface |
 | `wt done` | Remove completed or disposable worktrees and branches |
 | `wt config` | Print, edit, extract, or inline config |

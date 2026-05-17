@@ -103,9 +103,12 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Inspect { target } => commands::inspect::run(ctx, target.as_deref()),
         Commands::Agent { command } => match command {
             AgentCommand::Status { target } => commands::agent::status(ctx, target.as_deref()),
-            AgentCommand::Watch { target, interval } => {
-                commands::agent::watch(ctx, target.as_deref(), *interval)
-            }
+            AgentCommand::Watch {
+                target,
+                interval,
+                timeout,
+                heartbeat,
+            } => commands::agent::watch(ctx, target.as_deref(), *interval, *timeout, *heartbeat),
         },
         Commands::Send {
             target,

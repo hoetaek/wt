@@ -6,7 +6,7 @@ use anyhow::Result;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub fn status(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     let (report, exit_code) = observe_status(ctx, target, "status")?;
@@ -19,17 +19,48 @@ pub fn status(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     exit_result(exit_code)
 }
 
-pub fn watch(ctx: &Ctx, target: Option<&str>, interval_secs: u64) -> Result<()> {
-    let interval = if interval_secs == 0 {
-        Duration::ZERO
-    } else {
-        Duration::from_secs(interval_secs)
-    };
-    watch_with_interval(ctx, target, interval)
+pub fn watch(
+    ctx: &Ctx,
+    target: Option<&str>,
+    interval_secs: u64,
+    timeout_secs: Option<u64>,
+    heartbeat_secs: Option<u64>,
+) -> Result<()> {
+    watch_with_options(
+        ctx,
+        target,
+        WatchOptions {
+            interval: duration_from_secs(interval_secs),
+            timeout: timeout_secs.map(duration_from_secs),
+            heartbeat: heartbeat_secs.map(duration_from_secs),
+        },
+    )
 }
 
+#[cfg(test)]
 fn watch_with_interval(ctx: &Ctx, target: Option<&str>, interval: Duration) -> Result<()> {
+    watch_with_options(
+        ctx,
+        target,
+        WatchOptions {
+            interval,
+            timeout: None,
+            heartbeat: None,
+        },
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WatchOptions {
+    interval: Duration,
+    timeout: Option<Duration>,
+    heartbeat: Option<Duration>,
+}
+
+fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) -> Result<()> {
     let target = resolve_agent_target(ctx, target, "watch")?;
+    let started_at = Instant::now();
+    let mut last_output_at = started_at;
     let mut last_signature = None;
 
     loop {
@@ -37,24 +68,64 @@ fn watch_with_interval(ctx: &Ctx, target: Option<&str>, interval: Duration) -> R
         let report = AgentStatusReport::from_work(&work);
         let exit_code = exit_code_for(&work);
         let signature = report.transition_signature();
+        let now = Instant::now();
+        let elapsed = now.duration_since(started_at);
 
-        if last_signature.as_ref() != Some(&signature) {
+        let changed = last_signature.as_ref() != Some(&signature);
+        if changed {
             if ctx.is_json() {
                 print_json_line(&report)?;
             } else {
                 print_watch_transition(ctx, &report);
             }
             last_signature = Some(signature);
+            last_output_at = now;
         }
 
         if should_stop_watching(&work, exit_code) {
             return exit_result(exit_code);
         }
 
-        if interval > Duration::ZERO {
-            std::thread::sleep(interval);
+        if let Some(timeout) = options.timeout.filter(|timeout| elapsed >= *timeout) {
+            if ctx.is_json() {
+                print_json_line(&report_with_warning(
+                    &report,
+                    watch_timeout_message(&report, timeout, elapsed),
+                ))?;
+            } else {
+                print_watch_timeout(ctx, &report, timeout, elapsed);
+            }
+            return exit_result(exit_code);
+        }
+
+        if !changed
+            && options
+                .heartbeat
+                .is_some_and(|heartbeat| now.duration_since(last_output_at) >= heartbeat)
+        {
+            if ctx.is_json() {
+                print_json_line(&report)?;
+            } else {
+                print_watch_heartbeat(ctx, &report, elapsed);
+            }
+            last_output_at = now;
+        }
+
+        let sleep_duration = watch_sleep_duration(
+            options.interval,
+            options.timeout,
+            options.heartbeat,
+            started_at.elapsed(),
+            last_output_at.elapsed(),
+        );
+        if sleep_duration > Duration::ZERO {
+            std::thread::sleep(sleep_duration);
         }
     }
+}
+
+fn duration_from_secs(seconds: u64) -> Duration {
+    Duration::from_secs(seconds)
 }
 
 fn exit_result(exit_code: i32) -> Result<()> {
@@ -289,6 +360,37 @@ fn should_stop_watching(work: &work::Work, exit_code: i32) -> bool {
     exit_code != 0 || work.state.status != AgentStatus::Running
 }
 
+fn watch_sleep_duration(
+    interval: Duration,
+    timeout: Option<Duration>,
+    heartbeat: Option<Duration>,
+    elapsed: Duration,
+    since_last_output: Duration,
+) -> Duration {
+    let mut sleep = (interval > Duration::ZERO).then_some(interval);
+    if let Some(timeout) = timeout {
+        sleep = Some(match sleep {
+            Some(current) => current.min(timeout.saturating_sub(elapsed)),
+            None => timeout.saturating_sub(elapsed),
+        });
+    }
+    if let Some(heartbeat) = heartbeat {
+        sleep = Some(match sleep {
+            Some(current) => current.min(heartbeat.saturating_sub(since_last_output)),
+            None => heartbeat.saturating_sub(since_last_output),
+        });
+    }
+    sleep.unwrap_or(Duration::ZERO)
+}
+
+fn report_with_warning(report: &AgentStatusReport, warning: String) -> AgentStatusReport {
+    let mut report = report.clone();
+    if !report.warnings.contains(&warning) {
+        report.warnings.push(warning);
+    }
+    report
+}
+
 fn print_json(report: &AgentStatusReport) -> Result<()> {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
@@ -361,16 +463,77 @@ fn print_watch_transition(ctx: &Ctx, report: &AgentStatusReport) {
         "Agent watch: {} {} ({})",
         report.target, report.agent.state, report.agent.kind
     ));
+    print_watch_details(ctx, report, WatchDetailLevel::Transition);
+}
+
+fn print_watch_heartbeat(ctx: &Ctx, report: &AgentStatusReport, elapsed: Duration) {
+    ctx.ui.print_step(&format!(
+        "Agent watch heartbeat: elapsed {}; {} {} ({})",
+        format_duration(elapsed),
+        report.target,
+        report.agent.state,
+        report.agent.kind
+    ));
+    print_watch_details(ctx, report, WatchDetailLevel::Heartbeat);
+}
+
+fn print_watch_timeout(
+    ctx: &Ctx,
+    report: &AgentStatusReport,
+    timeout: Duration,
+    elapsed: Duration,
+) {
+    ctx.ui
+        .print_step(&watch_timeout_message(report, timeout, elapsed));
+    print_watch_details(ctx, report, WatchDetailLevel::Heartbeat);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchDetailLevel {
+    Transition,
+    Heartbeat,
+}
+
+fn print_watch_details(ctx: &Ctx, report: &AgentStatusReport, detail_level: WatchDetailLevel) {
     ctx.ui.print_dim(&format!("  Branch: {}", report.branch));
     print_task_run_text(ctx, report);
+    if detail_level == WatchDetailLevel::Heartbeat {
+        if let Some(last_tool) = report.agent.last_tool.as_deref() {
+            ctx.ui.print_dim(&format!("  Last tool: {last_tool}"));
+        }
+    }
     if let Some(last_event_at) = report.agent.last_event_at.as_deref() {
         ctx.ui.print_dim(&format!("  Last event: {last_event_at}"));
+    }
+    if detail_level == WatchDetailLevel::Heartbeat {
+        if let Some(session_id) = report.agent.session_id.as_deref() {
+            ctx.ui.print_dim(&format!("  Session: {session_id}"));
+        }
     }
     print_cmux_text(ctx, report);
     print_cmux_candidates_text(ctx, &report.cmux.candidates);
     for warning in &report.warnings {
         ctx.ui.print_warning(warning);
     }
+}
+
+fn watch_timeout_message(
+    report: &AgentStatusReport,
+    timeout: Duration,
+    elapsed: Duration,
+) -> String {
+    format!(
+        "Agent watch timeout after {}: {} still {} ({}); elapsed {}",
+        format_duration(timeout),
+        report.target,
+        report.agent.state,
+        report.agent.kind,
+        format_duration(elapsed)
+    )
+}
+
+fn format_duration(duration: Duration) -> String {
+    format!("{}s", duration.as_secs())
 }
 
 fn print_cmux_candidates_text(ctx: &Ctx, candidates: &[CmuxCandidateReport]) {
@@ -876,6 +1039,94 @@ mod tests {
         let steps = ui.steps.lock().unwrap().join("\n");
         assert!(steps.contains("Agent watch: feature running (codex)"));
         assert!(steps.contains("Agent watch: feature needs_input (codex)"));
+    }
+
+    #[test]
+    fn watch_timeout_stops_still_running_agent_with_clear_result() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_running_observation(&mut runner, &fixture);
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            fixture.repo.clone(),
+            fixture.repo.clone(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui.clone()),
+        );
+
+        watch_with_options(
+            &ctx,
+            Some("feature"),
+            WatchOptions {
+                interval: Duration::ZERO,
+                timeout: Some(Duration::ZERO),
+                heartbeat: None,
+            },
+        )
+        .unwrap();
+
+        let steps = ui.steps.lock().unwrap().join("\n");
+        let dims = ui.dims.lock().unwrap().join("\n");
+        assert!(steps.contains("Agent watch: feature running (codex)"));
+        assert!(
+            steps.contains("Agent watch timeout after 0s: feature still running (codex); elapsed")
+        );
+        assert!(dims.contains("Last tool: Bash"));
+        assert!(dims.contains("Session: codex-session"));
+        assert!(dims.contains("cmux: workspace:1 surface:4"));
+    }
+
+    #[test]
+    fn watch_heartbeat_prints_unchanged_running_observation() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::write(
+            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"batch\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+        )
+        .unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        runner.add_response("", false);
+        add_running_observation(&mut runner, &fixture);
+        add_running_observation(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        add_selected_surface(&mut runner);
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            fixture.repo.clone(),
+            fixture.repo.clone(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui.clone()),
+        );
+
+        watch_with_options(
+            &ctx,
+            Some("run-feature"),
+            WatchOptions {
+                interval: Duration::ZERO,
+                timeout: None,
+                heartbeat: Some(Duration::ZERO),
+            },
+        )
+        .unwrap();
+
+        let steps = ui.steps.lock().unwrap().join("\n");
+        let dims = ui.dims.lock().unwrap().join("\n");
+        assert!(steps.contains("Agent watch: run-feature running (codex)"));
+        assert!(steps.contains("Agent watch heartbeat: elapsed 0s; run-feature running (codex)"));
+        assert!(steps.contains("Agent watch: run-feature idle (codex)"));
+        assert!(dims.contains("TaskRun: run-feature (status=running, source=batch)"));
+        assert!(dims.contains("Last tool: Bash"));
+        assert!(dims.contains("Session: codex-session"));
+        assert!(dims.contains("cmux: workspace:1 surface:4"));
     }
 
     #[test]

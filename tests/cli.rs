@@ -325,6 +325,9 @@ fn agent_watch_help_explains_polling_target() {
         .stdout(predicate::str::contains("task agent"))
         .stdout(predicate::str::contains("[TARGET]"))
         .stdout(predicate::str::contains("--interval"))
+        .stdout(predicate::str::contains("--timeout"))
+        .stdout(predicate::str::contains("--heartbeat"))
+        .stdout(predicate::str::contains("unchanged running observations"))
         .stdout(predicate::str::contains(
             "Omit TARGET in an interactive terminal",
         ));

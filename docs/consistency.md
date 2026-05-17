@@ -478,6 +478,12 @@ runtime observation이므로 한 top-level field 이름으로 합치지 않는�
 도달하면 polling contract에 맞춰 종료한다. GitHub CLI의 `gh run watch`
 (`https://cli.github.com/manual/gh_run_watch`)처럼 `watch`는 반복 관찰과 의미 있는 종료
 상태를 가진 surface 이름이다.
+기본 출력은 transition-only로 유지한다. 오래 running 상태가 바뀌지 않는 coordinator wait는
+`--heartbeat <SECONDS>`를 명시해서 elapsed time, target, branch, TaskRun lifecycle status,
+agent kind/state, 마지막 tool/session/event, cmux contact/warning을 compact하게 반복 출력한다.
+`--timeout <SECONDS>`는 지정한 bound를 넘어서도 agent가 running이면 timeout 메시지를 출력하고
+현재 observation exit-code contract로 종료한다. 따라서 여전히 running이고 blocked/failed가
+아니라면 observable/not blocked인 0으로 끝난다.
 
 `wt agent status`와 `wt agent watch`의 `<target>` 생략도 interactive TTY human mode에서만
 selector를 연다. `--json`, `--quiet`, 또는 non-TTY automation에서는 explicit `<target>`이

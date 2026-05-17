@@ -235,9 +235,9 @@ pub enum AgentCommand {
         /// Branch, worktree path/name, or TaskRun id to observe
         target: Option<String>,
     },
-    /// Poll a task agent's runtime state until it is no longer running or becomes blocked
+    /// Poll a task agent's runtime state until it is no longer running, becomes blocked, or reaches a bound
     #[command(
-        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
+        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
     )]
     Watch {
         /// Branch, worktree path/name, or TaskRun id to watch
@@ -245,6 +245,12 @@ pub enum AgentCommand {
         /// Seconds between observations
         #[arg(long, default_value_t = 2, value_name = "SECONDS")]
         interval: u64,
+        /// Stop waiting after this many positive seconds
+        #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
+        timeout: Option<u64>,
+        /// Print unchanged running observations at this positive-second interval
+        #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
+        heartbeat: Option<u64>,
     },
 }
 
@@ -472,6 +478,16 @@ impl BaseMode {
 fn parse_positive_usize(value: &str) -> std::result::Result<usize, String> {
     let parsed = value
         .parse::<usize>()
+        .map_err(|_| "must be a positive integer".to_string())?;
+    if parsed == 0 {
+        return Err("must be a positive integer".into());
+    }
+    Ok(parsed)
+}
+
+fn parse_positive_u64(value: &str) -> std::result::Result<u64, String> {
+    let parsed = value
+        .parse::<u64>()
         .map_err(|_| "must be a positive integer".to_string())?;
     if parsed == 0 {
         return Err("must be a positive integer".into());
@@ -737,14 +753,46 @@ mod tests {
     }
 
     #[test]
+    fn agent_watch_help_describes_bounds_and_heartbeat() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("agent")
+            .unwrap()
+            .find_subcommand_mut("watch")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("task agent"));
+        assert!(help.contains("[TARGET]"));
+        assert!(help.contains("--timeout"));
+        assert!(help.contains("--heartbeat"));
+        assert!(help.contains("unchanged running observations"));
+        assert!(help.contains("Omit TARGET in an interactive terminal"));
+    }
+
+    #[test]
     fn agent_watch_accepts_optional_target_and_interval() {
-        let cli = parse(&["wt", "agent", "watch", "feature", "--interval", "5"]);
+        let cli = parse(&[
+            "wt",
+            "agent",
+            "watch",
+            "feature",
+            "--interval",
+            "5",
+            "--timeout",
+            "60",
+            "--heartbeat",
+            "10",
+        ]);
         assert!(matches!(
             cli.command,
             Some(Commands::Agent {
                 command: AgentCommand::Watch {
                     ref target,
                     interval: 5,
+                    timeout: Some(60),
+                    heartbeat: Some(10),
                 }
             }) if target.as_deref() == Some("feature")
         ));
@@ -756,9 +804,21 @@ mod tests {
                 command: AgentCommand::Watch {
                     target: None,
                     interval: 2,
+                    timeout: None,
+                    heartbeat: None,
                 }
             })
         ));
+    }
+
+    #[test]
+    fn agent_watch_rejects_zero_timeout_and_heartbeat() {
+        let timeout = Cli::try_parse_from(["wt", "agent", "watch", "feature", "--timeout", "0"]);
+        assert!(timeout.is_err());
+
+        let heartbeat =
+            Cli::try_parse_from(["wt", "agent", "watch", "feature", "--heartbeat", "0"]);
+        assert!(heartbeat.is_err());
     }
 
     #[test]
