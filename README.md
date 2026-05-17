@@ -230,6 +230,7 @@ For user-facing model changes, read [docs/consistency.md](docs/consistency.md).
 - [CHANGELOG.md](CHANGELOG.md) for release notes
 - [CONTRIBUTING.md](CONTRIBUTING.md) for development and release checks
 - [SECURITY.md](SECURITY.md) for vulnerability reporting
+- [docs/architecture.md](docs/architecture.md) for implementation boundaries
 - [docs/consistency.md](docs/consistency.md) for the canonical UX model
 
 ## License
