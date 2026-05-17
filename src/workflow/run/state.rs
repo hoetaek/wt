@@ -1,22 +1,22 @@
-use super::render::workflow_task_label;
 use crate::context::Ctx;
 use crate::task as task_store;
 use crate::task_run;
+use crate::workflow::render::workflow_task_label;
 use crate::workflow::{WorkflowMetadata, WorkflowTask};
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 #[derive(Clone, Debug)]
-pub(super) struct WorkflowTaskState {
-    pub(super) idx: usize,
-    pub(super) row: WorkflowTask,
-    pub(super) document: task_store::TaskDocument,
-    pub(super) path: String,
-    pub(super) content: String,
-    pub(super) run: task_run::TaskRun,
+pub(crate) struct WorkflowTaskState {
+    pub(crate) idx: usize,
+    pub(crate) row: WorkflowTask,
+    pub(crate) document: task_store::TaskDocument,
+    pub(crate) path: String,
+    pub(crate) content: String,
+    pub(crate) run: task_run::TaskRun,
 }
 
-pub(super) fn read_single_workflow_task_states(
+pub(crate) fn read_single_workflow_task_states(
     ctx: &Ctx,
     workflow_path: &Path,
     metadata: &WorkflowMetadata,
@@ -28,7 +28,7 @@ pub(super) fn read_single_workflow_task_states(
     Ok(states)
 }
 
-pub(super) fn read_batch_workflow_task_states(
+pub(crate) fn read_batch_workflow_task_states(
     ctx: &Ctx,
     workflow_path: &Path,
     metadata: &WorkflowMetadata,
@@ -40,7 +40,7 @@ pub(super) fn read_batch_workflow_task_states(
     Ok(states)
 }
 
-pub(super) fn read_stack_workflow_task_states(
+pub(crate) fn read_stack_workflow_task_states(
     ctx: &Ctx,
     workflow_path: &Path,
     metadata: &WorkflowMetadata,
@@ -85,7 +85,7 @@ fn read_workflow_task_states(
         .collect()
 }
 
-pub(super) fn validate_workflow_task_run(
+pub(crate) fn validate_workflow_task_run(
     row: &WorkflowTask,
     run: &task_run::TaskRun,
 ) -> Result<()> {
@@ -132,7 +132,7 @@ fn validate_workflow_task_run_source(
     Ok(())
 }
 
-pub(super) fn update_workflow_task_run(
+pub(crate) fn update_workflow_task_run(
     ctx: &Ctx,
     row: &WorkflowTask,
     status: task_run::TaskRunStatus,
@@ -156,7 +156,7 @@ pub(super) fn update_workflow_task_run(
     Ok(())
 }
 
-pub(super) fn task_run_record(ctx: &Ctx, run: &str) -> Option<task_run::TaskRun> {
+pub(crate) fn task_run_record(ctx: &Ctx, run: &str) -> Option<task_run::TaskRun> {
     task_run::resolve(ctx, run)
         .and_then(|path| task_run::read(&path))
         .ok()

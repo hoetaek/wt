@@ -1,12 +1,13 @@
-use super::render::workflow_task_label;
 use super::resolve_mutating_target;
-use super::run;
-use super::state::{read_stack_workflow_task_states, update_workflow_task_run};
 use crate::context::Ctx;
 use crate::services::git::GitService;
 use crate::task as task_store;
 use crate::task_run::STATUS_DONE;
 use crate::workflow as workflow_store;
+use crate::workflow::render::workflow_task_label;
+use crate::workflow::run::{
+    read_stack_workflow_task_states, run_workflow, update_workflow_task_run,
+};
 use crate::workflow::{WorkflowMode, WorkflowTask};
 use anyhow::{Result, bail};
 
@@ -49,7 +50,7 @@ pub(super) fn complete_stack_workflow(
         workflow_task_label(&metadata.tasks[idx])
     ));
     if run_next {
-        run(ctx, Some(path.to_string_lossy().as_ref()), 1)?;
+        run_workflow(ctx, &path, 1)?;
     }
     Ok(())
 }

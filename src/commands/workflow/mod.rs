@@ -1,59 +1,48 @@
-use crate::cli::{BaseMode, WorkflowModeArg, WorkflowPrModeArg};
+use crate::cli::{WorkflowModeArg, WorkflowPrModeArg};
 use crate::commands::editor;
-use crate::commands::issue;
 use crate::commands::issue_selection;
 use crate::commands::task as task_command;
-use crate::config::{
-    Config, WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
-    validate_profile_name,
-};
-use crate::context::Ctx;
-use crate::error::WtError;
-use crate::services::cmux::CmuxService;
-use crate::services::git::GitService;
-use crate::task::{self as task_store, PreparedTask};
-use crate::task_run::{self, STATUS_PREPARED, STATUS_RUNNING};
 #[cfg(test)]
-use crate::task_run::{STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED};
+use crate::config::{WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode};
+use crate::context::Ctx;
+use crate::task::{self as task_store, PreparedTask};
+#[cfg(test)]
+use crate::task_run::{self, STATUS_PREPARED};
+#[cfg(test)]
+use crate::task_run::{STATUS_DONE, STATUS_FAILED, STATUS_RUNNING, STATUS_SKIPPED};
 use crate::workflow as workflow_store;
+#[cfg(test)]
+use crate::workflow::planner::parent_for_stack_task;
+#[cfg(test)]
+use crate::workflow::render::{
+    render_single_workflow_snapshot, workflow_batch_task_prompt_content,
+    workflow_single_task_prompt_content, workflow_stack_task_prompt_content,
+};
+use crate::workflow::run as workflow_runner;
+#[cfg(test)]
+use crate::workflow::run::{
+    WorkflowTaskState, read_batch_workflow_task_states, read_single_workflow_task_states,
+    read_stack_workflow_task_states, task_run_record,
+};
+#[cfg(test)]
 use crate::workflow::{
-    WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowPolicy, WorkflowPullRequestMode,
-    WorkflowTask,
+    WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowPullRequestMode, WorkflowTask,
 };
 use anyhow::{Result, bail};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
-mod batch;
 mod display;
-mod render;
 mod repair;
 mod selection;
-mod stack;
 mod stack_completion;
-mod stack_plan;
-mod state;
 
-use batch::run_batch_workflow;
 use display::show_workflow;
-use render::workflow_single_task_handoff_section;
-#[cfg(test)]
-use render::{
-    workflow_batch_task_prompt_content, workflow_single_task_prompt_content,
-    workflow_stack_task_prompt_content,
-};
 #[cfg(test)]
 use selection::list_runnable_workflow_candidates;
 use selection::resolve_run_workflow_path;
-use stack::run_stack_workflow;
 use stack_completion::complete_stack_workflow;
-#[cfg(test)]
-use state::read_batch_workflow_task_states;
-#[cfg(test)]
-use state::read_stack_workflow_task_states;
-#[cfg(test)]
-use state::task_run_record;
-use state::{WorkflowTaskState, read_single_workflow_task_states};
 
 pub fn task(
     ctx: &Ctx,
@@ -63,8 +52,7 @@ pub fn task(
     base: &Option<String>,
     pr: Option<WorkflowPrModeArg>,
 ) -> Result<()> {
-    validate_profile(ctx, profile)?;
-    validate_mode_options(mode, pr)?;
+    workflow_runner::validate_prepare_options(ctx, mode, profile, pr)?;
     let prepared_tasks = if tasks.is_empty() {
         task_store::select_local_tasks(ctx)?
             .into_iter()
@@ -76,7 +64,7 @@ pub fn task(
     } else {
         task_command::prepare_named_tasks(ctx, tasks)?
     };
-    write_prepared_workflow(ctx, mode, profile, base, prepared_tasks, pr)
+    workflow_runner::prepare_workflow(ctx, mode, profile, base, prepared_tasks, pr)
 }
 
 pub fn issue(
@@ -87,8 +75,7 @@ pub fn issue(
     base: &Option<String>,
     pr: Option<WorkflowPrModeArg>,
 ) -> Result<()> {
-    validate_profile(ctx, profile)?;
-    validate_mode_options(mode, pr)?;
+    workflow_runner::validate_prepare_options(ctx, mode, profile, pr)?;
 
     let selected_issues = if issues.is_empty() {
         issue_selection::select_issues(ctx, "Select issues for workflow")?
@@ -105,7 +92,7 @@ pub fn issue(
     }
 
     let prepared_tasks = task_command::prepare_issue_tasks(ctx, &selected_issues)?;
-    write_prepared_workflow(ctx, mode, profile, base, prepared_tasks, pr)
+    workflow_runner::prepare_workflow(ctx, mode, profile, base, prepared_tasks, pr)
 }
 
 pub fn show(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
@@ -127,393 +114,11 @@ pub fn run(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
     let Some(path) = resolve_run_workflow_path(ctx, workflow)? else {
         return Ok(());
     };
-    let mut metadata = workflow_store::read(&path)?;
-    match metadata.mode {
-        WorkflowMode::Single => run_single_workflow(ctx, &path, &mut metadata),
-        WorkflowMode::Batch => run_batch_workflow(ctx, &path, &mut metadata, jobs),
-        WorkflowMode::Stack => run_stack_workflow(ctx, &path, &mut metadata),
-    }
+    workflow_runner::run_workflow(ctx, &path, jobs)
 }
 
 pub fn complete(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
     complete_stack_workflow(ctx, workflow, task, run_next)
-}
-
-fn write_prepared_workflow(
-    ctx: &Ctx,
-    mode: WorkflowModeArg,
-    profile: Option<&str>,
-    base: &Option<String>,
-    prepared_tasks: Vec<PreparedTask>,
-    pr: Option<WorkflowPrModeArg>,
-) -> Result<()> {
-    if prepared_tasks.is_empty() {
-        ctx.ui.print_warning("No tasks selected");
-        return Ok(());
-    }
-
-    validate_single_mode_branches(mode, &prepared_tasks)?;
-    let resolved_base = resolve_workflow_base(ctx, base)?;
-    let workflow_path = workflow_store::next_available_path(ctx)?;
-    let default_policy = ctx.config.workflow_default_policy();
-    let prepared = workflow_tasks_from_prepared(
-        ctx,
-        mode,
-        &workflow_path,
-        &resolved_base,
-        prepared_tasks,
-        workflow_pr_mode(mode, pr, default_policy),
-    )?;
-
-    let mut metadata = WorkflowMetadata::new(
-        workflow_mode(mode),
-        "explicit",
-        Some(resolved_base),
-        prepared.tasks,
-    );
-    metadata.profile = profile.map(str::to_string);
-    metadata.policy = Some(workflow_policy(default_policy));
-
-    if let Err(err) = workflow_store::write(ctx, &workflow_path, &mut metadata) {
-        rollback_task_runs(&prepared.task_runs);
-        return Err(err);
-    }
-
-    ctx.ui
-        .print_step(&format!("Prepared workflow: {}", workflow_path.display()));
-    Ok(())
-}
-
-fn run_single_workflow(
-    ctx: &Ctx,
-    workflow_path: &Path,
-    metadata: &mut WorkflowMetadata,
-) -> Result<()> {
-    validate_profile(ctx, metadata.profile.as_deref())?;
-    if metadata
-        .color
-        .as_deref()
-        .is_none_or(|color| color.trim().is_empty())
-    {
-        workflow_store::write(ctx, workflow_path, metadata)?;
-    }
-
-    let states = read_single_workflow_task_states(ctx, workflow_path, metadata)?;
-    if states.is_empty() {
-        bail!("Workflow has no tasks: {}", workflow_path.display());
-    }
-    if states.iter().any(|state| !state.run.is_runnable()) {
-        bail!("single mode workflow can only run prepared or failed TaskRuns");
-    }
-
-    let base = workflow_base_raw(metadata)?;
-    let result = if states.len() == 1 {
-        run_single_workflow_task(ctx, &states[0], &base, metadata.profile.as_deref())
-    } else {
-        run_single_workflow_group(ctx, &states, &base, metadata.profile.as_deref())
-    };
-
-    let result = match result {
-        Ok(result) => result,
-        Err(err) => {
-            mark_single_workflow_failed(ctx, &states, &err);
-            return Err(err);
-        }
-    };
-
-    for state in &states {
-        if state.document.branch != result.branch_name {
-            task_store::write_task_branch(ctx, &state.row.task, &result.branch_name)?;
-        }
-        task_run::update(
-            ctx,
-            &state.row.run,
-            STATUS_RUNNING,
-            Some(&result.branch_name),
-            None,
-        )?;
-    }
-    apply_workflow_color(ctx, &result.worktree_path, metadata.color.as_deref());
-    Ok(())
-}
-
-fn run_single_workflow_task(
-    ctx: &Ctx,
-    state: &WorkflowTaskState,
-    base: &Option<String>,
-    profile: Option<&str>,
-) -> Result<issue::IssueRunResult> {
-    let completion_section = workflow_single_task_handoff_section();
-    let branch_name = task_store::prepared_branch_name(&state.document.branch);
-    if branch_name.is_none() && state.document.origin.is_none() {
-        bail!("Workflow task {} has no branch", state.row.task);
-    }
-    let identifier = state.document.identifier_or_key(&state.row.task);
-    let title = state.document.title_or_key(&state.row.task);
-
-    issue::run_with_issue_snapshot(
-        ctx,
-        base,
-        profile,
-        false,
-        issue::PreparedIssueContext {
-            identifier: &identifier,
-            title: &title,
-            branch_name,
-            mode: state.document.mode(),
-            on_start_issue_id: state
-                .document
-                .origin
-                .as_ref()
-                .map(|origin| origin.id.as_str()),
-            prompt_intro: "Use this task before changing code.",
-            completion_section: Some(&completion_section),
-            workspace_label: None,
-            snapshot: issue::IssueSnapshotContext {
-                path_label: "Task path",
-                path: &state.path,
-                content: &state.content,
-            },
-        },
-    )
-}
-
-fn run_single_workflow_group(
-    ctx: &Ctx,
-    states: &[WorkflowTaskState],
-    base: &Option<String>,
-    profile: Option<&str>,
-) -> Result<issue::IssueRunResult> {
-    let branch = shared_single_workflow_branch(states)?;
-    let snapshot_path = states
-        .iter()
-        .map(|state| state.path.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let snapshot_content = render_single_workflow_snapshot(states);
-    let completion_section = workflow_single_task_handoff_section();
-    let title = single_workflow_group_title(states);
-
-    issue::run_with_issue_snapshot(
-        ctx,
-        base,
-        profile,
-        false,
-        issue::PreparedIssueContext {
-            identifier: &branch,
-            title: &title,
-            branch_name: Some(&branch),
-            mode: "new",
-            on_start_issue_id: None,
-            prompt_intro: "Use these tasks before changing code. Work in this single workspace and address every selected TaskDocument.",
-            completion_section: Some(&completion_section),
-            workspace_label: None,
-            snapshot: issue::IssueSnapshotContext {
-                path_label: "Task paths",
-                path: &snapshot_path,
-                content: &snapshot_content,
-            },
-        },
-    )
-}
-
-fn shared_single_workflow_branch(states: &[WorkflowTaskState]) -> Result<String> {
-    let branches = states
-        .iter()
-        .filter_map(|state| task_store::prepared_branch_name(&state.document.branch))
-        .collect::<HashSet<_>>();
-    let mut branches = branches.into_iter();
-    let Some(branch) = branches.next() else {
-        bail!("single mode workflow with multiple tasks requires a shared branch");
-    };
-    if branches.next().is_some() {
-        bail!("single mode workflow with multiple tasks requires one shared branch");
-    }
-    Ok(branch.to_string())
-}
-
-fn render_single_workflow_snapshot(states: &[WorkflowTaskState]) -> String {
-    let mut content = String::new();
-    content.push_str("Selected TaskDocuments:\n");
-    for state in states {
-        content.push_str(&format!("- {}: {}\n", state.row.task, state.path));
-    }
-    for state in states {
-        content.push_str(&format!("\n--- {} ({}) ---\n", state.row.task, state.path));
-        content.push_str(state.content.trim_end());
-        content.push('\n');
-    }
-    content
-}
-
-fn single_workflow_group_title(states: &[WorkflowTaskState]) -> String {
-    let first = states
-        .first()
-        .map(|state| state.document.title_or_key(&state.row.task))
-        .unwrap_or_else(|| "workflow".into());
-    format!("{}개 작업: {first}", states.len())
-}
-
-pub(super) fn workflow_base_raw(metadata: &WorkflowMetadata) -> Result<Option<String>> {
-    match metadata.base_mode.as_str() {
-        "explicit" => Ok(Some(metadata.base.clone().ok_or_else(|| {
-            anyhow::anyhow!("Workflow base_mode is explicit but base is missing")
-        })?)),
-        other => bail!("workflow run only supports explicit base, found {other}"),
-    }
-}
-
-fn mark_single_workflow_failed(ctx: &Ctx, states: &[WorkflowTaskState], err: &anyhow::Error) {
-    let status = if is_cancelled(err) {
-        task_run::STATUS_SKIPPED
-    } else {
-        task_run::STATUS_FAILED
-    };
-    let message = err.to_string();
-    for state in states {
-        let _ = task_run::update(ctx, &state.row.run, status, None, Some(&message));
-    }
-}
-
-pub(super) fn is_cancelled(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<WtError>()
-        .is_some_and(|err| matches!(err, WtError::Cancelled))
-}
-
-pub(super) fn apply_workflow_color(ctx: &Ctx, worktree_path: &Path, color: Option<&str>) {
-    let Some(color) = color.map(str::trim).filter(|color| !color.is_empty()) else {
-        return;
-    };
-    let cmux = CmuxService::new(ctx.runner.as_ref());
-    if !cmux.is_available() {
-        return;
-    }
-    let target = comparable_path(worktree_path);
-    let Ok(workspaces) = cmux.list_workspaces() else {
-        return;
-    };
-    for workspace in workspaces {
-        let Some(current_directory) = workspace.current_directory.as_deref() else {
-            continue;
-        };
-        if comparable_path(current_directory) == target {
-            let _ = cmux.set_color(&workspace.handle, color);
-            break;
-        }
-    }
-}
-
-fn comparable_path(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-}
-
-struct PreparedWorkflowTasks {
-    tasks: Vec<WorkflowTask>,
-    task_runs: Vec<task_run::TaskRunRecord>,
-}
-
-fn workflow_tasks_from_prepared(
-    ctx: &Ctx,
-    mode: WorkflowModeArg,
-    workflow_path: &Path,
-    initial_parent: &str,
-    prepared_tasks: Vec<PreparedTask>,
-    pull_request: Option<WorkflowPullRequestMode>,
-) -> Result<PreparedWorkflowTasks> {
-    let group = task_run::group_from_path(workflow_path)?;
-    let mut parent = Some(initial_parent.to_string());
-    let mut tasks = Vec::new();
-    let mut task_runs = Vec::new();
-    for task in prepared_tasks {
-        let run = match task_run::create(
-            ctx,
-            &task.key,
-            &task.branch,
-            source_for_mode(mode),
-            Some(&group),
-            STATUS_PREPARED,
-        ) {
-            Ok(run) => run,
-            Err(err) => {
-                rollback_task_runs(&task_runs);
-                return Err(err);
-            }
-        };
-
-        let mut row = WorkflowTask::new(task.key.clone(), run.id.clone());
-        if mode == WorkflowModeArg::Stack {
-            row.parent = parent.clone();
-            row.pull_request = pull_request;
-            parent = task_store::prepared_branch_name(&task.branch).map(str::to_string);
-        }
-        task_runs.push(run);
-        tasks.push(row);
-    }
-    Ok(PreparedWorkflowTasks { tasks, task_runs })
-}
-
-fn validate_mode_options(mode: WorkflowModeArg, pr: Option<WorkflowPrModeArg>) -> Result<()> {
-    if pr.is_some() && mode != WorkflowModeArg::Stack {
-        bail!("--pr is only valid with --mode stack");
-    }
-    Ok(())
-}
-
-fn workflow_pr_mode(
-    mode: WorkflowModeArg,
-    pr: Option<WorkflowPrModeArg>,
-    default_policy: WorkflowDefaultPolicy,
-) -> Option<WorkflowPullRequestMode> {
-    if mode != WorkflowModeArg::Stack {
-        return None;
-    }
-
-    match pr {
-        Some(WorkflowPrModeArg::Draft) => Some(WorkflowPullRequestMode::Draft),
-        Some(WorkflowPrModeArg::Ready) => Some(WorkflowPullRequestMode::Ready),
-        Some(WorkflowPrModeArg::None) => None,
-        None => match default_policy.pull_request {
-            WorkflowDefaultPullRequestMode::None => None,
-            WorkflowDefaultPullRequestMode::Draft => Some(WorkflowPullRequestMode::Draft),
-            WorkflowDefaultPullRequestMode::Ready => Some(WorkflowPullRequestMode::Ready),
-        },
-    }
-}
-
-fn workflow_policy(default_policy: WorkflowDefaultPolicy) -> WorkflowPolicy {
-    WorkflowPolicy {
-        landing: match default_policy.landing {
-            WorkflowDefaultLandingPolicy::Manual => WorkflowLandingPolicy::Manual,
-            WorkflowDefaultLandingPolicy::AfterReview => WorkflowLandingPolicy::AfterReview,
-        },
-        landing_requires_approval: default_policy.landing_requires_approval,
-    }
-}
-
-fn validate_single_mode_branches(
-    mode: WorkflowModeArg,
-    prepared_tasks: &[PreparedTask],
-) -> Result<()> {
-    if mode != WorkflowModeArg::Single || prepared_tasks.len() <= 1 {
-        return Ok(());
-    }
-
-    let branches = prepared_tasks
-        .iter()
-        .filter_map(|task| task_store::prepared_branch_name(&task.branch).map(str::to_string))
-        .collect::<HashSet<_>>();
-    if branches.len() > 1 {
-        bail!(
-            "single mode with multiple tasks requires the selected TaskDocuments to share one branch"
-        );
-    }
-    Ok(())
-}
-
-fn rollback_task_runs(task_runs: &[task_run::TaskRunRecord]) {
-    for run in task_runs.iter().rev() {
-        let _ = task_run::delete_record(run);
-    }
 }
 
 fn resolve_read_target(ctx: &Ctx, workflow: Option<&str>) -> Result<std::path::PathBuf> {
@@ -527,60 +132,6 @@ pub(super) fn resolve_mutating_target(ctx: &Ctx, workflow: &str, command: &str) 
         );
     }
     workflow_store::resolve(ctx, workflow)
-}
-
-fn resolve_workflow_base(ctx: &Ctx, base: &Option<String>) -> Result<String> {
-    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
-    let base = match BaseMode::from_raw(base) {
-        BaseMode::Explicit(branch) => branch,
-        BaseMode::Interactive => {
-            let branches = git.list_local_branches()?;
-            if branches.is_empty() {
-                bail!("No local branches found");
-            }
-            let idx = ctx.ui.select("Select base branch", &branches)?;
-            branches[idx].clone()
-        }
-        BaseMode::Current => git.current_branch()?,
-        BaseMode::Default => {
-            let current = git.current_branch()?;
-            ctx.ui.input("Base branch", Some(&current))?
-        }
-    };
-
-    if base.trim().is_empty() {
-        bail!("Base branch cannot be empty");
-    }
-    Ok(base)
-}
-
-pub(super) fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
-    let Some(profile) = profile else {
-        return Ok(());
-    };
-
-    validate_profile_name(profile)?;
-    if Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?.is_none() {
-        bail!("Profile '{profile}' not found");
-    }
-
-    Ok(())
-}
-
-fn workflow_mode(mode: WorkflowModeArg) -> WorkflowMode {
-    match mode {
-        WorkflowModeArg::Single => WorkflowMode::Single,
-        WorkflowModeArg::Batch => WorkflowMode::Batch,
-        WorkflowModeArg::Stack => WorkflowMode::Stack,
-    }
-}
-
-fn source_for_mode(mode: WorkflowModeArg) -> task_run::TaskRunSource {
-    match mode {
-        WorkflowModeArg::Single => task_run::SOURCE_NEW,
-        WorkflowModeArg::Batch => task_run::SOURCE_BATCH,
-        WorkflowModeArg::Stack => task_run::SOURCE_STACK,
-    }
 }
 
 #[cfg(test)]
@@ -1217,7 +768,7 @@ mod tests {
         let states = read_stack_workflow_task_states(&ctx, &record.path, &record.workflow).unwrap();
 
         assert_eq!(
-            stack_plan::parent_for_stack_task(&record.workflow, &states, 2).unwrap(),
+            parent_for_stack_task(&record.workflow, &states, 2).unwrap(),
             "schema"
         );
     }

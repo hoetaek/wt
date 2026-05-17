@@ -1,12 +1,17 @@
-use super::render::workflow_batch_task_handoff_section;
 use super::state::{WorkflowTaskState, read_batch_workflow_task_states};
-use super::{apply_workflow_color, is_cancelled, validate_profile, workflow_base_raw};
+use super::{apply_workflow_color, is_cancelled, validate_profile};
 use crate::commands::issue;
 use crate::context::Ctx;
 use crate::task as task_store;
 use crate::task_run::{self, STATUS_FAILED, STATUS_RUNNING};
 use crate::workflow as workflow_store;
 use crate::workflow::WorkflowMetadata;
+use crate::workflow::planner::workflow_base_raw;
+use crate::workflow::render::{
+    failed_workflow_task_message, no_runnable_workflow_tasks_message,
+    started_workflow_task_message, starting_workflow_task_message,
+    workflow_batch_task_handoff_section, workflow_batch_task_prompt_intro,
+};
 use crate::worktree_naming;
 use anyhow::{Result, bail};
 use std::collections::{HashMap, HashSet};
@@ -38,8 +43,7 @@ pub(super) fn run_batch_workflow(
         .filter(|state| state.run.is_runnable())
         .collect::<Vec<_>>();
     if runnable.is_empty() {
-        ctx.ui
-            .print_step("No prepared or failed tasks to run in this workflow.");
+        ctx.ui.print_step(no_runnable_workflow_tasks_message());
         return Ok(());
     }
 
@@ -65,7 +69,8 @@ fn run_batch_workflow_sequential(
     let mut failed = false;
     let total = metadata.tasks.len();
     for (idx, state) in states.iter().enumerate() {
-        ctx.ui.print_step(&format!("Starting {}", state.row.task));
+        ctx.ui
+            .print_step(&starting_workflow_task_message(&state.row.task));
         task_run::update(ctx, &state.row.run, STATUS_RUNNING, None, None)?;
         let result =
             run_batch_workflow_task(ctx, state, &base, metadata.profile.as_deref(), true, total);
@@ -119,7 +124,8 @@ fn run_batch_workflow_parallel(
         loop {
             while !cancelled && active < worker_count && next < runnable.len() {
                 let state = runnable[next].clone();
-                ctx.ui.print_step(&format!("Starting {}", state.row.task));
+                ctx.ui
+                    .print_step(&starting_workflow_task_message(&state.row.task));
                 task_run::update(ctx, &state.row.run, STATUS_RUNNING, None, None)?;
                 let tx = tx.clone();
                 let base = base.clone();
@@ -361,7 +367,7 @@ fn run_batch_workflow_task(
             .origin
             .as_ref()
             .map(|origin| origin.id.as_str()),
-        prompt_intro: "Use this task before changing code.",
+        prompt_intro: workflow_batch_task_prompt_intro(),
         completion_section: Some(&completion_section),
         workspace_label: Some(workspace_label),
         snapshot: issue::IssueSnapshotContext {
@@ -417,7 +423,8 @@ fn record_batch_workflow_success(
         None,
     )?;
     apply_workflow_color(ctx, &result.worktree_path, color);
-    ctx.ui.print_step(&format!("Started {}", state.row.task));
+    ctx.ui
+        .print_step(&started_workflow_task_message(&state.row.task));
     Ok(())
 }
 
@@ -428,7 +435,7 @@ fn record_batch_workflow_failure(
     error: &str,
 ) -> Result<()> {
     ctx.ui
-        .print_warning(&format!("Failed {}: {error}", state.row.task));
+        .print_warning(&failed_workflow_task_message(&state.row.task, error));
     task_run::update(ctx, &state.row.run, status, None, Some(error))?;
     Ok(())
 }

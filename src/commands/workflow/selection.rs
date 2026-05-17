@@ -1,15 +1,15 @@
-use super::render::{
+use super::resolve_mutating_target;
+use crate::context::{Ctx, PromptItem};
+use crate::workflow as workflow_store;
+use crate::workflow::planner::{RunnableWorkflowInfo, runnable_workflow_info};
+use crate::workflow::render::{
     base_label, shell_arg, workflow_filtered_task_summary, workflow_relative_path,
     workflow_selection_status_counts, workflow_task_title_label,
 };
-use super::resolve_mutating_target;
-use super::stack_plan::next_runnable_stack_task;
-use super::state::{
+use crate::workflow::run::{
     WorkflowTaskState, read_batch_workflow_task_states, read_single_workflow_task_states,
     read_stack_workflow_task_states,
 };
-use crate::context::{Ctx, PromptItem};
-use crate::workflow as workflow_store;
 use crate::workflow::{WorkflowMetadata, WorkflowMode};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -19,11 +19,6 @@ pub(super) struct RunnableWorkflowCandidate {
     pub(super) path: PathBuf,
     item: PromptItem,
     label: String,
-}
-
-struct RunnableWorkflowInfo {
-    runnable_count: usize,
-    next_idx: Option<usize>,
 }
 
 pub(super) fn resolve_run_workflow_path(
@@ -110,43 +105,6 @@ fn read_workflow_candidate_states(
         WorkflowMode::Single => read_single_workflow_task_states(ctx, workflow_path, metadata),
         WorkflowMode::Batch => read_batch_workflow_task_states(ctx, workflow_path, metadata),
         WorkflowMode::Stack => read_stack_workflow_task_states(ctx, workflow_path, metadata),
-    }
-}
-
-fn runnable_workflow_info(
-    mode: &WorkflowMode,
-    states: &[WorkflowTaskState],
-) -> Option<RunnableWorkflowInfo> {
-    match mode {
-        WorkflowMode::Single => {
-            if !states.is_empty() && states.iter().all(|state| state.run.is_runnable()) {
-                Some(RunnableWorkflowInfo {
-                    runnable_count: states.len(),
-                    next_idx: None,
-                })
-            } else {
-                None
-            }
-        }
-        WorkflowMode::Batch => {
-            let runnable_count = states
-                .iter()
-                .filter(|state| state.run.is_runnable())
-                .count();
-            (runnable_count > 0).then_some(RunnableWorkflowInfo {
-                runnable_count,
-                next_idx: None,
-            })
-        }
-        WorkflowMode::Stack => {
-            if states.iter().any(|state| state.run.is_stack_completable()) {
-                return None;
-            }
-            next_runnable_stack_task(states).map(|next_idx| RunnableWorkflowInfo {
-                runnable_count: 1,
-                next_idx: Some(next_idx),
-            })
-        }
     }
 }
 
