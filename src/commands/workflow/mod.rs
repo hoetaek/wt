@@ -49,6 +49,7 @@ pub fn task(
     tasks: &[String],
     mode: WorkflowModeArg,
     profile: Option<&str>,
+    objective: Option<&str>,
     base: &Option<String>,
     pr: Option<WorkflowPrModeArg>,
 ) -> Result<()> {
@@ -64,7 +65,7 @@ pub fn task(
     } else {
         task_command::prepare_named_tasks(ctx, tasks)?
     };
-    workflow_runner::prepare_workflow(ctx, mode, profile, base, prepared_tasks, pr)
+    workflow_runner::prepare_workflow(ctx, mode, profile, objective, base, prepared_tasks, pr)
 }
 
 pub fn issue(
@@ -72,6 +73,7 @@ pub fn issue(
     issues: &[String],
     mode: WorkflowModeArg,
     profile: Option<&str>,
+    objective: Option<&str>,
     base: &Option<String>,
     pr: Option<WorkflowPrModeArg>,
 ) -> Result<()> {
@@ -92,7 +94,7 @@ pub fn issue(
     }
 
     let prepared_tasks = task_command::prepare_issue_tasks(ctx, &selected_issues)?;
-    workflow_runner::prepare_workflow(ctx, mode, profile, base, prepared_tasks, pr)
+    workflow_runner::prepare_workflow(ctx, mode, profile, objective, base, prepared_tasks, pr)
 }
 
 pub fn show(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
@@ -202,7 +204,7 @@ mod tests {
             .iter()
             .map(|title| title.to_string())
             .collect::<Vec<_>>();
-        task(ctx, &tasks, mode, None, &Some("main".into()), None).unwrap();
+        task(ctx, &tasks, mode, None, None, &Some("main".into()), None).unwrap();
         workflow_store::list(ctx).unwrap().pop().unwrap()
     }
 
@@ -268,6 +270,7 @@ mod tests {
             &["workflow docs".into(), "workflow state".into()],
             WorkflowModeArg::Batch,
             None,
+            None,
             &Some("main".into()),
             None,
         )
@@ -287,6 +290,37 @@ mod tests {
         );
         assert!(workflow.policy.as_ref().unwrap().landing_requires_approval);
         assert_eq!(task_run::list(&ctx).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn task_prepares_workflow_with_objective_and_show_displays_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
+
+        task(
+            &ctx,
+            &["workflow docs".into()],
+            WorkflowModeArg::Batch,
+            None,
+            Some("Ship the larger workflow migration"),
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(
+            record.workflow.objective.as_deref(),
+            Some("Ship the larger workflow migration")
+        );
+        let content = std::fs::read_to_string(&record.path).unwrap();
+        assert!(content.contains("objective = \"Ship the larger workflow migration\""));
+
+        show(&ctx, Some(&record.id)).unwrap();
+
+        let dims = ui.dims.lock().unwrap().join("\n");
+        assert!(dims.contains("Objective: Ship the larger workflow migration"));
     }
 
     #[test]
@@ -320,6 +354,7 @@ mod tests {
             &[],
             WorkflowModeArg::Batch,
             None,
+            None,
             &Some("main".into()),
             None,
         )
@@ -352,6 +387,7 @@ mod tests {
             &["workflow docs".into(), "workflow state".into()],
             WorkflowModeArg::Batch,
             None,
+            None,
             &Some("main".into()),
             None,
         )
@@ -377,6 +413,7 @@ mod tests {
             &ctx,
             &["workflow docs".into()],
             WorkflowModeArg::Single,
+            None,
             None,
             &Some("main".into()),
             None,
@@ -410,6 +447,7 @@ mod tests {
             &ctx,
             &["workflow docs".into(), "workflow state".into()],
             WorkflowModeArg::Batch,
+            None,
             None,
             &Some("main".into()),
             None,
@@ -454,6 +492,7 @@ mod tests {
             &ctx,
             &["cancel first".into(), "should wait".into()],
             WorkflowModeArg::Batch,
+            None,
             None,
             &Some("main".into()),
             None,
@@ -500,6 +539,7 @@ mod tests {
             &["workflow docs".into()],
             WorkflowModeArg::Single,
             None,
+            None,
             &Some("main".into()),
             None,
         )
@@ -523,6 +563,7 @@ mod tests {
             &ctx,
             &["contract".into(), "state model".into()],
             WorkflowModeArg::Stack,
+            None,
             None,
             &Some("main".into()),
             Some(WorkflowPrModeArg::Draft),
@@ -553,6 +594,7 @@ mod tests {
             &ctx,
             &["contract".into()],
             WorkflowModeArg::Stack,
+            None,
             None,
             &Some("main".into()),
             None,
@@ -599,6 +641,7 @@ mod tests {
             &ctx,
             &["contract".into()],
             WorkflowModeArg::Stack,
+            None,
             None,
             &Some("main".into()),
             None,
@@ -649,6 +692,7 @@ mod tests {
             &["contract".into()],
             WorkflowModeArg::Stack,
             None,
+            None,
             &Some("main".into()),
             Some(WorkflowPrModeArg::None),
         )
@@ -689,6 +733,7 @@ mod tests {
             &["PROJ-123".into()],
             WorkflowModeArg::Stack,
             None,
+            None,
             &Some("main".into()),
             None,
         )
@@ -718,6 +763,7 @@ mod tests {
             &["contract".into()],
             WorkflowModeArg::Stack,
             None,
+            None,
             &Some("main".into()),
             Some(WorkflowPrModeArg::Ready),
         )
@@ -741,6 +787,7 @@ mod tests {
             &ctx,
             &["schema".into(), "api".into(), "ui".into()],
             WorkflowModeArg::Stack,
+            None,
             None,
             &Some("main".into()),
             None,
@@ -1198,6 +1245,7 @@ mod tests {
             &["workflow docs".into()],
             WorkflowModeArg::Batch,
             None,
+            None,
             &Some("main".into()),
             Some(WorkflowPrModeArg::Draft),
         )
@@ -1216,6 +1264,7 @@ mod tests {
             &["workflow docs".into()],
             WorkflowModeArg::Single,
             None,
+            None,
             &Some("main".into()),
             Some(WorkflowPrModeArg::None),
         )
@@ -1233,6 +1282,7 @@ mod tests {
             &ctx,
             &["PROJ-123".into()],
             WorkflowModeArg::Batch,
+            None,
             None,
             &Some("main".into()),
             Some(WorkflowPrModeArg::None),

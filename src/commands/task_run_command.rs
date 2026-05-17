@@ -94,6 +94,7 @@ fn run_selected_task(
                     .map(|origin| origin.id.as_str()),
                 prompt_intro: "Use this task before changing code.",
                 completion_section: Some(TASK_RUN_COORDINATOR_HANDOFF_SECTION),
+                pre_snapshot_context: None,
                 workspace_label: None,
                 snapshot: issue::IssueSnapshotContext {
                     path_label: "Task path",
@@ -153,6 +154,7 @@ fn run_selected_task(
                 .map(|origin| origin.id.as_str()),
             prompt_intro: "Use this task before changing code.",
             completion_section: Some(TASK_RUN_COORDINATOR_HANDOFF_SECTION),
+            pre_snapshot_context: None,
             workspace_label: None,
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",

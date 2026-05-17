@@ -37,6 +37,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             matrix,
         } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
         Commands::Task { command } => match command {
+            TaskCommand::Import { issues } => commands::task::import(ctx, issues),
             TaskCommand::Run {
                 tasks,
                 base,
@@ -50,16 +51,34 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 tasks,
                 mode,
                 profile,
+                objective,
                 base,
                 pr,
-            } => commands::workflow::task(ctx, tasks, *mode, profile.as_deref(), base, *pr),
+            } => commands::workflow::task(
+                ctx,
+                tasks,
+                *mode,
+                profile.as_deref(),
+                objective.as_deref(),
+                base,
+                *pr,
+            ),
             WorkflowCommand::Issue {
                 issues,
                 mode,
                 profile,
+                objective,
                 base,
                 pr,
-            } => commands::workflow::issue(ctx, issues, *mode, profile.as_deref(), base, *pr),
+            } => commands::workflow::issue(
+                ctx,
+                issues,
+                *mode,
+                profile.as_deref(),
+                objective.as_deref(),
+                base,
+                *pr,
+            ),
             WorkflowCommand::Run { workflow, jobs } => {
                 commands::workflow::run(ctx, workflow.as_deref(), *jobs)
             }

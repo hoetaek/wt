@@ -76,11 +76,19 @@ wt task run
 wt task run add-profile-docs
 ```
 
+Prepare local TaskDocuments without starting work:
+
+```bash
+wt task import PROJ-123
+wt task import
+wt task publish add-profile-docs
+```
+
 Prepare saved workflows when local tasks or issues need coordination:
 
 ```bash
 wt workflow task --mode single add-schema wire-api --base .
-wt workflow task --mode batch add-schema wire-api --base main
+wt workflow task --mode batch add-schema wire-api --base main --objective "Ship search"
 wt workflow issue --mode stack 123 456 789 --base main --pr draft
 wt workflow run
 wt workflow repair 2026-05-16-001
@@ -111,10 +119,13 @@ Land reviewed work with Git or pull requests first.
 - `wt issue` starts a worktree from an existing provider issue.
 - `wt pr` opens existing pull request branches as worktrees.
 - `TaskDocument` files in `.local/tasks/<task>.toml` define prepared local work.
+- `wt task import [<issue>...]` imports provider issues as TaskDocuments and
+  records `[origin]`; it does not start worktrees.
 - `wt task run [<task>...]` starts one worktree per selected TaskDocument.
 - `wt task publish [<task>...]` creates provider issues from TaskDocuments and
   records `[origin]`; it does not start worktrees.
 - `Workflow` files in `.local/workflows/<id>.toml` save coordinated execution.
+  Optional `objective` records the larger human goal for the saved plan.
   `single` shares one workspace, `batch` runs independent branches from one
   base, and `stack` runs ordered branches as a parent chain.
 - `TaskRun` files in `.local/task-runs/<id>.toml` record execution attempts.
@@ -182,11 +193,13 @@ landing = "after_review"      # manual | after_review
 landing_requires_approval = true
 ```
 
-`wt workflow task` and `wt workflow issue` write the effective landing policy to
-the prepared workflow file under `[policy]`. Stack-mode tasks also materialize
-the effective PR handoff on each task row; an explicit `--pr none|draft|ready`
-overrides `workflow.defaults.pull_request` for that prepared workflow. Single
-and batch workflows still report `PR=none`.
+`wt workflow task --objective <text>` and
+`wt workflow issue --objective <text>` write top-level workflow context for the
+larger goal. `wt workflow task` and `wt workflow issue` write the effective
+landing policy to the prepared workflow file under `[policy]`. Stack-mode tasks
+also materialize the effective PR handoff on each task row; an explicit
+`--pr none|draft|ready` overrides `workflow.defaults.pull_request` for that
+prepared workflow. Single and batch workflows still report `PR=none`.
 
 Small private agent config can stay inline:
 
@@ -220,6 +233,7 @@ name.
 | `wt issue` | Start work from a provider issue |
 | `wt pr` | Start worktrees from pull requests |
 | `wt new` | Start work from branch-name text |
+| `wt task import` | Import provider issues as local TaskDocuments |
 | `wt task run` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
 | `wt workflow` | Prepare, inspect, run, repair, and complete saved workflows |

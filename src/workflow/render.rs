@@ -107,6 +107,13 @@ pub(crate) fn workflow_relative_path(ctx: &Ctx, path: &Path) -> String {
         .to_string()
 }
 
+pub(crate) fn workflow_objective_prompt_context(objective: Option<&str>) -> Option<String> {
+    objective
+        .map(str::trim)
+        .filter(|objective| !objective.is_empty())
+        .map(|objective| format!("Workflow objective:\n\n{objective}"))
+}
+
 pub(crate) fn workflow_single_task_prompt_intro() -> &'static str {
     "Use this task before changing code."
 }

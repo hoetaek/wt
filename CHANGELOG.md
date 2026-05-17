@@ -13,6 +13,13 @@ minor version instead of moving to `x.0.0`.
   unknown-subcommand handling instead of parsing only to return replacement
   guidance, while canonical behavior remains under `wt workflow`, `wt inspect`,
   and `wt agent status` / `wt agent watch`.
+- Added `wt task import [<issue>...]` as the non-executing inverse of
+  `wt task publish`. It imports existing provider issues into `.local/tasks`
+  TaskDocuments, records `[origin]`, supports explicit issue ids and a bare
+  provider issue selector, and refuses duplicate ids or existing local
+  TaskDocument collisions.
+- Bumped the package version to `0.25.0` because `wt task import` adds a new
+  user-facing CLI subcommand while `wt` is still pre-1.0.
 
 ## 0.24.0 - 2026-05-17
 

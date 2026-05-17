@@ -37,6 +37,8 @@ impl WorkflowMode {
 pub struct WorkflowMetadata {
     pub mode: WorkflowMode,
     #[serde(default)]
+    pub objective: Option<String>,
+    #[serde(default)]
     pub profile: Option<String>,
     pub base_mode: String,
     #[serde(default)]
@@ -118,6 +120,7 @@ impl WorkflowMetadata {
         let now = current_utc_timestamp();
         Self {
             mode,
+            objective: None,
             profile: None,
             base_mode: base_mode.into(),
             base,
@@ -339,6 +342,13 @@ fn validate_workflow(workflow: &WorkflowMetadata) -> Result<()> {
     if workflow.tasks.is_empty() {
         bail!("Workflow has no tasks");
     }
+    if workflow
+        .objective
+        .as_deref()
+        .is_some_and(|objective| objective.trim().is_empty())
+    {
+        bail!("Workflow objective cannot be empty");
+    }
     if workflow.created_at.trim().is_empty() {
         bail!("Workflow is missing created_at");
     }
@@ -394,6 +404,9 @@ fn validate_workflow_task(mode: &WorkflowMode, item: &WorkflowTask) -> Result<()
 fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
     let mut content = String::new();
     content.push_str(&format!("mode = {}\n", toml_quote(workflow.mode.as_str())));
+    if let Some(objective) = workflow.objective.as_deref() {
+        content.push_str(&format!("objective = {}\n", toml_quote(objective)));
+    }
     if let Some(profile) = workflow.profile.as_deref() {
         content.push_str(&format!("profile = {}\n", toml_quote(profile)));
     }
@@ -547,6 +560,7 @@ mod tests {
         let path = dir.path().join(".local/workflows/2026-05-16-001.toml");
         let mut workflow = WorkflowMetadata {
             mode: WorkflowMode::Stack,
+            objective: Some("Ship the workflow state model migration".into()),
             profile: Some("codex".into()),
             base_mode: "explicit".into(),
             base: Some("main".into()),
@@ -568,11 +582,12 @@ mod tests {
         write(&ctx, &path, &mut workflow).unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
-        assert!(
-            content.starts_with("mode = \"stack\"\nprofile = \"codex\"\nbase_mode = \"explicit\"")
-        );
+        assert!(content.starts_with(
+            "mode = \"stack\"\nobjective = \"Ship the workflow state model migration\"\nprofile = \"codex\"\nbase_mode = \"explicit\""
+        ));
         assert!(content.contains("base = \"main\""));
         assert!(content.contains("color = \"blue\""));
+        assert!(content.contains("objective = \"Ship the workflow state model migration\""));
         assert!(content.contains("[[tasks]]"));
         assert!(content.contains("task = \"add-schema\""));
         assert!(content.contains("run = \"stack-2026-05-16-001-add-schema\""));
@@ -760,7 +775,38 @@ parent = "main"
         )
         .unwrap();
 
-        assert!(read(&path).unwrap().policy.is_none());
+        let workflow = read(&path).unwrap();
+        assert!(workflow.policy.is_none());
+        assert!(workflow.objective.is_none());
+    }
+
+    #[test]
+    fn read_rejects_objective_alias_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflow.toml");
+
+        for field in ["body", "description"] {
+            fs::write(
+                &path,
+                format!(
+                    r#"mode = "single"
+{field} = "Ship the larger goal"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+"#
+                ),
+            )
+            .unwrap();
+
+            assert!(error_report(read(&path)).contains(field));
+        }
     }
 
     #[test]

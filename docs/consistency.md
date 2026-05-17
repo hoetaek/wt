@@ -56,9 +56,11 @@ namespace가 아니다. 새 상태 파일은 `.local/workflows` 아래에만 만
 surface를 `wt workflow` 옆에 남기면 두 command surface가 모두 canonical처럼 보이므로
 새 CLI parser와 dispatch는 canonical `wt workflow`만 노출한다.
 
-Workflow file은 mode, base, profile, color, timestamps, task/run link 같은
-orchestration만 저장한다. Task branch name의 source of truth는 항상
-TaskDocument의 `branch`다. Workflow task row는 branch 이름을 복사해 저장하지 않는다.
+Workflow file은 optional `objective`, mode, base, profile, color, timestamps,
+workflow-level policy, task/run link 같은 prepared-plan context와 orchestration만
+저장한다. `objective`는 workflow가 완수하려는 더 큰 목표를 설명하는 human context이며
+실행 상태가 아니다. Task branch name의 source of truth는 항상 TaskDocument의 `branch`다.
+Workflow task row는 branch 이름을 복사해 저장하지 않는다.
 
 Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 묶는 표시다. 색상이
 생략되면 `wt`가 내장 cmux named-color palette의 다음 색을 고르고 workflow file에
@@ -191,6 +193,21 @@ profile convention file merge를 모두 끝낸 뒤 최종 effective config에서
 TaskDocument는 작업이 무엇인지를 담는 정의다. `.local/tasks/<task>.toml`
 아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
 
+TaskDocument import는 configured issue provider의 기존 issue를 local task 정의로
+가져오는 side effect다. Canonical command shape는 `wt task import` 또는
+`wt task import <issue>...`다. Bare `wt task import`는 provider issue를
+multi-select로 고르게 하고, 명시 issue id는 scriptable path로 남긴다. `import`는
+`.local/tasks/<safe-issue-id>.toml`에 title, branch, body, `[origin]`을 기록하지만
+worktree, branch, TaskRun, Workflow, pull request를 만들지 않고 provider에 쓰지도
+않는다. `[origin]`은 provider issue와의 durable link이지, 자동 동기화 계약이 아니다.
+
+Import ambiguity는 local TaskDocument write 전에 실패해야 한다. Configured issue
+provider가 없으면 실패한다. 같은 invocation 안의 duplicate issue id는 실패한다. Provider
+조회 뒤 canonical issue id가 같은 task key로 수렴하는 경우도 실패한다. Import 대상
+`.local/tasks/<safe-issue-id>.toml`이 이미 있으면 local edits를 보존하기 위해 실패하고,
+조용히 덮어쓰거나 merge하지 않는다. Replace/update가 필요하다면 별도의 명시 옵션과
+help/test/documentation이 먼저 필요하다.
+
 TaskDocument publish는 local task 정의를 configured issue provider의 issue로 만드는
 side effect다. Canonical command shape는 `wt task publish` 또는
 `wt task publish <task>...`다. Bare `wt task publish`는 아직 `[origin]`이 없는 local
@@ -201,9 +218,9 @@ TaskDocument를 multi-select로 고르게 하고, 명시 task key는 scriptable 
 publish해야 한다는 pending request가 아니다.
 
 `wt issue`는 이미 존재하는 provider issue에서 worktree를 시작하는 명령으로 남긴다.
-Local TaskDocument를 provider issue로 만드는 흐름을 `wt issue create`, `import`,
-`sync` 같은 이름으로 추가하지 않는다. `import`는 provider issue를 TaskDocument로
-가져오는 방향이고, `publish`는 TaskDocument를 provider issue로 내보내는 방향이다.
+Provider issue를 TaskDocument로 가져오는 흐름은 `wt task import`, Local TaskDocument를
+provider issue로 만드는 흐름은 `wt task publish`다. `wt issue import`, `wt issue create`,
+`sync`, `pull`, `push`, `export` 같은 이름을 같은 개념의 alias로 추가하지 않는다.
 
 Publish는 TaskDocument의 schema를 넓히지 않는다. TaskDocument에는 계속 title, branch,
 body, optional origin만 둔다. TaskRun, workflow, profile, retry status, pending
@@ -231,6 +248,12 @@ plan이어야 하고, TaskDocument에 pending state를 저장해서 dry-run 결�
 보여줘야 한다. Worktree 시작, TaskRun 생성, workflow 실행, branch landing처럼 다른
 lifecycle을 publish 도움말에 섞지 않는다.
 
+`wt task import --help`는 import가 provider issue에서 TaskDocument로 향하는
+non-executing 흐름임을 그대로 설명해야 한다. 즉 explicit issue id와 bare provider issue
+selector를 모두 지원한다는 점, `[origin]`을 기록한다는 점, duplicate ids나 existing
+TaskDocument collision에서 실패한다는 점, worktree/branch/TaskRun/Workflow/PR/provider
+write를 만들지 않는다는 점을 보여줘야 한다.
+
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
 task, branch, status, source, group, error, creation_order, created_at,
 updated_at을 저장한다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
@@ -241,16 +264,18 @@ status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이다.
 status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서 실패시킨다.
 
 통합 실행 상태 모델은 TaskDocument, Workflow, TaskRun의 책임을 나누는 데서 시작한다.
-TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, Workflow는 그 task set을
-어떤 실행 shape로 이어갈지에 대한 저장된 계획이며, TaskRun은 TaskDocument 하나를 한 번
-실행한 기록이다.
+TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, Workflow는 optional
+`objective`와 그 task set을 어떤 실행 shape로 이어갈지에 대한 저장된 계획이며,
+TaskRun은 TaskDocument 하나를 한 번 실행한 기록이다.
 
 Workflow 준비는 `.local/workflows/<id>.toml` 하나와 각 task의 TaskDocument/TaskRun link를
 만든다. Workflow의 canonical task 목록은 `[[tasks]]`이고, 각 row는 task key, linked
 TaskRun id, stack-mode parent, pull request handoff intent처럼 orchestration에 필요한
 link와 실행 지시만 저장한다. Workflow row는 status/error를 따로 가지지 않고, branch
 이름도 복사하지 않는다. 실행 인스턴스의 canonical 기록은 TaskRun이고, branch name의
-canonical 기록은 TaskDocument다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을
+canonical 기록은 TaskDocument다. `objective`는 workflow-level field로만 저장하고
+TaskDocument `body`나 row-level field로 복사하지 않는다. `body`, `description`,
+`goal_task`, `parent_task`, `subtasks`, `[[issues]]`, `[[items]]`처럼 같은 상태나 목표를
 가리키는 다른 이름은 받지 않는다.
 
 Stack-mode workflow preparation accepts `--pr <none|draft|ready>`. Omitted `--pr` and
@@ -319,14 +344,23 @@ config for one run while keeping the same value names and failing early for conf
 forms instead of introducing aliases.
 
 This model changes both `.wt.toml` config shape and `.local/workflows` state shape, so
-implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Ordinary
-development commits still do not bump `Cargo.toml`; the release branch owns the eventual
-version bump.
+implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Adding
+workflow `objective` also changes the `.local/workflows` state shape and
+`wt workflow task` / `wt workflow issue` preparation surface, so it belongs in the same
+pre-1.0 minor model-change category. Ordinary development commits still do not bump
+`Cargo.toml`; the release branch owns the eventual version bump.
 
 Open implementation boundary: the current PR handoff runtime is stack-mode only. Until
 single or batch mode has a clear per-branch PR model, non-stack workflows should continue
 to report `PR=none` rather than silently applying `workflow.defaults.pull_request` in a
 different shape.
+
+`wt workflow task --objective <text>`와 `wt workflow issue --objective <text>`는 저장된
+Workflow의 더 큰 목표를 `.local/workflows/<id>.toml`의 top-level `objective`로 기록한다.
+이 값은 `wt workflow show`와 workflow-started agent prompt에 context로 나타나지만,
+runnable selection, TaskRun lifecycle, landing policy, cleanup behavior를 바꾸지 않는다.
+Prompt에서는 coordinator handoff가 먼저 전달되고, objective는 그 뒤 TaskDocument snapshot
+근처에 배치된다.
 
 Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
