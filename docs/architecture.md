@@ -20,7 +20,7 @@ effects.
 | Workflow execution planner | `src/commands/workflow.rs` today; extract to `src/workflow/planner.rs` when split | Runnable-workflow selection, single/batch/stack next-step rules, preflight plans, parent-chain calculation | UI printing, cmux calls, issue-provider calls, file serialization |
 | Workflow runner orchestration | `src/commands/workflow.rs` today; extract to `src/workflow/run.rs` when split | Coordinating planner output with `TaskDocument`, `TaskRun`, `issue` start paths, and setup results | Domain schema definitions, config merge policy, provider implementation details |
 | Rendering | `ctx.ui` call sites and prompt builders in command modules today; extract workflow prompt/status text to `src/workflow/render.rs` when split | Human status text, selector labels, agent prompt snapshots, coordinator handoff text | State transitions, filesystem writes, shelling out to tools |
-| Config layering | `src/config.rs` | Config schema, `.wt.toml` and `.local/.wt.toml` load order, profile resolution, profile convention overlays, prompt merge/finalization | Worktree creation, site registration, TaskDocument/TaskRun/Workflow state |
+| Config layering | `src/config/` | Config schema, `.wt.toml` and `.local/.wt.toml` load order, profile resolution, profile convention overlays, prompt merge/finalization | Worktree creation, site registration, TaskDocument/TaskRun/Workflow state |
 | Setup side effects | `src/setup.rs` | Copy/link/env substitution, site registration, cmux workspace opening, agent bootstrap, dependency/test command execution, setup summary | Config precedence, workflow planning, task state ownership |
 | External services | `src/services/*` | Shell/tool boundaries for Git, GitHub, Linear, cmux, Herd, Valet, Docker proxy, Traefik, issue providers, and work-session observation | CLI policy, persisted wt state schemas, UX concept naming |
 
@@ -59,7 +59,7 @@ TaskDocument, TaskRun, and Workflow state. cmux workspace or surface coordinates
 are transport details and must not become persisted task or workflow state.
 
 Site providers are external services. `SiteConfig` and provider choice live in
-`src/config.rs`; service dispatch lives in `src/services/site.rs`; provider
+`src/config/`; service dispatch lives in `src/services/site.rs`; provider
 implementations live in `src/services/herd.rs`, `src/services/valet.rs`, and
 `src/services/traefik.rs`, with no-op providers such as Docker proxy handled by
 the dispatch layer. `src/setup.rs` may invoke them while preparing a worktree,
@@ -95,7 +95,7 @@ schemas.
 
 ## Setup and Config Boundary
 
-`src/config.rs` owns how configuration becomes effective configuration:
+`src/config/` owns how configuration becomes effective configuration:
 schema parsing, shared/local load order, profile selection, profile directory
 loading, convention overlays, and prompt merge/finalization. Commands may ask
 whether a profile is valid and may pass an effective `Config` onward. They
