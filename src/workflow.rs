@@ -5,6 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(crate) mod planner;
+pub(crate) mod render;
+pub(crate) mod run;
+
 pub const WORKFLOW_COLOR_ROTATION: &[&str] = &[
     "red", "crimson", "orange", "amber", "olive", "green", "teal", "aqua", "blue", "navy",
     "indigo", "purple", "magenta", "rose", "brown", "charcoal",

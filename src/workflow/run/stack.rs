@@ -1,5 +1,3 @@
-use super::render::{workflow_stack_task_handoff_section, workflow_task_label};
-use super::stack_plan::{next_runnable_stack_task, parent_for_stack_task};
 use super::state::{read_stack_workflow_task_states, update_workflow_task_run};
 use super::{apply_workflow_color, is_cancelled, validate_profile};
 use crate::commands::issue;
@@ -7,6 +5,12 @@ use crate::context::Ctx;
 use crate::task as task_store;
 use crate::task_run::{self, STATUS_FAILED, STATUS_RUNNING, STATUS_SKIPPED};
 use crate::workflow as workflow_store;
+use crate::workflow::planner::{next_runnable_stack_task, parent_for_stack_task};
+use crate::workflow::render::{
+    no_runnable_workflow_tasks_message, stack_task_already_running_message,
+    started_stack_task_message, workflow_stack_task_handoff_section,
+    workflow_stack_task_prompt_intro, workflow_task_label,
+};
 use crate::workflow::{WorkflowMetadata, WorkflowTask};
 use anyhow::{Result, bail};
 use std::path::Path;
@@ -32,16 +36,13 @@ pub(super) fn run_stack_workflow(
 
     if let Some(state) = states.iter().find(|state| state.run.is_stack_completable()) {
         bail!(
-            "Workflow stack task {} is already running. Mark it complete with: wt workflow complete {} {}",
-            workflow_task_label(&state.row),
-            workflow_path.display(),
-            workflow_task_label(&state.row)
+            "{}",
+            stack_task_already_running_message(workflow_path, &state.row)
         );
     }
 
     let Some(idx) = next_runnable_stack_task(&states) else {
-        ctx.ui
-            .print_step("No prepared or failed tasks to run in this workflow.");
+        ctx.ui.print_step(no_runnable_workflow_tasks_message());
         return Ok(());
     };
 
@@ -66,11 +67,9 @@ pub(super) fn run_stack_workflow(
             task_store::write_task_branch(ctx, &metadata.tasks[idx].task, &result.branch_name)?;
             update_workflow_task_run(ctx, &metadata.tasks[idx], STATUS_RUNNING, None)?;
             apply_workflow_color(ctx, &result.worktree_path, metadata.color.as_deref());
-            ctx.ui.print_step(&format!(
-                "Started workflow task {}. Mark it complete with: wt workflow complete {} {}",
-                workflow_task_label(&metadata.tasks[idx]),
-                workflow_path.display(),
-                workflow_task_label(&metadata.tasks[idx])
+            ctx.ui.print_step(&started_stack_task_message(
+                workflow_path,
+                &metadata.tasks[idx],
             ));
             Ok(())
         }
@@ -126,7 +125,7 @@ fn run_stack_workflow_task(
             branch_name,
             mode: task_doc.mode(),
             on_start_issue_id: task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
-            prompt_intro: "Use this task before changing code.",
+            prompt_intro: workflow_stack_task_prompt_intro(),
             completion_section: Some(&completion_section),
             workspace_label: Some(workspace_label),
             snapshot: issue::IssueSnapshotContext {

@@ -1,9 +1,9 @@
-use super::state::WorkflowTaskState;
 use crate::context::Ctx;
 use crate::task as task_store;
 use crate::task_run::{
     STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
+use crate::workflow::run::WorkflowTaskState;
 use crate::workflow::{WorkflowMetadata, WorkflowPullRequestMode, WorkflowTask};
 use std::path::Path;
 
@@ -15,14 +15,14 @@ enum WorkflowCoordinatorHandoff<'a> {
     },
 }
 
-pub(super) fn base_label(metadata: &WorkflowMetadata) -> String {
+pub(crate) fn base_label(metadata: &WorkflowMetadata) -> String {
     metadata
         .base
         .clone()
         .unwrap_or_else(|| format!("({})", metadata.base_mode))
 }
 
-pub(super) fn workflow_task_label(row: &WorkflowTask) -> &str {
+pub(crate) fn workflow_task_label(row: &WorkflowTask) -> &str {
     if row.task.trim().is_empty() {
         "workflow-task"
     } else {
@@ -30,7 +30,7 @@ pub(super) fn workflow_task_label(row: &WorkflowTask) -> &str {
     }
 }
 
-pub(super) fn workflow_task_title_label(ctx: &Ctx, key: &str) -> String {
+pub(crate) fn workflow_task_title_label(ctx: &Ctx, key: &str) -> String {
     match task_store::read_task_document(ctx, key) {
         Ok(document) => {
             let title = document.title_or_key(key);
@@ -44,7 +44,7 @@ pub(super) fn workflow_task_title_label(ctx: &Ctx, key: &str) -> String {
     }
 }
 
-pub(super) fn workflow_filtered_task_summary<F>(
+pub(crate) fn workflow_filtered_task_summary<F>(
     ctx: &Ctx,
     states: &[WorkflowTaskState],
     include: F,
@@ -72,7 +72,7 @@ where
     Some(summary)
 }
 
-pub(super) fn workflow_selection_status_counts(items: &[WorkflowTaskState]) -> String {
+pub(crate) fn workflow_selection_status_counts(items: &[WorkflowTaskState]) -> String {
     let counts = [
         STATUS_PREPARED,
         STATUS_RUNNING,
@@ -100,25 +100,108 @@ pub(super) fn workflow_selection_status_counts(items: &[WorkflowTaskState]) -> S
     }
 }
 
-pub(super) fn workflow_relative_path(ctx: &Ctx, path: &Path) -> String {
+pub(crate) fn workflow_relative_path(ctx: &Ctx, path: &Path) -> String {
     path.strip_prefix(&ctx.repo_root)
         .unwrap_or(path)
         .display()
         .to_string()
 }
 
+pub(crate) fn workflow_single_task_prompt_intro() -> &'static str {
+    "Use this task before changing code."
+}
+
+pub(crate) fn workflow_single_group_prompt_intro() -> &'static str {
+    "Use these tasks before changing code. Work in this single workspace and address every selected TaskDocument."
+}
+
+pub(crate) fn workflow_batch_task_prompt_intro() -> &'static str {
+    "Use this task before changing code."
+}
+
+pub(crate) fn workflow_stack_task_prompt_intro() -> &'static str {
+    "Use this task before changing code."
+}
+
+pub(crate) fn no_tasks_selected_message() -> &'static str {
+    "No tasks selected"
+}
+
+pub(crate) fn prepared_workflow_message(workflow_path: &Path) -> String {
+    format!("Prepared workflow: {}", workflow_path.display())
+}
+
+pub(crate) fn no_runnable_workflow_tasks_message() -> &'static str {
+    "No prepared or failed tasks to run in this workflow."
+}
+
+pub(crate) fn starting_workflow_task_message(task: &str) -> String {
+    format!("Starting {task}")
+}
+
+pub(crate) fn started_workflow_task_message(task: &str) -> String {
+    format!("Started {task}")
+}
+
+pub(crate) fn failed_workflow_task_message(task: &str, error: &str) -> String {
+    format!("Failed {task}: {error}")
+}
+
+pub(crate) fn stack_task_already_running_message(
+    workflow_path: &Path,
+    row: &WorkflowTask,
+) -> String {
+    format!(
+        "Workflow stack task {} is already running. Mark it complete with: wt workflow complete {} {}",
+        workflow_task_label(row),
+        workflow_path.display(),
+        workflow_task_label(row)
+    )
+}
+
+pub(crate) fn started_stack_task_message(workflow_path: &Path, row: &WorkflowTask) -> String {
+    format!(
+        "Started workflow task {}. Mark it complete with: wt workflow complete {} {}",
+        workflow_task_label(row),
+        workflow_path.display(),
+        workflow_task_label(row)
+    )
+}
+
+pub(crate) fn render_single_workflow_snapshot(states: &[WorkflowTaskState]) -> String {
+    let mut content = String::new();
+    content.push_str("Selected TaskDocuments:\n");
+    for state in states {
+        content.push_str(&format!("- {}: {}\n", state.row.task, state.path));
+    }
+    for state in states {
+        content.push_str(&format!("\n--- {} ({}) ---\n", state.row.task, state.path));
+        content.push_str(state.content.trim_end());
+        content.push('\n');
+    }
+    content
+}
+
+pub(crate) fn single_workflow_group_title(states: &[WorkflowTaskState]) -> String {
+    let first = states
+        .first()
+        .map(|state| state.document.title_or_key(&state.row.task))
+        .unwrap_or_else(|| "workflow".into());
+    format!("{}개 작업: {first}", states.len())
+}
+
 #[cfg(test)]
-pub(super) fn workflow_single_task_prompt_content(content: &str) -> String {
+pub(crate) fn workflow_single_task_prompt_content(content: &str) -> String {
     workflow_task_prompt_content(content, &workflow_single_task_handoff_section())
 }
 
 #[cfg(test)]
-pub(super) fn workflow_batch_task_prompt_content(content: &str) -> String {
+pub(crate) fn workflow_batch_task_prompt_content(content: &str) -> String {
     workflow_task_prompt_content(content, &workflow_batch_task_handoff_section())
 }
 
 #[cfg(test)]
-pub(super) fn workflow_stack_task_prompt_content(
+pub(crate) fn workflow_stack_task_prompt_content(
     content: &str,
     workflow_path: &Path,
     row: &WorkflowTask,
@@ -129,15 +212,15 @@ pub(super) fn workflow_stack_task_prompt_content(
     )
 }
 
-pub(super) fn workflow_single_task_handoff_section() -> String {
+pub(crate) fn workflow_single_task_handoff_section() -> String {
     workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::ReportOnly)
 }
 
-pub(super) fn workflow_batch_task_handoff_section() -> String {
+pub(crate) fn workflow_batch_task_handoff_section() -> String {
     workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::ReportOnly)
 }
 
-pub(super) fn workflow_stack_task_handoff_section(
+pub(crate) fn workflow_stack_task_handoff_section(
     workflow_path: &Path,
     row: &WorkflowTask,
 ) -> String {
@@ -237,7 +320,7 @@ fn workflow_pr_command(mode: WorkflowPullRequestMode, parent_branch: &str) -> St
     )
 }
 
-pub(super) fn shell_arg(value: &str) -> String {
+pub(crate) fn shell_arg(value: &str) -> String {
     let safe = value
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | ':' | '='));
