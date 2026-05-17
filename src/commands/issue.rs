@@ -11,7 +11,7 @@ use crate::names::WorktreeNames;
 use crate::services::git::{CreateType, GitService};
 use crate::services::issues::github::GithubIssueProvider;
 use crate::services::issues::linear::LinearIssueProvider;
-use crate::services::issues::{EnsuredBranch, IssueInfo, IssueProvider};
+use crate::services::issues::{IssueInfo, IssueProvider};
 use crate::setup;
 use crate::worktree_naming::{self, WorktreeNamingResult};
 use anyhow::{Result, bail};
@@ -32,6 +32,8 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) mode: &'a str,
     pub(crate) on_start_issue_id: Option<&'a str>,
     pub(crate) prompt_intro: &'a str,
+    pub(crate) completion_section: Option<&'a str>,
+    pub(crate) pre_snapshot_context: Option<&'a str>,
     pub(crate) workspace_label: Option<String>,
     pub(crate) snapshot: IssueSnapshotContext<'a>,
 }
@@ -80,6 +82,13 @@ impl std::error::Error for IssueRunPartialFailure {}
 pub(crate) struct PlannedIssueWorktree {
     pub(crate) branch_name: String,
     pub(crate) path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct MaterializedIssueBranch {
+    pub(crate) branch_name: String,
+    pub(crate) naming: Option<WorktreeNamingResult>,
+    pub(crate) provider_created_branch_base: Option<String>,
 }
 
 struct ProfileRunOptions<'a> {
@@ -281,40 +290,36 @@ fn run_inner_many(
     let prompt_intro = prepared_issue
         .map(|issue| issue.prompt_intro)
         .unwrap_or("Use this issue snapshot before changing code.");
+    let completion_section = prepared_issue.and_then(|issue| issue.completion_section);
+    let pre_snapshot_context = prepared_issue.and_then(|issue| issue.pre_snapshot_context);
 
     ctx.ui.print_step(&format!("{identifier}: {title}"));
 
-    let naming = worktree_naming::generate(ctx, &identifier, &title, suggested_branch.as_deref())?;
-
-    let provider_branch_base =
-        if should_resolve_provider_branch_base(ctx, suggested_branch.as_deref(), prepared_issue) {
-            Some(resolve_base_branch(ctx, &git, base_raw)?)
-        } else {
-            None
-        };
-
-    // Ensure branch exists (provider-specific: Linear reads, GH may create)
-    let raw_id = identifier.trim_start_matches('#');
-    let ensured_branch =
+    let branch_resolution =
         if let Some(prepared_branch) = prepared_issue.and_then(|issue| issue.branch_name) {
-            EnsuredBranch {
-                name: prepared_branch.to_string(),
-                created: false,
+            let naming =
+                worktree_naming::generate(ctx, &identifier, &title, suggested_branch.as_deref())?;
+            MaterializedIssueBranch {
+                branch_name: prepared_branch.to_string(),
+                naming,
+                provider_created_branch_base: None,
             }
         } else {
             let provider = build_provider(ctx)?;
-            provider.ensure_branch(
-                raw_id,
-                provider_branch_base.as_deref(),
-                naming.as_ref().and_then(|n| n.branch.as_deref()),
+            materialize_provider_issue_branch(
+                ctx,
+                provider.as_ref(),
+                &identifier,
+                &title,
+                suggested_branch.as_deref(),
+                Some(base_raw),
+                prompt_policy,
             )?
         };
-    let provider_created_branch_base = if ensured_branch.created {
-        provider_branch_base.as_deref()
-    } else {
-        None
-    };
-    let branch_name = ensured_branch.name;
+    let raw_id = identifier.trim_start_matches('#');
+    let provider_created_branch_base = branch_resolution.provider_created_branch_base;
+    let branch_name = branch_resolution.branch_name;
+    let naming = branch_resolution.naming;
 
     let on_start_issue_id = prepared_issue
         .map(|issue| issue.on_start_issue_id)
@@ -338,7 +343,14 @@ fn run_inner_many(
 
     let names = issue_worktree_names(ctx, &branch_name, &title, naming.as_ref(), workspace_label)?;
     let snapshot_config = issue_snapshot.map(|snapshot| {
-        profile_config_with_issue_snapshot(&ctx.config, snapshot, setup_mode, prompt_intro)
+        profile_config_with_issue_snapshot(
+            &ctx.config,
+            snapshot,
+            setup_mode,
+            prompt_intro,
+            completion_section,
+            pre_snapshot_context,
+        )
     });
 
     // 2. Check if branch is already checked out elsewhere
@@ -429,7 +441,7 @@ fn run_inner_many(
         &branch_name,
         &names.path,
         base_raw,
-        provider_created_branch_base,
+        provider_created_branch_base.as_deref(),
         prompt_policy,
     )?;
 
@@ -510,6 +522,12 @@ fn run_profiles(
         .prepared_issue
         .map(|issue| issue.prompt_intro)
         .unwrap_or("Use this issue snapshot before changing code.");
+    let completion_section = options
+        .prepared_issue
+        .and_then(|issue| issue.completion_section);
+    let pre_snapshot_context = options
+        .prepared_issue
+        .and_then(|issue| issue.pre_snapshot_context);
     let profiles = load_selected_profiles(ctx, profile)?;
 
     ctx.ui.print_step(&format!(
@@ -529,7 +547,14 @@ fn run_profiles(
 
     for (profile_name, profile_config) in &profiles {
         let snapshot_config = issue_snapshot.map(|snapshot| {
-            profile_config_with_issue_snapshot(profile_config, snapshot, setup_mode, prompt_intro)
+            profile_config_with_issue_snapshot(
+                profile_config,
+                snapshot,
+                setup_mode,
+                prompt_intro,
+                completion_section,
+                pre_snapshot_context,
+            )
         });
         let profile_config = snapshot_config.as_ref().unwrap_or(profile_config);
         let profile_branch = format!("{branch_name}-{profile_name}");
@@ -675,25 +700,125 @@ fn profile_config_with_issue_snapshot(
     snapshot: &IssueSnapshotContext<'_>,
     mode: &str,
     prompt_intro: &str,
+    completion_section: Option<&str>,
+    pre_snapshot_context: Option<&str>,
 ) -> Config {
     let mut config = config.clone();
     if let Some(agent) = config.agent.as_mut() {
-        let snapshot_prompt = format!(
-            "{}\n\n{}: `{}`\n\n{}\n\n{}",
-            prompt_intro,
-            snapshot.path_label,
-            snapshot.path,
-            snapshot.content,
-            agent_report::prompt_section()
-        );
         let prompts = agent.prompt.entry(mode.into()).or_default();
-        if let Some(first_prompt) = prompts.first_mut() {
-            *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+        if let Some(completion_section) = completion_section {
+            let handoff_prompt = format!(
+                "{}\n\nThe TaskDocument prompt follows next. Do not start work until it arrives.",
+                completion_section
+            );
+            let snapshot_prompt = prepared_snapshot_prompt(
+                pre_snapshot_context,
+                prompt_intro,
+                snapshot.path_label,
+                snapshot.path,
+                snapshot.content,
+            );
+            if let Some(first_prompt) = prompts.first_mut() {
+                *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+            } else {
+                prompts.push(snapshot_prompt);
+            }
+            prompts.insert(0, handoff_prompt);
         } else {
-            prompts.push(snapshot_prompt);
+            let snapshot_prompt = format!(
+                "{}\n\n{}: `{}`\n\n{}\n\n{}",
+                prompt_intro,
+                snapshot.path_label,
+                snapshot.path,
+                snapshot.content,
+                agent_report::prompt_section()
+            );
+            if let Some(first_prompt) = prompts.first_mut() {
+                *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+            } else {
+                prompts.push(snapshot_prompt);
+            }
         }
     }
     config
+}
+
+fn prepared_snapshot_prompt(
+    pre_snapshot_context: Option<&str>,
+    prompt_intro: &str,
+    path_label: &str,
+    path: &str,
+    content: &str,
+) -> String {
+    let mut prompt = String::new();
+    if let Some(context) = pre_snapshot_context
+        .map(str::trim)
+        .filter(|context| !context.is_empty())
+    {
+        prompt.push_str(context);
+        prompt.push_str("\n\n");
+    }
+    prompt.push_str(&format!(
+        "{prompt_intro}\n\n{path_label}: `{path}`\n\n{}",
+        content.trim_end()
+    ));
+    prompt
+}
+
+pub(crate) fn materialize_provider_issue_branch(
+    ctx: &Ctx,
+    provider: &dyn IssueProvider,
+    identifier: &str,
+    title: &str,
+    suggested_branch: Option<&str>,
+    base_raw: Option<&Option<String>>,
+    prompt_policy: PromptPolicy,
+) -> Result<MaterializedIssueBranch> {
+    let naming = worktree_naming::generate(ctx, identifier, title, suggested_branch)?;
+    let provider_branch_base = if should_resolve_provider_branch_base(ctx, suggested_branch, None) {
+        match base_raw {
+            Some(base_raw) => {
+                if prompt_policy == PromptPolicy::Deny
+                    && matches!(
+                        BaseMode::from_raw(base_raw),
+                        BaseMode::Interactive | BaseMode::Default
+                    )
+                {
+                    bail!(
+                        "Base branch resolution is interactive; parallel batch workers cannot prompt"
+                    );
+                }
+                let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+                Some(resolve_base_branch(ctx, &git, base_raw)?)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let raw_id = identifier.trim_start_matches('#');
+    let ensured_branch = provider.ensure_branch(
+        raw_id,
+        provider_branch_base.as_deref(),
+        naming.as_ref().and_then(|n| n.branch.as_deref()),
+    )?;
+    if ensured_branch.name.trim().is_empty() {
+        bail!(
+            "Provider issue {identifier} did not resolve a branch name; refusing to write incomplete TaskDocument"
+        );
+    }
+    let provider_created_branch_base = if ensured_branch.created {
+        provider_branch_base
+    } else {
+        None
+    };
+
+    Ok(MaterializedIssueBranch {
+        branch_name: ensured_branch.name,
+        naming,
+        provider_created_branch_base,
+    })
 }
 
 fn resolve_base_branch(ctx: &Ctx, git: &GitService, base_raw: &Option<String>) -> Result<String> {
@@ -954,6 +1079,8 @@ mod tests {
             &snapshot,
             "issue",
             "Use this issue snapshot before changing code.",
+            None,
+            None,
         );
 
         let mut agent = config.agent.unwrap();
@@ -970,6 +1097,54 @@ mod tests {
                     .unwrap()
         );
         assert_eq!(prompts[1], "Then run verification.");
+    }
+
+    #[test]
+    fn prepared_completion_prompt_places_context_after_handoff_before_snapshot() {
+        let config = Config {
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: std::collections::HashMap::new(),
+            }),
+            ..Config::default()
+        };
+        let snapshot = IssueSnapshotContext {
+            path_label: "Task path",
+            path: ".local/tasks/add-schema.toml",
+            content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        };
+
+        let config = profile_config_with_issue_snapshot(
+            &config,
+            &snapshot,
+            "new",
+            "Use this task before changing code.",
+            Some("## Workflow Coordinator Handoff\n\nSend the report."),
+            Some("Workflow objective:\n\nShip the broader migration."),
+        );
+
+        let mut agent = config.agent.unwrap();
+        let prompts = agent.prompt.remove("new").unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
+        assert!(prompts[0].contains("TaskDocument prompt follows next"));
+        assert!(!prompts[0].contains("Workflow objective"));
+        assert!(
+            prompts[1].find("Workflow objective").unwrap()
+                < prompts[1]
+                    .find("Task path: `.local/tasks/add-schema.toml`")
+                    .unwrap()
+        );
+        assert!(
+            prompts[1].find("Workflow objective").unwrap()
+                < prompts[1].find("title = \"Add schema\"").unwrap()
+        );
     }
 
     #[test]
@@ -1001,6 +1176,8 @@ mod tests {
             &snapshot,
             "new",
             "Use this task before changing code.",
+            None,
+            None,
         );
 
         let mut agent = config.agent.unwrap();
@@ -1058,6 +1235,8 @@ mod tests {
                 mode: "issue",
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",
+                completion_section: None,
+                pre_snapshot_context: None,
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",
@@ -1124,6 +1303,8 @@ mod tests {
                 mode: "issue",
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",
+                completion_section: None,
+                pre_snapshot_context: None,
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",

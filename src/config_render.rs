@@ -1,7 +1,7 @@
 use crate::config::{
     AgentCli, AgentConfig, Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
-    ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig, WorkspaceConfig,
-    WorktreeConfig,
+    ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig, WorkflowConfig,
+    WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
 };
 
 pub fn render_effective_config(config: &Config) -> String {
@@ -9,6 +9,7 @@ pub fn render_effective_config(config: &Config) -> String {
 
     append_worktree_section(&mut s, &config.worktree);
     append_setup_section(&mut s, &config.setup);
+    append_workflow_section(&mut s, &config.workflow);
     if let Some(issues) = config.issues.as_ref() {
         append_issues_section(&mut s, issues);
     }
@@ -118,6 +119,25 @@ fn append_setup_section(s: &mut String, setup: &SetupConfig) {
             s.push_str(&format!("{} = {}\n", toml_key(key), toml_quote(value)));
         }
     }
+}
+
+fn append_workflow_section(s: &mut String, workflow: &WorkflowConfig) {
+    let pull_request = workflow
+        .pull_request
+        .unwrap_or(WorkflowDefaultPullRequestMode::None);
+    let landing = workflow
+        .landing
+        .unwrap_or(WorkflowDefaultLandingPolicy::Manual);
+
+    s.push_str("\n[workflow]\n");
+    s.push_str(&format!(
+        "pull_request = {}\n",
+        toml_quote(workflow_default_pull_request_name(pull_request))
+    ));
+    s.push_str(&format!(
+        "landing = {}\n",
+        toml_quote(workflow_default_landing_name(landing))
+    ));
 }
 
 fn append_issues_section(s: &mut String, issues: &IssuesConfig) {
@@ -284,6 +304,21 @@ fn site_provider_name(provider: &SiteProvider) -> &'static str {
         SiteProvider::Valet => "valet",
         SiteProvider::DockerProxy => "docker_proxy",
         SiteProvider::Traefik => "traefik",
+    }
+}
+
+fn workflow_default_pull_request_name(mode: WorkflowDefaultPullRequestMode) -> &'static str {
+    match mode {
+        WorkflowDefaultPullRequestMode::None => "none",
+        WorkflowDefaultPullRequestMode::Draft => "draft",
+        WorkflowDefaultPullRequestMode::Ready => "ready",
+    }
+}
+
+fn workflow_default_landing_name(policy: WorkflowDefaultLandingPolicy) -> &'static str {
+    match policy {
+        WorkflowDefaultLandingPolicy::Manual => "manual",
+        WorkflowDefaultLandingPolicy::Auto => "auto",
     }
 }
 

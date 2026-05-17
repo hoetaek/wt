@@ -1,8 +1,25 @@
-use crate::commands::{issue, task, task_run};
+use crate::commands::issue;
 use crate::context::Ctx;
 use crate::error::WtError;
+use crate::task;
+use crate::task_run;
 use anyhow::{Result, bail};
 use std::collections::HashSet;
+
+const TASK_RUN_COORDINATOR_HANDOFF_SECTION: &str = r#"## Task Run Coordinator Handoff
+
+Send the Agent Completion Report back to the coordinator cmux surface that started this task run:
+
+```bash
+cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
+{{coordinator_enter_command}}
+```
+
+This immediate TaskDocument run has no Workflow orchestration or pull-request handoff intent. When this task is complete and committed, do not open a pull request from the task agent; report `PR=none`.
+
+After sending the report, wait for the coordinator to review, land, and clean up the task run explicitly.
+
+If the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait."#;
 
 pub fn run(
     ctx: &Ctx,
@@ -76,6 +93,8 @@ fn run_selected_task(
                     .as_ref()
                     .map(|origin| origin.id.as_str()),
                 prompt_intro: "Use this task before changing code.",
+                completion_section: Some(TASK_RUN_COORDINATOR_HANDOFF_SECTION),
+                pre_snapshot_context: None,
                 workspace_label: None,
                 snapshot: issue::IssueSnapshotContext {
                     path_label: "Task path",
@@ -134,6 +153,8 @@ fn run_selected_task(
                 .as_ref()
                 .map(|origin| origin.id.as_str()),
             prompt_intro: "Use this task before changing code.",
+            completion_section: Some(TASK_RUN_COORDINATOR_HANDOFF_SECTION),
+            pre_snapshot_context: None,
             workspace_label: None,
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",
@@ -269,10 +290,14 @@ fn is_cancelled(err: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, IssueProviderType, IssuesConfig};
+    use crate::config::{
+        AgentCli, AgentConfig, Config, IssueProviderType, IssuesConfig, ReadyMode, SubmitMode,
+        WorkspaceConfig,
+    };
     use crate::context::mock::{CommandCall, MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
     use anyhow::Result;
+    use std::collections::HashMap;
     use std::path::Path;
     use std::sync::Arc;
 
@@ -415,6 +440,185 @@ mod tests {
         assert_eq!(runs[0].run.source, task_run::SOURCE_NEW);
         assert_eq!(runs[0].run.status, task_run::STATUS_RUNNING);
         assert_eq!(runs[0].run.branch, "add-schema");
+    }
+
+    #[test]
+    fn task_run_prompt_includes_rendered_coordinator_handoff() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("main", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:7","workspace_ref":"workspace:34","pane_ref":"pane:8","surface_ref":"surface:103"}}"#,
+            true,
+        );
+        runner.add_response("workspace:200 workspace:200", true);
+        runner.add_response("pane:1", true);
+        runner.add_response("pane:1", true);
+        runner.add_response("surface:999", true);
+        runner.add_response("", true);
+        runner.add_response("handoff prompt", true);
+        runner.add_response("task prompt ready", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config {
+                workspace: Some(WorkspaceConfig::default()),
+                agent: Some(AgentConfig {
+                    cli: AgentCli::None,
+                    args: Vec::new(),
+                    command: None,
+                    ready: ReadyMode::Auto,
+                    submit: SubmitMode::None,
+                    timeout: 1,
+                    send_after: 0,
+                    prompt: HashMap::from([("new".into(), vec!["Existing prompt".into()])]),
+                }),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, &["add-schema".into()], &None, None, false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let send_calls = calls
+            .iter()
+            .filter(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|arg| arg == "send"))
+            .collect::<Vec<_>>();
+        assert_eq!(send_calls.len(), 2);
+
+        let handoff_prompt = send_calls[0].1.last().unwrap();
+        assert!(handoff_prompt.contains("## Task Run Coordinator Handoff"));
+        assert!(
+            handoff_prompt.find("cmux send --workspace").unwrap()
+                < handoff_prompt
+                    .find("This immediate TaskDocument run")
+                    .unwrap()
+        );
+        assert!(handoff_prompt.contains("cmux send --workspace workspace:34 --surface surface:103 \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
+        assert!(
+            handoff_prompt
+                .contains("cmux send-key --workspace workspace:34 --surface surface:103 enter")
+        );
+        assert!(handoff_prompt.contains("If the coordinator cmux target is unavailable or stale"));
+        assert!(!handoff_prompt.contains("Task path: `.local/tasks/add-schema.toml`"));
+        assert!(!handoff_prompt.contains("Create the schema first."));
+        assert!(!handoff_prompt.contains("wt workflow complete"));
+
+        let task_prompt = send_calls[1].1.last().unwrap();
+        assert!(task_prompt.contains("Task path: `.local/tasks/add-schema.toml`"));
+        assert!(task_prompt.contains("Create the schema first."));
+        assert!(task_prompt.contains("Existing prompt"));
+    }
+
+    #[test]
+    fn task_run_records_failed_when_agent_prompt_delivery_fails() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("main", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:7","workspace_ref":"workspace:34","pane_ref":"pane:8","surface_ref":"surface:103"}}"#,
+            true,
+        );
+        runner.add_response("workspace:200 workspace:200", true);
+        runner.add_response("pane:1", true);
+        runner.add_response("pane:1", true);
+        runner.add_response("surface:999", true);
+        runner.add_response("", true);
+        runner.add_response("same screen", true);
+        runner.add_response("same screen", true);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config {
+                workspace: Some(WorkspaceConfig::default()),
+                agent: Some(AgentConfig {
+                    cli: AgentCli::None,
+                    args: Vec::new(),
+                    command: None,
+                    ready: ReadyMode::Auto,
+                    submit: SubmitMode::None,
+                    timeout: 1,
+                    send_after: 0,
+                    prompt: HashMap::from([("new".into(), vec!["Existing prompt".into()])]),
+                }),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        let err = run(&ctx, &["add-schema".into()], &None, None, false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Agent prompt 2/2 failed"));
+        assert!(err.contains("unchanged screen"));
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run.status, task_run::STATUS_FAILED);
+        assert!(
+            runs[0]
+                .run
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Agent prompt 2/2 failed")
+        );
     }
 
     #[test]

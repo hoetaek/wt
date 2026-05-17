@@ -1,6 +1,6 @@
 use crate::commands::issue;
 use crate::context::{Ctx, PromptItem};
-use crate::services::issues::IssueListItem;
+use crate::services::issues::{IssueListItem, IssueProvider};
 use anyhow::{Result, bail};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -11,6 +11,14 @@ pub(crate) struct SelectedIssue {
 
 pub(crate) fn select_issues(ctx: &Ctx, prompt: &str) -> Result<Vec<SelectedIssue>> {
     let provider = issue::build_provider(ctx)?;
+    select_issues_with_provider(ctx, prompt, provider.as_ref())
+}
+
+pub(crate) fn select_issues_with_provider(
+    ctx: &Ctx,
+    prompt: &str,
+    provider: &dyn IssueProvider,
+) -> Result<Vec<SelectedIssue>> {
     let issues = provider.list_issues()?;
     if issues.is_empty() {
         bail!("No issues found");

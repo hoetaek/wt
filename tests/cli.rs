@@ -47,6 +47,40 @@ fn git_init(path: &Path) {
     assert!(status.success());
 }
 
+fn git_commit(path: &Path) {
+    std::fs::write(path.join("README.md"), "sample\n").unwrap();
+    let status = git_command()
+        .args(["add", "README.md"])
+        .current_dir(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let status = git_command()
+        .args([
+            "-c",
+            "user.name=wt test",
+            "-c",
+            "user.email=wt@example.com",
+            "commit",
+            "-m",
+            "initial",
+        ])
+        .current_dir(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+fn current_branch(path: &Path) -> String {
+    let output = git_command()
+        .args(["branch", "--show-current"])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
 #[test]
 fn version_flag_prints_package_version() {
     wt_command()
@@ -88,7 +122,8 @@ fn no_args_prints_help_successfully() {
         .stdout(predicate::str::contains("Usage: wt [OPTIONS] [COMMAND]"))
         .stdout(predicate::str::contains("issue"))
         .stdout(predicate::str::contains("pr"))
-        .stdout(predicate::str::contains("new"));
+        .stdout(predicate::str::contains("new"))
+        .stdout(predicate::str::contains("agent"));
 }
 
 #[test]
@@ -135,8 +170,43 @@ fn task_run_help_explains_task_execution() {
         .success()
         .stdout(predicate::str::contains("one worktree per selected"))
         .stdout(predicate::str::contains("source = \"new\" TaskRun"))
+        .stdout(predicate::str::contains("Task Run Coordinator Handoff"))
+        .stdout(predicate::str::contains("Task-run agents report PR=none"))
         .stdout(predicate::str::contains("wt workflow task --mode batch"))
         .stdout(predicate::str::contains("wt workflow task --mode single"));
+}
+
+#[test]
+fn task_help_lists_import_run_and_publish() {
+    wt_command()
+        .args(["task", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("import"))
+        .stdout(predicate::str::contains("run"))
+        .stdout(predicate::str::contains("publish"));
+}
+
+#[test]
+fn task_import_help_explains_behavior() {
+    wt_command()
+        .args(["task", "import", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Import existing provider issues"))
+        .stdout(predicate::str::contains(
+            ".local/tasks/<safe-issue-id>.toml",
+        ))
+        .stdout(predicate::str::contains(
+            "write title, branch, body, and [origin]",
+        ))
+        .stdout(predicate::str::contains("does not start workspaces"))
+        .stdout(predicate::str::contains("create local branches"))
+        .stdout(predicate::str::contains("create TaskRuns"))
+        .stdout(predicate::str::contains("gh issue develop"))
+        .stdout(predicate::str::contains("Omit issue ids"))
+        .stdout(predicate::str::contains("duplicate issue ids"))
+        .stdout(predicate::str::contains("existing local TaskDocument"));
 }
 
 #[test]
@@ -170,38 +240,143 @@ fn workflow_run_help_explains_omitted_target_selection() {
 }
 
 #[test]
-fn legacy_batch_command_fails_with_workflow_guidance() {
+fn workflow_prepare_help_uses_pr_mode() {
     wt_command()
-        .args(["batch", "run"])
+        .args(["workflow", "task", "--help"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("wt batch has been replaced"))
-        .stderr(predicate::str::contains("wt workflow --mode batch"));
+        .success()
+        .stdout(predicate::str::contains("--pr <none|draft|ready>"))
+        .stdout(predicate::str::contains("[workflow].pull_request"))
+        .stdout(predicate::str::contains(format!("workflow.{}", "defaults")).not())
+        .stdout(predicate::str::contains("--pull-request").not());
+
+    wt_command()
+        .args(["workflow", "issue", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--pr <none|draft|ready>"))
+        .stdout(predicate::str::contains("[workflow].pull_request"))
+        .stdout(predicate::str::contains(format!("workflow.{}", "defaults")).not())
+        .stdout(predicate::str::contains("--pull-request").not());
 }
 
 #[test]
-fn legacy_stack_command_fails_with_workflow_guidance() {
+fn workflow_prepare_accepts_pr_on_non_stack_modes() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
     wt_command()
-        .args(["stack", "run"])
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "task",
+            "--mode",
+            "single",
+            "--pr",
+            "draft",
+            "workflow-docs",
+            "--base",
+            "main",
+        ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("wt stack has been replaced"))
-        .stderr(predicate::str::contains("wt workflow --mode stack"));
+        .success()
+        .stdout(predicate::str::contains("Prepared workflow:"));
+
+    let workflows = std::fs::read_dir(temp.path().join(".local/workflows"))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(workflows.len(), 1);
+    let content = std::fs::read_to_string(workflows[0].path()).unwrap();
+    assert!(content.contains("pull_request = \"draft\""));
 }
 
 #[test]
-fn status_help_explains_polling_target() {
+fn agent_status_help_explains_polling_target() {
     wt_command()
-        .args(["status", "--help"])
+        .args(["agent", "status", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("task agent"))
-        .stdout(predicate::str::contains("<TARGET>"))
+        .stdout(predicate::str::contains("[TARGET]"))
         .stdout(predicate::str::contains(
             "Branch, worktree path/name, or TaskRun id",
         ))
+        .stdout(predicate::str::contains(
+            "Omit TARGET in an interactive terminal",
+        ))
         .stdout(predicate::str::contains("read-only"))
         .stdout(predicate::str::contains("cmux hooks codex install --yes"));
+}
+
+#[test]
+fn agent_watch_help_explains_polling_target() {
+    wt_command()
+        .args(["agent", "watch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("task agent"))
+        .stdout(predicate::str::contains("[TARGET]"))
+        .stdout(predicate::str::contains("--interval"))
+        .stdout(predicate::str::contains("--timeout"))
+        .stdout(predicate::str::contains("--heartbeat"))
+        .stdout(predicate::str::contains("unchanged running observations"))
+        .stdout(predicate::str::contains(
+            "Omit TARGET in an interactive terminal",
+        ));
+}
+
+#[test]
+fn inspect_help_explains_optional_target_selection() {
+    wt_command()
+        .args(["inspect", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("read-only work dossier"))
+        .stdout(predicate::str::contains("[TARGET]"))
+        .stdout(predicate::str::contains(
+            "Branch, worktree path/name, or TaskRun id",
+        ))
+        .stdout(predicate::str::contains(
+            "Omit TARGET in an interactive terminal",
+        ));
+}
+
+#[test]
+fn inspect_without_target_noninteractive_requires_explicit_target() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "inspect"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt inspect requires TARGET"))
+        .stderr(predicate::str::contains(
+            "branch, worktree path/name, or TaskRun id",
+        ));
+}
+
+#[test]
+fn inspect_explicit_branch_prints_dossier_without_cmux_contact() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let branch = current_branch(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "inspect", &branch])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("Inspect: {branch}")))
+        .stdout(predicate::str::contains("Work"))
+        .stdout(predicate::str::contains("Git"))
+        .stdout(predicate::str::contains("Agent"))
+        .stdout(predicate::str::contains("Cmux"))
+        .stdout(predicate::str::contains("Expected report"))
+        .stdout(predicate::str::contains("PR=<pr>"))
+        .stderr(predicate::str::contains("Cmux:"));
 }
 
 #[test]
@@ -298,7 +473,11 @@ fn init_dry_run_previews_plan_without_writing_config() {
         .stdout(predicate::str::contains("setup: npm install"))
         .stdout(predicate::str::contains("test: npm test"))
         .stdout(predicate::str::contains("[setup]"))
-        .stdout(predicate::str::contains("[test]"));
+        .stdout(predicate::str::contains("[test]"))
+        .stdout(predicate::str::contains("# [workflow]"))
+        .stdout(predicate::str::contains("# pull_request = \"none\""))
+        .stdout(predicate::str::contains("# landing = \"manual\""))
+        .stdout(predicate::str::contains("\n    [workflow]\n").not());
 
     assert!(!temp.path().join(".wt.toml").exists());
     assert!(!temp.path().join(".local/.wt.toml").exists());
@@ -378,7 +557,7 @@ fn json_output_uses_machine_readable_surface_without_status_decoration() {
 }
 
 #[test]
-fn status_supports_json_global_flag() {
+fn agent_status_supports_json_global_flag() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -387,6 +566,7 @@ fn status_supports_json_global_flag() {
             "-C",
             temp.path().to_str().unwrap(),
             "--json",
+            "agent",
             "status",
             "missing",
         ])
@@ -395,6 +575,21 @@ fn status_supports_json_global_flag() {
         .stdout("")
         .stderr(predicate::str::contains("Work target not found: missing"))
         .stderr(predicate::str::contains("JSON output is supported").not());
+}
+
+#[test]
+fn agent_status_without_target_noninteractive_requires_guidance() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "agent", "status"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt agent status requires TARGET"))
+        .stderr(predicate::str::contains("wt agent status <target>"))
+        .stderr(predicate::str::contains("wt agent watch <target>"))
+        .stderr(predicate::str::contains("wt inspect [<target>]"));
 }
 
 #[test]
@@ -545,6 +740,10 @@ link = ["storage"]
 APP_ENV = "local"
 LOG_LEVEL = "info"
 
+[workflow]
+pull_request = "draft"
+landing = "auto"
+
 [agent]
 cli = "codex"
 args = ["--model", "gpt-5.5"]
@@ -661,6 +860,15 @@ CODEX_MODE = "1"
     assert_eq!(config.setup.env.get("LOG_LEVEL").unwrap(), "debug");
     assert_eq!(config.setup.env.get("PRIVATE_TOKEN").unwrap(), "secret");
     assert_eq!(config.setup.env.get("CODEX_MODE").unwrap(), "1");
+    let policy = config.workflow_default_policy();
+    assert_eq!(
+        policy.pull_request,
+        wt::config::WorkflowDefaultPullRequestMode::Draft
+    );
+    assert_eq!(
+        policy.landing,
+        wt::config::WorkflowDefaultLandingPolicy::Auto
+    );
 
     let agent = config.agent.unwrap();
     assert_eq!(agent.cli, wt::config::AgentCli::Codex);
@@ -690,6 +898,20 @@ CODEX_MODE = "1"
             .iter()
             .any(|entry| { entry.from == ".local/profiles/codex/scaffold" && entry.to == "." })
     );
+}
+
+#[test]
+fn config_renders_builtin_workflow_defaults() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[workflow]"))
+        .stdout(predicate::str::contains("pull_request = \"none\""))
+        .stdout(predicate::str::contains("landing = \"manual\""));
 }
 
 #[test]

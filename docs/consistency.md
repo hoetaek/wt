@@ -50,15 +50,17 @@ Workflow는 정확히 하나의 `mode = "single" | "batch" | "stack"` 값을 가
 TaskDocument를 실행하고, `batch`는 같은 base에서 여러 독립 branch를 실행하며,
 `stack`은 task branch들을 정해진 parent chain으로 순서대로 실행한다.
 
-`batch`와 `stack`은 workflow mode 값으로 남지만 top-level 상태 파일 noun이 아니다.
-새 상태 파일은 `.local/workflows` 아래에만 만들고, `.local/batches`와
-`.local/stacks`는 migration context 또는 old readable state로만 다룬다. `wt batch`나
-`wt stack`을 `wt workflow`의 compatibility alias로 남겨 두면 두 command surface가 모두
-canonical처럼 보이므로, migration 시에는 명시적으로 실패하거나 제거한다.
+`batch`와 `stack`은 workflow mode 값으로 남지만 top-level 상태 파일 noun이나 command
+namespace가 아니다. 새 상태 파일은 `.local/workflows` 아래에만 만들고, batch/stack
+전용 상태 디렉터리는 새 코드가 읽거나 쓰는 상태 위치가 아니다. 별도 top-level command
+surface를 `wt workflow` 옆에 남기면 두 command surface가 모두 canonical처럼 보이므로
+새 CLI parser와 dispatch는 canonical `wt workflow`만 노출한다.
 
-Workflow file은 mode, base, profile, color, timestamps, task/run link 같은
-orchestration만 저장한다. Task branch name의 source of truth는 항상
-TaskDocument의 `branch`다. Workflow task row는 branch 이름을 복사해 저장하지 않는다.
+Workflow file은 optional `objective`, mode, base, profile, color, timestamps,
+workflow-level policy, task/run link 같은 prepared-plan context와 orchestration만
+저장한다. `objective`는 workflow가 완수하려는 더 큰 목표를 설명하는 human context이며
+실행 상태가 아니다. Task branch name의 source of truth는 항상 TaskDocument의 `branch`다.
+Workflow task row는 branch 이름을 복사해 저장하지 않는다.
 
 Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 묶는 표시다. 색상이
 생략되면 `wt`가 내장 cmux named-color palette의 다음 색을 고르고 workflow file에
@@ -191,6 +193,26 @@ profile convention file merge를 모두 끝낸 뒤 최종 effective config에서
 TaskDocument는 작업이 무엇인지를 담는 정의다. `.local/tasks/<task>.toml`
 아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
 
+TaskDocument import는 configured issue provider의 기존 issue를 local task 정의로
+가져오는 side effect다. Canonical command shape는 `wt task import` 또는
+`wt task import <issue>...`다. Bare `wt task import`는 provider issue를
+multi-select로 고르게 하고, 명시 issue id는 scriptable path로 남긴다. `import`는
+`.local/tasks/<safe-issue-id>.toml`에 title, branch, body, `[origin]`을 기록한다.
+이때 branch는 `wt issue <issue>`가 사용할 provider issue branch와 같은 값이어야 하며,
+필요하면 provider branch를 먼저 materialize한다. GitHub에서는 linked branch가 없을 때
+`gh issue develop`을 호출할 수 있다. Import는 provider branch materialization 외에는
+worktree, local branch, TaskRun, Workflow, pull request, agent setup을 만들지 않는다.
+Provider가 branch를 공급하거나 materialize할 수 없으면 branch가 빈 TaskDocument를 쓰지
+말고 실패해야 한다. `[origin]`은 provider issue와의 durable link이지, 자동 동기화 계약이
+아니다.
+
+Import ambiguity는 local TaskDocument write 전에 실패해야 한다. Configured issue
+provider가 없으면 실패한다. 같은 invocation 안의 duplicate issue id는 실패한다. Provider
+조회 뒤 canonical issue id가 같은 task key로 수렴하는 경우도 실패한다. Import 대상
+`.local/tasks/<safe-issue-id>.toml`이 이미 있으면 local edits를 보존하기 위해 실패하고,
+조용히 덮어쓰거나 merge하지 않는다. Replace/update가 필요하다면 별도의 명시 옵션과
+help/test/documentation이 먼저 필요하다.
+
 TaskDocument publish는 local task 정의를 configured issue provider의 issue로 만드는
 side effect다. Canonical command shape는 `wt task publish` 또는
 `wt task publish <task>...`다. Bare `wt task publish`는 아직 `[origin]`이 없는 local
@@ -201,9 +223,9 @@ TaskDocument를 multi-select로 고르게 하고, 명시 task key는 scriptable 
 publish해야 한다는 pending request가 아니다.
 
 `wt issue`는 이미 존재하는 provider issue에서 worktree를 시작하는 명령으로 남긴다.
-Local TaskDocument를 provider issue로 만드는 흐름을 `wt issue create`, `import`,
-`sync` 같은 이름으로 추가하지 않는다. `import`는 provider issue를 TaskDocument로
-가져오는 방향이고, `publish`는 TaskDocument를 provider issue로 내보내는 방향이다.
+Provider issue를 TaskDocument로 가져오는 흐름은 `wt task import`, Local TaskDocument를
+provider issue로 만드는 흐름은 `wt task publish`다. `wt issue import`, `wt issue create`,
+`sync`, `pull`, `push`, `export` 같은 이름을 같은 개념의 alias로 추가하지 않는다.
 
 Publish는 TaskDocument의 schema를 넓히지 않는다. TaskDocument에는 계속 title, branch,
 body, optional origin만 둔다. TaskRun, workflow, profile, retry status, pending
@@ -231,28 +253,109 @@ plan이어야 하고, TaskDocument에 pending state를 저장해서 dry-run 결�
 보여줘야 한다. Worktree 시작, TaskRun 생성, workflow 실행, branch landing처럼 다른
 lifecycle을 publish 도움말에 섞지 않는다.
 
+`wt task import --help`는 import가 provider issue에서 TaskDocument로 향하는
+non-executing 흐름임을 그대로 설명해야 한다. 즉 explicit issue id와 bare provider issue
+selector를 모두 지원한다는 점, title/branch/body/`[origin]`을 기록한다는 점, provider
+branch materialization은 할 수 있지만 worktree/local branch/TaskRun/Workflow/PR/agent
+setup은 만들지 않는다는 점, duplicate ids나 existing TaskDocument collision에서
+실패한다는 점, branch를 materialize할 수 없으면 incomplete TaskDocument를 쓰지 않고
+실패한다는 점을 보여줘야 한다.
+
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
 task, branch, status, source, group, error, creation_order, created_at,
 updated_at을 저장한다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
 초 단위 timestamp 우연성에 기대지 않도록 새 TaskRun마다 증가하는 실행 생성 순서다.
-`creation_order`가 없는 legacy TaskRun은 계속 읽되 ordered TaskRun보다 앞에 정렬하고,
-legacy끼리는 `created_at`과 id를 fallback으로 쓴다.
+`creation_order`가 없는 previous TaskRun은 계속 읽되 ordered TaskRun보다 앞에 정렬하고,
+previous끼리는 `created_at`과 id를 fallback으로 쓴다.
 status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이다. 알 수 없는
 status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서 실패시킨다.
 
 통합 실행 상태 모델은 TaskDocument, Workflow, TaskRun의 책임을 나누는 데서 시작한다.
-TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, Workflow는 그 task set을
-어떤 실행 shape로 이어갈지에 대한 저장된 계획이며, TaskRun은 TaskDocument 하나를 한 번
-실행한 기록이다.
+TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, Workflow는 optional
+`objective`와 그 task set을 어떤 실행 shape로 이어갈지에 대한 저장된 계획이며,
+TaskRun은 TaskDocument 하나를 한 번 실행한 기록이다.
 
 Workflow 준비는 `.local/workflows/<id>.toml` 하나와 각 task의 TaskDocument/TaskRun link를
 만든다. Workflow의 canonical task 목록은 `[[tasks]]`이고, 각 row는 task key, linked
-TaskRun id, stack-mode parent, pull request handoff intent처럼 orchestration에 필요한
-link와 실행 지시만 저장한다. Workflow row는 status/error를 따로 가지지 않고, branch
-이름도 복사하지 않는다. 실행 인스턴스의 canonical 기록은 TaskRun이고, branch name의
-canonical 기록은 TaskDocument다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을
-가리키는 다른 이름은 받지 않는다.
+TaskRun id, stack-mode parent처럼 orchestration에 필요한 link와 실행 지시만 저장한다.
+Workflow row는 status/error를 따로 가지지 않고, branch 이름도 복사하지 않는다. 실행
+인스턴스의 canonical 기록은 TaskRun이고, branch name의 canonical 기록은 TaskDocument다.
+`objective`는 workflow-level field로만 저장하고 TaskDocument `body`나 row-level field로
+복사하지 않는다. `body`, `description`, `goal_task`, `parent_task`, `subtasks`,
+`[[issues]]`, `[[items]]`처럼 같은 상태나 목표를 가리키는 다른 이름은 받지 않는다.
 
+Workflow preparation accepts `--pr <none|draft|ready>` as a one-run override for
+pull-request handoff intent. Omitted `--pr` means use the effective `[workflow]`
+config. `--pr none` means agents report `PR=none`, `--pr draft` means agents open draft
+pull requests and leave them draft, and `--pr ready` means agents open pull requests that
+are ready for review immediately. Boolean `--pull-request` and boolean
+`pull_request = true/false` are not canonical workflow surfaces.
+
+Workflow policy is a preparation preference in `.wt.toml`, while a Workflow file is the
+prepared execution plan for one run. Preparing a workflow reads the effective config
+from `.wt.toml` plus `.local/.wt.toml`, applies any explicit command-line override, and
+writes the resulting policy snapshot into `.local/workflows/<id>.toml`. Later edits to
+`.wt.toml` do not reinterpret already prepared workflows.
+
+Canonical config shape:
+
+```toml
+[workflow]
+pull_request = "none"  # none | draft | ready
+landing = "manual"     # manual | auto
+```
+
+`pull_request` is the default pull-request handoff intent for workflow tasks. `none`
+means agents report `PR=none` and do not create pull requests. `draft` means agents open
+draft pull requests and leave them draft. `ready` means agents open pull requests that
+are ready for review immediately. `ready` is the canonical name; `open`, `review`,
+boolean `true`, and boolean `false` are not aliases.
+
+`landing` is the coordinator preference after review passes. Review is always part of
+the coordinator flow, and config cannot disable review. `manual` means review completes
+and the coordinator stops before merge or cleanup until the user explicitly directs
+landing. `auto` means review passing is enough approval for the coordinator to proceed
+to landing and cleanup. `auto` does not bypass dirty-worktree checks, configured check
+commands, required pull-request checks, unresolved review threads, branch ancestry
+checks, workflow mode ordering, or any other landing safety gate.
+
+The Workflow file stores the effective policy snapshot once at workflow level:
+
+```toml
+[policy]
+pull_request = "none"
+landing = "manual"
+```
+
+Workflow policy is intent, not state: actual pull-request review result, merge status,
+ancestry proof, worktree cleanup, branch deletion, TaskRun lifecycle status, and
+TaskDocument cleanup remain outside Workflow policy. `wt inspect`, pull-request state,
+Git commands, workflow completion, and `wt done` continue to own those checks and
+transitions explicitly.
+
+The built-in config defaults are `pull_request = "none"` and `landing = "manual"`.
+Explicit workflow preparation flags override the config for one run while keeping the
+same value names and failing early for conflicting forms instead of introducing aliases.
+`wt config` shows the effective `[workflow]` policy, including built-in defaults, so
+scripts and humans can inspect the actual policy that new workflow preparation will use.
+`wt init` may include a commented optional `[workflow]` block for discoverability, but
+generated config must not actively enable pull-request creation or automatic landing by
+default. `wt workflow show` displays the prepared policy snapshot from the workflow file,
+not the current `.wt.toml` value.
+
+This model changes both `.wt.toml` config shape and `.local/workflows` state shape, so
+implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Adding
+workflow `objective` also changes the `.local/workflows` state shape and
+`wt workflow task` / `wt workflow issue` preparation surface, so it belongs in the same
+pre-1.0 minor model-change category. Ordinary development commits still do not bump
+`Cargo.toml`; the release branch owns the eventual version bump.
+
+`wt workflow task --objective <text>`와 `wt workflow issue --objective <text>`는 저장된
+Workflow의 더 큰 목표를 `.local/workflows/<id>.toml`의 top-level `objective`로 기록한다.
+이 값은 `wt workflow show`와 workflow-started agent prompt에 context로 나타나지만,
+runnable selection, TaskRun lifecycle, landing policy, cleanup behavior를 바꾸지 않는다.
+Prompt에서는 coordinator handoff가 먼저 전달되고, objective는 그 뒤 TaskDocument snapshot
+근처에 배치된다.
 Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
 두 번째 task source를 만들지 않는다.
@@ -260,9 +363,8 @@ Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-sele
 `.local/workflows`는 `.local/batches`와 `.local/stacks`를 대체한다. 이유는 batch와 stack이
 저장소 noun이 아니라 하나의 Workflow 안에서 고르는 execution mode이기 때문이다. 새
 기능이 `.local/batches`나 `.local/stacks`에 상태를 계속 추가하면 사용자는 같은 준비 작업을
-workflow, batch file, stack file 중 무엇으로 읽어야 하는지 다시 배워야 한다. 기존 old
-state를 읽는 기간이 필요하더라도 migration context로만 설명하고, 새 canonical state는
-Workflow file 하나로 수렴시킨다.
+workflow, batch file, stack file 중 무엇으로 읽어야 하는지 다시 배워야 한다. 새 canonical
+state는 Workflow file 하나로 수렴시킨다.
 
 `single` mode workflow는 하나의 branch workspace에서 하나 이상의 TaskDocument를 실행한다.
 `batch` mode workflow는 같은 base에서 여러 TaskDocument를 독립 branch로 실행한다. Batch
@@ -283,12 +385,42 @@ Workspace label은 저장 상태가 아니라 현재 실행을 찾기 위한 표
 이름에는 `batch`나 `stack` 같은 mode label을 섞지 않는다. `B`/`S` prefix는 workflow
 contract에 포함하지 않는다.
 
-Stack-mode handoff intent는 workflow task row에 저장할 수 있다. `pull_request = true`면
-작업 agent가 branch를 push하고 stack parent branch를 base로 draft pull request를 열어야
-한다. `pull_request = false`면 pull request를 열지 않고 `PR=none`으로 보고한다. 이것은 PR
-자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은 transport일
-뿐 상태 전이가 아니다. 실행자나 coordinator가 `wt review`, 필요한 경우 pull request, 보고를
-확인한 뒤 workflow completion command를 실행할 때 TaskRun 상태가 전이된다.
+`wt task run` coordinator handoff는 즉시 TaskDocument 실행 handoff다. `wt task run`이
+시작하는 prompt에는 `Task Run Coordinator Handoff` section이 포함되고, 현재 coordinator
+cmux workspace/surface 좌표로 렌더링되는 `cmux send`와 `cmux send-key ... enter` 명령이
+들어간다. 이것은 Workflow orchestration이나 completion command가 아니다. Task-run agent는
+`PR=none`인 `Agent Completion Report`를 coordinator에게 보내고, coordinator가 review,
+landing, cleanup을 명시적으로 처리할 때까지 기다린다. 좌표는 현재 transport 정보일 뿐이므로
+TaskDocument나 TaskRun에 저장하지 않는다. 좌표가 unavailable 또는 stale이면 agent는 같은
+보고를 task session에 남기고 기다린다. Handoff section과 그 안의 `cmux send`/enter 명령은
+긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서 terminal prompt가 축약되어도
+coordinator 좌표가 앞쪽에 남게 한다.
+
+Workflow coordinator handoff는 `stack` 전용 개념이 아니라 `wt workflow run`이 시작하는
+모든 task prompt의 계약이다. Prompt에는 `Workflow Coordinator Handoff` section이 포함되고,
+현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
+`cmux send-key ... enter` 명령이 들어간다. 이 좌표는 현재 transport 정보일 뿐이므로
+Workflow file, TaskRun, TaskDocument에 저장하지 않는다. 좌표가 unavailable 또는 stale이면
+agent는 같은 `Agent Completion Report`를 task session에 남기고 기다린다. Handoff section과
+그 안의 `cmux send`/enter 명령은 긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서
+terminal prompt가 축약되어도 coordinator 좌표가 앞쪽에 남게 한다.
+
+보고 형식은 workflow mode와 무관하게
+`Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>`
+이다. `PR` 값은 workflow file의 prepared policy를 따른다. `pull_request = "none"`이면
+pull request를 열지 않고 `PR=none`으로 보고한다. `"draft"`는 작업 agent가 branch를
+push하고 준비된 workflow base 또는 parent branch를 base로 draft pull request를 열어 draft로
+남긴다는 뜻이다. `"ready"`는 draft를 만들었다가 전환하지 않고 바로 review-ready pull request를
+연다는 뜻이다. PR을 여는 workflow task는 `.github/pull_request_template.md`에서
+`<pr-body-file>`을 만들고 summary, context, changes, validation, risks/follow-ups 중심의
+review-focused 본문을 채운 뒤 `gh pr create --body-file <pr-body-file>` 경로로 PR을 생성한다.
+Agent Completion Report는 coordinator transport/report 형식이며 PR 본문으로 복사하지 않는다.
+이것은 PR 자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은
+transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow에 포함된다. Codex/GitHub
+review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한 check를 다시 돌린 뒤
+commit/push하고 PR 본문이 stale해졌을 때만 PR 본문과 Agent Completion Report를 갱신한다.
+실행자나 coordinator가 `wt inspect`, 필요한 경우 pull request, 보고를 확인한 뒤 workflow
+completion command를 실행할 때 TaskRun 상태가 전이된다.
 
 `wt done`은 worktree와 local branch cleanup 명령이다. `done`은 cleanup 신호이고,
 workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch commit을 `master` 같은
@@ -304,32 +436,90 @@ Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work
 `wt task clean`, `wt run clean`, `wt workflow clean` 같은 명령을 만들더라도 `done`이나
 `complete`에 merge나 task definition 삭제 의미를 섞지 않는다.
 
-`wt review`는 상태 전이 명령이 아니다. branch, worktree, TaskRun을 읽어서 parent,
-dirty 상태, commit/diff 정보, agent 완료 보고 기대치를 보여주는 점검 명령이다. cmux
-workspace/surface 정보도 저장된 실행 상태가 아니라 현재 세션에서 발견한 transport
-좌표로만 보여준다. 실제 완료 기록은 `wt done` 또는 workflow completion command처럼
-source별 completion 명령이 맡는다.
+`wt inspect [<target>]`는 branch, worktree, TaskRun을 읽어서 parent, dirty 상태,
+commit/diff 정보, Agent Completion Report 기대치, 현재 cmux contact를 보여주는 canonical
+read-only dossier다. Agent observation snapshot을 같이 보여줄 수 있지만, `inspect`의 exit
+code는 command 자체의 성공/실패만 뜻한다. 관찰된 agent가 `needs_input`이거나 `failed`여도
+그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. 실제 완료 기록은 source별 명령이
+맡는다. `source = "new"`와 `source = "batch"` TaskRun은 landing/cleanup 안전 확인 뒤
+`wt done`이 정리하고, `source = "stack"` TaskRun은 stack-mode workflow completion command가
+전이한다.
 
-`wt send`도 상태 전이 명령이 아니다. `wt review`와 같은 target 해석으로 현재 cmux
+`wt inspect`에서 `<target>` 생략은 interactive TTY human mode에서 inspectable work target
+selector를 여는 기본 동작이다. `--json`, `--quiet`, 또는 non-TTY automation에서는 selector를
+열지 않고 explicit `<target>`을 요구해야 한다. 실패 메시지는 branch, worktree path/name,
+TaskRun id 중 하나를 넘기거나 interactive TTY에서 selector를 열라는 guidance를 정확히
+보여줘야 한다.
+
+`wt send`도 상태 전이 명령이 아니다. `wt inspect`와 같은 target 해석으로 현재 cmux
 surface를 찾아 메시지를 보내는 transport 명령이다. 메시지를 보냈다는 사실을 TaskRun
 상태로 저장하지 않고, 완료 여부는 여전히 TaskRun status와 workflow completion command로만
 표현한다.
 
-`wt status <target>`도 상태 전이 명령이 아니다. `target`은 `wt review`와 `wt send`가
-받는 branch, worktree path/name, TaskRun id와 같은 work selector다. 이 명령은 현재
-cmux workspace/surface와 agent 화면/이벤트를 관찰해서 agent-friendly JSON 상태를
-돌려주며, TaskRun status나 provider issue status를 쓰지 않는다. JSON 필드는 current
-observation contract이므로 `status`, `agent`, cmux id/ref, 마지막 tool/session/event,
-warnings/meta처럼 agent가 polling할 수 있는 값을 안정적인 snake_case 이름으로 노출한다.
-사람용 출력은 같은 관찰 결과를 얇게 읽기 좋게 보여주는 layer일 뿐 별도 의미를 만들지
-않는다. cmux 자체를 사용할 수 없으면 성공한 `no_session`처럼 보이지 않도록 실패한다.
-Agent별 상태 신호 준비도는 `status`가 고치는 대상이 아니라 관찰의 신뢰도 조건이다.
-Claude Code는 cmux의 Claude 통합에서 status/sidebar 신호가 나오고, Codex는 사용자가
-`cmux hooks codex install --yes`를 명시적으로 실행한 뒤에야 `agent.hook.*`와
-`set_status codex Running/Idle` 신호가 나온다. Codex hook이 없으면 `wt status`는
-화면 텍스트 fallback을 쓸 수 있지만 약한 관찰이라는 warning을 남겨야 한다.
-`wt doctor`는 이 준비도를 보고만 하고, 일반 wt 명령이 전역 Codex hook을 자동 설치하거나
-사용자 agent config를 몰래 수정하면 안 된다.
+`wt agent status [<target>]`는 현재 agent/cmux observation surface다. `target`은
+`wt inspect`와 `wt send`가 받는 branch, worktree path/name, TaskRun id와 같은 work selector다.
+이 명령은 현재 cmux workspace/surface와 agent 화면/status/event를 관찰해서 agent-friendly
+text/JSON 상태를 돌려주며, TaskRun status나 provider issue status를 쓰지 않는다. Text 출력은
+target, branch, TaskRun lifecycle status, agent kind/state, cmux contact, 마지막
+tool/session/event, warning을 compact하게 보여준다. JSON에는 top-level `status`를 만들지
+않고 `task_run.status`와 `agent.state` 또는 `agent.status`를 서로 다른 nested field로 둔다.
+`TaskRun.status`는 durable execution lifecycle이고, `agent.state`/`agent.status`는 현재
+runtime observation이므로 한 top-level field 이름으로 합치지 않는다.
+
+`wt agent watch [<target>]`는 polling/waiting surface다. 같은 target과 observation model을
+쓰되, interval마다 상태 변화를 compact하게 출력하고 blocked/failed terminal observation에
+도달하면 polling contract에 맞춰 종료한다. GitHub CLI의 `gh run watch`
+(`https://cli.github.com/manual/gh_run_watch`)처럼 `watch`는 반복 관찰과 의미 있는 종료
+상태를 가진 surface 이름이다.
+기본 출력은 transition-only로 유지한다. 오래 running 상태가 바뀌지 않는 coordinator wait는
+`--heartbeat <SECONDS>`를 명시해서 elapsed time, target, branch, TaskRun lifecycle status,
+agent kind/state, 마지막 tool/session/event, cmux contact/warning을 compact하게 반복 출력한다.
+`--timeout <SECONDS>`는 지정한 bound를 넘어서도 agent가 running이면 timeout 메시지를 출력하고
+현재 observation exit-code contract로 종료한다. 따라서 여전히 running이고 blocked/failed가
+아니라면 observable/not blocked인 0으로 끝난다.
+
+`wt agent status`와 `wt agent watch`의 `<target>` 생략도 interactive TTY human mode에서만
+selector를 연다. `--json`, `--quiet`, 또는 non-TTY automation에서는 explicit `<target>`이
+필수이며, omission은 `wt agent status <target>`, `wt agent watch <target>`, `wt inspect
+[<target>]` 중 어떤 표면을 써야 하는지 알려주며 실패해야 한다.
+
+Agent observation exit code는 agent command에만 속한다. `wt agent status`와
+`wt agent watch`는 0을 observable/not blocked, 1을 target/session/cmux unavailable, 2를
+`needs_input`, 3을 `failed`로 유지한다. cmux 자체를 사용할 수 없으면 성공한 `no_session`처럼
+보이지 않도록 실패한다.
+
+Agent별 상태 신호 준비도는 `agent status`나 `agent watch`가 고치는 대상이 아니라 관찰의
+신뢰도 조건이다. Claude Code는 cmux의 Claude 통합에서 status/sidebar 신호가 나오고, Codex는
+사용자가 `cmux hooks codex install --yes`를 명시적으로 실행한 뒤에야 `agent.hook.*`와
+`set_status codex Running/Idle` 신호가 나온다. Codex hook이 없으면 agent commands는 화면
+텍스트 fallback을 쓸 수 있지만 약한 관찰이라는 warning을 남겨야 한다. `wt doctor`는 이
+준비도를 보고만 하고, 일반 wt 명령이 전역 Codex hook을 자동 설치하거나 사용자 agent config를
+몰래 수정하면 안 된다.
+
+Agent runtime observation은 `wt agent status`와 `wt agent watch` 아래에 둔다. Git의
+`status` 문서(`https://git-scm.com/docs/git-status.html`)는 worktree/index state를 뜻하므로
+top-level status command는 좁은 agent screen poll보다 managed work state 전반을 암시한다.
+GitHub CLI도 `gh auth status`(`https://cli.github.com/manual/gh_auth_status`),
+`gh pr status`(`https://cli.github.com/manual/gh_pr_status`)처럼 좁은 status를 noun namespace
+아래에 둔다. 따라서 agent observation parser와 dispatch는 canonical agent namespace에만
+존재해야 하며, top-level silent alias를 남기지 않는다.
+
+Read-only dossier command는 `wt inspect [<target>]`다. GitHub CLI의
+`gh pr review`(`https://cli.github.com/manual/gh_pr_review`)처럼 external CLI convention에서
+review는 검토를 추가/제출하는 action으로 읽히기 쉽다. Read-only detail dossier는 Kubernetes
+`describe`(`https://kubernetes.io/docs/reference/kubectl/generated/kubectl_describe/`)처럼
+inspection surface에 가깝다. 따라서 parser와 dispatch는 canonical inspect surface에만
+존재해야 하며, review-named silent alias를 남기지 않는다.
+
+`wt workflow repair <workflow>`는 관찰 side effect가 아니라 coordinator/operator가
+명시적으로 실행하는 복구 표면이다. 기본 동작은 dry-run preview이며, linked TaskRun,
+local worktree, 현재 cmux agent surface를 관찰해 어떤 TaskRun을 기존 `failed` 상태로
+기록할 수 있는지 보여준다. `--apply`를 줬을 때만 TaskRun failure model을 통해 status와
+error를 쓴다. repair는 Workflow나 TaskRun에 cmux workspace/surface 좌표를 저장하지
+않고, cmux workspace close나 worktree removal 같은 파괴적 정리는 수행하지 않는다. 그런
+정리가 필요하면 별도의 명확한 flag/confirmation이 있는 cleanup 표면에서 다뤄야 한다.
+`wt inspect`, `wt send`, `wt agent status/watch`는 repair를 권할 수는 있지만 repair
+action을 대신 실행하지 않는다.
 
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 

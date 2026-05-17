@@ -1,0 +1,584 @@
+use crate::context::{Ctx, PromptItem};
+use crate::task_run;
+use anyhow::{Context, Result, bail};
+use serde::Deserialize;
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TaskDocument {
+    #[serde(default)]
+    pub(crate) title: String,
+    #[serde(default)]
+    pub(crate) branch: String,
+    #[serde(default)]
+    pub(crate) body: String,
+    #[serde(default)]
+    pub(crate) origin: Option<TaskOrigin>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TaskOrigin {
+    pub(crate) provider: String,
+    pub(crate) id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PreparedTask {
+    pub(crate) key: String,
+    pub(crate) branch: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SelectedTask {
+    pub(crate) key: String,
+    pub(crate) path: String,
+    pub(crate) content: String,
+    pub(crate) document: TaskDocument,
+}
+
+impl TaskDocument {
+    pub(crate) fn title_or_key(&self, key: &str) -> String {
+        if self.title.trim().is_empty() {
+            key.to_string()
+        } else {
+            self.title.clone()
+        }
+    }
+
+    pub(crate) fn mode(&self) -> &'static str {
+        if self.origin.is_some() {
+            "issue"
+        } else {
+            "new"
+        }
+    }
+
+    pub(crate) fn identifier_or_key(&self, key: &str) -> String {
+        self.origin
+            .as_ref()
+            .map(|origin| origin.id.clone())
+            .unwrap_or_else(|| key.to_string())
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn select_local_task(ctx: &Ctx) -> Result<SelectedTask> {
+    let tasks = list_local_tasks(ctx)?;
+    if tasks.is_empty() {
+        bail!("No task files found in .local/tasks");
+    }
+
+    let items = tasks.iter().map(task_selection_item).collect::<Vec<_>>();
+    let idx = ctx.ui.select_items("Task to start", &items)?;
+    let task = tasks
+        .get(idx)
+        .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
+    Ok(task.clone())
+}
+
+pub(crate) fn select_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
+    let tasks = list_local_tasks(ctx)?;
+    if tasks.is_empty() {
+        bail!("No task files found in .local/tasks");
+    }
+
+    let items = tasks.iter().map(task_selection_item).collect::<Vec<_>>();
+    let selections = ctx.ui.multi_select_items("Tasks to start", &items)?;
+    let mut selected = Vec::new();
+    for idx in selections {
+        let task = tasks
+            .get(idx)
+            .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
+        selected.push(task.clone());
+    }
+    Ok(selected)
+}
+
+pub(crate) fn select_local_task_by_key(ctx: &Ctx, key: &str) -> Result<SelectedTask> {
+    let key = safe_task_key(key);
+    let (document, path, content) = read_task_file(ctx, &key)?;
+    Ok(SelectedTask {
+        key,
+        path,
+        content,
+        document,
+    })
+}
+
+pub(crate) fn list_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
+    let tasks_dir = ctx.repo_root.join(".local/tasks");
+    if !tasks_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in
+        fs::read_dir(&tasks_dir).with_context(|| "Failed to read task directory: .local/tasks")?
+    {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let mut tasks = Vec::new();
+    for path in paths {
+        let task = read_selected_task(ctx, path)?;
+        if task_run::task_is_selectable(ctx, &task.key)? {
+            tasks.push(task);
+        }
+    }
+    Ok(tasks)
+}
+
+pub(crate) fn read_task_document(ctx: &Ctx, key: &str) -> Result<TaskDocument> {
+    let content = fs::read_to_string(task_path(ctx, key))
+        .with_context(|| format!("Failed to read task: {}", task_relative_path(key)))?;
+    let task: TaskDocument = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse task: {}", task_relative_path(key)))?;
+    Ok(task)
+}
+
+pub(crate) fn read_task_file(ctx: &Ctx, key: &str) -> Result<(TaskDocument, String, String)> {
+    let path = task_relative_path(key);
+    let content = fs::read_to_string(ctx.repo_root.join(&path))
+        .with_context(|| format!("Failed to read task: {path}"))?;
+    let task: TaskDocument =
+        toml::from_str(&content).with_context(|| format!("Failed to parse task: {path}"))?;
+    Ok((task, path, content))
+}
+
+pub(crate) fn write_task_document(ctx: &Ctx, key: &str, task: &TaskDocument) -> Result<()> {
+    let tasks_dir = ctx.repo_root.join(".local/tasks");
+    fs::create_dir_all(&tasks_dir)?;
+    fs::write(task_path(ctx, key), render_task_document(task))?;
+    Ok(())
+}
+
+pub(crate) fn write_new_task_document(ctx: &Ctx, key: &str, task: &TaskDocument) -> Result<()> {
+    let tasks_dir = ctx.repo_root.join(".local/tasks");
+    fs::create_dir_all(&tasks_dir)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(task_path(ctx, key))
+        .with_context(|| format!("Task already exists: {}", task_relative_path(key)))?;
+    file.write_all(render_task_document(task).as_bytes())?;
+    Ok(())
+}
+
+pub(crate) fn write_task_branch(ctx: &Ctx, key: &str, branch: &str) -> Result<()> {
+    let mut task = read_task_document(ctx, key)?;
+    task.branch = branch.to_string();
+    write_task_document(ctx, key, &task)
+}
+
+pub(crate) fn task_relative_path(key: &str) -> String {
+    format!(".local/tasks/{}.toml", safe_task_key(key))
+}
+
+pub(crate) fn prepared_branch_name(branch: &str) -> Option<&str> {
+    let branch = branch.trim();
+    if branch.is_empty() || branch == "-" {
+        None
+    } else {
+        Some(branch)
+    }
+}
+
+pub(crate) fn task_exists(ctx: &Ctx, key: &str) -> bool {
+    task_path(ctx, key).exists()
+}
+
+fn task_path(ctx: &Ctx, key: &str) -> PathBuf {
+    ctx.repo_root.join(task_relative_path(key))
+}
+
+fn read_selected_task(ctx: &Ctx, path: PathBuf) -> Result<SelectedTask> {
+    let relative_path = path
+        .strip_prefix(&ctx.repo_root)
+        .unwrap_or(&path)
+        .to_string_lossy()
+        .into_owned();
+    let key = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Task file is missing a key: {relative_path}"))?
+        .to_string();
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read task: {relative_path}"))?;
+    let document: TaskDocument = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse task: {relative_path}"))?;
+    Ok(SelectedTask {
+        key,
+        path: relative_path,
+        content,
+        document,
+    })
+}
+
+#[cfg(test)]
+fn task_selection_label(task: &SelectedTask) -> String {
+    task_selection_item(task).render_plain()
+}
+
+pub(crate) fn task_selection_item(task: &SelectedTask) -> PromptItem {
+    task_resource_item(
+        &task.key,
+        &task.document,
+        &task_origin_status(&task.document),
+    )
+}
+
+pub(crate) fn task_resource_item(key: &str, document: &TaskDocument, status: &str) -> PromptItem {
+    let title = document.title_or_key(key);
+    let label = title.trim();
+    let key = key.trim();
+    let label = if label.is_empty() { key } else { label };
+    let mut hint_parts = Vec::new();
+
+    if !key.is_empty() && label != key {
+        hint_parts.push(format!("task {key}"));
+    }
+    hint_parts.extend(task_status_hint_parts(status, key));
+    if let Some(branch) = prepared_branch_name(&document.branch) {
+        hint_parts.push(format!("branch {branch}"));
+    }
+
+    PromptItem::from_hint_parts(label.to_string(), hint_parts)
+}
+
+fn task_status_hint_parts(status: &str, key: &str) -> Vec<String> {
+    let status = status.trim();
+    if status.is_empty() {
+        return Vec::new();
+    }
+
+    if status == "origin:none" {
+        return vec!["not published".into()];
+    }
+
+    if let Some(origin) = status.strip_prefix("origin:") {
+        let mut parts = origin.splitn(2, ':');
+        let provider = parts.next().unwrap_or_default();
+        let id = parts.next().unwrap_or_default();
+        let provider = provider_display_label(provider);
+        if id.trim().is_empty() || id == key {
+            return vec![provider];
+        }
+        return vec![format!("{provider} {id}")];
+    }
+
+    vec![status.replace(':', " ")]
+}
+
+fn provider_display_label(provider: &str) -> String {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "github" => "GitHub".into(),
+        "linear" => "Linear".into(),
+        "" => "external".into(),
+        other => other.to_string(),
+    }
+}
+
+fn task_origin_status(document: &TaskDocument) -> String {
+    document
+        .origin
+        .as_ref()
+        .map(|origin| format!("origin:{}:{}", origin.provider, origin.id))
+        .unwrap_or_else(|| "origin:none".into())
+}
+
+pub(crate) fn safe_task_key(value: &str) -> String {
+    let key = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+
+    if key.is_empty() { "task".into() } else { key }
+}
+
+pub(crate) fn workspace_run_label(idx: usize, total: usize, identifier: Option<&str>) -> String {
+    let total = total.max(1);
+    let mut label = format!("{}/{}", idx + 1, total);
+    if let Some(identifier) = identifier
+        .map(str::trim)
+        .filter(|identifier| !identifier.is_empty())
+    {
+        label.push(' ');
+        label.push_str(identifier);
+    }
+    label
+}
+
+fn render_task_document(task: &TaskDocument) -> String {
+    let mut content = String::new();
+    content.push_str(&format!("title = {}\n", toml_quote(&task.title)));
+    if !task.branch.trim().is_empty() {
+        content.push_str(&format!("branch = {}\n", toml_quote(&task.branch)));
+    }
+    if !task.body.trim().is_empty() {
+        content.push_str(&format!("body = {}\n", toml_multiline_string(&task.body)));
+    }
+    if let Some(origin) = &task.origin {
+        content.push_str("\n[origin]\n");
+        content.push_str(&format!("provider = {}\n", toml_quote(&origin.provider)));
+        content.push_str(&format!("id = {}\n", toml_quote(&origin.id)));
+    }
+    content
+}
+
+fn toml_quote(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn toml_multiline_string(value: &str) -> String {
+    if value.starts_with(['\n', '\r']) {
+        return toml_quote(value);
+    }
+    let escaped = value
+        .replace("\\", "\\\\")
+        .replace("\"\"\"", "\\\"\\\"\\\"");
+    format!("\"\"\"{}\"\"\"", escaped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::context::mock::{MockRunner, MockUi};
+
+    #[test]
+    fn safe_task_key_replaces_unsafe_chars() {
+        assert_eq!(safe_task_key("#42"), "42");
+        assert_eq!(safe_task_key("PROJ-123"), "PROJ-123");
+        assert_eq!(safe_task_key("bad/value"), "bad-value");
+    }
+
+    #[test]
+    fn workspace_run_label_keeps_order_and_identifier_short() {
+        assert_eq!(workspace_run_label(1, 5, Some("PROJ-123")), "2/5 PROJ-123");
+        assert_eq!(workspace_run_label(0, 3, None), "1/3");
+    }
+
+    #[test]
+    fn task_selection_label_keeps_title_key_origin_and_branch_separate() {
+        let task = SelectedTask {
+            key: "PROJ-123".into(),
+            path: ".local/tasks/PROJ-123.toml".into(),
+            content: String::new(),
+            document: TaskDocument {
+                title: "Fix editor".into(),
+                branch: "alice/proj-123-fix-editor".into(),
+                body: String::new(),
+                origin: Some(TaskOrigin {
+                    provider: "linear".into(),
+                    id: "PROJ-123".into(),
+                }),
+            },
+        };
+
+        assert_eq!(
+            task_selection_label(&task),
+            "Fix editor  task PROJ-123 | Linear | branch alice/proj-123-fix-editor"
+        );
+    }
+
+    #[test]
+    fn task_selection_label_omits_duplicate_key_when_title_is_missing() {
+        let task = SelectedTask {
+            key: "local-task".into(),
+            path: ".local/tasks/local-task.toml".into(),
+            content: String::new(),
+            document: TaskDocument {
+                title: String::new(),
+                branch: "local-task".into(),
+                body: String::new(),
+                origin: None,
+            },
+        };
+
+        assert_eq!(
+            task_selection_label(&task),
+            "local-task  not published | branch local-task"
+        );
+    }
+
+    #[test]
+    fn select_local_task_errors_when_no_task_files_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let result = select_local_task(&ctx);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No task files found in .local/tasks")
+        );
+    }
+
+    #[test]
+    fn select_local_task_reads_selected_task_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("a-first.toml"),
+            "title = \"First\"\nbranch = \"first\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("b-second.toml"),
+            "title = \"Second\"\nbranch = \"second\"\nbody = \"details\"\n",
+        )
+        .unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(1);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        let selected = select_local_task(&ctx).unwrap();
+
+        assert_eq!(selected.key, "b-second");
+        assert_eq!(selected.path, ".local/tasks/b-second.toml");
+        assert_eq!(selected.document.title, "Second");
+        assert_eq!(selected.document.branch, "second");
+        assert!(selected.content.contains("body = \"details\""));
+    }
+
+    #[test]
+    fn list_local_tasks_omits_tasks_with_completed_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("a-first.toml"),
+            "title = \"First\"\nbranch = \"first\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("b-second.toml"),
+            "title = \"Second\"\nbranch = \"second\"\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        task_run::create(
+            &ctx,
+            "a-first",
+            "first",
+            task_run::SOURCE_NEW,
+            None,
+            task_run::STATUS_DONE,
+        )
+        .unwrap();
+
+        let tasks = list_local_tasks(&ctx).unwrap();
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].key, "b-second");
+    }
+
+    #[test]
+    fn list_local_tasks_keeps_skipped_runs_selectable() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("a-first.toml"),
+            "title = \"First\"\nbranch = \"first\"\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        task_run::create(
+            &ctx,
+            "a-first",
+            "first",
+            task_run::SOURCE_NEW,
+            None,
+            task_run::STATUS_SKIPPED,
+        )
+        .unwrap();
+
+        let tasks = list_local_tasks(&ctx).unwrap();
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].key, "a-first");
+    }
+
+    #[test]
+    fn list_local_tasks_rejects_unknown_task_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("bad.toml"),
+            "title = \"Bad\"\nbranch = \"bad\"\nextra = true\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let result = list_local_tasks(&ctx);
+
+        assert!(result.is_err());
+        assert!(format!("{:#}", result.unwrap_err()).contains("unknown field"));
+    }
+}

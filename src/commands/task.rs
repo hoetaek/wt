@@ -1,143 +1,34 @@
-use crate::commands::issue;
 use crate::commands::new as new_command;
-use crate::commands::task_run;
+use crate::commands::{issue, issue_selection};
 use crate::config::IssueProviderType;
-use crate::context::{Ctx, PromptItem};
-use crate::worktree_naming;
+use crate::context::Ctx;
+use crate::services::issues::{IssueInfo, IssueProvider};
+use crate::task::{self, PreparedTask, TaskDocument, TaskOrigin};
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
 use std::collections::HashSet;
-use std::fs;
-use std::path::PathBuf;
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TaskDocument {
-    #[serde(default)]
-    pub(crate) title: String,
-    #[serde(default)]
-    pub(crate) branch: String,
-    #[serde(default)]
-    pub(crate) body: String,
-    #[serde(default)]
-    pub(crate) origin: Option<TaskOrigin>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TaskOrigin {
-    pub(crate) provider: String,
-    pub(crate) id: String,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PreparedTask {
-    pub(crate) key: String,
-    pub(crate) branch: String,
+struct ImportedTask {
+    key: String,
+    provider: String,
+    issue_id: String,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SelectedTask {
-    pub(crate) key: String,
-    pub(crate) path: String,
-    pub(crate) content: String,
-    pub(crate) document: TaskDocument,
+struct IssueTaskSource {
+    key: String,
+    provider: String,
+    issue_id: String,
+    issue: IssueInfo,
 }
 
-impl TaskDocument {
-    pub(crate) fn title_or_key(&self, key: &str) -> String {
-        if self.title.trim().is_empty() {
-            key.to_string()
-        } else {
-            self.title.clone()
-        }
-    }
-
-    pub(crate) fn mode(&self) -> &'static str {
-        if self.origin.is_some() {
-            "issue"
-        } else {
-            "new"
-        }
-    }
-
-    pub(crate) fn identifier_or_key(&self, key: &str) -> String {
-        self.origin
-            .as_ref()
-            .map(|origin| origin.id.clone())
-            .unwrap_or_else(|| key.to_string())
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn select_local_task(ctx: &Ctx) -> Result<SelectedTask> {
-    let tasks = list_local_tasks(ctx)?;
-    if tasks.is_empty() {
-        bail!("No task files found in .local/tasks");
-    }
-
-    let items = tasks.iter().map(task_selection_item).collect::<Vec<_>>();
-    let idx = ctx.ui.select_items("Task to start", &items)?;
-    let task = tasks
-        .get(idx)
-        .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
-    Ok(task.clone())
-}
-
-pub(crate) fn select_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
-    let tasks = list_local_tasks(ctx)?;
-    if tasks.is_empty() {
-        bail!("No task files found in .local/tasks");
-    }
-
-    let items = tasks.iter().map(task_selection_item).collect::<Vec<_>>();
-    let selections = ctx.ui.multi_select_items("Tasks to start", &items)?;
-    let mut selected = Vec::new();
-    for idx in selections {
-        let task = tasks
-            .get(idx)
-            .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
-        selected.push(task.clone());
-    }
-    Ok(selected)
-}
-
-pub(crate) fn select_local_task_by_key(ctx: &Ctx, key: &str) -> Result<SelectedTask> {
-    let key = safe_task_key(key);
-    let (document, path, content) = read_task_file(ctx, &key)?;
-    Ok(SelectedTask {
-        key,
-        path,
-        content,
-        document,
-    })
-}
-
-pub(crate) fn list_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
-    let tasks_dir = ctx.repo_root.join(".local/tasks");
-    if !tasks_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut paths = Vec::new();
-    for entry in
-        fs::read_dir(&tasks_dir).with_context(|| "Failed to read task directory: .local/tasks")?
-    {
-        let path = entry?.path();
-        if path.extension().is_some_and(|ext| ext == "toml") {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-
-    let mut tasks = Vec::new();
-    for path in paths {
-        let task = read_selected_task(ctx, path)?;
-        if task_run::task_is_selectable(ctx, &task.key)? {
-            tasks.push(task);
-        }
-    }
-    Ok(tasks)
+#[derive(Clone, Debug)]
+struct IssueTaskCandidate {
+    key: String,
+    branch: String,
+    provider: String,
+    issue_id: String,
+    document: TaskDocument,
 }
 
 pub(crate) fn prepare_named_tasks(ctx: &Ctx, names: &[String]) -> Result<Vec<PreparedTask>> {
@@ -157,9 +48,8 @@ pub(crate) fn prepare_named_tasks(ctx: &Ctx, names: &[String]) -> Result<Vec<Pre
             bail!("Duplicate task: {key}");
         }
 
-        let path = task_path(ctx, &key);
-        let doc = if path.exists() {
-            read_task_document(ctx, &key)?
+        let doc = if task::task_exists(ctx, &key) {
+            task::read_task_document(ctx, &key)?
         } else {
             let branch = new_command::branch_name_from_words(&[title.to_string()])?;
             let doc = TaskDocument {
@@ -168,7 +58,7 @@ pub(crate) fn prepare_named_tasks(ctx: &Ctx, names: &[String]) -> Result<Vec<Pre
                 body: String::new(),
                 origin: None,
             };
-            write_task_document(ctx, &key, &doc)?;
+            task::write_task_document(ctx, &key, &doc)?;
             doc
         };
 
@@ -184,91 +74,202 @@ pub(crate) fn prepare_named_tasks(ctx: &Ctx, names: &[String]) -> Result<Vec<Pre
 pub(crate) fn prepare_issue_tasks(ctx: &Ctx, issues: &[String]) -> Result<Vec<PreparedTask>> {
     let provider = issue::build_provider(ctx)?;
     let provider_name = issue_provider_name(ctx)?;
-    let mut seen = HashSet::new();
-    let mut tasks = Vec::new();
+    let candidates = resolve_issue_task_candidates(ctx, issues, &provider_name, provider.as_ref())?;
+    write_issue_task_candidates(ctx, &candidates)?;
 
-    for source in issues {
-        let issue = provider.get_issue(source.trim_start_matches('#'))?;
-        let naming = worktree_naming::generate(
-            ctx,
-            &issue.identifier,
-            &issue.title,
-            issue.branch_name.as_deref(),
-        )?;
-        let branch = naming
-            .and_then(|naming| naming.branch)
-            .or(issue.branch_name)
-            .unwrap_or_default();
-        let key = safe_task_key(&issue.identifier);
-        if !seen.insert(key.clone()) {
-            bail!("Duplicate task: {key}");
-        }
+    Ok(candidates
+        .into_iter()
+        .map(|candidate| PreparedTask {
+            key: candidate.key,
+            branch: candidate.branch,
+        })
+        .collect())
+}
 
-        let doc = TaskDocument {
-            title: issue.title,
-            branch: branch.clone(),
-            body: issue.body.unwrap_or_default(),
-            origin: Some(TaskOrigin {
-                provider: provider_name.clone(),
-                id: issue.identifier,
-            }),
-        };
-        write_task_document(ctx, &key, &doc)?;
-        tasks.push(PreparedTask { key, branch });
+pub(crate) fn import(ctx: &Ctx, issues: &[String]) -> Result<()> {
+    let provider_name = issue_provider_name(ctx)?;
+    let provider = issue::build_provider(ctx)?;
+    let issue_ids = resolve_import_issue_ids(ctx, issues, provider.as_ref())?;
+    if issue_ids.is_empty() {
+        ctx.ui.print_warning("No issues selected to import");
+        return Ok(());
     }
 
-    Ok(tasks)
-}
-
-pub(crate) fn read_task_document(ctx: &Ctx, key: &str) -> Result<TaskDocument> {
-    let content = fs::read_to_string(task_path(ctx, key))
-        .with_context(|| format!("Failed to read task: {}", task_relative_path(key)))?;
-    let task: TaskDocument = toml::from_str(&content)
-        .with_context(|| format!("Failed to parse task: {}", task_relative_path(key)))?;
-    Ok(task)
-}
-
-pub(crate) fn read_task_file(ctx: &Ctx, key: &str) -> Result<(TaskDocument, String, String)> {
-    let path = task_relative_path(key);
-    let content = fs::read_to_string(ctx.repo_root.join(&path))
-        .with_context(|| format!("Failed to read task: {path}"))?;
-    let task: TaskDocument =
-        toml::from_str(&content).with_context(|| format!("Failed to parse task: {path}"))?;
-    Ok((task, path, content))
-}
-
-pub(crate) fn write_task_document(ctx: &Ctx, key: &str, task: &TaskDocument) -> Result<()> {
-    let tasks_dir = ctx.repo_root.join(".local/tasks");
-    fs::create_dir_all(&tasks_dir)?;
-    fs::write(task_path(ctx, key), render_task_document(task))?;
+    let imported = import_issue_task_documents(ctx, &issue_ids, &provider_name, provider.as_ref())?;
+    print_import_summary(ctx, &imported);
     Ok(())
 }
 
-pub(crate) fn write_task_branch(ctx: &Ctx, key: &str, branch: &str) -> Result<()> {
-    let mut task = read_task_document(ctx, key)?;
-    task.branch = branch.to_string();
-    write_task_document(ctx, key, &task)
-}
-
-pub(crate) fn task_relative_path(key: &str) -> String {
-    format!(".local/tasks/{}.toml", safe_task_key(key))
-}
-
-pub(crate) fn prepared_branch_name(branch: &str) -> Option<&str> {
-    let branch = branch.trim();
-    if branch.is_empty() || branch == "-" {
-        None
-    } else {
-        Some(branch)
+fn resolve_import_issue_ids(
+    ctx: &Ctx,
+    issues: &[String],
+    provider: &dyn IssueProvider,
+) -> Result<Vec<String>> {
+    if issues.is_empty() {
+        return Ok(issue_selection::select_issues_with_provider(
+            ctx,
+            "Select issues to import",
+            provider,
+        )?
+        .into_iter()
+        .map(|issue| issue.identifier)
+        .collect());
     }
+
+    Ok(issues.to_vec())
 }
 
-fn task_path(ctx: &Ctx, key: &str) -> PathBuf {
-    ctx.repo_root.join(task_relative_path(key))
+fn import_issue_task_documents(
+    ctx: &Ctx,
+    issues: &[String],
+    provider_name: &str,
+    provider: &dyn IssueProvider,
+) -> Result<Vec<ImportedTask>> {
+    let candidates = resolve_issue_task_candidates(ctx, issues, provider_name, provider)?;
+    write_issue_task_candidates(ctx, &candidates)?;
+
+    Ok(candidates
+        .into_iter()
+        .map(|candidate| ImportedTask {
+            key: candidate.key,
+            provider: candidate.provider,
+            issue_id: candidate.issue_id,
+        })
+        .collect())
 }
 
-fn task_key_from_text(value: &str) -> Result<String> {
-    new_command::branch_name_from_words(&[value.to_string()])
+fn resolve_issue_task_candidates(
+    ctx: &Ctx,
+    issues: &[String],
+    provider_name: &str,
+    provider: &dyn IssueProvider,
+) -> Result<Vec<IssueTaskCandidate>> {
+    validate_issue_ids(issues)?;
+
+    let mut sources = Vec::new();
+    for source in issues {
+        let issue = provider.get_issue(source.trim().trim_start_matches('#'))?;
+        let issue_id = issue.identifier.clone();
+        sources.push(IssueTaskSource {
+            key: task::safe_task_key(&issue_id),
+            provider: provider_name.to_string(),
+            issue_id,
+            issue,
+        });
+    }
+
+    validate_issue_task_sources(ctx, &sources)?;
+    sources
+        .into_iter()
+        .map(|source| issue_task_candidate(ctx, provider, source))
+        .collect()
+}
+
+fn validate_issue_ids(issues: &[String]) -> Result<()> {
+    let mut seen = HashSet::new();
+    for source in issues {
+        let issue_id = source.trim();
+        if issue_id.is_empty() {
+            bail!("Issue id cannot be empty");
+        }
+        let dedupe_key = issue_id.trim_start_matches('#').to_string();
+        if !seen.insert(dedupe_key) {
+            bail!("Duplicate issue id: {issue_id}");
+        }
+    }
+    Ok(())
+}
+
+fn issue_task_candidate(
+    ctx: &Ctx,
+    provider: &dyn IssueProvider,
+    source: IssueTaskSource,
+) -> Result<IssueTaskCandidate> {
+    let IssueTaskSource {
+        key,
+        provider: provider_name,
+        issue_id,
+        issue,
+    } = source;
+    let branch = issue::materialize_provider_issue_branch(
+        ctx,
+        provider,
+        &issue.identifier,
+        &issue.title,
+        issue.branch_name.as_deref(),
+        None,
+        crate::commands::profile_workspace::PromptPolicy::Deny,
+    )?
+    .branch_name;
+    let document = TaskDocument {
+        title: issue.title,
+        branch: branch.clone(),
+        body: issue.body.unwrap_or_default(),
+        origin: Some(TaskOrigin {
+            provider: provider_name.clone(),
+            id: issue_id.clone(),
+        }),
+    };
+
+    Ok(IssueTaskCandidate {
+        key,
+        branch,
+        provider: provider_name.to_string(),
+        issue_id,
+        document,
+    })
+}
+
+fn validate_issue_task_sources(ctx: &Ctx, sources: &[IssueTaskSource]) -> Result<()> {
+    let mut seen = HashSet::new();
+    for source in sources {
+        if !seen.insert(source.key.clone()) {
+            bail!(
+                "Duplicate issue id resolves to task {}; refusing to import duplicate",
+                source.key
+            );
+        }
+        if task::task_exists(ctx, &source.key) {
+            bail!(
+                "TaskDocument already exists at {}; refusing to overwrite local task edits",
+                task::task_relative_path(&source.key)
+            );
+        }
+    }
+    Ok(())
+}
+
+fn write_issue_task_candidates(ctx: &Ctx, candidates: &[IssueTaskCandidate]) -> Result<()> {
+    for candidate in candidates {
+        task::write_new_task_document(ctx, &candidate.key, &candidate.document).with_context(
+            || {
+                format!(
+                    "Failed to import provider issue {}:{} to {}",
+                    candidate.provider,
+                    candidate.issue_id,
+                    task::task_relative_path(&candidate.key)
+                )
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn print_import_summary(ctx: &Ctx, imported: &[ImportedTask]) {
+    ctx.ui.print_step("Task import summary");
+    ctx.ui
+        .print_dim(&format!("  Imported: {}", format_imported(imported)));
+}
+
+fn format_imported(imported: &[ImportedTask]) -> String {
+    if imported.is_empty() {
+        return "none".into();
+    }
+    imported
+        .iter()
+        .map(|task| format!("{} <- {}:{}", task.key, task.provider, task.issue_id))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(crate) fn issue_provider_name(ctx: &Ctx) -> Result<String> {
@@ -282,242 +283,226 @@ pub(crate) fn issue_provider_name(ctx: &Ctx) -> Result<String> {
     .into())
 }
 
-fn read_selected_task(ctx: &Ctx, path: PathBuf) -> Result<SelectedTask> {
-    let relative_path = path
-        .strip_prefix(&ctx.repo_root)
-        .unwrap_or(&path)
-        .to_string_lossy()
-        .into_owned();
-    let key = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Task file is missing a key: {relative_path}"))?
-        .to_string();
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read task: {relative_path}"))?;
-    let document: TaskDocument = toml::from_str(&content)
-        .with_context(|| format!("Failed to parse task: {relative_path}"))?;
-    Ok(SelectedTask {
-        key,
-        path: relative_path,
-        content,
-        document,
-    })
-}
-
-#[cfg(test)]
-fn task_selection_label(task: &SelectedTask) -> String {
-    task_selection_item(task).render_plain()
-}
-
-fn task_selection_item(task: &SelectedTask) -> PromptItem {
-    task_resource_item(
-        &task.key,
-        &task.document,
-        &task_origin_status(&task.document),
-    )
-}
-
-pub(crate) fn task_resource_item(key: &str, document: &TaskDocument, status: &str) -> PromptItem {
-    let title = document.title_or_key(key);
-    let label = title.trim();
-    let key = key.trim();
-    let label = if label.is_empty() { key } else { label };
-    let mut hint_parts = Vec::new();
-
-    if !key.is_empty() && label != key {
-        hint_parts.push(format!("task {key}"));
-    }
-    hint_parts.extend(task_status_hint_parts(status, key));
-    if let Some(branch) = prepared_branch_name(&document.branch) {
-        hint_parts.push(format!("branch {branch}"));
-    }
-
-    PromptItem::from_hint_parts(label.to_string(), hint_parts)
-}
-
-fn task_status_hint_parts(status: &str, key: &str) -> Vec<String> {
-    let status = status.trim();
-    if status.is_empty() {
-        return Vec::new();
-    }
-
-    if status == "origin:none" {
-        return vec!["not published".into()];
-    }
-
-    if let Some(origin) = status.strip_prefix("origin:") {
-        let mut parts = origin.splitn(2, ':');
-        let provider = parts.next().unwrap_or_default();
-        let id = parts.next().unwrap_or_default();
-        let provider = provider_display_label(provider);
-        if id.trim().is_empty() || id == key {
-            return vec![provider];
-        }
-        return vec![format!("{provider} {id}")];
-    }
-
-    vec![status.replace(':', " ")]
-}
-
-fn provider_display_label(provider: &str) -> String {
-    match provider.trim().to_ascii_lowercase().as_str() {
-        "github" => "GitHub".into(),
-        "linear" => "Linear".into(),
-        "" => "external".into(),
-        other => other.to_string(),
-    }
-}
-
-fn task_origin_status(document: &TaskDocument) -> String {
-    document
-        .origin
-        .as_ref()
-        .map(|origin| format!("origin:{}:{}", origin.provider, origin.id))
-        .unwrap_or_else(|| "origin:none".into())
-}
-
-pub(crate) fn safe_task_key(value: &str) -> String {
-    let key = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string();
-
-    if key.is_empty() { "task".into() } else { key }
-}
-
-pub(crate) fn workspace_run_label(idx: usize, total: usize, identifier: Option<&str>) -> String {
-    let total = total.max(1);
-    let mut label = format!("{}/{}", idx + 1, total);
-    if let Some(identifier) = identifier
-        .map(str::trim)
-        .filter(|identifier| !identifier.is_empty())
-    {
-        label.push(' ');
-        label.push_str(identifier);
-    }
-    label
-}
-
-fn render_task_document(task: &TaskDocument) -> String {
-    let mut content = String::new();
-    content.push_str(&format!("title = {}\n", toml_quote(&task.title)));
-    if !task.branch.trim().is_empty() {
-        content.push_str(&format!("branch = {}\n", toml_quote(&task.branch)));
-    }
-    if !task.body.trim().is_empty() {
-        content.push_str(&format!("body = {}\n", toml_multiline_string(&task.body)));
-    }
-    if let Some(origin) = &task.origin {
-        content.push_str("\n[origin]\n");
-        content.push_str(&format!("provider = {}\n", toml_quote(&origin.provider)));
-        content.push_str(&format!("id = {}\n", toml_quote(&origin.id)));
-    }
-    content
-}
-
-fn toml_quote(value: &str) -> String {
-    let mut out = String::from("\"");
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn toml_multiline_string(value: &str) -> String {
-    if value.starts_with(['\n', '\r']) {
-        return toml_quote(value);
-    }
-    let escaped = value
-        .replace("\\", "\\\\")
-        .replace("\"\"\"", "\\\"\\\"\\\"");
-    format!("\"\"\"{}\"\"\"", escaped)
+fn task_key_from_text(value: &str) -> Result<String> {
+    new_command::branch_name_from_words(&[value.to_string()])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, IssueProviderType, IssuesConfig};
+    use crate::config::{Config, IssueProviderType, IssuesConfig, WorktreeNamingConfig};
     use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::{CmdOutput, CommandRunner};
+    use crate::services::issues::{CreateIssueRequest, EnsuredBranch, IssueListItem};
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
 
-    #[test]
-    fn safe_task_key_replaces_unsafe_chars() {
-        assert_eq!(safe_task_key("#42"), "42");
-        assert_eq!(safe_task_key("PROJ-123"), "PROJ-123");
-        assert_eq!(safe_task_key("bad/value"), "bad-value");
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct EnsureBranchCall {
+        id: String,
+        base: Option<String>,
+        branch_name: Option<String>,
     }
 
-    #[test]
-    fn workspace_run_label_keeps_order_and_identifier_short() {
-        assert_eq!(workspace_run_label(1, 5, Some("PROJ-123")), "2/5 PROJ-123");
-        assert_eq!(workspace_run_label(0, 3, None), "1/3");
+    struct SharedRunner {
+        inner: Arc<MockRunner>,
     }
 
-    #[test]
-    fn task_selection_label_keeps_title_key_origin_and_branch_separate() {
-        let task = SelectedTask {
-            key: "PROJ-123".into(),
-            path: ".local/tasks/PROJ-123.toml".into(),
-            content: String::new(),
-            document: TaskDocument {
-                title: "Fix editor".into(),
-                branch: "alice/proj-123-fix-editor".into(),
-                body: String::new(),
-                origin: Some(TaskOrigin {
-                    provider: "linear".into(),
-                    id: "PROJ-123".into(),
-                }),
-            },
-        };
+    impl CommandRunner for SharedRunner {
+        fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+            self.inner.run(cmd, args, cwd)
+        }
 
-        assert_eq!(
-            task_selection_label(&task),
-            "Fix editor  task PROJ-123 | Linear | branch alice/proj-123-fix-editor"
-        );
+        fn has_command(&self, cmd: &str) -> bool {
+            self.inner.has_command(cmd)
+        }
     }
 
-    #[test]
-    fn task_selection_label_omits_duplicate_key_when_title_is_missing() {
-        let task = SelectedTask {
-            key: "local-task".into(),
-            path: ".local/tasks/local-task.toml".into(),
-            content: String::new(),
-            document: TaskDocument {
-                title: String::new(),
-                branch: "local-task".into(),
-                body: String::new(),
-                origin: None,
-            },
-        };
+    #[derive(Default)]
+    struct FakeIssueProvider {
+        issues: Vec<IssueInfo>,
+        list: Vec<IssueListItem>,
+        fetched: Mutex<Vec<String>>,
+        ensure_calls: Mutex<Vec<EnsureBranchCall>>,
+    }
 
-        assert_eq!(
-            task_selection_label(&task),
-            "local-task  not published | branch local-task"
-        );
+    impl FakeIssueProvider {
+        fn with_issues(issues: Vec<IssueInfo>) -> Self {
+            Self {
+                issues,
+                list: Vec::new(),
+                fetched: Mutex::new(Vec::new()),
+                ensure_calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn with_list(mut self, list: Vec<IssueListItem>) -> Self {
+            self.list = list;
+            self
+        }
+
+        fn fetched_ids(&self) -> Vec<String> {
+            self.fetched.lock().unwrap().clone()
+        }
+
+        fn ensure_calls(&self) -> Vec<EnsureBranchCall> {
+            self.ensure_calls.lock().unwrap().clone()
+        }
+    }
+
+    impl IssueProvider for FakeIssueProvider {
+        fn get_issue(&self, id: &str) -> Result<IssueInfo> {
+            self.fetched.lock().unwrap().push(id.to_string());
+            let lookup = id.trim_start_matches('#');
+            self.issues
+                .iter()
+                .find(|issue| {
+                    issue.identifier == id || issue.identifier.trim_start_matches('#') == lookup
+                })
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing fake issue {id}"))
+        }
+
+        fn list_issues(&self) -> Result<Vec<IssueListItem>> {
+            Ok(self.list.clone())
+        }
+
+        fn create_issue(&self, _request: CreateIssueRequest) -> Result<IssueInfo> {
+            unimplemented!("task import does not create provider issues")
+        }
+
+        fn ensure_branch(
+            &self,
+            id: &str,
+            base: Option<&str>,
+            branch_name: Option<&str>,
+        ) -> Result<EnsuredBranch> {
+            self.ensure_calls.lock().unwrap().push(EnsureBranchCall {
+                id: id.to_string(),
+                base: base.map(str::to_string),
+                branch_name: branch_name.map(str::to_string),
+            });
+
+            if let Some(branch_name) = branch_name {
+                return Ok(EnsuredBranch {
+                    name: branch_name.to_string(),
+                    created: false,
+                });
+            }
+
+            let lookup = id.trim_start_matches('#');
+            let issue = self
+                .issues
+                .iter()
+                .find(|issue| {
+                    issue.identifier == id || issue.identifier.trim_start_matches('#') == lookup
+                })
+                .ok_or_else(|| anyhow::anyhow!("missing fake issue {id}"))?;
+            let name = issue
+                .branch_name
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("No branch name for issue {id}"))?;
+            Ok(EnsuredBranch {
+                name,
+                created: false,
+            })
+        }
+
+        fn on_start(&self, _id: &str) -> Result<()> {
+            unimplemented!("task import does not start provider issues")
+        }
+
+        fn on_clean(&self, _id: &str, _branch: &str) -> Result<()> {
+            unimplemented!("task import does not clean provider issues")
+        }
+    }
+
+    fn ctx_with_config(root: &std::path::Path, config: Config) -> Ctx {
+        Ctx::new(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        )
+    }
+
+    fn ctx_with_config_and_ui(root: &std::path::Path, config: Config, ui: Arc<MockUi>) -> Ctx {
+        Ctx::new(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        )
+    }
+
+    fn linear_config() -> Config {
+        Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            ..Config::default()
+        }
+    }
+
+    fn github_config() -> Config {
+        Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Github,
+                gh_user: None,
+            }),
+            ..Config::default()
+        }
+    }
+
+    fn naming_config(branch: &str) -> WorktreeNamingConfig {
+        WorktreeNamingConfig {
+            command: "namer".into(),
+            prompt: "Name {{issue_identifier}} {{issue_title}}".into(),
+            branch: Some(branch.into()),
+            workspace: None,
+        }
+    }
+
+    fn issue(
+        identifier: &str,
+        title: &str,
+        branch_name: Option<&str>,
+        body: Option<&str>,
+    ) -> IssueInfo {
+        IssueInfo {
+            identifier: identifier.into(),
+            title: title.into(),
+            branch_name: branch_name.map(str::to_string),
+            body: body.map(str::to_string),
+        }
+    }
+
+    fn list_item(identifier: &str, title: &str, hint: &str) -> IssueListItem {
+        IssueListItem {
+            identifier: identifier.into(),
+            title: title.into(),
+            display: format!("{identifier} {title}"),
+            hint: Some(hint.into()),
+        }
+    }
+
+    fn write_task(root: &std::path::Path, key: &str, content: &str) {
+        let tasks_dir = root.join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
     }
 
     #[test]
     fn prepare_issue_tasks_writes_task_toml() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor","description":"Long issue body"}"#,
+            true,
+        );
         runner.add_response(
             r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor","description":"Long issue body"}"#,
             true,
@@ -553,153 +538,328 @@ mod tests {
     }
 
     #[test]
-    fn select_local_task_errors_when_no_task_files_exist() {
+    fn import_issue_task_documents_writes_body_branch_origin_without_running_work() {
         let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_config(dir.path(), linear_config());
+        let provider = FakeIssueProvider::with_issues(vec![issue(
+            "PROJ-123",
+            "Fix editor",
+            Some("alice/proj-123-fix-editor"),
+            Some("Long issue body"),
+        )]);
+
+        let imported =
+            import_issue_task_documents(&ctx, &["PROJ-123".into()], "linear", &provider).unwrap();
+
+        assert_eq!(
+            imported,
+            vec![ImportedTask {
+                key: "PROJ-123".into(),
+                provider: "linear".into(),
+                issue_id: "PROJ-123".into(),
+            }]
+        );
+        let document = task::read_task_document(&ctx, "PROJ-123").unwrap();
+        assert_eq!(document.title, "Fix editor");
+        assert_eq!(document.branch, "alice/proj-123-fix-editor");
+        assert_eq!(document.body, "Long issue body");
+        let origin = document.origin.unwrap();
+        assert_eq!(origin.provider, "linear");
+        assert_eq!(origin.id, "PROJ-123");
+        assert!(!dir.path().join(".local/task-runs").exists());
+    }
+
+    #[test]
+    fn github_import_without_existing_branch_creates_provider_branch_and_writes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"number":52,"title":"Fix editor","body":"Long issue body","url":"https://github.com/acme/repo/issues/52"}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("https://github.com/acme/repo/tree/52-fix-editor", true);
+        let runner = Arc::new(runner);
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
-            Config::default(),
-            Box::new(MockRunner::new()),
+            github_config(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
             Box::new(MockUi::new()),
         );
 
-        let result = select_local_task(&ctx);
+        import(&ctx, &["52".into()]).unwrap();
 
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("No task files found in .local/tasks")
+        let document = task::read_task_document(&ctx, "52").unwrap();
+        assert_eq!(document.title, "Fix editor");
+        assert_eq!(document.branch, "52-fix-editor");
+        assert!(document.body.contains("Long issue body"));
+        let origin = document.origin.unwrap();
+        assert_eq!(origin.provider, "github");
+        assert_eq!(origin.id, "#52");
+        assert!(!dir.path().join(".local/task-runs").exists());
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "gh"
+                && args == &vec!["issue".to_string(), "develop".to_string(), "52".to_string()]
+        }));
+        assert!(calls.iter().all(|(cmd, _, _)| cmd != "git"));
+    }
+
+    #[test]
+    fn github_import_passes_generated_branch_to_provider_branch_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = github_config();
+        config.worktree.naming = Some(naming_config(
+            "generated/{{issue_key_lower}}-{{english_slug}}",
+        ));
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"number":52,"title":"Fix editor","body":null,"url":"https://github.com/acme/repo/issues/52"}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response(r#"{"english_slug":"fix-editor"}"#, true);
+        runner.add_response("", true);
+        runner.add_response(
+            "https://github.com/acme/repo/tree/generated/52-fix-editor",
+            true,
+        );
+        let runner = Arc::new(runner);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        import(&ctx, &["52".into()]).unwrap();
+
+        let document = task::read_task_document(&ctx, "52").unwrap();
+        assert_eq!(document.branch, "generated/52-fix-editor");
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "gh"
+                && args
+                    == &vec![
+                        "issue".to_string(),
+                        "develop".to_string(),
+                        "--name".to_string(),
+                        "generated/52-fix-editor".to_string(),
+                        "52".to_string(),
+                    ]
+        }));
+    }
+
+    #[test]
+    fn linear_import_uses_generated_branch_when_provider_has_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = linear_config();
+        config.worktree.naming = Some(naming_config("linear/{{issue_key_lower}}-{{english_slug}}"));
+        let mut runner = MockRunner::new();
+        runner.add_response(r#"{"english_slug":"fix-editor"}"#, true);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let provider =
+            FakeIssueProvider::with_issues(vec![issue("PROJ-123", "Fix editor", None, None)]);
+
+        import_issue_task_documents(&ctx, &["PROJ-123".into()], "linear", &provider).unwrap();
+
+        let document = task::read_task_document(&ctx, "PROJ-123").unwrap();
+        assert_eq!(document.branch, "linear/proj-123-fix-editor");
+        assert_eq!(
+            provider.ensure_calls(),
+            vec![EnsureBranchCall {
+                id: "PROJ-123".into(),
+                base: None,
+                branch_name: Some("linear/proj-123-fix-editor".into()),
+            }]
         );
     }
 
     #[test]
-    fn select_local_task_reads_selected_task_document() {
+    fn import_rejects_issue_without_materialized_branch() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".local/tasks");
-        std::fs::create_dir_all(&tasks_dir).unwrap();
-        std::fs::write(
-            tasks_dir.join("a-first.toml"),
-            "title = \"First\"\nbranch = \"first\"\n",
+        let ctx = ctx_with_config(dir.path(), linear_config());
+        let provider =
+            FakeIssueProvider::with_issues(vec![issue("PROJ-123", "Fix editor", None, None)]);
+
+        let err = import_issue_task_documents(&ctx, &["PROJ-123".into()], "linear", &provider)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("No branch name"));
+        assert!(!dir.path().join(".local/tasks/PROJ-123.toml").exists());
+    }
+
+    #[test]
+    fn import_rejects_missing_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_config(dir.path(), Config::default());
+
+        let err = import(&ctx, &["PROJ-123".into()]).unwrap_err();
+
+        assert!(err.to_string().contains("No [issues] section in .wt.toml"));
+    }
+
+    #[test]
+    fn import_rejects_duplicate_issue_ids_before_fetching() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_config(dir.path(), linear_config());
+        let provider = FakeIssueProvider::with_issues(vec![issue(
+            "PROJ-123",
+            "Fix editor",
+            Some("alice/proj-123-fix-editor"),
+            Some("Long issue body"),
+        )]);
+
+        let err = import_issue_task_documents(
+            &ctx,
+            &["PROJ-123".into(), "PROJ-123".into()],
+            "linear",
+            &provider,
         )
-        .unwrap();
-        std::fs::write(
-            tasks_dir.join("b-second.toml"),
-            "title = \"Second\"\nbranch = \"second\"\nbody = \"details\"\n",
+        .unwrap_err();
+
+        assert!(err.to_string().contains("Duplicate issue id: PROJ-123"));
+        assert!(provider.fetched_ids().is_empty());
+        assert!(!dir.path().join(".local/tasks").exists());
+    }
+
+    #[test]
+    fn import_rejects_existing_task_document_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "PROJ-123",
+            "title = \"Local edits\"\nbranch = \"local-edits\"\n",
+        );
+        let ctx = ctx_with_config(dir.path(), linear_config());
+        let provider = FakeIssueProvider::with_issues(vec![issue(
+            "PROJ-123",
+            "Provider title",
+            Some("alice/proj-123-provider-title"),
+            Some("Provider body"),
+        )]);
+
+        let err = import_issue_task_documents(&ctx, &["PROJ-123".into()], "linear", &provider)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("TaskDocument already exists"));
+        let content =
+            std::fs::read_to_string(dir.path().join(".local/tasks/PROJ-123.toml")).unwrap();
+        assert!(content.contains("title = \"Local edits\""));
+        assert!(!content.contains("Provider title"));
+    }
+
+    #[test]
+    fn import_preflights_later_collision_before_writing_any_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "PROJ-2",
+            "title = \"Existing\"\nbranch = \"existing\"\n",
+        );
+        let ctx = ctx_with_config(dir.path(), linear_config());
+        let provider = FakeIssueProvider::with_issues(vec![
+            issue(
+                "PROJ-1",
+                "First",
+                Some("alice/proj-1-first"),
+                Some("First body"),
+            ),
+            issue(
+                "PROJ-2",
+                "Second",
+                Some("alice/proj-2-second"),
+                Some("Second body"),
+            ),
+        ]);
+
+        let err = import_issue_task_documents(
+            &ctx,
+            &["PROJ-1".into(), "PROJ-2".into()],
+            "linear",
+            &provider,
         )
-        .unwrap();
+        .unwrap_err();
+
+        assert!(err.to_string().contains(".local/tasks/PROJ-2.toml"));
+        assert!(!dir.path().join(".local/tasks/PROJ-1.toml").exists());
+        let content = std::fs::read_to_string(dir.path().join(".local/tasks/PROJ-2.toml")).unwrap();
+        assert!(content.contains("title = \"Existing\""));
+    }
+
+    #[test]
+    fn bare_import_selects_provider_issues() {
+        let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(1);
-        let ctx = Ctx::new(
-            dir.path().to_path_buf(),
-            dir.path().to_path_buf(),
-            Config::default(),
-            Box::new(MockRunner::new()),
-            Box::new(ui),
+        ui.add_multi_select(vec![1]);
+        let ui = Arc::new(ui);
+        let ctx = ctx_with_config_and_ui(dir.path(), linear_config(), Arc::clone(&ui));
+        let provider = FakeIssueProvider::with_issues(vec![
+            issue("PROJ-1", "Fix A", Some("alice/proj-1-fix-a"), None),
+            issue("PROJ-2", "Fix B", Some("alice/proj-2-fix-b"), None),
+        ])
+        .with_list(vec![
+            list_item("PROJ-1", "Fix A", "Todo"),
+            list_item("PROJ-2", "Fix B", "Ready"),
+        ]);
+
+        let selected = resolve_import_issue_ids(&ctx, &[], &provider).unwrap();
+        let imported = import_issue_task_documents(&ctx, &selected, "linear", &provider).unwrap();
+
+        assert_eq!(selected, vec!["PROJ-2".to_string()]);
+        assert_eq!(imported[0].key, "PROJ-2");
+        assert!(dir.path().join(".local/tasks/PROJ-2.toml").exists());
+        assert!(!dir.path().join(".local/tasks/PROJ-1.toml").exists());
+        assert_eq!(
+            ui.multi_select_items.lock().unwrap().as_slice(),
+            [vec![
+                "Fix A  PROJ-1 | Todo".to_string(),
+                "Fix B  PROJ-2 | Ready".to_string(),
+            ]]
         );
-
-        let selected = select_local_task(&ctx).unwrap();
-
-        assert_eq!(selected.key, "b-second");
-        assert_eq!(selected.path, ".local/tasks/b-second.toml");
-        assert_eq!(selected.document.title, "Second");
-        assert_eq!(selected.document.branch, "second");
-        assert!(selected.content.contains("body = \"details\""));
     }
 
     #[test]
-    fn list_local_tasks_omits_tasks_with_completed_runs() {
+    fn prepare_issue_tasks_rejects_existing_task_document_collision() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".local/tasks");
-        std::fs::create_dir_all(&tasks_dir).unwrap();
-        std::fs::write(
-            tasks_dir.join("a-first.toml"),
-            "title = \"First\"\nbranch = \"first\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            tasks_dir.join("b-second.toml"),
-            "title = \"Second\"\nbranch = \"second\"\n",
-        )
-        .unwrap();
+        write_task(
+            dir.path(),
+            "PROJ-123",
+            "title = \"Local edits\"\nbranch = \"local-edits\"\n",
+        );
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Provider title","branchName":"alice/proj-123-provider-title","description":"Provider body"}"#,
+            true,
+        );
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
-            Config::default(),
-            Box::new(MockRunner::new()),
-            Box::new(MockUi::new()),
-        );
-        task_run::create(
-            &ctx,
-            "a-first",
-            "first",
-            task_run::SOURCE_NEW,
-            None,
-            task_run::STATUS_DONE,
-        )
-        .unwrap();
-
-        let tasks = list_local_tasks(&ctx).unwrap();
-
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].key, "b-second");
-    }
-
-    #[test]
-    fn list_local_tasks_keeps_skipped_runs_selectable() {
-        let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".local/tasks");
-        std::fs::create_dir_all(&tasks_dir).unwrap();
-        std::fs::write(
-            tasks_dir.join("a-first.toml"),
-            "title = \"First\"\nbranch = \"first\"\n",
-        )
-        .unwrap();
-        let ctx = Ctx::new(
-            dir.path().to_path_buf(),
-            dir.path().to_path_buf(),
-            Config::default(),
-            Box::new(MockRunner::new()),
-            Box::new(MockUi::new()),
-        );
-        task_run::create(
-            &ctx,
-            "a-first",
-            "first",
-            task_run::SOURCE_NEW,
-            None,
-            task_run::STATUS_SKIPPED,
-        )
-        .unwrap();
-
-        let tasks = list_local_tasks(&ctx).unwrap();
-
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].key, "a-first");
-    }
-
-    #[test]
-    fn list_local_tasks_rejects_unknown_task_fields() {
-        let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".local/tasks");
-        std::fs::create_dir_all(&tasks_dir).unwrap();
-        std::fs::write(
-            tasks_dir.join("bad.toml"),
-            "title = \"Bad\"\nbranch = \"bad\"\nextra = true\n",
-        )
-        .unwrap();
-        let ctx = Ctx::new(
-            dir.path().to_path_buf(),
-            dir.path().to_path_buf(),
-            Config::default(),
-            Box::new(MockRunner::new()),
+            linear_config(),
+            Box::new(runner),
             Box::new(MockUi::new()),
         );
 
-        let result = list_local_tasks(&ctx);
+        let err = prepare_issue_tasks(&ctx, &["PROJ-123".into()]).unwrap_err();
 
-        assert!(result.is_err());
-        assert!(format!("{:#}", result.unwrap_err()).contains("unknown field"));
+        assert!(err.to_string().contains("TaskDocument already exists"));
+        let content =
+            std::fs::read_to_string(dir.path().join(".local/tasks/PROJ-123.toml")).unwrap();
+        assert!(content.contains("title = \"Local edits\""));
+        assert!(!content.contains("Provider title"));
     }
 }

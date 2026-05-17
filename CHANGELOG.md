@@ -8,7 +8,65 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
-No changes yet.
+## 0.26.0 - 2026-05-18
+
+- Removed hidden parser and dispatch shells for top-level `wt batch`,
+  `wt stack`, `wt review`, and `wt status` names. Those names now use clap's
+  unknown-subcommand handling instead of parsing only to return replacement
+  guidance, while canonical behavior remains under `wt workflow`, `wt inspect`,
+  and `wt agent status` / `wt agent watch`.
+- Added `wt task import [<issue>...]` as the non-executing inverse of
+  `wt task publish`. It imports existing provider issues into `.local/tasks`
+  TaskDocuments, records `[origin]`, supports explicit issue ids and a bare
+  provider issue selector, and refuses duplicate ids or existing local
+  TaskDocument collisions.
+- Changed workflow policy config to direct `[workflow]` fields
+  `pull_request = "none" | "draft" | "ready"` and
+  `landing = "manual" | "auto"`. The old nested policy table, legacy review
+  landing value, approval boolean, and pull-request aliases now fail with
+  guidance to the canonical fields.
+- Changed prepared workflow files to snapshot pull-request and landing policy
+  once at workflow level under `[policy]`; task rows no longer store redundant
+  pull-request handoff intent.
+- Bumped the package version to `0.26.0` because `wt task import` adds a new
+  user-facing CLI subcommand and workflow config shape, workflow state shape,
+  CLI help, and workflow prompt behavior changed while `wt` is still pre-1.0.
+
+## 0.24.0 - 2026-05-17
+
+- Added `wt workflow repair <workflow>` as an explicit preview-first repair
+  surface for workflow runtime inconsistencies. Dry-run output recommends
+  repairable TaskRun failure-state updates, and `--apply` marks those TaskRuns
+  failed without closing cmux workspaces or removing worktrees.
+- Changed the canonical read-only work dossier from `wt review [TARGET]` to
+  `wt inspect [<target>]`. The previous `wt review` surface is hidden from
+  primary help and now fails with inspect migration guidance instead of acting
+  as a parallel canonical command.
+- Moved agent runtime observation from top-level `wt status` to
+  `wt agent status <target>` and `wt agent watch <target>`. The previous
+  top-level `wt status` surface is hidden from primary help and now fails with
+  explicit guidance for one-shot observation, polling, and human inspection.
+- Added nested workflow default config materialization for prepared workflows.
+  `wt workflow task` and `wt workflow issue` snapshot landing policy into
+  `[policy]`, and stack-mode PR handoff defaults into task rows unless `--pr`
+  explicitly overrides them.
+- Added a task-run coordinator handoff to `wt task run` prompts. Task-run
+  agents now receive coordinator cmux send coordinates and report `PR=none`
+  before waiting for review, landing, and cleanup.
+- Added a workflow-level coordinator handoff to every `wt workflow run` task
+  prompt. Single, batch, grouped single, and stack prompts now all include the
+  coordinator cmux send coordinates and the shared Agent Completion Report
+  format; single and batch prompts report `PR=none`, while stack prompts keep
+  their pull-request and `wt workflow complete ... --run-next` instructions.
+- Fixed `wt send` so an interactively selected cmux surface is used instead of
+  falling back to the first matching surface.
+- Fixed runtime binding so Codex cmux `list-status` signals can identify a
+  live agent even when the visible screen only shows model/status text such as
+  `gpt-5.5 ... Working`.
+- Bumped the package version to `0.24.0` because replacing `wt review` and
+  top-level `wt status`, adding `wt workflow repair`, and materializing
+  workflow defaults change the user-facing CLI/config contract while `wt` is
+  still pre-1.0.
 
 ## 0.23.0 - 2026-05-17
 
@@ -102,7 +160,7 @@ No changes yet.
   changed user-facing CLI behavior while `wt` is still pre-1.0.
 - Changed bare `wt batch run` to select from runnable batches with semantic
   labels, kept explicit batch path/id targets for scripts, and removed the
-  legacy `latest` target from the run contract.
+  previous `latest` target from the run contract.
 - Bumped the package version to `0.18.0` because batch run and the final
   `wt init` starter wizard changed user-facing CLI behavior while `wt` is still
   pre-1.0.
@@ -249,7 +307,7 @@ No changes yet.
 - Changed `wt batch show` to require batches with an explicit stored base,
   matching `wt batch run`.
 - Changed batch and stack metadata parsing to require canonical `[[tasks]]`
-  state instead of accepting alternate `[[issues]]` or legacy `[[items]]`
+  state instead of accepting alternate `[[issues]]` or previous `[[items]]`
   tables.
 - Changed site config parsing to require canonical `[site] provider = "herd"`
   instead of accepting a separate `[herd]` section.

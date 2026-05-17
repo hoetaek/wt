@@ -9,13 +9,15 @@ pub mod names;
 pub mod runner;
 pub mod services;
 pub mod setup;
+pub mod task;
+pub mod task_run;
 pub mod template;
 pub mod ui;
 pub mod workflow;
 pub mod worktree_naming;
 
-use anyhow::{Result, bail};
-use cli::{Commands, ConfigCommand, TaskCommand, WorkflowCommand};
+use anyhow::Result;
+use cli::{AgentCommand, Commands, ConfigCommand, TaskCommand, WorkflowCommand};
 use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
@@ -34,8 +36,8 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             profile,
             matrix,
         } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
-        Commands::Batch { .. } => legacy_batch_command_error(),
         Commands::Task { command } => match command {
+            TaskCommand::Import { issues } => commands::task::import(ctx, issues),
             TaskCommand::Run {
                 tasks,
                 base,
@@ -49,24 +51,33 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 tasks,
                 mode,
                 profile,
+                objective,
                 base,
-                pull_request,
-            } => {
-                commands::workflow::task(ctx, tasks, *mode, profile.as_deref(), base, *pull_request)
-            }
+                pr,
+            } => commands::workflow::task(
+                ctx,
+                tasks,
+                *mode,
+                profile.as_deref(),
+                objective.as_deref(),
+                base,
+                *pr,
+            ),
             WorkflowCommand::Issue {
                 issues,
                 mode,
                 profile,
+                objective,
                 base,
-                pull_request,
+                pr,
             } => commands::workflow::issue(
                 ctx,
                 issues,
                 *mode,
                 profile.as_deref(),
+                objective.as_deref(),
                 base,
-                *pull_request,
+                *pr,
             ),
             WorkflowCommand::Run { workflow, jobs } => {
                 commands::workflow::run(ctx, workflow.as_deref(), *jobs)
@@ -77,18 +88,28 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             WorkflowCommand::Edit { workflow } => {
                 commands::workflow::edit(ctx, workflow.as_deref())
             }
+            WorkflowCommand::Repair { workflow, apply } => {
+                commands::workflow::repair(ctx, workflow, *apply)
+            }
             WorkflowCommand::Complete {
                 workflow,
                 task,
                 run_next,
             } => commands::workflow::complete(ctx, workflow, task.as_deref(), *run_next),
         },
-        Commands::Stack { .. } => legacy_stack_command_error(),
         Commands::List { wide } => commands::list::run(ctx, *wide),
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
-        Commands::Review { target } => commands::review::run(ctx, target.as_deref()),
-        Commands::Status { target } => commands::status::run(ctx, target),
+        Commands::Inspect { target } => commands::inspect::run(ctx, target.as_deref()),
+        Commands::Agent { command } => match command {
+            AgentCommand::Status { target } => commands::agent::status(ctx, target.as_deref()),
+            AgentCommand::Watch {
+                target,
+                interval,
+                timeout,
+                heartbeat,
+            } => commands::agent::watch(ctx, target.as_deref(), *interval, *timeout, *heartbeat),
+        },
         Commands::Send {
             target,
             message,
@@ -142,16 +163,4 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             },
         ),
     }
-}
-
-fn legacy_batch_command_error() -> Result<()> {
-    bail!(
-        "wt batch has been replaced by wt workflow --mode batch. Use `wt workflow task ... --mode batch`, `wt workflow issue ... --mode batch`, `wt workflow run <workflow> --jobs <n>`, and `wt workflow show <workflow>`. Existing .local/batches files are old migration context, not the canonical state surface."
-    )
-}
-
-fn legacy_stack_command_error() -> Result<()> {
-    bail!(
-        "wt stack has been replaced by wt workflow --mode stack. Use `wt workflow task ... --mode stack`, `wt workflow issue ... --mode stack`, `wt workflow run <workflow>`, and `wt workflow complete <workflow> <task> [--run-next]`. Existing .local/stacks files are old migration context, not the canonical state surface."
-    )
 }

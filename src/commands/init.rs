@@ -649,6 +649,11 @@ fn push_notice(notices: &mut Vec<InitNotice>, level: InitNoticeLevel, message: S
 }
 
 fn append_optional_scaffold(s: &mut String) {
+    s.push_str("# Optional workflow policy for newly prepared workflows.\n");
+    s.push_str("# [workflow]\n");
+    s.push_str("# pull_request = \"none\"  # none | draft | ready\n");
+    s.push_str("# landing = \"manual\"     # manual | auto\n\n");
+
     s.push_str("# Optional worktree behavior. Uncomment and adjust as needed.\n");
     s.push_str("# [worktree]\n");
     s.push_str("# path = \"$HOME/worktrees/{{default_name}}\"\n");
