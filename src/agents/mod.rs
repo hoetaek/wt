@@ -485,6 +485,20 @@ mod tests {
     }
 
     #[test]
+    fn codex_text_in_non_agent_screen_does_not_classify_as_codex() {
+        let observation = AgentObservation::new(
+            Some("lazygit\n3fc13dc fix: Codex model screen binding"),
+            &[],
+            &[],
+        );
+
+        let state = classify(&observation);
+
+        assert_eq!(state.agent_kind, AgentKind::Unknown);
+        assert_eq!(state.status, AgentStatus::Unknown);
+    }
+
+    #[test]
     fn pre_tool_use_preserves_latest_tool_name() {
         let statuses = vec![status("claude_code", "Running")];
         let events = vec![

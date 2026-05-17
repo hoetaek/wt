@@ -104,6 +104,21 @@ struct CmuxObservationReport {
     pane: Option<String>,
     window: Option<String>,
     workspace_title: Option<String>,
+    candidates: Vec<CmuxCandidateReport>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct CmuxCandidateReport {
+    workspace: String,
+    surface: String,
+    pane: String,
+    window: String,
+    selected: bool,
+    readable: bool,
+    agent: String,
+    state: String,
+    warning: Option<String>,
+    live_agent_candidate: bool,
 }
 
 fn observe_status(
@@ -172,6 +187,11 @@ impl AgentStatusReport {
                 pane: cmux.and_then(|cmux| cmux.pane_ref.clone()),
                 window: cmux.map(|cmux| cmux.window_ref.clone()),
                 workspace_title: cmux.map(|cmux| cmux.workspace_title.clone()),
+                candidates: work
+                    .cmux_contacts
+                    .iter()
+                    .map(CmuxCandidateReport::from_contact)
+                    .collect(),
             },
             warnings: warnings_for_work(work),
         }
@@ -179,13 +199,14 @@ impl AgentStatusReport {
 
     fn transition_signature(&self) -> String {
         format!(
-            "{}:{}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}",
+            "{}:{}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
             self.target,
             self.agent.kind,
             self.agent.state,
             self.cmux.state,
             self.cmux.workspace,
             self.cmux.surface,
+            self.cmux.candidates,
             self.agent.last_tool,
             self.agent.last_event_at,
             self.warnings
@@ -193,10 +214,53 @@ impl AgentStatusReport {
     }
 }
 
+impl CmuxCandidateReport {
+    fn from_contact(contact: &work::CmuxContact) -> Self {
+        Self {
+            workspace: contact.workspace.clone(),
+            surface: contact.surface.clone(),
+            pane: contact.pane.clone(),
+            window: contact.window.clone(),
+            selected: contact.selected,
+            readable: contact.readable,
+            agent: contact.state.agent_kind.as_str().to_string(),
+            state: contact.state.status.as_str().to_string(),
+            warning: contact.validation_warning.clone(),
+            live_agent_candidate: contact.is_live_agent_candidate(),
+        }
+    }
+}
+
 fn warnings_for_work(work: &work::Work) -> Vec<String> {
     let mut warnings = Vec::new();
     if let Some(warning) = work.state.warning.as_ref() {
         warnings.push(warning.clone());
+    }
+    if let Some(cmux) = work.cmux.as_ref() {
+        if let Some(warning) = work
+            .cmux_contacts
+            .iter()
+            .find(|contact| {
+                contact.workspace == cmux.workspace_ref
+                    && Some(contact.surface.as_str()) == cmux.surface_ref.as_deref()
+            })
+            .and_then(|contact| contact.validation_warning.as_ref())
+        {
+            if !warnings.contains(warning) {
+                warnings.push(warning.clone());
+            }
+        }
+    }
+    if work.session_state != WorkSessionState::TerminalSurfaceReady {
+        for warning in work
+            .cmux_contacts
+            .iter()
+            .filter_map(|contact| contact.validation_warning.as_ref())
+        {
+            if !warnings.contains(warning) {
+                warnings.push(warning.clone());
+            }
+        }
     }
     if let Some(message) = work.message.as_ref() {
         warnings.push(message.clone());
@@ -209,7 +273,8 @@ fn exit_code_for(work: &work::Work) -> i32 {
         WorkSessionState::NoLocalWorktree
         | WorkSessionState::CmuxUnavailable
         | WorkSessionState::NoCmuxWorkspace
-        | WorkSessionState::NoTerminalSurface => return 1,
+        | WorkSessionState::NoTerminalSurface
+        | WorkSessionState::AmbiguousTerminalSurface => return 1,
         WorkSessionState::TerminalSurfaceReady => {}
     }
 
@@ -269,6 +334,7 @@ fn print_text(ctx: &Ctx, report: &AgentStatusReport) {
             .print_dim(&format!("  Needs input since: {needs_input_since}"));
     }
     print_cmux_text(ctx, report);
+    print_cmux_candidates_text(ctx, &report.cmux.candidates);
     for warning in &report.warnings {
         ctx.ui.print_warning(warning);
     }
@@ -301,8 +367,49 @@ fn print_watch_transition(ctx: &Ctx, report: &AgentStatusReport) {
         ctx.ui.print_dim(&format!("  Last event: {last_event_at}"));
     }
     print_cmux_text(ctx, report);
+    print_cmux_candidates_text(ctx, &report.cmux.candidates);
     for warning in &report.warnings {
         ctx.ui.print_warning(warning);
+    }
+}
+
+fn print_cmux_candidates_text(ctx: &Ctx, candidates: &[CmuxCandidateReport]) {
+    if candidates.is_empty() {
+        return;
+    }
+    if candidates.len() == 1
+        && candidates[0].live_agent_candidate
+        && candidates[0].warning.is_none()
+    {
+        return;
+    }
+
+    ctx.ui
+        .print_dim(&format!("  cmux candidates: {}", candidates.len()));
+    for candidate in candidates {
+        let selected = if candidate.selected { " selected" } else { "" };
+        let readable = if candidate.readable {
+            "readable"
+        } else {
+            "unreadable"
+        };
+        let warning = candidate
+            .warning
+            .as_deref()
+            .map(|warning| format!(", warning={warning}"))
+            .unwrap_or_default();
+        ctx.ui.print_dim(&format!(
+            "    - {} {}{} (pane {}, window {}, {}, agent={} state={}{})",
+            candidate.workspace,
+            candidate.surface,
+            selected,
+            candidate.pane,
+            candidate.window,
+            readable,
+            candidate.agent,
+            candidate.state,
+            warning
+        ));
     }
 }
 
@@ -389,6 +496,9 @@ mod tests {
         assert_eq!(value["cmux"]["workspace"], "workspace:1");
         assert_eq!(value["cmux"]["surface"], "surface:4");
         assert_eq!(value["cmux"]["state"], "terminal_surface_ready");
+        assert_eq!(value["cmux"]["candidates"][0]["agent"], "codex");
+        assert_eq!(value["cmux"]["candidates"][0]["state"], "idle");
+        assert_eq!(value["cmux"]["candidates"][0]["live_agent_candidate"], true);
         assert_eq!(value["warnings"], json!([]));
     }
 
@@ -462,6 +572,45 @@ mod tests {
 
         assert_eq!(exit_code, 3);
         assert_eq!(report.agent.state, "failed");
+    }
+
+    #[test]
+    fn status_keeps_codex_commit_text_surface_out_of_live_candidates() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4\nsurface:5", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        runner.add_response("", true);
+        runner.add_response(
+            "lazygit\n31fdd27 fix: Codex literal screen binding\n3fc13dc fix: Codex model screen binding",
+            true,
+        );
+        let ctx = fixture.ctx(runner, OutputMode::Json);
+
+        let (report, exit_code) = observe_status(&ctx, Some("feature"), "status").unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(report.agent.kind, "codex");
+        assert_eq!(report.agent.state, "idle");
+        assert_eq!(report.cmux.surface.as_deref(), Some("surface:4"));
+        assert_eq!(report.cmux.candidates.len(), 2);
+        assert!(report.cmux.candidates[0].live_agent_candidate);
+        assert_eq!(report.cmux.candidates[0].agent, "codex");
+        assert!(!report.cmux.candidates[1].live_agent_candidate);
+        assert_eq!(report.cmux.candidates[1].agent, "unknown");
+        assert_eq!(
+            report.cmux.candidates[1].warning.as_deref(),
+            Some("no live agent signal")
+        );
     }
 
     #[test]
@@ -574,13 +723,16 @@ mod tests {
         assert_eq!(exit_code, 1);
         assert_eq!(report.agent.state, "no_session");
         assert_eq!(report.cmux.workspace.as_deref(), Some("workspace:1"));
-        assert_eq!(report.cmux.surface.as_deref(), Some("surface:4"));
+        assert_eq!(report.cmux.surface, None);
         assert_eq!(report.cmux.state, "no_terminal_surface");
+        assert_eq!(report.cmux.candidates.len(), 1);
+        assert_eq!(report.cmux.candidates[0].surface, "surface:4");
+        assert!(!report.cmux.candidates[0].readable);
         assert!(
             report
                 .warnings
                 .iter()
-                .any(|warning| warning.contains("terminal surface is not ready"))
+                .any(|warning| warning.contains("unreadable cmux surface"))
         );
     }
 
@@ -624,7 +776,9 @@ mod tests {
         runner.add_response("", false);
         add_matching_workspace(&mut runner, &fixture);
         add_selected_surface(&mut runner);
-        runner.add_response("Ready", true);
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        runner.add_response("", true);
         let ctx = fixture.ctx(runner, OutputMode::Json);
 
         let (report, exit_code) = observe_status(&ctx, Some("run-feature"), "status").unwrap();
@@ -814,6 +968,8 @@ mod tests {
     }
 
     fn add_selected_surface(runner: &mut MockRunner) {
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
         runner.add_response(
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,

@@ -68,6 +68,9 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             WorkflowCommand::Edit { workflow } => {
                 commands::workflow::edit(ctx, workflow.as_deref())
             }
+            WorkflowCommand::Repair { workflow, apply } => {
+                commands::workflow::repair(ctx, workflow, *apply)
+            }
             WorkflowCommand::Complete {
                 workflow,
                 task,

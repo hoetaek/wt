@@ -642,6 +642,9 @@ mod tests {
         assert!(content.contains("group = \"2026-05-16-001\""));
         assert!(content.contains("error = \"setup failed\""));
         assert!(content.contains("creation_order = 1"));
+        assert!(!content.contains("cmux"));
+        assert!(!content.contains("workspace"));
+        assert!(!content.contains("surface"));
     }
 
     #[test]
@@ -674,6 +677,30 @@ updated_at = "2026-05-16T00:00:00Z"
         )
         .unwrap();
         assert!(read(&path).unwrap_err().to_string().contains("source"));
+    }
+
+    #[test]
+    fn read_rejects_runtime_binding_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.toml");
+
+        std::fs::write(
+            &path,
+            r#"task = "add-schema"
+branch = "add-schema"
+status = "running"
+source = "new"
+cmux_workspace = "workspace:1"
+cmux_surface = "surface:4"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let err = format!("{:#}", read(&path).unwrap_err());
+
+        assert!(err.contains("unknown field"));
     }
 
     #[test]

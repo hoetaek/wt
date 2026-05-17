@@ -83,6 +83,7 @@ wt workflow task --mode single add-schema wire-api --base .
 wt workflow task --mode batch add-schema wire-api --base main
 wt workflow issue --mode stack 123 456 789 --base main --pr draft
 wt workflow run
+wt workflow repair 2026-05-16-001
 wt workflow complete 2026-05-16-001 add-schema --run-next
 ```
 
@@ -221,7 +222,7 @@ name.
 | `wt new` | Start work from branch-name text |
 | `wt task run` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
-| `wt workflow` | Prepare, inspect, run, and complete saved workflows |
+| `wt workflow` | Prepare, inspect, run, repair, and complete saved workflows |
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
 | `wt agent status` | Observe the matching task agent surface once |
 | `wt agent watch` | Poll the matching task agent surface |

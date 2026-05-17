@@ -310,7 +310,7 @@ Pull-request handoff remains row-level because stack-mode tasks can have differe
 parents, while landing is a workflow-level coordination preference. Workflow policy is
 intent, not state: actual pull-request review result, merge status, ancestry proof,
 worktree cleanup, branch deletion, TaskRun lifecycle status, and TaskDocument cleanup
-remain outside Workflow policy. `wt review`, pull-request state, Git commands, workflow
+remain outside Workflow policy. `wt inspect`, pull-request state, Git commands, workflow
 completion, and `wt done` continue to own those checks and transitions explicitly.
 
 The built-in config defaults are `pull_request = "none"`, `landing = "manual"`, and
@@ -477,6 +477,16 @@ review는 검토를 추가/제출하는 action으로 읽히기 쉽다. Read-only
 `describe`(`https://kubernetes.io/docs/reference/kubectl/generated/kubectl_describe/`)처럼
 inspection surface에 가깝다. 따라서 canonical command는 `wt inspect [<target>]`이고, migration
 시 `wt review`는 explicit guidance와 함께 실패하거나 primary help에서 제거되어야 한다.
+
+`wt workflow repair <workflow>`는 관찰 side effect가 아니라 coordinator/operator가
+명시적으로 실행하는 복구 표면이다. 기본 동작은 dry-run preview이며, linked TaskRun,
+local worktree, 현재 cmux agent surface를 관찰해 어떤 TaskRun을 기존 `failed` 상태로
+기록할 수 있는지 보여준다. `--apply`를 줬을 때만 TaskRun failure model을 통해 status와
+error를 쓴다. repair는 Workflow나 TaskRun에 cmux workspace/surface 좌표를 저장하지
+않고, cmux workspace close나 worktree removal 같은 파괴적 정리는 수행하지 않는다. 그런
+정리가 필요하면 별도의 명확한 flag/confirmation이 있는 cleanup 표면에서 다뤄야 한다.
+`wt inspect`, `wt send`, `wt agent status/watch`는 repair를 권할 수는 있지만 repair
+action을 대신 실행하지 않는다.
 
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 

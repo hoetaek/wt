@@ -2,7 +2,7 @@ use crate::config::{AgentCli, AgentConfig, SubmitMode};
 use crate::context::Ctx;
 use crate::services::cmux::CmuxService;
 use crate::template;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 pub(super) fn bootstrap_agent(
@@ -21,12 +21,21 @@ pub(super) fn bootstrap_agent(
     let panes = cmux.list_panes(ws_handle)?;
     let pane = match panes.first() {
         Some(pane) => pane,
-        None => return Ok(()),
+        None => bail!(
+            "Agent prompt 1/{} failed: no cmux pane found in workspace {}",
+            prompts.len(),
+            ws_handle
+        ),
     };
     let surfaces = cmux.list_pane_surfaces(pane, ws_handle)?;
     let surface = match surfaces.first() {
         Some(surface) => surface,
-        None => return Ok(()),
+        None => bail!(
+            "Agent prompt 1/{} failed: no cmux surface found for pane {} in workspace {}",
+            prompts.len(),
+            pane,
+            ws_handle
+        ),
     };
     let mut vars = vars.clone();
     vars.insert("task_agent_cmux_workspace".into(), ws_handle.into());
@@ -36,7 +45,13 @@ pub(super) fn bootstrap_agent(
 
     for (i, prompt_template) in prompts.iter().enumerate() {
         if i > 0 {
-            let stale_screen = cmux.read_screen(surface, ws_handle).unwrap_or_default();
+            let stale_screen = cmux.read_screen(surface, ws_handle).map_err(|err| {
+                anyhow::anyhow!(
+                    "Agent prompt {}/{} failed: screen read failed before delivery: {err:#}",
+                    i + 1,
+                    prompts.len()
+                )
+            })?;
             let mut screen_changed = false;
             for attempt in 0..agent.timeout {
                 if attempt > 0 {
@@ -50,12 +65,11 @@ pub(super) fn bootstrap_agent(
                 }
             }
             if !screen_changed {
-                ctx.ui.print_warning(&format!(
-                    "Screen unchanged — skipping remaining prompts ({}/{})",
+                bail!(
+                    "Agent prompt {}/{} failed: unchanged screen before delivery",
                     i + 1,
                     prompts.len()
-                ));
-                return Ok(());
+                );
             }
         }
 
@@ -79,12 +93,12 @@ pub(super) fn bootstrap_agent(
             }
 
             if !ready {
-                ctx.ui.print_warning(&format!(
-                    "Timeout waiting for agent ready marker — skipping remaining prompts ({}/{})",
+                bail!(
+                    "Agent prompt {}/{} failed: ready marker timeout waiting for '{}'",
                     i + 1,
-                    prompts.len()
-                ));
-                return Ok(());
+                    prompts.len(),
+                    marker
+                );
             }
         } else if agent.send_after > 0 {
             ctx.ui.print_step(&format!(

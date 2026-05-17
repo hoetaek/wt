@@ -4,6 +4,7 @@ pub mod github;
 pub mod herd;
 pub mod issues;
 pub mod linear;
+pub mod runtime_binding;
 pub mod site;
 pub mod traefik;
 pub mod valet;
