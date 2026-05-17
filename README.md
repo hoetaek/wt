@@ -81,21 +81,26 @@ Prepare saved workflows when local tasks or issues need coordination:
 ```bash
 wt workflow task --mode single add-schema wire-api --base .
 wt workflow task --mode batch add-schema wire-api --base main
-wt workflow issue --mode stack 123 456 789 --base main
+wt workflow issue --mode stack 123 456 789 --base main --pr draft
 wt workflow run
 wt workflow repair 2026-05-16-001
 wt workflow complete 2026-05-16-001 add-schema --run-next
 ```
 
-Review, message, and clean worktrees:
+Inspect, observe, message, and clean worktrees:
 
 ```bash
 wt list
-wt review
-wt status <branch|worktree|task-run-id>
+wt inspect
+wt agent status <branch|worktree|task-run-id>
+wt agent watch <branch|worktree|task-run-id>
 wt send <target> "please report current status"
 wt done <target>
 ```
+
+Omitting a work target opens a selector only in interactive human use. In
+`--json`, `--quiet`, or non-TTY automation, pass an explicit branch, worktree
+path/name, or TaskRun id.
 
 `wt done` removes worktrees and local branches. It does not merge the branch.
 Land reviewed work with Git or pull requests first.
@@ -114,9 +119,16 @@ Land reviewed work with Git or pull requests first.
   base, and `stack` runs ordered branches as a parent chain.
 - `TaskRun` files in `.local/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
+- `wt inspect [<target>]` is the read-only work dossier for a branch, worktree,
+  or TaskRun.
+- `wt agent status [<target>]` observes the current agent/cmux state, and
+  `wt agent watch [<target>]` polls it. Agent state is separate from
+  `TaskRun.status`.
 
 `wt workflow` is the canonical prepared-work surface. Older top-level
 batch/stack concepts are migration context, not the model new docs should teach.
+Older `wt review` and top-level `wt status` names are migration context; new
+docs and scripts should use `wt inspect` and `wt agent status` / `wt agent watch`.
 
 ## Coordinator Handoff
 
@@ -134,13 +146,17 @@ Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<c
 
 Immediate `wt task run` work reports `PR=none`. Workflow single and batch tasks
 also report `PR=none`; stack tasks follow the workflow row's pull-request
-handoff intent. When stack task metadata sets `pull_request = true`, the task
-agent pushes the branch, opens a draft pull request against the workflow parent
-branch, updates the pull request body with the completion report, marks the pull
-request ready for review, and reports `PR=<pr-url>`. If Codex/GitHub review or
+handoff intent. Omit `--pr` or pass `--pr none` to avoid opening a PR,
+`--pr draft` to create a draft PR and leave it draft, or `--pr ready` to create
+a review-ready PR directly. Workflow rows persist PR intent only as
+`pull_request = "draft"` or `pull_request = "ready"`; an omitted value means
+`PR=none`. PR-opening tasks create a body file from
+`.github/pull_request_template.md`, fill a review-focused description, and pass
+it to `gh pr create --body-file <pr-body-file>`. If Codex/GitHub review or
 coordinator feedback asks for changes, the same agent updates the branch, reruns
-checks, pushes, refreshes the PR body when needed, and sends an updated report.
-The coordinator advances, lands, and cleans up only after review passes.
+checks, pushes, refreshes the PR body only if it became stale, and sends an
+updated report. The coordinator advances, lands, and cleans up only after review
+passes.
 
 ## Configuration
 
@@ -192,8 +208,9 @@ name.
 | `wt task run` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
 | `wt workflow` | Prepare, inspect, run, repair, and complete saved workflows |
-| `wt review` | Inspect a branch, worktree, or TaskRun before landing |
-| `wt status` | Poll the matching task agent surface |
+| `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
+| `wt agent status` | Observe the matching task agent surface once |
+| `wt agent watch` | Poll the matching task agent surface |
 | `wt send` | Send a message to the matching task agent surface |
 | `wt done` | Remove completed or disposable worktrees and branches |
 | `wt config` | Print, edit, extract, or inline config |

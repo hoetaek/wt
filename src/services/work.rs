@@ -1,7 +1,7 @@
 pub(crate) use crate::agents::WorkState;
 use crate::agents::{self, AgentKind, AgentObservation, AgentStatus};
 use crate::commands::task_run;
-use crate::context::Ctx;
+use crate::context::{Ctx, PromptItem};
 use crate::services::cmux::{CmuxEvent, CmuxService, CmuxWorkspace};
 use crate::services::git::{GitService, WorktreeEntry};
 use anyhow::{Result, bail};
@@ -130,8 +130,20 @@ struct WorkTargetCandidate {
     matches: Vec<String>,
 }
 
-pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
+#[derive(Clone, Debug)]
+struct SelectableWorkTarget {
+    target: WorkTarget,
+    item: PromptItem,
+    sort_key: String,
+}
+
+#[cfg(test)]
+fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
     let target = resolve_target(ctx, target)?;
+    observe_target(ctx, target)
+}
+
+pub(crate) fn observe_target(ctx: &Ctx, target: WorkTarget) -> Result<Work> {
     let Some(worktree) = target.worktree.clone() else {
         return Ok(Work {
             message: Some(format!(
@@ -256,6 +268,31 @@ pub(crate) fn resolve_target(ctx: &Ctx, target: Option<&str>) -> Result<WorkTarg
     }
 }
 
+pub(crate) fn select_target(
+    ctx: &Ctx,
+    prompt: &str,
+    non_interactive_guidance: &str,
+) -> Result<WorkTarget> {
+    if ctx.is_json() || ctx.quiet || !ctx.ui.can_prompt() {
+        bail!("{non_interactive_guidance}");
+    }
+
+    let candidates = selectable_targets(ctx)?;
+    if candidates.is_empty() {
+        bail!("No work targets found");
+    }
+
+    let items = candidates
+        .iter()
+        .map(|candidate| candidate.item.clone())
+        .collect::<Vec<_>>();
+    let idx = ctx.ui.select_items(prompt, &items)?;
+    candidates
+        .get(idx)
+        .map(|candidate| candidate.target.clone())
+        .ok_or_else(|| anyhow::anyhow!("Selected work target index out of range: {idx}"))
+}
+
 pub(crate) fn cmux_contacts(ctx: &Ctx, worktree: &Path) -> Result<Vec<CmuxContact>> {
     let cmux = CmuxService::new(ctx.runner.as_ref());
     if !cmux.is_available() {
@@ -269,6 +306,76 @@ pub(crate) fn cmux_contacts(ctx: &Ctx, worktree: &Path) -> Result<Vec<CmuxContac
         .cloned()
         .collect::<Vec<_>>();
     cmux_contacts_for_workspaces(&cmux, &workspaces)
+}
+
+fn selectable_targets(ctx: &Ctx) -> Result<Vec<SelectableWorkTarget>> {
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+    let worktrees = git.worktree_list()?;
+    let local_branches = git.list_local_branches()?;
+    let task_runs = task_run::list(ctx)?;
+    let mut candidates = Vec::new();
+
+    let mut branch_names = local_branches.into_iter().collect::<BTreeSet<_>>();
+    branch_names.extend(worktrees.iter().map(|entry| entry.branch.clone()));
+    for branch in branch_names.into_iter().filter(|branch| !branch.is_empty()) {
+        candidates.push(branch_selectable_target(&branch, &worktrees));
+    }
+
+    let mut seen_task_runs = HashSet::new();
+    let mut task_run_candidates = task_runs
+        .into_iter()
+        .filter(|record| seen_task_runs.insert(record.id.clone()))
+        .map(|record| task_run_selectable_target(record, &worktrees))
+        .collect::<Vec<_>>();
+    task_run_candidates.sort_by(|left, right| left.sort_key.cmp(&right.sort_key));
+    candidates.extend(task_run_candidates);
+
+    candidates.sort_by(|left, right| left.sort_key.cmp(&right.sort_key));
+    Ok(candidates)
+}
+
+fn branch_selectable_target(branch: &str, worktrees: &[WorktreeEntry]) -> SelectableWorkTarget {
+    let worktree = worktree_for_branch(worktrees, branch);
+    let item = match worktree.as_ref() {
+        Some(path) => PromptItem::from_hint_parts(
+            branch.to_string(),
+            vec!["branch".into(), format!("worktree {}", path.display())],
+        ),
+        None => PromptItem::with_hint(branch.to_string(), "branch | not checked out"),
+    };
+    SelectableWorkTarget {
+        target: WorkTarget {
+            label: branch.to_string(),
+            branch: branch.to_string(),
+            worktree,
+            task_run: None,
+        },
+        item,
+        sort_key: format!("0:{branch}"),
+    }
+}
+
+fn task_run_selectable_target(
+    record: task_run::TaskRunRecord,
+    worktrees: &[WorktreeEntry],
+) -> SelectableWorkTarget {
+    let hint = vec![
+        "TaskRun".into(),
+        format!("branch {}", record.run.branch),
+        format!("status {}", record.run.status),
+        format!("source {}", record.run.source),
+    ];
+    let worktree = worktree_for_branch(worktrees, &record.run.branch);
+    SelectableWorkTarget {
+        target: WorkTarget {
+            label: record.id.clone(),
+            branch: record.run.branch.clone(),
+            worktree,
+            task_run: Some(record.clone()),
+        },
+        item: PromptItem::from_hint_parts(record.id.clone(), hint),
+        sort_key: format!("1:{}", record.id),
+    }
 }
 
 fn resolve_explicit_target(

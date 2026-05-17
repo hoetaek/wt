@@ -47,6 +47,40 @@ fn git_init(path: &Path) {
     assert!(status.success());
 }
 
+fn git_commit(path: &Path) {
+    std::fs::write(path.join("README.md"), "sample\n").unwrap();
+    let status = git_command()
+        .args(["add", "README.md"])
+        .current_dir(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let status = git_command()
+        .args([
+            "-c",
+            "user.name=wt test",
+            "-c",
+            "user.email=wt@example.com",
+            "commit",
+            "-m",
+            "initial",
+        ])
+        .current_dir(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+fn current_branch(path: &Path) -> String {
+    let output = git_command()
+        .args(["branch", "--show-current"])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
 #[test]
 fn version_flag_prints_package_version() {
     wt_command()
@@ -88,7 +122,8 @@ fn no_args_prints_help_successfully() {
         .stdout(predicate::str::contains("Usage: wt [OPTIONS] [COMMAND]"))
         .stdout(predicate::str::contains("issue"))
         .stdout(predicate::str::contains("pr"))
-        .stdout(predicate::str::contains("new"));
+        .stdout(predicate::str::contains("new"))
+        .stdout(predicate::str::contains("agent"));
 }
 
 #[test]
@@ -172,6 +207,23 @@ fn workflow_run_help_explains_omitted_target_selection() {
 }
 
 #[test]
+fn workflow_prepare_help_uses_pr_mode() {
+    wt_command()
+        .args(["workflow", "task", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--pr <none|draft|ready>"))
+        .stdout(predicate::str::contains("--pull-request").not());
+
+    wt_command()
+        .args(["workflow", "issue", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--pr <none|draft|ready>"))
+        .stdout(predicate::str::contains("--pull-request").not());
+}
+
+#[test]
 fn legacy_batch_command_fails_with_workflow_guidance() {
     wt_command()
         .args(["batch", "run"])
@@ -192,18 +244,130 @@ fn legacy_stack_command_fails_with_workflow_guidance() {
 }
 
 #[test]
-fn status_help_explains_polling_target() {
+fn agent_status_help_explains_polling_target() {
     wt_command()
-        .args(["status", "--help"])
+        .args(["agent", "status", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("task agent"))
-        .stdout(predicate::str::contains("<TARGET>"))
+        .stdout(predicate::str::contains("[TARGET]"))
         .stdout(predicate::str::contains(
             "Branch, worktree path/name, or TaskRun id",
         ))
+        .stdout(predicate::str::contains(
+            "Omit TARGET in an interactive terminal",
+        ))
         .stdout(predicate::str::contains("read-only"))
         .stdout(predicate::str::contains("cmux hooks codex install --yes"));
+}
+
+#[test]
+fn agent_watch_help_explains_polling_target() {
+    wt_command()
+        .args(["agent", "watch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("task agent"))
+        .stdout(predicate::str::contains("[TARGET]"))
+        .stdout(predicate::str::contains("--interval"))
+        .stdout(predicate::str::contains(
+            "Omit TARGET in an interactive terminal",
+        ));
+}
+
+#[test]
+fn inspect_help_explains_optional_target_selection() {
+    wt_command()
+        .args(["inspect", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("read-only work dossier"))
+        .stdout(predicate::str::contains("[TARGET]"))
+        .stdout(predicate::str::contains(
+            "Branch, worktree path/name, or TaskRun id",
+        ))
+        .stdout(predicate::str::contains(
+            "Omit TARGET in an interactive terminal",
+        ));
+}
+
+#[test]
+fn inspect_without_target_noninteractive_requires_explicit_target() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "inspect"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt inspect requires TARGET"))
+        .stderr(predicate::str::contains(
+            "branch, worktree path/name, or TaskRun id",
+        ));
+}
+
+#[test]
+fn inspect_explicit_branch_prints_dossier_without_cmux_contact() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let branch = current_branch(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "inspect", &branch])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("Inspect: {branch}")))
+        .stdout(predicate::str::contains("Work"))
+        .stdout(predicate::str::contains("Git"))
+        .stdout(predicate::str::contains("Agent"))
+        .stdout(predicate::str::contains("Cmux"))
+        .stdout(predicate::str::contains("Expected report"))
+        .stdout(predicate::str::contains("PR=<pr>"))
+        .stderr(predicate::str::contains("Cmux:"));
+}
+
+#[test]
+fn legacy_review_command_fails_with_inspect_guidance() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "review", "feature"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt review has been replaced"))
+        .stderr(predicate::str::contains("wt inspect [<target>]"));
+}
+
+#[test]
+fn legacy_review_help_explains_inspect_migration() {
+    wt_command()
+        .args(["review", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Legacy migration surface"))
+        .stdout(predicate::str::contains("wt inspect [<target>]"));
+}
+
+#[test]
+fn legacy_review_with_json_still_fails_with_inspect_guidance() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "review",
+            "feature",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt review has been replaced"))
+        .stderr(predicate::str::contains("wt inspect [<target>]"))
+        .stderr(predicate::str::contains("JSON output is supported").not());
 }
 
 #[test]
@@ -380,7 +544,7 @@ fn json_output_uses_machine_readable_surface_without_status_decoration() {
 }
 
 #[test]
-fn status_supports_json_global_flag() {
+fn agent_status_supports_json_global_flag() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -389,6 +553,7 @@ fn status_supports_json_global_flag() {
             "-C",
             temp.path().to_str().unwrap(),
             "--json",
+            "agent",
             "status",
             "missing",
         ])
@@ -397,6 +562,47 @@ fn status_supports_json_global_flag() {
         .stdout("")
         .stderr(predicate::str::contains("Work target not found: missing"))
         .stderr(predicate::str::contains("JSON output is supported").not());
+}
+
+#[test]
+fn agent_status_without_target_noninteractive_requires_guidance() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "agent", "status"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt agent status requires TARGET"))
+        .stderr(predicate::str::contains("wt agent status <target>"))
+        .stderr(predicate::str::contains("wt agent watch <target>"))
+        .stderr(predicate::str::contains("wt inspect [<target>]"));
+}
+
+#[test]
+fn legacy_status_command_fails_with_agent_guidance() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "status", "feature"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt status has been replaced"))
+        .stderr(predicate::str::contains("wt agent status <target>"))
+        .stderr(predicate::str::contains("wt agent watch <target>"));
+}
+
+#[test]
+fn legacy_status_help_explains_agent_migration() {
+    wt_command()
+        .args(["status", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Legacy migration surface"))
+        .stdout(predicate::str::contains("wt agent status <target>"))
+        .stdout(predicate::str::contains("wt agent watch <target>"))
+        .stdout(predicate::str::contains("wt inspect [<target>]"));
 }
 
 #[test]

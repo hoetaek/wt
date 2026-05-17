@@ -14,6 +14,14 @@ minor version instead of moving to `x.0.0`.
   surface for workflow runtime inconsistencies. Dry-run output recommends
   repairable TaskRun failure-state updates, and `--apply` marks those TaskRuns
   failed without closing cmux workspaces or removing worktrees.
+- Changed the canonical read-only work dossier from `wt review [TARGET]` to
+  `wt inspect [<target>]`. The legacy `wt review` surface is hidden from
+  primary help and now fails with inspect migration guidance instead of acting
+  as a parallel canonical command.
+- Moved agent runtime observation from top-level `wt status` to
+  `wt agent status <target>` and `wt agent watch <target>`. The legacy
+  top-level `wt status` surface is hidden from primary help and now fails with
+  explicit guidance for one-shot observation, polling, and human inspection.
 - Added a task-run coordinator handoff to `wt task run` prompts. Task-run
   agents now receive coordinator cmux send coordinates and report `PR=none`
   before waiting for review, landing, and cleanup.
@@ -27,8 +35,9 @@ minor version instead of moving to `x.0.0`.
 - Fixed runtime binding so Codex cmux `list-status` signals can identify a
   live agent even when the visible screen only shows model/status text such as
   `gpt-5.5 ... Working`.
-- Bumped the package version to `0.24.0` because `wt workflow repair` adds a
-  new user-facing CLI command while `wt` is still pre-1.0.
+- Bumped the package version to `0.24.0` because replacing `wt review` and
+  top-level `wt status`, and adding `wt workflow repair`, change the
+  user-facing CLI contract while `wt` is still pre-1.0.
 
 ## 0.23.0 - 2026-05-17
 

@@ -115,18 +115,36 @@ pub enum Commands {
         /// Branch, issue number/key, or worktree directory names to remove
         targets: Vec<String>,
     },
-    /// Inspect a worktree, branch, or TaskRun before review or landing
+    /// Read a work dossier for a branch, worktree, or TaskRun
+    #[command(
+        long_about = "Read a concise, read-only work dossier for a branch, worktree path/name, or TaskRun id. Omit TARGET in an interactive terminal to choose an inspectable work target; pass TARGET explicitly for scripts and non-interactive use."
+    )]
+    Inspect {
+        /// Branch, worktree path/name, or TaskRun id to inspect
+        target: Option<String>,
+    },
+    /// Legacy review command; use wt inspect
+    #[command(
+        hide = true,
+        long_about = "Legacy migration surface. Use `wt inspect [<target>]` for the read-only work dossier, then complete, land, or clean up explicitly when appropriate."
+    )]
     Review {
         /// Branch, worktree path/name, or TaskRun id to inspect
         target: Option<String>,
     },
-    /// Poll a task agent's current status
+    /// Observe and watch task agent runtime state
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
+    /// Legacy status command; use wt agent status
     #[command(
-        long_about = "Poll a task agent's current status from the matching cmux surface. This is read-only: it observes cmux screen, status, and hook signals without updating TaskRuns or provider issues. Codex status is weaker until cmux Codex hooks are installed with `cmux hooks codex install --yes`."
+        hide = true,
+        long_about = "Legacy migration surface. Use `wt agent status <target>` to observe a task agent once, `wt agent watch <target>` to poll, or `wt inspect [<target>]` for the read-only work dossier."
     )]
     Status {
-        /// Branch, worktree path/name, or TaskRun id to poll
-        target: String,
+        /// Branch, worktree path/name, or TaskRun id
+        target: Option<String>,
     },
     /// Send a message to a task agent's cmux surface
     Send {
@@ -234,6 +252,29 @@ pub enum ProfileCommand {
     Create {
         /// New profile name
         name: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum AgentCommand {
+    /// Observe a task agent's current runtime state once
+    #[command(
+        long_about = "Observe a task agent's current runtime state from the matching cmux surface. This is read-only: it observes cmux screen, status, and hook signals without updating TaskRuns or provider issues. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use. Codex status is weaker until cmux Codex hooks are installed with `cmux hooks codex install --yes`."
+    )]
+    Status {
+        /// Branch, worktree path/name, or TaskRun id to observe
+        target: Option<String>,
+    },
+    /// Poll a task agent's runtime state until it is no longer running or becomes blocked
+    #[command(
+        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
+    )]
+    Watch {
+        /// Branch, worktree path/name, or TaskRun id to watch
+        target: Option<String>,
+        /// Seconds between observations
+        #[arg(long, default_value_t = 2, value_name = "SECONDS")]
+        interval: u64,
     },
 }
 
@@ -376,9 +417,9 @@ pub enum WorkflowCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Mark stack-mode workflow tasks as requiring pull-request handoff
-        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
-        pull_request: bool,
+        /// Pull-request handoff intent for stack-mode workflow tasks
+        #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
+        pr: Option<WorkflowPrModeArg>,
     },
     /// Prepare issues as a workflow file without starting workspaces
     Issue {
@@ -393,9 +434,9 @@ pub enum WorkflowCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Mark stack-mode workflow tasks as requiring pull-request handoff
-        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
-        pull_request: bool,
+        /// Pull-request handoff intent for stack-mode workflow tasks
+        #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
+        pr: Option<WorkflowPrModeArg>,
     },
     /// Start runnable tasks from a workflow
     #[command(
@@ -446,6 +487,13 @@ pub enum WorkflowModeArg {
     Single,
     Batch,
     Stack,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowPrModeArg {
+    None,
+    Draft,
+    Ready,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
@@ -752,57 +800,94 @@ mod tests {
     }
 
     #[test]
-    fn review_accepts_optional_target() {
-        let cli = parse(&["wt", "review"]);
+    fn inspect_accepts_optional_target() {
+        let cli = parse(&["wt", "inspect"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Review { target: None })
+            Some(Commands::Inspect { target: None })
         ));
 
-        let cli = parse(&["wt", "review", "feature"]);
+        let cli = parse(&["wt", "inspect", "feature"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Review { ref target }) if target.as_deref() == Some("feature")
+            Some(Commands::Inspect { ref target }) if target.as_deref() == Some("feature")
         ));
     }
 
     #[test]
-    fn review_help_describes_target_types() {
+    fn inspect_help_describes_optional_target_and_selector() {
         let mut command = Cli::command();
         let help = command
-            .find_subcommand_mut("review")
+            .find_subcommand_mut("inspect")
             .unwrap()
             .render_long_help()
             .to_string();
 
-        assert!(help.contains("worktree, branch, or TaskRun"));
+        assert!(help.contains("[TARGET]"));
+        assert!(help.contains("read-only work dossier"));
         assert!(help.contains("Branch, worktree path/name, or TaskRun id"));
+        assert!(help.contains("Omit TARGET in an interactive terminal"));
     }
 
     #[test]
-    fn status_accepts_required_target() {
-        let cli = parse(&["wt", "status", "feature"]);
+    fn agent_status_accepts_optional_target() {
+        let cli = parse(&["wt", "agent", "status", "feature"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Status { ref target }) if target == "feature"
+            Some(Commands::Agent {
+                command: AgentCommand::Status { ref target }
+            }) if target.as_deref() == Some("feature")
         ));
 
-        let result = Cli::try_parse_from(["wt", "status"]);
-        assert!(result.is_err());
+        let cli = parse(&["wt", "agent", "status"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Agent {
+                command: AgentCommand::Status { target: None }
+            })
+        ));
     }
 
     #[test]
-    fn status_help_describes_target_types() {
+    fn agent_status_help_describes_target_types_and_selector() {
         let mut command = Cli::command();
         let help = command
+            .find_subcommand_mut("agent")
+            .unwrap()
             .find_subcommand_mut("status")
             .unwrap()
             .render_long_help()
             .to_string();
 
         assert!(help.contains("task agent"));
-        assert!(help.contains("<TARGET>"));
+        assert!(help.contains("[TARGET]"));
         assert!(help.contains("Branch, worktree path/name, or TaskRun id"));
+        assert!(help.contains("Omit TARGET in an interactive terminal"));
+    }
+
+    #[test]
+    fn agent_watch_accepts_optional_target_and_interval() {
+        let cli = parse(&["wt", "agent", "watch", "feature", "--interval", "5"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Agent {
+                command: AgentCommand::Watch {
+                    ref target,
+                    interval: 5,
+                }
+            }) if target.as_deref() == Some("feature")
+        ));
+
+        let cli = parse(&["wt", "agent", "watch"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Agent {
+                command: AgentCommand::Watch {
+                    target: None,
+                    interval: 2,
+                }
+            })
+        ));
     }
 
     #[test]
@@ -1193,7 +1278,8 @@ mod tests {
             "codex",
             "--base",
             "main",
-            "--pull-request",
+            "--pr",
+            "ready",
         ]);
         assert!(matches!(
             cli.command,
@@ -1203,7 +1289,7 @@ mod tests {
                     mode: WorkflowModeArg::Stack,
                     profile: Some(ref profile),
                     base: Some(ref base),
-                    pull_request: true,
+                    pr: Some(WorkflowPrModeArg::Ready),
                 }
             }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
@@ -1222,7 +1308,7 @@ mod tests {
                     mode: WorkflowModeArg::Batch,
                     profile: None,
                     base: None,
-                    pull_request: false,
+                    pr: None,
                 }
             }) if tasks.is_empty()
         ));
@@ -1239,9 +1325,27 @@ mod tests {
                     mode: WorkflowModeArg::Batch,
                     profile: None,
                     base: None,
-                    pull_request: false,
+                    pr: None,
                 }
             }) if issues.is_empty()
+        ));
+    }
+
+    #[test]
+    fn workflow_issue_accepts_pr_draft() {
+        let cli = parse(&[
+            "wt", "workflow", "issue", "--mode", "stack", "PROJ-1", "--pr", "draft",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Issue {
+                    ref issues,
+                    mode: WorkflowModeArg::Stack,
+                    pr: Some(WorkflowPrModeArg::Draft),
+                    ..
+                }
+            }) if issues == &vec!["PROJ-1".to_string()]
         ));
     }
 
@@ -1316,6 +1420,18 @@ mod tests {
         let help = task.render_help().to_string();
         assert!(help.contains("[TASKS]..."));
         assert!(help.contains("omit to select multiple existing tasks"));
+        assert!(help.contains("--pr <none|draft|ready>"));
+        assert!(!help.contains("--pull-request"));
+    }
+
+    #[test]
+    fn workflow_issue_help_uses_pr_mode() {
+        let mut command = Cli::command();
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+        let issue = workflow.find_subcommand_mut("issue").unwrap();
+        let help = issue.render_help().to_string();
+        assert!(help.contains("--pr <none|draft|ready>"));
+        assert!(!help.contains("--pull-request"));
     }
 
     #[test]

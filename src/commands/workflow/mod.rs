@@ -1,4 +1,4 @@
-use crate::cli::{BaseMode, WorkflowModeArg};
+use crate::cli::{BaseMode, WorkflowModeArg, WorkflowPrModeArg};
 use crate::commands::editor;
 use crate::commands::issue;
 use crate::commands::issue_selection;
@@ -12,7 +12,7 @@ use crate::error::WtError;
 use crate::services::cmux::CmuxService;
 use crate::services::git::GitService;
 use crate::workflow as workflow_store;
-use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask};
+use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowPullRequestMode, WorkflowTask};
 use anyhow::{Result, bail};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -54,10 +54,10 @@ pub fn task(
     mode: WorkflowModeArg,
     profile: Option<&str>,
     base: &Option<String>,
-    pull_request: bool,
+    pr: Option<WorkflowPrModeArg>,
 ) -> Result<()> {
     validate_profile(ctx, profile)?;
-    validate_mode_options(mode, pull_request)?;
+    validate_mode_options(mode, pr)?;
     let prepared_tasks = if tasks.is_empty() {
         task_command::select_local_tasks(ctx)?
             .into_iter()
@@ -69,7 +69,7 @@ pub fn task(
     } else {
         task_command::prepare_named_tasks(ctx, tasks)?
     };
-    write_prepared_workflow(ctx, mode, profile, base, prepared_tasks, pull_request)
+    write_prepared_workflow(ctx, mode, profile, base, prepared_tasks, pr)
 }
 
 pub fn issue(
@@ -78,10 +78,10 @@ pub fn issue(
     mode: WorkflowModeArg,
     profile: Option<&str>,
     base: &Option<String>,
-    pull_request: bool,
+    pr: Option<WorkflowPrModeArg>,
 ) -> Result<()> {
     validate_profile(ctx, profile)?;
-    validate_mode_options(mode, pull_request)?;
+    validate_mode_options(mode, pr)?;
 
     let selected_issues = if issues.is_empty() {
         issue_selection::select_issues(ctx, "Select issues for workflow")?
@@ -98,7 +98,7 @@ pub fn issue(
     }
 
     let prepared_tasks = task_command::prepare_issue_tasks(ctx, &selected_issues)?;
-    write_prepared_workflow(ctx, mode, profile, base, prepared_tasks, pull_request)
+    write_prepared_workflow(ctx, mode, profile, base, prepared_tasks, pr)
 }
 
 pub fn show(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
@@ -138,7 +138,7 @@ fn write_prepared_workflow(
     profile: Option<&str>,
     base: &Option<String>,
     prepared_tasks: Vec<PreparedTask>,
-    pull_request: bool,
+    pr: Option<WorkflowPrModeArg>,
 ) -> Result<()> {
     if prepared_tasks.is_empty() {
         ctx.ui.print_warning("No tasks selected");
@@ -154,7 +154,7 @@ fn write_prepared_workflow(
         &workflow_path,
         &resolved_base,
         prepared_tasks,
-        pull_request,
+        workflow_pr_mode(pr),
     )?;
 
     let mut metadata = WorkflowMetadata::new(
@@ -409,7 +409,7 @@ fn workflow_tasks_from_prepared(
     workflow_path: &Path,
     initial_parent: &str,
     prepared_tasks: Vec<PreparedTask>,
-    pull_request: bool,
+    pull_request: Option<WorkflowPullRequestMode>,
 ) -> Result<PreparedWorkflowTasks> {
     let group = task_run::group_from_path(workflow_path)?;
     let mut parent = Some(initial_parent.to_string());
@@ -434,7 +434,7 @@ fn workflow_tasks_from_prepared(
         let mut row = WorkflowTask::new(task.key.clone(), run.id.clone());
         if mode == WorkflowModeArg::Stack {
             row.parent = parent.clone();
-            row.pull_request = Some(pull_request);
+            row.pull_request = pull_request;
             parent = task_command::prepared_branch_name(&task.branch).map(str::to_string);
         }
         task_runs.push(run);
@@ -443,11 +443,23 @@ fn workflow_tasks_from_prepared(
     Ok(PreparedWorkflowTasks { tasks, task_runs })
 }
 
-fn validate_mode_options(mode: WorkflowModeArg, pull_request: bool) -> Result<()> {
-    if pull_request && mode != WorkflowModeArg::Stack {
-        bail!("--pull-request is only valid with --mode stack");
+fn validate_mode_options(mode: WorkflowModeArg, pr: Option<WorkflowPrModeArg>) -> Result<()> {
+    if matches!(
+        pr,
+        Some(WorkflowPrModeArg::Draft | WorkflowPrModeArg::Ready)
+    ) && mode != WorkflowModeArg::Stack
+    {
+        bail!("--pr draft/ready is only valid with --mode stack");
     }
     Ok(())
+}
+
+fn workflow_pr_mode(pr: Option<WorkflowPrModeArg>) -> Option<WorkflowPullRequestMode> {
+    match pr {
+        Some(WorkflowPrModeArg::Draft) => Some(WorkflowPullRequestMode::Draft),
+        Some(WorkflowPrModeArg::Ready) => Some(WorkflowPullRequestMode::Ready),
+        Some(WorkflowPrModeArg::None) | None => None,
+    }
 }
 
 fn validate_single_mode_branches(
@@ -591,7 +603,7 @@ mod tests {
             .iter()
             .map(|title| title.to_string())
             .collect::<Vec<_>>();
-        task(ctx, &tasks, mode, None, &Some("main".into()), false).unwrap();
+        task(ctx, &tasks, mode, None, &Some("main".into()), None).unwrap();
         workflow_store::list(ctx).unwrap().pop().unwrap()
     }
 
@@ -658,7 +670,7 @@ mod tests {
             WorkflowModeArg::Batch,
             None,
             &Some("main".into()),
-            false,
+            None,
         )
         .unwrap();
 
@@ -705,7 +717,7 @@ mod tests {
             WorkflowModeArg::Batch,
             None,
             &Some("main".into()),
-            false,
+            None,
         )
         .unwrap();
 
@@ -737,7 +749,7 @@ mod tests {
             WorkflowModeArg::Batch,
             None,
             &Some("main".into()),
-            false,
+            None,
         )
         .unwrap();
 
@@ -763,7 +775,7 @@ mod tests {
             WorkflowModeArg::Single,
             None,
             &Some("main".into()),
-            false,
+            None,
         )
         .unwrap();
 
@@ -796,7 +808,7 @@ mod tests {
             WorkflowModeArg::Batch,
             None,
             &Some("main".into()),
-            false,
+            None,
         )
         .unwrap();
 
@@ -840,7 +852,7 @@ mod tests {
             WorkflowModeArg::Batch,
             None,
             &Some("main".into()),
-            false,
+            None,
         )
         .unwrap();
 
@@ -885,7 +897,7 @@ mod tests {
             WorkflowModeArg::Single,
             None,
             &Some("main".into()),
-            false,
+            None,
         )
         .unwrap();
 
@@ -899,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn task_prepares_stack_mode_workflow_with_parents_and_pull_request() {
+    fn task_prepares_stack_mode_workflow_with_parents_and_pr_modes() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
 
@@ -909,7 +921,7 @@ mod tests {
             WorkflowModeArg::Stack,
             None,
             &Some("main".into()),
-            true,
+            Some(WorkflowPrModeArg::Draft),
         )
         .unwrap();
 
@@ -917,9 +929,60 @@ mod tests {
         assert_eq!(workflow.mode, WorkflowMode::Stack);
         assert!(workflow.profile.is_none());
         assert_eq!(workflow.tasks[0].parent.as_deref(), Some("main"));
-        assert_eq!(workflow.tasks[0].pull_request, Some(true));
+        assert_eq!(
+            workflow.tasks[0].pull_request,
+            Some(WorkflowPullRequestMode::Draft)
+        );
         assert_eq!(workflow.tasks[1].parent.as_deref(), Some("contract"));
-        assert_eq!(workflow.tasks[1].pull_request, Some(true));
+        assert_eq!(
+            workflow.tasks[1].pull_request,
+            Some(WorkflowPullRequestMode::Draft)
+        );
+    }
+
+    #[test]
+    fn task_prepares_stack_mode_workflow_without_pr_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        task(
+            &ctx,
+            &["contract".into()],
+            WorkflowModeArg::Stack,
+            None,
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(record.workflow.tasks[0].pull_request, None);
+        let content = std::fs::read_to_string(record.path).unwrap();
+        assert!(!content.contains("pull_request"));
+    }
+
+    #[test]
+    fn task_prepares_stack_mode_workflow_with_ready_pr_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        task(
+            &ctx,
+            &["contract".into()],
+            WorkflowModeArg::Stack,
+            None,
+            &Some("main".into()),
+            Some(WorkflowPrModeArg::Ready),
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(
+            record.workflow.tasks[0].pull_request,
+            Some(WorkflowPullRequestMode::Ready)
+        );
+        let content = std::fs::read_to_string(record.path).unwrap();
+        assert!(content.contains("pull_request = \"ready\""));
     }
 
     #[test]
@@ -933,7 +996,7 @@ mod tests {
             WorkflowModeArg::Stack,
             None,
             &Some("main".into()),
-            false,
+            None,
         )
         .unwrap();
 
@@ -1220,12 +1283,12 @@ mod tests {
     }
 
     #[test]
-    fn workflow_stack_prompt_uses_workflow_completion_and_pr_policy() {
+    fn workflow_stack_prompt_uses_draft_pr_handoff_policy() {
         let row = WorkflowTask {
             task: "PROJ-2".into(),
             run: "run-2".into(),
             parent: Some("PROJ-1".into()),
-            pull_request: Some(true),
+            pull_request: Some(WorkflowPullRequestMode::Draft),
         };
         let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
 
@@ -1234,18 +1297,15 @@ mod tests {
         assert!(content.contains("## Workflow Coordinator Handoff"));
         assert_workflow_handoff_precedes_task_body(&content, "title = \"API\"");
         assert_workflow_send_command_precedes_policy(&content);
-        assert!(content.contains("Workflow task metadata sets `pull_request = true`"));
-        assert!(content.contains("gh pr create --draft --base PROJ-1 --fill"));
-        assert!(content.contains("gh pr edit --body-file <completion-report-body-file>"));
-        assert!(content.contains("gh pr ready"));
-        assert!(
-            content
-                .contains("update the pull request body with the Agent Completion Report details")
-        );
+        assert!(content.contains("Workflow task metadata sets `pull_request = \"draft\"`"));
+        assert!(content.contains("gh pr create --draft --body-file <pr-body-file>"));
+        assert!(content.contains(".github/pull_request_template.md"));
+        assert!(!content.contains("gh pr ready"));
+        assert!(!content.contains("gh pr edit --body-file"));
         assert!(
             content.contains("If Codex/GitHub review or coordinator feedback asks for changes")
         );
-        assert!(content.contains("commit, push, update the pull request body"));
+        assert!(content.contains("update the pull request body if it became stale"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains(
@@ -1255,18 +1315,37 @@ mod tests {
     }
 
     #[test]
-    fn workflow_stack_prompt_reports_none_without_pull_request_intent() {
+    fn workflow_stack_prompt_uses_ready_pr_handoff_policy() {
         let row = WorkflowTask {
             task: "PROJ-2".into(),
             run: "run-2".into(),
             parent: Some("PROJ-1".into()),
-            pull_request: Some(false),
+            pull_request: Some(WorkflowPullRequestMode::Ready),
         };
         let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
 
         let content = workflow_stack_task_prompt_content("title = \"API\"\n", &workflow_path, &row);
 
-        assert!(content.contains("Workflow task metadata sets `pull_request = false`"));
+        assert!(content.contains("Workflow task metadata sets `pull_request = \"ready\"`"));
+        assert!(content.contains("gh pr create --body-file <pr-body-file>"));
+        assert!(!content.contains("gh pr create --draft"));
+        assert!(!content.contains("gh pr ready"));
+        assert!(content.contains("PR=<pr-url>"));
+    }
+
+    #[test]
+    fn workflow_stack_prompt_reports_none_without_pull_request_intent() {
+        let row = WorkflowTask {
+            task: "PROJ-2".into(),
+            run: "run-2".into(),
+            parent: Some("PROJ-1".into()),
+            pull_request: None,
+        };
+        let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
+
+        let content = workflow_stack_task_prompt_content("title = \"API\"\n", &workflow_path, &row);
+
+        assert!(content.contains("Workflow task metadata omits `pull_request`"));
         assert!(content.contains("do not open a pull request for this workflow task"));
         assert!(content.contains("If coordinator feedback asks for changes"));
         assert!(!content.contains("If Codex/GitHub review"));
@@ -1364,7 +1443,7 @@ mod tests {
     }
 
     #[test]
-    fn pull_request_requires_stack_mode() {
+    fn pr_modes_require_stack_mode() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
 
@@ -1374,11 +1453,11 @@ mod tests {
             WorkflowModeArg::Batch,
             None,
             &Some("main".into()),
-            true,
+            Some(WorkflowPrModeArg::Draft),
         )
         .unwrap_err();
 
-        assert!(err.to_string().contains("--mode stack"));
+        assert!(err.to_string().contains("--pr draft/ready"));
     }
 
     fn replace_first_workflow_run_with_foreign_group(

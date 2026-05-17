@@ -132,6 +132,7 @@ pub struct CtxOptions {
     pub base_config: Config,
     pub output_mode: OutputMode,
     pub verbosity: u8,
+    pub quiet: bool,
 }
 
 impl Default for CtxOptions {
@@ -140,6 +141,7 @@ impl Default for CtxOptions {
             base_config: Config::default(),
             output_mode: OutputMode::Text,
             verbosity: 0,
+            quiet: false,
         }
     }
 }
@@ -156,6 +158,7 @@ pub struct Ctx {
     pub ui: Box<dyn UserInterface>,
     pub output_mode: OutputMode,
     pub verbosity: u8,
+    pub quiet: bool,
 }
 
 impl Ctx {
@@ -170,6 +173,7 @@ impl Ctx {
             base_config: config.clone(),
             output_mode: OutputMode::Text,
             verbosity: 0,
+            quiet: false,
         };
         Self::new_with_options(repo_root, invocation_root, config, runner, ui, options)
     }
@@ -199,6 +203,7 @@ impl Ctx {
             ui,
             output_mode: options.output_mode,
             verbosity: options.verbosity,
+            quiet: options.quiet,
         }
     }
 

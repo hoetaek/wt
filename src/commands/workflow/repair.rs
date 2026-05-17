@@ -132,7 +132,7 @@ fn running_repair_item(
             row,
             record,
             "Running TaskRun has multiple live cmux agent surfaces; no unique runtime binding was validated",
-            "Inspect wt status or wt review output and choose the intended cmux surface before changing TaskRun state",
+            "Inspect wt agent status or wt inspect output and choose the intended cmux surface before changing TaskRun state",
         ))),
         WorkSessionState::NoLocalWorktree => Ok(Some(mark_failed_item(
             row,
@@ -169,7 +169,7 @@ fn prepared_repair_item(
             row,
             record,
             "Prepared TaskRun has multiple live cmux agent surfaces; no unique runtime binding was validated",
-            "Inspect wt status or wt review output before changing TaskRun state",
+            "Inspect wt agent status or wt inspect output before changing TaskRun state",
         ))),
         WorkSessionState::CmuxUnavailable
         | WorkSessionState::NoCmuxWorkspace

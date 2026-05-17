@@ -18,7 +18,8 @@ impl<'a> RuntimeBindingResolver<'a> {
     }
 
     pub(crate) fn observe(&self, target: Option<&str>) -> Result<Work> {
-        work::observe_work(self.ctx, target)
+        let target = work::resolve_target(self.ctx, target)?;
+        work::observe_target(self.ctx, target)
     }
 
     pub(crate) fn unique_live_binding(&self, work: &Work) -> Option<RuntimeBinding> {

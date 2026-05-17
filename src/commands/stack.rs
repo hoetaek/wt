@@ -583,11 +583,11 @@ fn stack_task_prompt_content(content: &str, stack_path: &Path, stack_task: &Stac
     );
     let pull_request_instructions = if stack_task.pull_request {
         let pr_command = format!(
-            "git push -u origin HEAD\ngh pr create --draft --base {} --fill",
+            "git push -u origin HEAD\n# Create <pr-body-file> from .github/pull_request_template.md and fill it before creating the pull request.\npr_url=$(gh pr create --draft --body-file <pr-body-file> --base {} --fill)",
             shell_arg(parent_branch)
         );
         format!(
-            "Stack task metadata sets `pull_request = true`. When this task is complete and committed, push the branch and open a draft pull request against the stack parent branch:\n\n```bash\n{pr_command}\n```"
+            "Stack task metadata sets `pull_request = true`. This is legacy stack migration context. When this task is complete and committed, push the branch, create `<pr-body-file>` from `.github/pull_request_template.md`, fill it with a review-focused PR description, and open a draft pull request against the stack parent branch:\n\n```bash\n{pr_command}\n```"
         )
     } else {
         "Stack task metadata sets `pull_request = false`. When this task is complete and committed, do not open a pull request for this stack task.".into()
@@ -1493,7 +1493,9 @@ mod tests {
 
         assert!(content.contains("## Stack Coordinator Handoff"));
         assert!(content.contains("Stack task metadata sets `pull_request = true`"));
-        assert!(content.contains("gh pr create --draft --base PROJ-1 --fill"));
+        assert!(content.contains("legacy stack migration context"));
+        assert!(content.contains("gh pr create --draft --body-file <pr-body-file>"));
+        assert!(content.contains(".github/pull_request_template.md"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains(
@@ -1536,7 +1538,9 @@ mod tests {
 
         let content = stack_task_prompt_content("title = \"Task\"\n", &stack_path, &stack_task);
 
-        assert!(content.contains("gh pr create --draft --base '<stack-parent>' --fill"));
+        assert!(content.contains(
+            "gh pr create --draft --body-file <pr-body-file> --base '<stack-parent>' --fill"
+        ));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}}"));
         assert!(content.contains(
             "wt stack complete '/repo path/.local/stacks/stack.toml' 'task with space' --run-next"

@@ -58,6 +58,7 @@ fn is_codex_status_token(token: &str) -> bool {
             | "failure"
             | "fatal"
             | "error"
+            | "permission"
     )
 }
 
