@@ -7,18 +7,40 @@ use crate::commands::task_run::{
     self, STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
 use crate::config::{Config, validate_profile_name};
-use crate::context::{Ctx, PromptItem};
+use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::cmux::CmuxService;
 use crate::services::git::GitService;
 use crate::workflow as workflow_store;
 use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask};
-use crate::worktree_naming;
-use anyhow::{Context, Result, bail};
-use std::collections::{HashMap, HashSet};
+use anyhow::{Result, bail};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::thread;
+
+mod batch;
+mod render;
+mod selection;
+mod state;
+
+use batch::run_batch_workflow;
+use render::{
+    base_label, workflow_single_task_handoff_section, workflow_stack_task_handoff_section,
+    workflow_task_label,
+};
+#[cfg(test)]
+use render::{
+    workflow_batch_task_prompt_content, workflow_single_task_prompt_content,
+    workflow_stack_task_prompt_content,
+};
+#[cfg(test)]
+use selection::list_runnable_workflow_candidates;
+use selection::{next_runnable_workflow_stack_task, resolve_run_workflow_path};
+#[cfg(test)]
+use state::read_batch_workflow_task_states;
+use state::{
+    WorkflowTaskState, read_single_workflow_task_states, read_stack_workflow_task_states,
+    task_run_record, update_workflow_task_run,
+};
 
 pub fn task(
     ctx: &Ctx,
@@ -166,285 +188,6 @@ pub fn run(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
     }
 }
 
-struct RunnableWorkflowCandidate {
-    id: String,
-    path: PathBuf,
-    item: PromptItem,
-    label: String,
-}
-
-struct RunnableWorkflowInfo {
-    runnable_count: usize,
-    next_idx: Option<usize>,
-}
-
-fn resolve_run_workflow_path(ctx: &Ctx, workflow: Option<&str>) -> Result<Option<PathBuf>> {
-    match workflow {
-        Some(target) => Ok(Some(resolve_mutating_target(ctx, target, "run")?)),
-        None => select_runnable_workflow_path(ctx),
-    }
-}
-
-fn select_runnable_workflow_path(ctx: &Ctx) -> Result<Option<PathBuf>> {
-    let candidates = list_runnable_workflow_candidates(ctx)?;
-    match candidates.len() {
-        0 => {
-            ctx.ui.print_warning("No runnable workflows found");
-            Ok(None)
-        }
-        1 => Ok(Some(candidates[0].path.clone())),
-        _ if !ctx.ui.can_prompt() => {
-            bail!("{}", multiple_runnable_workflows_message(ctx, &candidates))
-        }
-        _ => {
-            let items = candidates
-                .iter()
-                .map(|candidate| candidate.item.clone())
-                .collect::<Vec<_>>();
-            let idx = ctx.ui.select_items("Workflow to run", &items)?;
-            let candidate = candidates
-                .get(idx)
-                .ok_or_else(|| anyhow::anyhow!("Selected workflow index out of range: {idx}"))?;
-            Ok(Some(candidate.path.clone()))
-        }
-    }
-}
-
-fn list_runnable_workflow_candidates(ctx: &Ctx) -> Result<Vec<RunnableWorkflowCandidate>> {
-    let mut candidates = Vec::new();
-    for record in workflow_store::list(ctx)? {
-        let states = read_workflow_candidate_states(ctx, &record.path, &record.workflow)
-            .with_context(|| {
-                format!(
-                    "Failed to read workflow task state: {}",
-                    record.path.display()
-                )
-            })?;
-        let Some(info) = runnable_workflow_info(&record.workflow.mode, &states) else {
-            continue;
-        };
-        let item = workflow_selection_item(
-            ctx,
-            &record.path,
-            &record.id,
-            &record.workflow,
-            &states,
-            &info,
-        );
-        let label = item.render_plain();
-        candidates.push(RunnableWorkflowCandidate {
-            id: record.id,
-            path: record.path,
-            item,
-            label,
-        });
-    }
-
-    candidates.sort_by(|left, right| {
-        left.label
-            .cmp(&right.label)
-            .then_with(|| left.path.cmp(&right.path))
-    });
-    Ok(candidates)
-}
-
-fn read_workflow_candidate_states(
-    ctx: &Ctx,
-    workflow_path: &Path,
-    metadata: &WorkflowMetadata,
-) -> Result<Vec<WorkflowTaskState>> {
-    match metadata.mode {
-        WorkflowMode::Single => read_single_workflow_task_states(ctx, workflow_path, metadata),
-        WorkflowMode::Batch => read_batch_workflow_task_states(ctx, workflow_path, metadata),
-        WorkflowMode::Stack => read_stack_workflow_task_states(ctx, workflow_path, metadata),
-    }
-}
-
-fn runnable_workflow_info(
-    mode: &WorkflowMode,
-    states: &[WorkflowTaskState],
-) -> Option<RunnableWorkflowInfo> {
-    match mode {
-        WorkflowMode::Single => {
-            if !states.is_empty() && states.iter().all(|state| state.run.is_runnable()) {
-                Some(RunnableWorkflowInfo {
-                    runnable_count: states.len(),
-                    next_idx: None,
-                })
-            } else {
-                None
-            }
-        }
-        WorkflowMode::Batch => {
-            let runnable_count = states
-                .iter()
-                .filter(|state| state.run.is_runnable())
-                .count();
-            (runnable_count > 0).then_some(RunnableWorkflowInfo {
-                runnable_count,
-                next_idx: None,
-            })
-        }
-        WorkflowMode::Stack => {
-            if states.iter().any(|state| state.run.is_stack_completable()) {
-                return None;
-            }
-            next_runnable_workflow_stack_task(states).map(|next_idx| RunnableWorkflowInfo {
-                runnable_count: 1,
-                next_idx: Some(next_idx),
-            })
-        }
-    }
-}
-
-fn workflow_selection_item(
-    ctx: &Ctx,
-    workflow_path: &Path,
-    workflow_id: &str,
-    metadata: &WorkflowMetadata,
-    states: &[WorkflowTaskState],
-    info: &RunnableWorkflowInfo,
-) -> PromptItem {
-    let mut fields = vec![format!("mode {}", metadata.mode.as_str())];
-    match metadata.mode {
-        WorkflowMode::Single | WorkflowMode::Batch => {
-            fields.push(format!("{} runnable", info.runnable_count));
-            fields.push(format!(
-                "tasks {}",
-                workflow_filtered_task_summary(ctx, states, |state| { state.run.is_runnable() })
-                    .unwrap_or_else(|| "none".into())
-            ));
-        }
-        WorkflowMode::Stack => {
-            if let Some(next_idx) = info.next_idx {
-                let state = &states[next_idx];
-                fields.push(format!(
-                    "next {} [{}]",
-                    workflow_task_title_label(ctx, &state.row.task),
-                    state.run.status
-                ));
-            }
-        }
-    }
-    fields.push(format!(
-        "status {}",
-        workflow_selection_status_counts(states)
-    ));
-    fields.push(format!("base {}", base_label(metadata)));
-    if let Some(profile) = metadata.profile.as_deref() {
-        fields.push(format!("profile {profile}"));
-    }
-    fields.push(format!(
-        "path {}",
-        workflow_relative_path(ctx, workflow_path)
-    ));
-
-    PromptItem::from_hint_parts(workflow_id, fields)
-}
-
-fn workflow_filtered_task_summary<F>(
-    ctx: &Ctx,
-    states: &[WorkflowTaskState],
-    include: F,
-) -> Option<String>
-where
-    F: Fn(&WorkflowTaskState) -> bool,
-{
-    let matching = states
-        .iter()
-        .filter(|state| include(state))
-        .collect::<Vec<_>>();
-    if matching.is_empty() {
-        return None;
-    }
-
-    let visible = matching
-        .iter()
-        .take(3)
-        .map(|state| workflow_task_title_label(ctx, &state.row.task))
-        .collect::<Vec<_>>();
-    let mut summary = visible.join(", ");
-    if matching.len() > visible.len() {
-        summary.push_str(&format!(", ...(+{})", matching.len() - visible.len()));
-    }
-    Some(summary)
-}
-
-fn workflow_task_title_label(ctx: &Ctx, key: &str) -> String {
-    match task_command::read_task_document(ctx, key) {
-        Ok(document) => {
-            let title = document.title_or_key(key);
-            if title == key {
-                key.to_string()
-            } else {
-                format!("{title} ({key})")
-            }
-        }
-        Err(_) => format!("{key} (missing)"),
-    }
-}
-
-fn workflow_selection_status_counts(items: &[WorkflowTaskState]) -> String {
-    let counts = [
-        STATUS_PREPARED,
-        STATUS_RUNNING,
-        STATUS_DONE,
-        STATUS_FAILED,
-        STATUS_SKIPPED,
-    ]
-    .iter()
-    .map(|status| {
-        let count = items
-            .iter()
-            .filter(|item| item.run.status == *status)
-            .count();
-        (status, count)
-    })
-    .filter(|(_, count)| *count > 0)
-    .map(|(status, count)| format!("{count} {status}"))
-    .collect::<Vec<_>>()
-    .join(" / ");
-
-    if counts.is_empty() {
-        "none".into()
-    } else {
-        counts
-    }
-}
-
-fn workflow_relative_path(ctx: &Ctx, path: &Path) -> String {
-    path.strip_prefix(&ctx.repo_root)
-        .unwrap_or(path)
-        .display()
-        .to_string()
-}
-
-fn multiple_runnable_workflows_message(
-    ctx: &Ctx,
-    candidates: &[RunnableWorkflowCandidate],
-) -> String {
-    let mut rows = candidates
-        .iter()
-        .take(10)
-        .map(|candidate| {
-            format!(
-                "  wt workflow run {}  # {}",
-                shell_arg(&candidate.id),
-                workflow_relative_path(ctx, &candidate.path)
-            )
-        })
-        .collect::<Vec<_>>();
-
-    if candidates.len() > rows.len() {
-        rows.push(format!("  ...(+{} more)", candidates.len() - rows.len()));
-    }
-
-    format!(
-        "Multiple runnable workflows found; pass one explicitly:\n{}",
-        rows.join("\n")
-    )
-}
-
 pub fn complete(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
     let path = resolve_mutating_target(ctx, workflow, "complete")?;
     let mut metadata = workflow_store::read(&path)?;
@@ -580,105 +323,6 @@ fn run_single_workflow(
     Ok(())
 }
 
-#[derive(Clone, Debug)]
-struct WorkflowTaskState {
-    idx: usize,
-    row: WorkflowTask,
-    document: task_command::TaskDocument,
-    path: String,
-    content: String,
-    run: task_run::TaskRun,
-}
-
-fn read_single_workflow_task_states(
-    ctx: &Ctx,
-    workflow_path: &Path,
-    metadata: &WorkflowMetadata,
-) -> Result<Vec<WorkflowTaskState>> {
-    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
-    for state in &states {
-        validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_NEW)?;
-    }
-    Ok(states)
-}
-
-fn read_workflow_task_states(
-    ctx: &Ctx,
-    workflow_path: &Path,
-    metadata: &WorkflowMetadata,
-) -> Result<Vec<WorkflowTaskState>> {
-    let group = task_run::group_from_path(workflow_path)?;
-    metadata
-        .tasks
-        .iter()
-        .enumerate()
-        .map(|(idx, row)| {
-            let (document, path, content) = task_command::read_task_file(ctx, &row.task)?;
-            let run_path = task_run::resolve(ctx, &row.run).with_context(|| {
-                format!(
-                    "Workflow task {} references missing TaskRun {}",
-                    row.task, row.run
-                )
-            })?;
-            let run = task_run::read(&run_path)?;
-            validate_workflow_task_run(row, &run)?;
-            validate_workflow_task_run_group(row, &run, &group)?;
-            Ok(WorkflowTaskState {
-                idx,
-                row: row.clone(),
-                document,
-                path,
-                content,
-                run,
-            })
-        })
-        .collect()
-}
-
-fn validate_workflow_task_run(row: &WorkflowTask, run: &task_run::TaskRun) -> Result<()> {
-    if run.task != row.task {
-        bail!(
-            "Workflow task {} references TaskRun {} for task {}",
-            row.task,
-            row.run,
-            run.task
-        );
-    }
-    Ok(())
-}
-
-fn validate_workflow_task_run_group(
-    row: &WorkflowTask,
-    run: &task_run::TaskRun,
-    group: &str,
-) -> Result<()> {
-    if run.group.as_deref() != Some(group) {
-        bail!(
-            "Workflow task {} references TaskRun {} outside workflow group {}",
-            row.task,
-            row.run,
-            group
-        );
-    }
-    Ok(())
-}
-
-fn validate_workflow_task_run_source(
-    row: &WorkflowTask,
-    run: &task_run::TaskRun,
-    source: task_run::TaskRunSource,
-) -> Result<()> {
-    if run.source != source {
-        bail!(
-            "Workflow task {} references TaskRun {} with source {}",
-            row.task,
-            row.run,
-            run.source
-        );
-    }
-    Ok(())
-}
-
 fn run_single_workflow_task(
     ctx: &Ctx,
     state: &WorkflowTaskState,
@@ -796,7 +440,7 @@ fn single_workflow_group_title(states: &[WorkflowTaskState]) -> String {
     format!("{}개 작업: {first}", states.len())
 }
 
-fn workflow_base_raw(metadata: &WorkflowMetadata) -> Result<Option<String>> {
+pub(super) fn workflow_base_raw(metadata: &WorkflowMetadata) -> Result<Option<String>> {
     match metadata.base_mode.as_str() {
         "explicit" => Ok(Some(metadata.base.clone().ok_or_else(|| {
             anyhow::anyhow!("Workflow base_mode is explicit but base is missing")
@@ -817,12 +461,12 @@ fn mark_single_workflow_failed(ctx: &Ctx, states: &[WorkflowTaskState], err: &an
     }
 }
 
-fn is_cancelled(err: &anyhow::Error) -> bool {
+pub(super) fn is_cancelled(err: &anyhow::Error) -> bool {
     err.downcast_ref::<WtError>()
         .is_some_and(|err| matches!(err, WtError::Cancelled))
 }
 
-fn apply_workflow_color(ctx: &Ctx, worktree_path: &Path, color: Option<&str>) {
+pub(super) fn apply_workflow_color(ctx: &Ctx, worktree_path: &Path, color: Option<&str>) {
     let Some(color) = color.map(str::trim).filter(|color| !color.is_empty()) else {
         return;
     };
@@ -847,437 +491,6 @@ fn apply_workflow_color(ctx: &Ctx, worktree_path: &Path, color: Option<&str>) {
 
 fn comparable_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-}
-
-fn run_batch_workflow(
-    ctx: &Ctx,
-    workflow_path: &Path,
-    metadata: &mut WorkflowMetadata,
-    jobs: usize,
-) -> Result<()> {
-    validate_profile(ctx, metadata.profile.as_deref())?;
-    if metadata
-        .color
-        .as_deref()
-        .is_none_or(|color| color.trim().is_empty())
-    {
-        workflow_store::write(ctx, workflow_path, metadata)?;
-    }
-
-    let states = read_batch_workflow_task_states(ctx, workflow_path, metadata)?;
-    if states.is_empty() {
-        bail!("Workflow has no tasks: {}", workflow_path.display());
-    }
-    let runnable = states
-        .into_iter()
-        .filter(|state| state.run.is_runnable())
-        .collect::<Vec<_>>();
-    if runnable.is_empty() {
-        ctx.ui
-            .print_step("No prepared or failed tasks to run in this workflow.");
-        return Ok(());
-    }
-
-    let base = workflow_base_raw(metadata)?.expect("workflow base is validated");
-    let failed = if jobs <= 1 {
-        run_batch_workflow_sequential(ctx, metadata, runnable, base)?
-    } else {
-        run_batch_workflow_parallel(ctx, metadata, runnable, base, jobs)?
-    };
-
-    if failed {
-        bail!("Workflow batch failed: {}", workflow_path.display());
-    }
-    Ok(())
-}
-
-fn read_batch_workflow_task_states(
-    ctx: &Ctx,
-    workflow_path: &Path,
-    metadata: &WorkflowMetadata,
-) -> Result<Vec<WorkflowTaskState>> {
-    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
-    for state in &states {
-        validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_BATCH)?;
-    }
-    Ok(states)
-}
-
-fn run_batch_workflow_sequential(
-    ctx: &Ctx,
-    metadata: &WorkflowMetadata,
-    states: Vec<WorkflowTaskState>,
-    base: String,
-) -> Result<bool> {
-    let mut failed = false;
-    let total = metadata.tasks.len();
-    for (idx, state) in states.iter().enumerate() {
-        ctx.ui.print_step(&format!("Starting {}", state.row.task));
-        task_run::update(ctx, &state.row.run, STATUS_RUNNING, None, None)?;
-        let result =
-            run_batch_workflow_task(ctx, state, &base, metadata.profile.as_deref(), true, total);
-        match apply_batch_workflow_result(ctx, state, result, metadata.color.as_deref())? {
-            BatchWorkflowTaskOutcome::Started => {}
-            BatchWorkflowTaskOutcome::Failed => failed = true,
-            BatchWorkflowTaskOutcome::Cancelled => {
-                failed = true;
-                for skipped in states.iter().skip(idx + 1) {
-                    record_batch_workflow_failure(
-                        ctx,
-                        skipped,
-                        task_run::STATUS_SKIPPED,
-                        "Skipped after user cancellation",
-                    )?;
-                }
-                break;
-            }
-        }
-    }
-    Ok(failed)
-}
-
-fn run_batch_workflow_parallel(
-    ctx: &Ctx,
-    metadata: &WorkflowMetadata,
-    states: Vec<WorkflowTaskState>,
-    base: String,
-    jobs: usize,
-) -> Result<bool> {
-    let mut failed = preflight_batch_workflow(ctx, &states, metadata.profile.as_deref())?;
-    let runnable = states
-        .into_iter()
-        .filter(|state| {
-            let failed = failed_indices(&failed);
-            !failed.contains(&state.row.run)
-        })
-        .collect::<Vec<_>>();
-    if runnable.is_empty() {
-        return Ok(!failed.is_empty());
-    }
-
-    let worker_count = jobs.max(1);
-    let (tx, rx) = mpsc::channel::<BatchWorkflowCompletion>();
-    let mut next = 0;
-    let mut active = 0;
-    let mut cancelled = false;
-    let total = metadata.tasks.len();
-
-    thread::scope(|scope| -> Result<()> {
-        loop {
-            while !cancelled && active < worker_count && next < runnable.len() {
-                let state = runnable[next].clone();
-                ctx.ui.print_step(&format!("Starting {}", state.row.task));
-                task_run::update(ctx, &state.row.run, STATUS_RUNNING, None, None)?;
-                let tx = tx.clone();
-                let base = base.clone();
-                let profile = metadata.profile.clone();
-                scope.spawn(move || {
-                    let result = run_batch_workflow_task(
-                        ctx,
-                        &state,
-                        &base,
-                        profile.as_deref(),
-                        false,
-                        total,
-                    );
-                    let _ = tx.send(BatchWorkflowCompletion { state, result });
-                });
-                active += 1;
-                next += 1;
-            }
-
-            if active == 0 {
-                break;
-            }
-
-            let completion = rx
-                .recv()
-                .map_err(|_| anyhow::anyhow!("Workflow batch worker result channel closed"))?;
-            active -= 1;
-            match completion.result {
-                Ok(result) => {
-                    record_batch_workflow_success(
-                        ctx,
-                        &completion.state,
-                        result,
-                        metadata.color.as_deref(),
-                    )?;
-                }
-                Err(err) if is_cancelled(&err) => {
-                    record_batch_workflow_failure(
-                        ctx,
-                        &completion.state,
-                        task_run::STATUS_SKIPPED,
-                        "User cancelled",
-                    )?;
-                    cancelled = true;
-                }
-                Err(err) => {
-                    let message = err.to_string();
-                    record_batch_workflow_failure(ctx, &completion.state, STATUS_FAILED, &message)?;
-                    failed.push(BatchWorkflowFailure {
-                        run: completion.state.row.run.clone(),
-                        error: message,
-                    });
-                }
-            }
-        }
-
-        Ok(())
-    })?;
-
-    if cancelled {
-        for state in runnable.iter().skip(next) {
-            record_batch_workflow_failure(
-                ctx,
-                state,
-                task_run::STATUS_SKIPPED,
-                "Skipped after user cancellation",
-            )?;
-        }
-    }
-
-    Ok(!failed.is_empty() || cancelled)
-}
-
-#[derive(Clone)]
-struct BatchWorkflowFailure {
-    run: String,
-    error: String,
-}
-
-struct BatchWorkflowCompletion {
-    state: WorkflowTaskState,
-    result: Result<issue::IssueRunResult>,
-}
-
-enum BatchWorkflowTaskOutcome {
-    Started,
-    Failed,
-    Cancelled,
-}
-
-fn failed_indices(failures: &[BatchWorkflowFailure]) -> HashSet<String> {
-    failures.iter().map(|failure| failure.run.clone()).collect()
-}
-
-fn preflight_batch_workflow(
-    ctx: &Ctx,
-    states: &[WorkflowTaskState],
-    profile: Option<&str>,
-) -> Result<Vec<BatchWorkflowFailure>> {
-    let mut failures = Vec::new();
-    let mut branches: HashMap<String, Vec<&WorkflowTaskState>> = HashMap::new();
-    let mut paths: HashMap<PathBuf, Vec<&WorkflowTaskState>> = HashMap::new();
-
-    for state in states {
-        match batch_workflow_plan(ctx, state, profile) {
-            Ok(plan) => {
-                for branch in plan.branches {
-                    branches.entry(branch).or_default().push(state);
-                }
-                for path in plan.paths {
-                    paths.entry(path).or_default().push(state);
-                }
-            }
-            Err(err) => failures.push(BatchWorkflowFailure {
-                run: state.row.run.clone(),
-                error: err.to_string(),
-            }),
-        }
-    }
-
-    for (branch, states) in branches {
-        if states.len() <= 1 {
-            continue;
-        }
-        for state in states {
-            failures.push(BatchWorkflowFailure {
-                run: state.row.run.clone(),
-                error: format!(
-                    "Multiple runnable workflow batch tasks target branch {branch}; adjust task branches before parallel run"
-                ),
-            });
-        }
-    }
-    for (path, states) in paths {
-        if states.len() <= 1 {
-            continue;
-        }
-        for state in states {
-            failures.push(BatchWorkflowFailure {
-                run: state.row.run.clone(),
-                error: format!(
-                    "Multiple runnable workflow batch tasks target worktree path {}; adjust task branches before parallel run",
-                    path.display()
-                ),
-            });
-        }
-    }
-
-    let mut deduped = Vec::new();
-    let mut seen = HashSet::new();
-    for failure in failures {
-        if seen.insert(failure.run.clone()) {
-            if let Some(state) = states.iter().find(|state| state.row.run == failure.run) {
-                record_batch_workflow_failure(ctx, state, STATUS_FAILED, &failure.error)?;
-            }
-            deduped.push(failure);
-        }
-    }
-    Ok(deduped)
-}
-
-struct BatchWorkflowPlan {
-    branches: Vec<String>,
-    paths: Vec<PathBuf>,
-}
-
-fn batch_workflow_plan(
-    ctx: &Ctx,
-    state: &WorkflowTaskState,
-    profile: Option<&str>,
-) -> Result<BatchWorkflowPlan> {
-    let branch_name = task_command::prepared_branch_name(&state.document.branch);
-    if branch_name.is_none() && state.document.origin.is_none() {
-        bail!("Workflow task {} has no branch", state.row.task);
-    }
-    let Some(branch_name) = branch_name else {
-        return Ok(BatchWorkflowPlan {
-            branches: Vec::new(),
-            paths: Vec::new(),
-        });
-    };
-
-    let identifier = state.document.identifier_or_key(&state.row.task);
-    let title = state.document.title_or_key(&state.row.task);
-    let naming = worktree_naming::generate(ctx, &identifier, &title, Some(branch_name))?;
-    let plans = issue::planned_worktrees_for_prepared_issue(
-        ctx,
-        &title,
-        branch_name,
-        profile,
-        naming.as_ref(),
-    )?;
-    for plan in &plans {
-        if plan.path.exists() {
-            bail!(
-                "Worktree {} already exists; parallel workflow batch workers cannot prompt to delete or open it",
-                plan.path.display()
-            );
-        }
-    }
-    Ok(BatchWorkflowPlan {
-        branches: plans.iter().map(|plan| plan.branch_name.clone()).collect(),
-        paths: plans.into_iter().map(|plan| plan.path).collect(),
-    })
-}
-
-fn run_batch_workflow_task(
-    ctx: &Ctx,
-    state: &WorkflowTaskState,
-    base: &str,
-    profile: Option<&str>,
-    allow_interactive_prompts: bool,
-    total: usize,
-) -> Result<issue::IssueRunResult> {
-    let completion_section = workflow_batch_task_handoff_section();
-    let branch_name = task_command::prepared_branch_name(&state.document.branch);
-    if branch_name.is_none() && state.document.origin.is_none() {
-        bail!("Workflow task {} has no branch", state.row.task);
-    }
-    let identifier = state.document.identifier_or_key(&state.row.task);
-    let title = state.document.title_or_key(&state.row.task);
-    let workspace_label = task_command::workspace_run_label(
-        state.idx,
-        total,
-        state
-            .document
-            .origin
-            .as_ref()
-            .map(|origin| origin.id.as_str()),
-    );
-    let base = Some(base.to_string());
-    let prepared = issue::PreparedIssueContext {
-        identifier: &identifier,
-        title: &title,
-        branch_name,
-        mode: state.document.mode(),
-        on_start_issue_id: state
-            .document
-            .origin
-            .as_ref()
-            .map(|origin| origin.id.as_str()),
-        prompt_intro: "Use this task before changing code.",
-        completion_section: Some(&completion_section),
-        workspace_label: Some(workspace_label),
-        snapshot: issue::IssueSnapshotContext {
-            path_label: "Task path",
-            path: &state.path,
-            content: &state.content,
-        },
-    };
-    if allow_interactive_prompts {
-        issue::run_with_issue_snapshot(ctx, &base, profile, false, prepared)
-    } else {
-        issue::run_with_issue_snapshot_non_interactive(ctx, &base, profile, false, prepared)
-    }
-}
-
-fn apply_batch_workflow_result(
-    ctx: &Ctx,
-    state: &WorkflowTaskState,
-    result: Result<issue::IssueRunResult>,
-    color: Option<&str>,
-) -> Result<BatchWorkflowTaskOutcome> {
-    match result {
-        Ok(result) => {
-            record_batch_workflow_success(ctx, state, result, color)?;
-            Ok(BatchWorkflowTaskOutcome::Started)
-        }
-        Err(err) if is_cancelled(&err) => {
-            record_batch_workflow_failure(ctx, state, task_run::STATUS_SKIPPED, "User cancelled")?;
-            Ok(BatchWorkflowTaskOutcome::Cancelled)
-        }
-        Err(err) => {
-            let message = err.to_string();
-            record_batch_workflow_failure(ctx, state, STATUS_FAILED, &message)?;
-            Ok(BatchWorkflowTaskOutcome::Failed)
-        }
-    }
-}
-
-fn record_batch_workflow_success(
-    ctx: &Ctx,
-    state: &WorkflowTaskState,
-    result: issue::IssueRunResult,
-    color: Option<&str>,
-) -> Result<()> {
-    if state.document.branch != result.branch_name {
-        task_command::write_task_branch(ctx, &state.row.task, &result.branch_name)?;
-    }
-    task_run::update(
-        ctx,
-        &state.row.run,
-        STATUS_RUNNING,
-        Some(&result.branch_name),
-        None,
-    )?;
-    apply_workflow_color(ctx, &result.worktree_path, color);
-    ctx.ui.print_step(&format!("Started {}", state.row.task));
-    Ok(())
-}
-
-fn record_batch_workflow_failure(
-    ctx: &Ctx,
-    state: &WorkflowTaskState,
-    status: task_run::TaskRunStatus,
-    error: &str,
-) -> Result<()> {
-    ctx.ui
-        .print_warning(&format!("Failed {}: {error}", state.row.task));
-    task_run::update(ctx, &state.row.run, status, None, Some(error))?;
-    Ok(())
 }
 
 fn run_stack_workflow(
@@ -1360,29 +573,6 @@ fn run_stack_workflow(
     }
 }
 
-fn read_stack_workflow_task_states(
-    ctx: &Ctx,
-    workflow_path: &Path,
-    metadata: &WorkflowMetadata,
-) -> Result<Vec<WorkflowTaskState>> {
-    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
-    for state in &states {
-        validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_STACK)?;
-    }
-    Ok(states)
-}
-
-fn next_runnable_workflow_stack_task(items: &[WorkflowTaskState]) -> Option<usize> {
-    for item in items {
-        match item.run.status {
-            STATUS_DONE | STATUS_SKIPPED => continue,
-            status if status.is_runnable() => return Some(item.idx),
-            _ => return None,
-        }
-    }
-    None
-}
-
 fn parent_for_workflow_stack_task(
     metadata: &WorkflowMetadata,
     states: &[WorkflowTaskState],
@@ -1463,125 +653,6 @@ fn run_stack_workflow_task(
     )
 }
 
-enum WorkflowCoordinatorHandoff<'a> {
-    ReportOnly,
-    Stack {
-        workflow_path: &'a Path,
-        row: &'a WorkflowTask,
-    },
-}
-
-#[cfg(test)]
-fn workflow_single_task_prompt_content(content: &str) -> String {
-    workflow_task_prompt_content(content, &workflow_single_task_handoff_section())
-}
-
-#[cfg(test)]
-fn workflow_batch_task_prompt_content(content: &str) -> String {
-    workflow_task_prompt_content(content, &workflow_batch_task_handoff_section())
-}
-
-#[cfg(test)]
-fn workflow_stack_task_prompt_content(
-    content: &str,
-    workflow_path: &Path,
-    row: &WorkflowTask,
-) -> String {
-    workflow_task_prompt_content(
-        content,
-        &workflow_stack_task_handoff_section(workflow_path, row),
-    )
-}
-
-fn workflow_single_task_handoff_section() -> String {
-    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::ReportOnly)
-}
-
-fn workflow_batch_task_handoff_section() -> String {
-    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::ReportOnly)
-}
-
-fn workflow_stack_task_handoff_section(workflow_path: &Path, row: &WorkflowTask) -> String {
-    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::Stack { workflow_path, row })
-}
-
-#[cfg(test)]
-fn workflow_task_prompt_content(content: &str, handoff: &str) -> String {
-    format!("{}\n\n{}", handoff, content.trim_end())
-}
-
-fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>) -> String {
-    let (pull_request_instructions, pr_report_value, complete_command) =
-        workflow_handoff_policy(handoff);
-    let send_command = format!(
-        "cmux send --workspace {{{{coordinator_cmux_workspace}}}} --surface {{{{coordinator_cmux_surface}}}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\"\n{{{{coordinator_enter_command}}}}"
-    );
-
-    let after_send = if let Some((complete_command, review_followup)) = complete_command {
-        format!(
-            "{review_followup}\n\nWhen review passes, wait for the coordinator to advance the workflow. The coordinator will run:\n\n```bash\n{complete_command}\n```"
-        )
-    } else {
-        "After sending the report, wait for review. If coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push if this branch tracks a remote, and send an updated Agent Completion Report. When review passes, wait for the coordinator to land and clean up the workflow task explicitly.".into()
-    };
-
-    format!(
-        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator cmux surface that started this workflow:\n\n```bash\n{}\n```\n\n{}\n\n{}\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait.",
-        send_command, pull_request_instructions, after_send
-    )
-}
-
-fn workflow_handoff_policy(
-    handoff: WorkflowCoordinatorHandoff<'_>,
-) -> (String, &'static str, Option<(String, &'static str)>) {
-    match handoff {
-        WorkflowCoordinatorHandoff::ReportOnly => (
-            "This workflow mode has no pull-request handoff intent. When this task is complete and committed, do not open a pull request for this workflow task; report `PR=none`.".into(),
-            "none",
-            None,
-        ),
-        WorkflowCoordinatorHandoff::Stack { workflow_path, row } => {
-            let parent_branch = row.parent.as_deref().unwrap_or("<workflow-parent>");
-            let pull_request = row.pull_request.unwrap_or(false);
-            let pr_report_value = if pull_request { "<pr-url>" } else { "none" };
-            let complete_command = format!(
-                "wt workflow complete {} {} --run-next",
-                shell_arg(&workflow_path.to_string_lossy()),
-                shell_arg(workflow_task_label(row))
-            );
-            let pull_request_instructions = if pull_request {
-                let pr_command = format!(
-                    "git push -u origin HEAD\ngh pr create --draft --base {} --fill\ngh pr edit --body-file <completion-report-body-file>\ngh pr ready",
-                    shell_arg(parent_branch)
-                );
-                format!(
-                    "Workflow task metadata sets `pull_request = true`. When this task is complete and committed, push the branch, open a draft pull request against the workflow parent branch, update the pull request body with the Agent Completion Report details, and mark it ready for review. Create `<completion-report-body-file>` as a temporary file containing Summary, Changed files, Checks run, PR, and Risks or follow-ups:\n\n```bash\n{pr_command}\n```"
-                )
-            } else {
-                "Workflow task metadata sets `pull_request = false`. When this task is complete and committed, do not open a pull request for this workflow task.".into()
-            };
-            let review_followup = if pull_request {
-                "After the pull request is ready and the report is sent, keep ownership of review follow-up for this task. If Codex/GitHub review or coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push, update the pull request body, and send an updated Agent Completion Report."
-            } else {
-                "After the report is sent, keep ownership of coordinator review follow-up for this task. If coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push if this branch tracks a remote, and send an updated Agent Completion Report."
-            };
-            (
-                pull_request_instructions,
-                pr_report_value,
-                Some((complete_command, review_followup)),
-            )
-        }
-    }
-}
-
-fn workflow_task_label(row: &WorkflowTask) -> &str {
-    if row.task.trim().is_empty() {
-        "workflow-task"
-    } else {
-        row.task.trim()
-    }
-}
-
 fn workflow_task_matches(ctx: &Ctx, row: &WorkflowTask, target: &str) -> bool {
     if row.task == target {
         return true;
@@ -1592,30 +663,6 @@ fn workflow_task_matches(ctx: &Ctx, row: &WorkflowTask, target: &str) -> bool {
     task_doc.title == target
         || task_command::prepared_branch_name(&task_doc.branch) == Some(target)
         || task_doc.branch.rsplit('/').next() == Some(target)
-}
-
-fn update_workflow_task_run(
-    ctx: &Ctx,
-    row: &WorkflowTask,
-    status: task_run::TaskRunStatus,
-    error: Option<&str>,
-) -> Result<()> {
-    let path = task_run::resolve(ctx, &row.run).with_context(|| {
-        format!(
-            "Workflow task {} references missing TaskRun {}",
-            workflow_task_label(row),
-            row.run
-        )
-    })?;
-    let run = task_run::read(&path)?;
-    validate_workflow_task_run(row, &run)?;
-
-    let branch = task_command::read_task_document(ctx, &row.task)
-        .ok()
-        .map(|task| task.branch);
-    let updated = task_run::update(ctx, &row.run, status, branch.as_deref(), error)?;
-    validate_workflow_task_run(row, &updated.run)?;
-    Ok(())
 }
 
 fn validate_completable_workflow_stack_task(ctx: &Ctx, row: &WorkflowTask) -> Result<()> {
@@ -1676,17 +723,6 @@ fn porcelain_status_path(line: &str) -> Option<&str> {
     let path = line.get(3..)?.trim();
     let path = path.rsplit(" -> ").next().unwrap_or(path);
     Some(path.trim_matches('"'))
-}
-
-fn shell_arg(value: &str) -> String {
-    let safe = value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | ':' | '='));
-    if safe && !value.is_empty() {
-        return value.to_string();
-    }
-
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 struct PreparedWorkflowTasks {
@@ -1771,7 +807,7 @@ fn resolve_read_target(ctx: &Ctx, workflow: Option<&str>) -> Result<std::path::P
     workflow_store::resolve(ctx, workflow.unwrap_or("latest"))
 }
 
-fn resolve_mutating_target(ctx: &Ctx, workflow: &str, command: &str) -> Result<PathBuf> {
+pub(super) fn resolve_mutating_target(ctx: &Ctx, workflow: &str, command: &str) -> Result<PathBuf> {
     if workflow == "latest" {
         bail!(
             "wt workflow {command} latest is not supported; pass a workflow path or id explicitly"
@@ -1805,7 +841,7 @@ fn resolve_workflow_base(ctx: &Ctx, base: &Option<String>) -> Result<String> {
     Ok(base)
 }
 
-fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
+pub(super) fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     let Some(profile) = profile else {
         return Ok(());
     };
@@ -1832,19 +868,6 @@ fn source_for_mode(mode: WorkflowModeArg) -> task_run::TaskRunSource {
         WorkflowModeArg::Batch => task_run::SOURCE_BATCH,
         WorkflowModeArg::Stack => task_run::SOURCE_STACK,
     }
-}
-
-fn base_label(metadata: &WorkflowMetadata) -> String {
-    metadata
-        .base
-        .clone()
-        .unwrap_or_else(|| format!("({})", metadata.base_mode))
-}
-
-fn task_run_record(ctx: &Ctx, run: &str) -> Option<task_run::TaskRun> {
-    task_run::resolve(ctx, run)
-        .and_then(|path| task_run::read(&path))
-        .ok()
 }
 
 #[cfg(test)]
