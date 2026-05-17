@@ -173,6 +173,21 @@ wt config
 wt config --profile codex
 ```
 
+Workflow preparation reads repository defaults from the effective config:
+
+```toml
+[workflow.defaults]
+pull_request = "draft"        # none | draft | ready
+landing = "after_review"      # manual | after_review
+landing_requires_approval = true
+```
+
+`wt workflow task` and `wt workflow issue` write the effective landing policy to
+the prepared workflow file under `[policy]`. Stack-mode tasks also materialize
+the effective PR handoff on each task row; an explicit `--pr none|draft|ready`
+overrides `workflow.defaults.pull_request` for that prepared workflow. Single
+and batch workflows still report `PR=none`.
+
 Small private agent config can stay inline:
 
 ```toml

@@ -1,7 +1,7 @@
 use crate::config::{
     AgentCli, AgentConfig, Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
-    ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig, WorkspaceConfig,
-    WorktreeConfig,
+    ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig, WorkflowConfig,
+    WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
 };
 
 pub fn render_effective_config(config: &Config) -> String {
@@ -9,6 +9,7 @@ pub fn render_effective_config(config: &Config) -> String {
 
     append_worktree_section(&mut s, &config.worktree);
     append_setup_section(&mut s, &config.setup);
+    append_workflow_section(&mut s, &config.workflow);
     if let Some(issues) = config.issues.as_ref() {
         append_issues_section(&mut s, issues);
     }
@@ -116,6 +117,33 @@ fn append_setup_section(s: &mut String, setup: &SetupConfig) {
         entries.sort_by(|a, b| a.0.cmp(b.0));
         for (key, value) in entries {
             s.push_str(&format!("{} = {}\n", toml_key(key), toml_quote(value)));
+        }
+    }
+}
+
+fn append_workflow_section(s: &mut String, workflow: &WorkflowConfig) {
+    if workflow == &WorkflowConfig::default() {
+        return;
+    }
+
+    if workflow.defaults != Default::default() {
+        s.push_str("\n[workflow.defaults]\n");
+        if let Some(pull_request) = workflow.defaults.pull_request {
+            s.push_str(&format!(
+                "pull_request = {}\n",
+                toml_quote(workflow_default_pull_request_name(pull_request))
+            ));
+        }
+        if let Some(landing) = workflow.defaults.landing {
+            s.push_str(&format!(
+                "landing = {}\n",
+                toml_quote(workflow_default_landing_name(landing))
+            ));
+        }
+        if let Some(landing_requires_approval) = workflow.defaults.landing_requires_approval {
+            s.push_str(&format!(
+                "landing_requires_approval = {landing_requires_approval}\n"
+            ));
         }
     }
 }
@@ -284,6 +312,21 @@ fn site_provider_name(provider: &SiteProvider) -> &'static str {
         SiteProvider::Valet => "valet",
         SiteProvider::DockerProxy => "docker_proxy",
         SiteProvider::Traefik => "traefik",
+    }
+}
+
+fn workflow_default_pull_request_name(mode: WorkflowDefaultPullRequestMode) -> &'static str {
+    match mode {
+        WorkflowDefaultPullRequestMode::None => "none",
+        WorkflowDefaultPullRequestMode::Draft => "draft",
+        WorkflowDefaultPullRequestMode::Ready => "ready",
+    }
+}
+
+fn workflow_default_landing_name(policy: WorkflowDefaultLandingPolicy) -> &'static str {
+    match policy {
+        WorkflowDefaultLandingPolicy::Manual => "manual",
+        WorkflowDefaultLandingPolicy::AfterReview => "after_review",
     }
 }
 

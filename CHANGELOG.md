@@ -22,6 +22,10 @@ minor version instead of moving to `x.0.0`.
   `wt agent status <target>` and `wt agent watch <target>`. The legacy
   top-level `wt status` surface is hidden from primary help and now fails with
   explicit guidance for one-shot observation, polling, and human inspection.
+- Added `[workflow.defaults]` config materialization for prepared workflows.
+  `wt workflow task` and `wt workflow issue` now snapshot landing policy into
+  `[policy]`, and stack-mode PR handoff defaults into task rows unless `--pr`
+  explicitly overrides them.
 - Added a task-run coordinator handoff to `wt task run` prompts. Task-run
   agents now receive coordinator cmux send coordinates and report `PR=none`
   before waiting for review, landing, and cleanup.
@@ -36,8 +40,9 @@ minor version instead of moving to `x.0.0`.
   live agent even when the visible screen only shows model/status text such as
   `gpt-5.5 ... Working`.
 - Bumped the package version to `0.24.0` because replacing `wt review` and
-  top-level `wt status`, and adding `wt workflow repair`, change the
-  user-facing CLI contract while `wt` is still pre-1.0.
+  top-level `wt status`, adding `wt workflow repair`, and materializing
+  workflow defaults change the user-facing CLI/config contract while `wt` is
+  still pre-1.0.
 
 ## 0.23.0 - 2026-05-17
 

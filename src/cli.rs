@@ -417,7 +417,7 @@ pub enum WorkflowCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Pull-request handoff intent for stack-mode workflow tasks
+        /// Override stack-mode pull-request handoff; omitted uses workflow.defaults.pull_request
         #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
         pr: Option<WorkflowPrModeArg>,
     },
@@ -434,7 +434,7 @@ pub enum WorkflowCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Pull-request handoff intent for stack-mode workflow tasks
+        /// Override stack-mode pull-request handoff; omitted uses workflow.defaults.pull_request
         #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
         pr: Option<WorkflowPrModeArg>,
     },
@@ -1421,6 +1421,7 @@ mod tests {
         assert!(help.contains("[TASKS]..."));
         assert!(help.contains("omit to select multiple existing tasks"));
         assert!(help.contains("--pr <none|draft|ready>"));
+        assert!(help.contains("workflow.defaults.pull_request"));
         assert!(!help.contains("--pull-request"));
     }
 
@@ -1431,6 +1432,7 @@ mod tests {
         let issue = workflow.find_subcommand_mut("issue").unwrap();
         let help = issue.render_help().to_string();
         assert!(help.contains("--pr <none|draft|ready>"));
+        assert!(help.contains("workflow.defaults.pull_request"));
         assert!(!help.contains("--pull-request"));
     }
 
