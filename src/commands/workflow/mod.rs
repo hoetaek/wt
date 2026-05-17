@@ -673,6 +673,53 @@ mod tests {
     }
 
     #[test]
+    fn task_snapshots_selected_profile_workflow_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[workflow]
+pull_request = "ready"
+landing = "auto"
+"#,
+        )
+        .unwrap();
+        let config = Config {
+            workflow: crate::config::WorkflowConfig {
+                pull_request: Some(WorkflowDefaultPullRequestMode::Draft),
+                landing: Some(WorkflowDefaultLandingPolicy::Manual),
+            },
+            ..Config::default()
+        };
+        let ctx = ctx_with_config(dir.path(), config);
+
+        task(
+            &ctx,
+            &["contract".into()],
+            WorkflowModeArg::Stack,
+            Some("codex"),
+            None,
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(record.workflow.profile.as_deref(), Some("codex"));
+        assert_eq!(
+            record.workflow.policy.pull_request,
+            WorkflowPullRequestMode::Ready
+        );
+        assert_eq!(record.workflow.policy.landing, WorkflowLandingPolicy::Auto);
+        let content = fs::read_to_string(record.path).unwrap();
+        assert!(content.contains("profile = \"codex\""));
+        assert!(content.contains("pull_request = \"ready\""));
+        assert!(content.contains("landing = \"auto\""));
+    }
+
+    #[test]
     fn explicit_pr_none_overrides_config_default() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config {
@@ -702,6 +749,45 @@ mod tests {
         );
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("pull_request = \"none\""));
+    }
+
+    #[test]
+    fn explicit_pr_none_overrides_selected_profile_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[workflow]
+pull_request = "ready"
+landing = "auto"
+"#,
+        )
+        .unwrap();
+        let ctx = ctx(dir.path());
+
+        task(
+            &ctx,
+            &["contract".into()],
+            WorkflowModeArg::Stack,
+            Some("codex"),
+            None,
+            &Some("main".into()),
+            Some(WorkflowPrModeArg::None),
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(
+            record.workflow.policy.pull_request,
+            WorkflowPullRequestMode::None
+        );
+        assert_eq!(record.workflow.policy.landing, WorkflowLandingPolicy::Auto);
+        let content = fs::read_to_string(record.path).unwrap();
+        assert!(content.contains("profile = \"codex\""));
+        assert!(content.contains("pull_request = \"none\""));
+        assert!(content.contains("landing = \"auto\""));
     }
 
     #[test]

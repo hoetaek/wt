@@ -1,6 +1,6 @@
 use crate::cli::{BaseMode, WorkflowModeArg, WorkflowPrModeArg};
 use crate::commands::issue;
-use crate::config::{Config, validate_profile_name};
+use crate::config::{Config, WorkflowDefaultPolicy, validate_profile_name};
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::cmux::CmuxService;
@@ -62,7 +62,7 @@ pub(crate) fn prepare_workflow(
     validate_single_mode_branches(mode, &prepared_tasks)?;
     let resolved_base = resolve_workflow_base(ctx, base)?;
     let workflow_path = workflow_store::next_available_path(ctx)?;
-    let default_policy = ctx.config.workflow_default_policy();
+    let default_policy = workflow_default_policy(ctx, profile)?;
     let pull_request = workflow_pr_mode(pr, default_policy);
     let prepared =
         workflow_tasks_from_prepared(ctx, mode, &workflow_path, &resolved_base, prepared_tasks)?;
@@ -407,4 +407,15 @@ fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn workflow_default_policy(ctx: &Ctx, profile: Option<&str>) -> Result<WorkflowDefaultPolicy> {
+    let Some(profile) = profile else {
+        return Ok(ctx.config.workflow_default_policy());
+    };
+
+    let Some(config) = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)? else {
+        bail!("Profile '{profile}' not found");
+    };
+    Ok(config.workflow_default_policy())
 }
