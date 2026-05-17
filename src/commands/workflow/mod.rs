@@ -15,7 +15,8 @@ use crate::workflow as workflow_store;
 use crate::workflow::planner::parent_for_stack_task;
 #[cfg(test)]
 use crate::workflow::render::{
-    render_single_workflow_snapshot, test_auto_landing_policy, test_workflow_policy,
+    render_single_workflow_snapshot, stack_task_already_running_message,
+    started_stack_task_message, test_auto_landing_policy, test_workflow_policy,
     workflow_batch_task_prompt_content, workflow_batch_task_prompt_content_for_policy,
     workflow_single_task_prompt_content, workflow_single_task_prompt_content_for_policy,
     workflow_stack_task_prompt_content, workflow_task_prompt_content_with_policy,
@@ -1260,6 +1261,24 @@ landing = "auto"
             )
         );
         assert!(!content.contains("gh pr create --body-file <pr-body-file> --base stored-parent"));
+    }
+
+    #[test]
+    fn workflow_stack_completion_status_messages_quote_shell_args() {
+        let row = WorkflowTask {
+            task: "PROJ weird's task".into(),
+            run: "run-2".into(),
+            parent: Some("PROJ-1".into()),
+        };
+        let workflow_path = PathBuf::from("/repo/.local/workflows/work flow.toml");
+        let expected_command =
+            "wt workflow complete '/repo/.local/workflows/work flow.toml' 'PROJ weird'\\''s task'";
+
+        let already_running = stack_task_already_running_message(&workflow_path, &row);
+        let started = started_stack_task_message(&workflow_path, &row);
+
+        assert!(already_running.contains(expected_command));
+        assert!(started.contains(expected_command));
     }
 
     #[test]
