@@ -1,9 +1,10 @@
 pub(crate) const REPORT_HEADING: &str = "Agent Completion Report";
 
-pub(crate) const REPORT_ITEMS: [&str; 4] = [
+pub(crate) const REPORT_ITEMS: [&str; 5] = [
     "Summary",
     "Changed files",
     "Checks run",
+    "PR",
     "Risks or follow-ups",
 ];
 

@@ -326,7 +326,7 @@ Agent Completion Report는 coordinator transport/report 형식이며 PR 본문�
 이것은 PR 자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은
 transport일 뿐 상태 전이가 아니다. Codex/GitHub review나 coordinator가 전달한 리뷰는 해당 task
 agent가 반영하고, 필요한 check를 다시 돌린 뒤 commit/push하고 PR 본문이 stale해졌을 때만 PR
-본문과 Agent Completion Report를 갱신한다. 실행자나 coordinator가 `wt review`, 필요한 경우 pull
+본문과 Agent Completion Report를 갱신한다. 실행자나 coordinator가 `wt inspect`, 필요한 경우 pull
 request, 보고를 확인한 뒤 workflow completion command를 실행할 때 stack TaskRun 상태가 전이된다.
 
 `wt done`은 worktree와 local branch cleanup 명령이다. `done`은 cleanup 신호이고,
@@ -343,32 +343,73 @@ Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work
 `wt task clean`, `wt run clean`, `wt workflow clean` 같은 명령을 만들더라도 `done`이나
 `complete`에 merge나 task definition 삭제 의미를 섞지 않는다.
 
-`wt review`는 상태 전이 명령이 아니다. branch, worktree, TaskRun을 읽어서 parent,
-dirty 상태, commit/diff 정보, agent 완료 보고 기대치를 보여주는 점검 명령이다. cmux
-workspace/surface 정보도 저장된 실행 상태가 아니라 현재 세션에서 발견한 transport
-좌표로만 보여준다. 실제 완료 기록은 `wt done` 또는 workflow completion command처럼
-source별 completion 명령이 맡는다.
+`wt inspect [<target>]`는 branch, worktree, TaskRun을 읽어서 parent, dirty 상태,
+commit/diff 정보, Agent Completion Report 기대치, 현재 cmux contact를 보여주는 canonical
+read-only dossier다. Agent observation snapshot을 같이 보여줄 수 있지만, `inspect`의 exit
+code는 command 자체의 성공/실패만 뜻한다. 관찰된 agent가 `needs_input`이거나 `failed`여도
+그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. 실제 완료 기록은 `wt done` 또는
+workflow completion command처럼 source별 completion 명령이 맡는다.
 
-`wt send`도 상태 전이 명령이 아니다. `wt review`와 같은 target 해석으로 현재 cmux
+`wt inspect`에서 `<target>` 생략은 interactive TTY human mode에서 inspectable work target
+selector를 여는 기본 동작이다. `--json`, `--quiet`, 또는 non-TTY automation에서는 selector를
+열지 않고 explicit `<target>`을 요구해야 한다. 실패 메시지는 branch, worktree path/name,
+TaskRun id 중 하나를 넘기거나 interactive TTY에서 selector를 열라는 guidance를 정확히
+보여줘야 한다.
+
+`wt send`도 상태 전이 명령이 아니다. `wt inspect`와 같은 target 해석으로 현재 cmux
 surface를 찾아 메시지를 보내는 transport 명령이다. 메시지를 보냈다는 사실을 TaskRun
 상태로 저장하지 않고, 완료 여부는 여전히 TaskRun status와 workflow completion command로만
 표현한다.
 
-`wt status <target>`도 상태 전이 명령이 아니다. `target`은 `wt review`와 `wt send`가
-받는 branch, worktree path/name, TaskRun id와 같은 work selector다. 이 명령은 현재
-cmux workspace/surface와 agent 화면/이벤트를 관찰해서 agent-friendly JSON 상태를
-돌려주며, TaskRun status나 provider issue status를 쓰지 않는다. JSON 필드는 current
-observation contract이므로 `status`, `agent`, cmux id/ref, 마지막 tool/session/event,
-warnings/meta처럼 agent가 polling할 수 있는 값을 안정적인 snake_case 이름으로 노출한다.
-사람용 출력은 같은 관찰 결과를 얇게 읽기 좋게 보여주는 layer일 뿐 별도 의미를 만들지
-않는다. cmux 자체를 사용할 수 없으면 성공한 `no_session`처럼 보이지 않도록 실패한다.
-Agent별 상태 신호 준비도는 `status`가 고치는 대상이 아니라 관찰의 신뢰도 조건이다.
-Claude Code는 cmux의 Claude 통합에서 status/sidebar 신호가 나오고, Codex는 사용자가
-`cmux hooks codex install --yes`를 명시적으로 실행한 뒤에야 `agent.hook.*`와
-`set_status codex Running/Idle` 신호가 나온다. Codex hook이 없으면 `wt status`는
-화면 텍스트 fallback을 쓸 수 있지만 약한 관찰이라는 warning을 남겨야 한다.
-`wt doctor`는 이 준비도를 보고만 하고, 일반 wt 명령이 전역 Codex hook을 자동 설치하거나
-사용자 agent config를 몰래 수정하면 안 된다.
+`wt agent status [<target>]`는 현재 agent/cmux observation surface다. `target`은
+`wt inspect`와 `wt send`가 받는 branch, worktree path/name, TaskRun id와 같은 work selector다.
+이 명령은 현재 cmux workspace/surface와 agent 화면/status/event를 관찰해서 agent-friendly
+text/JSON 상태를 돌려주며, TaskRun status나 provider issue status를 쓰지 않는다. Text 출력은
+target, branch, TaskRun lifecycle status, agent kind/state, cmux contact, 마지막
+tool/session/event, warning을 compact하게 보여준다. JSON에는 top-level `status`를 만들지
+않고 `task_run.status`와 `agent.state` 또는 `agent.status`를 서로 다른 nested field로 둔다.
+`TaskRun.status`는 durable execution lifecycle이고, `agent.state`/`agent.status`는 현재
+runtime observation이므로 한 top-level field 이름으로 합치지 않는다.
+
+`wt agent watch [<target>]`는 polling/waiting surface다. 같은 target과 observation model을
+쓰되, interval마다 상태 변화를 compact하게 출력하고 blocked/failed terminal observation에
+도달하면 polling contract에 맞춰 종료한다. GitHub CLI의 `gh run watch`
+(`https://cli.github.com/manual/gh_run_watch`)처럼 `watch`는 반복 관찰과 의미 있는 종료
+상태를 가진 surface 이름이다.
+
+`wt agent status`와 `wt agent watch`의 `<target>` 생략도 interactive TTY human mode에서만
+selector를 연다. `--json`, `--quiet`, 또는 non-TTY automation에서는 explicit `<target>`이
+필수이며, omission은 `wt agent status <target>`, `wt agent watch <target>`, `wt inspect
+[<target>]` 중 어떤 표면을 써야 하는지 알려주며 실패해야 한다.
+
+Agent observation exit code는 agent command에만 속한다. `wt agent status`와
+`wt agent watch`는 0을 observable/not blocked, 1을 target/session/cmux unavailable, 2를
+`needs_input`, 3을 `failed`로 유지한다. cmux 자체를 사용할 수 없으면 성공한 `no_session`처럼
+보이지 않도록 실패한다.
+
+Agent별 상태 신호 준비도는 `agent status`나 `agent watch`가 고치는 대상이 아니라 관찰의
+신뢰도 조건이다. Claude Code는 cmux의 Claude 통합에서 status/sidebar 신호가 나오고, Codex는
+사용자가 `cmux hooks codex install --yes`를 명시적으로 실행한 뒤에야 `agent.hook.*`와
+`set_status codex Running/Idle` 신호가 나온다. Codex hook이 없으면 agent commands는 화면
+텍스트 fallback을 쓸 수 있지만 약한 관찰이라는 warning을 남겨야 한다. `wt doctor`는 이
+준비도를 보고만 하고, 일반 wt 명령이 전역 Codex hook을 자동 설치하거나 사용자 agent config를
+몰래 수정하면 안 된다.
+
+`wt status`는 top-level broad command로 agent-only observation을 계속 맡으면 안 된다. Git의
+`status` 문서(`https://git-scm.com/docs/git-status.html`)는 worktree/index state를 뜻하므로
+top-level `wt status`도 좁은 agent screen poll보다 managed work state 전반을 암시한다.
+GitHub CLI도 `gh auth status`(`https://cli.github.com/manual/gh_auth_status`),
+`gh pr status`(`https://cli.github.com/manual/gh_pr_status`)처럼 좁은 status를 noun namespace
+아래에 둔다. 따라서 migration 시 `wt status`는 `wt agent status <target>`, `wt agent watch
+<target>`, `wt inspect [<target>]` guidance와 함께 실패하거나 primary help에서 제거되어야 하며,
+silent alias로 남기지 않는다.
+
+`wt review`도 read-only dossier의 canonical 이름으로 남기지 않는다. GitHub CLI의
+`gh pr review`(`https://cli.github.com/manual/gh_pr_review`)처럼 external CLI convention에서
+review는 검토를 추가/제출하는 action으로 읽히기 쉽다. Read-only detail dossier는 Kubernetes
+`describe`(`https://kubernetes.io/docs/reference/kubectl/generated/kubectl_describe/`)처럼
+inspection surface에 가깝다. 따라서 canonical command는 `wt inspect [<target>]`이고, migration
+시 `wt review`는 explicit guidance와 함께 실패하거나 primary help에서 제거되어야 한다.
 
 상태 파일은 내부 캐시가 아니라 사용자가 읽어도 이해되는 기록이어야 한다.
 
