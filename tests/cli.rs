@@ -324,6 +324,36 @@ fn legacy_review_command_fails_with_inspect_guidance() {
 }
 
 #[test]
+fn legacy_review_help_explains_inspect_migration() {
+    wt_command()
+        .args(["review", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Legacy migration surface"))
+        .stdout(predicate::str::contains("wt inspect [<target>]"));
+}
+
+#[test]
+fn legacy_review_with_json_still_fails_with_inspect_guidance() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "review",
+            "feature",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt review has been replaced"))
+        .stderr(predicate::str::contains("wt inspect [<target>]"))
+        .stderr(predicate::str::contains("JSON output is supported").not());
+}
+
+#[test]
 fn init_yes_uses_minimal_preset_without_agent() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -544,6 +574,18 @@ fn legacy_status_command_fails_with_agent_guidance() {
         .stderr(predicate::str::contains("wt status has been replaced"))
         .stderr(predicate::str::contains("wt agent status <target>"))
         .stderr(predicate::str::contains("wt agent watch <target>"));
+}
+
+#[test]
+fn legacy_status_help_explains_agent_migration() {
+    wt_command()
+        .args(["status", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Legacy migration surface"))
+        .stdout(predicate::str::contains("wt agent status <target>"))
+        .stdout(predicate::str::contains("wt agent watch <target>"))
+        .stdout(predicate::str::contains("wt inspect [<target>]"));
 }
 
 #[test]

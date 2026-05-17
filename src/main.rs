@@ -162,6 +162,7 @@ fn supports_json(command: &Commands) -> bool {
             | Commands::Agent {
                 command: AgentCommand::Watch { .. },
             }
+            | Commands::Review { .. }
             | Commands::Status { .. }
             | Commands::Doctor
             | Commands::Profile { .. }

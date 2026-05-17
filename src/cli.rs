@@ -124,7 +124,10 @@ pub enum Commands {
         target: Option<String>,
     },
     /// Legacy review command; use wt inspect
-    #[command(hide = true)]
+    #[command(
+        hide = true,
+        long_about = "Legacy migration surface. Use `wt inspect [<target>]` for the read-only work dossier, then complete, land, or clean up explicitly when appropriate."
+    )]
     Review {
         /// Branch, worktree path/name, or TaskRun id to inspect
         target: Option<String>,
