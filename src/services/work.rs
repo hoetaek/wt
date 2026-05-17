@@ -722,8 +722,26 @@ fn contact_validation_warning(contact: &CmuxContact) -> Option<String> {
 
 fn screen_has_known_agent(screen: &str) -> bool {
     let lower = screen.to_ascii_lowercase();
-    // Codex can render only its model/status line, e.g. "gpt-5.5 ... Working".
-    lower.contains("codex") || lower.contains("claude code") || lower.contains("gpt-")
+    lower.contains("codex")
+        || lower.contains("claude code")
+        || screen_has_codex_model_status_line(&lower)
+}
+
+fn screen_has_codex_model_status_line(screen: &str) -> bool {
+    screen.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with("gpt-")
+            && line.split_whitespace().any(|token| {
+                matches!(
+                    trim_status_token(token),
+                    "working" | "running" | "thinking" | "exploring" | "ready" | "idle"
+                )
+            })
+    })
+}
+
+fn trim_status_token(token: &str) -> &str {
+    token.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
 }
 
 fn observed_cmux_contact(contacts: &[CmuxContact]) -> Option<&CmuxContact> {
@@ -1228,6 +1246,44 @@ mod tests {
         assert_eq!(work.state.status, AgentStatus::Running);
         assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:4"));
         assert!(!fixture.repo.join(".local").exists());
+    }
+
+    #[test]
+    fn observe_work_does_not_bind_selected_non_agent_surface_with_gpt_text() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4\nsurface:5", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        runner.add_response("notes about gpt-5.5 model behavior", true);
+        runner.add_response("gpt-5.5  Working", true);
+        runner.add_response("codex=Running", true);
+        runner.add_response("", true);
+        let ctx = fixture.ctx(runner);
+
+        let work = observe_work(&ctx, Some("feature")).unwrap();
+
+        assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
+        assert_eq!(work.state.agent_kind, AgentKind::Codex);
+        assert_eq!(work.state.status, AgentStatus::Running);
+        assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:5"));
+        assert!(
+            work.message
+                .unwrap()
+                .contains("Selected cmux surface is not a live agent")
+        );
+        assert!(work.cmux_contacts[0].selected);
+        assert!(!work.cmux_contacts[0].is_live_agent_candidate());
+        assert_eq!(work.cmux_contacts[0].state.agent_kind, AgentKind::Unknown);
+        assert_eq!(work.cmux_contacts[0].state.status, AgentStatus::Unknown);
+        assert_eq!(work.cmux_contacts[1].state.agent_kind, AgentKind::Codex);
+        assert_eq!(work.cmux_contacts[1].state.status, AgentStatus::Running);
     }
 
     #[test]
