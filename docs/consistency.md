@@ -261,6 +261,73 @@ task agent to open a pull request that is ready for review immediately. Boolean
 `--pull-request` and boolean `pull_request = true/false` are not canonical workflow
 surfaces.
 
+Workflow default policy is a preference in `.wt.toml`, while a Workflow file is the
+prepared execution plan for one run. Preparing a workflow reads the effective config
+from `.wt.toml` plus `.local/.wt.toml`, applies any explicit command-line override, and
+writes the resulting policy into `.local/workflows/<id>.toml`. Later edits to
+`.wt.toml` do not reinterpret already prepared workflows.
+
+Canonical config shape:
+
+```toml
+[workflow.defaults]
+pull_request = "draft"        # none | draft | ready
+landing = "after_review"      # manual | after_review
+landing_requires_approval = true
+```
+
+`workflow.defaults.pull_request` is the default pull-request handoff intent for
+PR-capable workflow tasks. `none` means do not ask task agents to open pull requests.
+`draft` means agents open draft pull requests and leave them draft. `ready` means agents
+open pull requests that are ready for review immediately. `ready` is the canonical name;
+`open`, `review`, boolean `true`, and boolean `false` are not aliases. In the Workflow
+file, `draft` and `ready` are stored on the task row as `pull_request = "draft"` or
+`pull_request = "ready"`. `none` is represented by omitting `pull_request` from the row,
+matching the existing handoff contract.
+
+`workflow.defaults.landing` is the coordinator preference after review passes. `manual`
+means the coordinator stops after review and leaves landing to an explicit user or Git
+step. `after_review` means the coordinator should proceed to landing after review passes,
+subject to the approval rule below. Landing policy does not mean the branch has already
+merged.
+
+`workflow.defaults.landing_requires_approval` says whether `after_review` landing still
+requires an explicit user approval before the coordinator runs merge or cleanup steps.
+The safe built-in default is `true`. Setting it to `false` means review passing is enough
+approval for the coordinator to land according to the workflow's mode and order; it does
+not bypass required GitHub checks, unresolved review threads, dirty-worktree checks, or
+branch ancestry checks.
+
+The Workflow file stores landing policy once at workflow level, not on every task row:
+
+```toml
+[policy]
+landing = "after_review"
+landing_requires_approval = true
+```
+
+Pull-request handoff remains row-level because stack-mode tasks can have different
+parents, while landing is a workflow-level coordination preference. Workflow policy is
+intent, not state: actual pull-request review result, merge status, ancestry proof,
+worktree cleanup, branch deletion, TaskRun lifecycle status, and TaskDocument cleanup
+remain outside Workflow policy. `wt review`, pull-request state, Git commands, workflow
+completion, and `wt done` continue to own those checks and transitions explicitly.
+
+The built-in config defaults are `pull_request = "none"`, `landing = "manual"`, and
+`landing_requires_approval = true`. A future implementation may let explicit workflow
+preparation flags override the config for one run, but it should keep the same value
+names and fail early for conflicting forms instead of introducing aliases.
+
+This model changes both `.wt.toml` config shape and `.local/workflows` state shape, so
+implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Ordinary
+development commits still do not bump `Cargo.toml`; the release branch owns the eventual
+version bump.
+
+Open implementation boundary: the current PR handoff runtime is stack-mode only. Until
+single or batch mode has a clear per-branch PR model, non-stack workflows should continue
+to report `PR=none` rather than silently applying `workflow.defaults.pull_request` in a
+different shape.
+
 Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
 두 번째 task source를 만들지 않는다.
