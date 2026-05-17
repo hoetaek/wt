@@ -4,7 +4,6 @@ use crate::config::IssueProviderType;
 use crate::context::Ctx;
 use crate::services::issues::{IssueInfo, IssueProvider};
 use crate::task::{self, PreparedTask, TaskDocument, TaskOrigin};
-use crate::worktree_naming;
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 
@@ -13,6 +12,14 @@ struct ImportedTask {
     key: String,
     provider: String,
     issue_id: String,
+}
+
+#[derive(Clone, Debug)]
+struct IssueTaskSource {
+    key: String,
+    provider: String,
+    issue_id: String,
+    issue: IssueInfo,
 }
 
 #[derive(Clone, Debug)]
@@ -139,14 +146,23 @@ fn resolve_issue_task_candidates(
 ) -> Result<Vec<IssueTaskCandidate>> {
     validate_issue_ids(issues)?;
 
-    let mut candidates = Vec::new();
+    let mut sources = Vec::new();
     for source in issues {
         let issue = provider.get_issue(source.trim().trim_start_matches('#'))?;
-        candidates.push(issue_task_candidate(ctx, provider_name, issue)?);
+        let issue_id = issue.identifier.clone();
+        sources.push(IssueTaskSource {
+            key: task::safe_task_key(&issue_id),
+            provider: provider_name.to_string(),
+            issue_id,
+            issue,
+        });
     }
 
-    validate_import_candidates(ctx, &candidates)?;
-    Ok(candidates)
+    validate_issue_task_sources(ctx, &sources)?;
+    sources
+        .into_iter()
+        .map(|source| issue_task_candidate(ctx, provider, source))
+        .collect()
 }
 
 fn validate_issue_ids(issues: &[String]) -> Result<()> {
@@ -166,28 +182,30 @@ fn validate_issue_ids(issues: &[String]) -> Result<()> {
 
 fn issue_task_candidate(
     ctx: &Ctx,
-    provider_name: &str,
-    issue: IssueInfo,
+    provider: &dyn IssueProvider,
+    source: IssueTaskSource,
 ) -> Result<IssueTaskCandidate> {
-    let suggested_branch = issue.branch_name.clone();
-    let naming = worktree_naming::generate(
+    let IssueTaskSource {
+        key,
+        provider: provider_name,
+        issue_id,
+        issue,
+    } = source;
+    let branch = issue::materialize_provider_issue_branch(
         ctx,
+        provider,
         &issue.identifier,
         &issue.title,
-        suggested_branch.as_deref(),
-    )?;
-    let branch = naming
-        .and_then(|naming| naming.branch)
-        .or(suggested_branch)
-        .unwrap_or_default();
-    let issue_id = issue.identifier;
-    let key = task::safe_task_key(&issue_id);
+        issue.branch_name.as_deref(),
+        None,
+    )?
+    .branch_name;
     let document = TaskDocument {
         title: issue.title,
         branch: branch.clone(),
         body: issue.body.unwrap_or_default(),
         origin: Some(TaskOrigin {
-            provider: provider_name.to_string(),
+            provider: provider_name.clone(),
             id: issue_id.clone(),
         }),
     };
@@ -201,19 +219,19 @@ fn issue_task_candidate(
     })
 }
 
-fn validate_import_candidates(ctx: &Ctx, candidates: &[IssueTaskCandidate]) -> Result<()> {
+fn validate_issue_task_sources(ctx: &Ctx, sources: &[IssueTaskSource]) -> Result<()> {
     let mut seen = HashSet::new();
-    for candidate in candidates {
-        if !seen.insert(candidate.key.clone()) {
+    for source in sources {
+        if !seen.insert(source.key.clone()) {
             bail!(
                 "Duplicate issue id resolves to task {}; refusing to import duplicate",
-                candidate.key
+                source.key
             );
         }
-        if task::task_exists(ctx, &candidate.key) {
+        if task::task_exists(ctx, &source.key) {
             bail!(
                 "TaskDocument already exists at {}; refusing to overwrite local task edits",
-                task::task_relative_path(&candidate.key)
+                task::task_relative_path(&source.key)
             );
         }
     }
@@ -271,16 +289,40 @@ fn task_key_from_text(value: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, IssueProviderType, IssuesConfig};
+    use crate::config::{Config, IssueProviderType, IssuesConfig, WorktreeNamingConfig};
     use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::{CmdOutput, CommandRunner};
     use crate::services::issues::{CreateIssueRequest, EnsuredBranch, IssueListItem};
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct EnsureBranchCall {
+        id: String,
+        base: Option<String>,
+        branch_name: Option<String>,
+    }
+
+    struct SharedRunner {
+        inner: Arc<MockRunner>,
+    }
+
+    impl CommandRunner for SharedRunner {
+        fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+            self.inner.run(cmd, args, cwd)
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            self.inner.has_command(cmd)
+        }
+    }
 
     #[derive(Default)]
     struct FakeIssueProvider {
         issues: Vec<IssueInfo>,
         list: Vec<IssueListItem>,
         fetched: Mutex<Vec<String>>,
+        ensure_calls: Mutex<Vec<EnsureBranchCall>>,
     }
 
     impl FakeIssueProvider {
@@ -289,6 +331,7 @@ mod tests {
                 issues,
                 list: Vec::new(),
                 fetched: Mutex::new(Vec::new()),
+                ensure_calls: Mutex::new(Vec::new()),
             }
         }
 
@@ -299,6 +342,10 @@ mod tests {
 
         fn fetched_ids(&self) -> Vec<String> {
             self.fetched.lock().unwrap().clone()
+        }
+
+        fn ensure_calls(&self) -> Vec<EnsureBranchCall> {
+            self.ensure_calls.lock().unwrap().clone()
         }
     }
 
@@ -325,11 +372,39 @@ mod tests {
 
         fn ensure_branch(
             &self,
-            _id: &str,
-            _base: Option<&str>,
-            _branch_name: Option<&str>,
+            id: &str,
+            base: Option<&str>,
+            branch_name: Option<&str>,
         ) -> Result<EnsuredBranch> {
-            unimplemented!("task import does not ensure provider branches")
+            self.ensure_calls.lock().unwrap().push(EnsureBranchCall {
+                id: id.to_string(),
+                base: base.map(str::to_string),
+                branch_name: branch_name.map(str::to_string),
+            });
+
+            if let Some(branch_name) = branch_name {
+                return Ok(EnsuredBranch {
+                    name: branch_name.to_string(),
+                    created: false,
+                });
+            }
+
+            let lookup = id.trim_start_matches('#');
+            let issue = self
+                .issues
+                .iter()
+                .find(|issue| {
+                    issue.identifier == id || issue.identifier.trim_start_matches('#') == lookup
+                })
+                .ok_or_else(|| anyhow::anyhow!("missing fake issue {id}"))?;
+            let name = issue
+                .branch_name
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("No branch name for issue {id}"))?;
+            Ok(EnsuredBranch {
+                name,
+                created: false,
+            })
         }
 
         fn on_start(&self, _id: &str) -> Result<()> {
@@ -371,6 +446,25 @@ mod tests {
         }
     }
 
+    fn github_config() -> Config {
+        Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Github,
+                gh_user: None,
+            }),
+            ..Config::default()
+        }
+    }
+
+    fn naming_config(branch: &str) -> WorktreeNamingConfig {
+        WorktreeNamingConfig {
+            command: "namer".into(),
+            prompt: "Name {{issue_identifier}} {{issue_title}}".into(),
+            branch: Some(branch.into()),
+            workspace: None,
+        }
+    }
+
     fn issue(
         identifier: &str,
         title: &str,
@@ -404,6 +498,10 @@ mod tests {
     fn prepare_issue_tasks_writes_task_toml() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor","description":"Long issue body"}"#,
+            true,
+        );
         runner.add_response(
             r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor","description":"Long issue body"}"#,
             true,
@@ -468,6 +566,140 @@ mod tests {
         assert_eq!(origin.provider, "linear");
         assert_eq!(origin.id, "PROJ-123");
         assert!(!dir.path().join(".local/task-runs").exists());
+    }
+
+    #[test]
+    fn github_import_without_existing_branch_creates_provider_branch_and_writes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"number":52,"title":"Fix editor","body":"Long issue body","url":"https://github.com/acme/repo/issues/52"}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("https://github.com/acme/repo/tree/52-fix-editor", true);
+        let runner = Arc::new(runner);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            github_config(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        import(&ctx, &["52".into()]).unwrap();
+
+        let document = task::read_task_document(&ctx, "52").unwrap();
+        assert_eq!(document.title, "Fix editor");
+        assert_eq!(document.branch, "52-fix-editor");
+        assert!(document.body.contains("Long issue body"));
+        let origin = document.origin.unwrap();
+        assert_eq!(origin.provider, "github");
+        assert_eq!(origin.id, "#52");
+        assert!(!dir.path().join(".local/task-runs").exists());
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "gh"
+                && args == &vec!["issue".to_string(), "develop".to_string(), "52".to_string()]
+        }));
+        assert!(calls.iter().all(|(cmd, _, _)| cmd != "git"));
+    }
+
+    #[test]
+    fn github_import_passes_generated_branch_to_provider_branch_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = github_config();
+        config.worktree.naming = Some(naming_config(
+            "generated/{{issue_key_lower}}-{{english_slug}}",
+        ));
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"number":52,"title":"Fix editor","body":null,"url":"https://github.com/acme/repo/issues/52"}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response(r#"{"english_slug":"fix-editor"}"#, true);
+        runner.add_response("", true);
+        runner.add_response(
+            "https://github.com/acme/repo/tree/generated/52-fix-editor",
+            true,
+        );
+        let runner = Arc::new(runner);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        import(&ctx, &["52".into()]).unwrap();
+
+        let document = task::read_task_document(&ctx, "52").unwrap();
+        assert_eq!(document.branch, "generated/52-fix-editor");
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "gh"
+                && args
+                    == &vec![
+                        "issue".to_string(),
+                        "develop".to_string(),
+                        "--name".to_string(),
+                        "generated/52-fix-editor".to_string(),
+                        "52".to_string(),
+                    ]
+        }));
+    }
+
+    #[test]
+    fn linear_import_uses_generated_branch_when_provider_has_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = linear_config();
+        config.worktree.naming = Some(naming_config("linear/{{issue_key_lower}}-{{english_slug}}"));
+        let mut runner = MockRunner::new();
+        runner.add_response(r#"{"english_slug":"fix-editor"}"#, true);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            config,
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let provider =
+            FakeIssueProvider::with_issues(vec![issue("PROJ-123", "Fix editor", None, None)]);
+
+        import_issue_task_documents(&ctx, &["PROJ-123".into()], "linear", &provider).unwrap();
+
+        let document = task::read_task_document(&ctx, "PROJ-123").unwrap();
+        assert_eq!(document.branch, "linear/proj-123-fix-editor");
+        assert_eq!(
+            provider.ensure_calls(),
+            vec![EnsureBranchCall {
+                id: "PROJ-123".into(),
+                base: None,
+                branch_name: Some("linear/proj-123-fix-editor".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn import_rejects_issue_without_materialized_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_config(dir.path(), linear_config());
+        let provider =
+            FakeIssueProvider::with_issues(vec![issue("PROJ-123", "Fix editor", None, None)]);
+
+        let err = import_issue_task_documents(&ctx, &["PROJ-123".into()], "linear", &provider)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("No branch name"));
+        assert!(!dir.path().join(".local/tasks/PROJ-123.toml").exists());
     }
 
     #[test]

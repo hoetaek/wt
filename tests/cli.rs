@@ -197,9 +197,13 @@ fn task_import_help_explains_behavior() {
         .stdout(predicate::str::contains(
             ".local/tasks/<safe-issue-id>.toml",
         ))
-        .stdout(predicate::str::contains("write [origin]"))
+        .stdout(predicate::str::contains(
+            "write title, branch, body, and [origin]",
+        ))
         .stdout(predicate::str::contains("does not start workspaces"))
+        .stdout(predicate::str::contains("create local branches"))
         .stdout(predicate::str::contains("create TaskRuns"))
+        .stdout(predicate::str::contains("gh issue develop"))
         .stdout(predicate::str::contains("Omit issue ids"))
         .stdout(predicate::str::contains("duplicate issue ids"))
         .stdout(predicate::str::contains("existing local TaskDocument"));

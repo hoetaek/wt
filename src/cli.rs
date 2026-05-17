@@ -298,7 +298,7 @@ pub enum InitSiteProvider {
 pub enum TaskCommand {
     /// Import provider issues as local TaskDocuments
     #[command(
-        long_about = "Import existing provider issues into .local/tasks/<safe-issue-id>.toml TaskDocuments and write [origin] with the configured provider and issue id. This command does not start workspaces, create branches, create TaskRuns, prepare workflows, open pull requests, or write to the provider.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
+        long_about = "Import existing provider issues into .local/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
     )]
     Import {
         /// Provider issue ids to import
@@ -916,10 +916,12 @@ mod tests {
 
         assert!(help.contains("Import existing provider issues"));
         assert!(help.contains(".local/tasks/<safe-issue-id>.toml"));
-        assert!(help.contains("write [origin]"));
+        assert!(help.contains("write title, branch, body, and [origin]"));
         assert!(help.contains("does not start workspaces"));
-        assert!(help.contains("create branches"));
+        assert!(help.contains("create local branches"));
         assert!(help.contains("create TaskRuns"));
+        assert!(help.contains("gh issue develop"));
+        assert!(help.contains("empty branch"));
         assert!(help.contains("Omit issue ids to choose provider issues interactively"));
         assert!(help.contains("duplicate issue ids"));
         assert!(help.contains("overwrite an existing local TaskDocument"));

@@ -712,6 +712,10 @@ mod tests {
             r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"proj-123-fix-editor","description":"Long issue body"}"#,
             true,
         );
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"proj-123-fix-editor","description":"Long issue body"}"#,
+            true,
+        );
         let config = Config {
             issues: Some(IssuesConfig {
                 provider: IssueProviderType::Linear,

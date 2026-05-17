@@ -197,9 +197,14 @@ TaskDocument import는 configured issue provider의 기존 issue를 local task �
 가져오는 side effect다. Canonical command shape는 `wt task import` 또는
 `wt task import <issue>...`다. Bare `wt task import`는 provider issue를
 multi-select로 고르게 하고, 명시 issue id는 scriptable path로 남긴다. `import`는
-`.local/tasks/<safe-issue-id>.toml`에 title, branch, body, `[origin]`을 기록하지만
-worktree, branch, TaskRun, Workflow, pull request를 만들지 않고 provider에 쓰지도
-않는다. `[origin]`은 provider issue와의 durable link이지, 자동 동기화 계약이 아니다.
+`.local/tasks/<safe-issue-id>.toml`에 title, branch, body, `[origin]`을 기록한다.
+이때 branch는 `wt issue <issue>`가 사용할 provider issue branch와 같은 값이어야 하며,
+필요하면 provider branch를 먼저 materialize한다. GitHub에서는 linked branch가 없을 때
+`gh issue develop`을 호출할 수 있다. Import는 provider branch materialization 외에는
+worktree, local branch, TaskRun, Workflow, pull request, agent setup을 만들지 않는다.
+Provider가 branch를 공급하거나 materialize할 수 없으면 branch가 빈 TaskDocument를 쓰지
+말고 실패해야 한다. `[origin]`은 provider issue와의 durable link이지, 자동 동기화 계약이
+아니다.
 
 Import ambiguity는 local TaskDocument write 전에 실패해야 한다. Configured issue
 provider가 없으면 실패한다. 같은 invocation 안의 duplicate issue id는 실패한다. Provider
@@ -250,9 +255,11 @@ lifecycle을 publish 도움말에 섞지 않는다.
 
 `wt task import --help`는 import가 provider issue에서 TaskDocument로 향하는
 non-executing 흐름임을 그대로 설명해야 한다. 즉 explicit issue id와 bare provider issue
-selector를 모두 지원한다는 점, `[origin]`을 기록한다는 점, duplicate ids나 existing
-TaskDocument collision에서 실패한다는 점, worktree/branch/TaskRun/Workflow/PR/provider
-write를 만들지 않는다는 점을 보여줘야 한다.
+selector를 모두 지원한다는 점, title/branch/body/`[origin]`을 기록한다는 점, provider
+branch materialization은 할 수 있지만 worktree/local branch/TaskRun/Workflow/PR/agent
+setup은 만들지 않는다는 점, duplicate ids나 existing TaskDocument collision에서
+실패한다는 점, branch를 materialize할 수 없으면 incomplete TaskDocument를 쓰지 않고
+실패한다는 점을 보여줘야 한다.
 
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
 task, branch, status, source, group, error, creation_order, created_at,

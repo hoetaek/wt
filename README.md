@@ -120,8 +120,10 @@ Land reviewed work with Git or pull requests first.
 - `wt issue` starts a worktree from an existing provider issue.
 - `wt pr` opens existing pull request branches as worktrees.
 - `TaskDocument` files in `.local/tasks/<task>.toml` define prepared local work.
-- `wt task import [<issue>...]` imports provider issues as TaskDocuments and
-  records `[origin]`; it does not start worktrees.
+- `wt task import [<issue>...]` imports provider issues as TaskDocuments,
+  records title, branch, body, and `[origin]`, and may materialize the provider
+  issue branch first; it does not start worktrees, local branches, TaskRuns,
+  Workflows, or pull requests.
 - `wt task run [<task>...]` starts one worktree per selected TaskDocument.
 - `wt task publish [<task>...]` creates provider issues from TaskDocuments and
   records `[origin]`; it does not start worktrees.
