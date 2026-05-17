@@ -11,7 +11,7 @@ use crate::names::WorktreeNames;
 use crate::services::git::{CreateType, GitService};
 use crate::services::issues::github::GithubIssueProvider;
 use crate::services::issues::linear::LinearIssueProvider;
-use crate::services::issues::{EnsuredBranch, IssueInfo, IssueProvider};
+use crate::services::issues::{IssueInfo, IssueProvider};
 use crate::setup;
 use crate::worktree_naming::{self, WorktreeNamingResult};
 use anyhow::{Result, bail};
@@ -82,6 +82,13 @@ impl std::error::Error for IssueRunPartialFailure {}
 pub(crate) struct PlannedIssueWorktree {
     pub(crate) branch_name: String,
     pub(crate) path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct MaterializedIssueBranch {
+    pub(crate) branch_name: String,
+    pub(crate) naming: Option<WorktreeNamingResult>,
+    pub(crate) provider_created_branch_base: Option<String>,
 }
 
 struct ProfileRunOptions<'a> {
@@ -288,37 +295,30 @@ fn run_inner_many(
 
     ctx.ui.print_step(&format!("{identifier}: {title}"));
 
-    let naming = worktree_naming::generate(ctx, &identifier, &title, suggested_branch.as_deref())?;
-
-    let provider_branch_base =
-        if should_resolve_provider_branch_base(ctx, suggested_branch.as_deref(), prepared_issue) {
-            Some(resolve_base_branch(ctx, &git, base_raw)?)
-        } else {
-            None
-        };
-
-    // Ensure branch exists (provider-specific: Linear reads, GH may create)
-    let raw_id = identifier.trim_start_matches('#');
-    let ensured_branch =
+    let branch_resolution =
         if let Some(prepared_branch) = prepared_issue.and_then(|issue| issue.branch_name) {
-            EnsuredBranch {
-                name: prepared_branch.to_string(),
-                created: false,
+            let naming =
+                worktree_naming::generate(ctx, &identifier, &title, suggested_branch.as_deref())?;
+            MaterializedIssueBranch {
+                branch_name: prepared_branch.to_string(),
+                naming,
+                provider_created_branch_base: None,
             }
         } else {
             let provider = build_provider(ctx)?;
-            provider.ensure_branch(
-                raw_id,
-                provider_branch_base.as_deref(),
-                naming.as_ref().and_then(|n| n.branch.as_deref()),
+            materialize_provider_issue_branch(
+                ctx,
+                provider.as_ref(),
+                &identifier,
+                &title,
+                suggested_branch.as_deref(),
+                Some(base_raw),
             )?
         };
-    let provider_created_branch_base = if ensured_branch.created {
-        provider_branch_base.as_deref()
-    } else {
-        None
-    };
-    let branch_name = ensured_branch.name;
+    let raw_id = identifier.trim_start_matches('#');
+    let provider_created_branch_base = branch_resolution.provider_created_branch_base;
+    let branch_name = branch_resolution.branch_name;
+    let naming = branch_resolution.naming;
 
     let on_start_issue_id = prepared_issue
         .map(|issue| issue.on_start_issue_id)
@@ -440,7 +440,7 @@ fn run_inner_many(
         &branch_name,
         &names.path,
         base_raw,
-        provider_created_branch_base,
+        provider_created_branch_base.as_deref(),
         prompt_policy,
     )?;
 
@@ -762,6 +762,51 @@ fn prepared_snapshot_prompt(
         content.trim_end()
     ));
     prompt
+}
+
+pub(crate) fn materialize_provider_issue_branch(
+    ctx: &Ctx,
+    provider: &dyn IssueProvider,
+    identifier: &str,
+    title: &str,
+    suggested_branch: Option<&str>,
+    base_raw: Option<&Option<String>>,
+) -> Result<MaterializedIssueBranch> {
+    let naming = worktree_naming::generate(ctx, identifier, title, suggested_branch)?;
+    let provider_branch_base = if should_resolve_provider_branch_base(ctx, suggested_branch, None) {
+        match base_raw {
+            Some(base_raw) => {
+                let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+                Some(resolve_base_branch(ctx, &git, base_raw)?)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let raw_id = identifier.trim_start_matches('#');
+    let ensured_branch = provider.ensure_branch(
+        raw_id,
+        provider_branch_base.as_deref(),
+        naming.as_ref().and_then(|n| n.branch.as_deref()),
+    )?;
+    if ensured_branch.name.trim().is_empty() {
+        bail!(
+            "Provider issue {identifier} did not resolve a branch name; refusing to write incomplete TaskDocument"
+        );
+    }
+    let provider_created_branch_base = if ensured_branch.created {
+        provider_branch_base
+    } else {
+        None
+    };
+
+    Ok(MaterializedIssueBranch {
+        branch_name: ensured_branch.name,
+        naming,
+        provider_created_branch_base,
+    })
 }
 
 fn resolve_base_branch(ctx: &Ctx, git: &GitService, base_raw: &Option<String>) -> Result<String> {
