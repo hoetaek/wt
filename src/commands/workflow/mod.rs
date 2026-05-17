@@ -2,10 +2,7 @@ use crate::cli::{BaseMode, WorkflowModeArg, WorkflowPrModeArg};
 use crate::commands::editor;
 use crate::commands::issue;
 use crate::commands::issue_selection;
-use crate::commands::task::{self as task_command, PreparedTask};
-use crate::commands::task_run::{self, STATUS_PREPARED, STATUS_RUNNING};
-#[cfg(test)]
-use crate::commands::task_run::{STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED};
+use crate::commands::task as task_command;
 use crate::config::{
     Config, WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
     validate_profile_name,
@@ -14,6 +11,10 @@ use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::cmux::CmuxService;
 use crate::services::git::GitService;
+use crate::task::{self as task_store, PreparedTask};
+use crate::task_run::{self, STATUS_PREPARED, STATUS_RUNNING};
+#[cfg(test)]
+use crate::task_run::{STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED};
 use crate::workflow as workflow_store;
 use crate::workflow::{
     WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowPolicy, WorkflowPullRequestMode,
@@ -65,7 +66,7 @@ pub fn task(
     validate_profile(ctx, profile)?;
     validate_mode_options(mode, pr)?;
     let prepared_tasks = if tasks.is_empty() {
-        task_command::select_local_tasks(ctx)?
+        task_store::select_local_tasks(ctx)?
             .into_iter()
             .map(|task| PreparedTask {
                 key: task.key,
@@ -222,7 +223,7 @@ fn run_single_workflow(
 
     for state in &states {
         if state.document.branch != result.branch_name {
-            task_command::write_task_branch(ctx, &state.row.task, &result.branch_name)?;
+            task_store::write_task_branch(ctx, &state.row.task, &result.branch_name)?;
         }
         task_run::update(
             ctx,
@@ -243,7 +244,7 @@ fn run_single_workflow_task(
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
     let completion_section = workflow_single_task_handoff_section();
-    let branch_name = task_command::prepared_branch_name(&state.document.branch);
+    let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
     }
@@ -319,7 +320,7 @@ fn run_single_workflow_group(
 fn shared_single_workflow_branch(states: &[WorkflowTaskState]) -> Result<String> {
     let branches = states
         .iter()
-        .filter_map(|state| task_command::prepared_branch_name(&state.document.branch))
+        .filter_map(|state| task_store::prepared_branch_name(&state.document.branch))
         .collect::<HashSet<_>>();
     let mut branches = branches.into_iter();
     let Some(branch) = branches.next() else {
@@ -443,7 +444,7 @@ fn workflow_tasks_from_prepared(
         if mode == WorkflowModeArg::Stack {
             row.parent = parent.clone();
             row.pull_request = pull_request;
-            parent = task_command::prepared_branch_name(&task.branch).map(str::to_string);
+            parent = task_store::prepared_branch_name(&task.branch).map(str::to_string);
         }
         task_runs.push(run);
         tasks.push(row);
@@ -499,7 +500,7 @@ fn validate_single_mode_branches(
 
     let branches = prepared_tasks
         .iter()
-        .filter_map(|task| task_command::prepared_branch_name(&task.branch).map(str::to_string))
+        .filter_map(|task| task_store::prepared_branch_name(&task.branch).map(str::to_string))
         .collect::<HashSet<_>>();
     if branches.len() > 1 {
         bail!(
@@ -910,7 +911,7 @@ mod tests {
 
         let record = workflow_store::list(&ctx).unwrap().remove(0);
         let first_task =
-            task_command::read_task_document(&ctx, &record.workflow.tasks[0].task).unwrap();
+            task_store::read_task_document(&ctx, &record.workflow.tasks[0].task).unwrap();
         let first_worktree = crate::names::WorktreeNames::new_with_workspace_config(
             &first_task.branch,
             &ctx.parent_dir,
@@ -1574,7 +1575,7 @@ mod tests {
                     parent: None,
                     pull_request: None,
                 },
-                document: task_command::TaskDocument {
+                document: task_store::TaskDocument {
                     title: "API".into(),
                     branch: "shared".into(),
                     body: String::new(),
@@ -1602,7 +1603,7 @@ mod tests {
                     parent: None,
                     pull_request: None,
                 },
-                document: task_command::TaskDocument {
+                document: task_store::TaskDocument {
                     title: "Docs".into(),
                     branch: "shared".into(),
                     body: String::new(),
@@ -1697,7 +1698,7 @@ mod tests {
         source: task_run::TaskRunSource,
     ) -> String {
         let row = workflow.tasks.first_mut().unwrap();
-        let document = task_command::read_task_document(ctx, &row.task).unwrap();
+        let document = task_store::read_task_document(ctx, &row.task).unwrap();
         let run = task_run::create(
             ctx,
             &row.task,

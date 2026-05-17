@@ -1,9 +1,9 @@
 pub(crate) use crate::agents::WorkState;
 use crate::agents::{self, AgentKind, AgentObservation, AgentStatus};
-use crate::commands::task_run;
 use crate::context::{Ctx, PromptItem};
 use crate::services::cmux::{CmuxEvent, CmuxService, CmuxWorkspace};
 use crate::services::git::{GitService, WorktreeEntry};
+use crate::task_run;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};

@@ -1,7 +1,7 @@
 use super::render::workflow_task_label;
-use crate::commands::task as task_command;
-use crate::commands::task_run;
 use crate::context::Ctx;
+use crate::task as task_store;
+use crate::task_run;
 use crate::workflow::{WorkflowMetadata, WorkflowTask};
 use anyhow::{Context, Result, bail};
 use std::path::Path;
@@ -10,7 +10,7 @@ use std::path::Path;
 pub(super) struct WorkflowTaskState {
     pub(super) idx: usize,
     pub(super) row: WorkflowTask,
-    pub(super) document: task_command::TaskDocument,
+    pub(super) document: task_store::TaskDocument,
     pub(super) path: String,
     pub(super) content: String,
     pub(super) run: task_run::TaskRun,
@@ -63,7 +63,7 @@ fn read_workflow_task_states(
         .iter()
         .enumerate()
         .map(|(idx, row)| {
-            let (document, path, content) = task_command::read_task_file(ctx, &row.task)?;
+            let (document, path, content) = task_store::read_task_file(ctx, &row.task)?;
             let run_path = task_run::resolve(ctx, &row.run).with_context(|| {
                 format!(
                     "Workflow task {} references missing TaskRun {}",
@@ -148,7 +148,7 @@ pub(super) fn update_workflow_task_run(
     let run = task_run::read(&path)?;
     validate_workflow_task_run(row, &run)?;
 
-    let branch = task_command::read_task_document(ctx, &row.task)
+    let branch = task_store::read_task_document(ctx, &row.task)
         .ok()
         .map(|task| task.branch);
     let updated = task_run::update(ctx, &row.run, status, branch.as_deref(), error)?;

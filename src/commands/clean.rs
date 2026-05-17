@@ -1,5 +1,5 @@
+use crate::commands::issue::build_provider;
 use crate::commands::profile_match;
-use crate::commands::{issue::build_provider, task_run};
 use crate::config::Config;
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
@@ -7,6 +7,7 @@ use crate::services::cmux::{CmuxService, CmuxWorkspace};
 use crate::services::git::GitService;
 use crate::services::site::{SiteService, provider_label};
 use crate::setup;
+use crate::task_run;
 use anyhow::{Result, bail};
 use std::path::Path;
 
@@ -345,11 +346,11 @@ fn branch_issue_matches(branch: &str, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::task_run;
     use crate::config::{Config, WorkspaceConfig};
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CmdOutput, CommandRunner};
+    use crate::task_run;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 

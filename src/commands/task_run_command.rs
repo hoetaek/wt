@@ -1,6 +1,8 @@
-use crate::commands::{issue, task, task_run};
+use crate::commands::issue;
 use crate::context::Ctx;
 use crate::error::WtError;
+use crate::task;
+use crate::task_run;
 use anyhow::{Result, bail};
 use std::collections::HashSet;
 

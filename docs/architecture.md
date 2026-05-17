@@ -15,7 +15,7 @@ effects.
 | Layer | Source of truth | Owns | Must not own |
 | --- | --- | --- | --- |
 | CLI command orchestration | `src/commands/*.rs`, especially `src/commands/workflow.rs` | Argument-level flow, interactive selection, high-level calls into stores, planners, services, and setup | Persisted schemas, TOML parsing rules, provider command details, long rendering templates |
-| Task state | `src/commands/task.rs` and `src/commands/task_run.rs` today | `TaskDocument` under `.local/tasks` and `TaskRun` under `.local/task-runs` | Workflow mode semantics, cmux coordinates, branch landing state |
+| Task state | `src/task.rs` and `src/task_run.rs` | `TaskDocument` under `.local/tasks` and `TaskRun` under `.local/task-runs` | Workflow mode semantics, cmux coordinates, branch landing state |
 | Workflow state store | `src/workflow.rs` today | `WorkflowMode`, `WorkflowMetadata`, `WorkflowTask`, `.local/workflows` paths, validation, read/write/list/resolve, TOML rendering for workflow files | Starting worktrees, prompting agents, selecting runnable workflows, mutating TaskRun status beyond store validation |
 | Workflow execution planner | `src/commands/workflow.rs` today; extract to `src/workflow/planner.rs` when split | Runnable-workflow selection, single/batch/stack next-step rules, preflight plans, parent-chain calculation | UI printing, cmux calls, issue-provider calls, file serialization |
 | Workflow runner orchestration | `src/commands/workflow.rs` today; extract to `src/workflow/run.rs` when split | Coordinating planner output with `TaskDocument`, `TaskRun`, `issue` start paths, and setup results | Domain schema definitions, config merge policy, provider implementation details |
@@ -26,15 +26,14 @@ effects.
 
 ## Canonical State
 
-`TaskDocument` is the reusable work definition. Its current source-of-truth
-module is `src/commands/task.rs`, and its durable location is
-`.local/tasks/<task>.toml`. It owns title, branch, body, and optional origin.
-It does not own execution status, workflow membership, profile choice, or cmux
-transport data.
+`TaskDocument` is the reusable work definition. Its source-of-truth module is
+`src/task.rs`, and its durable location is `.local/tasks/<task>.toml`. It owns
+title, branch, body, and optional origin. It does not own execution status,
+workflow membership, profile choice, or cmux transport data.
 
-`TaskRun` is one execution instance of a `TaskDocument`. Its current
-source-of-truth module is `src/commands/task_run.rs`, and its durable location
-is `.local/task-runs/<id>.toml`. It owns task, branch, status, source, group,
+`TaskRun` is one execution instance of a `TaskDocument`. Its source-of-truth
+module is `src/task_run.rs`, and its durable location is
+`.local/task-runs/<id>.toml`. It owns task, branch, status, source, group,
 error, creation_order, and timestamps. It records execution state, not branch
 landing or review state.
 
@@ -90,11 +89,11 @@ Keep `src/workflow.rs` as the Workflow state facade. If it grows, turn it into a
 - `src/workflow/render.rs`: selector labels, status summaries, task snapshots,
   and coordinator handoff text.
 
-Use the same direction for task state if it is extracted later:
-`src/task/model.rs` and `src/task/store.rs` for `TaskDocument`, and
-`src/task_run/model.rs` and `src/task_run/store.rs` for TaskRun. Command modules
-should call those stores; they should not become the long-term home for state
-schemas.
+Task state follows the same direction at smaller scale: `src/task.rs` owns
+`TaskDocument` and `.local/tasks` TOML read/write rules, and `src/task_run.rs`
+owns TaskRun and `.local/task-runs` TOML read/write rules. If either grows,
+split it into `model.rs` and `store.rs` under a directory module without moving
+schema ownership back into command modules.
 
 ## Setup and Config Boundary
 

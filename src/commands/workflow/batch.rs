@@ -2,9 +2,9 @@ use super::render::workflow_batch_task_handoff_section;
 use super::state::{WorkflowTaskState, read_batch_workflow_task_states};
 use super::{apply_workflow_color, is_cancelled, validate_profile, workflow_base_raw};
 use crate::commands::issue;
-use crate::commands::task as task_command;
-use crate::commands::task_run::{self, STATUS_FAILED, STATUS_RUNNING};
 use crate::context::Ctx;
+use crate::task as task_store;
+use crate::task_run::{self, STATUS_FAILED, STATUS_RUNNING};
 use crate::workflow as workflow_store;
 use crate::workflow::WorkflowMetadata;
 use crate::worktree_naming;
@@ -291,7 +291,7 @@ fn batch_workflow_plan(
     state: &WorkflowTaskState,
     profile: Option<&str>,
 ) -> Result<BatchWorkflowPlan> {
-    let branch_name = task_command::prepared_branch_name(&state.document.branch);
+    let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
     }
@@ -335,13 +335,13 @@ fn run_batch_workflow_task(
     total: usize,
 ) -> Result<issue::IssueRunResult> {
     let completion_section = workflow_batch_task_handoff_section();
-    let branch_name = task_command::prepared_branch_name(&state.document.branch);
+    let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
     }
     let identifier = state.document.identifier_or_key(&state.row.task);
     let title = state.document.title_or_key(&state.row.task);
-    let workspace_label = task_command::workspace_run_label(
+    let workspace_label = task_store::workspace_run_label(
         state.idx,
         total,
         state
@@ -407,7 +407,7 @@ fn record_batch_workflow_success(
     color: Option<&str>,
 ) -> Result<()> {
     if state.document.branch != result.branch_name {
-        task_command::write_task_branch(ctx, &state.row.task, &result.branch_name)?;
+        task_store::write_task_branch(ctx, &state.row.task, &result.branch_name)?;
     }
     task_run::update(
         ctx,

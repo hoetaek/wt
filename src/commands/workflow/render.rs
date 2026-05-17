@@ -1,9 +1,9 @@
 use super::state::WorkflowTaskState;
-use crate::commands::task as task_command;
-use crate::commands::task_run::{
+use crate::context::Ctx;
+use crate::task as task_store;
+use crate::task_run::{
     STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
-use crate::context::Ctx;
 use crate::workflow::{WorkflowMetadata, WorkflowPullRequestMode, WorkflowTask};
 use std::path::Path;
 
@@ -31,7 +31,7 @@ pub(super) fn workflow_task_label(row: &WorkflowTask) -> &str {
 }
 
 pub(super) fn workflow_task_title_label(ctx: &Ctx, key: &str) -> String {
-    match task_command::read_task_document(ctx, key) {
+    match task_store::read_task_document(ctx, key) {
         Ok(document) => {
             let title = document.title_or_key(key);
             if title == key {
