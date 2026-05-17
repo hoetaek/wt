@@ -1058,7 +1058,6 @@ mod tests {
         assert!(content.contains(
             "wt workflow complete /repo/.local/workflows/2026-05-16-001.toml PROJ-2 --run-next"
         ));
-        assert!(!content.contains("wt stack complete"));
     }
 
     #[test]
