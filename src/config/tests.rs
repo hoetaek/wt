@@ -28,6 +28,11 @@ VITE_API_TARGET = "{{api_url}}"
 [setup.env_files."backend/.env"]
 DJANGO_ENV = "dev"
 
+[workflow.defaults]
+pull_request = "draft"
+landing = "after_review"
+landing_requires_approval = false
+
 [profile]
 name = "codex"
 
@@ -77,6 +82,7 @@ commands = [
         config
             .worktree
             .inject_local_context
+            .as_deref()
             .unwrap()
             .contains("{{parent_branch}}")
     );
@@ -119,6 +125,16 @@ commands = [
             .unwrap(),
         "dev"
     );
+    let workflow_policy = config.workflow_default_policy();
+    assert_eq!(
+        workflow_policy.pull_request,
+        WorkflowDefaultPullRequestMode::Draft
+    );
+    assert_eq!(
+        workflow_policy.landing,
+        WorkflowDefaultLandingPolicy::AfterReview
+    );
+    assert!(!workflow_policy.landing_requires_approval);
     assert_eq!(config.profile.unwrap().name.as_deref(), Some("codex"));
 
     let site = config.site.unwrap();
@@ -243,6 +259,11 @@ fn local_config_overrides_root_config() {
 [issues]
 provider = "github"
 
+[workflow.defaults]
+pull_request = "draft"
+landing = "manual"
+landing_requires_approval = true
+
 [site]
 provider = "herd"
 name = "root"
@@ -259,6 +280,11 @@ copy = [".env"]
 [profile.agent]
 cli = "codex"
 
+[workflow.defaults]
+pull_request = "none"
+landing = "after_review"
+landing_requires_approval = false
+
 [site]
 provider = "traefik"
 name = "{{repo}}-{{branch_slug}}.l"
@@ -271,12 +297,70 @@ copy = ["CLAUDE.local.md"]
 
     let (config, source) = Config::load_with_source(dir.path()).unwrap();
     assert!(matches!(source, ConfigSource::Files(paths) if paths.len() == 2));
-    assert_eq!(config.agent.unwrap().cli, AgentCli::Codex);
-    assert_eq!(config.issues.unwrap().provider, IssueProviderType::Github);
-    let site = config.site.unwrap();
+    assert_eq!(config.agent.as_ref().unwrap().cli, AgentCli::Codex);
+    assert_eq!(
+        config.issues.as_ref().unwrap().provider,
+        IssueProviderType::Github
+    );
+    let site = config.site.as_ref().unwrap();
     assert_eq!(site.provider, SiteProvider::Traefik);
     assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}.l"));
     assert_eq!(config.worktree.copy, vec![".env", "CLAUDE.local.md"]);
+    let workflow_policy = config.workflow_default_policy();
+    assert_eq!(
+        workflow_policy.pull_request,
+        WorkflowDefaultPullRequestMode::None
+    );
+    assert_eq!(
+        workflow_policy.landing,
+        WorkflowDefaultLandingPolicy::AfterReview
+    );
+    assert!(!workflow_policy.landing_requires_approval);
+}
+
+#[test]
+fn workflow_defaults_merge_per_field() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
+[workflow.defaults]
+pull_request = "ready"
+landing = "manual"
+landing_requires_approval = true
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        dir.path().join(".local/.wt.toml"),
+        r#"
+[workflow.defaults]
+landing = "after_review"
+"#,
+    )
+    .unwrap();
+
+    let config = Config::load(dir.path()).unwrap();
+    let policy = config.workflow_default_policy();
+    assert_eq!(policy.pull_request, WorkflowDefaultPullRequestMode::Ready);
+    assert_eq!(policy.landing, WorkflowDefaultLandingPolicy::AfterReview);
+    assert!(policy.landing_requires_approval);
+}
+
+#[test]
+fn workflow_defaults_reject_aliases() {
+    let err = toml::from_str::<Config>(
+        r#"
+[workflow.defaults]
+pull_request = "open"
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("open"));
 }
 
 #[test]

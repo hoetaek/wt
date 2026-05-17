@@ -6,13 +6,19 @@ use crate::commands::task::{self as task_command, PreparedTask};
 use crate::commands::task_run::{self, STATUS_PREPARED, STATUS_RUNNING};
 #[cfg(test)]
 use crate::commands::task_run::{STATUS_DONE, STATUS_FAILED, STATUS_SKIPPED};
-use crate::config::{Config, validate_profile_name};
+use crate::config::{
+    Config, WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
+    validate_profile_name,
+};
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::cmux::CmuxService;
 use crate::services::git::GitService;
 use crate::workflow as workflow_store;
-use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowPullRequestMode, WorkflowTask};
+use crate::workflow::{
+    WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowPolicy, WorkflowPullRequestMode,
+    WorkflowTask,
+};
 use anyhow::{Result, bail};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -143,13 +149,14 @@ fn write_prepared_workflow(
     validate_single_mode_branches(mode, &prepared_tasks)?;
     let resolved_base = resolve_workflow_base(ctx, base)?;
     let workflow_path = workflow_store::next_available_path(ctx)?;
+    let default_policy = ctx.config.workflow_default_policy();
     let prepared = workflow_tasks_from_prepared(
         ctx,
         mode,
         &workflow_path,
         &resolved_base,
         prepared_tasks,
-        workflow_pr_mode(pr),
+        workflow_pr_mode(mode, pr, default_policy),
     )?;
 
     let mut metadata = WorkflowMetadata::new(
@@ -159,6 +166,7 @@ fn write_prepared_workflow(
         prepared.tasks,
     );
     metadata.profile = profile.map(str::to_string);
+    metadata.policy = Some(workflow_policy(default_policy));
 
     if let Err(err) = workflow_store::write(ctx, &workflow_path, &mut metadata) {
         rollback_task_runs(&prepared.task_runs);
@@ -439,21 +447,40 @@ fn workflow_tasks_from_prepared(
 }
 
 fn validate_mode_options(mode: WorkflowModeArg, pr: Option<WorkflowPrModeArg>) -> Result<()> {
-    if matches!(
-        pr,
-        Some(WorkflowPrModeArg::Draft | WorkflowPrModeArg::Ready)
-    ) && mode != WorkflowModeArg::Stack
-    {
-        bail!("--pr draft/ready is only valid with --mode stack");
+    if pr.is_some() && mode != WorkflowModeArg::Stack {
+        bail!("--pr is only valid with --mode stack");
     }
     Ok(())
 }
 
-fn workflow_pr_mode(pr: Option<WorkflowPrModeArg>) -> Option<WorkflowPullRequestMode> {
+fn workflow_pr_mode(
+    mode: WorkflowModeArg,
+    pr: Option<WorkflowPrModeArg>,
+    default_policy: WorkflowDefaultPolicy,
+) -> Option<WorkflowPullRequestMode> {
+    if mode != WorkflowModeArg::Stack {
+        return None;
+    }
+
     match pr {
         Some(WorkflowPrModeArg::Draft) => Some(WorkflowPullRequestMode::Draft),
         Some(WorkflowPrModeArg::Ready) => Some(WorkflowPullRequestMode::Ready),
-        Some(WorkflowPrModeArg::None) | None => None,
+        Some(WorkflowPrModeArg::None) => None,
+        None => match default_policy.pull_request {
+            WorkflowDefaultPullRequestMode::None => None,
+            WorkflowDefaultPullRequestMode::Draft => Some(WorkflowPullRequestMode::Draft),
+            WorkflowDefaultPullRequestMode::Ready => Some(WorkflowPullRequestMode::Ready),
+        },
+    }
+}
+
+fn workflow_policy(default_policy: WorkflowDefaultPolicy) -> WorkflowPolicy {
+    WorkflowPolicy {
+        landing: match default_policy.landing {
+            WorkflowDefaultLandingPolicy::Manual => WorkflowLandingPolicy::Manual,
+            WorkflowDefaultLandingPolicy::AfterReview => WorkflowLandingPolicy::AfterReview,
+        },
+        landing_requires_approval: default_policy.landing_requires_approval,
     }
 }
 
@@ -553,7 +580,7 @@ fn source_for_mode(mode: WorkflowModeArg) -> task_run::TaskRunSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, IssueProviderType, IssuesConfig, WorkflowDefaultsConfig};
     use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
     use std::fs;
@@ -565,6 +592,26 @@ mod tests {
             root.to_path_buf(),
             Config::default(),
             Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        )
+    }
+
+    fn ctx_with_config(root: &Path, config: Config) -> Ctx {
+        Ctx::new(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            config,
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        )
+    }
+
+    fn ctx_with_config_and_runner(root: &Path, config: Config, runner: MockRunner) -> Ctx {
+        Ctx::new(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            config,
+            Box::new(runner),
             Box::new(MockUi::new()),
         )
     }
@@ -667,6 +714,11 @@ mod tests {
         assert_eq!(workflow.tasks.len(), 2);
         assert!(workflow.tasks.iter().all(|row| row.parent.is_none()));
         assert!(workflow.tasks.iter().all(|row| row.pull_request.is_none()));
+        assert_eq!(
+            workflow.policy.as_ref().unwrap().landing,
+            WorkflowLandingPolicy::Manual
+        );
+        assert!(workflow.policy.as_ref().unwrap().landing_requires_approval);
         assert_eq!(task_run::list(&ctx).unwrap().len(), 2);
     }
 
@@ -942,8 +994,151 @@ mod tests {
 
         let record = workflow_store::list(&ctx).unwrap().remove(0);
         assert_eq!(record.workflow.tasks[0].pull_request, None);
+        assert_eq!(
+            record.workflow.policy.as_ref().unwrap().landing,
+            WorkflowLandingPolicy::Manual
+        );
+        assert!(
+            record
+                .workflow
+                .policy
+                .as_ref()
+                .unwrap()
+                .landing_requires_approval
+        );
+        let content = std::fs::read_to_string(record.path).unwrap();
+        assert!(content.contains("[policy]"));
+        assert!(content.contains("landing = \"manual\""));
+        assert!(content.contains("landing_requires_approval = true"));
+        assert!(!content.contains("pull_request"));
+    }
+
+    #[test]
+    fn task_applies_workflow_defaults_to_stack_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            workflow: crate::config::WorkflowConfig {
+                defaults: WorkflowDefaultsConfig {
+                    pull_request: Some(WorkflowDefaultPullRequestMode::Draft),
+                    landing: Some(WorkflowDefaultLandingPolicy::AfterReview),
+                    landing_requires_approval: Some(false),
+                },
+            },
+            ..Config::default()
+        };
+        let ctx = ctx_with_config(dir.path(), config);
+
+        task(
+            &ctx,
+            &["contract".into()],
+            WorkflowModeArg::Stack,
+            None,
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(
+            record.workflow.tasks[0].pull_request,
+            Some(WorkflowPullRequestMode::Draft)
+        );
+        assert_eq!(
+            record.workflow.policy.as_ref().unwrap().landing,
+            WorkflowLandingPolicy::AfterReview
+        );
+        assert!(
+            !record
+                .workflow
+                .policy
+                .as_ref()
+                .unwrap()
+                .landing_requires_approval
+        );
+        let content = std::fs::read_to_string(record.path).unwrap();
+        assert!(content.contains("pull_request = \"draft\""));
+        assert!(content.contains("[policy]"));
+        assert!(content.contains("landing = \"after_review\""));
+        assert!(content.contains("landing_requires_approval = false"));
+    }
+
+    #[test]
+    fn explicit_pr_none_overrides_config_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            workflow: crate::config::WorkflowConfig {
+                defaults: WorkflowDefaultsConfig {
+                    pull_request: Some(WorkflowDefaultPullRequestMode::Ready),
+                    landing: Some(WorkflowDefaultLandingPolicy::Manual),
+                    landing_requires_approval: Some(true),
+                },
+            },
+            ..Config::default()
+        };
+        let ctx = ctx_with_config(dir.path(), config);
+
+        task(
+            &ctx,
+            &["contract".into()],
+            WorkflowModeArg::Stack,
+            None,
+            &Some("main".into()),
+            Some(WorkflowPrModeArg::None),
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(record.workflow.tasks[0].pull_request, None);
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(!content.contains("pull_request"));
+    }
+
+    #[test]
+    fn issue_applies_workflow_defaults_to_stack_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"proj-123-fix-editor","description":"Long issue body"}"#,
+            true,
+        );
+        let config = Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            workflow: crate::config::WorkflowConfig {
+                defaults: WorkflowDefaultsConfig {
+                    pull_request: Some(WorkflowDefaultPullRequestMode::Ready),
+                    landing: Some(WorkflowDefaultLandingPolicy::AfterReview),
+                    landing_requires_approval: Some(true),
+                },
+            },
+            ..Config::default()
+        };
+        let ctx = ctx_with_config_and_runner(dir.path(), config, runner);
+
+        issue(
+            &ctx,
+            &["PROJ-123".into()],
+            WorkflowModeArg::Stack,
+            None,
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(
+            record.workflow.tasks[0].pull_request,
+            Some(WorkflowPullRequestMode::Ready)
+        );
+        assert_eq!(
+            record.workflow.policy.as_ref().unwrap().landing,
+            WorkflowLandingPolicy::AfterReview
+        );
+        let content = std::fs::read_to_string(record.path).unwrap();
+        assert!(content.contains("pull_request = \"ready\""));
+        assert!(content.contains("[policy]"));
     }
 
     #[test]
@@ -1321,7 +1516,43 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(err.to_string().contains("--pr draft/ready"));
+        assert!(err.to_string().contains("--pr is only valid"));
+    }
+
+    #[test]
+    fn pr_none_requires_stack_mode_for_task_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        let err = task(
+            &ctx,
+            &["workflow docs".into()],
+            WorkflowModeArg::Single,
+            None,
+            &Some("main".into()),
+            Some(WorkflowPrModeArg::None),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("--pr is only valid"));
+    }
+
+    #[test]
+    fn pr_none_requires_stack_mode_for_issue_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        let err = issue(
+            &ctx,
+            &["PROJ-123".into()],
+            WorkflowModeArg::Batch,
+            None,
+            &Some("main".into()),
+            Some(WorkflowPrModeArg::None),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("--pr is only valid"));
     }
 
     fn replace_first_workflow_run_with_foreign_group(

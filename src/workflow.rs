@@ -42,6 +42,8 @@ pub struct WorkflowMetadata {
     pub created_at: String,
     pub updated_at: String,
     #[serde(default)]
+    pub policy: Option<WorkflowPolicy>,
+    #[serde(default)]
     pub tasks: Vec<WorkflowTask>,
 }
 
@@ -72,6 +74,29 @@ impl WorkflowPullRequestMode {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowPolicy {
+    pub landing: WorkflowLandingPolicy,
+    pub landing_requires_approval: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowLandingPolicy {
+    Manual,
+    AfterReview,
+}
+
+impl WorkflowLandingPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkflowLandingPolicy::Manual => "manual",
+            WorkflowLandingPolicy::AfterReview => "after_review",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkflowRecord {
     pub id: String,
@@ -95,6 +120,7 @@ impl WorkflowMetadata {
             color: None,
             created_at: now.clone(),
             updated_at: now,
+            policy: None,
             tasks,
         }
     }
@@ -322,7 +348,6 @@ fn validate_workflow(workflow: &WorkflowMetadata) -> Result<()> {
     {
         bail!("Workflow color cannot be empty");
     }
-
     for item in &workflow.tasks {
         validate_workflow_task(&workflow.mode, item)?;
     }
@@ -386,6 +411,17 @@ fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
         "updated_at = {}\n",
         toml_quote(&workflow.updated_at)
     ));
+    if let Some(policy) = workflow.policy.as_ref() {
+        content.push_str("\n[policy]\n");
+        content.push_str(&format!(
+            "landing = {}\n",
+            toml_quote(policy.landing.as_str())
+        ));
+        content.push_str(&format!(
+            "landing_requires_approval = {}\n",
+            policy.landing_requires_approval
+        ));
+    }
 
     for item in &workflow.tasks {
         content.push_str("\n[[tasks]]\n");
@@ -513,6 +549,10 @@ mod tests {
             color: Some("blue".into()),
             created_at: "2026-05-16T00:00:00Z".into(),
             updated_at: "2026-05-16T00:00:00Z".into(),
+            policy: Some(WorkflowPolicy {
+                landing: WorkflowLandingPolicy::AfterReview,
+                landing_requires_approval: true,
+            }),
             tasks: vec![WorkflowTask {
                 task: "add-schema".into(),
                 run: "stack-2026-05-16-001-add-schema".into(),
@@ -534,6 +574,9 @@ mod tests {
         assert!(content.contains("run = \"stack-2026-05-16-001-add-schema\""));
         assert!(content.contains("parent = \"main\""));
         assert!(content.contains("pull_request = \"draft\""));
+        assert!(content.contains("[policy]"));
+        assert!(content.contains("landing = \"after_review\""));
+        assert!(content.contains("landing_requires_approval = true"));
         assert!(!content.contains("branch ="));
         assert!(!content.contains("status ="));
         assert!(!content.contains("error ="));
@@ -689,6 +732,31 @@ pull_request = true
         .unwrap();
 
         assert!(error_report(read(&path)).contains("pull_request"));
+    }
+
+    #[test]
+    fn read_accepts_existing_workflow_without_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflow.toml");
+
+        fs::write(
+            &path,
+            r#"mode = "stack"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+parent = "main"
+"#,
+        )
+        .unwrap();
+
+        assert!(read(&path).unwrap().policy.is_none());
     }
 
     #[test]

@@ -24,6 +24,13 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
     if let Some(color) = metadata.color.as_deref() {
         ctx.ui.print_dim(&format!("  Color: {color}"));
     }
+    if let Some(policy) = metadata.policy.as_ref() {
+        ctx.ui.print_dim(&format!(
+            "  Landing: {} (requires approval: {})",
+            policy.landing.as_str(),
+            policy.landing_requires_approval
+        ));
+    }
     ctx.ui
         .print_dim(&format!("  Tasks: {}", metadata.tasks.len()));
 

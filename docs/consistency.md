@@ -314,9 +314,9 @@ remain outside Workflow policy. `wt review`, pull-request state, Git commands, w
 completion, and `wt done` continue to own those checks and transitions explicitly.
 
 The built-in config defaults are `pull_request = "none"`, `landing = "manual"`, and
-`landing_requires_approval = true`. A future implementation may let explicit workflow
-preparation flags override the config for one run, but it should keep the same value
-names and fail early for conflicting forms instead of introducing aliases.
+`landing_requires_approval = true`. Explicit workflow preparation flags override the
+config for one run while keeping the same value names and failing early for conflicting
+forms instead of introducing aliases.
 
 This model changes both `.wt.toml` config shape and `.local/workflows` state shape, so
 implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Ordinary
