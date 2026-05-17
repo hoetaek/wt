@@ -1,6 +1,7 @@
 use crate::agents::AgentStatus;
 use crate::context::Ctx;
 use crate::error::WtError;
+use crate::services::runtime_binding::RuntimeBindingResolver;
 use crate::services::work::{self, WorkSessionState};
 use anyhow::Result;
 use serde::Serialize;
@@ -61,7 +62,8 @@ struct StatusCmuxCandidate {
 }
 
 fn observe_status(ctx: &Ctx, target: &str) -> Result<(StatusReport, i32)> {
-    let work = work::observe_work(ctx, Some(target))?;
+    let resolver = RuntimeBindingResolver::new(ctx);
+    let work = resolver.observe(Some(target))?;
     let exit_code = exit_code_for(&work);
     Ok((StatusReport::from_work(&work), exit_code))
 }
@@ -515,7 +517,7 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert_eq!(report.status, "no_session");
         assert_eq!(report.cmux_workspace_ref.as_deref(), Some("workspace:1"));
-        assert_eq!(report.cmux_surface_ref.as_deref(), Some("surface:4"));
+        assert_eq!(report.cmux_surface_ref.as_deref(), None);
         assert_eq!(report.meta["session_state"], "no_terminal_surface");
         assert!(
             report

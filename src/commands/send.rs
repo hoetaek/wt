@@ -1,6 +1,7 @@
-use crate::commands::review;
 use crate::context::Ctx;
 use crate::services::cmux::CmuxService;
+use crate::services::runtime_binding::{RuntimeBinding, RuntimeBindingResolver};
+use crate::services::work::CmuxContact;
 use anyhow::{Result, bail};
 
 pub fn run(ctx: &Ctx, target: &str, message: &[String], no_enter: bool) -> Result<()> {
@@ -9,14 +10,10 @@ pub fn run(ctx: &Ctx, target: &str, message: &[String], no_enter: bool) -> Resul
     }
     let text = message.join(" ");
 
-    let target = review::resolve_review_target(ctx, Some(target))?;
-    let worktree = target.worktree.as_deref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Target branch is not checked out in a local worktree: {}",
-            target.branch
-        )
-    })?;
-    let contact = resolve_cmux_contact(ctx, worktree, &text, no_enter)?;
+    let resolver = RuntimeBindingResolver::new(ctx);
+    let binding = resolve_runtime_binding(ctx, &resolver, target, &text, no_enter)?;
+    let binding = resolver.revalidate(&binding)?;
+    let contact = &binding.contact;
 
     let cmux = CmuxService::new(ctx.runner.as_ref());
     cmux.send(&contact.surface, &contact.workspace, &text)?;
@@ -32,59 +29,59 @@ pub fn run(ctx: &Ctx, target: &str, message: &[String], no_enter: bool) -> Resul
     Ok(())
 }
 
-fn resolve_cmux_contact(
+fn resolve_runtime_binding(
     ctx: &Ctx,
-    worktree: &std::path::Path,
+    resolver: &RuntimeBindingResolver<'_>,
+    target: &str,
     message: &str,
     no_enter: bool,
-) -> Result<review::CmuxContact> {
-    let contacts = review::cmux_contacts(ctx, worktree)?;
-    match contacts.as_slice() {
+) -> Result<RuntimeBinding> {
+    let work = resolver.observe(Some(target))?;
+    if work.target.worktree.is_none() {
+        bail!(
+            "Target branch is not checked out in a local worktree: {}",
+            work.target.branch
+        );
+    }
+    if let Some(binding) = resolver.unique_live_binding(&work) {
+        return Ok(binding);
+    }
+
+    let live = resolver.live_candidates(&work);
+    match live.as_slice() {
         [] => bail!(
-            "No cmux workspace/surface found for worktree: {}",
-            worktree.display()
+            "No live agent cmux surface was validated for target {}; send was not delivered.\n{}",
+            work.target.label,
+            cmux_candidate_commands(&work.cmux_contacts, message, no_enter)
         ),
-        _ => match unique_live_agent_contact(&contacts) {
-            Some(contact) => Ok(contact),
-            None => select_cmux_contact(ctx, contacts, message, no_enter),
-        },
+        _ => select_runtime_binding(ctx, resolver, &work, live, message, no_enter),
     }
 }
 
-fn unique_live_agent_contact(contacts: &[review::CmuxContact]) -> Option<review::CmuxContact> {
-    let mut candidates = contacts
-        .iter()
-        .filter(|contact| contact.is_live_agent_candidate());
-    let contact = candidates.next()?;
-    if candidates.next().is_none() {
-        Some(contact.clone())
-    } else {
-        None
-    }
-}
-
-fn select_cmux_contact(
+fn select_runtime_binding(
     ctx: &Ctx,
-    contacts: Vec<review::CmuxContact>,
+    resolver: &RuntimeBindingResolver<'_>,
+    work: &crate::services::work::Work,
+    contacts: Vec<CmuxContact>,
     message: &str,
     no_enter: bool,
-) -> Result<review::CmuxContact> {
+) -> Result<RuntimeBinding> {
     let items = contacts.iter().map(contact_label).collect::<Vec<_>>();
 
-    match ctx.ui.select("Select cmux surface", &items) {
-        Ok(index) if index < contacts.len() => Ok(contacts[index].clone()),
+    match ctx.ui.select("Select live agent cmux surface", &items) {
+        Ok(index) if index < contacts.len() => Ok(resolver.bind_contact(work, &contacts[index])),
         Ok(index) => bail!(
             "Selected cmux surface index {index} is out of range for {} candidates",
             contacts.len()
         ),
         Err(_) => bail!(
-            "Multiple cmux surfaces match the target worktree, or no unique live agent surface was validated; send was not delivered.\n{}",
+            "Multiple live agent cmux surfaces match the target worktree; send was not delivered.\n{}",
             cmux_candidate_commands(&contacts, message, no_enter)
         ),
     }
 }
 
-fn contact_label(contact: &review::CmuxContact) -> String {
+fn contact_label(contact: &CmuxContact) -> String {
     let selected = if contact.selected { " [selected]" } else { "" };
     let readable = if contact.readable {
         "readable"
@@ -111,11 +108,7 @@ fn contact_label(contact: &review::CmuxContact) -> String {
     )
 }
 
-fn cmux_candidate_commands(
-    contacts: &[review::CmuxContact],
-    message: &str,
-    no_enter: bool,
-) -> String {
+fn cmux_candidate_commands(contacts: &[CmuxContact], message: &str, no_enter: bool) -> String {
     contacts
         .iter()
         .map(|contact| {
@@ -197,6 +190,7 @@ mod tests {
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
+        add_revalidated_live_contact(&mut runner, &worktree, "surface:4", "uuid-surface-4");
         runner.add_response("", true);
         runner.add_response("", true);
         let ui = Arc::new(MockUi::new());
@@ -212,6 +206,145 @@ mod tests {
 
         let steps = ui.steps.lock().unwrap().join("\n");
         assert!(steps.contains("Sent message to surface:4 on workspace:1"));
+    }
+
+    #[test]
+    fn send_resolves_task_run_target_through_runtime_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("sample");
+        let worktree = dir.path().join("sample-feature");
+        std::fs::create_dir_all(repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            repo.join(".local/task-runs/run-feature.toml"),
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"stack\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/master\n\nworktree {}\nHEAD def\nbranch refs/heads/feature\n\n",
+                repo.display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("", false);
+        runner.add_response(
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
+        runner.add_response(
+            &format!(
+                r#"{{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{{"id":"uuid-workspace-1","ref":"workspace:1","title":"feature","current_directory":"{}"}}]}}"#,
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        runner.add_response("", true);
+        add_revalidated_live_contact(&mut runner, &worktree, "surface:4", "uuid-surface-4");
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo,
+            worktree,
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui.clone()),
+        );
+
+        run(
+            &ctx,
+            "run-feature",
+            &["hello".into(), "agent".into()],
+            false,
+        )
+        .unwrap();
+
+        let steps = ui.steps.lock().unwrap().join("\n");
+        assert!(steps.contains("Sent message to surface:4 on workspace:1"));
+    }
+
+    #[test]
+    fn send_rejects_stale_binding_after_revalidation() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("sample");
+        let worktree = dir.path().join("sample-feature");
+        std::fs::create_dir_all(&worktree).unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/master\n\nworktree {}\nHEAD def\nbranch refs/heads/feature\n\n",
+                repo.display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response(
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
+        runner.add_response(
+            &format!(
+                r#"{{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{{"id":"uuid-workspace-1","ref":"workspace:1","title":"feature","current_directory":"{}"}}]}}"#,
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        runner.add_response("", true);
+        runner.add_response(
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
+        runner.add_response(
+            &format!(
+                r#"{{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{{"id":"uuid-workspace-1","ref":"workspace:1","title":"feature","current_directory":"{}"}}]}}"#,
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        runner.add_response("Terminal surface not found", false);
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo,
+            worktree,
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui),
+        );
+
+        let err = run(&ctx, "feature", &["hello".into(), "agent".into()], false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("stale or no longer a live agent surface"));
     }
 
     #[test]
@@ -265,7 +398,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("Multiple cmux surfaces match the target worktree"));
+        assert!(err.contains("Multiple live agent cmux surfaces match the target worktree"));
         assert!(
             err.contains("cmux send --workspace workspace:1 --surface surface:4 'hello agent'")
         );
@@ -311,6 +444,7 @@ mod tests {
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
         runner.add_response("zsh %", true);
+        add_revalidated_live_contact(&mut runner, &worktree, "surface:5", "uuid-surface-5");
         runner.add_response("", true);
         runner.add_response("", true);
         let ui = Arc::new(MockUi::new());
@@ -368,6 +502,7 @@ mod tests {
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
+        add_revalidated_live_contact(&mut runner, &worktree, "surface:5", "uuid-surface-5");
         runner.add_response("", true);
         runner.add_response("", true);
         let ui = Arc::new(MockUi::new());
@@ -425,6 +560,7 @@ mod tests {
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
+        add_revalidated_live_contact(&mut runner, &worktree, "surface:5", "uuid-surface-5");
         runner.add_response("", true);
         runner.add_response("", true);
         let ui = Arc::new(MockUi::new());
@@ -494,7 +630,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("Multiple cmux surfaces match the target worktree"));
+        assert!(err.contains("Multiple live agent cmux surfaces match the target worktree"));
         assert!(
             err.contains("cmux send --workspace workspace:1 --surface surface:4 'hello agent'")
         );
@@ -504,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn send_prompts_for_cmux_surface_when_match_is_ambiguous() {
+    fn send_prompts_for_live_agent_surface_when_match_is_ambiguous() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
@@ -537,8 +673,11 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":null,"selected_surface_ref":null}]}"#,
             true,
         );
-        runner.add_response("zsh %", true);
-        runner.add_response("zsh %", true);
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        runner.add_response("", true);
+        runner.add_response("Codex Ready", true);
+        add_revalidated_live_contact(&mut runner, &worktree, "surface:5", "uuid-surface-5");
         runner.add_response("", true);
         runner.add_response("", true);
         let mut ui = MockUi::new();
@@ -555,6 +694,39 @@ mod tests {
         run(&ctx, "feature", &["hello".into(), "agent".into()], false).unwrap();
 
         let steps = ui.steps.lock().unwrap().join("\n");
+        let prompts = ui.prompts.lock().unwrap().join("\n");
+        assert!(prompts.contains("Select live agent cmux surface"));
         assert!(steps.contains("Sent message to surface:5 on workspace:1"));
+    }
+
+    fn add_revalidated_live_contact(
+        runner: &mut MockRunner,
+        worktree: &std::path::Path,
+        surface: &str,
+        surface_id: &str,
+    ) {
+        runner.add_response(
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
+        runner.add_response(
+            &format!(
+                r#"{{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{{"id":"uuid-workspace-1","ref":"workspace:1","title":"feature","current_directory":"{}"}}]}}"#,
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("pane:3", true);
+        runner.add_response(surface, true);
+        runner.add_response(
+            &format!(
+                r#"{{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"{}","selected_surface_ref":"{}"}}]}}"#,
+                surface_id, surface
+            ),
+            true,
+        );
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        runner.add_response("", true);
     }
 }

@@ -1,15 +1,16 @@
 use crate::commands::{agent_report, task, task_run};
 use crate::context::Ctx;
 use crate::services::git::GitService;
+use crate::services::runtime_binding::RuntimeBindingResolver;
 use crate::services::work;
 use anyhow::{Context, Result};
-use std::path::Path;
 
 pub(crate) type ReviewTarget = work::WorkTarget;
 pub(crate) type CmuxContact = work::CmuxContact;
 
 pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
-    let work = work::observe_work(ctx, target)?;
+    let resolver = RuntimeBindingResolver::new(ctx);
+    let work = resolver.observe(target)?;
     let target = &work.target;
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
     let parent = git.get_branch_parent(&target.branch)?;
@@ -36,10 +37,6 @@ pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     print_review_checklist(ctx, status.as_deref(), parent.as_deref(), &target.branch)?;
 
     Ok(())
-}
-
-pub(crate) fn resolve_review_target(ctx: &Ctx, target: Option<&str>) -> Result<ReviewTarget> {
-    work::resolve_target(ctx, target)
 }
 
 fn task_runs_for_target(ctx: &Ctx, target: &ReviewTarget) -> Result<Vec<task_run::TaskRunRecord>> {
@@ -259,10 +256,6 @@ fn print_cmux_workspace_ref(ctx: &Ctx, cmux: &work::WorkCmuxSurface) {
         "  cmux workspace: {} \"{}\" (window {})",
         cmux.workspace_ref, cmux.workspace_title, cmux.window_ref
     ));
-}
-
-pub(crate) fn cmux_contacts(ctx: &Ctx, worktree: &Path) -> Result<Vec<CmuxContact>> {
-    work::cmux_contacts(ctx, worktree)
 }
 
 fn print_parent_review(ctx: &Ctx, parent: Option<&str>, branch: &str) -> Result<()> {
@@ -623,8 +616,8 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
         );
-        runner.add_response("ready", true);
-        runner.add_response("", true);
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
         runner.add_response("", true);
         runner.add_response("main", true);
         runner.add_response("", true);
