@@ -18,6 +18,10 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
         .print_dim(&format!("  Mode: {}", metadata.mode.as_str()));
     ctx.ui
         .print_dim(&format!("  Base: {}", base_label(metadata)));
+    if let Some(objective) = metadata.objective.as_deref() {
+        ctx.ui
+            .print_dim(&format!("  Objective: {}", objective.trim()));
+    }
     if let Some(profile) = metadata.profile.as_deref() {
         ctx.ui.print_dim(&format!("  Profile: {profile}"));
     }

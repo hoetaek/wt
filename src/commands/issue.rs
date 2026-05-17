@@ -33,6 +33,7 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) on_start_issue_id: Option<&'a str>,
     pub(crate) prompt_intro: &'a str,
     pub(crate) completion_section: Option<&'a str>,
+    pub(crate) pre_snapshot_context: Option<&'a str>,
     pub(crate) workspace_label: Option<String>,
     pub(crate) snapshot: IssueSnapshotContext<'a>,
 }
@@ -283,6 +284,7 @@ fn run_inner_many(
         .map(|issue| issue.prompt_intro)
         .unwrap_or("Use this issue snapshot before changing code.");
     let completion_section = prepared_issue.and_then(|issue| issue.completion_section);
+    let pre_snapshot_context = prepared_issue.and_then(|issue| issue.pre_snapshot_context);
 
     ctx.ui.print_step(&format!("{identifier}: {title}"));
 
@@ -346,6 +348,7 @@ fn run_inner_many(
             setup_mode,
             prompt_intro,
             completion_section,
+            pre_snapshot_context,
         )
     });
 
@@ -521,6 +524,9 @@ fn run_profiles(
     let completion_section = options
         .prepared_issue
         .and_then(|issue| issue.completion_section);
+    let pre_snapshot_context = options
+        .prepared_issue
+        .and_then(|issue| issue.pre_snapshot_context);
     let profiles = load_selected_profiles(ctx, profile)?;
 
     ctx.ui.print_step(&format!(
@@ -546,6 +552,7 @@ fn run_profiles(
                 setup_mode,
                 prompt_intro,
                 completion_section,
+                pre_snapshot_context,
             )
         });
         let profile_config = snapshot_config.as_ref().unwrap_or(profile_config);
@@ -693,6 +700,7 @@ fn profile_config_with_issue_snapshot(
     mode: &str,
     prompt_intro: &str,
     completion_section: Option<&str>,
+    pre_snapshot_context: Option<&str>,
 ) -> Config {
     let mut config = config.clone();
     if let Some(agent) = config.agent.as_mut() {
@@ -702,9 +710,12 @@ fn profile_config_with_issue_snapshot(
                 "{}\n\nThe TaskDocument prompt follows next. Do not start work until it arrives.",
                 completion_section
             );
-            let snapshot_prompt = format!(
-                "{}\n\n{}: `{}`\n\n{}",
-                prompt_intro, snapshot.path_label, snapshot.path, snapshot.content
+            let snapshot_prompt = prepared_snapshot_prompt(
+                pre_snapshot_context,
+                prompt_intro,
+                snapshot.path_label,
+                snapshot.path,
+                snapshot.content,
             );
             if let Some(first_prompt) = prompts.first_mut() {
                 *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
@@ -729,6 +740,28 @@ fn profile_config_with_issue_snapshot(
         }
     }
     config
+}
+
+fn prepared_snapshot_prompt(
+    pre_snapshot_context: Option<&str>,
+    prompt_intro: &str,
+    path_label: &str,
+    path: &str,
+    content: &str,
+) -> String {
+    let mut prompt = String::new();
+    if let Some(context) = pre_snapshot_context
+        .map(str::trim)
+        .filter(|context| !context.is_empty())
+    {
+        prompt.push_str(context);
+        prompt.push_str("\n\n");
+    }
+    prompt.push_str(&format!(
+        "{prompt_intro}\n\n{path_label}: `{path}`\n\n{}",
+        content.trim_end()
+    ));
+    prompt
 }
 
 fn resolve_base_branch(ctx: &Ctx, git: &GitService, base_raw: &Option<String>) -> Result<String> {
@@ -990,6 +1023,7 @@ mod tests {
             "issue",
             "Use this issue snapshot before changing code.",
             None,
+            None,
         );
 
         let mut agent = config.agent.unwrap();
@@ -1006,6 +1040,54 @@ mod tests {
                     .unwrap()
         );
         assert_eq!(prompts[1], "Then run verification.");
+    }
+
+    #[test]
+    fn prepared_completion_prompt_places_context_after_handoff_before_snapshot() {
+        let config = Config {
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: std::collections::HashMap::new(),
+            }),
+            ..Config::default()
+        };
+        let snapshot = IssueSnapshotContext {
+            path_label: "Task path",
+            path: ".local/tasks/add-schema.toml",
+            content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        };
+
+        let config = profile_config_with_issue_snapshot(
+            &config,
+            &snapshot,
+            "new",
+            "Use this task before changing code.",
+            Some("## Workflow Coordinator Handoff\n\nSend the report."),
+            Some("Workflow objective:\n\nShip the broader migration."),
+        );
+
+        let mut agent = config.agent.unwrap();
+        let prompts = agent.prompt.remove("new").unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
+        assert!(prompts[0].contains("TaskDocument prompt follows next"));
+        assert!(!prompts[0].contains("Workflow objective"));
+        assert!(
+            prompts[1].find("Workflow objective").unwrap()
+                < prompts[1]
+                    .find("Task path: `.local/tasks/add-schema.toml`")
+                    .unwrap()
+        );
+        assert!(
+            prompts[1].find("Workflow objective").unwrap()
+                < prompts[1].find("title = \"Add schema\"").unwrap()
+        );
     }
 
     #[test]
@@ -1037,6 +1119,7 @@ mod tests {
             &snapshot,
             "new",
             "Use this task before changing code.",
+            None,
             None,
         );
 
@@ -1096,6 +1179,7 @@ mod tests {
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",
                 completion_section: None,
+                pre_snapshot_context: None,
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",
@@ -1163,6 +1247,7 @@ mod tests {
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",
                 completion_section: None,
+                pre_snapshot_context: None,
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",

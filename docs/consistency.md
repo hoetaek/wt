@@ -56,9 +56,11 @@ TaskDocument를 실행하고, `batch`는 같은 base에서 여러 독립 branch�
 `wt workflow`의 compatibility alias로 남겨 두면 두 command surface가 모두 canonical처럼
 보이므로, 명시적으로 실패하거나 제거한다.
 
-Workflow file은 mode, base, profile, color, timestamps, task/run link 같은
-orchestration만 저장한다. Task branch name의 source of truth는 항상
-TaskDocument의 `branch`다. Workflow task row는 branch 이름을 복사해 저장하지 않는다.
+Workflow file은 optional `objective`, mode, base, profile, color, timestamps,
+workflow-level policy, task/run link 같은 prepared-plan context와 orchestration만
+저장한다. `objective`는 workflow가 완수하려는 더 큰 목표를 설명하는 human context이며
+실행 상태가 아니다. Task branch name의 source of truth는 항상 TaskDocument의 `branch`다.
+Workflow task row는 branch 이름을 복사해 저장하지 않는다.
 
 Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 묶는 표시다. 색상이
 생략되면 `wt`가 내장 cmux named-color palette의 다음 색을 고르고 workflow file에
@@ -262,16 +264,18 @@ status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이다.
 status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서 실패시킨다.
 
 통합 실행 상태 모델은 TaskDocument, Workflow, TaskRun의 책임을 나누는 데서 시작한다.
-TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, Workflow는 그 task set을
-어떤 실행 shape로 이어갈지에 대한 저장된 계획이며, TaskRun은 TaskDocument 하나를 한 번
-실행한 기록이다.
+TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, Workflow는 optional
+`objective`와 그 task set을 어떤 실행 shape로 이어갈지에 대한 저장된 계획이며,
+TaskRun은 TaskDocument 하나를 한 번 실행한 기록이다.
 
 Workflow 준비는 `.local/workflows/<id>.toml` 하나와 각 task의 TaskDocument/TaskRun link를
 만든다. Workflow의 canonical task 목록은 `[[tasks]]`이고, 각 row는 task key, linked
 TaskRun id, stack-mode parent, pull request handoff intent처럼 orchestration에 필요한
 link와 실행 지시만 저장한다. Workflow row는 status/error를 따로 가지지 않고, branch
 이름도 복사하지 않는다. 실행 인스턴스의 canonical 기록은 TaskRun이고, branch name의
-canonical 기록은 TaskDocument다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을
+canonical 기록은 TaskDocument다. `objective`는 workflow-level field로만 저장하고
+TaskDocument `body`나 row-level field로 복사하지 않는다. `body`, `description`,
+`goal_task`, `parent_task`, `subtasks`, `[[issues]]`, `[[items]]`처럼 같은 상태나 목표를
 가리키는 다른 이름은 받지 않는다.
 
 Stack-mode workflow preparation accepts `--pr <none|draft|ready>`. Omitted `--pr` and
@@ -340,14 +344,23 @@ config for one run while keeping the same value names and failing early for conf
 forms instead of introducing aliases.
 
 This model changes both `.wt.toml` config shape and `.local/workflows` state shape, so
-implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Ordinary
-development commits still do not bump `Cargo.toml`; the release branch owns the eventual
-version bump.
+implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Adding
+workflow `objective` also changes the `.local/workflows` state shape and
+`wt workflow task` / `wt workflow issue` preparation surface, so it belongs in the same
+pre-1.0 minor model-change category. Ordinary development commits still do not bump
+`Cargo.toml`; the release branch owns the eventual version bump.
 
 Open implementation boundary: the current PR handoff runtime is stack-mode only. Until
 single or batch mode has a clear per-branch PR model, non-stack workflows should continue
 to report `PR=none` rather than silently applying `workflow.defaults.pull_request` in a
 different shape.
+
+`wt workflow task --objective <text>`와 `wt workflow issue --objective <text>`는 저장된
+Workflow의 더 큰 목표를 `.local/workflows/<id>.toml`의 top-level `objective`로 기록한다.
+이 값은 `wt workflow show`와 workflow-started agent prompt에 context로 나타나지만,
+runnable selection, TaskRun lifecycle, landing policy, cleanup behavior를 바꾸지 않는다.
+Prompt에서는 coordinator handoff가 먼저 전달되고, objective는 그 뒤 TaskDocument snapshot
+근처에 배치된다.
 
 Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는

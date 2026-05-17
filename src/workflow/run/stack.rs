@@ -8,8 +8,8 @@ use crate::workflow as workflow_store;
 use crate::workflow::planner::{next_runnable_stack_task, parent_for_stack_task};
 use crate::workflow::render::{
     no_runnable_workflow_tasks_message, stack_task_already_running_message,
-    started_stack_task_message, workflow_stack_task_handoff_section,
-    workflow_stack_task_prompt_intro, workflow_task_label,
+    started_stack_task_message, workflow_objective_prompt_context,
+    workflow_stack_task_handoff_section, workflow_stack_task_prompt_intro, workflow_task_label,
 };
 use crate::workflow::{WorkflowMetadata, WorkflowTask};
 use anyhow::{Result, bail};
@@ -56,10 +56,13 @@ pub(super) fn run_stack_workflow(
         ctx,
         workflow_path,
         &metadata.tasks[idx],
-        idx,
-        metadata.tasks.len(),
-        &parent,
-        metadata.profile.as_deref(),
+        StackWorkflowTaskRunContext {
+            idx,
+            total_tasks: metadata.tasks.len(),
+            parent: &parent,
+            profile: metadata.profile.as_deref(),
+            objective: metadata.objective.as_deref(),
+        },
     );
 
     match result {
@@ -90,34 +93,40 @@ pub(super) fn run_stack_workflow(
     }
 }
 
+struct StackWorkflowTaskRunContext<'a> {
+    idx: usize,
+    total_tasks: usize,
+    parent: &'a str,
+    profile: Option<&'a str>,
+    objective: Option<&'a str>,
+}
+
 fn run_stack_workflow_task(
     ctx: &Ctx,
     workflow_path: &Path,
     row: &WorkflowTask,
-    idx: usize,
-    total_tasks: usize,
-    parent: &str,
-    profile: Option<&str>,
+    task_context: StackWorkflowTaskRunContext<'_>,
 ) -> Result<issue::IssueRunResult> {
     let (task_doc, task_path, content) = task_store::read_task_file(ctx, &row.task)?;
     let completion_section = workflow_stack_task_handoff_section(workflow_path, row);
+    let workflow_context = workflow_objective_prompt_context(task_context.objective);
     let branch_name = task_store::prepared_branch_name(&task_doc.branch);
     if branch_name.is_none() && task_doc.origin.is_none() {
         bail!("Workflow task {} has no branch", workflow_task_label(row));
     }
-    let base = Some(parent.to_string());
+    let base = Some(task_context.parent.to_string());
     let identifier = task_doc.identifier_or_key(&row.task);
     let title = task_doc.title_or_key(&row.task);
     let workspace_label = task_store::workspace_run_label(
-        idx,
-        total_tasks,
+        task_context.idx,
+        task_context.total_tasks,
         task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
     );
 
     issue::run_with_issue_snapshot(
         ctx,
         &base,
-        profile,
+        task_context.profile,
         false,
         issue::PreparedIssueContext {
             identifier: &identifier,
@@ -127,6 +136,7 @@ fn run_stack_workflow_task(
             on_start_issue_id: task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
             prompt_intro: workflow_stack_task_prompt_intro(),
             completion_section: Some(&completion_section),
+            pre_snapshot_context: workflow_context.as_deref(),
             workspace_label: Some(workspace_label),
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",

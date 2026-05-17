@@ -14,8 +14,9 @@ use crate::workflow::planner::{
 };
 use crate::workflow::render::{
     no_tasks_selected_message, prepared_workflow_message, render_single_workflow_snapshot,
-    single_workflow_group_title, workflow_single_group_prompt_intro,
-    workflow_single_task_handoff_section, workflow_single_task_prompt_intro,
+    single_workflow_group_title, workflow_objective_prompt_context,
+    workflow_single_group_prompt_intro, workflow_single_task_handoff_section,
+    workflow_single_task_prompt_intro,
 };
 use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowPullRequestMode, WorkflowTask};
 use anyhow::{Result, bail};
@@ -47,6 +48,7 @@ pub(crate) fn prepare_workflow(
     ctx: &Ctx,
     mode: WorkflowModeArg,
     profile: Option<&str>,
+    objective: Option<&str>,
     base: &Option<String>,
     prepared_tasks: Vec<PreparedTask>,
     pr: Option<WorkflowPrModeArg>,
@@ -77,6 +79,7 @@ pub(crate) fn prepare_workflow(
         prepared.tasks,
     );
     metadata.profile = profile.map(str::to_string);
+    metadata.objective = normalized_objective(objective)?;
     metadata.policy = Some(workflow_policy(default_policy));
 
     if let Err(err) = workflow_store::write(ctx, &workflow_path, &mut metadata) {
@@ -122,9 +125,21 @@ fn run_single_workflow(
 
     let base = workflow_base_raw(metadata)?;
     let result = if states.len() == 1 {
-        run_single_workflow_task(ctx, &states[0], &base, metadata.profile.as_deref())
+        run_single_workflow_task(
+            ctx,
+            &states[0],
+            &base,
+            metadata.profile.as_deref(),
+            metadata.objective.as_deref(),
+        )
     } else {
-        run_single_workflow_group(ctx, &states, &base, metadata.profile.as_deref())
+        run_single_workflow_group(
+            ctx,
+            &states,
+            &base,
+            metadata.profile.as_deref(),
+            metadata.objective.as_deref(),
+        )
     };
 
     let result = match result {
@@ -156,8 +171,10 @@ fn run_single_workflow_task(
     state: &WorkflowTaskState,
     base: &Option<String>,
     profile: Option<&str>,
+    objective: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
     let completion_section = workflow_single_task_handoff_section();
+    let workflow_context = workflow_objective_prompt_context(objective);
     let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
@@ -182,6 +199,7 @@ fn run_single_workflow_task(
                 .map(|origin| origin.id.as_str()),
             prompt_intro: workflow_single_task_prompt_intro(),
             completion_section: Some(&completion_section),
+            pre_snapshot_context: workflow_context.as_deref(),
             workspace_label: None,
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",
@@ -197,6 +215,7 @@ fn run_single_workflow_group(
     states: &[WorkflowTaskState],
     base: &Option<String>,
     profile: Option<&str>,
+    objective: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
     let branch = shared_single_workflow_branch(states)?;
     let snapshot_path = states
@@ -206,6 +225,7 @@ fn run_single_workflow_group(
         .join(", ");
     let snapshot_content = render_single_workflow_snapshot(states);
     let completion_section = workflow_single_task_handoff_section();
+    let workflow_context = workflow_objective_prompt_context(objective);
     let title = single_workflow_group_title(states);
 
     issue::run_with_issue_snapshot(
@@ -221,6 +241,7 @@ fn run_single_workflow_group(
             on_start_issue_id: None,
             prompt_intro: workflow_single_group_prompt_intro(),
             completion_section: Some(&completion_section),
+            pre_snapshot_context: workflow_context.as_deref(),
             workspace_label: None,
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task paths",
@@ -340,6 +361,17 @@ fn validate_mode_options(mode: WorkflowModeArg, pr: Option<WorkflowPrModeArg>) -
         bail!("--pr is only valid with --mode stack");
     }
     Ok(())
+}
+
+fn normalized_objective(objective: Option<&str>) -> Result<Option<String>> {
+    let Some(objective) = objective else {
+        return Ok(None);
+    };
+    let objective = objective.trim();
+    if objective.is_empty() {
+        bail!("Workflow objective cannot be empty");
+    }
+    Ok(Some(objective.to_string()))
 }
 
 fn rollback_task_runs(task_runs: &[task_run::TaskRunRecord]) {

@@ -370,6 +370,9 @@ pub enum WorkflowCommand {
         /// Named profile from .local/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
+        /// Human context explaining the larger objective this workflow is meant to complete
+        #[arg(long)]
+        objective: Option<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
@@ -387,6 +390,9 @@ pub enum WorkflowCommand {
         /// Named profile from .local/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
+        /// Human context explaining the larger objective this workflow is meant to complete
+        #[arg(long)]
+        objective: Option<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
@@ -1079,6 +1085,8 @@ mod tests {
             "stack",
             "--profile",
             "codex",
+            "--objective",
+            "Ship the split workflow",
             "--base",
             "main",
             "--pr",
@@ -1091,11 +1099,13 @@ mod tests {
                     ref tasks,
                     mode: WorkflowModeArg::Stack,
                     profile: Some(ref profile),
+                    objective: Some(ref objective),
                     base: Some(ref base),
                     pr: Some(WorkflowPrModeArg::Ready),
                 }
             }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
+                && objective == "Ship the split workflow"
                 && base == "main"
         ));
     }
@@ -1110,6 +1120,7 @@ mod tests {
                     ref tasks,
                     mode: WorkflowModeArg::Batch,
                     profile: None,
+                    objective: None,
                     base: None,
                     pr: None,
                 }
@@ -1127,6 +1138,7 @@ mod tests {
                     ref issues,
                     mode: WorkflowModeArg::Batch,
                     profile: None,
+                    objective: None,
                     base: None,
                     pr: None,
                 }
@@ -1201,6 +1213,22 @@ mod tests {
         assert!(help.contains("coordinator cmux send coordinates"));
         assert!(help.contains("Single and batch tasks report PR=none"));
         assert!(help.contains("PR review follow-up"));
+    }
+
+    #[test]
+    fn workflow_prepare_help_describes_objective_option() {
+        let mut command = Cli::command();
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+
+        let task = workflow.find_subcommand_mut("task").unwrap();
+        let task_help = task.render_long_help().to_string();
+        assert!(task_help.contains("--objective"));
+        assert!(task_help.contains("larger objective"));
+
+        let issue = workflow.find_subcommand_mut("issue").unwrap();
+        let issue_help = issue.render_long_help().to_string();
+        assert!(issue_help.contains("--objective"));
+        assert!(issue_help.contains("larger objective"));
     }
 
     #[test]
