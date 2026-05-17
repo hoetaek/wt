@@ -70,9 +70,27 @@ pub(crate) fn workflow_task_prompt_content_with_policy(
     row: &WorkflowTask,
     policy: &WorkflowPolicy,
 ) -> String {
+    let validated_parent = row.parent.as_deref().unwrap_or("<workflow-parent>");
+    workflow_task_prompt_content_with_policy_and_parent(
+        content,
+        workflow_path,
+        row,
+        policy,
+        validated_parent,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn workflow_task_prompt_content_with_policy_and_parent(
+    content: &str,
+    workflow_path: &Path,
+    row: &WorkflowTask,
+    policy: &WorkflowPolicy,
+    validated_parent: &str,
+) -> String {
     workflow_task_prompt_content(
         content,
-        &workflow_stack_task_handoff_section(workflow_path, row, policy),
+        &workflow_stack_task_handoff_section(workflow_path, row, policy, validated_parent),
     )
 }
 
@@ -357,10 +375,11 @@ pub(crate) fn workflow_stack_task_handoff_section(
     workflow_path: &Path,
     row: &WorkflowTask,
     policy: &WorkflowPolicy,
+    validated_parent: &str,
 ) -> String {
     workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::Task {
         policy,
-        pr_base: row.parent.as_deref().unwrap_or("<workflow-parent>"),
+        pr_base: validated_parent,
         pr_base_label: "workflow parent branch",
         completion: Some(WorkflowCompletion { workflow_path, row }),
     })

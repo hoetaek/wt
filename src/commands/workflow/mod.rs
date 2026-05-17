@@ -19,6 +19,7 @@ use crate::workflow::render::{
     workflow_batch_task_prompt_content, workflow_batch_task_prompt_content_for_policy,
     workflow_single_task_prompt_content, workflow_single_task_prompt_content_for_policy,
     workflow_stack_task_prompt_content, workflow_task_prompt_content_with_policy,
+    workflow_task_prompt_content_with_policy_and_parent,
 };
 use crate::workflow::run as workflow_runner;
 #[cfg(test)]
@@ -1147,6 +1148,32 @@ mod tests {
         assert!(!content.contains("gh pr create --draft"));
         assert!(!content.contains("gh pr ready"));
         assert!(content.contains("PR=<pr-url>"));
+    }
+
+    #[test]
+    fn workflow_stack_prompt_uses_validated_parent_for_pr_base() {
+        let row = WorkflowTask {
+            task: "PROJ-2".into(),
+            run: "run-2".into(),
+            parent: Some("stored-parent".into()),
+        };
+        let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
+        let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
+
+        let content = workflow_task_prompt_content_with_policy_and_parent(
+            "title = \"API\"\n",
+            &workflow_path,
+            &row,
+            &policy,
+            "validated-runtime-parent",
+        );
+
+        assert!(
+            content.contains(
+                "gh pr create --body-file <pr-body-file> --base validated-runtime-parent"
+            )
+        );
+        assert!(!content.contains("gh pr create --body-file <pr-body-file> --base stored-parent"));
     }
 
     #[test]
