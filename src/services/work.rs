@@ -104,6 +104,10 @@ struct WorkTargetCandidate {
 
 pub(crate) fn observe_work(ctx: &Ctx, target: Option<&str>) -> Result<Work> {
     let target = resolve_target(ctx, target)?;
+    observe_target(ctx, target)
+}
+
+pub(crate) fn observe_target(ctx: &Ctx, target: WorkTarget) -> Result<Work> {
     let Some(worktree) = target.worktree.clone() else {
         return Ok(Work {
             message: Some(format!(

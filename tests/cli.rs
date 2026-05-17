@@ -47,6 +47,40 @@ fn git_init(path: &Path) {
     assert!(status.success());
 }
 
+fn git_commit(path: &Path) {
+    std::fs::write(path.join("README.md"), "sample\n").unwrap();
+    let status = git_command()
+        .args(["add", "README.md"])
+        .current_dir(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let status = git_command()
+        .args([
+            "-c",
+            "user.name=wt test",
+            "-c",
+            "user.email=wt@example.com",
+            "commit",
+            "-m",
+            "initial",
+        ])
+        .current_dir(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+fn current_branch(path: &Path) -> String {
+    let output = git_command()
+        .args(["branch", "--show-current"])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
 #[test]
 fn version_flag_prints_package_version() {
     wt_command()
@@ -204,6 +238,71 @@ fn status_help_explains_polling_target() {
         ))
         .stdout(predicate::str::contains("read-only"))
         .stdout(predicate::str::contains("cmux hooks codex install --yes"));
+}
+
+#[test]
+fn inspect_help_explains_optional_target_selection() {
+    wt_command()
+        .args(["inspect", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("read-only work dossier"))
+        .stdout(predicate::str::contains("[TARGET]"))
+        .stdout(predicate::str::contains(
+            "Branch, worktree path/name, or TaskRun id",
+        ))
+        .stdout(predicate::str::contains(
+            "Omit TARGET in an interactive terminal",
+        ));
+}
+
+#[test]
+fn inspect_without_target_noninteractive_requires_explicit_target() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "inspect"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt inspect requires TARGET"))
+        .stderr(predicate::str::contains(
+            "branch, worktree path/name, or TaskRun id",
+        ));
+}
+
+#[test]
+fn inspect_explicit_branch_prints_dossier_without_cmux_contact() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let branch = current_branch(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "inspect", &branch])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("Inspect: {branch}")))
+        .stdout(predicate::str::contains("Work"))
+        .stdout(predicate::str::contains("Git"))
+        .stdout(predicate::str::contains("Agent"))
+        .stdout(predicate::str::contains("Cmux"))
+        .stdout(predicate::str::contains("Expected report"))
+        .stdout(predicate::str::contains("PR=<pr>"))
+        .stderr(predicate::str::contains("Cmux:"));
+}
+
+#[test]
+fn legacy_review_command_fails_with_inspect_guidance() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "review", "feature"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt review has been replaced"))
+        .stderr(predicate::str::contains("wt inspect [<target>]"));
 }
 
 #[test]

@@ -95,6 +95,7 @@ fn try_main() -> Result<()> {
             base_config,
             output_mode,
             verbosity: cli.verbose,
+            quiet: cli.quiet,
         },
     );
 

@@ -519,6 +519,7 @@ mod tests {
                     base_config: Config::default(),
                     output_mode,
                     verbosity: 0,
+                    quiet: false,
                 },
             )
         }

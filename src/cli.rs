@@ -115,7 +115,16 @@ pub enum Commands {
         /// Branch, issue number/key, or worktree directory names to remove
         targets: Vec<String>,
     },
-    /// Inspect a worktree, branch, or TaskRun before review or landing
+    /// Read a work dossier for a branch, worktree, or TaskRun
+    #[command(
+        long_about = "Read a concise, read-only work dossier for a branch, worktree path/name, or TaskRun id. Omit TARGET in an interactive terminal to choose an inspectable work target; pass TARGET explicitly for scripts and non-interactive use."
+    )]
+    Inspect {
+        /// Branch, worktree path/name, or TaskRun id to inspect
+        target: Option<String>,
+    },
+    /// Legacy review command; use wt inspect
+    #[command(hide = true)]
     Review {
         /// Branch, worktree path/name, or TaskRun id to inspect
         target: Option<String>,
@@ -741,31 +750,33 @@ mod tests {
     }
 
     #[test]
-    fn review_accepts_optional_target() {
-        let cli = parse(&["wt", "review"]);
+    fn inspect_accepts_optional_target() {
+        let cli = parse(&["wt", "inspect"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Review { target: None })
+            Some(Commands::Inspect { target: None })
         ));
 
-        let cli = parse(&["wt", "review", "feature"]);
+        let cli = parse(&["wt", "inspect", "feature"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Review { ref target }) if target.as_deref() == Some("feature")
+            Some(Commands::Inspect { ref target }) if target.as_deref() == Some("feature")
         ));
     }
 
     #[test]
-    fn review_help_describes_target_types() {
+    fn inspect_help_describes_optional_target_and_selector() {
         let mut command = Cli::command();
         let help = command
-            .find_subcommand_mut("review")
+            .find_subcommand_mut("inspect")
             .unwrap()
             .render_long_help()
             .to_string();
 
-        assert!(help.contains("worktree, branch, or TaskRun"));
+        assert!(help.contains("[TARGET]"));
+        assert!(help.contains("read-only work dossier"));
         assert!(help.contains("Branch, worktree path/name, or TaskRun id"));
+        assert!(help.contains("Omit TARGET in an interactive terminal"));
     }
 
     #[test]

@@ -87,7 +87,8 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::List { wide } => commands::list::run(ctx, *wide),
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
-        Commands::Review { target } => commands::review::run(ctx, target.as_deref()),
+        Commands::Inspect { target } => commands::review::run(ctx, target.as_deref()),
+        Commands::Review { .. } => legacy_review_command_error(),
         Commands::Status { target } => commands::status::run(ctx, target),
         Commands::Send {
             target,
@@ -153,5 +154,11 @@ fn legacy_batch_command_error() -> Result<()> {
 fn legacy_stack_command_error() -> Result<()> {
     bail!(
         "wt stack has been replaced by wt workflow --mode stack. Use `wt workflow task ... --mode stack`, `wt workflow issue ... --mode stack`, `wt workflow run <workflow>`, and `wt workflow complete <workflow> <task> [--run-next]`. Existing .local/stacks files are old migration context, not the canonical state surface."
+    )
+}
+
+fn legacy_review_command_error() -> Result<()> {
+    bail!(
+        "wt review has been replaced by wt inspect. Use `wt inspect [<target>]` for the read-only work dossier, then complete, land, or clean up explicitly when appropriate."
     )
 }
