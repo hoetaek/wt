@@ -103,12 +103,13 @@ loading, convention overlays, and prompt merge/finalization. Commands may ask
 whether a profile is valid and may pass an effective `Config` onward. They
 should not duplicate merge rules or inspect profile directories directly.
 
-Workflow default policy is config, not Workflow state, until a workflow is
-prepared. `src/config/` should own parsing and merging `[workflow.defaults]`
-from `.wt.toml` and `.local/.wt.toml`; workflow preparation should materialize
-the effective values into `.local/workflows/<id>.toml` for that run. Workflow
-state owns the prepared policy snapshot, not the config precedence rules that
-produced it.
+Workflow preparation policy is config, not Workflow state, until a workflow is
+prepared. `src/config/` should own parsing and merging `[workflow]` from
+`.wt.toml` and `.local/.wt.toml`, including built-in defaults for
+`pull_request` and `landing`; workflow preparation should materialize the
+effective values into `.local/workflows/<id>.toml` for that run. Workflow state
+owns the prepared policy snapshot shown by `wt workflow show`, not the config
+precedence rules that produced it.
 
 `src/setup.rs` is the setup facade and keeps `run_setup` as the orchestration
 entrypoint after a worktree path, names, prompt context, and effective config are
