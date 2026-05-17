@@ -1,6 +1,5 @@
 pub mod agent;
 pub mod agent_report;
-pub mod batch;
 pub mod clean;
 pub mod config;
 pub mod doctor;
@@ -19,7 +18,6 @@ pub mod profile_match;
 pub(crate) mod profile_workspace;
 pub mod send;
 pub mod site;
-pub mod stack;
 pub mod task;
 pub mod task_publish;
 pub mod task_run_command;

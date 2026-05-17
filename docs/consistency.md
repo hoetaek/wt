@@ -52,9 +52,9 @@ TaskDocument를 실행하고, `batch`는 같은 base에서 여러 독립 branch�
 
 `batch`와 `stack`은 workflow mode 값으로 남지만 top-level 상태 파일 noun이 아니다.
 새 상태 파일은 `.local/workflows` 아래에만 만들고, `.local/batches`와
-`.local/stacks`는 migration context 또는 old readable state로만 다룬다. `wt batch`나
-`wt stack`을 `wt workflow`의 compatibility alias로 남겨 두면 두 command surface가 모두
-canonical처럼 보이므로, migration 시에는 명시적으로 실패하거나 제거한다.
+`.local/stacks`는 새 코드가 읽거나 쓰는 상태 위치가 아니다. `wt batch`나 `wt stack`을
+`wt workflow`의 compatibility alias로 남겨 두면 두 command surface가 모두 canonical처럼
+보이므로, 명시적으로 실패하거나 제거한다.
 
 Workflow file은 mode, base, profile, color, timestamps, task/run link 같은
 orchestration만 저장한다. Task branch name의 source of truth는 항상
@@ -235,8 +235,8 @@ TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<i
 task, branch, status, source, group, error, creation_order, created_at,
 updated_at을 저장한다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
 초 단위 timestamp 우연성에 기대지 않도록 새 TaskRun마다 증가하는 실행 생성 순서다.
-`creation_order`가 없는 legacy TaskRun은 계속 읽되 ordered TaskRun보다 앞에 정렬하고,
-legacy끼리는 `created_at`과 id를 fallback으로 쓴다.
+`creation_order`가 없는 previous TaskRun은 계속 읽되 ordered TaskRun보다 앞에 정렬하고,
+previous끼리는 `created_at`과 id를 fallback으로 쓴다.
 status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이다. 알 수 없는
 status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서 실패시킨다.
 
@@ -335,9 +335,8 @@ Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-sele
 `.local/workflows`는 `.local/batches`와 `.local/stacks`를 대체한다. 이유는 batch와 stack이
 저장소 noun이 아니라 하나의 Workflow 안에서 고르는 execution mode이기 때문이다. 새
 기능이 `.local/batches`나 `.local/stacks`에 상태를 계속 추가하면 사용자는 같은 준비 작업을
-workflow, batch file, stack file 중 무엇으로 읽어야 하는지 다시 배워야 한다. 기존 old
-state를 읽는 기간이 필요하더라도 migration context로만 설명하고, 새 canonical state는
-Workflow file 하나로 수렴시킨다.
+workflow, batch file, stack file 중 무엇으로 읽어야 하는지 다시 배워야 한다. 새 canonical
+state는 Workflow file 하나로 수렴시킨다.
 
 `single` mode workflow는 하나의 branch workspace에서 하나 이상의 TaskDocument를 실행한다.
 `batch` mode workflow는 같은 base에서 여러 TaskDocument를 독립 branch로 실행한다. Batch

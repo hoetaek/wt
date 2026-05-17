@@ -49,9 +49,9 @@ Git/review workflow.
 `batch` and `stack` are Workflow modes. New prepared-work state belongs in
 `.local/workflows` with `mode = "single" | "batch" | "stack"`. The
 `.local/batches`, `.local/stacks`, `wt batch`, and `wt stack` surfaces are
-legacy migration context. Refactors may read them to preserve old state during
-migration, but new behavior should not extend them as canonical stores or teach
-them as equal command surfaces.
+not state or command ownership points. Keep any remaining handling limited to
+explicit replacement guidance, and do not teach those names as equal command
+surfaces.
 
 cmux is a runtime and surface integration. `src/services/cmux.rs` owns the
 external command boundary; setup and command renderers may use current cmux
@@ -133,7 +133,7 @@ Before adding a command or expanding an existing one:
   inputs instead of letting setup discover workflow/task state.
 - Keep human output, selector labels, and agent prompt text in rendering
   helpers when the text is longer than a local status line.
-- Treat `.local/batches`, `.local/stacks`, `wt batch`, and `wt stack` as
-  migration context unless a separate task explicitly changes that policy.
+- Treat `.local/batches`, `.local/stacks`, `wt batch`, and `wt stack` as removed
+  surfaces unless a separate task explicitly changes that policy.
 - Add or update tests at the layer that owns the behavior, and inspect public
   help text when command behavior changes.

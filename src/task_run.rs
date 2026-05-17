@@ -57,10 +57,6 @@ impl TaskRunStatus {
         matches!(self, Self::Prepared | Self::Failed | Self::Skipped)
     }
 
-    pub(crate) fn is_cleanable(self) -> bool {
-        matches!(self, Self::Done | Self::Skipped)
-    }
-
     pub(crate) fn is_stack_completable(self) -> bool {
         self == Self::Running
     }
@@ -809,14 +805,14 @@ updated_at = "2026-05-16T00:00:00Z"
     }
 
     #[test]
-    fn latest_for_task_sorts_fractional_timestamps_after_legacy_seconds() {
+    fn latest_for_task_sorts_fractional_timestamps_after_previous_seconds() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
         let task_runs_dir = dir.path().join(".local/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
 
         write(
-            &task_runs_dir.join("z-legacy.toml"),
+            &task_runs_dir.join("z-previous.toml"),
             &run_with_order("add-schema", STATUS_DONE, None, "2026-05-16T00:00:00Z"),
         )
         .unwrap();
@@ -838,7 +834,7 @@ updated_at = "2026-05-16T00:00:00Z"
     }
 
     #[test]
-    fn latest_for_task_orders_mixed_legacy_and_ordered_records_totally() {
+    fn latest_for_task_orders_mixed_previous_and_ordered_records_totally() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
         let task_runs_dir = dir.path().join(".local/task-runs");
@@ -850,7 +846,7 @@ updated_at = "2026-05-16T00:00:00Z"
         )
         .unwrap();
         write(
-            &task_runs_dir.join("b-legacy.toml"),
+            &task_runs_dir.join("b-previous.toml"),
             &run_with_order("add-schema", STATUS_DONE, None, "2026-05-16T00:00:02Z"),
         )
         .unwrap();
@@ -866,11 +862,11 @@ updated_at = "2026-05-16T00:00:00Z"
         .unwrap();
 
         let records = list(&ctx).unwrap();
-        let legacy = record_by_id(&records, "b-legacy");
+        let previous = record_by_id(&records, "b-previous");
         let ordered_first = record_by_id(&records, "a-ordered-first");
         let ordered_second = record_by_id(&records, "c-ordered-second");
         assert_eq!(
-            compare_task_run_records(legacy, ordered_first),
+            compare_task_run_records(previous, ordered_first),
             Ordering::Less
         );
         assert_eq!(
@@ -878,7 +874,7 @@ updated_at = "2026-05-16T00:00:00Z"
             Ordering::Less
         );
         assert_eq!(
-            compare_task_run_records(legacy, ordered_second),
+            compare_task_run_records(previous, ordered_second),
             Ordering::Less
         );
 

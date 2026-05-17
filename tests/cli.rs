@@ -270,7 +270,7 @@ fn workflow_prepare_rejects_pr_none_on_non_stack_modes() {
 }
 
 #[test]
-fn legacy_batch_command_fails_with_workflow_guidance() {
+fn previous_batch_command_fails_with_workflow_guidance() {
     wt_command()
         .args(["batch", "run"])
         .assert()
@@ -280,9 +280,29 @@ fn legacy_batch_command_fails_with_workflow_guidance() {
 }
 
 #[test]
-fn legacy_stack_command_fails_with_workflow_guidance() {
+fn previous_batch_help_fails_with_workflow_guidance() {
+    wt_command()
+        .args(["batch", "--help"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt batch has been replaced"))
+        .stderr(predicate::str::contains("wt workflow --mode batch"));
+}
+
+#[test]
+fn previous_stack_command_fails_with_workflow_guidance() {
     wt_command()
         .args(["stack", "run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt stack has been replaced"))
+        .stderr(predicate::str::contains("wt workflow --mode stack"));
+}
+
+#[test]
+fn previous_stack_help_fails_with_workflow_guidance() {
+    wt_command()
+        .args(["stack", "--help"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("wt stack has been replaced"))
@@ -374,7 +394,7 @@ fn inspect_explicit_branch_prints_dossier_without_cmux_contact() {
 }
 
 #[test]
-fn legacy_review_command_fails_with_inspect_guidance() {
+fn previous_review_command_fails_with_inspect_guidance() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -387,17 +407,17 @@ fn legacy_review_command_fails_with_inspect_guidance() {
 }
 
 #[test]
-fn legacy_review_help_explains_inspect_migration() {
+fn previous_review_help_explains_inspect_migration() {
     wt_command()
         .args(["review", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Legacy migration surface"))
+        .stdout(predicate::str::contains("Previous command surface"))
         .stdout(predicate::str::contains("wt inspect [<target>]"));
 }
 
 #[test]
-fn legacy_review_with_json_still_fails_with_inspect_guidance() {
+fn previous_review_with_json_still_fails_with_inspect_guidance() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -626,7 +646,7 @@ fn agent_status_without_target_noninteractive_requires_guidance() {
 }
 
 #[test]
-fn legacy_status_command_fails_with_agent_guidance() {
+fn previous_status_command_fails_with_agent_guidance() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -640,12 +660,12 @@ fn legacy_status_command_fails_with_agent_guidance() {
 }
 
 #[test]
-fn legacy_status_help_explains_agent_migration() {
+fn previous_status_help_explains_agent_migration() {
     wt_command()
         .args(["status", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Legacy migration surface"))
+        .stdout(predicate::str::contains("Previous command surface"))
         .stdout(predicate::str::contains("wt agent status <target>"))
         .stdout(predicate::str::contains("wt agent watch <target>"))
         .stdout(predicate::str::contains("wt inspect [<target>]"));
