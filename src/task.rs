@@ -3,6 +3,7 @@ use crate::task_run;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -156,6 +157,18 @@ pub(crate) fn write_task_document(ctx: &Ctx, key: &str, task: &TaskDocument) -> 
     let tasks_dir = ctx.repo_root.join(".local/tasks");
     fs::create_dir_all(&tasks_dir)?;
     fs::write(task_path(ctx, key), render_task_document(task))?;
+    Ok(())
+}
+
+pub(crate) fn write_new_task_document(ctx: &Ctx, key: &str, task: &TaskDocument) -> Result<()> {
+    let tasks_dir = ctx.repo_root.join(".local/tasks");
+    fs::create_dir_all(&tasks_dir)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(task_path(ctx, key))
+        .with_context(|| format!("Task already exists: {}", task_relative_path(key)))?;
+    file.write_all(render_task_document(task).as_bytes())?;
     Ok(())
 }
 

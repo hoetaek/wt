@@ -191,6 +191,21 @@ profile convention file merge를 모두 끝낸 뒤 최종 effective config에서
 TaskDocument는 작업이 무엇인지를 담는 정의다. `.local/tasks/<task>.toml`
 아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
 
+TaskDocument import는 configured issue provider의 기존 issue를 local task 정의로
+가져오는 side effect다. Canonical command shape는 `wt task import` 또는
+`wt task import <issue>...`다. Bare `wt task import`는 provider issue를
+multi-select로 고르게 하고, 명시 issue id는 scriptable path로 남긴다. `import`는
+`.local/tasks/<safe-issue-id>.toml`에 title, branch, body, `[origin]`을 기록하지만
+worktree, branch, TaskRun, Workflow, pull request를 만들지 않고 provider에 쓰지도
+않는다. `[origin]`은 provider issue와의 durable link이지, 자동 동기화 계약이 아니다.
+
+Import ambiguity는 local TaskDocument write 전에 실패해야 한다. Configured issue
+provider가 없으면 실패한다. 같은 invocation 안의 duplicate issue id는 실패한다. Provider
+조회 뒤 canonical issue id가 같은 task key로 수렴하는 경우도 실패한다. Import 대상
+`.local/tasks/<safe-issue-id>.toml`이 이미 있으면 local edits를 보존하기 위해 실패하고,
+조용히 덮어쓰거나 merge하지 않는다. Replace/update가 필요하다면 별도의 명시 옵션과
+help/test/documentation이 먼저 필요하다.
+
 TaskDocument publish는 local task 정의를 configured issue provider의 issue로 만드는
 side effect다. Canonical command shape는 `wt task publish` 또는
 `wt task publish <task>...`다. Bare `wt task publish`는 아직 `[origin]`이 없는 local
@@ -201,9 +216,9 @@ TaskDocument를 multi-select로 고르게 하고, 명시 task key는 scriptable 
 publish해야 한다는 pending request가 아니다.
 
 `wt issue`는 이미 존재하는 provider issue에서 worktree를 시작하는 명령으로 남긴다.
-Local TaskDocument를 provider issue로 만드는 흐름을 `wt issue create`, `import`,
-`sync` 같은 이름으로 추가하지 않는다. `import`는 provider issue를 TaskDocument로
-가져오는 방향이고, `publish`는 TaskDocument를 provider issue로 내보내는 방향이다.
+Provider issue를 TaskDocument로 가져오는 흐름은 `wt task import`, Local TaskDocument를
+provider issue로 만드는 흐름은 `wt task publish`다. `wt issue import`, `wt issue create`,
+`sync`, `pull`, `push`, `export` 같은 이름을 같은 개념의 alias로 추가하지 않는다.
 
 Publish는 TaskDocument의 schema를 넓히지 않는다. TaskDocument에는 계속 title, branch,
 body, optional origin만 둔다. TaskRun, workflow, profile, retry status, pending
@@ -230,6 +245,12 @@ plan이어야 하고, TaskDocument에 pending state를 저장해서 dry-run 결�
 불명확하면 실패한다는 점, bare publish는 아직 origin이 없는 TaskDocument를 고른다는 점을
 보여줘야 한다. Worktree 시작, TaskRun 생성, workflow 실행, branch landing처럼 다른
 lifecycle을 publish 도움말에 섞지 않는다.
+
+`wt task import --help`는 import가 provider issue에서 TaskDocument로 향하는
+non-executing 흐름임을 그대로 설명해야 한다. 즉 explicit issue id와 bare provider issue
+selector를 모두 지원한다는 점, `[origin]`을 기록한다는 점, duplicate ids나 existing
+TaskDocument collision에서 실패한다는 점, worktree/branch/TaskRun/Workflow/PR/provider
+write를 만들지 않는다는 점을 보여줘야 한다.
 
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
 task, branch, status, source, group, error, creation_order, created_at,

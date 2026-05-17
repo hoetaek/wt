@@ -320,6 +320,15 @@ pub enum InitSiteProvider {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum TaskCommand {
+    /// Import provider issues as local TaskDocuments
+    #[command(
+        long_about = "Import existing provider issues into .local/tasks/<safe-issue-id>.toml TaskDocuments and write [origin] with the configured provider and issue id. This command does not start workspaces, create branches, create TaskRuns, prepare workflows, open pull requests, or write to the provider.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
+    )]
+    Import {
+        /// Provider issue ids to import
+        #[arg(value_name = "ISSUE")]
+        issues: Vec<String>,
+    },
     /// Start one worktree per selected local TaskDocument
     #[command(
         long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a source = \"new\" TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
@@ -839,6 +848,71 @@ mod tests {
                     "--run-next".to_string()
                 ]
         ));
+    }
+
+    #[test]
+    fn task_import_accepts_issue_id() {
+        let cli = parse(&["wt", "task", "import", "PROJ-123"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Import { ref issues }
+            }) if issues == &vec!["PROJ-123".to_string()]
+        ));
+    }
+
+    #[test]
+    fn task_import_accepts_multiple_issue_ids() {
+        let cli = parse(&["wt", "task", "import", "PROJ-123", "#42"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Import { ref issues }
+            }) if issues == &vec!["PROJ-123".to_string(), "#42".to_string()]
+        ));
+    }
+
+    #[test]
+    fn task_import_accepts_no_issue_ids_for_interactive_selection() {
+        let cli = parse(&["wt", "task", "import"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::Import { ref issues }
+            }) if issues.is_empty()
+        ));
+    }
+
+    #[test]
+    fn task_import_rejects_stack_selector() {
+        let err = Cli::try_parse_from(["wt", "task", "import", "--stack", "latest"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unexpected argument '--stack'"));
+    }
+
+    #[test]
+    fn task_import_help_explains_non_executing_import_and_failures() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("import")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("Import existing provider issues"));
+        assert!(help.contains(".local/tasks/<safe-issue-id>.toml"));
+        assert!(help.contains("write [origin]"));
+        assert!(help.contains("does not start workspaces"));
+        assert!(help.contains("create branches"));
+        assert!(help.contains("create TaskRuns"));
+        assert!(help.contains("Omit issue ids to choose provider issues interactively"));
+        assert!(help.contains("duplicate issue ids"));
+        assert!(help.contains("overwrite an existing local TaskDocument"));
+        assert!(!help.contains("--stack <STACK>"));
+        assert!(!help.contains("--batch <BATCH>"));
     }
 
     #[test]

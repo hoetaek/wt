@@ -38,6 +38,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
         Commands::Batch { .. } => removed_batch_command_error(),
         Commands::Task { command } => match command {
+            TaskCommand::Import { issues } => commands::task::import(ctx, issues),
             TaskCommand::Run {
                 tasks,
                 base,

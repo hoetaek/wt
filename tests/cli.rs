@@ -177,6 +177,35 @@ fn task_run_help_explains_task_execution() {
 }
 
 #[test]
+fn task_help_lists_import_run_and_publish() {
+    wt_command()
+        .args(["task", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("import"))
+        .stdout(predicate::str::contains("run"))
+        .stdout(predicate::str::contains("publish"));
+}
+
+#[test]
+fn task_import_help_explains_behavior() {
+    wt_command()
+        .args(["task", "import", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Import existing provider issues"))
+        .stdout(predicate::str::contains(
+            ".local/tasks/<safe-issue-id>.toml",
+        ))
+        .stdout(predicate::str::contains("write [origin]"))
+        .stdout(predicate::str::contains("does not start workspaces"))
+        .stdout(predicate::str::contains("create TaskRuns"))
+        .stdout(predicate::str::contains("Omit issue ids"))
+        .stdout(predicate::str::contains("duplicate issue ids"))
+        .stdout(predicate::str::contains("existing local TaskDocument"));
+}
+
+#[test]
 fn task_publish_help_explains_behavior() {
     wt_command()
         .args(["task", "publish", "--help"])
