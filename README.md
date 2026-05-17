@@ -160,19 +160,19 @@ for their task:
 Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>
 ```
 
-Immediate `wt task run` work reports `PR=none`. Workflow single and batch tasks
-also report `PR=none`; stack tasks follow the workflow row's pull-request
-handoff intent. Omit `--pr` or pass `--pr none` to avoid opening a PR,
-`--pr draft` to create a draft PR and leave it draft, or `--pr ready` to create
-a review-ready PR directly. Workflow rows persist PR intent only as
-`pull_request = "draft"` or `pull_request = "ready"`; an omitted value means
-`PR=none`. PR-opening tasks create a body file from
+Immediate `wt task run` work reports `PR=none`. Workflow tasks follow the
+prepared workflow policy. Omit `--pr` to use the effective `[workflow]`
+configuration, pass `--pr none` to report `PR=none`, pass `--pr draft` to create
+a draft PR and leave it draft, or pass `--pr ready` to create a review-ready PR
+directly. PR-opening tasks create a body file from
 `.github/pull_request_template.md`, fill a review-focused description, and pass
 it to `gh pr create --body-file <pr-body-file>`. If Codex/GitHub review or
 coordinator feedback asks for changes, the same agent updates the branch, reruns
 checks, pushes, refreshes the PR body only if it became stale, and sends an
-updated report. The coordinator advances, lands, and cleans up only after review
-passes.
+updated report. Review always happens. The prepared landing policy only decides
+whether the coordinator stops after review or proceeds to landing and cleanup
+after review passes; automatic landing still has to satisfy dirty-worktree,
+check, review-thread, and ancestry safety checks.
 
 ## Configuration
 
@@ -189,22 +189,38 @@ wt config
 wt config --profile codex
 ```
 
-Workflow preparation reads repository defaults from the effective config:
+Workflow preparation reads policy from the effective config:
 
 ```toml
-[workflow.defaults]
-pull_request = "draft"        # none | draft | ready
-landing = "after_review"      # manual | after_review
-landing_requires_approval = true
+[workflow]
+pull_request = "none"  # none | draft | ready
+landing = "manual"     # manual | auto
 ```
+
+`pull_request = "none"` means workflow agents report `PR=none`,
+`pull_request = "draft"` means they create draft PRs, and
+`pull_request = "ready"` means they create review-ready PRs.
+`landing = "manual"` means review completes and the coordinator waits for an
+explicit landing direction. `landing = "auto"` means review passing is enough
+approval for the coordinator to proceed to landing and cleanup, without
+bypassing dirty-worktree, check, review-thread, or ancestry safety gates.
+
+`wt config` prints the effective `[workflow]` policy, including the built-in
+defaults above. `wt init` may include a commented optional `[workflow]` block so
+the policy is discoverable, but generated config does not actively enable PR
+creation or automatic landing by default.
+
+`wt workflow task` and `wt workflow issue` snapshot the effective workflow
+policy into `.local/workflows/<id>.toml` for the prepared workflow.
+`wt workflow show` reads that prepared policy from the workflow file, not from
+the current `.wt.toml`, so later config edits do not rewrite the meaning of
+existing workflow files. An explicit `--pr none|draft|ready` overrides the
+effective config for that prepared workflow only.
 
 `wt workflow task --objective <text>` and
 `wt workflow issue --objective <text>` write top-level workflow context for the
-larger goal. `wt workflow task` and `wt workflow issue` write the effective
-landing policy to the prepared workflow file under `[policy]`. Stack-mode tasks
-also materialize the effective PR handoff on each task row; an explicit
-`--pr none|draft|ready` overrides `workflow.defaults.pull_request` for that
-prepared workflow. Single and batch workflows still report `PR=none`.
+larger goal without changing runnable selection, TaskRun lifecycle, landing
+policy, or cleanup behavior.
 
 Small private agent config can stay inline:
 

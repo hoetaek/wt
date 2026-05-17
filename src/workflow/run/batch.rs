@@ -5,7 +5,6 @@ use crate::context::Ctx;
 use crate::task as task_store;
 use crate::task_run::{self, STATUS_FAILED, STATUS_RUNNING};
 use crate::workflow as workflow_store;
-use crate::workflow::WorkflowMetadata;
 use crate::workflow::planner::workflow_base_raw;
 use crate::workflow::render::{
     failed_workflow_task_message, no_runnable_workflow_tasks_message,
@@ -13,6 +12,7 @@ use crate::workflow::render::{
     workflow_batch_task_handoff_section, workflow_batch_task_prompt_intro,
     workflow_objective_prompt_context,
 };
+use crate::workflow::{WorkflowMetadata, WorkflowPolicy};
 use crate::worktree_naming;
 use anyhow::{Result, bail};
 use std::collections::{HashMap, HashSet};
@@ -75,12 +75,15 @@ fn run_batch_workflow_sequential(
         task_run::update(ctx, &state.row.run, STATUS_RUNNING, None, None)?;
         let result = run_batch_workflow_task(
             ctx,
-            state,
-            &base,
-            metadata.profile.as_deref(),
-            metadata.objective.as_deref(),
-            true,
-            total,
+            BatchWorkflowTaskContext {
+                state,
+                base: &base,
+                policy: &metadata.policy,
+                profile: metadata.profile.as_deref(),
+                objective: metadata.objective.as_deref(),
+                allow_interactive_prompts: true,
+                total,
+            },
         );
         match apply_batch_workflow_result(ctx, state, result, metadata.color.as_deref())? {
             BatchWorkflowTaskOutcome::Started => {}
@@ -143,12 +146,15 @@ fn run_batch_workflow_parallel(
                 scope.spawn(move || {
                     let result = run_batch_workflow_task(
                         ctx,
-                        &state,
-                        &base,
-                        profile.as_deref(),
-                        objective.as_deref(),
-                        false,
-                        total,
+                        BatchWorkflowTaskContext {
+                            state: &state,
+                            base: &base,
+                            policy: &metadata.policy,
+                            profile: profile.as_deref(),
+                            objective: objective.as_deref(),
+                            allow_interactive_prompts: false,
+                            total,
+                        },
                     );
                     let _ = tx.send(BatchWorkflowCompletion { state, result });
                 });
@@ -343,17 +349,23 @@ fn batch_workflow_plan(
     })
 }
 
-fn run_batch_workflow_task(
-    ctx: &Ctx,
-    state: &WorkflowTaskState,
-    base: &str,
-    profile: Option<&str>,
-    objective: Option<&str>,
+struct BatchWorkflowTaskContext<'a> {
+    state: &'a WorkflowTaskState,
+    base: &'a str,
+    policy: &'a WorkflowPolicy,
+    profile: Option<&'a str>,
+    objective: Option<&'a str>,
     allow_interactive_prompts: bool,
     total: usize,
+}
+
+fn run_batch_workflow_task(
+    ctx: &Ctx,
+    task: BatchWorkflowTaskContext<'_>,
 ) -> Result<issue::IssueRunResult> {
-    let completion_section = workflow_batch_task_handoff_section();
-    let workflow_context = workflow_objective_prompt_context(objective);
+    let completion_section = workflow_batch_task_handoff_section(task.policy, task.base);
+    let workflow_context = workflow_objective_prompt_context(task.objective);
+    let state = task.state;
     let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
@@ -362,14 +374,14 @@ fn run_batch_workflow_task(
     let title = state.document.title_or_key(&state.row.task);
     let workspace_label = task_store::workspace_run_label(
         state.idx,
-        total,
+        task.total,
         state
             .document
             .origin
             .as_ref()
             .map(|origin| origin.id.as_str()),
     );
-    let base = Some(base.to_string());
+    let base = Some(task.base.to_string());
     let prepared = issue::PreparedIssueContext {
         identifier: &identifier,
         title: &title,
@@ -390,10 +402,10 @@ fn run_batch_workflow_task(
             content: &state.content,
         },
     };
-    if allow_interactive_prompts {
-        issue::run_with_issue_snapshot(ctx, &base, profile, false, prepared)
+    if task.allow_interactive_prompts {
+        issue::run_with_issue_snapshot(ctx, &base, task.profile, false, prepared)
     } else {
-        issue::run_with_issue_snapshot_non_interactive(ctx, &base, profile, false, prepared)
+        issue::run_with_issue_snapshot_non_interactive(ctx, &base, task.profile, false, prepared)
     }
 }
 

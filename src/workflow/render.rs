@@ -4,16 +4,96 @@ use crate::task_run::{
     STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
 use crate::workflow::run::WorkflowTaskState;
-use crate::workflow::{WorkflowMetadata, WorkflowPullRequestMode, WorkflowTask};
+use crate::workflow::{
+    WorkflowLandingPolicy, WorkflowMetadata, WorkflowPolicy, WorkflowPullRequestMode, WorkflowTask,
+};
 use std::path::Path;
 
 enum WorkflowCoordinatorHandoff<'a> {
-    ReportOnly,
-    Stack {
-        workflow_path: &'a Path,
-        row: &'a WorkflowTask,
+    Task {
+        policy: &'a WorkflowPolicy,
+        pr_base: &'a str,
+        pr_base_label: &'static str,
+        completion: Option<WorkflowCompletion<'a>>,
     },
 }
+
+struct WorkflowCompletion<'a> {
+    workflow_path: &'a Path,
+    row: &'a WorkflowTask,
+}
+
+impl WorkflowCompletion<'_> {
+    fn complete_command(&self) -> String {
+        format!(
+            "wt workflow complete {} {} --run-next",
+            shell_arg(&self.workflow_path.to_string_lossy()),
+            shell_arg(workflow_task_label(self.row))
+        )
+    }
+}
+
+fn review_followup(policy: &WorkflowPolicy) -> &'static str {
+    match policy.pull_request {
+        WorkflowPullRequestMode::None => {
+            "After the report is sent, keep ownership of coordinator review follow-up for this task. If coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push if this branch tracks a remote, and send an updated Agent Completion Report."
+        }
+        WorkflowPullRequestMode::Draft | WorkflowPullRequestMode::Ready => {
+            "After the pull request is opened and the report is sent, keep ownership of review follow-up for this task. If Codex/GitHub review or coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push, update the pull request body if it became stale, and send an updated Agent Completion Report."
+        }
+    }
+}
+
+fn landing_wait_text(policy: &WorkflowPolicy) -> &'static str {
+    match policy.landing {
+        WorkflowLandingPolicy::Manual => {
+            "When review passes, wait for the coordinator to land and clean up the workflow task explicitly."
+        }
+        WorkflowLandingPolicy::Auto => {
+            "When review passes, wait for the coordinator to proceed with landing and cleanup after its dirty-worktree, check, unresolved-review, and ancestry safety checks pass."
+        }
+    }
+}
+
+#[cfg(test)]
+fn default_workflow_policy() -> WorkflowPolicy {
+    WorkflowPolicy {
+        pull_request: WorkflowPullRequestMode::None,
+        landing: WorkflowLandingPolicy::Manual,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn workflow_task_prompt_content_with_policy(
+    content: &str,
+    workflow_path: &Path,
+    row: &WorkflowTask,
+    policy: &WorkflowPolicy,
+) -> String {
+    workflow_task_prompt_content(
+        content,
+        &workflow_stack_task_handoff_section(workflow_path, row, policy),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn test_workflow_policy(pull_request: WorkflowPullRequestMode) -> WorkflowPolicy {
+    WorkflowPolicy {
+        pull_request,
+        landing: WorkflowLandingPolicy::Manual,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_auto_landing_policy() -> WorkflowPolicy {
+    WorkflowPolicy {
+        pull_request: WorkflowPullRequestMode::None,
+        landing: WorkflowLandingPolicy::Auto,
+    }
+}
+
+#[cfg(test)]
+const TEST_WORKFLOW_BASE: &str = "main";
 
 pub(crate) fn base_label(metadata: &WorkflowMetadata) -> String {
     metadata
@@ -199,12 +279,40 @@ pub(crate) fn single_workflow_group_title(states: &[WorkflowTaskState]) -> Strin
 
 #[cfg(test)]
 pub(crate) fn workflow_single_task_prompt_content(content: &str) -> String {
-    workflow_task_prompt_content(content, &workflow_single_task_handoff_section())
+    workflow_task_prompt_content(
+        content,
+        &workflow_single_task_handoff_section(&default_workflow_policy(), TEST_WORKFLOW_BASE),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn workflow_single_task_prompt_content_for_policy(
+    content: &str,
+    policy: &WorkflowPolicy,
+) -> String {
+    workflow_task_prompt_content(
+        content,
+        &workflow_single_task_handoff_section(policy, TEST_WORKFLOW_BASE),
+    )
 }
 
 #[cfg(test)]
 pub(crate) fn workflow_batch_task_prompt_content(content: &str) -> String {
-    workflow_task_prompt_content(content, &workflow_batch_task_handoff_section())
+    workflow_task_prompt_content(
+        content,
+        &workflow_batch_task_handoff_section(&default_workflow_policy(), TEST_WORKFLOW_BASE),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn workflow_batch_task_prompt_content_for_policy(
+    content: &str,
+    policy: &WorkflowPolicy,
+) -> String {
+    workflow_task_prompt_content(
+        content,
+        &workflow_batch_task_handoff_section(policy, TEST_WORKFLOW_BASE),
+    )
 }
 
 #[cfg(test)]
@@ -213,25 +321,49 @@ pub(crate) fn workflow_stack_task_prompt_content(
     workflow_path: &Path,
     row: &WorkflowTask,
 ) -> String {
-    workflow_task_prompt_content(
+    workflow_task_prompt_content_with_policy(
         content,
-        &workflow_stack_task_handoff_section(workflow_path, row),
+        workflow_path,
+        row,
+        &default_workflow_policy(),
     )
 }
 
-pub(crate) fn workflow_single_task_handoff_section() -> String {
-    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::ReportOnly)
+pub(crate) fn workflow_single_task_handoff_section(
+    policy: &WorkflowPolicy,
+    pr_base: &str,
+) -> String {
+    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::Task {
+        policy,
+        pr_base,
+        pr_base_label: "workflow base branch",
+        completion: None,
+    })
 }
 
-pub(crate) fn workflow_batch_task_handoff_section() -> String {
-    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::ReportOnly)
+pub(crate) fn workflow_batch_task_handoff_section(
+    policy: &WorkflowPolicy,
+    pr_base: &str,
+) -> String {
+    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::Task {
+        policy,
+        pr_base,
+        pr_base_label: "workflow base branch",
+        completion: None,
+    })
 }
 
 pub(crate) fn workflow_stack_task_handoff_section(
     workflow_path: &Path,
     row: &WorkflowTask,
+    policy: &WorkflowPolicy,
 ) -> String {
-    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::Stack { workflow_path, row })
+    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::Task {
+        policy,
+        pr_base: row.parent.as_deref().unwrap_or("<workflow-parent>"),
+        pr_base_label: "workflow parent branch",
+        completion: Some(WorkflowCompletion { workflow_path, row }),
+    })
 }
 
 #[cfg(test)]
@@ -240,19 +372,10 @@ fn workflow_task_prompt_content(content: &str, handoff: &str) -> String {
 }
 
 fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>) -> String {
-    let (pull_request_instructions, pr_report_value, complete_command) =
-        workflow_handoff_policy(handoff);
+    let (pull_request_instructions, pr_report_value, after_send) = workflow_handoff_policy(handoff);
     let send_command = format!(
         "cmux send --workspace {{{{coordinator_cmux_workspace}}}} --surface {{{{coordinator_cmux_surface}}}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\"\n{{{{coordinator_enter_command}}}}"
     );
-
-    let after_send = if let Some((complete_command, review_followup)) = complete_command {
-        format!(
-            "{review_followup}\n\nWhen review passes, wait for the coordinator to advance the workflow. The coordinator will run:\n\n```bash\n{complete_command}\n```"
-        )
-    } else {
-        "After sending the report, wait for review. If coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push if this branch tracks a remote, and send an updated Agent Completion Report. When review passes, wait for the coordinator to land and clean up the workflow task explicitly.".into()
-    };
 
     format!(
         "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator cmux surface that started this workflow:\n\n```bash\n{}\n```\n\n{}\n\n{}\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait.",
@@ -262,56 +385,55 @@ fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>)
 
 fn workflow_handoff_policy(
     handoff: WorkflowCoordinatorHandoff<'_>,
-) -> (String, &'static str, Option<(String, &'static str)>) {
+) -> (String, &'static str, String) {
     match handoff {
-        WorkflowCoordinatorHandoff::ReportOnly => (
-            "This workflow mode has no pull-request handoff intent. When this task is complete and committed, do not open a pull request for this workflow task; report `PR=none`.".into(),
-            "none",
-            None,
-        ),
-        WorkflowCoordinatorHandoff::Stack { workflow_path, row } => {
-            let parent_branch = row.parent.as_deref().unwrap_or("<workflow-parent>");
-            let pull_request = row.pull_request;
-            let pr_report_value = if pull_request.is_some() {
-                "<pr-url>"
-            } else {
-                "none"
+        WorkflowCoordinatorHandoff::Task {
+            policy,
+            pr_base,
+            pr_base_label,
+            completion,
+        } => {
+            let pr_report_value = match policy.pull_request {
+                WorkflowPullRequestMode::None => "none",
+                WorkflowPullRequestMode::Draft | WorkflowPullRequestMode::Ready => "<pr-url>",
             };
-            let complete_command = format!(
-                "wt workflow complete {} {} --run-next",
-                shell_arg(&workflow_path.to_string_lossy()),
-                shell_arg(workflow_task_label(row))
-            );
-            let pull_request_instructions = match pull_request {
-                Some(mode) => {
-                    let pr_command = workflow_pr_command(mode, parent_branch);
-                    let mode_instruction = match mode {
+            let pull_request_instructions = match policy.pull_request {
+                WorkflowPullRequestMode::Draft | WorkflowPullRequestMode::Ready => {
+                    let pr_command = workflow_pr_command(policy.pull_request, pr_base);
+                    let mode_instruction = match policy.pull_request {
                         WorkflowPullRequestMode::Draft => {
-                            "open a draft pull request against the workflow parent branch and leave it draft"
+                            "open a draft pull request and leave it draft"
                         }
                         WorkflowPullRequestMode::Ready => {
-                            "open a pull request against the workflow parent branch that is ready for review immediately"
+                            "open a pull request that is ready for review immediately"
                         }
+                        WorkflowPullRequestMode::None => unreachable!(),
                     };
                     format!(
-                        "Workflow task metadata sets `pull_request = \"{}\"`. When this task is complete and committed, push the branch and {mode_instruction}. Create `<pr-body-file>` from `.github/pull_request_template.md` and fill it with a review-focused PR description covering summary, context, changes, validation, and risks/follow-ups before creating the pull request:\n\n```bash\n{pr_command}\n```",
-                        mode.as_str()
+                        "Workflow policy sets `pull_request = \"{}\"`. When this task is complete and committed, push the branch and {mode_instruction} against the {pr_base_label}. Create `<pr-body-file>` from `.github/pull_request_template.md` and fill it with a review-focused PR description covering summary, context, changes, validation, and risks/follow-ups before creating the pull request:\n\n```bash\n{pr_command}\n```",
+                        policy.pull_request.as_str()
                     )
                 }
-                None => {
-                    "Workflow task metadata omits `pull_request`. When this task is complete and committed, do not open a pull request for this workflow task.".into()
+                WorkflowPullRequestMode::None => {
+                    "Workflow policy sets `pull_request = \"none\"`. When this task is complete and committed, do not open a pull request for this workflow task; report `PR=none`.".into()
                 }
             };
-            let review_followup = if pull_request.is_some() {
-                "After the pull request is opened and the report is sent, keep ownership of review follow-up for this task. If Codex/GitHub review or coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push, update the pull request body if it became stale, and send an updated Agent Completion Report."
+
+            let after_send = if let Some(completion) = completion {
+                format!(
+                    "{}\n\nWhen review passes, wait for the coordinator to advance the workflow. The coordinator will run:\n\n```bash\n{}\n```\n\n{}",
+                    review_followup(policy),
+                    completion.complete_command(),
+                    landing_wait_text(policy)
+                )
             } else {
-                "After the report is sent, keep ownership of coordinator review follow-up for this task. If coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push if this branch tracks a remote, and send an updated Agent Completion Report."
+                format!(
+                    "{}\n\n{}",
+                    review_followup(policy),
+                    landing_wait_text(policy)
+                )
             };
-            (
-                pull_request_instructions,
-                pr_report_value,
-                Some((complete_command, review_followup)),
-            )
+            (pull_request_instructions, pr_report_value, after_send)
         }
     }
 }
@@ -320,6 +442,7 @@ fn workflow_pr_command(mode: WorkflowPullRequestMode, parent_branch: &str) -> St
     let create_args = match mode {
         WorkflowPullRequestMode::Draft => "--draft --body-file <pr-body-file>",
         WorkflowPullRequestMode::Ready => "--body-file <pr-body-file>",
+        WorkflowPullRequestMode::None => unreachable!("pull_request = none does not create PRs"),
     };
     format!(
         "git push -u origin HEAD\n# Create <pr-body-file> from .github/pull_request_template.md and fill it before creating the pull request.\npr_url=$(gh pr create {create_args} --base {} --fill)",

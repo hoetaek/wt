@@ -1,8 +1,8 @@
 use crate::context::Ctx;
 use crate::task as task_store;
+use crate::workflow::WorkflowMetadata;
 use crate::workflow::render::base_label;
 use crate::workflow::run::task_run_record;
-use crate::workflow::{WorkflowMetadata, WorkflowMode};
 use anyhow::Result;
 use std::path::Path;
 
@@ -28,13 +28,12 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
     if let Some(color) = metadata.color.as_deref() {
         ctx.ui.print_dim(&format!("  Color: {color}"));
     }
-    if let Some(policy) = metadata.policy.as_ref() {
-        ctx.ui.print_dim(&format!(
-            "  Landing: {} (requires approval: {})",
-            policy.landing.as_str(),
-            policy.landing_requires_approval
-        ));
-    }
+    ctx.ui.print_dim(&format!(
+        "  Pull request: {}",
+        metadata.policy.pull_request.as_str()
+    ));
+    ctx.ui
+        .print_dim(&format!("  Landing: {}", metadata.policy.landing.as_str()));
     ctx.ui
         .print_dim(&format!("  Tasks: {}", metadata.tasks.len()));
 
@@ -71,14 +70,6 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
         }
         if let Some(parent) = item.parent.as_deref() {
             ctx.ui.print_dim(&format!("     Parent: {parent}"));
-        }
-        if metadata.mode == WorkflowMode::Stack {
-            let pull_request = item
-                .pull_request
-                .map(|mode| mode.as_str())
-                .unwrap_or("none");
-            ctx.ui
-                .print_dim(&format!("     Pull request: {pull_request}"));
         }
         if let Some(error) = run.and_then(|run| run.error) {
             if !error.trim().is_empty() {

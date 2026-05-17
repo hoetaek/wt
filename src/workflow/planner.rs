@@ -128,33 +128,31 @@ pub(crate) fn validate_single_mode_branches(
 }
 
 pub(crate) fn workflow_pr_mode(
-    mode: WorkflowModeArg,
     pr: Option<WorkflowPrModeArg>,
     default_policy: WorkflowDefaultPolicy,
-) -> Option<WorkflowPullRequestMode> {
-    if mode != WorkflowModeArg::Stack {
-        return None;
-    }
-
+) -> WorkflowPullRequestMode {
     match pr {
-        Some(WorkflowPrModeArg::Draft) => Some(WorkflowPullRequestMode::Draft),
-        Some(WorkflowPrModeArg::Ready) => Some(WorkflowPullRequestMode::Ready),
-        Some(WorkflowPrModeArg::None) => None,
+        Some(WorkflowPrModeArg::Draft) => WorkflowPullRequestMode::Draft,
+        Some(WorkflowPrModeArg::Ready) => WorkflowPullRequestMode::Ready,
+        Some(WorkflowPrModeArg::None) => WorkflowPullRequestMode::None,
         None => match default_policy.pull_request {
-            WorkflowDefaultPullRequestMode::None => None,
-            WorkflowDefaultPullRequestMode::Draft => Some(WorkflowPullRequestMode::Draft),
-            WorkflowDefaultPullRequestMode::Ready => Some(WorkflowPullRequestMode::Ready),
+            WorkflowDefaultPullRequestMode::None => WorkflowPullRequestMode::None,
+            WorkflowDefaultPullRequestMode::Draft => WorkflowPullRequestMode::Draft,
+            WorkflowDefaultPullRequestMode::Ready => WorkflowPullRequestMode::Ready,
         },
     }
 }
 
-pub(crate) fn workflow_policy(default_policy: WorkflowDefaultPolicy) -> WorkflowPolicy {
+pub(crate) fn workflow_policy(
+    default_policy: WorkflowDefaultPolicy,
+    pull_request: WorkflowPullRequestMode,
+) -> WorkflowPolicy {
     WorkflowPolicy {
+        pull_request,
         landing: match default_policy.landing {
             WorkflowDefaultLandingPolicy::Manual => WorkflowLandingPolicy::Manual,
-            WorkflowDefaultLandingPolicy::AfterReview => WorkflowLandingPolicy::AfterReview,
+            WorkflowDefaultLandingPolicy::Auto => WorkflowLandingPolicy::Auto,
         },
-        landing_requires_approval: default_policy.landing_requires_approval,
     }
 }
 

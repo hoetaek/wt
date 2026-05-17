@@ -11,7 +11,7 @@ use crate::workflow::render::{
     started_stack_task_message, workflow_objective_prompt_context,
     workflow_stack_task_handoff_section, workflow_stack_task_prompt_intro, workflow_task_label,
 };
-use crate::workflow::{WorkflowMetadata, WorkflowTask};
+use crate::workflow::{WorkflowMetadata, WorkflowPolicy, WorkflowTask};
 use anyhow::{Result, bail};
 use std::path::Path;
 
@@ -54,9 +54,10 @@ pub(super) fn run_stack_workflow(
 
     let result = run_stack_workflow_task(
         ctx,
-        workflow_path,
-        &metadata.tasks[idx],
-        StackWorkflowTaskRunContext {
+        StackWorkflowTaskContext {
+            workflow_path,
+            row: &metadata.tasks[idx],
+            policy: &metadata.policy,
             idx,
             total_tasks: metadata.tasks.len(),
             parent: &parent,
@@ -93,7 +94,10 @@ pub(super) fn run_stack_workflow(
     }
 }
 
-struct StackWorkflowTaskRunContext<'a> {
+struct StackWorkflowTaskContext<'a> {
+    workflow_path: &'a Path,
+    row: &'a WorkflowTask,
+    policy: &'a WorkflowPolicy,
     idx: usize,
     total_tasks: usize,
     parent: &'a str,
@@ -103,30 +107,32 @@ struct StackWorkflowTaskRunContext<'a> {
 
 fn run_stack_workflow_task(
     ctx: &Ctx,
-    workflow_path: &Path,
-    row: &WorkflowTask,
-    task_context: StackWorkflowTaskRunContext<'_>,
+    task: StackWorkflowTaskContext<'_>,
 ) -> Result<issue::IssueRunResult> {
-    let (task_doc, task_path, content) = task_store::read_task_file(ctx, &row.task)?;
-    let completion_section = workflow_stack_task_handoff_section(workflow_path, row);
-    let workflow_context = workflow_objective_prompt_context(task_context.objective);
+    let (task_doc, task_path, content) = task_store::read_task_file(ctx, &task.row.task)?;
+    let completion_section =
+        workflow_stack_task_handoff_section(task.workflow_path, task.row, task.policy);
+    let workflow_context = workflow_objective_prompt_context(task.objective);
     let branch_name = task_store::prepared_branch_name(&task_doc.branch);
     if branch_name.is_none() && task_doc.origin.is_none() {
-        bail!("Workflow task {} has no branch", workflow_task_label(row));
+        bail!(
+            "Workflow task {} has no branch",
+            workflow_task_label(task.row)
+        );
     }
-    let base = Some(task_context.parent.to_string());
-    let identifier = task_doc.identifier_or_key(&row.task);
-    let title = task_doc.title_or_key(&row.task);
+    let base = Some(task.parent.to_string());
+    let identifier = task_doc.identifier_or_key(&task.row.task);
+    let title = task_doc.title_or_key(&task.row.task);
     let workspace_label = task_store::workspace_run_label(
-        task_context.idx,
-        task_context.total_tasks,
+        task.idx,
+        task.total_tasks,
         task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
     );
 
     issue::run_with_issue_snapshot(
         ctx,
         &base,
-        task_context.profile,
+        task.profile,
         false,
         issue::PreparedIssueContext {
             identifier: &identifier,

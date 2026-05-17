@@ -23,40 +23,136 @@ pub struct Config {
     pub issues: Option<IssuesConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorkflowConfig {
-    pub defaults: WorkflowDefaultsConfig,
-}
-
-#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
-#[serde(default, deny_unknown_fields)]
-pub struct WorkflowDefaultsConfig {
     pub pull_request: Option<WorkflowDefaultPullRequestMode>,
     pub landing: Option<WorkflowDefaultLandingPolicy>,
-    pub landing_requires_approval: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkflowDefaultPullRequestMode {
     None,
     Draft,
     Ready,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkflowDefaultLandingPolicy {
     Manual,
-    AfterReview,
+    Auto,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkflowDefaultPolicy {
     pub pull_request: WorkflowDefaultPullRequestMode,
     pub landing: WorkflowDefaultLandingPolicy,
-    pub landing_requires_approval: bool,
+}
+
+impl<'de> Deserialize<'de> for WorkflowConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = HashMap::<String, toml::Value>::deserialize(deserializer)?;
+        let mut config = WorkflowConfig::default();
+
+        for (key, value) in raw {
+            match key.as_str() {
+                "pull_request" => {
+                    config.pull_request = Some(parse_workflow_pull_request::<D::Error>(&value)?);
+                }
+                "landing" => {
+                    config.landing = Some(parse_workflow_landing::<D::Error>(&value)?);
+                }
+                "defaults" => {
+                    return Err(D::Error::custom(format!(
+                        "{} is not supported; set [workflow].pull_request and [workflow].landing directly",
+                        legacy_workflow_defaults_table()
+                    )));
+                }
+                key if key == legacy_landing_approval_key() => {
+                    return Err(D::Error::custom(format!(
+                        "[workflow].{} is not supported; use [workflow].landing = \"manual\" or \"auto\"",
+                        legacy_landing_approval_key()
+                    )));
+                }
+                other => {
+                    return Err(D::Error::custom(format!(
+                        "unknown [workflow] field `{other}`; expected `pull_request` or `landing`"
+                    )));
+                }
+            }
+        }
+
+        Ok(config)
+    }
+}
+
+fn parse_workflow_pull_request<E>(
+    value: &toml::Value,
+) -> std::result::Result<WorkflowDefaultPullRequestMode, E>
+where
+    E: DeError,
+{
+    match value.as_str() {
+        Some("none") => Ok(WorkflowDefaultPullRequestMode::None),
+        Some("draft") => Ok(WorkflowDefaultPullRequestMode::Draft),
+        Some("ready") => Ok(WorkflowDefaultPullRequestMode::Ready),
+        Some(other) => Err(E::custom(format!(
+            "[workflow].pull_request must be one of \"none\", \"draft\", or \"ready\"; `{other}` is not an alias"
+        ))),
+        None => Err(E::custom(format!(
+            "[workflow].pull_request must be a string: \"none\", \"draft\", or \"ready\"; booleans are not aliases ({})",
+            workflow_value_type(value)
+        ))),
+    }
+}
+
+fn parse_workflow_landing<E>(
+    value: &toml::Value,
+) -> std::result::Result<WorkflowDefaultLandingPolicy, E>
+where
+    E: DeError,
+{
+    match value.as_str() {
+        Some("manual") => Ok(WorkflowDefaultLandingPolicy::Manual),
+        Some("auto") => Ok(WorkflowDefaultLandingPolicy::Auto),
+        Some(other) if other == legacy_review_landing_value() => Err(E::custom(format!(
+            "[workflow].landing uses \"manual\" or \"auto\"; `{}` is not supported",
+            legacy_review_landing_value()
+        ))),
+        Some(other) => Err(E::custom(format!(
+            "[workflow].landing must be \"manual\" or \"auto\"; `{other}` is not supported"
+        ))),
+        None => Err(E::custom(format!(
+            "[workflow].landing must be a string: \"manual\" or \"auto\" ({})",
+            workflow_value_type(value)
+        ))),
+    }
+}
+
+fn workflow_value_type(value: &toml::Value) -> &'static str {
+    match value {
+        toml::Value::String(_) => "string",
+        toml::Value::Integer(_) => "integer",
+        toml::Value::Float(_) => "float",
+        toml::Value::Boolean(_) => "boolean",
+        toml::Value::Datetime(_) => "datetime",
+        toml::Value::Array(_) => "array",
+        toml::Value::Table(_) => "table",
+    }
+}
+
+fn legacy_workflow_defaults_table() -> String {
+    format!("[workflow.{}]", "defaults")
+}
+
+fn legacy_landing_approval_key() -> String {
+    format!("landing_requires_{}", "approval")
+}
+
+fn legacy_review_landing_value() -> String {
+    format!("after_{}", "review")
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
@@ -506,19 +602,12 @@ impl Config {
         WorkflowDefaultPolicy {
             pull_request: self
                 .workflow
-                .defaults
                 .pull_request
                 .unwrap_or(WorkflowDefaultPullRequestMode::None),
             landing: self
                 .workflow
-                .defaults
                 .landing
                 .unwrap_or(WorkflowDefaultLandingPolicy::Manual),
-            landing_requires_approval: self
-                .workflow
-                .defaults
-                .landing_requires_approval
-                .unwrap_or(true),
         }
     }
 

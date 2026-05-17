@@ -18,7 +18,7 @@ use crate::workflow::render::{
     workflow_single_group_prompt_intro, workflow_single_task_handoff_section,
     workflow_single_task_prompt_intro,
 };
-use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowPullRequestMode, WorkflowTask};
+use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask};
 use anyhow::{Result, bail};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -63,14 +63,9 @@ pub(crate) fn prepare_workflow(
     let resolved_base = resolve_workflow_base(ctx, base)?;
     let workflow_path = workflow_store::next_available_path(ctx)?;
     let default_policy = ctx.config.workflow_default_policy();
-    let prepared = workflow_tasks_from_prepared(
-        ctx,
-        mode,
-        &workflow_path,
-        &resolved_base,
-        prepared_tasks,
-        workflow_pr_mode(mode, pr, default_policy),
-    )?;
+    let pull_request = workflow_pr_mode(pr, default_policy);
+    let prepared =
+        workflow_tasks_from_prepared(ctx, mode, &workflow_path, &resolved_base, prepared_tasks)?;
 
     let mut metadata = WorkflowMetadata::new(
         workflow_mode(mode),
@@ -80,7 +75,7 @@ pub(crate) fn prepare_workflow(
     );
     metadata.profile = profile.map(str::to_string);
     metadata.objective = normalized_objective(objective)?;
-    metadata.policy = Some(workflow_policy(default_policy));
+    metadata.policy = workflow_policy(default_policy, pull_request);
 
     if let Err(err) = workflow_store::write(ctx, &workflow_path, &mut metadata) {
         rollback_task_runs(&prepared.task_runs);
@@ -126,20 +121,14 @@ fn run_single_workflow(
     let base = workflow_base_raw(metadata)?;
     let result = if states.len() == 1 {
         run_single_workflow_task(
+            metadata,
             ctx,
             &states[0],
             &base,
             metadata.profile.as_deref(),
-            metadata.objective.as_deref(),
         )
     } else {
-        run_single_workflow_group(
-            ctx,
-            &states,
-            &base,
-            metadata.profile.as_deref(),
-            metadata.objective.as_deref(),
-        )
+        run_single_workflow_group(metadata, ctx, &states, &base, metadata.profile.as_deref())
     };
 
     let result = match result {
@@ -167,14 +156,15 @@ fn run_single_workflow(
 }
 
 fn run_single_workflow_task(
+    metadata: &WorkflowMetadata,
     ctx: &Ctx,
     state: &WorkflowTaskState,
     base: &Option<String>,
     profile: Option<&str>,
-    objective: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
-    let completion_section = workflow_single_task_handoff_section();
-    let workflow_context = workflow_objective_prompt_context(objective);
+    let completion_section =
+        workflow_single_task_handoff_section(&metadata.policy, workflow_pr_base(base));
+    let workflow_context = workflow_objective_prompt_context(metadata.objective.as_deref());
     let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
@@ -211,11 +201,11 @@ fn run_single_workflow_task(
 }
 
 fn run_single_workflow_group(
+    metadata: &WorkflowMetadata,
     ctx: &Ctx,
     states: &[WorkflowTaskState],
     base: &Option<String>,
     profile: Option<&str>,
-    objective: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
     let branch = shared_single_workflow_branch(states)?;
     let snapshot_path = states
@@ -224,8 +214,9 @@ fn run_single_workflow_group(
         .collect::<Vec<_>>()
         .join(", ");
     let snapshot_content = render_single_workflow_snapshot(states);
-    let completion_section = workflow_single_task_handoff_section();
-    let workflow_context = workflow_objective_prompt_context(objective);
+    let completion_section =
+        workflow_single_task_handoff_section(&metadata.policy, workflow_pr_base(base));
+    let workflow_context = workflow_objective_prompt_context(metadata.objective.as_deref());
     let title = single_workflow_group_title(states);
 
     issue::run_with_issue_snapshot(
@@ -322,7 +313,6 @@ fn workflow_tasks_from_prepared(
     workflow_path: &Path,
     initial_parent: &str,
     prepared_tasks: Vec<PreparedTask>,
-    pull_request: Option<WorkflowPullRequestMode>,
 ) -> Result<PreparedWorkflowTasks> {
     let group = task_run::group_from_path(workflow_path)?;
     let mut parent = Some(initial_parent.to_string());
@@ -347,7 +337,6 @@ fn workflow_tasks_from_prepared(
         let mut row = WorkflowTask::new(task.key.clone(), run.id.clone());
         if mode == WorkflowModeArg::Stack {
             row.parent = parent.clone();
-            row.pull_request = pull_request;
             parent = task_store::prepared_branch_name(&task.branch).map(str::to_string);
         }
         task_runs.push(run);
@@ -357,9 +346,7 @@ fn workflow_tasks_from_prepared(
 }
 
 fn validate_mode_options(mode: WorkflowModeArg, pr: Option<WorkflowPrModeArg>) -> Result<()> {
-    if pr.is_some() && mode != WorkflowModeArg::Stack {
-        bail!("--pr is only valid with --mode stack");
-    }
+    let _ = (mode, pr);
     Ok(())
 }
 
@@ -372,6 +359,10 @@ fn normalized_objective(objective: Option<&str>) -> Result<Option<String>> {
         bail!("Workflow objective cannot be empty");
     }
     Ok(Some(objective.to_string()))
+}
+
+fn workflow_pr_base(base: &Option<String>) -> &str {
+    base.as_deref().unwrap_or("<workflow-base>")
 }
 
 fn rollback_task_runs(task_runs: &[task_run::TaskRunRecord]) {

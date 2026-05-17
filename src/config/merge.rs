@@ -6,7 +6,7 @@ use super::schema::{
 };
 use super::{
     AgentCli, AgentConfig, Config, CopyAsEntry, EditorConfig, SetupConfig, WorkflowConfig,
-    WorkflowDefaultsConfig, WorkspaceConfig, WorktreeConfig,
+    WorkspaceConfig, WorktreeConfig,
 };
 
 pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
@@ -186,23 +186,11 @@ fn merge_setup_config(base: &mut SetupConfig, profile: SetupConfig) {
 }
 
 fn merge_workflow_config(base: &mut WorkflowConfig, profile: WorkflowConfig) {
-    if profile.defaults != WorkflowDefaultsConfig::default() {
-        merge_workflow_defaults_config(&mut base.defaults, profile.defaults);
-    }
-}
-
-fn merge_workflow_defaults_config(
-    base: &mut WorkflowDefaultsConfig,
-    profile: WorkflowDefaultsConfig,
-) {
     if profile.pull_request.is_some() {
         base.pull_request = profile.pull_request;
     }
     if profile.landing.is_some() {
         base.landing = profile.landing;
-    }
-    if profile.landing_requires_approval.is_some() {
-        base.landing_requires_approval = profile.landing_requires_approval;
     }
 }
 

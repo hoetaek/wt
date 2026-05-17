@@ -18,8 +18,17 @@ minor version instead of moving to `x.0.0`.
   TaskDocuments, records `[origin]`, supports explicit issue ids and a bare
   provider issue selector, and refuses duplicate ids or existing local
   TaskDocument collisions.
-- Bumped the package version to `0.25.0` because `wt task import` adds a new
-  user-facing CLI subcommand while `wt` is still pre-1.0.
+- Changed workflow policy config to direct `[workflow]` fields
+  `pull_request = "none" | "draft" | "ready"` and
+  `landing = "manual" | "auto"`. The old nested policy table, legacy review
+  landing value, approval boolean, and pull-request aliases now fail with
+  guidance to the canonical fields.
+- Changed prepared workflow files to snapshot pull-request and landing policy
+  once at workflow level under `[policy]`; task rows no longer store redundant
+  pull-request handoff intent.
+- Bumped the package version to `0.26.0` because `wt task import` adds a new
+  user-facing CLI subcommand and workflow config shape, workflow state shape,
+  CLI help, and workflow prompt behavior changed while `wt` is still pre-1.0.
 
 ## 0.24.0 - 2026-05-17
 
@@ -35,8 +44,8 @@ minor version instead of moving to `x.0.0`.
   `wt agent status <target>` and `wt agent watch <target>`. The previous
   top-level `wt status` surface is hidden from primary help and now fails with
   explicit guidance for one-shot observation, polling, and human inspection.
-- Added `[workflow.defaults]` config materialization for prepared workflows.
-  `wt workflow task` and `wt workflow issue` now snapshot landing policy into
+- Added nested workflow default config materialization for prepared workflows.
+  `wt workflow task` and `wt workflow issue` snapshot landing policy into
   `[policy]`, and stack-mode PR handoff defaults into task rows unless `--pr`
   explicitly overrides them.
 - Added a task-run coordinator handoff to `wt task run` prompts. Task-run
