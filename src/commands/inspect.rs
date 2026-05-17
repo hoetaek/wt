@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-pub(crate) type ReviewTarget = work::WorkTarget;
+pub(crate) type InspectTarget = work::WorkTarget;
 pub(crate) type CmuxContact = work::CmuxContact;
 
 pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
@@ -34,21 +34,21 @@ pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn resolve_inspect_target(ctx: &Ctx, target: Option<&str>) -> Result<ReviewTarget> {
+fn resolve_inspect_target(ctx: &Ctx, target: Option<&str>) -> Result<InspectTarget> {
     match target {
         Some(target) => work::resolve_target(ctx, Some(target)),
         None => select_inspect_target(ctx),
     }
 }
 
-fn select_inspect_target(ctx: &Ctx) -> Result<ReviewTarget> {
+fn select_inspect_target(ctx: &Ctx) -> Result<InspectTarget> {
     work::select_target(
         ctx,
         "Work target to inspect",
         "wt inspect requires TARGET when it cannot open an interactive selector. Pass a branch, worktree path/name, or TaskRun id; or run `wt inspect` in an interactive terminal to choose a work target.",
     )
 }
-fn task_runs_for_target(ctx: &Ctx, target: &ReviewTarget) -> Result<Vec<task_run::TaskRunRecord>> {
+fn task_runs_for_target(ctx: &Ctx, target: &InspectTarget) -> Result<Vec<task_run::TaskRunRecord>> {
     if let Some(record) = target.task_run.clone() {
         return Ok(vec![record]);
     }
@@ -127,7 +127,7 @@ fn workflow_task_label(task: &str) -> String {
 
 fn print_work_section(
     ctx: &Ctx,
-    target: &ReviewTarget,
+    target: &InspectTarget,
     records: &[task_run::TaskRunRecord],
     workflows: &[WorkflowMatch],
 ) -> Result<()> {
@@ -199,7 +199,7 @@ fn print_git_section(
     branch: &str,
 ) -> Result<()> {
     ctx.ui.print_step("Git");
-    print_parent_review(ctx, parent, branch)?;
+    print_parent_summary(ctx, parent, branch)?;
     print_worktree_status(ctx, status);
     Ok(())
 }
@@ -412,7 +412,7 @@ fn print_cmux_workspace_ref(ctx: &Ctx, cmux: &work::WorkCmuxSurface) {
     ));
 }
 
-fn print_parent_review(ctx: &Ctx, parent: Option<&str>, branch: &str) -> Result<()> {
+fn print_parent_summary(ctx: &Ctx, parent: Option<&str>, branch: &str) -> Result<()> {
     let Some(parent) = parent else {
         ctx.ui
             .print_dim("  Parent: not recorded; committed diff checks skipped");
@@ -495,7 +495,7 @@ fn print_agent_report_expectation(ctx: &Ctx) {
     }
 }
 
-fn print_next_section(ctx: &Ctx, target: &ReviewTarget, workflows: &[WorkflowMatch]) {
+fn print_next_section(ctx: &Ctx, target: &InspectTarget, workflows: &[WorkflowMatch]) {
     ctx.ui.print_step("Next");
     ctx.ui.print_dim(
         "  Review: compare the report, diff, and checks before changing lifecycle state.",
@@ -1005,7 +1005,7 @@ mod tests {
     }
 
     #[test]
-    fn review_clean_check_ignores_configured_worktree_links() {
+    fn inspect_clean_check_ignores_configured_worktree_links() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.worktree.link = vec![".local".into()];

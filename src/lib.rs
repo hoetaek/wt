@@ -81,7 +81,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::List { wide } => commands::list::run(ctx, *wide),
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
-        Commands::Inspect { target } => commands::review::run(ctx, target.as_deref()),
+        Commands::Inspect { target } => commands::inspect::run(ctx, target.as_deref()),
         Commands::Review { .. } => legacy_review_command_error(),
         Commands::Agent { command } => match command {
             AgentCommand::Status { target } => commands::agent::status(ctx, target.as_deref()),
