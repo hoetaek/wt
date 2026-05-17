@@ -125,10 +125,10 @@ Land reviewed work with Git or pull requests first.
   `wt agent watch [<target>]` polls it. Agent state is separate from
   `TaskRun.status`.
 
-`wt workflow` is the canonical prepared-work surface. Older top-level
-batch/stack concepts are migration context, not the model new docs should teach.
-Older `wt review` and top-level `wt status` names are migration context; new
-docs and scripts should use `wt inspect` and `wt agent status` / `wt agent watch`.
+`wt workflow` is the canonical prepared-work surface. Removed top-level
+batch/stack command names are not the model new docs should teach. Removed
+`wt review` and top-level `wt status` names should not appear in new docs or
+scripts; use `wt inspect` and `wt agent status` / `wt agent watch`.
 
 ## Coordinator Handoff
 

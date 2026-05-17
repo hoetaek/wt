@@ -8,6 +8,10 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Removed inactive top-level `wt batch` and `wt stack` command implementations.
+  Those names now parse only enough to return `wt workflow` replacement
+  guidance, while canonical behavior remains under `wt workflow`.
+
 ## 0.24.0 - 2026-05-17
 
 - Added `wt workflow repair <workflow>` as an explicit preview-first repair
@@ -15,11 +19,11 @@ minor version instead of moving to `x.0.0`.
   repairable TaskRun failure-state updates, and `--apply` marks those TaskRuns
   failed without closing cmux workspaces or removing worktrees.
 - Changed the canonical read-only work dossier from `wt review [TARGET]` to
-  `wt inspect [<target>]`. The legacy `wt review` surface is hidden from
+  `wt inspect [<target>]`. The previous `wt review` surface is hidden from
   primary help and now fails with inspect migration guidance instead of acting
   as a parallel canonical command.
 - Moved agent runtime observation from top-level `wt status` to
-  `wt agent status <target>` and `wt agent watch <target>`. The legacy
+  `wt agent status <target>` and `wt agent watch <target>`. The previous
   top-level `wt status` surface is hidden from primary help and now fails with
   explicit guidance for one-shot observation, polling, and human inspection.
 - Added `[workflow.defaults]` config materialization for prepared workflows.
@@ -136,7 +140,7 @@ minor version instead of moving to `x.0.0`.
   changed user-facing CLI behavior while `wt` is still pre-1.0.
 - Changed bare `wt batch run` to select from runnable batches with semantic
   labels, kept explicit batch path/id targets for scripts, and removed the
-  legacy `latest` target from the run contract.
+  previous `latest` target from the run contract.
 - Bumped the package version to `0.18.0` because batch run and the final
   `wt init` starter wizard changed user-facing CLI behavior while `wt` is still
   pre-1.0.
@@ -283,7 +287,7 @@ minor version instead of moving to `x.0.0`.
 - Changed `wt batch show` to require batches with an explicit stored base,
   matching `wt batch run`.
 - Changed batch and stack metadata parsing to require canonical `[[tasks]]`
-  state instead of accepting alternate `[[issues]]` or legacy `[[items]]`
+  state instead of accepting alternate `[[issues]]` or previous `[[items]]`
   tables.
 - Changed site config parsing to require canonical `[site] provider = "herd"`
   instead of accepting a separate `[herd]` section.

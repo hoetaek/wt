@@ -77,11 +77,11 @@ pub enum Commands {
         #[arg(long, conflicts_with = "profile")]
         matrix: bool,
     },
-    /// Legacy batch command; use wt workflow --mode batch
-    #[command(hide = true)]
+    /// Previous batch command; use wt workflow --mode batch
+    #[command(hide = true, disable_help_flag = true, disable_help_subcommand = true)]
     Batch {
-        #[command(subcommand)]
-        command: BatchCommand,
+        #[arg(value_name = "ARGS", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Manage local TaskDocuments
     Task {
@@ -93,11 +93,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: WorkflowCommand,
     },
-    /// Legacy stack command; use wt workflow --mode stack
-    #[command(hide = true)]
+    /// Previous stack command; use wt workflow --mode stack
+    #[command(hide = true, disable_help_flag = true, disable_help_subcommand = true)]
     Stack {
-        #[command(subcommand)]
-        command: StackCommand,
+        #[arg(value_name = "ARGS", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Show worktree, branch, site, and setup state
     List {
@@ -123,10 +123,10 @@ pub enum Commands {
         /// Branch, worktree path/name, or TaskRun id to inspect
         target: Option<String>,
     },
-    /// Legacy review command; use wt inspect
+    /// Previous review command; use wt inspect
     #[command(
         hide = true,
-        long_about = "Legacy migration surface. Use `wt inspect [<target>]` for the read-only work dossier, then complete, land, or clean up explicitly when appropriate."
+        long_about = "Previous command surface. Use `wt inspect [<target>]` for the read-only work dossier, then complete, land, or clean up explicitly when appropriate."
     )]
     Review {
         /// Branch, worktree path/name, or TaskRun id to inspect
@@ -137,10 +137,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
-    /// Legacy status command; use wt agent status
+    /// Previous status command; use wt agent status
     #[command(
         hide = true,
-        long_about = "Legacy migration surface. Use `wt agent status <target>` to observe a task agent once, `wt agent watch <target>` to poll, or `wt inspect [<target>]` for the read-only work dossier."
+        long_about = "Previous command surface. Use `wt agent status <target>` to observe a task agent once, `wt agent watch <target>` to poll, or `wt inspect [<target>]` for the read-only work dossier."
     )]
     Status {
         /// Branch, worktree path/name, or TaskRun id
@@ -319,59 +319,6 @@ pub enum InitSiteProvider {
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum BatchCommand {
-    /// Prepare local tasks as a batch file without starting workspaces
-    Task {
-        /// Task titles or existing task keys to prepare
-        #[arg(required = true)]
-        tasks: Vec<String>,
-        /// Named profile from .local/profiles/<name> for all tasks
-        #[arg(long)]
-        profile: Option<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-    },
-    /// Prepare issues as a batch file without starting workspaces
-    Issue {
-        /// Issue identifiers to import as tasks (omit to select interactively)
-        issues: Vec<String>,
-        /// Named profile from .local/profiles/<name> for all tasks
-        #[arg(long)]
-        profile: Option<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-    },
-    /// Start prepared or failed tasks; running siblings stay visible
-    #[command(
-        long_about = "Start prepared or failed TaskRuns from a batch and mark them running.\n\nOmit BATCH to choose from runnable batches: batches with at least one prepared or failed task. Running sibling tasks remain visible and do not block independent runnable tasks. Passing BATCH accepts a TOML path or shorthand id for scripts."
-    )]
-    Run {
-        /// Batch TOML path or shorthand id (omit to select a runnable batch; running siblings stay visible)
-        batch: Option<String>,
-        /// Maximum number of runnable tasks to execute concurrently
-        #[arg(long, default_value_t = 1, value_parser = parse_positive_usize)]
-        jobs: usize,
-    },
-    /// Show batch metadata and task statuses
-    Show {
-        /// Batch TOML path, shorthand id, or "latest" (default)
-        batch: Option<String>,
-    },
-    /// Open batch TOML in the configured editor
-    Edit {
-        /// Batch TOML path, shorthand id, or "latest" (default)
-        batch: Option<String>,
-    },
-    /// Delete completed batch TaskDocument files
-    Clean {
-        /// Batch TOML path, shorthand id, or "latest" (default)
-        batch: Option<String>,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum TaskCommand {
     /// Start one worktree per selected local TaskDocument
     #[command(
@@ -494,67 +441,6 @@ pub enum WorkflowPrModeArg {
     None,
     Draft,
     Ready,
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum StackCommand {
-    /// Prepare local tasks as a stack file without starting workspaces
-    Task {
-        /// Task titles or existing task keys to prepare in base-to-top order
-        #[arg(required = true)]
-        tasks: Vec<String>,
-        /// Named profile from .local/profiles/<name> for all tasks
-        #[arg(long)]
-        profile: Option<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-        /// Mark prepared stack tasks as requiring draft pull requests
-        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
-        pull_request: bool,
-    },
-    /// Prepare issues as a stack file without starting workspaces
-    Issue {
-        /// Issue identifiers to import as tasks in base-to-top order (omit to select interactively)
-        issues: Vec<String>,
-        /// Named profile from .local/profiles/<name> for all tasks
-        #[arg(long)]
-        profile: Option<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-        /// Mark prepared stack tasks as requiring draft pull requests
-        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
-        pull_request: bool,
-    },
-    /// Start the next prepared or failed task from a selected runnable stack
-    #[command(
-        long_about = "Start the next prepared or failed TaskRun from a stack and mark it running.\n\nOmit STACK to choose from runnable stacks: stacks with a next prepared or failed task and no currently running task. Passing STACK accepts a TOML path or shorthand id for scripts."
-    )]
-    Run {
-        /// Stack TOML path or shorthand id (omit to select a runnable stack)
-        stack: Option<String>,
-    },
-    /// Show stack metadata and task statuses
-    Show {
-        /// Stack TOML path, shorthand id, or "latest" (default)
-        stack: Option<String>,
-    },
-    /// Open stack TOML in the configured editor
-    Edit {
-        /// Stack TOML path, shorthand id, or "latest" (default)
-        stack: Option<String>,
-    },
-    /// Mark the running task in a stack as complete
-    Complete {
-        /// Stack TOML path, or "latest" for the newest local stack
-        stack: String,
-        /// Running stack task identifier to complete
-        task: Option<String>,
-        /// Start the next stack task after marking this one complete
-        #[arg(long)]
-        run_next: bool,
-    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
@@ -932,184 +818,27 @@ mod tests {
     }
 
     #[test]
-    fn batch_issue_accepts_default_profile() {
-        let cli = parse(&["wt", "batch", "issue", "PROJ-123", "PROJ-456"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Issue {
-                    ref issues,
-                    profile: None,
-                    base: None,
-                }
-            }) if issues == &vec!["PROJ-123".to_string(), "PROJ-456".to_string()]
-        ));
-    }
-
-    #[test]
-    fn batch_issue_accepts_no_issue_args_for_interactive_selection() {
-        let cli = parse(&["wt", "batch", "issue"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Issue {
-                    ref issues,
-                    profile: None,
-                    base: None,
-                }
-            }) if issues.is_empty()
-        ));
-    }
-
-    #[test]
-    fn batch_issue_accepts_profile_and_base() {
-        let cli = parse(&[
-            "wt",
-            "batch",
-            "issue",
-            "PROJ-123",
-            "--profile",
-            "codex-yolo",
-            "--base",
-            "main",
-        ]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Issue {
-                    ref issues,
-                    profile: Some(ref profile),
-                    base: Some(ref base),
-                }
-            }) if issues == &vec!["PROJ-123".to_string()]
-                && profile == "codex-yolo"
-                && base == "main"
-        ));
-    }
-
-    #[test]
-    fn batch_prepare_is_not_a_command() {
-        let result = Cli::try_parse_from(["wt", "batch", "prepare", "PROJ-123"]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn batch_run_accepts_optional_target() {
-        let cli = parse(&["wt", "batch", "run"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Run {
-                    batch: None,
-                    jobs: 1
-                }
-            })
-        ));
-
-        let cli = parse(&["wt", "batch", "run", "2026-05-16-001"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Run { ref batch, jobs }
-            }) if batch.as_deref() == Some("2026-05-16-001") && jobs == 1
-        ));
-    }
-
-    #[test]
-    fn batch_run_accepts_jobs() {
+    fn previous_batch_command_collects_args_for_rejection() {
         let cli = parse(&["wt", "batch", "run", "--jobs", "3"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Run { ref batch, jobs }
-            }) if batch.is_none() && jobs == 3
+            Some(Commands::Batch { ref args })
+                if args == &vec!["run".to_string(), "--jobs".to_string(), "3".to_string()]
         ));
     }
 
     #[test]
-    fn batch_run_rejects_zero_jobs() {
-        let result = Cli::try_parse_from(["wt", "batch", "run", "--jobs", "0"]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn batch_show_accepts_optional_target() {
-        let cli = parse(&["wt", "batch", "show"]);
+    fn previous_stack_command_collects_args_for_rejection() {
+        let cli = parse(&["wt", "stack", "complete", "latest", "--run-next"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Show { batch: None }
-            })
+            Some(Commands::Stack { ref args })
+                if args == &vec![
+                    "complete".to_string(),
+                    "latest".to_string(),
+                    "--run-next".to_string()
+                ]
         ));
-
-        let cli = parse(&["wt", "batch", "show", "latest"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Show { ref batch }
-            }) if batch.as_deref() == Some("latest")
-        ));
-    }
-
-    #[test]
-    fn batch_edit_accepts_optional_target() {
-        let cli = parse(&["wt", "batch", "edit", "latest"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Edit { ref batch }
-            }) if batch.as_deref() == Some("latest")
-        ));
-    }
-
-    #[test]
-    fn batch_clean_accepts_optional_target() {
-        let cli = parse(&["wt", "batch", "clean"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Clean { batch: None }
-            })
-        ));
-
-        let cli = parse(&["wt", "batch", "clean", "latest"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Clean { ref batch }
-            }) if batch.as_deref() == Some("latest")
-        ));
-
-        let cli = parse(&["wt", "batch", "clean", "2026-05-09-001"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch {
-                command: BatchCommand::Clean { ref batch }
-            }) if batch.as_deref() == Some("2026-05-09-001")
-        ));
-    }
-
-    #[test]
-    fn batch_help_uses_general_batch_description() {
-        let mut command = Cli::command();
-        let batch = command.find_subcommand_mut("batch").unwrap();
-        let help = batch.render_help().to_string();
-        assert!(help.contains("Legacy batch command"));
-        assert!(help.contains("clean"));
-        assert!(help.contains("show"));
-    }
-
-    #[test]
-    fn batch_run_help_explains_jobs() {
-        let mut command = Cli::command();
-        let batch = command.find_subcommand_mut("batch").unwrap();
-        let run = batch.find_subcommand_mut("run").unwrap();
-        let help = run.render_help().to_string();
-        assert!(help.contains("--jobs <JOBS>"));
-        assert!(help.contains("Maximum number of runnable tasks to execute concurrently"));
-        assert!(help.contains("omit to select a runnable batch"));
-        assert!(help.contains("running siblings stay visible"));
-        assert!(!help.contains("latest"));
     }
 
     #[test]
@@ -1434,202 +1163,6 @@ mod tests {
         assert!(help.contains("--pr <none|draft|ready>"));
         assert!(help.contains("workflow.defaults.pull_request"));
         assert!(!help.contains("--pull-request"));
-    }
-
-    #[test]
-    fn stack_issue_accepts_ordered_issues_profile_and_base() {
-        let cli = parse(&[
-            "wt",
-            "stack",
-            "issue",
-            "PROJ-123",
-            "PROJ-456",
-            "--profile",
-            "codex",
-            "--base",
-            "main",
-        ]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Issue {
-                    ref issues,
-                    profile: Some(ref profile),
-                    base: Some(ref base),
-                    pull_request: false,
-                }
-            }) if issues == &vec!["PROJ-123".to_string(), "PROJ-456".to_string()]
-                && profile == "codex"
-                && base == "main"
-        ));
-    }
-
-    #[test]
-    fn stack_task_accepts_tasks_profile_and_base() {
-        let cli = parse(&[
-            "wt",
-            "stack",
-            "task",
-            "add-schema",
-            "wire-api",
-            "--profile",
-            "codex",
-            "--base",
-            "main",
-        ]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Task {
-                    ref tasks,
-                    profile: Some(ref profile),
-                    base: Some(ref base),
-                    pull_request: false,
-                }
-            }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
-                && profile == "codex"
-                && base == "main"
-        ));
-    }
-
-    #[test]
-    fn stack_issue_accepts_no_issue_args_for_interactive_selection() {
-        let cli = parse(&["wt", "stack", "issue"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Issue {
-                    ref issues,
-                    profile: None,
-                    base: None,
-                    pull_request: false,
-                }
-            }) if issues.is_empty()
-        ));
-    }
-
-    #[test]
-    fn stack_prepare_accepts_pull_request_flag() {
-        let cli = parse(&["wt", "stack", "task", "add-schema", "--pull-request"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Task {
-                    pull_request: true,
-                    ..
-                }
-            })
-        ));
-
-        let cli = parse(&["wt", "stack", "issue", "PROJ-123", "--pull-request"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Issue {
-                    pull_request: true,
-                    ..
-                }
-            })
-        ));
-    }
-
-    #[test]
-    fn stack_run_accepts_optional_target() {
-        let cli = parse(&["wt", "stack", "run"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Run { stack: None }
-            })
-        ));
-
-        let cli = parse(&["wt", "stack", "run", "manual"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Run { ref stack }
-            }) if stack.as_deref() == Some("manual")
-        ));
-    }
-
-    #[test]
-    fn stack_show_accepts_optional_target() {
-        let cli = parse(&["wt", "stack", "show"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Show { stack: None }
-            })
-        ));
-
-        let cli = parse(&["wt", "stack", "show", "latest"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Show { ref stack }
-            }) if stack.as_deref() == Some("latest")
-        ));
-    }
-
-    #[test]
-    fn stack_edit_accepts_optional_target() {
-        let cli = parse(&["wt", "stack", "edit", "latest"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Edit { ref stack }
-            }) if stack.as_deref() == Some("latest")
-        ));
-    }
-
-    #[test]
-    fn stack_help_uses_general_stack_description() {
-        let mut command = Cli::command();
-        let stack = command.find_subcommand_mut("stack").unwrap();
-        let help = stack.render_help().to_string();
-        assert!(help.contains("Legacy stack command"));
-        assert!(help.contains("Start the next prepared or failed task"));
-        assert!(help.contains("Mark the running task"));
-        assert!(!help.contains("failed item"));
-        assert!(!help.contains("running item"));
-        assert!(help.contains("show"));
-    }
-
-    #[test]
-    fn stack_complete_accepts_stack_and_task() {
-        let cli = parse(&["wt", "stack", "complete", "latest", "PROJ-123"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Complete {
-                    ref stack,
-                    task: Some(ref task),
-                    run_next: false,
-                }
-            }) if stack == "latest" && task == "PROJ-123"
-        ));
-    }
-
-    #[test]
-    fn stack_complete_accepts_run_next() {
-        let cli = parse(&[
-            "wt",
-            "stack",
-            "complete",
-            "latest",
-            "PROJ-123",
-            "--run-next",
-        ]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack {
-                command: StackCommand::Complete {
-                    ref stack,
-                    task: Some(ref task),
-                    run_next: true,
-                }
-            }) if stack == "latest" && task == "PROJ-123"
-        ));
     }
 
     #[test]
