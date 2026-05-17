@@ -3,9 +3,9 @@ use super::stack_plan::{next_runnable_stack_task, parent_for_stack_task};
 use super::state::{read_stack_workflow_task_states, update_workflow_task_run};
 use super::{apply_workflow_color, is_cancelled, validate_profile};
 use crate::commands::issue;
-use crate::commands::task as task_command;
-use crate::commands::task_run::{self, STATUS_FAILED, STATUS_RUNNING, STATUS_SKIPPED};
 use crate::context::Ctx;
+use crate::task as task_store;
+use crate::task_run::{self, STATUS_FAILED, STATUS_RUNNING, STATUS_SKIPPED};
 use crate::workflow as workflow_store;
 use crate::workflow::{WorkflowMetadata, WorkflowTask};
 use anyhow::{Result, bail};
@@ -63,7 +63,7 @@ pub(super) fn run_stack_workflow(
 
     match result {
         Ok(result) => {
-            task_command::write_task_branch(ctx, &metadata.tasks[idx].task, &result.branch_name)?;
+            task_store::write_task_branch(ctx, &metadata.tasks[idx].task, &result.branch_name)?;
             update_workflow_task_run(ctx, &metadata.tasks[idx], STATUS_RUNNING, None)?;
             apply_workflow_color(ctx, &result.worktree_path, metadata.color.as_deref());
             ctx.ui.print_step(&format!(
@@ -100,16 +100,16 @@ fn run_stack_workflow_task(
     parent: &str,
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
-    let (task_doc, task_path, content) = task_command::read_task_file(ctx, &row.task)?;
+    let (task_doc, task_path, content) = task_store::read_task_file(ctx, &row.task)?;
     let completion_section = workflow_stack_task_handoff_section(workflow_path, row);
-    let branch_name = task_command::prepared_branch_name(&task_doc.branch);
+    let branch_name = task_store::prepared_branch_name(&task_doc.branch);
     if branch_name.is_none() && task_doc.origin.is_none() {
         bail!("Workflow task {} has no branch", workflow_task_label(row));
     }
     let base = Some(parent.to_string());
     let identifier = task_doc.identifier_or_key(&row.task);
     let title = task_doc.title_or_key(&row.task);
-    let workspace_label = task_command::workspace_run_label(
+    let workspace_label = task_store::workspace_run_label(
         idx,
         total_tasks,
         task_doc.origin.as_ref().map(|origin| origin.id.as_str()),

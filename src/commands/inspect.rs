@@ -1,7 +1,9 @@
-use crate::commands::{agent_report, task, task_run};
+use crate::commands::agent_report;
 use crate::context::Ctx;
 use crate::services::git::GitService;
 use crate::services::work;
+use crate::task;
+use crate::task_run;
 use crate::workflow::{self, WorkflowPullRequestMode, WorkflowRecord};
 use anyhow::{Context, Result};
 use std::collections::HashSet;

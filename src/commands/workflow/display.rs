@@ -1,7 +1,7 @@
 use super::render::base_label;
 use super::state::task_run_record;
-use crate::commands::task as task_command;
 use crate::context::Ctx;
+use crate::task as task_store;
 use crate::workflow::{WorkflowMetadata, WorkflowMode};
 use anyhow::Result;
 use std::path::Path;
@@ -40,7 +40,7 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
             .as_ref()
             .map(|run| run.status.as_str())
             .unwrap_or("missing");
-        let task_doc = task_command::read_task_document(ctx, &item.task);
+        let task_doc = task_store::read_task_document(ctx, &item.task);
         let title = task_doc
             .as_ref()
             .map(|document| document.title_or_key(&item.task))
@@ -54,7 +54,7 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
         ));
         ctx.ui.print_dim(&format!(
             "     Task: {}",
-            task_command::task_relative_path(&item.task)
+            task_store::task_relative_path(&item.task)
         ));
         match task_doc {
             Ok(document) => {

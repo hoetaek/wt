@@ -2,10 +2,10 @@ use super::render::workflow_task_label;
 use super::resolve_mutating_target;
 use super::run;
 use super::state::{read_stack_workflow_task_states, update_workflow_task_run};
-use crate::commands::task as task_command;
-use crate::commands::task_run::STATUS_DONE;
 use crate::context::Ctx;
 use crate::services::git::GitService;
+use crate::task as task_store;
+use crate::task_run::STATUS_DONE;
 use crate::workflow as workflow_store;
 use crate::workflow::{WorkflowMode, WorkflowTask};
 use anyhow::{Result, bail};
@@ -58,17 +58,17 @@ fn workflow_task_matches(ctx: &Ctx, row: &WorkflowTask, target: &str) -> bool {
     if row.task == target {
         return true;
     }
-    let Ok(task_doc) = task_command::read_task_document(ctx, &row.task) else {
+    let Ok(task_doc) = task_store::read_task_document(ctx, &row.task) else {
         return false;
     };
     task_doc.title == target
-        || task_command::prepared_branch_name(&task_doc.branch) == Some(target)
+        || task_store::prepared_branch_name(&task_doc.branch) == Some(target)
         || task_doc.branch.rsplit('/').next() == Some(target)
 }
 
 fn validate_completable_stack_task(ctx: &Ctx, row: &WorkflowTask) -> Result<()> {
-    let task_doc = task_command::read_task_document(ctx, &row.task)?;
-    let branch = task_command::prepared_branch_name(&task_doc.branch).ok_or_else(|| {
+    let task_doc = task_store::read_task_document(ctx, &row.task)?;
+    let branch = task_store::prepared_branch_name(&task_doc.branch).ok_or_else(|| {
         anyhow::anyhow!("Workflow task {} has no branch", workflow_task_label(row))
     })?;
     let parent = row.parent.as_deref().ok_or_else(|| {

@@ -1,8 +1,8 @@
 use super::render::workflow_task_label;
 use super::state::WorkflowTaskState;
 use super::workflow_base_raw;
-use crate::commands::task as task_command;
-use crate::commands::task_run::{STATUS_DONE, STATUS_SKIPPED};
+use crate::task as task_store;
+use crate::task_run::{STATUS_DONE, STATUS_SKIPPED};
 use crate::workflow::WorkflowMetadata;
 use anyhow::{Result, bail};
 
@@ -30,7 +30,7 @@ pub(super) fn parent_for_stack_task(
     for previous in states.iter().rev().filter(|state| state.idx < idx) {
         match previous.run.status {
             STATUS_DONE => {
-                return task_command::prepared_branch_name(&previous.document.branch)
+                return task_store::prepared_branch_name(&previous.document.branch)
                     .map(str::to_string)
                     .ok_or_else(|| {
                         anyhow::anyhow!(

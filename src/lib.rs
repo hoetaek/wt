@@ -9,6 +9,8 @@ pub mod names;
 pub mod runner;
 pub mod services;
 pub mod setup;
+pub mod task;
+pub mod task_run;
 pub mod template;
 pub mod ui;
 pub mod workflow;

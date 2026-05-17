@@ -1,14 +1,15 @@
 use crate::cli::BaseMode;
 use crate::commands::issue;
 use crate::commands::issue_selection::{self, SelectedIssue};
-use crate::commands::task::{self, PreparedTask};
-use crate::commands::task_run::{
-    self, STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
-};
+use crate::commands::task as task_command;
 use crate::config::{Config, validate_profile_name};
 use crate::context::{Ctx, PromptItem};
 use crate::error::WtError;
 use crate::services::git::GitService;
+use crate::task::{self, PreparedTask};
+use crate::task_run::{
+    self, STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
+};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::fs;
@@ -25,7 +26,7 @@ pub fn task(
     pull_request: bool,
 ) -> Result<()> {
     validate_profile(ctx, profile)?;
-    let prepared_tasks = task::prepare_named_tasks(ctx, tasks)?;
+    let prepared_tasks = task_command::prepare_named_tasks(ctx, tasks)?;
     write_prepared_stack(ctx, profile, base, prepared_tasks, pull_request)
 }
 
@@ -52,7 +53,7 @@ pub fn issue(
         return Ok(());
     }
 
-    let prepared_tasks = task::prepare_issue_tasks(ctx, &selected_issues)?;
+    let prepared_tasks = task_command::prepare_issue_tasks(ctx, &selected_issues)?;
     write_prepared_stack(ctx, profile, base, prepared_tasks, pull_request)
 }
 

@@ -1,7 +1,8 @@
-use crate::commands::{issue, task};
+use crate::commands::{issue, task as task_command};
 use crate::context::{Ctx, PromptItem};
 use crate::services::issues::CreateIssueRequest;
 use crate::services::issues::IssueProvider;
+use crate::task;
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::fs;
@@ -40,7 +41,7 @@ pub(crate) fn run(ctx: &Ctx, task_keys: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    let provider_name = task::issue_provider_name(ctx)?;
+    let provider_name = task_command::issue_provider_name(ctx)?;
     let mut candidates = preflight_task_documents(ctx, &keys, &provider_name)?;
     let provider = issue::build_provider(ctx)?;
     let summary = publish_candidates(ctx, &mut candidates, &provider_name, provider.as_ref());
