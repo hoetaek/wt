@@ -111,7 +111,7 @@ fn run_stack_workflow_task(
 ) -> Result<issue::IssueRunResult> {
     let (task_doc, task_path, content) = task_store::read_task_file(ctx, &task.row.task)?;
     let completion_section =
-        workflow_stack_task_handoff_section(task.workflow_path, task.row, task.policy);
+        workflow_stack_task_handoff_section(task.workflow_path, task.row, task.policy, task.parent);
     let workflow_context = workflow_objective_prompt_context(task.objective);
     let branch_name = task_store::prepared_branch_name(&task_doc.branch);
     if branch_name.is_none() && task_doc.origin.is_none() {
