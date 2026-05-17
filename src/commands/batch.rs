@@ -182,9 +182,7 @@ pub fn run(ctx: &Ctx, batch: Option<&str>, jobs: usize) -> Result<()> {
     }
 
     let task_states = read_batch_task_states(ctx, &batch_path, &metadata)?;
-    let has_runnable_task = task_states
-        .iter()
-        .any(|state| is_runnable_status(&state.run.status));
+    let has_runnable_task = task_states.iter().any(|state| state.run.is_runnable());
     if !has_runnable_task {
         ctx.ui
             .print_step("No prepared or failed tasks to run in this batch.");
@@ -280,8 +278,8 @@ fn next_task_execution(
     base: Option<String>,
     allow_interactive_prompts: bool,
 ) -> Result<Option<BatchTaskExecution>> {
-    let current_status = state.run.status.as_str();
-    if !is_runnable_status(current_status) {
+    let current_status = state.run.status;
+    if !current_status.is_runnable() {
         ctx.ui.print_step(&format!(
             "Skipping {} ({current_status})",
             state.batch_task.label()
@@ -599,7 +597,7 @@ fn record_batch_task_run(
     ctx: &Ctx,
     batch_path: &Path,
     item: &BatchTask,
-    status: &str,
+    status: task_run::TaskRunStatus,
     error: Option<&str>,
 ) -> Result<()> {
     let path = task_run::resolve(ctx, &item.run).with_context(|| {
@@ -637,7 +635,7 @@ fn finish_batch_run(
     ctx.ui
         .print_step(&format!("Batch status: {}", metadata.status));
 
-    if metadata.status == STATUS_FAILED {
+    if metadata.status == STATUS_FAILED.as_str() {
         bail!("Batch failed: {}", batch_path.display());
     }
 
@@ -737,7 +735,7 @@ pub fn clean(ctx: &Ctx, batch: Option<&str>) -> Result<()> {
     let task_states = read_batch_task_states(ctx, &batch_path, &metadata)?;
     let blocked = task_states
         .iter()
-        .filter(|state| !is_cleanable_status(&state.run.status))
+        .filter(|state| !state.run.status.is_cleanable())
         .map(|state| format!("{} [{}]", state.batch_task.label(), state.run.status))
         .collect::<Vec<_>>();
     if !blocked.is_empty() {
@@ -1134,10 +1132,7 @@ fn list_runnable_batch_candidates(ctx: &Ctx) -> Result<Vec<RunnableBatchCandidat
             .with_context(|| format!("Failed to read batch: {}", path.display()))?;
         let states = read_batch_task_states(ctx, &path, &metadata)
             .with_context(|| format!("Failed to read batch task state: {}", path.display()))?;
-        if !states
-            .iter()
-            .any(|state| is_runnable_status(&state.run.status))
-        {
+        if !states.iter().any(|state| state.run.is_runnable()) {
             continue;
         }
         let item = batch_selection_item(ctx, &path, &metadata, &states)?;
@@ -1162,11 +1157,10 @@ fn batch_selection_item(
     let batch_id = batch_selector_id(batch_path);
     let runnable = states
         .iter()
-        .filter(|state| is_runnable_status(&state.run.status))
+        .filter(|state| state.run.is_runnable())
         .count();
-    let ready_summary =
-        batch_filtered_task_summary(ctx, states, |state| is_runnable_status(&state.run.status))
-            .unwrap_or_else(|| "none".into());
+    let ready_summary = batch_filtered_task_summary(ctx, states, |state| state.run.is_runnable())
+        .unwrap_or_else(|| "none".into());
     let running_summary =
         batch_filtered_task_summary(ctx, states, |state| state.run.status == STATUS_RUNNING);
     let status_counts = batch_selection_status_counts(states);
@@ -1385,14 +1379,6 @@ fn batch_base_option(batch: &BatchMetadata) -> Result<Option<String>> {
     }
 }
 
-fn is_runnable_status(status: &str) -> bool {
-    matches!(status, STATUS_PREPARED | STATUS_FAILED)
-}
-
-fn is_cleanable_status(status: &str) -> bool {
-    matches!(status, STATUS_DONE | STATUS_SKIPPED)
-}
-
 fn collect_external_task_references(
     ctx: &Ctx,
     current_batch_path: &Path,
@@ -1464,10 +1450,7 @@ fn summarize_batch_status(items: &[BatchTaskState]) -> String {
     if items.iter().any(|item| item.run.status == STATUS_RUNNING) {
         return STATUS_RUNNING.into();
     }
-    if items
-        .iter()
-        .all(|item| matches!(item.run.status.as_str(), STATUS_DONE | STATUS_SKIPPED))
-    {
+    if items.iter().all(|item| item.run.status.is_cleanable()) {
         return STATUS_DONE.into();
     }
     if items.iter().all(|item| item.run.status == STATUS_PREPARED) {
@@ -1561,7 +1544,7 @@ mod tests {
         batch_path: &Path,
         key: &str,
         branch: &str,
-        status: &str,
+        status: task_run::TaskRunStatus,
         error: &str,
     ) -> BatchTask {
         let group = task_run::group_from_path(batch_path).unwrap();
@@ -1584,15 +1567,19 @@ mod tests {
         task_run::read(&root.join(".local/task-runs").join(format!("{run_id}.toml"))).unwrap()
     }
 
-    fn batch_state_with_status(idx: usize, key: &str, status: &str) -> BatchTaskState {
+    fn batch_state_with_status(
+        idx: usize,
+        key: &str,
+        status: task_run::TaskRunStatus,
+    ) -> BatchTaskState {
         BatchTaskState {
             idx,
             batch_task: batch_task(key, &format!("run-{idx}")),
             run: task_run::TaskRun {
                 task: key.into(),
                 branch: key.into(),
-                status: status.into(),
-                source: task_run::SOURCE_BATCH.into(),
+                status,
+                source: task_run::SOURCE_BATCH,
                 group: Some("batch".into()),
                 error: None,
                 creation_order: Some(idx as u64 + 1),
@@ -2753,7 +2740,7 @@ error = ""
         run(&ctx, None, 2).unwrap();
 
         let updated = read_batch_metadata(&batch_path).unwrap();
-        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.status, STATUS_RUNNING.as_str());
         assert_eq!(read_run(dir.path(), &task_one.run).status, STATUS_RUNNING);
     }
 
@@ -3078,11 +3065,12 @@ error = ""
 
     #[test]
     fn summarize_status_distinguishes_batch_and_task_state() {
-        let task = |idx, status: &str| batch_state_with_status(idx, "PROJ-123", status);
+        let task =
+            |idx, status: task_run::TaskRunStatus| batch_state_with_status(idx, "PROJ-123", status);
 
         assert_eq!(
             summarize_batch_status(&[task(0, STATUS_PREPARED)]),
-            STATUS_PREPARED
+            STATUS_PREPARED.as_str()
         );
         assert_eq!(
             summarize_batch_status(&[task(0, STATUS_DONE), task(1, STATUS_PREPARED)]),
@@ -3090,11 +3078,11 @@ error = ""
         );
         assert_eq!(
             summarize_batch_status(&[task(0, STATUS_DONE), task(1, STATUS_FAILED)]),
-            STATUS_FAILED
+            STATUS_FAILED.as_str()
         );
         assert_eq!(
             summarize_batch_status(&[task(0, STATUS_DONE), task(1, STATUS_SKIPPED)]),
-            STATUS_DONE
+            STATUS_DONE.as_str()
         );
     }
 
@@ -3176,7 +3164,7 @@ error = ""
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.base_mode, "explicit");
         assert_eq!(updated.base.as_deref(), Some("main"));
-        assert_eq!(updated.status, STATUS_FAILED);
+        assert_eq!(updated.status, STATUS_FAILED.as_str());
         let run = read_run(dir.path(), &updated.tasks[0].run);
         assert_eq!(run.task, "PROJ-123");
         assert_eq!(run.status, STATUS_FAILED);
@@ -3226,7 +3214,7 @@ error = ""
         );
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.base_mode, "interactive");
-        assert_eq!(updated.status, STATUS_PREPARED);
+        assert_eq!(updated.status, STATUS_PREPARED.as_str());
         let run = read_run(dir.path(), &updated.tasks[0].run);
         assert_eq!(run.status, STATUS_PREPARED);
         assert!(run.error.is_none());
@@ -3276,7 +3264,7 @@ error = ""
         run(&ctx, Some(batch_path.to_str().unwrap()), 2).unwrap();
 
         let updated = read_batch_metadata(&batch_path).unwrap();
-        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.status, STATUS_RUNNING.as_str());
         for item in &updated.tasks {
             let run = read_run(dir.path(), &item.run);
             assert_eq!(run.status, STATUS_RUNNING);
@@ -3337,7 +3325,7 @@ error = ""
 
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
-        assert_eq!(updated.status, STATUS_FAILED);
+        assert_eq!(updated.status, STATUS_FAILED.as_str());
         let ok_run = read_run(dir.path(), &updated.tasks[0].run);
         let failed_run = read_run(dir.path(), &updated.tasks[1].run);
         assert_eq!(ok_run.status, STATUS_RUNNING);
@@ -3389,7 +3377,7 @@ error = ""
         run(&ctx, Some(batch_path.to_str().unwrap()), 2).unwrap();
 
         let updated = read_batch_metadata(&batch_path).unwrap();
-        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.status, STATUS_RUNNING.as_str());
         assert_eq!(
             read_run(dir.path(), &updated.tasks[0].run).status,
             STATUS_RUNNING
@@ -3444,7 +3432,7 @@ error = ""
 
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
-        assert_eq!(updated.status, STATUS_FAILED);
+        assert_eq!(updated.status, STATUS_FAILED.as_str());
         let run = read_run(dir.path(), &updated.tasks[0].run);
         assert_eq!(run.status, STATUS_FAILED);
         assert!(
@@ -3500,7 +3488,7 @@ error = ""
 
         assert!(result.is_err());
         let updated = read_batch_metadata(&batch_path).unwrap();
-        assert_eq!(updated.status, STATUS_FAILED);
+        assert_eq!(updated.status, STATUS_FAILED.as_str());
         let first_run = read_run(dir.path(), &updated.tasks[0].run);
         let second_run = read_run(dir.path(), &updated.tasks[1].run);
         assert_eq!(first_run.status, STATUS_FAILED);
@@ -3577,7 +3565,7 @@ error = ""
         let updated = read_batch_metadata(&batch_path).unwrap();
         assert_eq!(updated.base_mode, "explicit");
         assert_eq!(updated.base.as_deref(), Some("main"));
-        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.status, STATUS_RUNNING.as_str());
         assert_eq!(
             read_run(dir.path(), &updated.tasks[0].run).status,
             STATUS_RUNNING

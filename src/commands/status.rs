@@ -61,8 +61,8 @@ impl StatusReport {
         );
         if let Some(record) = work.target.task_run.as_ref() {
             meta.insert("task_run_id".into(), record.id.clone());
-            meta.insert("task_run_status".into(), record.run.status.clone());
-            meta.insert("task_run_source".into(), record.run.source.clone());
+            meta.insert("task_run_status".into(), record.run.status.to_string());
+            meta.insert("task_run_source".into(), record.run.source.to_string());
         }
 
         let cmux = work.cmux.as_ref();
