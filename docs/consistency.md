@@ -253,6 +253,14 @@ link와 실행 지시만 저장한다. Workflow row는 status/error를 따로 �
 canonical 기록은 TaskDocument다. `[[issues]]`나 `[[items]]`처럼 같은 상태 목록을
 가리키는 다른 이름은 받지 않는다.
 
+Stack-mode workflow preparation accepts `--pr <none|draft|ready>`. Omitted `--pr` and
+`--pr none` mean no pull-request handoff intent and do not write `pull_request` to the
+workflow row. `--pr draft` writes `pull_request = "draft"` and tells the task agent to
+open a draft pull request. `--pr ready` writes `pull_request = "ready"` and tells the
+task agent to open a pull request that is ready for review immediately. Boolean
+`--pull-request` and boolean `pull_request = true/false` are not canonical workflow
+surfaces.
+
 Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
 두 번째 task source를 만들지 않는다.
@@ -307,15 +315,19 @@ terminal prompt가 축약되어도 coordinator 좌표가 앞쪽에 남게 한다
 `Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>`
 이다. `single`과 `batch` mode는 pull-request handoff intent가 없으므로 `PR=none`으로
 보고하고, coordinator가 review, landing, cleanup을 명시적으로 처리한다. Stack-mode handoff
-intent는 workflow task row에 저장할 수 있다. `pull_request = true`면 작업 agent가 branch를
-push하고 stack parent branch를 base로 draft pull request를 연 뒤, completion report 내용으로
-PR 본문을 갱신하고 ready for review로 전환한 다음 `PR=<pr-url>`로 보고해야 한다.
-`pull_request = false`면 pull request를 열지 않고 `PR=none`으로 보고한다. 이것은 PR 자체나
-review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은 transport일 뿐 상태
-전이가 아니다. Codex/GitHub review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고,
-필요한 check를 다시 돌린 뒤 commit/push하고 PR 본문과 Agent Completion Report를 갱신한다.
-실행자나 coordinator가 `wt review`, 필요한 경우 pull request, 보고를 확인한 뒤 workflow
-completion command를 실행할 때 stack TaskRun 상태가 전이된다.
+intent는 workflow task row에 `pull_request = "draft"` 또는 `pull_request = "ready"`로
+저장할 수 있고, 값이 생략되면 pull request를 열지 않고 `PR=none`으로 보고한다. `"draft"`는
+작업 agent가 branch를 push하고 stack parent branch를 base로 draft pull request를 열어 draft로
+남긴다는 뜻이다. `"ready"`는 draft를 만들었다가 전환하지 않고 바로 review-ready pull request를
+연다는 뜻이다. PR을 여는 workflow task는 `.github/pull_request_template.md`에서
+`<pr-body-file>`을 만들고 summary, context, changes, validation, risks/follow-ups 중심의
+review-focused 본문을 채운 뒤 `gh pr create --body-file <pr-body-file>` 경로로 PR을 생성한다.
+Agent Completion Report는 coordinator transport/report 형식이며 PR 본문으로 복사하지 않는다.
+이것은 PR 자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은
+transport일 뿐 상태 전이가 아니다. Codex/GitHub review나 coordinator가 전달한 리뷰는 해당 task
+agent가 반영하고, 필요한 check를 다시 돌린 뒤 commit/push하고 PR 본문이 stale해졌을 때만 PR
+본문과 Agent Completion Report를 갱신한다. 실행자나 coordinator가 `wt review`, 필요한 경우 pull
+request, 보고를 확인한 뒤 workflow completion command를 실행할 때 stack TaskRun 상태가 전이된다.
 
 `wt done`은 worktree와 local branch cleanup 명령이다. `done`은 cleanup 신호이고,
 workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch commit을 `master` 같은

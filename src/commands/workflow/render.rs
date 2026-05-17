@@ -4,7 +4,7 @@ use crate::commands::task_run::{
     STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
 use crate::context::Ctx;
-use crate::workflow::{WorkflowMetadata, WorkflowTask};
+use crate::workflow::{WorkflowMetadata, WorkflowPullRequestMode, WorkflowTask};
 use std::path::Path;
 
 enum WorkflowCoordinatorHandoff<'a> {
@@ -181,26 +181,39 @@ fn workflow_handoff_policy(
         ),
         WorkflowCoordinatorHandoff::Stack { workflow_path, row } => {
             let parent_branch = row.parent.as_deref().unwrap_or("<workflow-parent>");
-            let pull_request = row.pull_request.unwrap_or(false);
-            let pr_report_value = if pull_request { "<pr-url>" } else { "none" };
+            let pull_request = row.pull_request;
+            let pr_report_value = if pull_request.is_some() {
+                "<pr-url>"
+            } else {
+                "none"
+            };
             let complete_command = format!(
                 "wt workflow complete {} {} --run-next",
                 shell_arg(&workflow_path.to_string_lossy()),
                 shell_arg(workflow_task_label(row))
             );
-            let pull_request_instructions = if pull_request {
-                let pr_command = format!(
-                    "git push -u origin HEAD\ngh pr create --draft --base {} --fill\ngh pr edit --body-file <completion-report-body-file>\ngh pr ready",
-                    shell_arg(parent_branch)
-                );
-                format!(
-                    "Workflow task metadata sets `pull_request = true`. When this task is complete and committed, push the branch, open a draft pull request against the workflow parent branch, update the pull request body with the Agent Completion Report details, and mark it ready for review. Create `<completion-report-body-file>` as a temporary file containing Summary, Changed files, Checks run, PR, and Risks or follow-ups:\n\n```bash\n{pr_command}\n```"
-                )
-            } else {
-                "Workflow task metadata sets `pull_request = false`. When this task is complete and committed, do not open a pull request for this workflow task.".into()
+            let pull_request_instructions = match pull_request {
+                Some(mode) => {
+                    let pr_command = workflow_pr_command(mode, parent_branch);
+                    let mode_instruction = match mode {
+                        WorkflowPullRequestMode::Draft => {
+                            "open a draft pull request against the workflow parent branch and leave it draft"
+                        }
+                        WorkflowPullRequestMode::Ready => {
+                            "open a pull request against the workflow parent branch that is ready for review immediately"
+                        }
+                    };
+                    format!(
+                        "Workflow task metadata sets `pull_request = \"{}\"`. When this task is complete and committed, push the branch and {mode_instruction}. Create `<pr-body-file>` from `.github/pull_request_template.md` and fill it with a review-focused PR description covering summary, context, changes, validation, and risks/follow-ups before creating the pull request:\n\n```bash\n{pr_command}\n```",
+                        mode.as_str()
+                    )
+                }
+                None => {
+                    "Workflow task metadata omits `pull_request`. When this task is complete and committed, do not open a pull request for this workflow task.".into()
+                }
             };
-            let review_followup = if pull_request {
-                "After the pull request is ready and the report is sent, keep ownership of review follow-up for this task. If Codex/GitHub review or coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push, update the pull request body, and send an updated Agent Completion Report."
+            let review_followup = if pull_request.is_some() {
+                "After the pull request is opened and the report is sent, keep ownership of review follow-up for this task. If Codex/GitHub review or coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push, update the pull request body if it became stale, and send an updated Agent Completion Report."
             } else {
                 "After the report is sent, keep ownership of coordinator review follow-up for this task. If coordinator feedback asks for changes, implement the changes in this branch, rerun the relevant checks, commit, push if this branch tracks a remote, and send an updated Agent Completion Report."
             };
@@ -211,6 +224,17 @@ fn workflow_handoff_policy(
             )
         }
     }
+}
+
+fn workflow_pr_command(mode: WorkflowPullRequestMode, parent_branch: &str) -> String {
+    let create_args = match mode {
+        WorkflowPullRequestMode::Draft => "--draft --body-file <pr-body-file>",
+        WorkflowPullRequestMode::Ready => "--body-file <pr-body-file>",
+    };
+    format!(
+        "git push -u origin HEAD\n# Create <pr-body-file> from .github/pull_request_template.md and fill it before creating the pull request.\npr_url=$(gh pr create {create_args} --base {} --fill)",
+        shell_arg(parent_branch)
+    )
 }
 
 pub(super) fn shell_arg(value: &str) -> String {

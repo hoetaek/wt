@@ -172,6 +172,23 @@ fn workflow_run_help_explains_omitted_target_selection() {
 }
 
 #[test]
+fn workflow_prepare_help_uses_pr_mode() {
+    wt_command()
+        .args(["workflow", "task", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--pr <none|draft|ready>"))
+        .stdout(predicate::str::contains("--pull-request").not());
+
+    wt_command()
+        .args(["workflow", "issue", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--pr <none|draft|ready>"))
+        .stdout(predicate::str::contains("--pull-request").not());
+}
+
+#[test]
 fn legacy_batch_command_fails_with_workflow_guidance() {
     wt_command()
         .args(["batch", "run"])

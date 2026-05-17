@@ -376,9 +376,9 @@ pub enum WorkflowCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Mark stack-mode workflow tasks as requiring pull-request handoff
-        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
-        pull_request: bool,
+        /// Pull-request handoff intent for stack-mode workflow tasks
+        #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
+        pr: Option<WorkflowPrModeArg>,
     },
     /// Prepare issues as a workflow file without starting workspaces
     Issue {
@@ -393,9 +393,9 @@ pub enum WorkflowCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Mark stack-mode workflow tasks as requiring pull-request handoff
-        #[arg(long = "pull-request", action = ArgAction::SetTrue)]
-        pull_request: bool,
+        /// Pull-request handoff intent for stack-mode workflow tasks
+        #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
+        pr: Option<WorkflowPrModeArg>,
     },
     /// Start runnable tasks from a workflow
     #[command(
@@ -435,6 +435,13 @@ pub enum WorkflowModeArg {
     Single,
     Batch,
     Stack,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowPrModeArg {
+    None,
+    Draft,
+    Ready,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
@@ -1182,7 +1189,8 @@ mod tests {
             "codex",
             "--base",
             "main",
-            "--pull-request",
+            "--pr",
+            "ready",
         ]);
         assert!(matches!(
             cli.command,
@@ -1192,7 +1200,7 @@ mod tests {
                     mode: WorkflowModeArg::Stack,
                     profile: Some(ref profile),
                     base: Some(ref base),
-                    pull_request: true,
+                    pr: Some(WorkflowPrModeArg::Ready),
                 }
             }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
@@ -1211,7 +1219,7 @@ mod tests {
                     mode: WorkflowModeArg::Batch,
                     profile: None,
                     base: None,
-                    pull_request: false,
+                    pr: None,
                 }
             }) if tasks.is_empty()
         ));
@@ -1228,9 +1236,27 @@ mod tests {
                     mode: WorkflowModeArg::Batch,
                     profile: None,
                     base: None,
-                    pull_request: false,
+                    pr: None,
                 }
             }) if issues.is_empty()
+        ));
+    }
+
+    #[test]
+    fn workflow_issue_accepts_pr_draft() {
+        let cli = parse(&[
+            "wt", "workflow", "issue", "--mode", "stack", "PROJ-1", "--pr", "draft",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Issue {
+                    ref issues,
+                    mode: WorkflowModeArg::Stack,
+                    pr: Some(WorkflowPrModeArg::Draft),
+                    ..
+                }
+            }) if issues == &vec!["PROJ-1".to_string()]
         ));
     }
 
@@ -1279,6 +1305,18 @@ mod tests {
         let help = task.render_help().to_string();
         assert!(help.contains("[TASKS]..."));
         assert!(help.contains("omit to select multiple existing tasks"));
+        assert!(help.contains("--pr <none|draft|ready>"));
+        assert!(!help.contains("--pull-request"));
+    }
+
+    #[test]
+    fn workflow_issue_help_uses_pr_mode() {
+        let mut command = Cli::command();
+        let workflow = command.find_subcommand_mut("workflow").unwrap();
+        let issue = workflow.find_subcommand_mut("issue").unwrap();
+        let help = issue.render_help().to_string();
+        assert!(help.contains("--pr <none|draft|ready>"));
+        assert!(!help.contains("--pull-request"));
     }
 
     #[test]

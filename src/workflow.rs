@@ -53,7 +53,23 @@ pub struct WorkflowTask {
     #[serde(default)]
     pub parent: Option<String>,
     #[serde(default)]
-    pub pull_request: Option<bool>,
+    pub pull_request: Option<WorkflowPullRequestMode>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowPullRequestMode {
+    Draft,
+    Ready,
+}
+
+impl WorkflowPullRequestMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkflowPullRequestMode::Draft => "draft",
+            WorkflowPullRequestMode::Ready => "ready",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -379,7 +395,10 @@ fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
             content.push_str(&format!("parent = {}\n", toml_quote(parent)));
         }
         if let Some(pull_request) = item.pull_request {
-            content.push_str(&format!("pull_request = {pull_request}\n"));
+            content.push_str(&format!(
+                "pull_request = {}\n",
+                toml_quote(pull_request.as_str())
+            ));
         }
     }
 
@@ -498,7 +517,7 @@ mod tests {
                 task: "add-schema".into(),
                 run: "stack-2026-05-16-001-add-schema".into(),
                 parent: Some("main".into()),
-                pull_request: Some(false),
+                pull_request: Some(WorkflowPullRequestMode::Draft),
             }],
         };
 
@@ -514,7 +533,7 @@ mod tests {
         assert!(content.contains("task = \"add-schema\""));
         assert!(content.contains("run = \"stack-2026-05-16-001-add-schema\""));
         assert!(content.contains("parent = \"main\""));
-        assert!(content.contains("pull_request = false"));
+        assert!(content.contains("pull_request = \"draft\""));
         assert!(!content.contains("branch ="));
         assert!(!content.contains("status ="));
         assert!(!content.contains("error ="));
@@ -639,10 +658,36 @@ updated_at = "2026-05-16T00:00:00Z"
 [[tasks]]
 task = "add-schema"
 run = "workflow-add-schema"
-pull_request = false
+pull_request = "draft"
 "#,
         )
         .unwrap();
+        assert!(error_report(read(&path)).contains("pull_request"));
+    }
+
+    #[test]
+    fn read_rejects_boolean_pull_request_intent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflow.toml");
+
+        fs::write(
+            &path,
+            r#"mode = "stack"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+parent = "main"
+pull_request = true
+"#,
+        )
+        .unwrap();
+
         assert!(error_report(read(&path)).contains("pull_request"));
     }
 
