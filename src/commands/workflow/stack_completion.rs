@@ -24,10 +24,19 @@ pub(super) fn complete_stack_workflow(
     }
 
     let states = read_stack_workflow_task_states(ctx, &path, &metadata)?;
-    let Some(state) = states.iter().find(|state| state.run.is_stack_completable()) else {
+    let completable = states
+        .iter()
+        .filter(|state| state.run.is_stack_completable())
+        .collect::<Vec<_>>();
+    let Some(state) = completable.first().copied() else {
         ctx.ui.print_warning("No running workflow stack task found");
         return Ok(());
     };
+    if completable.len() > 1 {
+        bail!(
+            "Multiple running workflow stack tasks found; run `wt workflow repair {workflow}` first"
+        );
+    }
     let idx = state.idx;
 
     if let Some(task) = task {

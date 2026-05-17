@@ -92,9 +92,10 @@ fn workflows_for_task_runs(
     matches.sort_by(|left, right| {
         left.id
             .cmp(&right.id)
-            .then_with(|| left.task.cmp(&right.task))
             .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.task.cmp(&right.task))
     });
+    matches.dedup_by(|left, right| left.id == right.id && left.path == right.path);
     Ok(matches)
 }
 

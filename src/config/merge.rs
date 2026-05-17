@@ -65,6 +65,14 @@ pub(super) fn finalize_config_prompt_appends(config: &mut Config) {
     }
 }
 
+pub(super) fn finalize_config_prompt_appends_for_merge_layer(config: &mut Config) {
+    if let Some(agent) = config.agent.as_mut()
+        && !is_prompt_only_agent_patch(agent)
+    {
+        finalize_agent_prompt_appends(agent);
+    }
+}
+
 pub(super) fn finalize_config_common_prompt_scope(config: &mut Config) {
     if let Some(agent) = config.agent.as_mut() {
         finalize_agent_common_prompt_scope(agent);

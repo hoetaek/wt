@@ -198,6 +198,7 @@ fn issue_task_candidate(
         &issue.title,
         issue.branch_name.as_deref(),
         None,
+        crate::commands::profile_workspace::PromptPolicy::Deny,
     )?
     .branch_name;
     let document = TaskDocument {

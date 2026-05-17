@@ -243,7 +243,12 @@ pub enum AgentCommand {
         /// Branch, worktree path/name, or TaskRun id to watch
         target: Option<String>,
         /// Seconds between observations
-        #[arg(long, default_value_t = 2, value_name = "SECONDS")]
+        #[arg(
+            long,
+            default_value_t = 2,
+            value_name = "SECONDS",
+            value_parser = parse_positive_u64
+        )]
         interval: u64,
         /// Stop waiting after this many positive seconds
         #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
@@ -813,6 +818,9 @@ mod tests {
 
     #[test]
     fn agent_watch_rejects_zero_timeout_and_heartbeat() {
+        let interval = Cli::try_parse_from(["wt", "agent", "watch", "feature", "--interval", "0"]);
+        assert!(interval.is_err());
+
         let timeout = Cli::try_parse_from(["wt", "agent", "watch", "feature", "--timeout", "0"]);
         assert!(timeout.is_err());
 

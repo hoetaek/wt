@@ -8,6 +8,8 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.26.0 - 2026-05-18
+
 - Removed hidden parser and dispatch shells for top-level `wt batch`,
   `wt stack`, `wt review`, and `wt status` names. Those names now use clap's
   unknown-subcommand handling instead of parsing only to return replacement

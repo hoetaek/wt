@@ -313,6 +313,7 @@ fn run_inner_many(
                 &title,
                 suggested_branch.as_deref(),
                 Some(base_raw),
+                prompt_policy,
             )?
         };
     let raw_id = identifier.trim_start_matches('#');
@@ -771,11 +772,22 @@ pub(crate) fn materialize_provider_issue_branch(
     title: &str,
     suggested_branch: Option<&str>,
     base_raw: Option<&Option<String>>,
+    prompt_policy: PromptPolicy,
 ) -> Result<MaterializedIssueBranch> {
     let naming = worktree_naming::generate(ctx, identifier, title, suggested_branch)?;
     let provider_branch_base = if should_resolve_provider_branch_base(ctx, suggested_branch, None) {
         match base_raw {
             Some(base_raw) => {
+                if prompt_policy == PromptPolicy::Deny
+                    && matches!(
+                        BaseMode::from_raw(base_raw),
+                        BaseMode::Interactive | BaseMode::Default
+                    )
+                {
+                    bail!(
+                        "Base branch resolution is interactive; parallel batch workers cannot prompt"
+                    );
+                }
                 let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
                 Some(resolve_base_branch(ctx, &git, base_raw)?)
             }

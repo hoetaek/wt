@@ -2,7 +2,8 @@ use anyhow::{Context, bail};
 use std::path::{Path, PathBuf};
 
 use super::merge::{
-    finalize_config_common_prompt_scope, finalize_config_prompt_appends, merge_config,
+    finalize_config_common_prompt_scope, finalize_config_prompt_appends,
+    finalize_config_prompt_appends_for_merge_layer, merge_config,
 };
 use super::profile::apply_profile_conventions;
 use super::{Config, validate_profile_name};
@@ -50,7 +51,8 @@ impl Config {
             (true, true) => {
                 let mut root = Self::load_file(&root_path)?;
                 finalize_config_prompt_appends(&mut root);
-                let local = Self::load_file(&local_path)?;
+                let mut local = Self::load_file(&local_path)?;
+                finalize_config_prompt_appends_for_merge_layer(&mut local);
                 (
                     merge_config(&root, local),
                     ConfigSource::Files(vec![root_path, local_path]),

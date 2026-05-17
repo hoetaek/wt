@@ -270,7 +270,7 @@ impl AgentStatusReport {
 
     fn transition_signature(&self) -> String {
         format!(
-            "{}:{}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
+            "{}:{}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
             self.target,
             self.agent.kind,
             self.agent.state,
@@ -278,6 +278,9 @@ impl AgentStatusReport {
             self.cmux.workspace,
             self.cmux.surface,
             self.cmux.candidates,
+            self.task_run.id,
+            self.task_run.status,
+            self.task_run.source,
             self.agent.last_tool,
             self.agent.last_event_at,
             self.warnings
