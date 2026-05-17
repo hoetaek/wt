@@ -277,78 +277,71 @@ TaskRun은 TaskDocument 하나를 한 번 실행한 기록이다.
 
 Workflow 준비는 `.local/workflows/<id>.toml` 하나와 각 task의 TaskDocument/TaskRun link를
 만든다. Workflow의 canonical task 목록은 `[[tasks]]`이고, 각 row는 task key, linked
-TaskRun id, stack-mode parent, pull request handoff intent처럼 orchestration에 필요한
-link와 실행 지시만 저장한다. Workflow row는 status/error를 따로 가지지 않고, branch
-이름도 복사하지 않는다. 실행 인스턴스의 canonical 기록은 TaskRun이고, branch name의
-canonical 기록은 TaskDocument다. `objective`는 workflow-level field로만 저장하고
-TaskDocument `body`나 row-level field로 복사하지 않는다. `body`, `description`,
-`goal_task`, `parent_task`, `subtasks`, `[[issues]]`, `[[items]]`처럼 같은 상태나 목표를
-가리키는 다른 이름은 받지 않는다.
+TaskRun id, stack-mode parent처럼 orchestration에 필요한 link와 실행 지시만 저장한다.
+Workflow row는 status/error를 따로 가지지 않고, branch 이름도 복사하지 않는다. 실행
+인스턴스의 canonical 기록은 TaskRun이고, branch name의 canonical 기록은 TaskDocument다.
+`objective`는 workflow-level field로만 저장하고 TaskDocument `body`나 row-level field로
+복사하지 않는다. `body`, `description`, `goal_task`, `parent_task`, `subtasks`,
+`[[issues]]`, `[[items]]`처럼 같은 상태나 목표를 가리키는 다른 이름은 받지 않는다.
 
-Stack-mode workflow preparation accepts `--pr <none|draft|ready>`. Omitted `--pr` and
-`--pr none` mean no pull-request handoff intent and do not write `pull_request` to the
-workflow row. `--pr draft` writes `pull_request = "draft"` and tells the task agent to
-open a draft pull request. `--pr ready` writes `pull_request = "ready"` and tells the
-task agent to open a pull request that is ready for review immediately. Boolean
-`--pull-request` and boolean `pull_request = true/false` are not canonical workflow
-surfaces.
+Workflow preparation accepts `--pr <none|draft|ready>` as a one-run override for
+pull-request handoff intent. Omitted `--pr` means use the effective `[workflow]`
+config. `--pr none` means agents report `PR=none`, `--pr draft` means agents open draft
+pull requests and leave them draft, and `--pr ready` means agents open pull requests that
+are ready for review immediately. Boolean `--pull-request` and boolean
+`pull_request = true/false` are not canonical workflow surfaces.
 
-Workflow default policy is a preference in `.wt.toml`, while a Workflow file is the
+Workflow policy is a preparation preference in `.wt.toml`, while a Workflow file is the
 prepared execution plan for one run. Preparing a workflow reads the effective config
 from `.wt.toml` plus `.local/.wt.toml`, applies any explicit command-line override, and
-writes the resulting policy into `.local/workflows/<id>.toml`. Later edits to
+writes the resulting policy snapshot into `.local/workflows/<id>.toml`. Later edits to
 `.wt.toml` do not reinterpret already prepared workflows.
 
 Canonical config shape:
 
 ```toml
-[workflow.defaults]
-pull_request = "draft"        # none | draft | ready
-landing = "after_review"      # manual | after_review
-landing_requires_approval = true
+[workflow]
+pull_request = "none"  # none | draft | ready
+landing = "manual"     # manual | auto
 ```
 
-`workflow.defaults.pull_request` is the default pull-request handoff intent for
-PR-capable workflow tasks. `none` means do not ask task agents to open pull requests.
-`draft` means agents open draft pull requests and leave them draft. `ready` means agents
-open pull requests that are ready for review immediately. `ready` is the canonical name;
-`open`, `review`, boolean `true`, and boolean `false` are not aliases. In the Workflow
-file, `draft` and `ready` are stored on the task row as `pull_request = "draft"` or
-`pull_request = "ready"`. `none` is represented by omitting `pull_request` from the row,
-matching the existing handoff contract.
+`pull_request` is the default pull-request handoff intent for workflow tasks. `none`
+means agents report `PR=none` and do not create pull requests. `draft` means agents open
+draft pull requests and leave them draft. `ready` means agents open pull requests that
+are ready for review immediately. `ready` is the canonical name; `open`, `review`,
+boolean `true`, and boolean `false` are not aliases.
 
-`workflow.defaults.landing` is the coordinator preference after review passes. `manual`
-means the coordinator stops after review and leaves landing to an explicit user or Git
-step. `after_review` means the coordinator should proceed to landing after review passes,
-subject to the approval rule below. Landing policy does not mean the branch has already
-merged.
+`landing` is the coordinator preference after review passes. Review is always part of
+the coordinator flow, and config cannot disable review. `manual` means review completes
+and the coordinator stops before merge or cleanup until the user explicitly directs
+landing. `auto` means review passing is enough approval for the coordinator to proceed
+to landing and cleanup. `auto` does not bypass dirty-worktree checks, configured check
+commands, required pull-request checks, unresolved review threads, branch ancestry
+checks, workflow mode ordering, or any other landing safety gate.
 
-`workflow.defaults.landing_requires_approval` says whether `after_review` landing still
-requires an explicit user approval before the coordinator runs merge or cleanup steps.
-The safe built-in default is `true`. Setting it to `false` means review passing is enough
-approval for the coordinator to land according to the workflow's mode and order; it does
-not bypass required GitHub checks, unresolved review threads, dirty-worktree checks, or
-branch ancestry checks.
-
-The Workflow file stores landing policy once at workflow level, not on every task row:
+The Workflow file stores the effective policy snapshot once at workflow level:
 
 ```toml
 [policy]
-landing = "after_review"
-landing_requires_approval = true
+pull_request = "none"
+landing = "manual"
 ```
 
-Pull-request handoff remains row-level because stack-mode tasks can have different
-parents, while landing is a workflow-level coordination preference. Workflow policy is
-intent, not state: actual pull-request review result, merge status, ancestry proof,
-worktree cleanup, branch deletion, TaskRun lifecycle status, and TaskDocument cleanup
-remain outside Workflow policy. `wt inspect`, pull-request state, Git commands, workflow
-completion, and `wt done` continue to own those checks and transitions explicitly.
+Workflow policy is intent, not state: actual pull-request review result, merge status,
+ancestry proof, worktree cleanup, branch deletion, TaskRun lifecycle status, and
+TaskDocument cleanup remain outside Workflow policy. `wt inspect`, pull-request state,
+Git commands, workflow completion, and `wt done` continue to own those checks and
+transitions explicitly.
 
-The built-in config defaults are `pull_request = "none"`, `landing = "manual"`, and
-`landing_requires_approval = true`. Explicit workflow preparation flags override the
-config for one run while keeping the same value names and failing early for conflicting
-forms instead of introducing aliases.
+The built-in config defaults are `pull_request = "none"` and `landing = "manual"`.
+Explicit workflow preparation flags override the config for one run while keeping the
+same value names and failing early for conflicting forms instead of introducing aliases.
+`wt config` shows the effective `[workflow]` policy, including built-in defaults, so
+scripts and humans can inspect the actual policy that new workflow preparation will use.
+`wt init` may include a commented optional `[workflow]` block for discoverability, but
+generated config must not actively enable pull-request creation or automatic landing by
+default. `wt workflow show` displays the prepared policy snapshot from the workflow file,
+not the current `.wt.toml` value.
 
 This model changes both `.wt.toml` config shape and `.local/workflows` state shape, so
 implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Adding
@@ -357,18 +350,12 @@ workflow `objective` also changes the `.local/workflows` state shape and
 pre-1.0 minor model-change category. Ordinary development commits still do not bump
 `Cargo.toml`; the release branch owns the eventual version bump.
 
-Open implementation boundary: the current PR handoff runtime is stack-mode only. Until
-single or batch mode has a clear per-branch PR model, non-stack workflows should continue
-to report `PR=none` rather than silently applying `workflow.defaults.pull_request` in a
-different shape.
-
 `wt workflow task --objective <text>`와 `wt workflow issue --objective <text>`는 저장된
 Workflow의 더 큰 목표를 `.local/workflows/<id>.toml`의 top-level `objective`로 기록한다.
 이 값은 `wt workflow show`와 workflow-started agent prompt에 context로 나타나지만,
 runnable selection, TaskRun lifecycle, landing policy, cleanup behavior를 바꾸지 않는다.
 Prompt에서는 coordinator handoff가 먼저 전달되고, objective는 그 뒤 TaskDocument snapshot
 근처에 배치된다.
-
 Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
 두 번째 task source를 만들지 않는다.
@@ -420,21 +407,20 @@ terminal prompt가 축약되어도 coordinator 좌표가 앞쪽에 남게 한다
 
 보고 형식은 workflow mode와 무관하게
 `Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>`
-이다. `single`과 `batch` mode는 pull-request handoff intent가 없으므로 `PR=none`으로
-보고하고, coordinator가 review, landing, cleanup을 명시적으로 처리한다. Stack-mode handoff
-intent는 workflow task row에 `pull_request = "draft"` 또는 `pull_request = "ready"`로
-저장할 수 있고, 값이 생략되면 pull request를 열지 않고 `PR=none`으로 보고한다. `"draft"`는
-작업 agent가 branch를 push하고 stack parent branch를 base로 draft pull request를 열어 draft로
+이다. `PR` 값은 workflow file의 prepared policy를 따른다. `pull_request = "none"`이면
+pull request를 열지 않고 `PR=none`으로 보고한다. `"draft"`는 작업 agent가 branch를
+push하고 준비된 workflow base 또는 parent branch를 base로 draft pull request를 열어 draft로
 남긴다는 뜻이다. `"ready"`는 draft를 만들었다가 전환하지 않고 바로 review-ready pull request를
 연다는 뜻이다. PR을 여는 workflow task는 `.github/pull_request_template.md`에서
 `<pr-body-file>`을 만들고 summary, context, changes, validation, risks/follow-ups 중심의
 review-focused 본문을 채운 뒤 `gh pr create --body-file <pr-body-file>` 경로로 PR을 생성한다.
 Agent Completion Report는 coordinator transport/report 형식이며 PR 본문으로 복사하지 않는다.
 이것은 PR 자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은
-transport일 뿐 상태 전이가 아니다. Codex/GitHub review나 coordinator가 전달한 리뷰는 해당 task
-agent가 반영하고, 필요한 check를 다시 돌린 뒤 commit/push하고 PR 본문이 stale해졌을 때만 PR
-본문과 Agent Completion Report를 갱신한다. 실행자나 coordinator가 `wt inspect`, 필요한 경우 pull
-request, 보고를 확인한 뒤 workflow completion command를 실행할 때 stack TaskRun 상태가 전이된다.
+transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow에 포함된다. Codex/GitHub
+review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한 check를 다시 돌린 뒤
+commit/push하고 PR 본문이 stale해졌을 때만 PR 본문과 Agent Completion Report를 갱신한다.
+실행자나 coordinator가 `wt inspect`, 필요한 경우 pull request, 보고를 확인한 뒤 workflow
+completion command를 실행할 때 TaskRun 상태가 전이된다.
 
 `wt done`은 worktree와 local branch cleanup 명령이다. `done`은 cleanup 신호이고,
 workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch commit을 `master` 같은
