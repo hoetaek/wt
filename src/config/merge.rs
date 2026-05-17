@@ -5,8 +5,8 @@ use super::schema::{
     default_agent_submit, default_agent_timeout, prompt_append_mode,
 };
 use super::{
-    AgentCli, AgentConfig, Config, CopyAsEntry, EditorConfig, SetupConfig, WorkspaceConfig,
-    WorktreeConfig,
+    AgentCli, AgentConfig, Config, CopyAsEntry, EditorConfig, SetupConfig, WorkflowConfig,
+    WorkflowDefaultsConfig, WorkspaceConfig, WorktreeConfig,
 };
 
 pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
@@ -17,6 +17,9 @@ pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
     }
     if profile.setup != SetupConfig::default() {
         merge_setup_config(&mut merged.setup, profile.setup);
+    }
+    if profile.workflow != WorkflowConfig::default() {
+        merge_workflow_config(&mut merged.workflow, profile.workflow);
     }
     if profile.profile.is_some() {
         merged.profile = profile.profile;
@@ -179,6 +182,27 @@ fn merge_setup_config(base: &mut SetupConfig, profile: SetupConfig) {
     base.env.extend(profile.env);
     for (path, entries) in profile.env_files {
         base.env_files.entry(path).or_default().extend(entries);
+    }
+}
+
+fn merge_workflow_config(base: &mut WorkflowConfig, profile: WorkflowConfig) {
+    if profile.defaults != WorkflowDefaultsConfig::default() {
+        merge_workflow_defaults_config(&mut base.defaults, profile.defaults);
+    }
+}
+
+fn merge_workflow_defaults_config(
+    base: &mut WorkflowDefaultsConfig,
+    profile: WorkflowDefaultsConfig,
+) {
+    if profile.pull_request.is_some() {
+        base.pull_request = profile.pull_request;
+    }
+    if profile.landing.is_some() {
+        base.landing = profile.landing;
+    }
+    if profile.landing_requires_approval.is_some() {
+        base.landing_requires_approval = profile.landing_requires_approval;
     }
 }
 

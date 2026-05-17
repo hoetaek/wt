@@ -16,6 +16,10 @@ minor version instead of moving to `x.0.0`.
   `wt agent status <target>` and `wt agent watch <target>`. The legacy
   top-level `wt status` surface is hidden from primary help and now fails with
   explicit guidance for one-shot observation, polling, and human inspection.
+- Added `[workflow.defaults]` config materialization for prepared workflows.
+  `wt workflow task` and `wt workflow issue` now snapshot landing policy into
+  `[policy]`, and stack-mode PR handoff defaults into task rows unless `--pr`
+  explicitly overrides them.
 - Bumped the package version to `0.24.0` because replacing `wt review` and
   top-level `wt status` changes the user-facing CLI contract while `wt` is
   still pre-1.0.

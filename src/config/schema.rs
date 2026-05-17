@@ -13,6 +13,7 @@ pub(super) const PROMPT_RUNTIME_MODES: [&str; 3] = ["issue", "new", "pr"];
 pub struct Config {
     pub worktree: WorktreeConfig,
     pub setup: SetupConfig,
+    pub workflow: WorkflowConfig,
     pub profile: Option<ProfileConfig>,
     pub site: Option<SiteConfig>,
     pub editor: EditorConfig,
@@ -20,6 +21,42 @@ pub struct Config {
     pub agent: Option<AgentConfig>,
     pub test: Option<TestConfig>,
     pub issues: Option<IssuesConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkflowConfig {
+    pub defaults: WorkflowDefaultsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkflowDefaultsConfig {
+    pub pull_request: Option<WorkflowDefaultPullRequestMode>,
+    pub landing: Option<WorkflowDefaultLandingPolicy>,
+    pub landing_requires_approval: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowDefaultPullRequestMode {
+    None,
+    Draft,
+    Ready,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowDefaultLandingPolicy {
+    Manual,
+    AfterReview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkflowDefaultPolicy {
+    pub pull_request: WorkflowDefaultPullRequestMode,
+    pub landing: WorkflowDefaultLandingPolicy,
+    pub landing_requires_approval: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
@@ -465,6 +502,26 @@ Rules:
 }
 
 impl Config {
+    pub fn workflow_default_policy(&self) -> WorkflowDefaultPolicy {
+        WorkflowDefaultPolicy {
+            pull_request: self
+                .workflow
+                .defaults
+                .pull_request
+                .unwrap_or(WorkflowDefaultPullRequestMode::None),
+            landing: self
+                .workflow
+                .defaults
+                .landing
+                .unwrap_or(WorkflowDefaultLandingPolicy::Manual),
+            landing_requires_approval: self
+                .workflow
+                .defaults
+                .landing_requires_approval
+                .unwrap_or(true),
+        }
+    }
+
     pub fn effective_site(&self) -> Option<SiteConfig> {
         let site = self.site.as_ref()?;
         if site.provider == SiteProvider::None {

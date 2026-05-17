@@ -224,6 +224,52 @@ fn workflow_prepare_help_uses_pr_mode() {
 }
 
 #[test]
+fn workflow_prepare_rejects_pr_none_on_non_stack_modes() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "task",
+            "--mode",
+            "single",
+            "--pr",
+            "none",
+            "workflow-docs",
+            "--base",
+            "main",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--pr is only valid with --mode stack",
+        ));
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "workflow",
+            "issue",
+            "--mode",
+            "batch",
+            "--pr",
+            "none",
+            "PROJ-123",
+            "--base",
+            "main",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--pr is only valid with --mode stack",
+        ));
+}
+
+#[test]
 fn legacy_batch_command_fails_with_workflow_guidance() {
     wt_command()
         .args(["batch", "run"])
@@ -753,6 +799,11 @@ link = ["storage"]
 APP_ENV = "local"
 LOG_LEVEL = "info"
 
+[workflow.defaults]
+pull_request = "draft"
+landing = "after_review"
+landing_requires_approval = false
+
 [agent]
 cli = "codex"
 args = ["--model", "gpt-5.5"]
@@ -869,6 +920,16 @@ CODEX_MODE = "1"
     assert_eq!(config.setup.env.get("LOG_LEVEL").unwrap(), "debug");
     assert_eq!(config.setup.env.get("PRIVATE_TOKEN").unwrap(), "secret");
     assert_eq!(config.setup.env.get("CODEX_MODE").unwrap(), "1");
+    let policy = config.workflow_default_policy();
+    assert_eq!(
+        policy.pull_request,
+        wt::config::WorkflowDefaultPullRequestMode::Draft
+    );
+    assert_eq!(
+        policy.landing,
+        wt::config::WorkflowDefaultLandingPolicy::AfterReview
+    );
+    assert!(!policy.landing_requires_approval);
 
     let agent = config.agent.unwrap();
     assert_eq!(agent.cli, wt::config::AgentCli::Codex);
