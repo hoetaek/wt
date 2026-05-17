@@ -19,6 +19,7 @@ use crate::workflow::render::{
     workflow_batch_task_prompt_content, workflow_batch_task_prompt_content_for_policy,
     workflow_single_task_prompt_content, workflow_single_task_prompt_content_for_policy,
     workflow_stack_task_prompt_content, workflow_task_prompt_content_with_policy,
+    workflow_task_prompt_content_with_policy_and_parent,
 };
 use crate::workflow::run as workflow_runner;
 #[cfg(test)]
@@ -672,6 +673,53 @@ mod tests {
     }
 
     #[test]
+    fn task_snapshots_selected_profile_workflow_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[workflow]
+pull_request = "ready"
+landing = "auto"
+"#,
+        )
+        .unwrap();
+        let config = Config {
+            workflow: crate::config::WorkflowConfig {
+                pull_request: Some(WorkflowDefaultPullRequestMode::Draft),
+                landing: Some(WorkflowDefaultLandingPolicy::Manual),
+            },
+            ..Config::default()
+        };
+        let ctx = ctx_with_config(dir.path(), config);
+
+        task(
+            &ctx,
+            &["contract".into()],
+            WorkflowModeArg::Stack,
+            Some("codex"),
+            None,
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(record.workflow.profile.as_deref(), Some("codex"));
+        assert_eq!(
+            record.workflow.policy.pull_request,
+            WorkflowPullRequestMode::Ready
+        );
+        assert_eq!(record.workflow.policy.landing, WorkflowLandingPolicy::Auto);
+        let content = fs::read_to_string(record.path).unwrap();
+        assert!(content.contains("profile = \"codex\""));
+        assert!(content.contains("pull_request = \"ready\""));
+        assert!(content.contains("landing = \"auto\""));
+    }
+
+    #[test]
     fn explicit_pr_none_overrides_config_default() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config {
@@ -701,6 +749,45 @@ mod tests {
         );
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("pull_request = \"none\""));
+    }
+
+    #[test]
+    fn explicit_pr_none_overrides_selected_profile_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[workflow]
+pull_request = "ready"
+landing = "auto"
+"#,
+        )
+        .unwrap();
+        let ctx = ctx(dir.path());
+
+        task(
+            &ctx,
+            &["contract".into()],
+            WorkflowModeArg::Stack,
+            Some("codex"),
+            None,
+            &Some("main".into()),
+            Some(WorkflowPrModeArg::None),
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(
+            record.workflow.policy.pull_request,
+            WorkflowPullRequestMode::None
+        );
+        assert_eq!(record.workflow.policy.landing, WorkflowLandingPolicy::Auto);
+        let content = fs::read_to_string(record.path).unwrap();
+        assert!(content.contains("profile = \"codex\""));
+        assert!(content.contains("pull_request = \"none\""));
+        assert!(content.contains("landing = \"auto\""));
     }
 
     #[test]
@@ -1147,6 +1234,32 @@ mod tests {
         assert!(!content.contains("gh pr create --draft"));
         assert!(!content.contains("gh pr ready"));
         assert!(content.contains("PR=<pr-url>"));
+    }
+
+    #[test]
+    fn workflow_stack_prompt_uses_validated_parent_for_pr_base() {
+        let row = WorkflowTask {
+            task: "PROJ-2".into(),
+            run: "run-2".into(),
+            parent: Some("stored-parent".into()),
+        };
+        let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
+        let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
+
+        let content = workflow_task_prompt_content_with_policy_and_parent(
+            "title = \"API\"\n",
+            &workflow_path,
+            &row,
+            &policy,
+            "validated-runtime-parent",
+        );
+
+        assert!(
+            content.contains(
+                "gh pr create --body-file <pr-body-file> --base validated-runtime-parent"
+            )
+        );
+        assert!(!content.contains("gh pr create --body-file <pr-body-file> --base stored-parent"));
     }
 
     #[test]

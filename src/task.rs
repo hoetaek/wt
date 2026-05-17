@@ -3,8 +3,8 @@ use crate::task_run;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -156,8 +156,11 @@ pub(crate) fn read_task_file(ctx: &Ctx, key: &str) -> Result<(TaskDocument, Stri
 pub(crate) fn write_task_document(ctx: &Ctx, key: &str, task: &TaskDocument) -> Result<()> {
     let tasks_dir = ctx.repo_root.join(".local/tasks");
     fs::create_dir_all(&tasks_dir)?;
-    fs::write(task_path(ctx, key), render_task_document(task))?;
-    Ok(())
+    write_task_document_atomically(
+        &tasks_dir,
+        &task_path(ctx, key),
+        &render_task_document(task),
+    )
 }
 
 pub(crate) fn write_new_task_document(ctx: &Ctx, key: &str, task: &TaskDocument) -> Result<()> {
@@ -199,18 +202,95 @@ fn task_path(ctx: &Ctx, key: &str) -> PathBuf {
     ctx.repo_root.join(task_relative_path(key))
 }
 
+fn write_task_document_atomically(
+    tasks_dir: &Path,
+    final_path: &Path,
+    content: &str,
+) -> Result<()> {
+    let existing_permissions = match fs::metadata(final_path) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(err) if err.kind() == ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("Failed to stat task document: {}", final_path.display())
+            });
+        }
+    };
+    let (temp_path, mut file) = create_task_temp_file(tasks_dir, final_path)?;
+    let result = (|| -> Result<()> {
+        if let Some(permissions) = existing_permissions {
+            fs::set_permissions(&temp_path, permissions).with_context(|| {
+                format!(
+                    "Failed to set temporary task document permissions: {}",
+                    temp_path.display()
+                )
+            })?;
+        }
+        file.write_all(content.as_bytes()).with_context(|| {
+            format!(
+                "Failed to write temporary task document: {}",
+                temp_path.display()
+            )
+        })?;
+        file.sync_all().with_context(|| {
+            format!(
+                "Failed to sync temporary task document: {}",
+                temp_path.display()
+            )
+        })?;
+        drop(file);
+        fs::rename(&temp_path, final_path).with_context(|| {
+            format!("Failed to replace task document: {}", final_path.display())
+        })?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
+}
+
+fn create_task_temp_file(tasks_dir: &Path, _final_path: &Path) -> Result<(PathBuf, fs::File)> {
+    let pid = std::process::id();
+
+    for attempt in 0..100 {
+        let temp_path = tasks_dir.join(format!(".wt-task-{pid}-{attempt}.tmp"));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => return Ok((temp_path, file)),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Failed to create temporary task document: {}",
+                        temp_path.display()
+                    )
+                });
+            }
+        }
+    }
+
+    bail!(
+        "Failed to allocate temporary task document path in {}",
+        tasks_dir.display()
+    )
+}
+
 fn read_selected_task(ctx: &Ctx, path: PathBuf) -> Result<SelectedTask> {
     let relative_path = path
         .strip_prefix(&ctx.repo_root)
         .unwrap_or(&path)
         .to_string_lossy()
         .into_owned();
-    let key = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Task file is missing a key: {relative_path}"))?
-        .to_string();
+    let key = safe_task_key(
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("Task file is missing a key: {relative_path}"))?,
+    );
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read task: {relative_path}"))?;
     let document: TaskDocument = toml::from_str(&content)
@@ -485,6 +565,127 @@ mod tests {
         assert_eq!(selected.document.title, "Second");
         assert_eq!(selected.document.branch, "second");
         assert!(selected.content.contains("body = \"details\""));
+    }
+
+    #[test]
+    fn list_local_tasks_normalizes_discovered_filename_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("ISSUE#42!.toml"),
+            "title = \"Unsafe\"\nbranch = \"unsafe\"\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let tasks = list_local_tasks(&ctx).unwrap();
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].key, "ISSUE-42");
+        assert_eq!(tasks[0].path, ".local/tasks/ISSUE#42!.toml");
+    }
+
+    #[test]
+    fn write_task_document_replaces_existing_task_without_leaving_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        let final_path = tasks_dir.join("replace-me.toml");
+        std::fs::write(&final_path, "title = \"Old\"\nbranch = \"old\"\n").unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let task = TaskDocument {
+            title: "New".into(),
+            branch: "replace-me".into(),
+            body: "details".into(),
+            origin: None,
+        };
+
+        write_task_document(&ctx, "replace/me", &task).unwrap();
+
+        let content = std::fs::read_to_string(final_path).unwrap();
+        assert_eq!(
+            content,
+            "title = \"New\"\nbranch = \"replace-me\"\nbody = \"\"\"details\"\"\"\n"
+        );
+        let temp_files = std::fs::read_dir(tasks_dir)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .ok()
+                    .and_then(|entry| entry.path().extension().map(|ext| ext == "tmp"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(temp_files, 0);
+    }
+
+    #[test]
+    fn write_task_document_uses_bounded_temp_filename_for_long_task_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "a".repeat(240);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let task = TaskDocument {
+            title: "Long".into(),
+            branch: key.clone(),
+            body: "details".into(),
+            origin: None,
+        };
+
+        write_task_document(&ctx, &key, &task).unwrap();
+
+        let final_path = dir.path().join(format!(".local/tasks/{key}.toml"));
+        assert!(final_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_task_document_preserves_existing_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        let final_path = tasks_dir.join("restricted.toml");
+        std::fs::write(&final_path, "title = \"Old\"\nbranch = \"old\"\n").unwrap();
+        std::fs::set_permissions(&final_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let task = TaskDocument {
+            title: "New".into(),
+            branch: "restricted".into(),
+            body: "details".into(),
+            origin: None,
+        };
+
+        write_task_document(&ctx, "restricted", &task).unwrap();
+
+        let mode = std::fs::metadata(final_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
