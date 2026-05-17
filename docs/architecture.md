@@ -47,11 +47,9 @@ state; branch comes from `TaskDocument`, execution status comes from `TaskRun`,
 and actual landing remains an explicit Git/review workflow.
 
 `batch` and `stack` are Workflow modes. New prepared-work state belongs in
-`.local/workflows` with `mode = "single" | "batch" | "stack"`. The
-`.local/batches`, `.local/stacks`, `wt batch`, and `wt stack` surfaces are
-not state or command ownership points. Keep any remaining handling limited to
-explicit replacement guidance, and do not teach those names as equal command
-surfaces.
+`.local/workflows` with `mode = "single" | "batch" | "stack"`. Batch/stack
+state directories are not ownership points, and top-level batch/stack command
+shells should not exist beside the canonical `wt workflow` surface.
 
 cmux is a runtime and surface integration. `src/services/cmux.rs` owns the
 external command boundary; setup and command renderers may use current cmux
@@ -133,7 +131,7 @@ Before adding a command or expanding an existing one:
   inputs instead of letting setup discover workflow/task state.
 - Keep human output, selector labels, and agent prompt text in rendering
   helpers when the text is longer than a local status line.
-- Treat `.local/batches`, `.local/stacks`, `wt batch`, and `wt stack` as removed
-  surfaces unless a separate task explicitly changes that policy.
+- Treat batch/stack state directories and top-level command shells as outside
+  the current model unless a separate task explicitly changes that policy.
 - Add or update tests at the layer that owns the behavior, and inspect public
   help text when command behavior changes.

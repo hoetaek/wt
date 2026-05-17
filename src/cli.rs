@@ -77,12 +77,6 @@ pub enum Commands {
         #[arg(long, conflicts_with = "profile")]
         matrix: bool,
     },
-    /// Previous batch command; use wt workflow --mode batch
-    #[command(hide = true, disable_help_flag = true, disable_help_subcommand = true)]
-    Batch {
-        #[arg(value_name = "ARGS", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
     /// Manage local TaskDocuments
     Task {
         #[command(subcommand)]
@@ -92,12 +86,6 @@ pub enum Commands {
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
-    },
-    /// Previous stack command; use wt workflow --mode stack
-    #[command(hide = true, disable_help_flag = true, disable_help_subcommand = true)]
-    Stack {
-        #[arg(value_name = "ARGS", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
     },
     /// Show worktree, branch, site, and setup state
     List {
@@ -123,28 +111,10 @@ pub enum Commands {
         /// Branch, worktree path/name, or TaskRun id to inspect
         target: Option<String>,
     },
-    /// Previous review command; use wt inspect
-    #[command(
-        hide = true,
-        long_about = "Previous command surface. Use `wt inspect [<target>]` for the read-only work dossier, then complete, land, or clean up explicitly when appropriate."
-    )]
-    Review {
-        /// Branch, worktree path/name, or TaskRun id to inspect
-        target: Option<String>,
-    },
     /// Observe and watch task agent runtime state
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
-    },
-    /// Previous status command; use wt agent status
-    #[command(
-        hide = true,
-        long_about = "Previous command surface. Use `wt agent status <target>` to observe a task agent once, `wt agent watch <target>` to poll, or `wt inspect [<target>]` for the read-only work dossier."
-    )]
-    Status {
-        /// Branch, worktree path/name, or TaskRun id
-        target: Option<String>,
     },
     /// Send a message to a task agent's cmux surface
     Send {
@@ -830,30 +800,6 @@ mod tests {
         assert!(help.contains("<TARGET>"));
         assert!(help.contains("<MESSAGE>"));
         assert!(help.contains("--no-enter"));
-    }
-
-    #[test]
-    fn previous_batch_command_collects_args_for_rejection() {
-        let cli = parse(&["wt", "batch", "run", "--jobs", "3"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Batch { ref args })
-                if args == &vec!["run".to_string(), "--jobs".to_string(), "3".to_string()]
-        ));
-    }
-
-    #[test]
-    fn previous_stack_command_collects_args_for_rejection() {
-        let cli = parse(&["wt", "stack", "complete", "latest", "--run-next"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack { ref args })
-                if args == &vec![
-                    "complete".to_string(),
-                    "latest".to_string(),
-                    "--run-next".to_string()
-                ]
-        ));
     }
 
     #[test]

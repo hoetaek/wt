@@ -8,14 +8,16 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Removed hidden parser and dispatch shells for top-level `wt batch`,
+  `wt stack`, `wt review`, and `wt status` names. Those names now use clap's
+  unknown-subcommand handling instead of parsing only to return replacement
+  guidance, while canonical behavior remains under `wt workflow`, `wt inspect`,
+  and `wt agent status` / `wt agent watch`.
 - Added `wt task import [<issue>...]` as the non-executing inverse of
   `wt task publish`. It imports existing provider issues into `.local/tasks`
   TaskDocuments, records `[origin]`, supports explicit issue ids and a bare
   provider issue selector, and refuses duplicate ids or existing local
   TaskDocument collisions.
-- Removed inactive top-level `wt batch` and `wt stack` command implementations.
-  Those names now parse only enough to return `wt workflow` replacement
-  guidance, while canonical behavior remains under `wt workflow`.
 - Bumped the package version to `0.25.0` because `wt task import` adds a new
   user-facing CLI subcommand while `wt` is still pre-1.0.
 

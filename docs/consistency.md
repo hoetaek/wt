@@ -50,11 +50,11 @@ Workflow는 정확히 하나의 `mode = "single" | "batch" | "stack"` 값을 가
 TaskDocument를 실행하고, `batch`는 같은 base에서 여러 독립 branch를 실행하며,
 `stack`은 task branch들을 정해진 parent chain으로 순서대로 실행한다.
 
-`batch`와 `stack`은 workflow mode 값으로 남지만 top-level 상태 파일 noun이 아니다.
-새 상태 파일은 `.local/workflows` 아래에만 만들고, `.local/batches`와
-`.local/stacks`는 새 코드가 읽거나 쓰는 상태 위치가 아니다. `wt batch`나 `wt stack`을
-`wt workflow`의 compatibility alias로 남겨 두면 두 command surface가 모두 canonical처럼
-보이므로, 명시적으로 실패하거나 제거한다.
+`batch`와 `stack`은 workflow mode 값으로 남지만 top-level 상태 파일 noun이나 command
+namespace가 아니다. 새 상태 파일은 `.local/workflows` 아래에만 만들고, batch/stack
+전용 상태 디렉터리는 새 코드가 읽거나 쓰는 상태 위치가 아니다. 별도 top-level command
+surface를 `wt workflow` 옆에 남기면 두 command surface가 모두 canonical처럼 보이므로
+새 CLI parser와 dispatch는 canonical `wt workflow`만 노출한다.
 
 Workflow file은 optional `objective`, mode, base, profile, color, timestamps,
 workflow-level policy, task/run link 같은 prepared-plan context와 orchestration만
@@ -495,21 +495,20 @@ Agent별 상태 신호 준비도는 `agent status`나 `agent watch`가 고치는
 준비도를 보고만 하고, 일반 wt 명령이 전역 Codex hook을 자동 설치하거나 사용자 agent config를
 몰래 수정하면 안 된다.
 
-`wt status`는 top-level broad command로 agent-only observation을 계속 맡으면 안 된다. Git의
+Agent runtime observation은 `wt agent status`와 `wt agent watch` 아래에 둔다. Git의
 `status` 문서(`https://git-scm.com/docs/git-status.html`)는 worktree/index state를 뜻하므로
-top-level `wt status`도 좁은 agent screen poll보다 managed work state 전반을 암시한다.
+top-level status command는 좁은 agent screen poll보다 managed work state 전반을 암시한다.
 GitHub CLI도 `gh auth status`(`https://cli.github.com/manual/gh_auth_status`),
 `gh pr status`(`https://cli.github.com/manual/gh_pr_status`)처럼 좁은 status를 noun namespace
-아래에 둔다. 따라서 migration 시 `wt status`는 `wt agent status <target>`, `wt agent watch
-<target>`, `wt inspect [<target>]` guidance와 함께 실패하거나 primary help에서 제거되어야 하며,
-silent alias로 남기지 않는다.
+아래에 둔다. 따라서 agent observation parser와 dispatch는 canonical agent namespace에만
+존재해야 하며, top-level silent alias를 남기지 않는다.
 
-`wt review`도 read-only dossier의 canonical 이름으로 남기지 않는다. GitHub CLI의
+Read-only dossier command는 `wt inspect [<target>]`다. GitHub CLI의
 `gh pr review`(`https://cli.github.com/manual/gh_pr_review`)처럼 external CLI convention에서
 review는 검토를 추가/제출하는 action으로 읽히기 쉽다. Read-only detail dossier는 Kubernetes
 `describe`(`https://kubernetes.io/docs/reference/kubectl/generated/kubectl_describe/`)처럼
-inspection surface에 가깝다. 따라서 canonical command는 `wt inspect [<target>]`이고, migration
-시 `wt review`는 explicit guidance와 함께 실패하거나 primary help에서 제거되어야 한다.
+inspection surface에 가깝다. 따라서 parser와 dispatch는 canonical inspect surface에만
+존재해야 하며, review-named silent alias를 남기지 않는다.
 
 `wt workflow repair <workflow>`는 관찰 side effect가 아니라 coordinator/operator가
 명시적으로 실행하는 복구 표면이다. 기본 동작은 dry-run preview이며, linked TaskRun,
