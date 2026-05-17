@@ -36,6 +36,7 @@ struct StatusReport {
     cmux_pane_ref: Option<String>,
     cmux_surface_id: Option<String>,
     cmux_surface_ref: Option<String>,
+    cmux_candidates: Vec<StatusCmuxCandidate>,
     agent: String,
     status: String,
     last_tool: Option<String>,
@@ -44,6 +45,19 @@ struct StatusReport {
     needs_input_since: Option<String>,
     meta: BTreeMap<String, String>,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct StatusCmuxCandidate {
+    workspace_ref: String,
+    surface_ref: String,
+    pane_ref: String,
+    window_ref: String,
+    selected: bool,
+    readable: bool,
+    agent: String,
+    status: String,
+    warning: Option<String>,
 }
 
 fn observe_status(ctx: &Ctx, target: &str) -> Result<(StatusReport, i32)> {
@@ -83,6 +97,11 @@ impl StatusReport {
             cmux_pane_ref: cmux.and_then(|cmux| cmux.pane_ref.clone()),
             cmux_surface_id: cmux.and_then(|cmux| cmux.surface_id.clone()),
             cmux_surface_ref: cmux.and_then(|cmux| cmux.surface_ref.clone()),
+            cmux_candidates: work
+                .cmux_contacts
+                .iter()
+                .map(StatusCmuxCandidate::from_contact)
+                .collect(),
             agent: work.state.agent_kind.as_str().to_string(),
             status: work.state.status.as_str().to_string(),
             last_tool: work.state.last_tool.clone(),
@@ -95,10 +114,41 @@ impl StatusReport {
     }
 }
 
+impl StatusCmuxCandidate {
+    fn from_contact(contact: &work::CmuxContact) -> Self {
+        Self {
+            workspace_ref: contact.workspace.clone(),
+            surface_ref: contact.surface.clone(),
+            pane_ref: contact.pane.clone(),
+            window_ref: contact.window.clone(),
+            selected: contact.selected,
+            readable: contact.readable,
+            agent: contact.state.agent_kind.as_str().to_string(),
+            status: contact.state.status.as_str().to_string(),
+            warning: contact.validation_warning.clone(),
+        }
+    }
+}
+
 fn warnings_for_work(work: &work::Work) -> Vec<String> {
     let mut warnings = Vec::new();
     if let Some(warning) = work.state.warning.as_ref() {
         warnings.push(warning.clone());
+    }
+    if let Some(cmux) = work.cmux.as_ref() {
+        if let Some(warning) = work
+            .cmux_contacts
+            .iter()
+            .find(|contact| {
+                contact.workspace == cmux.workspace_ref
+                    && Some(contact.surface.as_str()) == cmux.surface_ref.as_deref()
+            })
+            .and_then(|contact| contact.validation_warning.as_ref())
+        {
+            if !warnings.contains(warning) {
+                warnings.push(warning.clone());
+            }
+        }
     }
     if let Some(message) = work.message.as_ref() {
         warnings.push(message.clone());
@@ -151,6 +201,7 @@ fn print_text(ctx: &Ctx, report: &StatusReport) {
             .print_dim(&format!("  Needs input since: {needs_input_since}"));
     }
     print_cmux_text(ctx, report);
+    print_cmux_candidates_text(ctx, report);
     for warning in &report.warnings {
         ctx.ui.print_warning(warning);
     }
@@ -188,6 +239,45 @@ fn print_cmux_text(ctx: &Ctx, report: &StatusReport) {
             ctx.ui
                 .print_dim(&format!("  cmux: {surface} (workspace unavailable)"));
         }
+    }
+}
+
+fn print_cmux_candidates_text(ctx: &Ctx, report: &StatusReport) {
+    if report.cmux_candidates.is_empty() {
+        return;
+    }
+    if report.cmux_candidates.len() == 1 && report.cmux_candidates[0].warning.is_none() {
+        return;
+    }
+
+    ctx.ui.print_dim(&format!(
+        "  cmux candidates: {}",
+        report.cmux_candidates.len()
+    ));
+    for candidate in &report.cmux_candidates {
+        let selected = if candidate.selected { " selected" } else { "" };
+        let readable = if candidate.readable {
+            "readable"
+        } else {
+            "unreadable"
+        };
+        let warning = candidate
+            .warning
+            .as_deref()
+            .map(|warning| format!(", warning={warning}"))
+            .unwrap_or_default();
+        ctx.ui.print_dim(&format!(
+            "    - {} {}{} (pane {}, window {}, {}, agent={} status={}{})",
+            candidate.workspace_ref,
+            candidate.surface_ref,
+            selected,
+            candidate.pane_ref,
+            candidate.window_ref,
+            readable,
+            candidate.agent,
+            candidate.status,
+            warning
+        ));
     }
 }
 
@@ -431,7 +521,15 @@ mod tests {
             report
                 .warnings
                 .iter()
-                .any(|warning| warning.contains("terminal surface is not ready"))
+                .any(|warning| warning.contains("No live agent cmux surface"))
+        );
+        assert_eq!(report.cmux_candidates.len(), 1);
+        assert!(!report.cmux_candidates[0].readable);
+        assert!(
+            report.cmux_candidates[0]
+                .warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("unreadable cmux surface"))
         );
     }
 
@@ -550,6 +648,8 @@ mod tests {
     }
 
     fn add_selected_surface(runner: &mut MockRunner) {
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
         runner.add_response(
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,

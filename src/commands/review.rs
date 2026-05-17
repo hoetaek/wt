@@ -145,13 +145,24 @@ fn print_cmux_work(ctx: &Ctx, work: &work::Work) {
             }
             ctx.ui.print_dim("  cmux: terminal surface is not ready");
         }
+        work::WorkSessionState::AmbiguousTerminalSurface => {
+            if let Some(cmux) = work.cmux.as_ref() {
+                print_cmux_workspace_ref(ctx, cmux);
+            }
+            ctx.ui.print_dim("  cmux: terminal surface is ambiguous");
+        }
         work::WorkSessionState::TerminalSurfaceReady => {
-            if let Some(contact) = work.cmux.as_ref().and_then(work::WorkCmuxSurface::contact) {
+            if let Some(contact) = selected_work_contact(work) {
+                print_cmux_workspace(ctx, contact);
+            } else if let Some(contact) =
+                work.cmux.as_ref().and_then(work::WorkCmuxSurface::contact)
+            {
                 print_cmux_workspace(ctx, &contact);
             }
         }
     }
     print_agent_state(ctx, &work.state);
+    print_cmux_candidates(ctx, &work.cmux_contacts);
 }
 
 fn print_agent_state(ctx: &Ctx, state: &work::WorkState) {
@@ -185,6 +196,62 @@ fn print_cmux_workspace(ctx: &Ctx, contact: &CmuxContact) {
         "  cmux enter: cmux send-key --workspace {} --surface {} enter",
         contact.workspace, contact.surface
     ));
+}
+
+fn selected_work_contact(work: &work::Work) -> Option<&CmuxContact> {
+    let cmux = work.cmux.as_ref()?;
+    work.cmux_contacts.iter().find(|contact| {
+        contact.workspace == cmux.workspace_ref
+            && Some(contact.surface.as_str()) == cmux.surface_ref.as_deref()
+    })
+}
+
+fn print_cmux_candidates(ctx: &Ctx, contacts: &[CmuxContact]) {
+    if contacts.is_empty() {
+        return;
+    }
+    if contacts.len() == 1
+        && contacts[0].is_live_agent_candidate()
+        && contacts[0].validation_warning.is_none()
+    {
+        return;
+    }
+
+    ctx.ui
+        .print_dim(&format!("  cmux candidates: {}", contacts.len()));
+    for contact in contacts {
+        let selected = if contact.selected { " selected" } else { "" };
+        let readable = if contact.readable {
+            "readable"
+        } else {
+            "unreadable"
+        };
+        let warning = contact
+            .validation_warning
+            .as_deref()
+            .map(|warning| format!(", warning={warning}"))
+            .unwrap_or_default();
+        ctx.ui.print_dim(&format!(
+            "    - {} {}{} (pane {}, window {}, {}, agent={} status={}{})",
+            contact.workspace,
+            contact.surface,
+            selected,
+            contact.pane,
+            contact.window,
+            readable,
+            contact.state.agent_kind.as_str(),
+            contact.state.status.as_str(),
+            warning
+        ));
+        ctx.ui.print_dim(&format!(
+            "      cmux send --workspace {} --surface {} <message>",
+            contact.workspace, contact.surface
+        ));
+        ctx.ui.print_dim(&format!(
+            "      cmux send-key --workspace {} --surface {} enter",
+            contact.workspace, contact.surface
+        ));
+    }
 }
 
 fn print_cmux_workspace_ref(ctx: &Ctx, cmux: &work::WorkCmuxSurface) {
@@ -550,6 +617,8 @@ mod tests {
             ),
             true,
         );
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
         runner.add_response(
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
@@ -610,6 +679,8 @@ mod tests {
             ),
             true,
         );
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
         runner.add_response(
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
@@ -635,7 +706,9 @@ mod tests {
         let dims = ui.dims.lock().unwrap().join("\n");
         assert!(dims.contains("cmux workspace: workspace:1 \"feature\" (window window:1)"));
         assert!(dims.contains("cmux: terminal surface is not ready"));
-        assert!(!dims.contains("cmux send --workspace workspace:1 --surface surface:4"));
+        assert!(dims.contains("cmux candidates: 1"));
+        assert!(dims.contains("unreadable cmux surface"));
+        assert!(dims.contains("cmux send --workspace workspace:1 --surface surface:4"));
     }
 
     #[test]
