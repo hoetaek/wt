@@ -86,15 +86,20 @@ wt workflow run
 wt workflow complete 2026-05-16-001 add-schema --run-next
 ```
 
-Review, message, and clean worktrees:
+Inspect, observe, message, and clean worktrees:
 
 ```bash
 wt list
-wt review
-wt status <branch|worktree|task-run-id>
+wt inspect
+wt agent status <branch|worktree|task-run-id>
+wt agent watch <branch|worktree|task-run-id>
 wt send <target> "please report current status"
 wt done <target>
 ```
+
+Omitting a work target opens a selector only in interactive human use. In
+`--json`, `--quiet`, or non-TTY automation, pass an explicit branch, worktree
+path/name, or TaskRun id.
 
 `wt done` removes worktrees and local branches. It does not merge the branch.
 Land reviewed work with Git or pull requests first.
@@ -113,9 +118,16 @@ Land reviewed work with Git or pull requests first.
   base, and `stack` runs ordered branches as a parent chain.
 - `TaskRun` files in `.local/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
+- `wt inspect [<target>]` is the read-only work dossier for a branch, worktree,
+  or TaskRun.
+- `wt agent status [<target>]` observes the current agent/cmux state, and
+  `wt agent watch [<target>]` polls it. Agent state is separate from
+  `TaskRun.status`.
 
 `wt workflow` is the canonical prepared-work surface. Older top-level
 batch/stack concepts are migration context, not the model new docs should teach.
+Older `wt review` and top-level `wt status` names are migration context; new
+docs and scripts should use `wt inspect` and `wt agent status` / `wt agent watch`.
 
 ## Coordinator Handoff
 
@@ -191,8 +203,9 @@ name.
 | `wt task run` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
 | `wt workflow` | Prepare, inspect, run, and complete saved workflows |
-| `wt review` | Inspect a branch, worktree, or TaskRun before landing |
-| `wt status` | Poll the matching task agent surface |
+| `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
+| `wt agent status` | Observe the matching task agent surface once |
+| `wt agent watch` | Poll the matching task agent surface |
 | `wt send` | Send a message to the matching task agent surface |
 | `wt done` | Remove completed or disposable worktrees and branches |
 | `wt config` | Print, edit, extract, or inline config |
