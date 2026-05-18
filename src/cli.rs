@@ -232,7 +232,7 @@ pub enum ProfileCommand {
 pub enum AgentCommand {
     /// Observe a task agent's current runtime state once
     #[command(
-        long_about = "Observe a task agent's current runtime state from the matching cmux surface. This is read-only: it observes cmux screen, status, and hook signals without updating TaskRuns or provider issues. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use. Codex status is weaker until cmux Codex hooks are installed with `cmux hooks codex install --yes`."
+        long_about = "Observe a task agent's current runtime state from the matching cmux surface. This is read-only: it observes surface process evidence, cmux screen fallback, status, and hook signals without updating TaskRuns or provider issues. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use. Codex status is weaker until cmux Codex hooks are installed with `cmux hooks codex install --yes`."
     )]
     Status {
         /// Branch, worktree path/name, or TaskRun id to observe

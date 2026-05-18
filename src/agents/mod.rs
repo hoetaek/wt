@@ -103,6 +103,7 @@ pub(crate) struct AgentObservation<'a> {
     pub(crate) screen: Option<&'a str>,
     pub(crate) statuses: &'a [CmuxStatusEntry],
     pub(crate) events: &'a [CmuxEvent],
+    pub(crate) process_agent_kind: Option<AgentKind>,
 }
 
 impl<'a> AgentObservation<'a> {
@@ -115,11 +116,20 @@ impl<'a> AgentObservation<'a> {
             screen,
             statuses,
             events,
+            process_agent_kind: None,
         }
+    }
+
+    pub(crate) fn with_process_agent_kind(mut self, agent_kind: Option<AgentKind>) -> Self {
+        self.process_agent_kind = agent_kind;
+        self
     }
 }
 
 pub(crate) fn classify(observation: &AgentObservation<'_>) -> WorkState {
+    if let Some(agent_kind) = observation.process_agent_kind {
+        return state_from_process_identity(agent_kind, observation);
+    }
     if let Some((kind, status_key)) = current_known_agent_status(observation) {
         return state_from_agent_signals(kind, status_key, observation);
     }
@@ -142,6 +152,31 @@ pub(crate) fn classify(observation: &AgentObservation<'_>) -> WorkState {
         Some(screen) => screen_status(screen).unwrap_or(AgentStatus::Unknown),
     };
     enrich_state(WorkState::new(AgentKind::Unknown, status), observation)
+}
+
+fn state_from_process_identity(
+    agent_kind: AgentKind,
+    observation: &AgentObservation<'_>,
+) -> WorkState {
+    let Some(status_key) = status_key_for_agent(agent_kind) else {
+        return enrich_state(
+            WorkState::new(agent_kind, AgentStatus::Unknown),
+            observation,
+        );
+    };
+
+    let mut state = state_from_agent_signals(agent_kind, status_key, observation)
+        .with_metadata("agent_identity", "process_tree");
+    if !has_status_signal(status_key, observation) && !has_hook_signal(observation) {
+        state = match agent_kind {
+            AgentKind::Codex => state
+                .with_warning("codex_hooks_missing")
+                .with_metadata("codex_hooks", "missing_or_inactive"),
+            AgentKind::ClaudeCode => state.with_warning("agent_status_signals_missing"),
+            AgentKind::Shell | AgentKind::Unknown => state,
+        };
+    }
+    state
 }
 
 pub(super) fn state_from_agent_signals(
@@ -173,13 +208,6 @@ pub(super) fn has_hook_signal(observation: &AgentObservation<'_>) -> bool {
         .events
         .iter()
         .any(|event| hook_name(event).is_some())
-}
-
-pub(super) fn screen_mentions(screen: Option<&str>, needle: &str) -> bool {
-    let Some(screen) = screen else {
-        return false;
-    };
-    screen.to_ascii_lowercase().contains(needle)
 }
 
 pub(super) fn enrich_state(mut state: WorkState, observation: &AgentObservation<'_>) -> WorkState {
@@ -220,6 +248,14 @@ fn known_status_key(key: &str) -> Option<(AgentKind, &'static str)> {
         "claude_code" => Some((AgentKind::ClaudeCode, "claude_code")),
         "codex" => Some((AgentKind::Codex, "codex")),
         _ => None,
+    }
+}
+
+fn status_key_for_agent(agent_kind: AgentKind) -> Option<&'static str> {
+    match agent_kind {
+        AgentKind::ClaudeCode => Some("claude_code"),
+        AgentKind::Codex => Some("codex"),
+        AgentKind::Shell | AgentKind::Unknown => None,
     }
 }
 
@@ -481,6 +517,41 @@ mod tests {
         assert_eq!(
             state.metadata.get("codex_hooks").map(String::as_str),
             Some("missing_or_inactive")
+        );
+    }
+
+    #[test]
+    fn codex_process_identity_does_not_need_screen_marker() {
+        let observation = AgentObservation::new(Some("custom footer text"), &[], &[])
+            .with_process_agent_kind(Some(AgentKind::Codex));
+
+        let state = classify(&observation);
+
+        assert_eq!(state.agent_kind, AgentKind::Codex);
+        assert_eq!(state.status, AgentStatus::Unknown);
+        assert_eq!(state.warning.as_deref(), Some("codex_hooks_missing"));
+        assert_eq!(
+            state.metadata.get("agent_identity").map(String::as_str),
+            Some("process_tree")
+        );
+    }
+
+    #[test]
+    fn claude_process_identity_does_not_need_screen_marker() {
+        let observation = AgentObservation::new(Some("custom footer text"), &[], &[])
+            .with_process_agent_kind(Some(AgentKind::ClaudeCode));
+
+        let state = classify(&observation);
+
+        assert_eq!(state.agent_kind, AgentKind::ClaudeCode);
+        assert_eq!(state.status, AgentStatus::Unknown);
+        assert_eq!(
+            state.warning.as_deref(),
+            Some("agent_status_signals_missing")
+        );
+        assert_eq!(
+            state.metadata.get("agent_identity").map(String::as_str),
+            Some("process_tree")
         );
     }
 

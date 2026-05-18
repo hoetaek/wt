@@ -1,7 +1,7 @@
 pub(crate) use crate::agents::WorkState;
 use crate::agents::{self, AgentKind, AgentObservation, AgentStatus};
 use crate::context::{Ctx, PromptItem};
-use crate::services::cmux::{CmuxEvent, CmuxService, CmuxWorkspace};
+use crate::services::cmux::{CmuxEvent, CmuxProcessInfo, CmuxService, CmuxWorkspace};
 use crate::services::git::{GitService, WorktreeEntry};
 use crate::task_run;
 use anyhow::{Result, bail};
@@ -724,7 +724,8 @@ fn cmux_contacts_for_workspaces(
         }
     }
     mark_selected_cmux_contacts(cmux, &mut contacts);
-    validate_cmux_contacts(cmux, &mut contacts);
+    let surface_processes = cmux_surface_processes(cmux, workspaces, &contacts);
+    validate_cmux_contacts(cmux, &mut contacts, &surface_processes);
     Ok(contacts)
 }
 
@@ -764,7 +765,37 @@ fn mark_selected_cmux_contacts(cmux: &CmuxService<'_>, contacts: &mut [CmuxConta
     }
 }
 
-fn validate_cmux_contacts(cmux: &CmuxService<'_>, contacts: &mut [CmuxContact]) {
+fn cmux_surface_processes(
+    cmux: &CmuxService<'_>,
+    workspaces: &[CmuxWorkspace],
+    contacts: &[CmuxContact],
+) -> BTreeMap<String, BTreeMap<String, Vec<CmuxProcessInfo>>> {
+    let contact_workspaces = contacts
+        .iter()
+        .map(|contact| contact.workspace.clone())
+        .collect::<BTreeSet<_>>();
+    let mut by_workspace = BTreeMap::new();
+    for workspace in workspaces
+        .iter()
+        .filter(|workspace| contact_workspaces.contains(&workspace.handle))
+    {
+        let Ok(surfaces) = cmux.surface_processes(&workspace.handle) else {
+            continue;
+        };
+        let surfaces = surfaces
+            .into_iter()
+            .map(|surface| (surface.surface, surface.processes))
+            .collect::<BTreeMap<_, _>>();
+        by_workspace.insert(workspace.handle.clone(), surfaces);
+    }
+    by_workspace
+}
+
+fn validate_cmux_contacts(
+    cmux: &CmuxService<'_>,
+    contacts: &mut [CmuxContact],
+    surface_processes: &BTreeMap<String, BTreeMap<String, Vec<CmuxProcessInfo>>>,
+) {
     let mut statuses_by_workspace: BTreeMap<String, Vec<_>> = BTreeMap::new();
     let mut events: Option<Vec<CmuxEvent>> = None;
     for contact in contacts {
@@ -783,12 +814,21 @@ fn validate_cmux_contacts(cmux: &CmuxService<'_>, contacts: &mut [CmuxContact]) 
         };
 
         contact.readable = true;
-        let (statuses, contact_events) = if screen_has_known_agent(&screen) {
-            let statuses = statuses_by_workspace
+        let process_agent_kind = surface_processes
+            .get(&contact.workspace)
+            .and_then(|surfaces| surfaces.get(&contact.surface))
+            .and_then(|processes| agent_kind_from_processes(processes));
+        let has_screen_agent = screen_has_known_agent(&screen);
+        let statuses = if process_agent_kind.is_some() || has_screen_agent {
+            statuses_by_workspace
                 .entry(contact.workspace.clone())
                 .or_insert_with(|| cmux.list_status(&contact.workspace).unwrap_or_default())
-                .clone();
-            let all_events = events
+                .clone()
+        } else {
+            Vec::new()
+        };
+        let contact_events = if process_agent_kind.is_some() || has_screen_agent {
+            events
                 .get_or_insert_with(|| {
                     cmux.replay_events_after(
                         0,
@@ -800,12 +840,12 @@ fn validate_cmux_contacts(cmux: &CmuxService<'_>, contacts: &mut [CmuxContact]) 
                 .iter()
                 .filter(|event| event_matches_contact(event, contact))
                 .cloned()
-                .collect::<Vec<_>>();
-            (statuses, all_events)
+                .collect::<Vec<_>>()
         } else {
-            (Vec::new(), Vec::new())
+            Vec::new()
         };
-        let observation = AgentObservation::new(Some(&screen), &statuses, &contact_events);
+        let observation = AgentObservation::new(Some(&screen), &statuses, &contact_events)
+            .with_process_agent_kind(process_agent_kind);
         contact.state = agents::classify(&observation);
         contact.validation_warning = contact_validation_warning(contact);
     }
@@ -832,8 +872,58 @@ fn contact_validation_warning(contact: &CmuxContact) -> Option<String> {
 }
 
 fn screen_has_known_agent(screen: &str) -> bool {
-    let lower = screen.to_ascii_lowercase();
-    lower.contains("claude code") || agents::codex::screen_has_codex_ui_marker(Some(screen))
+    agents::claude_code::screen_has_claude_ui_marker(Some(screen))
+        || agents::codex::screen_has_codex_ui_marker(Some(screen))
+}
+
+fn agent_kind_from_processes(processes: &[CmuxProcessInfo]) -> Option<AgentKind> {
+    let has_codex = processes.iter().any(process_matches_codex);
+    let has_claude = processes.iter().any(process_matches_claude);
+    match (has_codex, has_claude) {
+        (true, false) => Some(AgentKind::Codex),
+        (false, true) => Some(AgentKind::ClaudeCode),
+        _ => None,
+    }
+}
+
+fn process_matches_codex(process: &CmuxProcessInfo) -> bool {
+    process_name_is(&process.name, &["codex"])
+        || process_path_has_agent_component(process.path.as_deref(), &["codex"])
+        || process_path_has_vendor_package(process.path.as_deref(), "@openai", "codex")
+}
+
+fn process_matches_claude(process: &CmuxProcessInfo) -> bool {
+    process_name_is(&process.name, &["claude", "claude-code", "claude_code"])
+        || process_path_has_agent_component(
+            process.path.as_deref(),
+            &["claude", "claude-code", "claude_code"],
+        )
+        || process_path_has_vendor_package(process.path.as_deref(), "@anthropic-ai", "claude-code")
+}
+
+fn process_name_is(name: &str, expected: &[&str]) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    expected.iter().any(|expected| name == *expected)
+}
+
+fn process_path_has_agent_component(path: Option<&str>, components: &[&str]) -> bool {
+    let Some(path) = path else {
+        return false;
+    };
+    path.to_ascii_lowercase()
+        .split('/')
+        .any(|component| components.contains(&component))
+}
+
+fn process_path_has_vendor_package(path: Option<&str>, scope: &str, package: &str) -> bool {
+    let Some(path) = path else {
+        return false;
+    };
+    let components = path.to_ascii_lowercase();
+    let components = components.split('/').collect::<Vec<_>>();
+    components
+        .windows(2)
+        .any(|window| window[0] == scope && window[1] == package)
 }
 
 fn observed_cmux_contact(contacts: &[CmuxContact]) -> Option<&CmuxContact> {
@@ -1159,6 +1249,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":null,"selected_surface_ref":null}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("zsh %", true);
         let ctx = fixture.ctx(runner);
 
@@ -1195,6 +1286,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-5","selected_surface_ref":"surface:5"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("zsh %", true);
         runner.add_response("zsh %", true);
         runner.add_response("zsh %", true);
@@ -1289,6 +1381,7 @@ mod tests {
         runner.add_response("pane:3", true);
         runner.add_response("surface:4", true);
         add_selected_surface(&mut runner);
+        add_no_surface_processes(&mut runner);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
@@ -1326,6 +1419,7 @@ mod tests {
         runner.add_response("pane:3", true);
         runner.add_response("surface:4", true);
         add_selected_surface(&mut runner);
+        add_no_surface_processes(&mut runner);
         runner.add_response(
             "remove-task-run-source . gpt-5.5 xhigh . Context 94% left . 5h 91%",
             true,
@@ -1344,6 +1438,94 @@ mod tests {
     }
 
     #[test]
+    fn observe_work_identifies_codex_from_surface_process_without_statusline() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
+        add_selected_surface(&mut runner);
+        add_surface_processes(&mut runner, &[("surface:4", "codex")]);
+        runner.add_response("custom user footer", true);
+        runner.add_response("No status entries", true);
+        runner.add_response("", true);
+        let ctx = fixture.ctx(runner);
+
+        let work = observe_work(&ctx, Some("feature")).unwrap();
+
+        assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
+        assert_eq!(work.state.agent_kind, AgentKind::Codex);
+        assert_eq!(work.state.status, AgentStatus::Unknown);
+        assert_eq!(work.state.warning.as_deref(), Some("codex_hooks_missing"));
+        assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:4"));
+    }
+
+    #[test]
+    fn observe_work_identifies_claude_from_surface_process_without_statusline() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
+        add_selected_surface(&mut runner);
+        add_surface_processes(&mut runner, &[("surface:4", "claude")]);
+        runner.add_response("custom user footer", true);
+        runner.add_response("No status entries", true);
+        runner.add_response("", true);
+        let ctx = fixture.ctx(runner);
+
+        let work = observe_work(&ctx, Some("feature")).unwrap();
+
+        assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
+        assert_eq!(work.state.agent_kind, AgentKind::ClaudeCode);
+        assert_eq!(work.state.status, AgentStatus::Unknown);
+        assert_eq!(
+            work.state.warning.as_deref(),
+            Some("agent_status_signals_missing")
+        );
+        assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:4"));
+    }
+
+    #[test]
+    fn observe_work_does_not_apply_workspace_status_to_sibling_surfaces() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4\nsurface:5\nsurface:6", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-5","selected_surface_ref":"surface:5"}]}"#,
+            true,
+        );
+        add_surface_processes(&mut runner, &[("surface:4", "codex")]);
+        runner.add_response("custom user footer", true);
+        runner.add_response("codex=Running", true);
+        runner.add_response("", true);
+        runner.add_response("lazygit\ncommit says Codex should inspect this", true);
+        runner.add_response("zsh %", true);
+        let ctx = fixture.ctx(runner);
+
+        let work = observe_work(&ctx, Some("feature")).unwrap();
+
+        assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
+        assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:4"));
+        assert_eq!(work.state.agent_kind, AgentKind::Codex);
+        assert_eq!(work.state.status, AgentStatus::Running);
+        assert!(work.cmux_contacts[1].selected);
+        assert_eq!(work.cmux_contacts[1].state.agent_kind, AgentKind::Unknown);
+        assert_eq!(work.cmux_contacts[1].state.status, AgentStatus::Unknown);
+        assert!(!work.cmux_contacts[1].is_live_agent_candidate());
+        assert_eq!(work.cmux_contacts[2].state.agent_kind, AgentKind::Shell);
+        assert!(!work.cmux_contacts[2].is_live_agent_candidate());
+    }
+
+    #[test]
     fn observe_work_does_not_bind_selected_non_agent_surface_with_gpt_text() {
         let fixture = Fixture::new();
         let mut runner = MockRunner::new();
@@ -1356,6 +1538,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("notes about gpt-5.5 model behavior", true);
         runner.add_response("gpt-5.5  Working", true);
         runner.add_response("codex=Running", true);
@@ -1394,6 +1577,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
@@ -1428,6 +1612,7 @@ mod tests {
         runner.add_response("pane:3", true);
         runner.add_response("surface:4", true);
         add_selected_surface(&mut runner);
+        add_no_surface_processes(&mut runner);
         runner.add_response("ready", true);
         let ctx = fixture.ctx(runner);
 
@@ -1498,6 +1683,7 @@ mod tests {
         runner.add_response("pane:3", true);
         runner.add_response("surface:4", true);
         add_selected_surface(&mut runner);
+        add_no_surface_processes(&mut runner);
         runner.add_response("Terminal surface not found", false);
         let ctx = fixture.ctx(runner);
 
@@ -1618,6 +1804,28 @@ branch refs/heads/two
             &format!(
                 r#"{{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{{"id":"uuid-workspace-1","ref":"workspace:1","title":"feature","current_directory":"{}"}}]}}"#,
                 fixture.worktree.display()
+            ),
+            true,
+        );
+    }
+
+    fn add_no_surface_processes(runner: &mut MockRunner) {
+        add_surface_processes(runner, &[]);
+    }
+
+    fn add_surface_processes(runner: &mut MockRunner, processes: &[(&str, &str)]) {
+        let surfaces = processes
+            .iter()
+            .map(|(surface, process)| {
+                format!(
+                    r#"{{"ref":"{surface}","processes":[{{"name":"{process}","path":"/usr/bin/{process}","children":[]}}]}}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        runner.add_response(
+            &format!(
+                r#"{{"windows":[{{"workspaces":[{{"panes":[{{"surfaces":[{surfaces}]}}]}}]}}]}}"#
             ),
             true,
         );
