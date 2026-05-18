@@ -51,6 +51,7 @@ pub(super) fn run_matrix_workflow(
     }
 
     let base = workflow_base_raw(metadata)?.expect("workflow base is validated");
+    let workflow_context = workflow_metadata_prompt_context(metadata);
     let mut failed = false;
     for (idx, state) in runnable.iter().enumerate() {
         let Some(profile) = state.profile.as_deref() else {
@@ -75,7 +76,7 @@ pub(super) fn run_matrix_workflow(
                 state,
                 base: &base,
                 policy: &metadata.policy,
-                workflow_context: workflow_metadata_prompt_context(metadata),
+                workflow_context: workflow_context.clone(),
                 profile,
             },
         );
