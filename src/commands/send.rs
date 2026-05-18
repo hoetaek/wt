@@ -187,6 +187,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
@@ -249,6 +250,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
@@ -310,6 +312,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
@@ -330,6 +333,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("Terminal surface not found", false);
         let ui = Arc::new(MockUi::new());
         let ctx = Ctx::new(
@@ -381,6 +385,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":null,"selected_surface_ref":null}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
@@ -439,6 +444,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-5","selected_surface_ref":"surface:5"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("zsh %", true);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
@@ -498,6 +504,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("zsh %", true);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
@@ -556,6 +563,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("Terminal surface not found", false);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
@@ -613,6 +621,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"},{"id":"uuid-pane-4","ref":"pane:4","selected_surface_id":"uuid-surface-5","selected_surface_ref":"surface:5"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
@@ -673,6 +682,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":null,"selected_surface_ref":null}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
@@ -724,8 +734,16 @@ mod tests {
             ),
             true,
         );
+        add_no_surface_processes(runner);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
+    }
+
+    fn add_no_surface_processes(runner: &mut MockRunner) {
+        runner.add_response(
+            r#"{"windows":[{"workspaces":[{"panes":[{"surfaces":[]}]}]}]}"#,
+            true,
+        );
     }
 }

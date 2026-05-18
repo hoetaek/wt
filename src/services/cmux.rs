@@ -32,6 +32,18 @@ pub struct CmuxStatusEntry {
     pub color: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmuxProcessInfo {
+    pub name: String,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmuxSurfaceProcesses {
+    pub surface: String,
+    pub processes: Vec<CmuxProcessInfo>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CmuxEvent {
     pub seq: u64,
@@ -413,6 +425,18 @@ impl<'a> CmuxService<'a> {
         parse_status_entries(&out.stdout)
     }
 
+    pub fn surface_processes(&self, workspace: &str) -> Result<Vec<CmuxSurfaceProcesses>> {
+        let out = self.runner.run(
+            "cmux",
+            &["top", "--workspace", workspace, "--processes", "--json"],
+            None,
+        )?;
+        if !out.success {
+            bail!("cmux top failed: {}", command_error(&out));
+        }
+        parse_surface_processes(&out.stdout)
+    }
+
     pub fn replay_events_after(
         &self,
         after_seq: u64,
@@ -604,6 +628,81 @@ impl From<EventFrame> for CmuxEvent {
             payload: frame.payload,
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct TopResponse {
+    #[serde(default)]
+    windows: Vec<TopWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TopWindow {
+    #[serde(default)]
+    workspaces: Vec<TopWorkspace>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TopWorkspace {
+    #[serde(default)]
+    panes: Vec<TopPane>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TopPane {
+    #[serde(default)]
+    surfaces: Vec<TopSurface>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TopSurface {
+    #[serde(rename = "ref")]
+    surface_ref: String,
+    #[serde(default)]
+    processes: Vec<TopProcess>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TopProcess {
+    #[serde(default)]
+    name: String,
+    path: Option<String>,
+    #[serde(default)]
+    children: Vec<TopProcess>,
+}
+
+impl TopProcess {
+    fn collect_processes(&self, processes: &mut Vec<CmuxProcessInfo>) {
+        processes.push(CmuxProcessInfo {
+            name: self.name.clone(),
+            path: self.path.clone(),
+        });
+        for child in &self.children {
+            child.collect_processes(processes);
+        }
+    }
+}
+
+fn parse_surface_processes(stdout: &str) -> Result<Vec<CmuxSurfaceProcesses>> {
+    let response: TopResponse = serde_json::from_str(stdout)?;
+    let mut surfaces = Vec::new();
+    for window in response.windows {
+        for workspace in window.workspaces {
+            for pane in workspace.panes {
+                for surface in pane.surfaces {
+                    let mut processes = Vec::new();
+                    for process in &surface.processes {
+                        process.collect_processes(&mut processes);
+                    }
+                    surfaces.push(CmuxSurfaceProcesses {
+                        surface: surface.surface_ref,
+                        processes,
+                    });
+                }
+            }
+        }
+    }
+    Ok(surfaces)
 }
 
 fn parse_status_entries(stdout: &str) -> Result<Vec<CmuxStatusEntry>> {
@@ -1182,6 +1281,41 @@ mod tests {
         assert_eq!(
             calls[0].1,
             vec!["list-status", "--workspace", "workspace:58"]
+        );
+    }
+
+    #[test]
+    fn surface_processes_parses_cmux_top_json() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"windows":[{"workspaces":[{"panes":[{"surfaces":[{"ref":"surface:4","processes":[{"name":"login","path":"/usr/bin/login","children":[{"name":"zsh","path":"/bin/zsh","children":[{"name":"codex","path":"/opt/codex/bin/codex","children":[]}]}]}]},{"ref":"surface:5","processes":[{"name":"lazygit","path":"/opt/homebrew/bin/lazygit","children":[]}]}]}]}]}]}"#,
+            true,
+        );
+
+        let svc = CmuxService::new(&runner);
+        let surfaces = svc.surface_processes("workspace:58").unwrap();
+
+        assert_eq!(surfaces.len(), 2);
+        assert_eq!(surfaces[0].surface, "surface:4");
+        assert_eq!(
+            surfaces[0]
+                .processes
+                .iter()
+                .map(|process| process.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["login", "zsh", "codex"]
+        );
+        assert_eq!(surfaces[1].surface, "surface:5");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "top",
+                "--workspace",
+                "workspace:58",
+                "--processes",
+                "--json"
+            ]
         );
     }
 

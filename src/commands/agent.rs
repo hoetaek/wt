@@ -759,6 +759,7 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
         );
+        add_no_surface_processes(&mut runner);
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
@@ -1232,6 +1233,14 @@ mod tests {
         runner.add_response("surface:4", true);
         runner.add_response(
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        add_no_surface_processes(runner);
+    }
+
+    fn add_no_surface_processes(runner: &mut MockRunner) {
+        runner.add_response(
+            r#"{"windows":[{"workspaces":[{"panes":[{"surfaces":[]}]}]}]}"#,
             true,
         );
     }
