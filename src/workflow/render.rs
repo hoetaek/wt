@@ -397,8 +397,7 @@ fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>)
     );
 
     format!(
-        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator cmux surface that started this workflow:\n\n```bash\n{}\n```\n\n{}\n\n{}\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait.",
-        send_command, pull_request_instructions, after_send
+        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator cmux surface that started this workflow:\n\n```bash\n{send_command}\n```\n\n{pull_request_instructions}\n\n{after_send}\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait."
     )
 }
 

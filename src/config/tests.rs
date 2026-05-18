@@ -402,8 +402,7 @@ fn workflow_policy_rejects_legacy_landing_approval_key() {
 #[test]
 fn workflow_policy_rejects_legacy_review_landing_value() {
     let value = format!("after_{}", "review");
-    let err =
-        toml::from_str::<Config>(&format!("[workflow]\nlanding = {:?}\n", value)).unwrap_err();
+    let err = toml::from_str::<Config>(&format!("[workflow]\nlanding = {value:?}\n")).unwrap_err();
 
     assert!(err.to_string().contains(&value));
     assert!(err.to_string().contains("[workflow].landing"));

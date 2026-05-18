@@ -599,8 +599,7 @@ fn push_agent_tool_notice(ctx: &Ctx, notices: &mut Vec<InitNotice>, agent: &Agen
             notices,
             &command,
             format!(
-                "{} command missing; generated agent config can be saved, but agent launch needs {}",
-                command, command
+                "{command} command missing; generated agent config can be saved, but agent launch needs {command}"
             ),
         ),
         Ok(None) => {}

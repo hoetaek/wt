@@ -446,7 +446,7 @@ fn toml_multiline_string(value: &str) -> String {
     let escaped = value
         .replace("\\", "\\\\")
         .replace("\"\"\"", "\\\"\\\"\\\"");
-    format!("\"\"\"{}\"\"\"", escaped)
+    format!("\"\"\"{escaped}\"\"\"")
 }
 
 #[cfg(test)]

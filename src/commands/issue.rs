@@ -708,8 +708,7 @@ fn profile_config_with_issue_snapshot(
         let prompts = agent.prompt.entry(mode.into()).or_default();
         if let Some(completion_section) = completion_section {
             let handoff_prompt = format!(
-                "{}\n\nThe TaskDocument prompt follows next. Do not start work until it arrives.",
-                completion_section
+                "{completion_section}\n\nThe TaskDocument prompt follows next. Do not start work until it arrives."
             );
             let snapshot_prompt = prepared_snapshot_prompt(
                 pre_snapshot_context,

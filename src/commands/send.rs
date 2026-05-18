@@ -720,8 +720,7 @@ mod tests {
         runner.add_response(surface, true);
         runner.add_response(
             &format!(
-                r#"{{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"{}","selected_surface_ref":"{}"}}]}}"#,
-                surface_id, surface
+                r#"{{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"{surface_id}","selected_surface_ref":"{surface}"}}]}}"#
             ),
             true,
         );
