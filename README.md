@@ -51,8 +51,21 @@ lifecycle. The pack contains:
 - `wt-setup`
 - `wt-work`
 
-From this repository root, install the full pack into Codex globally with
-explicit skill names:
+Install the full pack into Codex globally from GitHub with explicit skill names:
+
+```bash
+npx --yes skills@latest add https://github.com/hoetaek/wt \
+  --skill wt-idea \
+  --skill wt-ready \
+  --skill wt-start \
+  --skill wt-coordinate \
+  --skill wt-land \
+  --skill wt-setup \
+  --skill wt-work \
+  -g -a codex --copy -y
+```
+
+From a local clone of this repository, use `.` as the source:
 
 ```bash
 npx --yes skills@latest add . \
