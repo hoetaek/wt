@@ -385,6 +385,36 @@ to landing and cleanup. `auto` does not bypass dirty-worktree checks, configured
 commands, required pull-request checks, unresolved review threads, branch ancestry
 checks, workflow mode ordering, or any other landing safety gate.
 
+If a pull request exists, "review passes" is an evidence-backed pull-request review
+gate, not an inferred state from green checks or an agent completion report. The
+coordinator must refresh the pull-request review surfaces immediately before landing:
+submitted reviews, review threads, PR comments, relevant check runs, PR body reactions,
+and reactions on any review-request comments. Flat `gh pr view` output is not enough
+when thread state, reviewer or review-agent replies, or reactions matter. `auto` may
+proceed only after that gate is satisfied.
+
+Review-thread resolution is part of the same gate. A thread can be resolved when the
+issue is fixed on the PR branch and the reviewer or review agent has acknowledged it,
+when the reviewer or review agent clearly agrees it is not actionable, or when a human
+explicitly overrides with evidence in the PR conversation. Conversational review agents
+are not one-shot signals: after the coordinator replies to an inline review comment,
+the coordinator must refresh the thread and wait for the follow-up response before
+resolving it. A thread-specific addressed marker or equivalent explicit acknowledgment
+can satisfy that follow-up check; a follow-up saying the PR branch still contains the
+issue keeps the thread unresolved. Tool-specific reactions or markers on the PR body or
+review-request comment are provider status hints and must be recorded as such, not
+treated as a substitute for checking threads, comments, and checks. When reviewing old
+or closed PR threads against current `develop`, a later mainline fix may be useful
+evidence for a reply, but it does not by itself prove the old PR branch's thread should
+be resolved.
+
+Provider examples are illustrative, not the canonical provider list:
+
+- CodeRabbit inline comments require a refresh after replying, and resolve only after
+  an addressed marker, explicit no-action agreement, or equivalent follow-up.
+- Codex PR body or review-request reactions are status signals to record while still
+  checking reviews, threads, comments, and checks.
+
 The Workflow file stores the effective policy snapshot once at workflow level:
 
 ```toml
@@ -497,11 +527,15 @@ issue를 닫도록 `Closes <origin.id>` issue-closing keyword도 PR 본문에 �
 `gh pr create --body-file <pr-body-file>` 경로로 PR을 생성한다.
 Agent Completion Report는 coordinator transport/report 형식이며 PR 본문으로 복사하지 않는다.
 이것은 PR 자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은
-transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow에 포함된다. Codex/GitHub
+transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow에 포함된다. Pull request
 review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한 check를 다시 돌린 뒤
 commit/push하고 PR 본문이 stale해졌을 때만 PR 본문과 Agent Completion Report를 갱신한다.
 실행자나 coordinator가 `wt inspect`, 필요한 경우 pull request, 보고를 확인한 뒤 workflow
-completion command를 실행할 때 TaskRun 상태가 전이된다.
+completion command를 실행할 때 TaskRun 상태가 전이된다. Pull request가 있으면 coordinator는
+workflow completion이나 landing 전에 pull-request review gate를 통과했는지 별도로 확인한다.
+이 gate는 unresolved thread가 0인지뿐 아니라 최근 reviewer 또는 review-agent 답글, PR comment,
+review-request reaction, check 상태를 포함한다. Review-agent thread는 coordinator 답글 직후
+바로 resolve하지 않고, follow-up을 refresh해서 해결 또는 비조치 동의가 확인된 뒤 resolve한다.
 
 `wt done`은 worktree와 local branch cleanup 명령이다. `done`은 cleanup 신호이고,
 workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch commit을 `master` 같은
