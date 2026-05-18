@@ -1,6 +1,7 @@
 use super::state::{read_stack_workflow_task_states, update_workflow_task_run};
 use super::{apply_workflow_color, is_cancelled, task_issue_closing_references, validate_profile};
 use crate::commands::issue;
+use crate::config::AGENT_PROMPT_WORKFLOW_SCOPE;
 use crate::context::Ctx;
 use crate::setup;
 use crate::task as task_store;
@@ -148,6 +149,7 @@ fn run_stack_workflow_task(
             title: &title,
             branch_name,
             setup_mode: task_doc.setup_mode(),
+            additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
             prompt_intro: workflow_stack_task_prompt_intro(),

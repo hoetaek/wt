@@ -484,6 +484,43 @@ issue = ["local append\n"]
 }
 
 #[test]
+fn workflow_prompt_append_layers_extend_workflow_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
+[agent]
+cli = "codex"
+
+[agent.prompt]
+workflow = ["shared workflow\n"]
+
+[agent.prompt.append]
+workflow = ["shared workflow append\n"]
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        dir.path().join(".local/.wt.toml"),
+        r#"
+[agent.prompt.append]
+workflow = ["local workflow append\n"]
+"#,
+    )
+    .unwrap();
+
+    let config = Config::load(dir.path()).unwrap();
+    let agent = config.agent.unwrap();
+    assert_eq!(
+        agent.prompt.get("workflow").unwrap(),
+        &vec!["shared workflow\n\nshared workflow append\n\nlocal workflow append\n".to_string()]
+    );
+}
+
+#[test]
 fn prompt_overwrite_layer_replaces_then_append_extends() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".local")).unwrap();
@@ -570,6 +607,7 @@ issue = ["local issue append\n"]
         agent.prompt.get("pr").unwrap(),
         &vec!["shared common\n\nshared common append\n\nlocal common append\n".to_string()]
     );
+    assert!(!agent.prompt.contains_key("workflow"));
 }
 
 #[test]
@@ -603,6 +641,12 @@ issue = ["root issue\n"]
         "file issue append\n",
     )
     .unwrap();
+    std::fs::write(profile_dir.join("prompts/workflow.md"), "file workflow\n").unwrap();
+    std::fs::write(
+        profile_dir.join("prompts/workflow.append.md"),
+        "file workflow append\n",
+    )
+    .unwrap();
 
     let (base, _, _) = Config::load_base_and_effective_with_source(dir.path()).unwrap();
     let config = Config::load_profile(dir.path(), "codex", &base)
@@ -624,6 +668,10 @@ issue = ["root issue\n"]
     assert_eq!(
         agent.prompt.get("pr").unwrap(),
         &vec!["file common\n\nfile common append\n".to_string()]
+    );
+    assert_eq!(
+        agent.prompt.get("workflow").unwrap(),
+        &vec!["file workflow\n\nfile workflow append\n".to_string()]
     );
 }
 

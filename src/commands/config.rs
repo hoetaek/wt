@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{AGENT_PROMPT_WORKFLOW_SCOPE, Config};
 use crate::config_render::render_effective_config;
 use crate::context::Ctx;
 use crate::error::WtError;
@@ -743,7 +743,7 @@ fn analyze_profile_config(
         let profile_dir = path
             .parent()
             .ok_or_else(|| anyhow!("Profile source has no parent directory: {display}"))?;
-        for mode in ["issue", "new", "pr"] {
+        for mode in ["issue", "new", "pr", AGENT_PROMPT_WORKFLOW_SCOPE] {
             let Some(value) = prompt.get(mode) else {
                 continue;
             };
@@ -1304,7 +1304,7 @@ fn prompt_source_for_path(ctx: &Ctx, path: &Path) -> Option<PromptSource> {
 }
 
 fn prompt_file_specs() -> Vec<PromptFileSpec> {
-    ["common", "issue", "new", "pr"]
+    ["common", "issue", "new", "pr", AGENT_PROMPT_WORKFLOW_SCOPE]
         .into_iter()
         .flat_map(|mode| {
             [

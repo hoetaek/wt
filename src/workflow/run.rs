@@ -1,6 +1,8 @@
 use crate::cli::{BaseMode, WorkflowModeArg, WorkflowPrModeArg};
 use crate::commands::issue;
-use crate::config::{Config, WorkflowDefaultPolicy, validate_profile_name};
+use crate::config::{
+    AGENT_PROMPT_WORKFLOW_SCOPE, Config, WorkflowDefaultPolicy, validate_profile_name,
+};
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::cmux::CmuxService;
@@ -197,6 +199,7 @@ fn run_single_workflow_task(
             title: &title,
             branch_name,
             setup_mode: state.document.setup_mode(),
+            additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: state
                 .document
@@ -251,6 +254,7 @@ fn run_single_workflow_group(
             title: &title,
             branch_name: Some(&branch),
             setup_mode: setup::WORKSPACE_COLOR_KIND_NEW,
+            additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: None,
             prompt_intro: workflow_single_group_prompt_intro(),

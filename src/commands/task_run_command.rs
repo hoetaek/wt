@@ -88,6 +88,7 @@ fn run_selected_task(
                 title: &title,
                 branch_name,
                 setup_mode: selected.document.setup_mode(),
+                additional_prompt_scope: None,
                 workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: selected
                     .document
@@ -148,6 +149,7 @@ fn run_selected_task(
             title: &title,
             branch_name,
             setup_mode: selected.document.setup_mode(),
+            additional_prompt_scope: None,
             workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: selected
                 .document
@@ -611,6 +613,7 @@ id = "PROJ-123"
             true,
         );
         runner.add_response("workspace:200 workspace:200", true);
+        runner.add_response("", true);
         runner.add_response("pane:1", true);
         runner.add_response("pane:1", true);
         runner.add_response("surface:999", true);
@@ -708,6 +711,7 @@ id = "PROJ-123"
             true,
         );
         runner.add_response("workspace:200 workspace:200", true);
+        runner.add_response("", true);
         runner.add_response("pane:1", true);
         runner.add_response("pane:1", true);
         runner.add_response("surface:999", true);

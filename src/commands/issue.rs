@@ -30,6 +30,7 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) title: &'a str,
     pub(crate) branch_name: Option<&'a str>,
     pub(crate) setup_mode: &'a str,
+    pub(crate) additional_prompt_scope: Option<&'a str>,
     pub(crate) workspace_color_kind: &'a str,
     pub(crate) on_start_issue_id: Option<&'a str>,
     pub(crate) prompt_intro: &'a str,
@@ -298,6 +299,7 @@ fn run_inner_many(
         .unwrap_or("Use this issue snapshot before changing code.");
     let completion_section = prepared_issue.and_then(|issue| issue.completion_section);
     let pre_snapshot_context = prepared_issue.and_then(|issue| issue.pre_snapshot_context);
+    let additional_prompt_scope = prepared_issue.and_then(|issue| issue.additional_prompt_scope);
 
     ctx.ui.print_step(&format!("{identifier}: {title}"));
 
@@ -353,6 +355,7 @@ fn run_inner_many(
             &ctx.config,
             snapshot,
             setup_mode,
+            additional_prompt_scope,
             prompt_intro,
             completion_section,
             pre_snapshot_context,
@@ -538,6 +541,9 @@ fn run_profiles(
     let pre_snapshot_context = options
         .prepared_issue
         .and_then(|issue| issue.pre_snapshot_context);
+    let additional_prompt_scope = options
+        .prepared_issue
+        .and_then(|issue| issue.additional_prompt_scope);
     let profiles = load_selected_profiles(ctx, profile)?;
 
     ctx.ui.print_step(&format!(
@@ -561,6 +567,7 @@ fn run_profiles(
                 profile_config,
                 snapshot,
                 setup_mode,
+                additional_prompt_scope,
                 prompt_intro,
                 completion_section,
                 pre_snapshot_context,
@@ -709,12 +716,16 @@ fn profile_config_with_issue_snapshot(
     config: &Config,
     snapshot: &IssueSnapshotContext<'_>,
     mode: &str,
+    additional_prompt_scope: Option<&str>,
     prompt_intro: &str,
     completion_section: Option<&str>,
     pre_snapshot_context: Option<&str>,
 ) -> Config {
     let mut config = config.clone();
     if let Some(agent) = config.agent.as_mut() {
+        let additional_prompts = additional_prompt_scope
+            .and_then(|scope| agent.prompt.remove(scope))
+            .unwrap_or_default();
         let prompts = agent.prompt.entry(mode.into()).or_default();
         if let Some(completion_section) = completion_section {
             let handoff_prompt = format!(
@@ -727,10 +738,17 @@ fn profile_config_with_issue_snapshot(
                 snapshot.path,
                 snapshot.content,
             );
-            if let Some(first_prompt) = prompts.first_mut() {
-                *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+            if additional_prompts.is_empty() {
+                if let Some(first_prompt) = prompts.first_mut() {
+                    *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+                } else {
+                    prompts.push(snapshot_prompt);
+                }
             } else {
+                let mode_prompts = std::mem::take(prompts);
                 prompts.push(snapshot_prompt);
+                prompts.extend(additional_prompts);
+                prompts.extend(mode_prompts);
             }
             prompts.insert(0, handoff_prompt);
         } else {
@@ -742,10 +760,17 @@ fn profile_config_with_issue_snapshot(
                 snapshot.content,
                 agent_report::prompt_section()
             );
-            if let Some(first_prompt) = prompts.first_mut() {
-                *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+            if additional_prompts.is_empty() {
+                if let Some(first_prompt) = prompts.first_mut() {
+                    *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+                } else {
+                    prompts.push(snapshot_prompt);
+                }
             } else {
+                let mode_prompts = std::mem::take(prompts);
                 prompts.push(snapshot_prompt);
+                prompts.extend(additional_prompts);
+                prompts.extend(mode_prompts);
             }
         }
     }
@@ -989,7 +1014,8 @@ fn create_worktree(
 mod tests {
     use super::*;
     use crate::config::{
-        AgentCli, AgentConfig, Config, IssueProviderType, IssuesConfig, ReadyMode, SubmitMode,
+        AGENT_PROMPT_WORKFLOW_SCOPE, AgentCli, AgentConfig, Config, IssueProviderType,
+        IssuesConfig, ReadyMode, SubmitMode,
     };
     use crate::context::mock::{CommandCall, MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
@@ -1087,6 +1113,7 @@ mod tests {
             &config,
             &snapshot,
             "issue",
+            None,
             "Use this issue snapshot before changing code.",
             None,
             None,
@@ -1133,6 +1160,7 @@ mod tests {
             &config,
             &snapshot,
             "new",
+            None,
             "Use this task before changing code.",
             Some("## Workflow Coordinator Handoff\n\nSend the report."),
             Some("Workflow objective:\n\nShip the broader migration."),
@@ -1153,6 +1181,107 @@ mod tests {
         assert!(
             prompts[1].find("Workflow objective").unwrap()
                 < prompts[1].find("title = \"Add schema\"").unwrap()
+        );
+    }
+
+    #[test]
+    fn workflow_prompt_scope_is_inserted_between_snapshot_and_setup_prompt() {
+        let config = Config {
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: std::collections::HashMap::from([
+                    (
+                        AGENT_PROMPT_WORKFLOW_SCOPE.into(),
+                        vec!["Workflow prompt".into(), "Workflow follow-up".into()],
+                    ),
+                    ("new".into(), vec!["New branch prompt".into()]),
+                ]),
+            }),
+            ..Config::default()
+        };
+        let snapshot = IssueSnapshotContext {
+            path_label: "Task path",
+            path: ".local/tasks/add-schema.toml",
+            content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        };
+
+        let config = profile_config_with_issue_snapshot(
+            &config,
+            &snapshot,
+            "new",
+            Some(AGENT_PROMPT_WORKFLOW_SCOPE),
+            "Use this task before changing code.",
+            Some("## Workflow Coordinator Handoff\n\nSend the report."),
+            Some("Workflow objective:\n\nShip the broader migration."),
+        );
+
+        let mut agent = config.agent.unwrap();
+        let prompts = agent.prompt.remove("new").unwrap();
+        assert_eq!(prompts.len(), 5);
+        assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
+        assert!(prompts[1].contains("Workflow objective"));
+        assert!(prompts[1].contains("Task path: `.local/tasks/add-schema.toml`"));
+        assert_eq!(prompts[2], "Workflow prompt");
+        assert_eq!(prompts[3], "Workflow follow-up");
+        assert_eq!(prompts[4], "New branch prompt");
+        assert!(!agent.prompt.contains_key(AGENT_PROMPT_WORKFLOW_SCOPE));
+    }
+
+    #[test]
+    fn workflow_prompt_scope_is_not_used_without_explicit_workflow_context() {
+        let config = Config {
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: std::collections::HashMap::from([
+                    (
+                        AGENT_PROMPT_WORKFLOW_SCOPE.into(),
+                        vec!["Workflow prompt".into()],
+                    ),
+                    ("new".into(), vec!["New branch prompt".into()]),
+                ]),
+            }),
+            ..Config::default()
+        };
+        let snapshot = IssueSnapshotContext {
+            path_label: "Task path",
+            path: ".local/tasks/add-schema.toml",
+            content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        };
+
+        let config = profile_config_with_issue_snapshot(
+            &config,
+            &snapshot,
+            "new",
+            None,
+            "Use this task before changing code.",
+            Some("## Task Run Coordinator Handoff\n\nSend the report."),
+            None,
+        );
+
+        let mut agent = config.agent.unwrap();
+        let prompts = agent.prompt.remove("new").unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[1].contains("New branch prompt"));
+        assert!(
+            !prompts
+                .iter()
+                .any(|prompt| prompt.contains("Workflow prompt"))
+        );
+        assert_eq!(
+            agent.prompt.get(AGENT_PROMPT_WORKFLOW_SCOPE).unwrap(),
+            &vec!["Workflow prompt".to_string()]
         );
     }
 
@@ -1184,6 +1313,7 @@ mod tests {
             &config,
             &snapshot,
             "new",
+            None,
             "Use this task before changing code.",
             None,
             None,
@@ -1242,6 +1372,7 @@ mod tests {
                 title: "Add schema",
                 branch_name: Some("add-schema"),
                 setup_mode: setup::WORKSPACE_COLOR_KIND_ISSUE,
+                additional_prompt_scope: None,
                 workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",
@@ -1311,6 +1442,7 @@ mod tests {
                 title: "Add schema",
                 branch_name: Some("add-schema"),
                 setup_mode: setup::WORKSPACE_COLOR_KIND_ISSUE,
+                additional_prompt_scope: None,
                 workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",

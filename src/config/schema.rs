@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 pub const RESERVED_PROFILE_NAME: &str = "default";
+pub const AGENT_PROMPT_WORKFLOW_SCOPE: &str = "workflow";
 const PROMPT_APPEND_PREFIX: &str = "\u{0}append:";
 pub(super) const PROMPT_COMMON_SCOPE: &str = "common";
 pub(super) const PROMPT_RUNTIME_MODES: [&str; 3] = ["issue", "new", "pr"];

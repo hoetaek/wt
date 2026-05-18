@@ -262,6 +262,20 @@ tabs = ["lazygit", "nvim"]
 # colors = { task = "blue", issue = "blue", new = "green", pr = "magenta" }
 ```
 
+Agent prompt scopes stay under `[agent.prompt]`. `common` is prepended to
+`issue`, `new`, and `pr` prompts. `workflow` is a separate workflow-started
+task scope: `wt workflow run` sends it after the built-in workflow handoff and
+TaskDocument snapshot, before the existing `issue` or `new` setup-mode prompts.
+It does not apply to direct `wt task run`, `wt issue`, `wt new`, or `wt pr`.
+
+```toml
+[agent.prompt]
+workflow = ["Wait for external PR review before reporting workflow completion."]
+
+[agent.prompt.append]
+workflow = ["Mention the PR state and any remaining review risk in the report."]
+```
+
 Use named profiles only when prompt files, scaffold files, or reusable runtime
 bundles are needed:
 

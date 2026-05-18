@@ -211,6 +211,16 @@ profile convention file merge를 모두 끝낸 뒤 최종 effective config에서
 `issue`, `new`, `pr` prompt 앞에 펼친다. `common`을 각 layer마다 mode별 prompt로
 복사하지 않는다.
 
+`workflow`도 Workflow `mode = "single" | "batch" | "stack"`나 setup mode가 아니라
+`[agent.prompt]` / `[agent.prompt.append]` 안의 workflow-started task 전용 scope다.
+`wt workflow run`으로 시작한 task에만 적용하고, direct `wt task run`, `wt issue`,
+`wt new`, `wt pr`에는 적용하지 않는다. Workflow task의 setup mode는 계속
+TaskDocument origin에 따라 `issue` 또는 `new`를 사용하므로 기존 setup-mode prompt도
+함께 적용된다. `common`은 `workflow`로 펼치지 않는다. Workflow task는 이미 `issue` 또는
+`new` prompt를 받기 때문에 `common`을 `workflow`에도 펼치면 같은 공통 지시가 중복된다.
+Profile convention file은 `.local/profiles/<name>/prompts/workflow.md`와
+`.local/profiles/<name>/prompts/workflow.append.md`를 같은 scope로 읽는다.
+
 ### State Is Explicit
 
 저장되는 상태는 사용자가 이해할 수 있는 상태여야 한다.
@@ -456,6 +466,8 @@ Workflow file, TaskRun, TaskDocument에 저장하지 않는다. 좌표가 unavai
 agent는 같은 `Agent Completion Report`를 task session에 남기고 기다린다. Handoff section과
 그 안의 `cmux send`/enter 명령은 긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서
 terminal prompt가 축약되어도 coordinator 좌표가 앞쪽에 남게 한다.
+사용자 정의 `[agent.prompt.workflow]` prompt가 있으면 이 built-in handoff와 TaskDocument
+snapshot 뒤, 기존 `issue`/`new` setup-mode prompt 앞에 보낸다.
 
 보고 형식은 workflow mode와 무관하게
 `Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>`

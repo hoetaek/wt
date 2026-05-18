@@ -1259,6 +1259,7 @@ mod tests {
         runner.add_response("pane:0", true);
         runner.add_response("surface:0", true);
         runner.add_response("ready ›", true);
+        runner.add_response("", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
 
