@@ -8,6 +8,14 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added an explicit `wt profile list` subcommand that reads the
+  `.local/profiles/<name>/profile.toml` inventory through the config/profile
+  loader, lists valid profiles in deterministic name order, and surfaces
+  invalid profile records as text warnings or JSON `invalid_profiles` entries
+  instead of failing the whole list. Bare `wt profile` remains as the
+  omission default for `wt profile list`, and the `default` profile name stays
+  reserved.
+
 ## 0.28.0 - 2026-05-18
 
 - Added `wt ui [--port <PORT>]`, a read-only loopback web UI that serves

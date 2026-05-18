@@ -12,43 +12,65 @@ use std::path::PathBuf;
 pub fn run(ctx: &Ctx, command: Option<&ProfileCommand>) -> Result<()> {
     match command {
         Some(ProfileCommand::Create { name }) => create(ctx, name),
-        None => list(ctx),
+        Some(ProfileCommand::List) | None => list(ctx),
     }
 }
 
 fn list(ctx: &Ctx) -> Result<()> {
-    let profiles = Config::load_profiles(&ctx.repo_root, &ctx.base_config)?;
-    if profiles.is_empty() {
-        if ctx.is_json() {
-            write_json(&Vec::<ProfileSummary>::new())?;
-            return Ok(());
-        }
+    let inventory = Config::load_profile_inventory(&ctx.repo_root, &ctx.base_config)?;
+
+    if ctx.is_json() {
+        let summaries = inventory
+            .profiles
+            .iter()
+            .map(|record| ProfileSummary::from_config(&record.name, &record.config))
+            .collect::<Vec<_>>();
+        let invalid = inventory
+            .invalid_profiles
+            .iter()
+            .map(|record| InvalidProfileSummary {
+                name: record.name.clone(),
+                path: record.path.display().to_string(),
+                error: record.error.clone(),
+            })
+            .collect::<Vec<_>>();
+        write_json(&ProfileListJson {
+            profiles: summaries,
+            invalid_profiles: invalid,
+        })?;
+        return Ok(());
+    }
+
+    if inventory.profiles.is_empty() && inventory.invalid_profiles.is_empty() {
         ctx.ui
             .print_step("No profiles found. Create one with: wt profile create <name>");
         return Ok(());
     }
 
-    if ctx.is_json() {
-        let summaries = profiles
-            .iter()
-            .map(|(name, config)| ProfileSummary::from_config(name, config))
-            .collect::<Vec<_>>();
-        write_json(&summaries)?;
-        return Ok(());
-    }
-
-    for (name, config) in &profiles {
-        let copy_count = config.worktree.copy.len() + config.worktree.copy_as.len();
-        let link_count = config.worktree.link.len();
-        let agent = config
+    for record in &inventory.profiles {
+        let copy_count = record.config.worktree.copy.len() + record.config.worktree.copy_as.len();
+        let link_count = record.config.worktree.link.len();
+        let agent = record
+            .config
             .agent
             .as_ref()
             .map(|agent| agent_cli_name(&agent.cli))
             .unwrap_or("none");
+        let name = &record.name;
         ctx.ui.print_step(&format!(
             "  {name}  (copy: {copy_count}, link: {link_count}, agent: {agent})"
         ));
     }
+
+    for invalid in &inventory.invalid_profiles {
+        ctx.ui.print_warning(&format!(
+            "Invalid profile '{}' at {}: {}",
+            invalid.name,
+            invalid.path.display(),
+            invalid.error
+        ));
+    }
+
     Ok(())
 }
 
@@ -179,6 +201,19 @@ pub(crate) fn create_profile(
         config_path: toml_path,
         dir: profile_dir,
     })
+}
+
+#[derive(Serialize)]
+struct ProfileListJson {
+    profiles: Vec<ProfileSummary>,
+    invalid_profiles: Vec<InvalidProfileSummary>,
+}
+
+#[derive(Serialize)]
+struct InvalidProfileSummary {
+    name: String,
+    path: String,
+    error: String,
 }
 
 #[derive(Serialize)]
@@ -579,6 +614,106 @@ cli = "codex"
 
         let output = steps.lock().unwrap().join("\n");
         assert!(output.contains("codex  (copy: 0, link: 0, agent: codex)"));
+    }
+
+    #[test]
+    fn list_subcommand_dispatches_to_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[agent]
+cli = "codex"
+"#,
+        )
+        .unwrap();
+
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, Some(&ProfileCommand::List)).unwrap();
+    }
+
+    #[test]
+    fn list_surfaces_invalid_profiles_as_warnings() {
+        struct SharedUi {
+            steps: Arc<Mutex<Vec<String>>>,
+            warnings: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl UserInterface for SharedUi {
+            fn select(&self, _prompt: &str, _items: &[String]) -> Result<usize> {
+                unreachable!()
+            }
+
+            fn multi_select(&self, _prompt: &str, _items: &[String]) -> Result<Vec<usize>> {
+                unreachable!()
+            }
+
+            fn confirm(&self, _prompt: &str, _default: bool) -> Result<bool> {
+                unreachable!()
+            }
+
+            fn input(&self, _prompt: &str, _default: Option<&str>) -> Result<String> {
+                unreachable!()
+            }
+
+            fn print_step(&self, msg: &str) {
+                self.steps.lock().unwrap().push(msg.into());
+            }
+
+            fn print_dim(&self, _msg: &str) {}
+
+            fn print_warning(&self, msg: &str) {
+                self.warnings.lock().unwrap().push(msg.into());
+            }
+
+            fn print_error(&self, _msg: &str) {}
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let valid_dir = dir.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&valid_dir).unwrap();
+        std::fs::write(valid_dir.join("profile.toml"), "[agent]\ncli = \"codex\"\n").unwrap();
+
+        let invalid_dir = dir.path().join(".local/profiles/broken");
+        std::fs::create_dir_all(&invalid_dir).unwrap();
+        std::fs::write(
+            invalid_dir.join("profile.toml"),
+            "this is not valid toml = [\n",
+        )
+        .unwrap();
+
+        let steps = Arc::new(Mutex::new(Vec::new()));
+        let warnings = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(SharedUi {
+                steps: Arc::clone(&steps),
+                warnings: Arc::clone(&warnings),
+            }),
+        );
+
+        run(&ctx, Some(&ProfileCommand::List)).unwrap();
+
+        let step_output = steps.lock().unwrap().join("\n");
+        assert!(step_output.contains("codex  (copy: 0, link: 0, agent: codex)"));
+
+        let warning_output = warnings.lock().unwrap().join("\n");
+        assert!(
+            warning_output.contains("Invalid profile 'broken'"),
+            "expected invalid profile warning, got: {warning_output}"
+        );
     }
 
     #[test]
