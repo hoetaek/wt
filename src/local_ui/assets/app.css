@@ -181,25 +181,43 @@ h1 {
 
 .top-actions {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  gap: 0;
   align-self: start;
 }
 
 .top-actions button {
-  min-width: 96px;
-  width: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 14px;
   border-color: rgba(247, 250, 244, 0.26);
   background: rgba(247, 250, 244, 0.08);
   color: #f7faf4;
 }
 
-#refresh {
-  min-width: 118px;
+.language-switch {
+  min-width: 108px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+}
+
+.language-switch span {
+  min-height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #c7d7cf;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.language-switch[data-current="en"] [data-lang="en"],
+.language-switch[data-current="ko"] [data-lang="ko"] {
+  background: #f7faf4;
+  color: var(--hero);
+  box-shadow: var(--shadow-soft);
 }
 
 .tabs {
@@ -258,21 +276,24 @@ h1 {
 }
 
 main {
-  width: min(1500px, 100%);
+  width: min(1320px, 100%);
   display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: 1fr;
+  gap: 18px;
   align-items: start;
   margin: 0 auto;
   padding: 24px 32px 44px;
 }
 
 .metrics {
-  position: sticky;
-  top: 74px;
+  position: static;
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.metrics[data-view]:not([data-view="overview"]) {
+  display: none;
 }
 
 .metric,
@@ -285,8 +306,8 @@ main {
 
 .metric {
   position: relative;
-  min-height: 96px;
-  padding: 14px;
+  min-height: 74px;
+  padding: 12px 13px;
   overflow: hidden;
 }
 
@@ -319,14 +340,14 @@ main {
 
 .metric strong {
   display: block;
-  margin-top: 12px;
-  font-size: clamp(30px, 4vw, 42px);
+  margin-top: 7px;
+  font-size: 26px;
   font-weight: 620;
   line-height: 0.9;
 }
 
 .metric-state {
-  margin-top: 10px;
+  margin-top: 7px;
 }
 
 .metric.invalid .metric-state {
@@ -586,20 +607,23 @@ main {
 
 .read-more {
   min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfa;
+  overflow: hidden;
 }
 
 .read-more summary {
   display: grid;
   gap: 8px;
   padding: 10px 11px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fbfcfa;
+  border: 0;
+  background: transparent;
   cursor: pointer;
   list-style: none;
 }
 
-.read-more summary:hover {
+.read-more:hover {
   border-color: var(--line-strong);
   background: #f7fbf8;
 }
@@ -646,7 +670,7 @@ main {
   display: inline;
 }
 
-.read-more[open] summary {
+.read-more[open] {
   border-color: #b8d8cb;
   background: #f3faf6;
 }
@@ -661,24 +685,70 @@ main {
 }
 
 .full-text {
-  margin-top: 10px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fbfcfa;
+  margin: 0;
+  padding: 0 11px 12px;
+  border: 0;
+  background: transparent;
   color: var(--ink-soft);
-  max-width: 72ch;
+  max-width: none;
   max-height: min(64vh, 760px);
   overflow: auto;
 }
 
-.full-text p {
-  margin: 0;
-  white-space: pre-wrap;
+.markdown-body {
+  display: grid;
+  gap: 8px;
+  max-width: 78ch;
 }
 
-.full-text p + p {
-  margin-top: 10px;
+.markdown-body p {
+  margin: 0;
+  white-space: normal;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin: 8px 0 0;
+  color: var(--ink);
+  font-weight: 760;
+  line-height: 1.28;
+}
+
+.markdown-body h1 {
+  font-size: 16px;
+}
+
+.markdown-body h2 {
+  font-size: 15px;
+}
+
+.markdown-body h3 {
+  font-size: 14px;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.markdown-body code {
+  padding: 1px 4px;
+  border-radius: 5px;
+  background: #eef3ee;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.markdown-body pre {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: #eef3ee;
+  overflow: auto;
 }
 
 .full-text pre {
@@ -687,17 +757,6 @@ main {
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
-}
-
-.collapse-inline {
-  min-height: 34px;
-  margin-top: 8px;
-  padding: 0 12px;
-  border-color: #b8d8cb;
-  background: #f3faf6;
-  color: var(--green);
-  font-size: 12px;
-  font-weight: 750;
 }
 
 .invalid-card {
@@ -765,11 +824,11 @@ main {
   }
 
   .top-actions {
-    width: 100%;
+    width: auto;
   }
 
   .top-actions button {
-    min-height: 42px;
+    min-height: 38px;
   }
 
   main,
@@ -791,10 +850,6 @@ main {
     justify-content: center;
     padding: 0 8px;
     font-size: 12px;
-  }
-
-  .metrics[data-view]:not([data-view="overview"]) {
-    display: none;
   }
 
   .metrics {

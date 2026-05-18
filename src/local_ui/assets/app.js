@@ -10,15 +10,14 @@ const tabs = Array.from(document.querySelectorAll(".tabs button"));
 const content = document.querySelector("#content");
 const metrics = document.querySelector("#metrics");
 const repoLabel = document.querySelector("#repo-label");
-const refreshButton = document.querySelector("#refresh");
 const languageButton = document.querySelector("#language-toggle");
 const statusRegion = document.querySelector("#status");
 
 const STRINGS = {
   en: {
     eyebrow: "Read-only local inventory",
-    refresh: "Refresh",
-    languageToggle: "한국어",
+    switchToKorean: "Switch language to Korean",
+    switchToEnglish: "Switch language to English",
     readFull: "Read full",
     collapse: "Collapse",
     body: "Body",
@@ -48,6 +47,11 @@ const STRINGS = {
     runnableWorkflows: "Runnable workflows",
     runningTaskRuns: "Running TaskRuns",
     localState: "Local state",
+    currentWork: "Current work",
+    inventory: "Inventory",
+    runnableWorkflowCount: "runnable workflows",
+    runningRunCount: "running TaskRuns",
+    failedRunCount: "failed TaskRuns",
     invalidRecords: "Invalid records",
     ideas: "Ideas",
     invalidIdeas: "Invalid ideas",
@@ -89,8 +93,8 @@ const STRINGS = {
   },
   ko: {
     eyebrow: "읽기 전용 로컬 인벤토리",
-    refresh: "새로고침",
-    languageToggle: "English",
+    switchToKorean: "한국어로 전환",
+    switchToEnglish: "영어로 전환",
     readFull: "전문 보기",
     collapse: "접기",
     body: "본문",
@@ -120,6 +124,11 @@ const STRINGS = {
     runnableWorkflows: "실행 가능한 Workflow",
     runningTaskRuns: "실행 중인 TaskRun",
     localState: "로컬 상태",
+    currentWork: "현재 작업",
+    inventory: "인벤토리",
+    runnableWorkflowCount: "실행 가능 Workflow",
+    runningRunCount: "실행 중 TaskRun",
+    failedRunCount: "실패 TaskRun",
     invalidRecords: "오류 기록",
     ideas: "아이디어 (Ideas)",
     invalidIdeas: "오류 아이디어",
@@ -166,33 +175,11 @@ tabs.forEach((button) => {
   button.addEventListener("keydown", handleTabKeydown);
 });
 
-refreshButton.addEventListener("click", loadSnapshot);
 languageButton.addEventListener("click", () => {
   state.locale = state.locale === "ko" ? "en" : "ko";
   localStorage.setItem(LOCALE_KEY, state.locale);
   applyLocale();
   render();
-});
-
-content.addEventListener("click", (event) => {
-  const target = event.target;
-  if (!(target instanceof Element)) {
-    return;
-  }
-  const button = target.closest("[data-collapse]");
-  if (!button) {
-    return;
-  }
-  const details = button.closest("details");
-  if (!details) {
-    return;
-  }
-  details.open = false;
-  const summary = details.querySelector("summary");
-  if (summary) {
-    summary.focus();
-    summary.scrollIntoView({ block: "nearest" });
-  }
 });
 
 applyLocale();
@@ -220,9 +207,12 @@ function tr(key, values) {
 function applyLocale() {
   document.documentElement.lang = state.locale;
   document.querySelector(".eyebrow").textContent = t("eyebrow");
-  refreshButton.textContent = t("refresh");
-  languageButton.textContent = t("languageToggle");
+  languageButton.dataset.current = state.locale;
   languageButton.setAttribute("aria-pressed", state.locale === "ko" ? "true" : "false");
+  languageButton.setAttribute(
+    "aria-label",
+    state.locale === "ko" ? t("switchToEnglish") : t("switchToKorean")
+  );
   tabs.forEach((tab) => {
     tab.textContent = t(tabLabelKey(tab.dataset.view));
   });
@@ -280,7 +270,6 @@ function activateTab(button, options = {}) {
 async function loadSnapshot() {
   content.innerHTML = `<div class="loading">${escapeHtml(t("loading"))}</div>`;
   setStatus(t("loadingSnapshot"));
-  refreshButton.disabled = true;
   try {
     const response = await fetch("/api/snapshot", { cache: "no-store" });
     if (!response.ok) {
@@ -291,8 +280,6 @@ async function loadSnapshot() {
   } catch (error) {
     content.innerHTML = `<div class="invalid-card"><h3>${escapeHtml(t("snapshotUnavailable"))}</h3><p class="error">${escapeHtml(error.message)}</p></div>`;
     setStatus(t("snapshotUnavailable"));
-  } finally {
-    refreshButton.disabled = false;
   }
 }
 
@@ -383,12 +370,16 @@ function overviewCards(snapshot) {
     snapshot.profiles.invalid,
     snapshot.retrospecs.invalid,
   ].reduce((total, rows) => total + rows.length, 0);
+  const runnableCount = snapshot.workflows.items.filter((row) => row.presentation_group === "runnable").length;
+  const runningCount = snapshot.task_runs.items.filter((row) => row.status === "running").length;
+  const failedCount = snapshot.task_runs.items.filter((row) => row.status === "failed").length;
   return [
-    card(snapshot.repo.name, [
-      pill(`${snapshot.workflows.items.length} workflows`, "blue"),
-      pill(`${snapshot.task_runs.items.length} runs`, "green"),
+    card(t("currentWork"), [
+      pill(`${runnableCount} ${t("runnableWorkflowCount")}`, runnableCount ? "green" : ""),
+      pill(`${runningCount} ${t("runningRunCount")}`, runningCount ? "green" : ""),
+      pill(`${failedCount} ${t("failedRunCount")}`, failedCount ? "red" : ""),
       invalidCount ? pill(`${invalidCount} invalid`, "red") : pill(t("valid"), "green"),
-    ], sourcePaths, snapshot.repo.root, "green"),
+    ], [snapshot.sources.workflows, snapshot.sources.task_runs], snapshot.repo.root, runningCount || runnableCount ? "green" : "blue"),
     card(t("config"), [
       pill(snapshot.config.source, "blue"),
       pill(`PR ${snapshot.config.workflow.pull_request}`, "green"),
@@ -397,7 +388,7 @@ function overviewCards(snapshot) {
     ], snapshot.config.paths, bodyPreview(snapshot.config.effective_text), "blue", [
       detail(t("effectiveConfig"), snapshot.config.effective_text, "source"),
     ]),
-    card(t("taskRuns"), counts.map((count) => pill(count)), [snapshot.sources.task_runs], t("noteTaskRuns"), "violet"),
+    card(t("inventory"), counts.map((count) => pill(count)), sourcePaths, t("noteOverview"), "violet"),
   ];
 }
 
@@ -676,23 +667,108 @@ function readableText(fullText, fallbackPreview, contextLabel, kind = "prose", l
     return `<div class="summary-block">${labelHtml}<p class="summary">${escapeHtml(text)}</p></div>`;
   }
   const context = contextLabel ? `: ${contextLabel}` : "";
-  return `<details class="read-more"><summary>${labelHtml}<span class="summary-preview">${escapeHtml(preview)}</span><span class="summary-action"><span class="when-closed" lang="${state.locale}">${escapeHtml(t("readFull"))}<span class="sr-only">${escapeHtml(context)}</span></span><span class="when-open" lang="${state.locale}">${escapeHtml(t("collapse"))}<span class="sr-only">${escapeHtml(context)}</span></span></span></summary><div class="full-text">${formatFullText(text, kind)}</div><button type="button" class="collapse-inline" data-collapse lang="${state.locale}">${escapeHtml(t("collapse"))}</button></details>`;
+  return `<details class="read-more"><summary>${labelHtml}<span class="summary-preview">${escapeHtml(preview)}</span><span class="summary-action"><span class="when-closed" lang="${state.locale}">${escapeHtml(t("readFull"))}<span class="sr-only">${escapeHtml(context)}</span></span><span class="when-open" lang="${state.locale}">${escapeHtml(t("collapse"))}<span class="sr-only">${escapeHtml(context)}</span></span></span></summary><div class="full-text">${formatFullText(text, kind)}</div></details>`;
 }
 
 function formatFullText(text, kind) {
   if (kind === "source") {
     return `<pre>${escapeHtml(text)}</pre>`;
   }
-  return formatBodyText(text);
+  return `<div class="markdown-body">${formatBodyText(text)}</div>`;
 }
 
 function formatBodyText(text) {
-  const blocks = String(text)
+  const lines = String(text)
     .trim()
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter(Boolean);
-  return blocks.map((block) => `<p>${escapeHtml(block)}</p>`).join("");
+    .split(/\r?\n/);
+  let html = "";
+  let paragraph = [];
+  let listItems = [];
+  let orderedList = false;
+  let codeLines = [];
+  let inCode = false;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) {
+      return;
+    }
+    html += `<p>${formatInlineMarkdown(paragraph.join(" "))}</p>`;
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!listItems.length) {
+      return;
+    }
+    const tag = orderedList ? "ol" : "ul";
+    html += `<${tag}>${listItems.map((item) => `<li>${formatInlineMarkdown(item)}</li>`).join("")}</${tag}>`;
+    listItems = [];
+  };
+  const flushCode = () => {
+    html += `<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`;
+    codeLines = [];
+  };
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      if (inCode) {
+        flushCode();
+        inCode = false;
+      } else {
+        flushParagraph();
+        flushList();
+        inCode = true;
+      }
+      return;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      return;
+    }
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      return;
+    }
+
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = Math.min(3, heading[1].length);
+      html += `<h${level}>${formatInlineMarkdown(heading[2].trim())}</h${level}>`;
+      return;
+    }
+
+    const unordered = trimmed.match(/^[-*]\s+(.+)$/);
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (unordered || ordered) {
+      flushParagraph();
+      const nextOrdered = Boolean(ordered);
+      if (listItems.length && orderedList !== nextOrdered) {
+        flushList();
+      }
+      orderedList = nextOrdered;
+      listItems.push((ordered || unordered)[1].trim());
+      return;
+    }
+
+    flushList();
+    paragraph.push(trimmed);
+  });
+
+  if (inCode) {
+    flushCode();
+  }
+  flushParagraph();
+  flushList();
+  return html;
+}
+
+function formatInlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
 }
 
 function compactText(value, maxChars) {
