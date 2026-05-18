@@ -196,11 +196,14 @@ h1 {
 
 .language-switch {
   min-width: 108px;
-  display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 2px;
   padding: 3px;
   border-radius: 999px;
+}
+
+.top-actions .language-switch {
+  display: grid;
 }
 
 .language-switch span {
@@ -607,20 +610,13 @@ main {
 
 .read-more {
   min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 10px 11px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfa;
   overflow: hidden;
-}
-
-.read-more summary {
-  display: grid;
-  gap: 8px;
-  padding: 10px 11px;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  list-style: none;
 }
 
 .read-more:hover {
@@ -628,15 +624,22 @@ main {
   background: #f7fbf8;
 }
 
-.read-more summary::-webkit-details-marker {
-  display: none;
-}
-
 .summary-preview {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
+  cursor: pointer;
+}
+
+.summary-text {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.summary-full {
+  display: block;
 }
 
 .summary-action {
@@ -650,6 +653,8 @@ main {
   border-radius: 999px;
   background: var(--panel);
   color: var(--green);
+  cursor: pointer;
+  font-family: inherit;
   font-size: 12px;
   font-weight: 750;
   white-space: nowrap;
@@ -662,31 +667,31 @@ main {
 }
 
 .when-open,
-.read-more[open] .when-closed {
+.read-more.is-open .when-closed {
   display: none;
 }
 
-.read-more[open] .when-open {
+.read-more.is-open .when-open {
   display: inline;
 }
 
-.read-more[open] {
+.read-more.is-open {
   border-color: #b8d8cb;
   background: #f3faf6;
 }
 
-.read-more[open] .summary-preview {
-  -webkit-line-clamp: 2;
-  color: var(--muted);
+.read-more.is-open .summary-preview,
+.read-more:not(.is-open) .summary-full {
+  display: none;
 }
 
-.read-more[open] .summary-action::before {
+.read-more.is-open .summary-action::before {
   content: "-";
 }
 
 .full-text {
   margin: 0;
-  padding: 0 11px 12px;
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--ink-soft);
@@ -880,7 +885,7 @@ main {
     gap: 7px;
   }
 
-  .read-more summary {
+  .read-more {
     padding: 10px;
   }
 }

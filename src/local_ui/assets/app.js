@@ -182,6 +182,8 @@ languageButton.addEventListener("click", () => {
   render();
 });
 
+content.addEventListener("click", handleReadToggle);
+
 applyLocale();
 loadSnapshot();
 
@@ -265,6 +267,26 @@ function activateTab(button, options = {}) {
   if (options.scroll && window.matchMedia("(max-width: 680px)").matches) {
     content.scrollIntoView({ block: "start" });
   }
+}
+
+function handleReadToggle(event) {
+  const explicitButton = event.target.closest("[data-read-toggle]");
+  const preview = event.target.closest(".summary-preview");
+  const block = (explicitButton || preview)?.closest(".read-more");
+  if (!block || !content.contains(block)) {
+    return;
+  }
+  const button = block.querySelector("[data-read-toggle]");
+  const previewText = block.querySelector(".summary-preview");
+  const fullText = block.querySelector(".summary-full");
+  if (!button || !previewText || !fullText) {
+    return;
+  }
+  const isOpen = !block.classList.contains("is-open");
+  block.classList.toggle("is-open", isOpen);
+  button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  previewText.hidden = isOpen;
+  fullText.hidden = !isOpen;
 }
 
 async function loadSnapshot() {
@@ -667,7 +689,7 @@ function readableText(fullText, fallbackPreview, contextLabel, kind = "prose", l
     return `<div class="summary-block">${labelHtml}<p class="summary">${escapeHtml(text)}</p></div>`;
   }
   const context = contextLabel ? `: ${contextLabel}` : "";
-  return `<details class="read-more"><summary>${labelHtml}<span class="summary-preview">${escapeHtml(preview)}</span><span class="summary-action"><span class="when-closed" lang="${state.locale}">${escapeHtml(t("readFull"))}<span class="sr-only">${escapeHtml(context)}</span></span><span class="when-open" lang="${state.locale}">${escapeHtml(t("collapse"))}<span class="sr-only">${escapeHtml(context)}</span></span></span></summary><div class="full-text">${formatFullText(text, kind)}</div></details>`;
+  return `<div class="read-more">${labelHtml}<div class="summary-text"><div class="summary-preview">${escapeHtml(preview)}</div><div class="summary-full full-text" hidden>${formatFullText(text, kind)}</div></div><button class="summary-action" type="button" data-read-toggle aria-expanded="false"><span class="when-closed" lang="${state.locale}">${escapeHtml(t("readFull"))}<span class="sr-only">${escapeHtml(context)}</span></span><span class="when-open" lang="${state.locale}">${escapeHtml(t("collapse"))}<span class="sr-only">${escapeHtml(context)}</span></span></button></div>`;
 }
 
 function formatFullText(text, kind) {
