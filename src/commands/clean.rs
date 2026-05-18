@@ -373,9 +373,31 @@ fn validate_task_run_targets_without_worktrees(ctx: &Ctx, targets: &[String]) ->
 }
 
 fn task_run_record_for_id(ctx: &Ctx, target: &str) -> Result<Option<TaskRunRecord>> {
-    Ok(task_run::list(ctx)?
-        .into_iter()
-        .find(|record| record.id == target))
+    if !is_direct_task_run_id(target) {
+        return Ok(None);
+    }
+
+    let path = ctx
+        .repo_root
+        .join(".local/task-runs")
+        .join(format!("{target}.toml"));
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let run = task_run::read(&path)?;
+    Ok(Some(TaskRunRecord {
+        id: target.to_string(),
+        path,
+        run,
+    }))
+}
+
+fn is_direct_task_run_id(target: &str) -> bool {
+    !target.trim().is_empty()
+        && !target.ends_with(".toml")
+        && !target.contains('/')
+        && !target.contains('\\')
 }
 
 fn reject_non_direct_task_run(ctx: &Ctx, record: &TaskRunRecord) -> Result<()> {
@@ -574,6 +596,63 @@ mod tests {
         assert_eq!(
             task_run::read(&run.path).unwrap().status,
             task_run::STATUS_DONE
+        );
+    }
+
+    #[test]
+    fn clean_branch_target_ignores_unrelated_malformed_task_run_during_resolution() {
+        let repo = tempfile::tempdir().unwrap();
+        let worktree = repo.path().with_file_name("test-repo-add-schema");
+        let task_runs_dir = repo.path().join(".local/task-runs");
+        std::fs::create_dir_all(&task_runs_dir).unwrap();
+        std::fs::write(
+            task_runs_dir.join("unrelated-broken.toml"),
+            r#"task = "unrelated"
+branch = "alice/unrelated"
+status = "started"
+created_at = "2026-05-18T00:00:00Z"
+updated_at = "2026-05-18T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\nbranch refs/heads/alice/add-schema\n\n",
+                repo.path().display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("", true); // worktree remove
+        runner.add_response("", true); // branch delete
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run_with_targets(&ctx, &["alice/add-schema".into()]).unwrap();
+
+        let steps = ui.steps.lock().unwrap();
+        assert!(steps.contains(&"  Branch deleted".into()));
+        drop(steps);
+        let warnings = ui.warnings.lock().unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("TaskRun lookup:"))
         );
     }
 
