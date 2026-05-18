@@ -325,7 +325,7 @@ pub(crate) fn running_cleanup_matches(ctx: &Ctx, branch: &str) -> Result<Vec<Tas
         if record.run.branch != branch || !record.run.status.is_cleanup_completable() {
             continue;
         }
-        if matches!(resolve_context(ctx, &record)?, TaskRunContext::Direct) {
+        if matches!(resolve_context(ctx, &record), Ok(TaskRunContext::Direct)) {
             records.push(record);
         }
     }
@@ -772,6 +772,33 @@ updated_at = "2026-05-16T00:00:00Z"
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
         create(&ctx, "add-schema", "add-schema", None, STATUS_DONE).unwrap();
         assert!(!task_is_selectable(&ctx, "add-schema").unwrap());
+    }
+
+    #[test]
+    fn running_cleanup_matches_skips_unreadable_workflow_contexts() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        std::fs::create_dir_all(dir.path().join(".local/workflows")).unwrap();
+
+        let direct = create(&ctx, "direct-task", "feature", None, STATUS_RUNNING).unwrap();
+        create(
+            &ctx,
+            "workflow-task",
+            "feature",
+            Some("broken-workflow"),
+            STATUS_RUNNING,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(".local/workflows/broken-workflow.toml"),
+            "mode = [",
+        )
+        .unwrap();
+
+        let records = running_cleanup_matches(&ctx, "feature").unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, direct.id);
     }
 
     #[test]

@@ -528,10 +528,13 @@ fn print_workflow_next_step(ctx: &Ctx, workflow: &WorkflowMatch) {
 
 fn workflow_complete_command(workflow: &WorkflowMatch) -> String {
     let mut command = format!(
-        "wt workflow complete {} {}",
-        shell_arg(&workflow.path.to_string_lossy()),
-        shell_arg(&workflow.task)
+        "wt workflow complete {}",
+        shell_arg(&workflow.path.to_string_lossy())
     );
+    if workflow.mode != "single" {
+        command.push(' ');
+        command.push_str(&shell_arg(&workflow.task));
+    }
     if workflow.mode == "stack" {
         command.push_str(" --run-next");
     }
@@ -680,6 +683,7 @@ mod tests {
 
         assert!(dims.contains("Complete: when accepted"));
         assert!(dims.contains("wt workflow complete"));
+        assert!(!dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("review the worktree, report, and checks"));
         assert!(dims.contains("land when policy and safety checks allow"));
         assert!(dims.contains("wt done feature"));
@@ -692,6 +696,7 @@ mod tests {
 
         assert!(dims.contains("Complete: when accepted"));
         assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("review the worktree, report, and checks"));
         assert!(dims.contains("land when policy and safety checks allow"));
         assert!(dims.contains("wt done feature"));
@@ -704,6 +709,7 @@ mod tests {
 
         assert!(dims.contains("Complete: when accepted"));
         assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("--run-next"));
         assert!(dims.contains("wt done feature"));
     }
