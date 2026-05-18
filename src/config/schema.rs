@@ -22,6 +22,8 @@ pub const WORKSPACE_DEFAULT_COLORS: [(&str, &str); 4] = [
 const DEFAULT_SITE_NAME_TEMPLATE: &str = "{{repo}}-{{branch_slug}}";
 const DEFAULT_SITE_ROOT: &str = ".";
 const DEFAULT_TRAEFIK_SITE_TARGET_TEMPLATE: &str = "http://127.0.0.1:{{vite_port}}";
+const DEFAULT_CHROME_DEVTOOLS_USER_DATA_DIR: &str = "{{worktree_path}}/.chrome-devtools-user-data";
+const DEFAULT_CHROME_DEVTOOLS_URL: &str = "{{site_url}}";
 
 pub fn default_workspace_color(kind: &str) -> Option<&'static str> {
     WORKSPACE_DEFAULT_COLORS
@@ -331,6 +333,7 @@ pub struct WorkspaceConfig {
     pub open_url: Option<String>,
     pub open_browser: Option<bool>,
     pub browser: Option<String>,
+    pub chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
 }
 
 impl WorkspaceConfig {
@@ -368,6 +371,34 @@ impl WorkspaceConfig {
         custom_colors.sort_by(|a, b| a.0.cmp(b.0));
         colors.extend(custom_colors);
         colors
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspaceChromeDevtoolsConfig {
+    pub enabled: bool,
+    pub port: Option<u16>,
+    pub user_data_dir: Option<String>,
+    pub url: Option<String>,
+}
+
+impl WorkspaceChromeDevtoolsConfig {
+    pub fn effective_user_data_dir(&self) -> &str {
+        self.user_data_dir
+            .as_deref()
+            .unwrap_or(DEFAULT_CHROME_DEVTOOLS_USER_DATA_DIR)
+    }
+
+    pub fn effective_url<'a>(&'a self, workspace: &'a WorkspaceConfig) -> Cow<'a, str> {
+        if let Some(url) = self.url.as_deref() {
+            return Cow::Borrowed(url);
+        }
+
+        match workspace.open_url.as_deref().filter(|url| !url.is_empty()) {
+            Some(url) => Cow::Borrowed(url),
+            None => Cow::Borrowed(DEFAULT_CHROME_DEVTOOLS_URL),
+        }
     }
 }
 

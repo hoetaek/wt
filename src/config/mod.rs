@@ -12,8 +12,8 @@ pub use schema::{
     TestCommand, TestConfig, WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_NEW,
     WORKSPACE_COLOR_KIND_PR, WORKSPACE_COLOR_KIND_TASK, WORKSPACE_DEFAULT_COLORS, WorkflowConfig,
     WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
-    WorkspaceConfig, WorktreeConfig, WorktreeNamingConfig, default_workspace_color,
-    validate_profile_name,
+    WorkspaceChromeDevtoolsConfig, WorkspaceConfig, WorktreeConfig, WorktreeNamingConfig,
+    default_workspace_color, validate_profile_name,
 };
 
 #[cfg(test)]

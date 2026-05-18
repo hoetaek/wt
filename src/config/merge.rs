@@ -215,6 +215,9 @@ fn merge_workspace_config(base: &mut WorkspaceConfig, profile: WorkspaceConfig) 
     if profile.browser.is_some() {
         base.browser = profile.browser;
     }
+    if profile.chrome_devtools.is_some() {
+        base.chrome_devtools = profile.chrome_devtools;
+    }
 }
 
 fn merge_editor_config(base: &mut EditorConfig, profile: EditorConfig) {

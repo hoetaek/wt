@@ -760,6 +760,11 @@ fn append_active_common_config(
     s.push_str("# open_url = \"{{site_url}}\"\n");
     s.push_str("# open_browser = true\n");
     s.push_str("# browser = \"Google Chrome\"\n");
+    s.push_str("#\n");
+    s.push_str("# [workspace.chrome_devtools]\n");
+    s.push_str("# enabled = true\n");
+    s.push_str("# user_data_dir = \"{{worktree_path}}/.chrome-devtools-user-data\"\n");
+    s.push_str("# url = \"{{site_url}}\"\n");
     s.push_str("# Workspace colors have built-in defaults; uncomment only to override.\n");
     s.push_str("# Use \"\" to disable a color kind.\n");
     s.push_str(

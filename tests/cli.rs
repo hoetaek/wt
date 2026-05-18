@@ -1249,6 +1249,30 @@ fn config_renders_builtin_workspace_color_defaults() {
 }
 
 #[test]
+fn config_renders_enabled_workspace_chrome_devtools_defaults() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[workspace]\nopen_url = \"{{site_url}}/dashboard\"\n\n[workspace.chrome_devtools]\nenabled = true\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[workspace.chrome_devtools]"))
+        .stdout(predicate::str::contains("enabled = true"))
+        .stdout(predicate::str::contains(
+            "user_data_dir = \"{{worktree_path}}/.chrome-devtools-user-data\"",
+        ))
+        .stdout(predicate::str::contains("url = \"{{site_url}}/dashboard\""))
+        .stdout(predicate::str::contains("port =").not());
+}
+
+#[test]
 fn config_preserves_empty_workspace_color_overrides() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());

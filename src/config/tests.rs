@@ -57,6 +57,12 @@ open_url = "{{site_url}}"
 open_browser = true
 browser = "Google Chrome"
 
+[workspace.chrome_devtools]
+enabled = true
+port = 9222
+user_data_dir = "{{worktree_path}}/.chrome-devtools-user-data"
+url = "{{site_url}}"
+
 [agent]
 cli = "claude"
 
@@ -158,6 +164,14 @@ commands = [
     assert_eq!(ws.open_url.as_deref(), Some("{{site_url}}"));
     assert_eq!(ws.open_browser, Some(true));
     assert_eq!(ws.browser.as_deref(), Some("Google Chrome"));
+    let chrome_devtools = ws.chrome_devtools.unwrap();
+    assert!(chrome_devtools.enabled);
+    assert_eq!(chrome_devtools.port, Some(9222));
+    assert_eq!(
+        chrome_devtools.user_data_dir.as_deref(),
+        Some("{{worktree_path}}/.chrome-devtools-user-data")
+    );
+    assert_eq!(chrome_devtools.url.as_deref(), Some("{{site_url}}"));
 
     let agent = config.agent.unwrap();
     assert_eq!(agent.cli, AgentCli::Claude);
@@ -195,6 +209,20 @@ commands = [
     .unwrap_err();
 
     assert!(err.to_string().contains("unknown field `cwd`"));
+}
+
+#[test]
+fn rejects_unknown_workspace_chrome_devtools_field() {
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.chrome_devtools]
+enabled = true
+debug_port = 9222
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("unknown field `debug_port`"));
 }
 
 #[test]
@@ -441,6 +469,30 @@ command = "code {{path}}"
         merged.editor.placement.as_ref(),
         Some(&EditorPlacement::CmuxSurface)
     );
+}
+
+#[test]
+fn profile_workspace_chrome_devtools_replaces_base_section() {
+    let base: Config = toml::from_str(
+        r#"
+[workspace.chrome_devtools]
+enabled = true
+port = 9222
+"#,
+    )
+    .unwrap();
+    let profile: Config = toml::from_str(
+        r#"
+[workspace.chrome_devtools]
+enabled = false
+"#,
+    )
+    .unwrap();
+
+    let merged = merge_config(&base, profile);
+    let chrome_devtools = merged.workspace.unwrap().chrome_devtools.unwrap();
+    assert!(!chrome_devtools.enabled);
+    assert_eq!(chrome_devtools.port, None);
 }
 
 #[test]

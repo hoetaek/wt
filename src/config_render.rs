@@ -217,6 +217,25 @@ fn append_workspace_section(s: &mut String, workspace: &WorkspaceConfig) {
     if let Some(browser) = workspace.browser.as_deref() {
         s.push_str(&format!("browser = {}\n", toml_quote(browser)));
     }
+    if let Some(chrome_devtools) = workspace.chrome_devtools.as_ref() {
+        s.push_str("\n[workspace.chrome_devtools]\n");
+        s.push_str(&format!("enabled = {}\n", chrome_devtools.enabled));
+        if let Some(port) = chrome_devtools.port {
+            s.push_str(&format!("port = {port}\n"));
+        }
+        if chrome_devtools.enabled || chrome_devtools.user_data_dir.is_some() {
+            s.push_str(&format!(
+                "user_data_dir = {}\n",
+                toml_quote(chrome_devtools.effective_user_data_dir())
+            ));
+        }
+        if chrome_devtools.enabled || chrome_devtools.url.is_some() {
+            s.push_str(&format!(
+                "url = {}\n",
+                toml_quote(chrome_devtools.effective_url(workspace).as_ref())
+            ));
+        }
+    }
 }
 
 fn append_agent_section(s: &mut String, agent: &AgentConfig) {

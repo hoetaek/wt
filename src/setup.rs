@@ -1,5 +1,6 @@
 mod agent;
 mod background_tests;
+mod chrome_devtools;
 mod command;
 mod deps;
 mod env_template;
@@ -12,6 +13,7 @@ mod workspace;
 
 use agent::bootstrap_agent;
 use background_tests::run_background_tests;
+use chrome_devtools::{apply_chrome_devtools_template_vars, launch_chrome_devtools};
 use deps::install_deps;
 use env_template::substitute_env;
 use files::{copy_files, link_files};
@@ -131,6 +133,7 @@ pub(crate) fn run_setup_with_workspace_color_kind(
         template_vars.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
     let site = apply_site_template_vars(config, &mut template_vars);
+    let chrome_devtools = apply_chrome_devtools_template_vars(config, wt_path, &mut template_vars)?;
 
     if let Some(ref site) = site {
         site::register_site(ctx, wt_path, site);
@@ -159,6 +162,10 @@ pub(crate) fn run_setup_with_workspace_color_kind(
 
     if let Some(handle) = ws_handle {
         open_post_deps_tabs(ctx, config, handle, &template_vars)?;
+    }
+
+    if let Some(chrome_devtools) = chrome_devtools {
+        launch_chrome_devtools(ctx, chrome_devtools)?;
     }
 
     // Open browser after deps (site may need built assets)
@@ -711,6 +718,186 @@ mod tests {
         assert_eq!(open_call.1[0], "-a");
         assert_eq!(open_call.1[1], "Google Chrome");
         assert!(open_call.1[2].starts_with("http://127.0.0.1:"));
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
+    fn run_setup_launches_chrome_devtools_and_renders_local_context_vars() {
+        use crate::config::{Config, WorkspaceChromeDevtoolsConfig, WorkspaceConfig};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let repo = std::env::temp_dir().join("wt-test-chrome-devtools-repo");
+        let wt = std::env::temp_dir().join("wt-test-chrome-devtools-worktree");
+        fs::create_dir_all(repo.join(".local")).ok();
+        fs::create_dir_all(&wt).ok();
+        fs::write(wt.join("CLAUDE.local.md"), "# Existing content\n").unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("google-chrome");
+        // get_branch_parent: git config --get
+        runner.add_response("", false);
+        // Chrome launch
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let mut config = Config {
+            workspace: Some(WorkspaceConfig {
+                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                    enabled: true,
+                    ..WorkspaceChromeDevtoolsConfig::default()
+                }),
+                ..WorkspaceConfig::default()
+            }),
+            agent: Some(agent_config(AgentCli::Claude)),
+            ..Config::default()
+        };
+        config.worktree.inject_local_context = Some(
+            "\n## chrome\n- debug: {{chrome_debug_url}}\n- port: {{chrome_debug_port}}\n- profile: {{chrome_user_data_dir}}\n".into(),
+        );
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: wt.clone(),
+            branch: "alice/issue-1-test".into(),
+            workspace: "test".into(),
+            site: None,
+        };
+
+        run_setup(&ctx, &wt, &names, Some("GitHub Issue"), "issue", None, None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let launch_call = calls
+            .iter()
+            .find(|(cmd, _, _)| cmd == "open" || cmd == "sh")
+            .expect("expected Chrome launch command");
+        let launch_args = launch_call.1.join(" ");
+        assert!(launch_args.contains("--remote-debugging-address=127.0.0.1"));
+        assert!(launch_args.contains("--remote-debugging-port="));
+        assert!(launch_args.contains("--user-data-dir="));
+        assert!(launch_args.contains(".chrome-devtools-user-data"));
+
+        let context = fs::read_to_string(wt.join("CLAUDE.local.md")).unwrap();
+        assert!(context.contains("- debug: http://127.0.0.1:"));
+        assert!(context.contains("- profile: "));
+        assert!(context.contains(".chrome-devtools-user-data"));
+        assert!(!context.contains("{{chrome_"));
+        assert!(!context.contains(&repo.join(".local").to_string_lossy().to_string()));
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
+    fn run_setup_renders_chrome_devtools_vars_for_post_deps_tabs() {
+        use crate::config::{Config, WorkspaceChromeDevtoolsConfig, WorkspaceConfig};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let repo = std::env::temp_dir().join("wt-test-chrome-devtools-post-tabs-repo");
+        let wt = std::env::temp_dir().join("wt-test-chrome-devtools-post-tabs-worktree");
+        fs::create_dir_all(&repo).ok();
+        fs::create_dir_all(&wt).ok();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_command("google-chrome");
+        runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
+        runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("", true);
+        runner.add_response("pane:0", true);
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:1", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let config = Config {
+            workspace: Some(WorkspaceConfig {
+                post_deps_tabs: vec![
+                    "echo {{chrome_debug_url}} {{chrome_debug_port}} {{chrome_user_data_dir}}"
+                        .into(),
+                ],
+                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                    enabled: true,
+                    ..WorkspaceChromeDevtoolsConfig::default()
+                }),
+                ..WorkspaceConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: wt.clone(),
+            branch: "alice/issue-1-test".into(),
+            workspace: "test".into(),
+            site: None,
+        };
+
+        run_setup(&ctx, &wt, &names, Some("GitHub Issue"), "new", None, None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let send_call = calls
+            .iter()
+            .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|arg| arg == "send"))
+            .expect("expected post-deps cmux send");
+        let sent = send_call.1.last().unwrap();
+        assert!(sent.contains("echo http://127.0.0.1:"));
+        assert!(sent.contains(".chrome-devtools-user-data"));
+        assert!(!sent.contains("{{chrome_"));
 
         fs::remove_dir_all(&repo).ok();
         fs::remove_dir_all(&wt).ok();

@@ -303,6 +303,9 @@ creation or automatic landing by default.
 When `[workspace]` is configured, `wt config` also prints effective workspace
 colors, including built-in defaults. To change or disable a color, copy that
 line into the owning config file and override the value there.
+When `[workspace.chrome_devtools]` is enabled, `wt config` prints the effective
+Chrome user data directory and URL templates. The port is shown only when it is
+configured; otherwise setup reserves an available localhost port at runtime.
 
 When an active `[site]` provider is configured, `wt config` prints the site
 defaults runtime setup uses, such as the generated name template, root,
@@ -350,6 +353,24 @@ workflow = ["Wait for external PR review before reporting workflow completion."]
 [agent.prompt.append]
 workflow = ["Mention the PR state and any remaining review risk in the report."]
 ```
+
+Workspaces can opt into an isolated debuggable Chrome instance during setup:
+
+```toml
+[workspace.chrome_devtools]
+enabled = true
+# port = 9222
+# user_data_dir = "{{worktree_path}}/.chrome-devtools-user-data"
+# url = "{{site_url}}"
+```
+
+When enabled, `wt` reserves a localhost port, launches Chrome with
+`--remote-debugging-address=127.0.0.1`, and uses a non-default worktree-local
+user data directory. Setup templates, post-deps tabs, local context, and agent
+bootstrap can use `{{chrome_debug_port}}`, `{{chrome_debug_url}}`, and
+`{{chrome_user_data_dir}}`. A localhost Chrome remote debugging endpoint lets
+local processes control that browser instance, so enable it only for workspaces
+where that local access is acceptable.
 
 Use named profiles only when prompt files, scaffold files, or reusable runtime
 bundles are needed:

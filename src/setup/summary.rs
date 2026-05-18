@@ -20,6 +20,9 @@ pub(super) fn print_summary(
     if let Some(url) = vars.get("api_url") {
         ctx.ui.print_step(&format!("  API: {url}"));
     }
+    if let Some(url) = vars.get("chrome_debug_url") {
+        ctx.ui.print_step(&format!("  Chrome DevTools: {url}"));
+    }
     if let Some(site) = site {
         ctx.ui.print_step(&format!(
             "  {}: {}",
