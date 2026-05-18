@@ -55,17 +55,15 @@ For an interactive install, run one command and choose the skills, agent, and
 scope from the prompts:
 
 ```bash
-npx skills add https://github.com/hoetaek/wt
+npx skills add https://github.com/hoetaek/wt/tree/develop/skills
 ```
 
-Select the `wt-*` skills you want. The installer also discovers the repo-local
-`consistency` skill; choose it only when you are working on `wt` itself and want
-the repository UX consistency review workflow.
+Select the `wt-*` skills you want.
 
 For a non-interactive Codex global install, pass explicit skill names:
 
 ```bash
-npx --yes skills@latest add https://github.com/hoetaek/wt \
+npx --yes skills@latest add https://github.com/hoetaek/wt/tree/develop/skills \
   --skill wt-idea \
   --skill wt-ready \
   --skill wt-start \
@@ -89,10 +87,6 @@ npx --yes skills@latest add . \
   --skill wt-work \
   -g -a codex --copy -y
 ```
-
-The explicit `--skill` list is intentional. This repository also has the
-repo-local `.agents/skills/consistency` skill, so root-repo installs should not
-use `--all` unless you also want that local development skill.
 
 For a project-local Codex install, run the same command from the project that
 should receive the skills, point `add` at this repository clone, and omit `-g`:
