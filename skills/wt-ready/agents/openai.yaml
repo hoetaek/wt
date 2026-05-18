@@ -1,0 +1,4 @@
+interface:
+  display_name: "WT Ready"
+  short_description: "Prepare wt work before launching"
+  default_prompt: "Use $wt-ready to gather evidence, split slices, choose execution shape/policy, and prepare TaskDocuments or a workflow handoff for $wt-start."

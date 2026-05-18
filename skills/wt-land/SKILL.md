@@ -1,0 +1,186 @@
+---
+name: wt-land
+description: "Use after wt work is reviewed: respect workflow policy, complete workflow-linked tasks when needed, merge, prove ancestry, and clean with `wt done`."
+---
+
+# WT Land
+
+Use this skill after `wt-coordinate` review says the work is acceptable. Do not
+use it to monitor active agents or request fixes; use `wt-coordinate` for that.
+
+## Boundaries
+
+Keep lifecycle states separate:
+
+- `complete`: for workflow-linked runs, mark reviewed running workflow tasks
+  complete with `wt workflow complete`.
+- `land`: merge or otherwise integrate the reviewed branch.
+- `done`: remove the worktree and local branch after landing is proven; this
+  cleanup marks only matching running direct TaskRuns done.
+
+TaskRun `done` is not proof that a branch landed. A clean worktree is not proof
+that the branch is reviewed. Do not run cleanup before ancestry or explicit
+discard intent is clear.
+
+Coordinator landing must not absorb task-branch merge conflict ownership. A
+merge conflict during landing is a task-branch update problem until the user
+explicitly asks the coordinator to take it over.
+
+## Preflight
+
+Inspect the exact target before changing state:
+
+```bash
+wt inspect <branch|worktree|task-run-id>
+wt agent status <branch|worktree|task-run-id>
+git -C <worktree> status --short --branch
+git -C <worktree> log --oneline <parent>..<branch>
+```
+
+Confirm:
+
+- the worktree is clean
+- useful commits exist ahead of the parent
+- checks appropriate to the change have passed or known gaps are acceptable
+- for workflow work, the prepared workflow `[policy].landing` value is known
+- the parent/integration branch is explicit or verified from the current branch
+- the branch can merge into the latest integration branch without conflicts
+- no unrelated dirty user changes block landing
+
+For workflow work, respect the prepared workflow policy snapshot, not the
+current config. Get it from the handoff, `wt workflow show <workflow>`, or the
+workflow TOML:
+
+- `landing = "manual"`: stop after review unless the user explicitly directed
+  landing for this run.
+- `landing = "auto"`: review passing is enough approval to proceed, but still
+  enforce dirty-worktree, check, unresolved-review, ancestry, branch-order, and
+  cleanup safety gates.
+
+For non-workflow/direct task work, there is no workflow landing policy; require
+an explicit user direction, repo policy, or discard intent before landing or
+cleanup.
+
+Choose the integration branch without assuming names like `main`, `master`, or
+`develop`. Prefer, in order:
+
+- an explicit user instruction, repo policy, or workflow handoff
+- the parent branch shown by `wt inspect`
+- the current branch at the start of landing, if it is not the task branch and
+  it matches the reviewed branch's intended parent
+
+If the current branch and `wt inspect` parent disagree, stop and ask before
+landing.
+
+Inside the `wt` repo, compare stale and local binaries when behavior matters:
+
+```bash
+wt --version
+./target/debug/wt --version
+```
+
+Prefer the freshly built repo binary when PATH `wt` is stale.
+
+## Complete When Applicable
+
+Complete only after review passes and the branch has useful committed work.
+
+This step applies to workflow-linked runs after review passes. For stack mode,
+use `--run-next` only when the next stack task should start:
+
+```bash
+wt workflow complete <workflow> <task> --run-next
+```
+
+For single, batch, the final stack task, or a stack task whose successor should
+wait, omit `--run-next`:
+
+```bash
+wt workflow complete <workflow> <task>
+```
+
+For direct TaskRuns, do not invent a separate completion step. After landing or
+explicit discard proof, `wt done <branch-or-worktree>` cleans the worktree/local
+branch and marks matching running direct TaskRuns done. Do not use `wt done` as
+a substitute for workflow completion.
+
+## Land
+
+First prove whether the branch is already integrated:
+
+```bash
+git merge-base --is-ancestor <branch> <integration-branch>
+```
+
+If it is not landed, check whether the merge would conflict before doing the
+real integration. Use a clean temporary integration worktree when the primary
+checkout is dirty, busy, or should not be disturbed:
+
+```bash
+git fetch --all --prune
+git worktree add <temp-integration-worktree> <integration-branch>
+git -C <temp-integration-worktree> pull --ff-only
+git -C <temp-integration-worktree> merge --no-commit --no-ff <branch>
+git -C <temp-integration-worktree> merge --abort
+```
+
+Hard rule: coordinators do not resolve task-branch merge conflicts during
+landing.
+
+If a merge conflicts, immediately abort the merge and return the branch to the
+task agent. The task agent owns updating its branch against the latest
+integration branch, resolving conflicts in its own worktree, committing the
+resolution, and rerunning checks.
+
+Only resolve conflicts in the coordinator checkout when the user explicitly
+instructs the coordinator to take over after the conflict is known. If you
+already entered a conflicted merge state, stop, report it, and abort the merge
+before sending the task agent the update request.
+
+After the task branch is conflict-free, merge deliberately from a clean
+integration checkout:
+
+```bash
+git switch <integration-branch>
+git pull --ff-only
+git merge --ff-only <branch>
+```
+
+For stack-mode work, land base-to-top unless the reviewed tip intentionally
+contains the whole stack. Before each merge, confirm the parent branch and diff:
+
+```bash
+git log --oneline <parent>..<branch>
+git diff --stat <parent>...<branch>
+```
+
+If the primary checkout is dirty or busy, create a temporary integration
+worktree instead of disturbing user state.
+
+## Cleanup
+
+Clean only after landing is proven:
+
+```bash
+git merge-base --is-ancestor <branch> <integration-branch>
+wt done <branch-or-worktree>
+git worktree list
+git branch --list '<branch-pattern>'
+```
+
+For intentionally discarded work, state that it is discard cleanup and confirm
+there is no useful unmerged work before `wt done`.
+
+Leave TaskDocument and TaskRun files alone unless a `wt` command owns that
+state transition or the user explicitly asks to remove them.
+
+## Report
+
+Report:
+
+- branch landed
+- integration branch and merge commit, or already-landed proof
+- completion command used, if any
+- cleanup command used
+- checks run and remaining gaps
+- remaining related worktrees or branches

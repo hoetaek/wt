@@ -1,0 +1,4 @@
+interface:
+  display_name: "WT Idea"
+  short_description: "Capture and enrich ideas before wt-ready"
+  default_prompt: "Use $wt-idea to capture vague ideas in .local/ideas with context, evidence, alternatives, risks, assumptions, and open questions; stop before TaskDocuments or workflows."

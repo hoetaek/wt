@@ -38,6 +38,57 @@ cargo install --git https://github.com/hoetaek/wt
 The crate is not published to crates.io because the `wt` package name is already
 used by another project.
 
+## wt Lifecycle Skills
+
+This repository also ships an installable Agent Skills pack for the `wt`
+lifecycle. The pack contains:
+
+- `wt-idea`
+- `wt-ready`
+- `wt-start`
+- `wt-coordinate`
+- `wt-land`
+- `wt-setup`
+- `wt-work`
+
+From this repository root, install the full pack into Codex globally with
+explicit skill names:
+
+```bash
+npx --yes skills@latest add . \
+  --skill wt-idea \
+  --skill wt-ready \
+  --skill wt-start \
+  --skill wt-coordinate \
+  --skill wt-land \
+  --skill wt-setup \
+  --skill wt-work \
+  -g -a codex --copy -y
+```
+
+The explicit `--skill` list is intentional. This repository also has the
+repo-local `.agents/skills/consistency` skill, so root-repo installs should not
+use `--all` unless you also want that local development skill.
+
+For a project-local Codex install, run the same command from the project that
+should receive the skills, point `add` at this repository clone, and omit `-g`:
+
+```bash
+npx --yes skills@latest add /path/to/wt \
+  --skill wt-idea \
+  --skill wt-ready \
+  --skill wt-start \
+  --skill wt-coordinate \
+  --skill wt-land \
+  --skill wt-setup \
+  --skill wt-work \
+  -a codex --copy -y
+```
+
+Installing these skills only installs Agent Skills playbooks. It does not
+install the `wt` binary, run `wt init`, write `.wt.toml`, configure providers,
+or create `.local` task/workflow state.
+
 ## Requirements
 
 Required:
