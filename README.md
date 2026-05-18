@@ -242,6 +242,7 @@ args = ["--model", "gpt-5.5"]
 
 [workspace]
 tabs = ["lazygit", "nvim"]
+colors = { task = "blue", issue = "blue", new = "green", pr = "magenta" }
 ```
 
 Use named profiles only when prompt files, scaffold files, or reusable runtime

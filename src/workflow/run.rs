@@ -5,6 +5,7 @@ use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::cmux::CmuxService;
 use crate::services::git::GitService;
+use crate::setup;
 use crate::task::{self as task_store, PreparedTask};
 use crate::task_run::{self, STATUS_PREPARED, STATUS_RUNNING};
 use crate::workflow as workflow_store;
@@ -195,7 +196,8 @@ fn run_single_workflow_task(
             identifier: &identifier,
             title: &title,
             branch_name,
-            mode: state.document.mode(),
+            setup_mode: state.document.setup_mode(),
+            workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: state
                 .document
                 .origin
@@ -248,7 +250,8 @@ fn run_single_workflow_group(
             identifier: &branch,
             title: &title,
             branch_name: Some(&branch),
-            mode: "new",
+            setup_mode: setup::WORKSPACE_COLOR_KIND_NEW,
+            workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: None,
             prompt_intro: workflow_single_group_prompt_intro(),
             completion_section: Some(&completion_section),

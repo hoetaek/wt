@@ -29,7 +29,8 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) identifier: &'a str,
     pub(crate) title: &'a str,
     pub(crate) branch_name: Option<&'a str>,
-    pub(crate) mode: &'a str,
+    pub(crate) setup_mode: &'a str,
+    pub(crate) workspace_color_kind: &'a str,
     pub(crate) on_start_issue_id: Option<&'a str>,
     pub(crate) prompt_intro: &'a str,
     pub(crate) completion_section: Option<&'a str>,
@@ -286,7 +287,12 @@ fn run_inner_many(
     let suggested_branch = issue.branch_name;
     let issue_snapshot = prepared_issue.map(|issue| &issue.snapshot);
     let workspace_label = prepared_issue.and_then(|issue| issue.workspace_label.as_deref());
-    let setup_mode = prepared_issue.map(|issue| issue.mode).unwrap_or("issue");
+    let setup_mode = prepared_issue
+        .map(|issue| issue.setup_mode)
+        .unwrap_or(setup::WORKSPACE_COLOR_KIND_ISSUE);
+    let workspace_color_kind = prepared_issue
+        .map(|issue| issue.workspace_color_kind)
+        .unwrap_or(setup::WORKSPACE_COLOR_KIND_ISSUE);
     let prompt_intro = prepared_issue
         .map(|issue| issue.prompt_intro)
         .unwrap_or("Use this issue snapshot before changing code.");
@@ -370,12 +376,12 @@ fn run_inner_many(
                 "Branch already checked out at: {}",
                 existing.display()
             ));
-            setup::run_setup(
+            setup::run_setup_with_workspace_color_kind(
                 ctx,
                 existing,
                 &names,
                 Some(&title),
-                setup_mode,
+                setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
                 naming.as_ref().map(|n| &n.vars),
                 snapshot_config.as_ref(),
             )?;
@@ -414,12 +420,12 @@ fn run_inner_many(
                 }
             }
             1 => {
-                setup::run_setup(
+                setup::run_setup_with_workspace_color_kind(
                     ctx,
                     &names.path,
                     &names,
                     Some(&title),
-                    setup_mode,
+                    setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
                     naming.as_ref().map(|n| &n.vars),
                     snapshot_config.as_ref(),
                 )?;
@@ -451,12 +457,12 @@ fn run_inner_many(
     }
 
     // 6. Setup
-    setup::run_setup(
+    setup::run_setup_with_workspace_color_kind(
         ctx,
         &names.path,
         &names,
         Some(&title),
-        setup_mode,
+        setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
         naming.as_ref().map(|n| &n.vars),
         snapshot_config.as_ref(),
     )?;
@@ -516,8 +522,12 @@ fn run_profiles(
     let issue_snapshot = options.prepared_issue.map(|issue| &issue.snapshot);
     let setup_mode = options
         .prepared_issue
-        .map(|issue| issue.mode)
-        .unwrap_or("issue");
+        .map(|issue| issue.setup_mode)
+        .unwrap_or(setup::WORKSPACE_COLOR_KIND_ISSUE);
+    let workspace_color_kind = options
+        .prepared_issue
+        .map(|issue| issue.workspace_color_kind)
+        .unwrap_or(setup::WORKSPACE_COLOR_KIND_ISSUE);
     let prompt_intro = options
         .prepared_issue
         .map(|issue| issue.prompt_intro)
@@ -604,12 +614,12 @@ fn run_profiles(
                     branch_name: profile_branch,
                     worktree_path: path.clone(),
                 };
-                if let Err(err) = setup::run_setup(
+                if let Err(err) = setup::run_setup_with_workspace_color_kind(
                     ctx,
                     &path,
                     &names,
                     Some(&profile_title),
-                    setup_mode,
+                    setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
                     Some(&profile_extra_vars),
                     Some(profile_config),
                 ) {
@@ -637,12 +647,12 @@ fn run_profiles(
             worktree_path: names.path.clone(),
         };
 
-        if let Err(err) = setup::run_setup(
+        if let Err(err) = setup::run_setup_with_workspace_color_kind(
             ctx,
             &names.path,
             &names,
             Some(&profile_title),
-            setup_mode,
+            setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
             Some(&profile_extra_vars),
             Some(profile_config),
         ) {
@@ -1231,7 +1241,8 @@ mod tests {
                 identifier: "add-schema",
                 title: "Add schema",
                 branch_name: Some("add-schema"),
-                mode: "issue",
+                setup_mode: setup::WORKSPACE_COLOR_KIND_ISSUE,
+                workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",
                 completion_section: None,
@@ -1299,7 +1310,8 @@ mod tests {
                 identifier: "add-schema",
                 title: "Add schema",
                 branch_name: Some("add-schema"),
-                mode: "issue",
+                setup_mode: setup::WORKSPACE_COLOR_KIND_ISSUE,
+                workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",
                 completion_section: None,

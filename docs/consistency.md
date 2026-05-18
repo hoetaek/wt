@@ -66,6 +66,16 @@ Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 �
 생략되면 `wt`가 내장 cmux named-color palette의 다음 색을 고르고 workflow file에
 기록한다. 색상은 mode나 task의 의미가 아니라 workflow-level 표시다.
 
+`[workspace].colors`는 workspace를 시작하는 command surface의 기본 cmux 색상이다.
+Canonical 색상 key는 `task`, `issue`, `new`, `pr`이다. `task`는 TaskDocument에
+`[origin]`이 있는지와 무관하게 즉시 실행 표면인 `wt task run`에 대응한다. `issue`는
+직접 provider issue에서 시작하는 `wt issue`, `new`는 branch-name text에서 시작하는
+`wt new`, `pr`은 pull request branch를 여는 `wt pr`에만 대응한다. 이 key들은 prompt
+setup mode, profile 이름, workflow `mode = "single" | "batch" | "stack"` 값이 아니다.
+Workflow run은 필요한 경우 TaskDocument setup을 거치더라도 최종 visible grouping color는
+저장된 `workflow.color`를 적용한다. 권장 예시는
+`colors = { task = "blue", issue = "blue", new = "green", pr = "magenta" }`이다.
+
 `matrix`는 하나의 issue, branch-name 입력, 또는 명시적으로 선택한 prepared task를
 named profile 목록으로 확장하는 개념이다. `batch`나 `stack`처럼 여러 task 자체를
 뜻하지 않고, profile 축으로 여러 worktree를 만드는 실행 형태다.

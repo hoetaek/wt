@@ -760,7 +760,9 @@ fn append_active_common_config(
     s.push_str("# open_url = \"{{site_url}}\"\n");
     s.push_str("# open_browser = true\n");
     s.push_str("# browser = \"Google Chrome\"\n");
-    s.push_str("# colors = { issue = \"blue\", pr = \"magenta\", new = \"green\" }\n\n");
+    s.push_str(
+        "# colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }\n\n",
+    );
 }
 
 fn append_command_entry(s: &mut String, command: &InitCommand) {
@@ -2231,9 +2233,9 @@ mod tests {
         assert!(content.contains("# [editor]"));
         assert!(content.contains("# [test]"));
         assert!(content.contains("# post_deps_tabs = [\"npm run dev\"]"));
-        assert!(
-            content.contains("# colors = { issue = \"blue\", pr = \"magenta\", new = \"green\" }")
-        );
+        assert!(content.contains(
+            "# colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }"
+        ));
         assert!(config.worktree.path.is_none());
         assert!(config.worktree.naming.is_none());
         let profile = config.profile.unwrap();

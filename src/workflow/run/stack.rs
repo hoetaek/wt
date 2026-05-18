@@ -2,6 +2,7 @@ use super::state::{read_stack_workflow_task_states, update_workflow_task_run};
 use super::{apply_workflow_color, is_cancelled, task_issue_closing_references, validate_profile};
 use crate::commands::issue;
 use crate::context::Ctx;
+use crate::setup;
 use crate::task as task_store;
 use crate::task_run::{self, STATUS_FAILED, STATUS_RUNNING, STATUS_SKIPPED};
 use crate::workflow as workflow_store;
@@ -146,7 +147,8 @@ fn run_stack_workflow_task(
             identifier: &identifier,
             title: &title,
             branch_name,
-            mode: task_doc.mode(),
+            setup_mode: task_doc.setup_mode(),
+            workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
             prompt_intro: workflow_stack_task_prompt_intro(),
             completion_section: Some(&completion_section),

@@ -1,6 +1,7 @@
 use crate::commands::issue;
 use crate::context::Ctx;
 use crate::error::WtError;
+use crate::setup;
 use crate::task;
 use crate::task_run;
 use anyhow::{Result, bail};
@@ -86,7 +87,8 @@ fn run_selected_task(
                 identifier: &identifier,
                 title: &title,
                 branch_name,
-                mode: selected.document.mode(),
+                setup_mode: selected.document.setup_mode(),
+                workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: selected
                     .document
                     .origin
@@ -145,7 +147,8 @@ fn run_selected_task(
             identifier: &identifier,
             title: &title,
             branch_name,
-            mode: selected.document.mode(),
+            setup_mode: selected.document.setup_mode(),
+            workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: selected
                 .document
                 .origin
@@ -330,6 +333,71 @@ mod tests {
             .count()
     }
 
+    fn add_task_worktree_creation_responses(runner: &mut MockRunner, repo: &Path) {
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.display()
+            ),
+            true,
+        );
+        runner.add_response("", true); // fetch
+        runner.add_response("", false); // local branch exists
+        runner.add_response("", false); // remote branch exists
+        runner.add_response("main", true); // current branch
+        runner.add_response("", true); // worktree add
+        runner.add_response("", true); // parent local branch exists
+        runner.add_response("", true); // set parent config
+    }
+
+    fn add_cmux_workspace_responses(runner: &mut MockRunner) {
+        runner.add_command("cmux");
+        runner.add_response("{}", true); // cmux identify
+        runner.add_response("workspace:200", true); // cmux new-workspace
+        runner.add_response("", true); // cmux workspace-action set-color
+        runner.add_response("", true); // cmux list-panes
+    }
+
+    fn task_color_config() -> Config {
+        Config {
+            workspace: Some(WorkspaceConfig {
+                colors: HashMap::from([
+                    (
+                        crate::setup::WORKSPACE_COLOR_KIND_TASK.into(),
+                        "cyan".into(),
+                    ),
+                    (
+                        crate::setup::WORKSPACE_COLOR_KIND_ISSUE.into(),
+                        "red".into(),
+                    ),
+                    (
+                        crate::setup::WORKSPACE_COLOR_KIND_NEW.into(),
+                        "green".into(),
+                    ),
+                ]),
+                ..WorkspaceConfig::default()
+            }),
+            ..Config::default()
+        }
+    }
+
+    fn cmux_set_color_values(calls: &[CommandCall]) -> Vec<String> {
+        calls
+            .iter()
+            .filter(|(cmd, args, _)| {
+                cmd == "cmux"
+                    && args.first().is_some_and(|arg| arg == "workspace-action")
+                    && args.iter().any(|arg| arg == "set-color")
+            })
+            .filter_map(|(_, args, _)| {
+                args.iter()
+                    .position(|arg| arg == "--color")
+                    .and_then(|idx| args.get(idx + 1))
+                    .cloned()
+            })
+            .collect()
+    }
+
     #[test]
     fn duplicate_task_values_are_rejected() {
         let repo = tempfile::tempdir().unwrap();
@@ -429,6 +497,86 @@ mod tests {
         assert_eq!(runs[0].run.task, "add-schema");
         assert_eq!(runs[0].run.status, task_run::STATUS_RUNNING);
         assert_eq!(runs[0].run.branch, "add-schema");
+    }
+
+    #[test]
+    fn task_run_uses_task_workspace_color_for_local_task() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        add_task_worktree_creation_responses(&mut runner, repo.path());
+        add_cmux_workspace_responses(&mut runner);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            task_color_config(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, &["add-schema".into()], &None, None, false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(cmux_set_color_values(&calls), vec!["cyan"]);
+    }
+
+    #[test]
+    fn task_run_uses_task_workspace_color_for_provider_origin_task() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("PROJ-123.toml"),
+            r#"title = "Fix editor"
+body = "Use the issue branch."
+
+[origin]
+provider = "linear"
+id = "PROJ-123"
+"#,
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"alice/proj-123-fix-editor"}"#,
+            true,
+        );
+        add_task_worktree_creation_responses(&mut runner, repo.path());
+        runner.add_response("", true); // issue on_start
+        add_cmux_workspace_responses(&mut runner);
+        let runner = Arc::new(runner);
+
+        let mut config = task_color_config();
+        config.issues = Some(IssuesConfig {
+            provider: IssueProviderType::Linear,
+            gh_user: None,
+        });
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, &["PROJ-123".into()], &None, None, false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(cmux_set_color_values(&calls), vec!["cyan"]);
     }
 
     #[test]

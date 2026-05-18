@@ -103,7 +103,7 @@ impl TaskDocument {
         }
     }
 
-    pub(crate) fn mode(&self) -> &'static str {
+    pub(crate) fn setup_mode(&self) -> &'static str {
         if self.origin.is_some() {
             "issue"
         } else {

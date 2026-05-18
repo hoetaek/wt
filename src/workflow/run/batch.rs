@@ -2,6 +2,7 @@ use super::state::{WorkflowTaskState, read_batch_workflow_task_states};
 use super::{apply_workflow_color, is_cancelled, task_issue_closing_references, validate_profile};
 use crate::commands::issue;
 use crate::context::Ctx;
+use crate::setup;
 use crate::task as task_store;
 use crate::task_run::{self, STATUS_FAILED, STATUS_RUNNING};
 use crate::workflow as workflow_store;
@@ -397,7 +398,8 @@ fn run_batch_workflow_task(
         identifier: &identifier,
         title: &title,
         branch_name,
-        mode: state.document.mode(),
+        setup_mode: state.document.setup_mode(),
+        workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
         on_start_issue_id: state
             .document
             .origin

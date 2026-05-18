@@ -79,7 +79,15 @@ pub fn run(
     git.worktree_add_new_branch(&names.path, &branch_name, &base)?;
     git.set_branch_parent(&branch_name, &base).ok();
 
-    setup::run_setup(ctx, &names.path, &names, None, "new", None, None)?;
+    setup::run_setup(
+        ctx,
+        &names.path,
+        &names,
+        None,
+        setup::WORKSPACE_COLOR_KIND_NEW,
+        None,
+        None,
+    )?;
 
     Ok(())
 }
@@ -149,7 +157,15 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
         )? {
             ProfileBranchDecision::CreateNew { .. } => {}
             ProfileBranchDecision::ReuseExisting { path } => {
-                setup::run_setup(ctx, &path, &names, None, "new", None, Some(profile_config))?;
+                setup::run_setup(
+                    ctx,
+                    &path,
+                    &names,
+                    None,
+                    setup::WORKSPACE_COLOR_KIND_NEW,
+                    None,
+                    Some(profile_config),
+                )?;
                 continue;
             }
             ProfileBranchDecision::Skip => continue,
@@ -163,7 +179,7 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
             &names.path,
             &names,
             None,
-            "new",
+            setup::WORKSPACE_COLOR_KIND_NEW,
             None,
             Some(profile_config),
         )?;

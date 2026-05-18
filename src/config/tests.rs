@@ -52,7 +52,7 @@ placement = "cmux_surface"
 [workspace]
 tabs = ["lazygit"]
 post_deps_tabs = ["npm run dev"]
-colors = { issue = "Red", pr = "Green" }
+colors = { task = "Blue", issue = "Red", pr = "Green" }
 open_url = "{{site_url}}"
 open_browser = true
 browser = "Google Chrome"
@@ -153,6 +153,7 @@ commands = [
     let ws = config.workspace.unwrap();
     assert_eq!(ws.tabs, vec!["lazygit"]);
     assert_eq!(ws.post_deps_tabs, vec!["npm run dev"]);
+    assert_eq!(ws.colors.get("task").unwrap(), "Blue");
     assert_eq!(ws.colors.get("issue").unwrap(), "Red");
     assert_eq!(ws.open_url.as_deref(), Some("{{site_url}}"));
     assert_eq!(ws.open_browser, Some(true));

@@ -31,6 +31,30 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
 
+pub(crate) const WORKSPACE_COLOR_KIND_ISSUE: &str = "issue";
+pub(crate) const WORKSPACE_COLOR_KIND_NEW: &str = "new";
+pub(crate) const WORKSPACE_COLOR_KIND_PR: &str = "pr";
+pub(crate) const WORKSPACE_COLOR_KIND_TASK: &str = "task";
+
+#[derive(Clone, Copy)]
+pub(crate) struct SetupModeKinds<'a> {
+    setup_mode: &'a str,
+    workspace_color_kind: &'a str,
+}
+
+impl<'a> SetupModeKinds<'a> {
+    pub(crate) fn new(setup_mode: &'a str, workspace_color_kind: &'a str) -> Self {
+        Self {
+            setup_mode,
+            workspace_color_kind,
+        }
+    }
+
+    fn same(kind: &'a str) -> Self {
+        Self::new(kind, kind)
+    }
+}
+
 #[cfg(test)]
 use crate::config::{AgentCli, AgentConfig, DepCommand, SubmitMode};
 #[cfg(test)]
@@ -77,6 +101,26 @@ pub fn run_setup(
     extra_vars: Option<&HashMap<String, String>>,
     config_override: Option<&Config>,
 ) -> Result<()> {
+    run_setup_with_workspace_color_kind(
+        ctx,
+        wt_path,
+        names,
+        title,
+        SetupModeKinds::same(mode),
+        extra_vars,
+        config_override,
+    )
+}
+
+pub(crate) fn run_setup_with_workspace_color_kind(
+    ctx: &Ctx,
+    wt_path: &Path,
+    names: &WorktreeNames,
+    title: Option<&str>,
+    modes: SetupModeKinds<'_>,
+    extra_vars: Option<&HashMap<String, String>>,
+    config_override: Option<&Config>,
+) -> Result<()> {
     let options = SetupOptions::default();
     let config = config_override.unwrap_or(&ctx.config);
 
@@ -95,7 +139,7 @@ pub fn run_setup(
 
     substitute_env(wt_path, config, &template_vars)?;
 
-    let ws_color = workspace_color(config, mode);
+    let ws_color = workspace_color(config, modes.workspace_color_kind);
     let opened_workspace = open_workspace(
         ctx,
         config,
@@ -126,7 +170,7 @@ pub fn run_setup(
     open_workspace_url(ctx, config, &template_vars)?;
 
     if let (Some(handle), Some(agent)) = (ws_handle, &config.agent) {
-        bootstrap_agent(ctx, handle, agent, mode, &template_vars)?;
+        bootstrap_agent(ctx, handle, agent, modes.setup_mode, &template_vars)?;
     }
 
     run_background_tests(ctx, config, wt_path)?;
