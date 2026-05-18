@@ -1326,8 +1326,11 @@ mod tests {
         runner.add_response("pane:3", true);
         runner.add_response("surface:4", true);
         add_selected_surface(&mut runner);
-        runner.add_response("gpt-5.5  Working", true);
-        runner.add_response("codex=Running", true);
+        runner.add_response(
+            "remove-task-run-source . gpt-5.5 xhigh . Context 94% left . 5h 91%",
+            true,
+        );
+        runner.add_response("codex=Idle", true);
         runner.add_response("", true);
         let ctx = fixture.ctx(runner);
 
@@ -1335,7 +1338,7 @@ mod tests {
 
         assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
         assert_eq!(work.state.agent_kind, AgentKind::Codex);
-        assert_eq!(work.state.status, AgentStatus::Running);
+        assert_eq!(work.state.status, AgentStatus::Idle);
         assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:4"));
         assert!(!fixture.repo.join(".local").exists());
     }

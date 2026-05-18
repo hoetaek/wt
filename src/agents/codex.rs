@@ -23,7 +23,11 @@ pub(crate) fn screen_has_codex_ui_marker(screen: Option<&str>) -> bool {
         return false;
     };
     let lower = screen.to_ascii_lowercase();
-    lower.lines().any(screen_has_codex_literal_marker) || screen_has_codex_model_status_line(&lower)
+    lower.lines().any(|line| {
+        screen_has_codex_literal_marker(line)
+            || screen_has_codex_model_status_line(line)
+            || screen_has_codex_modern_header(line)
+    })
 }
 
 fn screen_has_codex_literal_marker(line: &str) -> bool {
@@ -38,11 +42,28 @@ fn screen_has_codex_literal_marker(line: &str) -> bool {
         .any(|token| is_codex_status_token(token) || is_version_token(token))
 }
 
-fn screen_has_codex_model_status_line(screen: &str) -> bool {
-    screen.lines().any(|line| {
-        let line = line.trim();
-        line.starts_with("gpt-") && line.split_whitespace().any(is_codex_status_token)
-    })
+fn screen_has_codex_model_status_line(line: &str) -> bool {
+    let line = line.trim();
+    line.starts_with("gpt-") && line.split_whitespace().any(is_codex_status_token)
+}
+
+fn screen_has_codex_modern_header(line: &str) -> bool {
+    let tokens = line.split_whitespace().map(trim_token).collect::<Vec<_>>();
+    tokens.iter().any(|token| is_gpt_model_token(token))
+        && tokens.iter().any(|token| is_reasoning_effort_token(token))
+        && tokens.contains(&"context")
+        && tokens.contains(&"left")
+}
+
+fn is_gpt_model_token(token: &str) -> bool {
+    let Some(model) = token.strip_prefix("gpt-") else {
+        return false;
+    };
+    model.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+}
+
+fn is_reasoning_effort_token(token: &str) -> bool {
+    matches!(token, "low" | "medium" | "high" | "xhigh")
 }
 
 fn is_codex_status_token(token: &str) -> bool {
@@ -72,4 +93,23 @@ fn is_version_token(token: &str) -> bool {
 
 fn trim_token(token: &str) -> &str {
     token.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modern_codex_header_is_ui_marker() {
+        let screen = "remove-task-run-source . gpt-5.5 xhigh . Context 94% left . 5h 91%";
+
+        assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn generic_gpt_model_note_is_not_ui_marker() {
+        let screen = "notes about gpt-5.5 model behavior";
+
+        assert!(!screen_has_codex_ui_marker(Some(screen)));
+    }
 }
