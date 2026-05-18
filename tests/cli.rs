@@ -477,7 +477,7 @@ fn workflow_list_supports_json_and_reports_invalid_workflows() {
         temp.path(),
         "2026-05-18-001",
         "batch",
-        r#"objective = "Ship search"
+        r#"title = "Ship search"
 profile = "codex"
 "#,
         r#"[[tasks]]
@@ -515,7 +515,7 @@ run = "run-2026-05-18-001-schema"
     assert_eq!(row["id"], "2026-05-18-001");
     assert_eq!(row["path"], ".local/workflows/2026-05-18-001.toml");
     assert_eq!(row["mode"], "batch");
-    assert_eq!(row["objective_summary"], "Ship search");
+    assert_eq!(row["title"], "Ship search");
     assert_eq!(row["task_count"], 1);
     assert_eq!(row["task_runs"]["prepared"], 1);
     assert_eq!(row["task_runs"]["summary"], "1 prepared");

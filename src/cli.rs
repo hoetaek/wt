@@ -364,9 +364,21 @@ pub enum WorkflowCommand {
         /// With --mode matrix, selected named profiles to run in order
         #[arg(long, value_name = "PROFILE", value_delimiter = ',')]
         profiles: Vec<String>,
-        /// Human context explaining the larger objective this workflow is meant to complete
+        /// Short workflow title for list, select, and show surfaces
         #[arg(long)]
-        objective: Option<String>,
+        title: Option<String>,
+        /// Long workflow body with larger context and requirements
+        #[arg(long, conflicts_with = "body_file")]
+        body: Option<String>,
+        /// Read the workflow body from a file
+        #[arg(long = "body-file", value_name = "PATH", conflicts_with = "body")]
+        body_file: Option<PathBuf>,
+        /// Provider for the workflow-level origin link
+        #[arg(long = "origin-provider", requires = "origin_id")]
+        origin_provider: Option<String>,
+        /// Provider issue id for the workflow-level origin link
+        #[arg(long = "origin-id", requires = "origin_provider")]
+        origin_id: Option<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
@@ -384,9 +396,21 @@ pub enum WorkflowCommand {
         /// Named profile from .local/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
-        /// Human context explaining the larger objective this workflow is meant to complete
+        /// Short workflow title for list, select, and show surfaces
         #[arg(long)]
-        objective: Option<String>,
+        title: Option<String>,
+        /// Long workflow body with larger context and requirements
+        #[arg(long, conflicts_with = "body_file")]
+        body: Option<String>,
+        /// Read the workflow body from a file
+        #[arg(long = "body-file", value_name = "PATH", conflicts_with = "body")]
+        body_file: Option<PathBuf>,
+        /// Provider for the workflow-level origin link
+        #[arg(long = "origin-provider", requires = "origin_id")]
+        origin_provider: Option<String>,
+        /// Provider issue id for the workflow-level origin link
+        #[arg(long = "origin-id", requires = "origin_provider")]
+        origin_id: Option<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
@@ -1147,8 +1171,14 @@ mod tests {
             "stack",
             "--profile",
             "codex",
-            "--objective",
+            "--title",
+            "Split workflow",
+            "--body",
             "Ship the split workflow",
+            "--origin-provider",
+            "linear",
+            "--origin-id",
+            "WT-123",
             "--base",
             "main",
             "--pr",
@@ -1162,14 +1192,21 @@ mod tests {
                     mode: WorkflowModeArg::Stack,
                     profile: Some(ref profile),
                     ref profiles,
-                    objective: Some(ref objective),
+                    title: Some(ref title),
+                    body: Some(ref body),
+                    body_file: None,
+                    origin_provider: Some(ref origin_provider),
+                    origin_id: Some(ref origin_id),
                     base: Some(ref base),
                     pr: Some(WorkflowPrModeArg::Ready),
                 }
             }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
                 && profiles.is_empty()
-                && objective == "Ship the split workflow"
+                && title == "Split workflow"
+                && body == "Ship the split workflow"
+                && origin_provider == "linear"
+                && origin_id == "WT-123"
                 && base == "main"
         ));
     }
@@ -1185,12 +1222,51 @@ mod tests {
                     mode: WorkflowModeArg::Batch,
                     profile: None,
                     ref profiles,
-                    objective: None,
+                    title: None,
+                    body: None,
+                    body_file: None,
+                    origin_provider: None,
+                    origin_id: None,
                     base: None,
                     pr: None,
                 }
             }) if tasks.is_empty() && profiles.is_empty()
         ));
+    }
+
+    #[test]
+    fn workflow_task_rejects_removed_objective_flag() {
+        let err = Cli::try_parse_from([
+            "wt",
+            "workflow",
+            "task",
+            "--mode",
+            "batch",
+            "--objective",
+            "Ship workflow",
+            "add-schema",
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("--objective"));
+    }
+
+    #[test]
+    fn workflow_task_rejects_body_and_body_file_together() {
+        let err = Cli::try_parse_from([
+            "wt",
+            "workflow",
+            "task",
+            "--mode",
+            "batch",
+            "--body",
+            "inline",
+            "--body-file",
+            "workflow.md",
+            "add-schema",
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("--body"));
+        assert!(err.to_string().contains("--body-file"));
     }
 
     #[test]
@@ -1236,7 +1312,11 @@ mod tests {
                     ref issues,
                     mode: WorkflowModeArg::Batch,
                     profile: None,
-                    objective: None,
+                    title: None,
+                    body: None,
+                    body_file: None,
+                    origin_provider: None,
+                    origin_id: None,
                     base: None,
                     pr: None,
                 }
@@ -1314,19 +1394,27 @@ mod tests {
     }
 
     #[test]
-    fn workflow_prepare_help_describes_objective_option() {
+    fn workflow_prepare_help_describes_title_body_origin_options() {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
 
         let task = workflow.find_subcommand_mut("task").unwrap();
         let task_help = task.render_long_help().to_string();
-        assert!(task_help.contains("--objective"));
-        assert!(task_help.contains("larger objective"));
+        assert!(task_help.contains("--title"));
+        assert!(task_help.contains("--body"));
+        assert!(task_help.contains("--body-file"));
+        assert!(task_help.contains("--origin-provider"));
+        assert!(task_help.contains("--origin-id"));
+        assert!(!task_help.contains("--objective"));
 
         let issue = workflow.find_subcommand_mut("issue").unwrap();
         let issue_help = issue.render_long_help().to_string();
-        assert!(issue_help.contains("--objective"));
-        assert!(issue_help.contains("larger objective"));
+        assert!(issue_help.contains("--title"));
+        assert!(issue_help.contains("--body"));
+        assert!(issue_help.contains("--body-file"));
+        assert!(issue_help.contains("--origin-provider"));
+        assert!(issue_help.contains("--origin-id"));
+        assert!(!issue_help.contains("--objective"));
     }
 
     #[test]

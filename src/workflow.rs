@@ -38,9 +38,13 @@ impl WorkflowMode {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowMetadata {
-    pub mode: WorkflowMode,
     #[serde(default)]
-    pub objective: Option<String>,
+    pub title: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub origin: Option<WorkflowOrigin>,
+    pub mode: WorkflowMode,
     #[serde(default)]
     pub profile: Option<String>,
     #[serde(default)]
@@ -55,6 +59,13 @@ pub struct WorkflowMetadata {
     pub policy: WorkflowPolicy,
     #[serde(default)]
     pub tasks: Vec<WorkflowTask>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowOrigin {
+    pub provider: String,
+    pub id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -133,8 +144,10 @@ impl WorkflowMetadata {
     ) -> Self {
         let now = current_utc_timestamp();
         Self {
+            title: None,
+            body: None,
+            origin: None,
             mode,
-            objective: None,
             profile: None,
             profiles: Vec::new(),
             base_mode: base_mode.into(),
@@ -351,12 +364,20 @@ fn validate_workflow(workflow: &WorkflowMetadata) -> Result<()> {
         bail!("Workflow has no tasks");
     }
     if workflow
-        .objective
+        .title
         .as_deref()
-        .is_some_and(|objective| objective.trim().is_empty())
+        .is_some_and(|title| title.trim().is_empty())
     {
-        bail!("Workflow objective cannot be empty");
+        bail!("Workflow title cannot be empty");
     }
+    if workflow
+        .body
+        .as_deref()
+        .is_some_and(|body| body.trim().is_empty())
+    {
+        bail!("Workflow body cannot be empty");
+    }
+    validate_workflow_origin(workflow.origin.as_ref())?;
     if workflow
         .profile
         .as_deref()
@@ -380,6 +401,19 @@ fn validate_workflow(workflow: &WorkflowMetadata) -> Result<()> {
     }
     for item in &workflow.tasks {
         validate_workflow_task(workflow, item)?;
+    }
+    Ok(())
+}
+
+fn validate_workflow_origin(origin: Option<&WorkflowOrigin>) -> Result<()> {
+    let Some(origin) = origin else {
+        return Ok(());
+    };
+    if origin.provider.trim().is_empty() {
+        bail!("Workflow origin provider cannot be empty");
+    }
+    if origin.id.trim().is_empty() {
+        bail!("Workflow origin id cannot be empty");
     }
     Ok(())
 }
@@ -484,10 +518,13 @@ fn validate_matrix_workflow_task(workflow: &WorkflowMetadata, item: &WorkflowTas
 
 fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
     let mut content = String::new();
-    content.push_str(&format!("mode = {}\n", toml_quote(workflow.mode.as_str())));
-    if let Some(objective) = workflow.objective.as_deref() {
-        content.push_str(&format!("objective = {}\n", toml_quote(objective)));
+    if let Some(title) = workflow.title.as_deref() {
+        content.push_str(&format!("title = {}\n", toml_quote(title)));
     }
+    if let Some(body) = workflow.body.as_deref() {
+        content.push_str(&format!("body = {}\n", toml_multiline_string(body)));
+    }
+    content.push_str(&format!("mode = {}\n", toml_quote(workflow.mode.as_str())));
     if let Some(profile) = workflow.profile.as_deref() {
         content.push_str(&format!("profile = {}\n", toml_quote(profile)));
     }
@@ -518,6 +555,11 @@ fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
         "updated_at = {}\n",
         toml_quote(&workflow.updated_at)
     ));
+    if let Some(origin) = &workflow.origin {
+        content.push_str("\n[origin]\n");
+        content.push_str(&format!("provider = {}\n", toml_quote(&origin.provider)));
+        content.push_str(&format!("id = {}\n", toml_quote(&origin.id)));
+    }
     content.push_str("\n[policy]\n");
     content.push_str(&format!(
         "pull_request = {}\n",
@@ -545,6 +587,16 @@ fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
     }
 
     content
+}
+
+fn toml_multiline_string(value: &str) -> String {
+    if value.starts_with(['\n', '\r']) {
+        return toml_quote(value);
+    }
+    let escaped = value
+        .replace("\\", "\\\\")
+        .replace("\"\"\"", "\\\"\\\"\\\"");
+    format!("\"\"\"{escaped}\"\"\"")
 }
 
 pub(crate) fn workflow_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
@@ -671,8 +723,13 @@ mod tests {
         let ctx = ctx(dir.path());
         let path = dir.path().join(".local/workflows/2026-05-16-001.toml");
         let mut workflow = WorkflowMetadata {
+            title: Some("Workflow state model migration".into()),
+            body: Some("Ship the workflow state model migration".into()),
+            origin: Some(WorkflowOrigin {
+                provider: "linear".into(),
+                id: "WT-123".into(),
+            }),
             mode: WorkflowMode::Stack,
-            objective: Some("Ship the workflow state model migration".into()),
             profile: Some("codex".into()),
             profiles: Vec::new(),
             base_mode: "explicit".into(),
@@ -696,11 +753,12 @@ mod tests {
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.starts_with(
-            "mode = \"stack\"\nobjective = \"Ship the workflow state model migration\"\nprofile = \"codex\"\nbase_mode = \"explicit\""
+            "title = \"Workflow state model migration\"\nbody = \"\"\"Ship the workflow state model migration\"\"\"\nmode = \"stack\"\nprofile = \"codex\"\nbase_mode = \"explicit\""
         ));
         assert!(content.contains("base = \"main\""));
         assert!(content.contains("color = \"blue\""));
-        assert!(content.contains("objective = \"Ship the workflow state model migration\""));
+        assert!(content.contains("[origin]\nprovider = \"linear\"\nid = \"WT-123\""));
+        assert!(!content.contains("objective ="));
         assert!(content.contains("[[tasks]]"));
         assert!(content.contains("task = \"add-schema\""));
         assert!(content.contains("run = \"stack-2026-05-16-001-add-schema\""));
@@ -1053,11 +1111,17 @@ parent = "main"
     }
 
     #[test]
-    fn read_rejects_objective_alias_fields() {
+    fn read_rejects_non_canonical_metadata_fields() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("workflow.toml");
 
-        for field in ["body", "description"] {
+        for field in [
+            "objective",
+            "description",
+            "goal_task",
+            "parent_task",
+            "subtasks",
+        ] {
             fs::write(
                 &path,
                 format!(
@@ -1082,6 +1146,80 @@ run = "workflow-add-schema"
             .unwrap();
 
             assert!(error_report(read(&path)).contains(field));
+        }
+    }
+
+    #[test]
+    fn read_rejects_empty_title_body_and_origin_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflow.toml");
+
+        for (field, value, expected) in [
+            ("title", "   ", "Workflow title cannot be empty"),
+            ("body", "   ", "Workflow body cannot be empty"),
+        ] {
+            fs::write(
+                &path,
+                format!(
+                    r#"{field} = "{value}"
+mode = "single"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+"#
+                ),
+            )
+            .unwrap();
+
+            assert!(error_report(read(&path)).contains(expected));
+        }
+
+        for (origin_field, expected) in [
+            (
+                "provider = \"\"\nid = \"WT-123\"",
+                "Workflow origin provider cannot be empty",
+            ),
+            (
+                "provider = \"linear\"\nid = \"\"",
+                "Workflow origin id cannot be empty",
+            ),
+        ] {
+            fs::write(
+                &path,
+                format!(
+                    r#"mode = "single"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[origin]
+{origin_field}
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+"#
+                ),
+            )
+            .unwrap();
+
+            assert!(error_report(read(&path)).contains(expected));
         }
     }
 

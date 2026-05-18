@@ -36,7 +36,7 @@ struct WorkflowListRow {
     id: String,
     path: String,
     mode: String,
-    objective_summary: Option<String>,
+    title: Option<String>,
     task_count: usize,
     task_runs: TaskRunSummary,
     runnable: RunnableMetadata,
@@ -123,7 +123,7 @@ fn workflow_row(ctx: &Ctx, path: &Path, id: String, metadata: WorkflowMetadata) 
         id,
         path: workflow_relative_path(ctx, path),
         mode: metadata.mode.as_str().into(),
-        objective_summary: objective_summary(metadata.objective.as_deref()),
+        title: title_summary(metadata.title.as_deref()),
         task_count: metadata.tasks.len(),
         task_runs,
         runnable,
@@ -263,11 +263,11 @@ fn non_runnable_reason(mode: &WorkflowMode, states: &[WorkflowTaskState]) -> &'s
     }
 }
 
-fn objective_summary(objective: Option<&str>) -> Option<String> {
-    objective
+fn title_summary(title: Option<&str>) -> Option<String> {
+    title
         .map(one_line)
-        .filter(|objective| !objective.is_empty())
-        .map(|objective| truncate_chars(&objective, 80))
+        .filter(|title| !title.is_empty())
+        .map(|title| truncate_chars(&title, 80))
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {
@@ -367,8 +367,8 @@ fn print_workflow_group(
 
     for row in rows {
         ctx.ui.print_dim(&workflow_row_summary(row));
-        if let Some(objective) = row.objective_summary.as_deref() {
-            ctx.ui.print_dim(&format!("    {objective}"));
+        if let Some(title) = row.title.as_deref() {
+            ctx.ui.print_dim(&format!("    {title}"));
         }
         ctx.ui.print_dim(&workflow_detail_line(row, group));
         if let Some(error) = row.state_error.as_deref() {
@@ -550,7 +550,7 @@ mod tests {
             dir.path(),
             "2026-05-18-001",
             "batch",
-            r#"objective = "Ship search"
+            r#"title = "Ship search"
 profile = "codex"
 "#,
             r#"[[tasks]]
@@ -571,7 +571,7 @@ run = "run-2026-05-18-001-schema"
         let row = &report.workflows[0];
         assert_eq!(row.id, "2026-05-18-001");
         assert_eq!(row.mode, "batch");
-        assert_eq!(row.objective_summary.as_deref(), Some("Ship search"));
+        assert_eq!(row.title.as_deref(), Some("Ship search"));
         assert_eq!(row.task_count, 1);
         assert_eq!(row.task_runs.prepared, 1);
         assert!(row.runnable.runnable);
@@ -599,7 +599,7 @@ run = "run-2026-05-18-001-schema"
             dir.path(),
             "2026-05-18-001",
             "batch",
-            r#"objective = "Ship search"
+            r#"title = "Ship search"
 "#,
             r#"[[tasks]]
 task = "runnable-task"

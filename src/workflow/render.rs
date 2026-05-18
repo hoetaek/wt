@@ -218,11 +218,36 @@ pub(crate) fn workflow_relative_path(ctx: &Ctx, path: &Path) -> String {
         .to_string()
 }
 
-pub(crate) fn workflow_objective_prompt_context(objective: Option<&str>) -> Option<String> {
-    objective
+pub(crate) fn workflow_metadata_prompt_context(metadata: &WorkflowMetadata) -> Option<String> {
+    let mut sections = Vec::new();
+    if let Some(title) = metadata
+        .title
+        .as_deref()
         .map(str::trim)
-        .filter(|objective| !objective.is_empty())
-        .map(|objective| format!("Workflow objective:\n\n{objective}"))
+        .filter(|title| !title.is_empty())
+    {
+        sections.push(format!("Workflow title:\n\n{title}"));
+    }
+    if let Some(body) = metadata
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|body| !body.is_empty())
+    {
+        sections.push(format!("Workflow body:\n\n{body}"));
+    }
+    if let Some(origin) = &metadata.origin {
+        let provider = origin.provider.trim();
+        let id = origin.id.trim();
+        if !provider.is_empty() && !id.is_empty() {
+            sections.push(format!("Workflow origin: {provider}:{id}"));
+        }
+    }
+    if sections.is_empty() {
+        None
+    } else {
+        Some(sections.join("\n\n"))
+    }
 }
 
 pub(crate) fn workflow_single_task_prompt_intro() -> &'static str {
