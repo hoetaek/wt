@@ -27,7 +27,6 @@ pub fn run(
     task_args: &[String],
     base_raw: &Option<String>,
     profile: Option<&str>,
-    matrix: bool,
 ) -> Result<()> {
     let selected = if task_args.is_empty() {
         task::select_local_tasks(ctx)?
@@ -39,7 +38,7 @@ pub fn run(
     }
 
     for task in &selected {
-        run_selected_task(ctx, task, base_raw, profile, matrix)?;
+        run_selected_task(ctx, task, base_raw, profile)?;
     }
 
     Ok(())
@@ -67,7 +66,6 @@ fn run_selected_task(
     selected: &task::SelectedTask,
     base_raw: &Option<String>,
     profile: Option<&str>,
-    matrix: bool,
 ) -> Result<issue::IssueRunResult> {
     let branch_name = task::prepared_branch_name(&selected.document.branch);
     if branch_name.is_none() && selected.document.origin.is_none() {
@@ -77,12 +75,12 @@ fn run_selected_task(
     let identifier = selected.document.identifier_or_key(&selected.key);
     let title = selected.document.title_or_key(&selected.key);
 
-    if matrix || profile.is_some() {
-        let results = issue::run_with_issue_snapshot_many(
+    if profile.is_some() {
+        let result = issue::run_with_issue_snapshot(
             ctx,
             base_raw,
             profile,
-            matrix,
+            false,
             issue::PreparedIssueContext {
                 identifier: &identifier,
                 title: &title,
@@ -106,29 +104,15 @@ fn run_selected_task(
                 },
             },
         );
-        let results = match results {
-            Ok(results) => results,
+        let result = match result {
+            Ok(result) => result,
             Err(err) => {
-                if let Some(partial) = err.downcast_ref::<issue::IssueRunPartialFailure>() {
-                    if let Err(record_err) = record_task_profile_results(ctx, selected, partial) {
-                        return Err(anyhow::anyhow!(
-                            "Failed to record partial profile TaskRuns after profile run failed ({err}): {record_err}"
-                        ));
-                    }
-                } else {
-                    record_task_failure(ctx, selected, &err);
-                }
+                record_task_failure(ctx, selected, &err);
                 return Err(err);
             }
         };
-        if results.is_empty() {
-            bail!("No profile worktrees created");
-        }
-        record_task_profile_successes(ctx, selected, &results)?;
-        return results
-            .into_iter()
-            .last()
-            .ok_or_else(|| anyhow::anyhow!("No profile worktrees created"));
+        record_task_profile_success(ctx, selected, &result)?;
+        return Ok(result);
     }
 
     let run = task_run::create(
@@ -143,7 +127,7 @@ fn run_selected_task(
         ctx,
         base_raw,
         profile,
-        matrix,
+        false,
         issue::PreparedIssueContext {
             identifier: &identifier,
             title: &title,
@@ -220,59 +204,29 @@ fn record_task_failure(ctx: &Ctx, selected: &task::SelectedTask, err: &anyhow::E
     }
 }
 
-fn record_task_profile_successes(
+fn record_task_profile_success(
     ctx: &Ctx,
     selected: &task::SelectedTask,
-    results: &[issue::IssueRunResult],
+    result: &issue::IssueRunResult,
 ) -> Result<()> {
-    for result in results {
-        task_run::create(
-            ctx,
-            &selected.key,
-            &result.branch_name,
-            None,
-            task_run::STATUS_RUNNING,
-        )?;
-    }
-    write_task_branch_from_results(ctx, selected, results)?;
+    task_run::create(
+        ctx,
+        &selected.key,
+        &result.branch_name,
+        None,
+        task_run::STATUS_RUNNING,
+    )?;
+    write_task_branch_from_result(ctx, selected, result)?;
     Ok(())
 }
 
-fn write_task_branch_from_results(
+fn write_task_branch_from_result(
     ctx: &Ctx,
     selected: &task::SelectedTask,
-    results: &[issue::IssueRunResult],
+    result: &issue::IssueRunResult,
 ) -> Result<()> {
-    let Some(result) = results.first() else {
-        return Ok(());
-    };
     if selected.document.branch != result.canonical_branch_name {
         task::write_task_branch(ctx, &selected.key, &result.canonical_branch_name)?;
-    }
-    Ok(())
-}
-
-fn record_task_profile_results(
-    ctx: &Ctx,
-    selected: &task::SelectedTask,
-    partial: &issue::IssueRunPartialFailure,
-) -> Result<()> {
-    record_task_profile_successes(ctx, selected, &partial.completed)?;
-    if let Some(failed) = &partial.failed {
-        let run = task_run::create(
-            ctx,
-            &selected.key,
-            &failed.branch_name,
-            None,
-            task_run::STATUS_FAILED,
-        )?;
-        task_run::update(
-            ctx,
-            &run.id,
-            task_run::STATUS_FAILED,
-            None,
-            Some(partial.message()),
-        )?;
     }
     Ok(())
 }
@@ -319,6 +273,19 @@ mod tests {
         let profile_dir = root.join(".local/profiles").join(name);
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+    }
+
+    fn run(
+        ctx: &Ctx,
+        task_args: &[String],
+        base_raw: &Option<String>,
+        profile: Option<&str>,
+        selected_profiles: &[String],
+        matrix: bool,
+    ) -> Result<()> {
+        assert!(selected_profiles.is_empty());
+        assert!(!matrix);
+        super::run(ctx, task_args, base_raw, profile)
     }
 
     fn count_linear_start_updates(calls: &[CommandCall], issue_id: &str) -> usize {
@@ -423,6 +390,7 @@ mod tests {
             &["add-schema".into(), "add-schema".into()],
             &None,
             None,
+            &[],
             false,
         );
 
@@ -476,7 +444,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, &["add-schema".into()], &None, None, false).unwrap();
+        run(&ctx, &["add-schema".into()], &None, None, &[], false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -527,7 +495,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, &["add-schema".into()], &None, None, false).unwrap();
+        run(&ctx, &["add-schema".into()], &None, None, &[], false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(cmux_set_color_values(&calls), vec!["cyan"]);
@@ -575,7 +543,7 @@ id = "PROJ-123"
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, &["PROJ-123".into()], &None, None, false).unwrap();
+        run(&ctx, &["PROJ-123".into()], &None, None, &[], false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(cmux_set_color_values(&calls), vec!["cyan"]);
@@ -646,7 +614,7 @@ id = "PROJ-123"
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, &["add-schema".into()], &None, None, false).unwrap();
+        run(&ctx, &["add-schema".into()], &None, None, &[], false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let send_calls = calls
@@ -743,7 +711,7 @@ id = "PROJ-123"
             Box::new(MockUi::new()),
         );
 
-        let err = run(&ctx, &["add-schema".into()], &None, None, false)
+        let err = run(&ctx, &["add-schema".into()], &None, None, &[], false)
             .unwrap_err()
             .to_string();
 
@@ -806,7 +774,7 @@ id = "PROJ-123"
         )
         .unwrap();
 
-        run(&ctx, &["add-schema".into()], &None, None, false).unwrap();
+        run(&ctx, &["add-schema".into()], &None, None, &[], false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -874,7 +842,7 @@ id = "PROJ-123"
             Box::new(ui),
         );
 
-        run(&ctx, &[], &None, None, false).unwrap();
+        run(&ctx, &[], &None, None, &[], false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -963,6 +931,7 @@ id = "PROJ-123"
             &["add-schema".into(), "publish-issues".into()],
             &None,
             None,
+            &[],
             false,
         )
         .unwrap();
@@ -994,150 +963,6 @@ id = "PROJ-123"
             .collect::<Vec<_>>();
         assert!(branches.contains(&"add-schema"));
         assert!(branches.contains(&"publish-issues"));
-    }
-
-    #[test]
-    fn task_run_matrix_records_created_profile_runs_after_later_profile_failure() {
-        let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".local/tasks");
-        std::fs::create_dir_all(&tasks_dir).unwrap();
-        std::fs::write(
-            tasks_dir.join("add-schema.toml"),
-            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
-        )
-        .unwrap();
-
-        let alpha_dir = repo.path().join(".local/profiles/alpha");
-        std::fs::create_dir_all(&alpha_dir).unwrap();
-        std::fs::write(alpha_dir.join("profile.toml"), "").unwrap();
-
-        let beta_dir = repo.path().join(".local/profiles/beta");
-        std::fs::create_dir_all(beta_dir.join("scaffold/AGENTS.override.md")).unwrap();
-        std::fs::write(
-            beta_dir.join("profile.toml"),
-            r#"
-[worktree]
-inject_local_context = "context"
-
-[agent]
-cli = "codex"
-"#,
-        )
-        .unwrap();
-
-        let mut config = Config::default();
-        config.worktree.path = Some("worktrees/{{branch_sanitized}}".into());
-
-        let mut runner = MockRunner::new();
-        runner.add_response("", false); // alpha profile branch local_branch_exists
-        runner.add_response("", true); // alpha worktree_add_new_branch
-        runner.add_response("", true); // alpha parent local_branch_exists
-        runner.add_response("", true); // alpha set parent config
-        runner.add_response("", false); // beta profile branch local_branch_exists
-        runner.add_response("", true); // beta worktree_add_new_branch
-        runner.add_response("", true); // beta parent local_branch_exists
-        runner.add_response("", true); // beta set parent config
-        let runner = Arc::new(runner);
-
-        let ctx = Ctx::new(
-            repo.path().to_path_buf(),
-            repo.path().to_path_buf(),
-            config.clone(),
-            Box::new(SharedRunner {
-                inner: Arc::clone(&runner),
-            }),
-            Box::new(MockUi::new()),
-        );
-
-        let result = run(
-            &ctx,
-            &["add-schema".into()],
-            &Some("main".into()),
-            None,
-            true,
-        );
-
-        assert!(result.is_err());
-        let calls = runner.calls.lock().unwrap();
-        let added_branches = calls
-            .iter()
-            .filter(|(cmd, args, _)| {
-                cmd == "git"
-                    && args.len() >= 4
-                    && args[0] == "worktree"
-                    && args[1] == "add"
-                    && args[2] == "-b"
-            })
-            .map(|(_, args, _)| args[3].clone())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            added_branches,
-            vec![
-                "add-schema-alpha".to_string(),
-                "add-schema-beta".to_string()
-            ]
-        );
-        drop(calls);
-
-        let runs = task_run::list(&ctx).unwrap();
-        assert_eq!(runs.len(), 2);
-        let alpha = runs
-            .iter()
-            .find(|record| record.run.branch == "add-schema-alpha")
-            .expect("expected alpha profile TaskRun");
-        assert_eq!(alpha.run.task, "add-schema");
-        assert_eq!(alpha.run.status, task_run::STATUS_RUNNING);
-        assert!(alpha.run.error.is_none());
-
-        let beta = runs
-            .iter()
-            .find(|record| record.run.branch == "add-schema-beta")
-            .expect("expected beta profile TaskRun");
-        assert_eq!(beta.run.task, "add-schema");
-        assert_eq!(beta.run.status, task_run::STATUS_FAILED);
-        assert!(beta.run.error.is_some());
-        assert!(task_run::task_is_selectable(&ctx, "add-schema").unwrap());
-
-        let alpha_path = repo.path().join("worktrees/add-schema-alpha");
-        let mut clean_runner = MockRunner::new();
-        clean_runner.add_response(
-            &format!(
-                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\nbranch refs/heads/add-schema-alpha\n\n",
-                repo.path().display(),
-                alpha_path.display()
-            ),
-            true,
-        );
-        clean_runner.add_response("", true); // worktree remove
-        clean_runner.add_response("", true); // branch delete
-        clean_runner.add_response(
-            &format!(
-                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
-                repo.path().display()
-            ),
-            true,
-        );
-        let clean_ctx = Ctx::new(
-            repo.path().to_path_buf(),
-            repo.path().to_path_buf(),
-            config,
-            Box::new(clean_runner),
-            Box::new(MockUi::new()),
-        );
-
-        crate::commands::clean::run_with_targets(&clean_ctx, &["add-schema-alpha".into()]).unwrap();
-
-        let runs = task_run::list(&clean_ctx).unwrap();
-        let alpha = runs
-            .iter()
-            .find(|record| record.run.branch == "add-schema-alpha")
-            .expect("expected alpha profile TaskRun");
-        assert_eq!(alpha.run.status, task_run::STATUS_DONE);
-        let beta = runs
-            .iter()
-            .find(|record| record.run.branch == "add-schema-beta")
-            .expect("expected beta profile TaskRun");
-        assert_eq!(beta.run.status, task_run::STATUS_FAILED);
     }
 
     #[test]
@@ -1195,7 +1020,7 @@ id = "PROJ-123"
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, &["PROJ-123".into()], &None, None, false).unwrap();
+        run(&ctx, &["PROJ-123".into()], &None, None, &[], false).unwrap();
 
         let task_content =
             std::fs::read_to_string(repo.path().join(".local/tasks/PROJ-123.toml")).unwrap();
@@ -1272,6 +1097,7 @@ id = "PROJ-123"
             &["PROJ-123".into()],
             &Some("main".into()),
             Some("codex"),
+            &[],
             false,
         )
         .unwrap();
@@ -1329,6 +1155,7 @@ id = "PROJ-123"
             &["add-schema".into()],
             &Some("main".into()),
             Some("codex"),
+            &[],
             false,
         )
         .unwrap();

@@ -159,6 +159,7 @@ Prepare saved workflows when local tasks or issues need coordination:
 ```bash
 wt workflow task --mode single add-schema wire-api --base .
 wt workflow task --mode batch add-schema wire-api --base main --objective "Ship search"
+wt workflow task --mode matrix --profiles devtools-port,mcp-owned add-profile-docs --base main
 wt workflow issue --mode stack 123 456 789 --base main --pr draft
 wt workflow list
 wt workflow run
@@ -377,6 +378,21 @@ wt config inline .local/profiles/codex/profile.toml
 
 Omitting `--profile` means the effective config. `default` is not a profile
 name.
+
+Selected profile subsets for local TaskDocuments belong to saved workflow matrix
+mode:
+
+```bash
+wt workflow task --mode matrix --profiles devtools-port,mcp-owned chrome-devtools-isolation
+wt workflow run
+```
+
+Workflow matrix mode stores `profiles = [...]` in the Workflow TOML and supports
+exactly one local TaskDocument across the named profiles. Profile order is the
+user-provided order. Duplicate names, missing profiles, and reserved `default`
+fail before Workflow files, TaskRuns, or worktrees are created. Direct
+`wt task run` remains the immediate single-worktree path; use `--profile <name>`
+there for one named profile.
 
 ## Command Map
 

@@ -332,9 +332,6 @@ pub enum TaskCommand {
         /// Create a profiled task worktree from .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
-        /// Start one task worktree for each named profile
-        #[arg(long, conflicts_with = "profile")]
-        matrix: bool,
     },
     /// Publish local TaskDocuments as provider issues
     #[command(
@@ -362,8 +359,11 @@ pub enum WorkflowCommand {
         #[arg(long, value_enum)]
         mode: WorkflowModeArg,
         /// Named profile from .local/profiles/<name> for all tasks
-        #[arg(long)]
+        #[arg(long, conflicts_with = "profiles")]
         profile: Option<String>,
+        /// With --mode matrix, selected named profiles to run in order
+        #[arg(long, value_name = "PROFILE", value_delimiter = ',')]
+        profiles: Vec<String>,
         /// Human context explaining the larger objective this workflow is meant to complete
         #[arg(long)]
         objective: Option<String>,
@@ -443,6 +443,7 @@ pub enum WorkflowModeArg {
     Single,
     Batch,
     Stack,
+    Matrix,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -587,7 +588,7 @@ mod tests {
                 target: None,
                 base: None,
                 profile: None,
-                matrix: false
+                matrix: false,
             })
         ));
     }
@@ -645,6 +646,27 @@ mod tests {
     #[test]
     fn issue_rejects_matrix_with_profile() {
         let result = Cli::try_parse_from(["wt", "issue", "680", "--matrix", "--profile", "codex"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn issue_rejects_profiles_flag() {
+        let result = Cli::try_parse_from(["wt", "issue", "680", "--profiles", "alpha,beta"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn issue_rejects_profiles_with_profile() {
+        let result = Cli::try_parse_from([
+            "wt",
+            "issue",
+            "680",
+            "--matrix",
+            "--profiles",
+            "alpha",
+            "--profile",
+            "codex",
+        ]);
         assert!(result.is_err());
     }
 
@@ -1015,10 +1037,8 @@ mod tests {
     }
 
     #[test]
-    fn task_run_accepts_task_keys_base_profile_and_matrix() {
-        let cli = parse(&[
-            "wt", "task", "run", "task-a", "task-b", "--base", "main", "--matrix",
-        ]);
+    fn task_run_accepts_task_keys_base_and_profile() {
+        let cli = parse(&["wt", "task", "run", "task-a", "task-b", "--base", "main"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Task {
@@ -1026,7 +1046,6 @@ mod tests {
                     ref tasks,
                     base: Some(ref base),
                     profile: None,
-                    matrix: true,
                 }
             }) if tasks == &vec!["task-a".to_string(), "task-b".to_string()]
                 && base == "main"
@@ -1039,7 +1058,6 @@ mod tests {
                 command: TaskCommand::Run {
                     ref tasks,
                     profile: Some(ref profile),
-                    matrix: false,
                     ..
                 }
             }) if tasks == &vec!["task-a".to_string()] && profile == "codex"
@@ -1056,20 +1074,33 @@ mod tests {
                     ref tasks,
                     base: None,
                     profile: None,
-                    matrix: false,
                 }
             }) if tasks.is_empty()
         ));
     }
 
     #[test]
-    fn task_run_rejects_matrix_with_profile() {
+    fn task_run_rejects_matrix() {
+        let result = Cli::try_parse_from(["wt", "task", "run", "task-a", "--matrix"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn task_run_rejects_profiles_without_matrix() {
+        let result =
+            Cli::try_parse_from(["wt", "task", "run", "task-a", "--profiles", "alpha,beta"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn task_run_rejects_profiles_with_profile() {
         let result = Cli::try_parse_from([
             "wt",
             "task",
             "run",
             "task-a",
-            "--matrix",
+            "--profiles",
+            "alpha",
             "--profile",
             "codex",
         ]);
@@ -1094,6 +1125,8 @@ mod tests {
         assert!(help.contains("Task-run agents report PR=none"));
         assert!(help.contains("wt workflow task --mode batch"));
         assert!(help.contains("wt workflow task --mode single"));
+        assert!(!help.contains("--matrix"));
+        assert!(!help.contains("--profiles"));
     }
 
     #[test]
@@ -1128,12 +1161,14 @@ mod tests {
                     ref tasks,
                     mode: WorkflowModeArg::Stack,
                     profile: Some(ref profile),
+                    ref profiles,
                     objective: Some(ref objective),
                     base: Some(ref base),
                     pr: Some(WorkflowPrModeArg::Ready),
                 }
             }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
+                && profiles.is_empty()
                 && objective == "Ship the split workflow"
                 && base == "main"
         ));
@@ -1149,11 +1184,45 @@ mod tests {
                     ref tasks,
                     mode: WorkflowModeArg::Batch,
                     profile: None,
+                    ref profiles,
                     objective: None,
                     base: None,
                     pr: None,
                 }
-            }) if tasks.is_empty()
+            }) if tasks.is_empty() && profiles.is_empty()
+        ));
+    }
+
+    #[test]
+    fn workflow_task_accepts_matrix_profiles() {
+        let cli = parse(&[
+            "wt",
+            "workflow",
+            "task",
+            "--mode",
+            "matrix",
+            "--profiles",
+            "alpha,beta",
+            "--profiles",
+            "gamma",
+            "add-schema",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Task {
+                    ref tasks,
+                    mode: WorkflowModeArg::Matrix,
+                    profile: None,
+                    ref profiles,
+                    ..
+                }
+            }) if tasks == &vec!["add-schema".to_string()]
+                && profiles == &vec![
+                    "alpha".to_string(),
+                    "beta".to_string(),
+                    "gamma".to_string(),
+                ]
         ));
     }
 
@@ -1350,6 +1419,29 @@ mod tests {
             "some",
             "feature",
             "--matrix",
+            "--profile",
+            "codex",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn new_rejects_profiles_flag() {
+        let result =
+            Cli::try_parse_from(["wt", "new", "some", "feature", "--profiles", "alpha,beta"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn new_rejects_profiles_with_profile() {
+        let result = Cli::try_parse_from([
+            "wt",
+            "new",
+            "some",
+            "feature",
+            "--matrix",
+            "--profiles",
+            "alpha",
             "--profile",
             "codex",
         ]);

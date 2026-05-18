@@ -343,11 +343,10 @@ pub(crate) fn resolve_context(ctx: &Ctx, record: &TaskRunRecord) -> Result<TaskR
             continue;
         }
         let metadata = workflow::read(&path)?;
-        if let Some(row) = metadata
-            .tasks
-            .iter()
-            .find(|row| row.run == record.id && row.task == record.run.task)
-        {
+        if let Some(row) = metadata.tasks.iter().find(|row| {
+            row.task == record.run.task
+                && (row.run == record.id || row.runs.iter().any(|run| run.run == record.id))
+        }) {
             return Ok(TaskRunContext::WorkflowLinked(WorkflowTaskRunContext {
                 workflow_id,
                 workflow_path: path,

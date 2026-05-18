@@ -42,6 +42,16 @@ pub(crate) fn runnable_workflow_info(
                 next_idx: None,
             })
         }
+        WorkflowMode::Matrix => {
+            let runnable_count = states
+                .iter()
+                .filter(|state| state.run.is_runnable())
+                .count();
+            (runnable_count > 0).then_some(RunnableWorkflowInfo {
+                runnable_count,
+                next_idx: None,
+            })
+        }
         WorkflowMode::Stack => {
             if states
                 .iter()
@@ -164,5 +174,6 @@ pub(crate) fn workflow_mode(mode: WorkflowModeArg) -> WorkflowMode {
         WorkflowModeArg::Single => WorkflowMode::Single,
         WorkflowModeArg::Batch => WorkflowMode::Batch,
         WorkflowModeArg::Stack => WorkflowMode::Stack,
+        WorkflowModeArg::Matrix => WorkflowMode::Matrix,
     }
 }

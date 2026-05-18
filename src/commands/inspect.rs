@@ -105,17 +105,29 @@ fn add_workflow_matches(
     run_ids: &HashSet<&str>,
 ) {
     for row in &record.workflow.tasks {
-        if !run_ids.contains(row.run.as_str()) {
-            continue;
+        if run_ids.contains(row.run.as_str()) {
+            matches.push(WorkflowMatch {
+                id: record.id.clone(),
+                path: record.path.clone(),
+                mode: record.workflow.mode.as_str().into(),
+                task: workflow_task_label(&row.task),
+                parent: row.parent.clone(),
+                pull_request: record.workflow.policy.pull_request,
+            });
         }
-        matches.push(WorkflowMatch {
-            id: record.id.clone(),
-            path: record.path.clone(),
-            mode: record.workflow.mode.as_str().into(),
-            task: workflow_task_label(&row.task),
-            parent: row.parent.clone(),
-            pull_request: record.workflow.policy.pull_request,
-        });
+        for profile_run in &row.runs {
+            if !run_ids.contains(profile_run.run.as_str()) {
+                continue;
+            }
+            matches.push(WorkflowMatch {
+                id: record.id.clone(),
+                path: record.path.clone(),
+                mode: record.workflow.mode.as_str().into(),
+                task: format!("{}:{}", workflow_task_label(&row.task), profile_run.profile),
+                parent: row.parent.clone(),
+                pull_request: record.workflow.policy.pull_request,
+            });
+        }
     }
 }
 

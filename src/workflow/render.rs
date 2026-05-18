@@ -22,6 +22,7 @@ enum WorkflowCoordinatorHandoff<'a> {
 struct WorkflowCompletion<'a> {
     workflow_path: &'a Path,
     row: Option<&'a WorkflowTask>,
+    target: Option<String>,
     run_next: bool,
 }
 
@@ -31,7 +32,10 @@ impl WorkflowCompletion<'_> {
             "wt workflow complete {}",
             shell_arg(&self.workflow_path.to_string_lossy())
         );
-        if let Some(row) = self.row {
+        if let Some(target) = self.target.as_deref() {
+            command.push(' ');
+            command.push_str(&shell_arg(target));
+        } else if let Some(row) = self.row {
             command.push(' ');
             command.push_str(&shell_arg(workflow_task_label(row)));
         }
@@ -415,6 +419,7 @@ pub(crate) fn workflow_single_task_handoff_section(
         completion: Some(WorkflowCompletion {
             workflow_path,
             row,
+            target: None,
             run_next: false,
         }),
     })
@@ -435,6 +440,29 @@ pub(crate) fn workflow_batch_task_handoff_section(
         completion: Some(WorkflowCompletion {
             workflow_path,
             row: Some(row),
+            target: None,
+            run_next: false,
+        }),
+    })
+}
+
+pub(crate) fn workflow_matrix_task_handoff_section(
+    workflow_path: &Path,
+    row: &WorkflowTask,
+    profile: &str,
+    policy: &WorkflowPolicy,
+    pr_base: &str,
+    issue_closing_references: &[String],
+) -> String {
+    workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::Task {
+        policy,
+        pr_base,
+        pr_base_label: "workflow base branch",
+        issue_closing_references,
+        completion: Some(WorkflowCompletion {
+            workflow_path,
+            row: Some(row),
+            target: Some(format!("{}:{profile}", workflow_task_label(row))),
             run_next: false,
         }),
     })
@@ -455,6 +483,7 @@ pub(crate) fn workflow_stack_task_handoff_section(
         completion: Some(WorkflowCompletion {
             workflow_path,
             row: Some(row),
+            target: None,
             run_next: true,
         }),
     })

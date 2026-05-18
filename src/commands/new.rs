@@ -1,8 +1,8 @@
 use crate::cli::BaseMode;
+use crate::commands::profile_selection::{self, ProfileSelection};
 use crate::commands::profile_workspace::{
     ProfileBranchDecision, PromptPolicy, resolve_profile_branch,
 };
-use crate::config::Config;
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::names::WorktreeNames;
@@ -117,7 +117,8 @@ pub(crate) fn branch_name_from_words(name_words: &[String]) -> Result<String> {
 }
 
 fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>) -> Result<()> {
-    let profiles = load_selected_profiles(ctx, profile)?;
+    let profiles =
+        profile_selection::load_profile_selection(ctx, ProfileSelection::new(profile, &[]))?;
 
     ctx.ui.print_step(&format!(
         "Found {} profiles: {}",
@@ -192,20 +193,6 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
     Ok(())
 }
 
-fn load_selected_profiles(ctx: &Ctx, profile: Option<&str>) -> Result<Vec<(String, Config)>> {
-    if let Some(profile) = profile {
-        let config = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
-            .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))?;
-        return Ok(vec![(profile.to_string(), config)]);
-    }
-
-    let profiles = Config::load_profiles(&ctx.repo_root, &ctx.base_config)?;
-    if profiles.is_empty() {
-        bail!("No profile configs found in .local/profiles/*/profile.toml");
-    }
-    Ok(profiles)
-}
-
 fn resolve_base_branch(ctx: &Ctx, git: &GitService, mode: &BaseMode) -> Result<String> {
     let base = match mode {
         BaseMode::Explicit(branch) => Ok(branch.clone()),
@@ -270,6 +257,24 @@ mod tests {
         )
     }
 
+    fn write_empty_profile(root: &Path, name: &str) {
+        let profile_dir = root.join(".local/profiles").join(name);
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+    }
+
+    fn run(
+        ctx: &Ctx,
+        name_words: &[String],
+        base_raw: &Option<String>,
+        profile: Option<&str>,
+        selected_profiles: &[String],
+        matrix: bool,
+    ) -> Result<()> {
+        assert!(selected_profiles.is_empty());
+        super::run(ctx, name_words, base_raw, profile, matrix)
+    }
+
     #[test]
     fn kebab_case_conversion() {
         let words: Vec<String> = vec!["Some".into(), "Feature".into(), "Name".into()];
@@ -283,7 +288,7 @@ mod tests {
         let ui = MockUi::new();
         let ctx = make_ctx(runner, ui);
 
-        let result = run(&ctx, &[], &None, None, false);
+        let result = run(&ctx, &[], &None, None, &[], false);
         assert!(result.is_err());
         assert!(
             result
@@ -315,7 +320,7 @@ mod tests {
         );
 
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, &None, None, false);
+        let result = run(&ctx, &words, &None, None, &[], false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
 
         let calls = runner.calls.lock().unwrap();
@@ -362,7 +367,7 @@ mod tests {
 
         let ctx = make_ctx(runner, ui);
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, &None, None, false);
+        let result = run(&ctx, &words, &None, None, &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }
@@ -398,7 +403,7 @@ mod tests {
         let ui = MockUi::new();
         let ctx = make_ctx(runner, ui);
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        let result = run(&ctx, &words, &Some("develop".into()), None, false);
+        let result = run(&ctx, &words, &Some("develop".into()), None, &[], false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
     }
 
@@ -428,7 +433,7 @@ mod tests {
             Box::new(ui),
         );
         let words: Vec<String> = vec!["my".into(), "feature".into()];
-        run(&ctx, &words, &Some(".".into()), None, false).unwrap();
+        run(&ctx, &words, &Some(".".into()), None, &[], false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -489,6 +494,7 @@ mod tests {
             &["my".into(), "feature".into()],
             &Some("main".into()),
             Some("codex"),
+            &[],
             false,
         )
         .unwrap();
@@ -548,6 +554,7 @@ mod tests {
             &["my".into(), "feature".into()],
             &Some("main".into()),
             Some("codex"),
+            &[],
             false,
         );
 
@@ -600,6 +607,7 @@ mod tests {
             &["my".into(), "feature".into()],
             &Some("main".into()),
             Some("codex"),
+            &[],
             false,
         );
 
@@ -630,9 +638,7 @@ mod tests {
     #[test]
     fn new_with_profile_records_parentbranch_for_profile_branch() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex-yolo");
-        std::fs::create_dir_all(&profile_dir).unwrap();
-        std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+        write_empty_profile(repo.path(), "codex-yolo");
 
         let mut runner = MockRunner::new();
         // profile branch local_branch_exists
@@ -660,6 +666,7 @@ mod tests {
             &["my".into(), "feature".into()],
             &Some("main".into()),
             Some("codex-yolo"),
+            &[],
             false,
         )
         .unwrap();
@@ -701,6 +708,7 @@ mod tests {
             &["my".into(), "feature".into()],
             &Some("develop".into()),
             None,
+            &[],
             false,
         )
         .unwrap();
@@ -748,6 +756,7 @@ mod tests {
             &["my".into(), "feature".into()],
             &Some("develop".into()),
             None,
+            &[],
             false,
         )
         .unwrap();

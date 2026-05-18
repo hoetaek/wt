@@ -6,8 +6,9 @@ use crate::task_run::STATUS_DONE;
 use crate::workflow as workflow_store;
 use crate::workflow::render::workflow_task_label;
 use crate::workflow::run::{
-    WorkflowTaskState, read_batch_workflow_task_states, read_single_workflow_task_states,
-    read_stack_workflow_task_states, run_workflow, update_workflow_task_run,
+    WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
+    read_single_workflow_task_states, read_stack_workflow_task_states, run_workflow,
+    update_workflow_profile_task_run, update_workflow_task_run,
 };
 use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask};
 use anyhow::{Result, bail};
@@ -22,6 +23,10 @@ pub(super) fn complete_workflow(
     let mut metadata = workflow_store::read(&path)?;
     if run_next && metadata.mode != WorkflowMode::Stack {
         bail!("wt workflow complete --run-next only supports mode stack");
+    }
+
+    if metadata.mode == WorkflowMode::Matrix {
+        return complete_matrix_workflow(ctx, &path, &mut metadata, workflow, task);
     }
 
     let states = read_completable_workflow_task_states(ctx, &path, &metadata)?;
@@ -62,7 +67,89 @@ fn read_completable_workflow_task_states(
         WorkflowMode::Single => read_single_workflow_task_states(ctx, path, metadata),
         WorkflowMode::Batch => read_batch_workflow_task_states(ctx, path, metadata),
         WorkflowMode::Stack => read_stack_workflow_task_states(ctx, path, metadata),
+        WorkflowMode::Matrix => read_matrix_workflow_task_states(ctx, path, metadata),
     }
+}
+
+fn complete_matrix_workflow(
+    ctx: &Ctx,
+    path: &std::path::Path,
+    metadata: &mut WorkflowMetadata,
+    workflow: &str,
+    task: Option<&str>,
+) -> Result<()> {
+    let states = read_matrix_workflow_task_states(ctx, path, metadata)?;
+    let complete = complete_matrix_states(ctx, workflow, task, &states)?;
+    if complete.is_empty() {
+        return Ok(());
+    }
+
+    for state in &complete {
+        let profile = state
+            .profile
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("matrix workflow TaskRun is missing profile"))?;
+        update_workflow_profile_task_run(
+            ctx,
+            &state.row,
+            profile,
+            &state.run_id,
+            STATUS_DONE,
+            Some(&state.run.branch),
+            None,
+        )?;
+    }
+    workflow_store::touch(metadata);
+    workflow_store::write(ctx, path, metadata)?;
+
+    for state in complete {
+        let profile = state.profile.as_deref().unwrap_or("<missing-profile>");
+        ctx.ui.print_step(&format!(
+            "Marked {}:{profile} done",
+            workflow_task_label(&state.row)
+        ));
+    }
+    Ok(())
+}
+
+fn complete_matrix_states(
+    ctx: &Ctx,
+    workflow: &str,
+    task: Option<&str>,
+    states: &[WorkflowTaskState],
+) -> Result<Vec<WorkflowTaskState>> {
+    let running = states
+        .iter()
+        .filter(|state| state.run.status.is_stack_completable())
+        .cloned()
+        .collect::<Vec<_>>();
+    if running.is_empty() {
+        ctx.ui.print_warning("No running workflow task found");
+        return Ok(Vec::new());
+    }
+
+    if let Some(task) = task {
+        let matching = running
+            .into_iter()
+            .filter(|state| workflow_matrix_task_matches(ctx, state, task))
+            .collect::<Vec<_>>();
+        if matching.is_empty() {
+            bail!("No running workflow task matches {task}");
+        }
+        if matching.len() > 1 {
+            bail!(
+                "Multiple running workflow profile tasks match {task}; pass a profile target like `wt workflow complete {workflow} <task>:<profile>`"
+            );
+        }
+        return Ok(matching);
+    }
+
+    if running.len() > 1 {
+        bail!(
+            "Multiple running workflow profile tasks found; pass a profile target like `wt workflow complete {workflow} <task>:<profile>`"
+        );
+    }
+    Ok(running)
 }
 
 fn complete_indices(
@@ -95,7 +182,7 @@ fn complete_indices(
 
     match metadata.mode {
         WorkflowMode::Single => Ok(running.into_iter().map(|state| state.idx).collect()),
-        WorkflowMode::Batch | WorkflowMode::Stack => {
+        WorkflowMode::Batch | WorkflowMode::Stack | WorkflowMode::Matrix => {
             if running.len() > 1 {
                 bail!(
                     "Multiple running workflow tasks found; pass a task to `wt workflow complete {workflow} <task>` or run `wt workflow repair {workflow}` first"
@@ -104,6 +191,20 @@ fn complete_indices(
             Ok(vec![running[0].idx])
         }
     }
+}
+
+fn workflow_matrix_task_matches(ctx: &Ctx, state: &WorkflowTaskState, target: &str) -> bool {
+    let profile = state.profile.as_deref();
+    if profile.is_some_and(|profile| target == profile) {
+        return true;
+    }
+    if profile.is_some_and(|profile| target == format!("{}:{profile}", state.row.task)) {
+        return true;
+    }
+    if target == state.run.branch {
+        return true;
+    }
+    workflow_task_matches(ctx, &state.row, target)
 }
 
 fn workflow_task_matches(ctx: &Ctx, row: &WorkflowTask, target: &str) -> bool {

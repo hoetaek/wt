@@ -4,7 +4,7 @@ use crate::services::runtime_binding::RuntimeBindingResolver;
 use crate::services::work::{Work, WorkSessionState};
 use crate::task_run::{self, STATUS_FAILED, TaskRunRecord, TaskRunStatus};
 use crate::workflow as workflow_store;
-use crate::workflow::{WorkflowMetadata, WorkflowTask};
+use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -51,24 +51,29 @@ fn build_repair_plan(
     let mut items = Vec::new();
 
     for row in &metadata.tasks {
-        match read_task_run_record(ctx, row) {
-            Ok(record) => {
-                if let Some(item) = repair_item_for_record(ctx, &resolver, row, &record)? {
-                    items.push(item);
+        let refs = workflow_task_run_refs(metadata, row);
+        for run_ref in refs {
+            match read_task_run_record(ctx, row, run_ref.run) {
+                Ok(record) => {
+                    if let Some(item) =
+                        repair_item_for_record(ctx, &resolver, row, run_ref.profile, &record)?
+                    {
+                        items.push(item);
+                    }
                 }
+                Err(err) => items.push(RepairItem {
+                    task: repair_task_label(row, run_ref.profile),
+                    run: run_ref.run.to_string(),
+                    status: None,
+                    branch: None,
+                    problem: format!("Workflow task references an unreadable TaskRun: {err:#}"),
+                    action: RepairAction::Manual {
+                        note:
+                            "Recreate the TaskRun or edit the workflow row after inspecting local state"
+                                .into(),
+                    },
+                }),
             }
-            Err(err) => items.push(RepairItem {
-                task: row.task.clone(),
-                run: row.run.clone(),
-                status: None,
-                branch: None,
-                problem: format!("Workflow task references an unreadable TaskRun: {err:#}"),
-                action: RepairAction::Manual {
-                    note:
-                        "Recreate the TaskRun or edit the workflow row after inspecting local state"
-                            .into(),
-                },
-            }),
         }
     }
 
@@ -78,16 +83,41 @@ fn build_repair_plan(
     })
 }
 
-fn read_task_run_record(ctx: &Ctx, row: &WorkflowTask) -> Result<TaskRunRecord> {
-    let path = task_run::resolve(ctx, &row.run).with_context(|| {
+struct WorkflowRunRef<'a> {
+    profile: Option<&'a str>,
+    run: &'a str,
+}
+
+fn workflow_task_run_refs<'a>(
+    metadata: &'a WorkflowMetadata,
+    row: &'a WorkflowTask,
+) -> Vec<WorkflowRunRef<'a>> {
+    if metadata.mode == WorkflowMode::Matrix {
+        return row
+            .runs
+            .iter()
+            .map(|run| WorkflowRunRef {
+                profile: Some(run.profile.as_str()),
+                run: run.run.as_str(),
+            })
+            .collect();
+    }
+    vec![WorkflowRunRef {
+        profile: None,
+        run: row.run.as_str(),
+    }]
+}
+
+fn read_task_run_record(ctx: &Ctx, row: &WorkflowTask, run_id: &str) -> Result<TaskRunRecord> {
+    let path = task_run::resolve(ctx, run_id).with_context(|| {
         format!(
             "Workflow task {} references missing TaskRun {}",
-            row.task, row.run
+            row.task, run_id
         )
     })?;
     let run = task_run::read(&path)?;
     Ok(TaskRunRecord {
-        id: row.run.clone(),
+        id: run_id.to_string(),
         path,
         run,
     })
@@ -97,6 +127,7 @@ fn repair_item_for_record(
     ctx: &Ctx,
     resolver: &RuntimeBindingResolver<'_>,
     row: &WorkflowTask,
+    profile: Option<&str>,
     record: &TaskRunRecord,
 ) -> Result<Option<RepairItem>> {
     match record.run.status {
@@ -104,14 +135,19 @@ fn repair_item_for_record(
             if let Some(error) = startup_failure_error(record.run.error.as_deref()) {
                 return Ok(Some(mark_failed_item(
                     row,
+                    profile,
                     record,
                     "TaskRun records a startup or prompt-delivery failure but is not failed",
                     error,
                 )));
             }
             match record.run.status {
-                task_run::STATUS_RUNNING => running_repair_item(ctx, resolver, row, record),
-                task_run::STATUS_PREPARED => prepared_repair_item(ctx, resolver, row, record),
+                task_run::STATUS_RUNNING => {
+                    running_repair_item(ctx, resolver, row, profile, record)
+                }
+                task_run::STATUS_PREPARED => {
+                    prepared_repair_item(ctx, resolver, row, profile, record)
+                }
                 _ => unreachable!(),
             }
         }
@@ -123,6 +159,7 @@ fn running_repair_item(
     _ctx: &Ctx,
     resolver: &RuntimeBindingResolver<'_>,
     row: &WorkflowTask,
+    profile: Option<&str>,
     record: &TaskRunRecord,
 ) -> Result<Option<RepairItem>> {
     let work = resolver.observe(Some(&record.id))?;
@@ -130,12 +167,14 @@ fn running_repair_item(
         WorkSessionState::TerminalSurfaceReady => Ok(None),
         WorkSessionState::AmbiguousTerminalSurface => Ok(Some(manual_runtime_item(
             row,
+            profile,
             record,
             "Running TaskRun has multiple live cmux agent surfaces; no unique runtime binding was validated",
             "Inspect wt agent status or wt inspect output and choose the intended cmux surface before changing TaskRun state",
         ))),
         WorkSessionState::NoLocalWorktree => Ok(Some(mark_failed_item(
             row,
+            profile,
             record,
             "Running TaskRun has no usable local worktree",
             "Workflow runtime repair: running TaskRun has no usable local worktree",
@@ -145,7 +184,9 @@ fn running_repair_item(
         | WorkSessionState::NoTerminalSurface => {
             let problem = no_live_surface_problem(&work);
             let error = format!("Workflow runtime repair: {problem}");
-            Ok(Some(mark_failed_item(row, record, &problem, &error)))
+            Ok(Some(mark_failed_item(
+                row, profile, record, &problem, &error,
+            )))
         }
     }
 }
@@ -154,6 +195,7 @@ fn prepared_repair_item(
     _ctx: &Ctx,
     resolver: &RuntimeBindingResolver<'_>,
     row: &WorkflowTask,
+    profile: Option<&str>,
     record: &TaskRunRecord,
 ) -> Result<Option<RepairItem>> {
     let work = resolver.observe(Some(&record.id))?;
@@ -161,12 +203,14 @@ fn prepared_repair_item(
         WorkSessionState::NoLocalWorktree => Ok(None),
         WorkSessionState::TerminalSurfaceReady => Ok(Some(manual_runtime_item(
             row,
+            profile,
             record,
             "Prepared TaskRun already has a live cmux agent surface",
             "Inspect the worktree before deciding whether the TaskRun should be running or failed",
         ))),
         WorkSessionState::AmbiguousTerminalSurface => Ok(Some(manual_runtime_item(
             row,
+            profile,
             record,
             "Prepared TaskRun has multiple live cmux agent surfaces; no unique runtime binding was validated",
             "Inspect wt agent status or wt inspect output before changing TaskRun state",
@@ -179,7 +223,9 @@ fn prepared_repair_item(
                 work.session_state.as_str()
             );
             let error = format!("Workflow runtime repair: {problem}");
-            Ok(Some(mark_failed_item(row, record, &problem, &error)))
+            Ok(Some(mark_failed_item(
+                row, profile, record, &problem, &error,
+            )))
         }
     }
 }
@@ -218,12 +264,13 @@ fn no_live_surface_problem(work: &Work) -> String {
 
 fn mark_failed_item(
     row: &WorkflowTask,
+    profile: Option<&str>,
     record: &TaskRunRecord,
     problem: &str,
     error: &str,
 ) -> RepairItem {
     RepairItem {
-        task: row.task.clone(),
+        task: repair_task_label(row, profile),
         run: record.id.clone(),
         status: Some(record.run.status),
         branch: Some(record.run.branch.clone()),
@@ -236,18 +283,25 @@ fn mark_failed_item(
 
 fn manual_runtime_item(
     row: &WorkflowTask,
+    profile: Option<&str>,
     record: &TaskRunRecord,
     problem: &str,
     note: &str,
 ) -> RepairItem {
     RepairItem {
-        task: row.task.clone(),
+        task: repair_task_label(row, profile),
         run: record.id.clone(),
         status: Some(record.run.status),
         branch: Some(record.run.branch.clone()),
         problem: problem.into(),
         action: RepairAction::Manual { note: note.into() },
     }
+}
+
+fn repair_task_label(row: &WorkflowTask, profile: Option<&str>) -> String {
+    profile
+        .map(|profile| format!("{}:{profile}", row.task))
+        .unwrap_or_else(|| row.task.clone())
 }
 
 fn print_repair_plan(ctx: &Ctx, plan: &RepairPlan, apply: bool) {

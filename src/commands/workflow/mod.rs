@@ -54,18 +54,32 @@ pub fn list(ctx: &Ctx) -> Result<()> {
     list_command::run(ctx)
 }
 
-pub fn task(
-    ctx: &Ctx,
-    tasks: &[String],
-    mode: WorkflowModeArg,
-    profile: Option<&str>,
-    objective: Option<&str>,
-    base: &Option<String>,
-    pr: Option<WorkflowPrModeArg>,
-) -> Result<()> {
-    workflow_runner::validate_prepare_options(ctx, mode, profile, pr)?;
+pub struct TaskOptions<'a> {
+    pub mode: WorkflowModeArg,
+    pub profile: Option<&'a str>,
+    pub profiles: &'a [String],
+    pub objective: Option<&'a str>,
+    pub base: &'a Option<String>,
+    pub pr: Option<WorkflowPrModeArg>,
+}
+
+pub fn task(ctx: &Ctx, tasks: &[String], options: TaskOptions<'_>) -> Result<()> {
+    workflow_runner::validate_prepare_options(
+        ctx,
+        options.mode,
+        options.profile,
+        options.profiles,
+        options.pr,
+    )?;
+    if options.mode == WorkflowModeArg::Matrix && tasks.len() > 1 {
+        bail!("matrix mode workflow requires exactly one task");
+    }
     let prepared_tasks = if tasks.is_empty() {
-        task_store::select_local_tasks(ctx)?
+        let selected = task_store::select_local_tasks(ctx)?;
+        if options.mode == WorkflowModeArg::Matrix && selected.len() != 1 {
+            bail!("matrix mode workflow requires exactly one task");
+        }
+        selected
             .into_iter()
             .map(|task| PreparedTask {
                 key: task.key,
@@ -75,7 +89,18 @@ pub fn task(
     } else {
         task_command::prepare_named_tasks(ctx, tasks)?
     };
-    workflow_runner::prepare_workflow(ctx, mode, profile, objective, base, prepared_tasks, pr)
+    workflow_runner::prepare_workflow(
+        ctx,
+        workflow_runner::PrepareWorkflowOptions {
+            mode: options.mode,
+            profile: options.profile,
+            profiles: options.profiles,
+            objective: options.objective,
+            base: options.base,
+            pr: options.pr,
+        },
+        prepared_tasks,
+    )
 }
 
 pub fn issue(
@@ -87,7 +112,12 @@ pub fn issue(
     base: &Option<String>,
     pr: Option<WorkflowPrModeArg>,
 ) -> Result<()> {
-    workflow_runner::validate_prepare_options(ctx, mode, profile, pr)?;
+    if mode == WorkflowModeArg::Matrix {
+        bail!(
+            "wt workflow issue does not support mode matrix; use wt workflow task --mode matrix with one local TaskDocument"
+        );
+    }
+    workflow_runner::validate_prepare_options(ctx, mode, profile, &[], pr)?;
 
     let selected_issues = if issues.is_empty() {
         issue_selection::select_issues(ctx, "Select issues for workflow")?
@@ -104,7 +134,18 @@ pub fn issue(
     }
 
     let prepared_tasks = task_command::prepare_issue_tasks(ctx, &selected_issues)?;
-    workflow_runner::prepare_workflow(ctx, mode, profile, objective, base, prepared_tasks, pr)
+    workflow_runner::prepare_workflow(
+        ctx,
+        workflow_runner::PrepareWorkflowOptions {
+            mode,
+            profile,
+            profiles: &[],
+            objective,
+            base,
+            pr,
+        },
+        prepared_tasks,
+    )
 }
 
 pub fn show(ctx: &Ctx, workflow: Option<&str>) -> Result<()> {
@@ -150,10 +191,29 @@ pub(super) fn resolve_mutating_target(ctx: &Ctx, workflow: &str, command: &str) 
 mod tests {
     use super::*;
     use crate::config::{Config, IssueProviderType, IssuesConfig};
-    use crate::context::Ctx;
     use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::{CommandRunner, Ctx};
     use std::fs;
     use std::sync::Arc;
+
+    struct SharedRunner {
+        inner: Arc<MockRunner>,
+    }
+
+    impl CommandRunner for SharedRunner {
+        fn run(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            cwd: Option<&Path>,
+        ) -> Result<crate::context::CmdOutput> {
+            self.inner.run(cmd, args, cwd)
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            self.inner.has_command(cmd)
+        }
+    }
 
     fn ctx(root: &Path) -> Ctx {
         Ctx::new(
@@ -205,6 +265,52 @@ mod tests {
         )
     }
 
+    fn write_profile(root: &Path, name: &str) {
+        let profile_dir = root.join(".local/profiles").join(name);
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::write(
+            profile_dir.join("profile.toml"),
+            r#"
+[agent]
+cli = "none"
+"#,
+        )
+        .unwrap();
+    }
+
+    fn write_task(root: &Path, key: &str, content: &str) {
+        let tasks_dir = root.join(".local/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+        fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn task(
+        ctx: &Ctx,
+        tasks: &[String],
+        mode: WorkflowModeArg,
+        profile: Option<&str>,
+        objective: Option<&str>,
+        base: &Option<String>,
+        pr: Option<WorkflowPrModeArg>,
+    ) -> Result<()> {
+        super::task(
+            ctx,
+            tasks,
+            TaskOptions {
+                mode,
+                profile,
+                profiles: &[],
+                objective,
+                base,
+                pr,
+            },
+        )
+    }
+
     fn prepare_workflow(
         ctx: &Ctx,
         mode: WorkflowModeArg,
@@ -216,6 +322,31 @@ mod tests {
             .collect::<Vec<_>>();
         task(ctx, &tasks, mode, None, None, &Some("main".into()), None).unwrap();
         workflow_store::list(ctx).unwrap().pop().unwrap()
+    }
+
+    fn prepare_matrix_workflow(
+        ctx: &Ctx,
+        tasks: &[String],
+        profiles: &[String],
+    ) -> workflow_store::WorkflowRecord {
+        matrix_task(ctx, tasks, profiles).unwrap();
+        workflow_store::list(ctx).unwrap().pop().unwrap()
+    }
+
+    fn matrix_task(ctx: &Ctx, tasks: &[String], profiles: &[String]) -> Result<()> {
+        let base = Some("main".into());
+        super::task(
+            ctx,
+            tasks,
+            TaskOptions {
+                mode: WorkflowModeArg::Matrix,
+                profile: None,
+                profiles,
+                objective: None,
+                base: &base,
+                pr: None,
+            },
+        )
     }
 
     fn update_task_run(
@@ -544,6 +675,239 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert!(runs[0].run.group.is_some());
         assert_eq!(runs[0].run.status, STATUS_PREPARED);
+    }
+
+    #[test]
+    fn task_prepares_matrix_mode_workflow_with_profile_runs_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        write_profile(dir.path(), "beta");
+        write_profile(dir.path(), "alpha");
+        write_task(
+            dir.path(),
+            "add-schema",
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        );
+        let ctx = ctx(dir.path());
+
+        let record =
+            prepare_matrix_workflow(&ctx, &["add-schema".into()], &strings(&["beta", "alpha"]));
+
+        let workflow = &record.workflow;
+        assert_eq!(workflow.mode, WorkflowMode::Matrix);
+        assert!(workflow.profile.is_none());
+        assert_eq!(workflow.profiles, strings(&["beta", "alpha"]));
+        assert_eq!(workflow.tasks.len(), 1);
+        let row = &workflow.tasks[0];
+        assert_eq!(row.task, "add-schema");
+        assert!(row.run.is_empty());
+        assert_eq!(
+            row.runs
+                .iter()
+                .map(|run| run.profile.as_str())
+                .collect::<Vec<_>>(),
+            vec!["beta", "alpha"]
+        );
+
+        let task_runs = task_run::list(&ctx).unwrap();
+        assert_eq!(task_runs.len(), 2);
+        assert_eq!(
+            row.runs
+                .iter()
+                .map(|profile_run| {
+                    let run = task_runs
+                        .iter()
+                        .find(|record| record.id == profile_run.run)
+                        .expect("expected linked TaskRun");
+                    (
+                        profile_run.profile.as_str(),
+                        run.run.branch.as_str(),
+                        run.run.status,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("beta", "add-schema-beta", STATUS_PREPARED),
+                ("alpha", "add-schema-alpha", STATUS_PREPARED),
+            ]
+        );
+        assert!(task_runs.iter().all(|record| record.run.group.is_some()));
+
+        let content = fs::read_to_string(&record.path).unwrap();
+        assert!(content.contains("mode = \"matrix\""));
+        assert!(content.contains("profiles = [\"beta\", \"alpha\"]"));
+        assert!(content.contains("[[tasks.runs]]"));
+        assert!(!content.contains("\nrun = \"workflow-"));
+    }
+
+    #[test]
+    fn task_matrix_profile_validation_fails_before_workflow_or_task_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        write_profile(dir.path(), "alpha");
+        write_task(
+            dir.path(),
+            "add-schema",
+            "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        );
+        let ctx = ctx(dir.path());
+
+        let duplicate =
+            matrix_task(&ctx, &["add-schema".into()], &strings(&["alpha", "alpha"])).unwrap_err();
+        assert!(duplicate.to_string().contains("Duplicate profile: alpha"));
+        assert!(workflow_store::list(&ctx).unwrap().is_empty());
+        assert!(task_run::list(&ctx).unwrap().is_empty());
+
+        let missing =
+            matrix_task(&ctx, &["add-schema".into()], &strings(&["missing"])).unwrap_err();
+        assert!(missing.to_string().contains("Profile 'missing' not found"));
+        assert!(workflow_store::list(&ctx).unwrap().is_empty());
+        assert!(task_run::list(&ctx).unwrap().is_empty());
+
+        let reserved =
+            matrix_task(&ctx, &["add-schema".into()], &strings(&["default"])).unwrap_err();
+        assert!(reserved.to_string().contains("reserved"));
+        assert!(workflow_store::list(&ctx).unwrap().is_empty());
+        assert!(task_run::list(&ctx).unwrap().is_empty());
+    }
+
+    #[test]
+    fn task_matrix_requires_exactly_one_task_and_explicit_profiles() {
+        let dir = tempfile::tempdir().unwrap();
+        write_profile(dir.path(), "alpha");
+        write_task(
+            dir.path(),
+            "add-schema",
+            "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        );
+        write_task(
+            dir.path(),
+            "wire-api",
+            "title = \"Wire API\"\nbranch = \"wire-api\"\n",
+        );
+        let ctx = ctx(dir.path());
+
+        let no_profiles = matrix_task(&ctx, &["add-schema".into()], &[]).unwrap_err();
+        assert!(no_profiles.to_string().contains("--profiles is required"));
+        assert!(workflow_store::list(&ctx).unwrap().is_empty());
+        assert!(task_run::list(&ctx).unwrap().is_empty());
+
+        let too_many_tasks = matrix_task(
+            &ctx,
+            &["add-schema".into(), "wire-api".into()],
+            &strings(&["alpha"]),
+        )
+        .unwrap_err();
+        assert!(
+            too_many_tasks
+                .to_string()
+                .contains("matrix mode workflow requires exactly one task")
+        );
+        assert!(workflow_store::list(&ctx).unwrap().is_empty());
+        assert!(task_run::list(&ctx).unwrap().is_empty());
+    }
+
+    #[test]
+    fn workflow_matrix_run_starts_profile_runs_in_profile_order() {
+        let dir = tempfile::tempdir().unwrap();
+        write_profile(dir.path(), "alpha");
+        write_profile(dir.path(), "beta");
+        write_task(
+            dir.path(),
+            "add-schema",
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        );
+
+        let mut runner = MockRunner::new();
+        for _ in 0..2 {
+            runner.add_response("", false); // profile branch local_branch_exists
+            runner.add_response("", true); // worktree_add_new_branch
+            runner.add_response("", true); // parent local_branch_exists
+            runner.add_response("", true); // set parent config
+        }
+        let runner = Arc::new(runner);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let record =
+            prepare_matrix_workflow(&ctx, &["add-schema".into()], &strings(&["alpha", "beta"]));
+
+        run(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let added_branches = calls
+            .iter()
+            .filter(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 4
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .map(|(_, args, _)| args[3].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            added_branches,
+            vec![
+                "add-schema-alpha".to_string(),
+                "add-schema-beta".to_string()
+            ]
+        );
+        drop(calls);
+
+        let updated = workflow_store::read(&record.path).unwrap();
+        let row = &updated.tasks[0];
+        for profile_run in &row.runs {
+            let task_run = task_run_record(&ctx, &profile_run.run).unwrap();
+            assert_eq!(task_run.status, STATUS_RUNNING);
+            assert_eq!(
+                task_run.branch,
+                format!("add-schema-{}", profile_run.profile)
+            );
+        }
+    }
+
+    #[test]
+    fn workflow_complete_marks_one_matrix_profile_run_done() {
+        let dir = tempfile::tempdir().unwrap();
+        write_profile(dir.path(), "alpha");
+        write_profile(dir.path(), "beta");
+        write_task(
+            dir.path(),
+            "add-schema",
+            "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        );
+        let ctx = ctx(dir.path());
+        let record =
+            prepare_matrix_workflow(&ctx, &["add-schema".into()], &strings(&["alpha", "beta"]));
+        let row = &record.workflow.tasks[0];
+        for profile_run in &row.runs {
+            task_run::update(
+                &ctx,
+                &profile_run.run,
+                STATUS_RUNNING,
+                Some(&format!("add-schema-{}", profile_run.profile)),
+                None,
+            )
+            .unwrap();
+        }
+
+        complete(
+            &ctx,
+            record.path.to_str().unwrap(),
+            Some("add-schema:alpha"),
+            false,
+        )
+        .unwrap();
+
+        let alpha = task_run_record(&ctx, &row.runs[0].run).unwrap();
+        let beta = task_run_record(&ctx, &row.runs[1].run).unwrap();
+        assert_eq!(alpha.status, STATUS_DONE);
+        assert_eq!(beta.status, STATUS_RUNNING);
     }
 
     #[test]
@@ -1200,6 +1564,7 @@ landing = "auto"
             task: "PROJ-2".into(),
             run: "run-2".into(),
             parent: Some("PROJ-1".into()),
+            runs: Vec::new(),
         };
         let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
         let policy = test_workflow_policy(WorkflowPullRequestMode::Draft);
@@ -1238,6 +1603,7 @@ landing = "auto"
             task: "PROJ-2".into(),
             run: "run-2".into(),
             parent: Some("PROJ-1".into()),
+            runs: Vec::new(),
         };
         let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
         let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
@@ -1262,6 +1628,7 @@ landing = "auto"
             task: "PROJ-2".into(),
             run: "run-2".into(),
             parent: Some("stored-parent".into()),
+            runs: Vec::new(),
         };
         let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
         let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
@@ -1288,6 +1655,7 @@ landing = "auto"
             task: "PROJ weird's task".into(),
             run: "run-2".into(),
             parent: Some("PROJ-1".into()),
+            runs: Vec::new(),
         };
         let workflow_path = PathBuf::from("/repo/.local/workflows/work flow.toml");
         let expected_command =
@@ -1306,6 +1674,7 @@ landing = "auto"
             task: "PROJ-2".into(),
             run: "run-2".into(),
             parent: Some("PROJ-1".into()),
+            runs: Vec::new(),
         };
         let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
 
@@ -1391,7 +1760,10 @@ landing = "auto"
                     task: "api".into(),
                     run: "run-api".into(),
                     parent: None,
+                    runs: Vec::new(),
                 },
+                profile: None,
+                run_id: "run-api".into(),
                 document: task_store::TaskDocument {
                     title: "API".into(),
                     branch: "shared".into(),
@@ -1417,7 +1789,10 @@ landing = "auto"
                     task: "docs".into(),
                     run: "run-docs".into(),
                     parent: None,
+                    runs: Vec::new(),
                 },
+                profile: None,
+                run_id: "run-docs".into(),
                 document: task_store::TaskDocument {
                     title: "Docs".into(),
                     branch: "shared".into(),

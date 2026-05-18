@@ -82,7 +82,8 @@ Canonical 색상 key는 `task`, `issue`, `new`, `pr`이다. `task`는 TaskDocume
 `[origin]`이 있는지와 무관하게 즉시 실행 표면인 `wt task run`에 대응한다. `issue`는
 직접 provider issue에서 시작하는 `wt issue`, `new`는 branch-name text에서 시작하는
 `wt new`, `pr`은 pull request branch를 여는 `wt pr`에만 대응한다. 이 key들은 prompt
-setup mode, profile 이름, workflow `mode = "single" | "batch" | "stack"` 값이 아니다.
+setup mode, profile 이름, workflow `mode = "single" | "batch" | "stack" | "matrix"`
+값이 아니다.
 Workflow run은 필요한 경우 TaskDocument setup을 거치더라도 최종 visible grouping color는
 저장된 `workflow.color`를 적용한다. `[workspace].colors` key를 생략하면 내장 기본값
 `task = "blue"`, `issue = "blue"`, `new = "green"`, `pr = "magenta"`를 쓴다.
@@ -91,9 +92,22 @@ Workflow run은 필요한 경우 TaskDocument setup을 거치더라도 최종 vi
 Active `colors = { ... }`는 사용자가 기본값과 다른 색을 고정하려는 의도일 때만 둔다. 색을
 아예 쓰지 않을 kind는 `task = ""`처럼 빈 문자열로 override한다.
 
-`matrix`는 하나의 issue, branch-name 입력, 또는 명시적으로 선택한 prepared task를
-named profile 목록으로 확장하는 개념이다. `batch`나 `stack`처럼 여러 task 자체를
-뜻하지 않고, profile 축으로 여러 worktree를 만드는 실행 형태다.
+`matrix`는 하나의 local TaskDocument를 명시한 named profile 목록으로 확장하는 saved
+Workflow mode다. 첫 버전의 `mode = "matrix"`는 exactly one task x many named profiles만
+허용한다. `batch`나 `stack`처럼 여러 task 자체를 뜻하지 않고, profile 축으로 여러
+profile-specific TaskRun/worktree를 만드는 실행 형태다. `wt workflow task --mode matrix
+--profiles <name>[,<name>...] <task>`가 canonical creation surface이고, profile list는
+Workflow TOML의 `profiles = [...]`에 사용자가 넘긴 순서로 저장한다. `--profiles`는
+repeatable할 수 있지만 `--mode matrix` 없이 쓰면 안 되고, `--profile`과 동시에 쓰면 안
+된다. Unknown profile, duplicate profile, reserved `default` profile name은 worktree,
+TaskRun, Workflow 파일을 만들기 전에 실패해야 한다. 수동 Workflow TOML도 `mode =
+"matrix"`에서 task가 1개가 아니거나 `profiles`가 비어 있거나 task row가 profile별
+`[[tasks.runs]]`를 정확히 저장하지 않으면 invalid state로 거부한다.
+
+Direct `wt task run`은 immediate single-worktree path다. `wt task run <task>`와
+`wt task run <task> --profile <name>`만 소유하고, profile fan-out을 소유하지 않는다.
+Direct `wt issue --matrix`와 `wt new --matrix`의 legacy all-named-profiles behavior는
+보존하되 selected profile subset은 Workflow matrix로 표현한다.
 
 `wt new <words...>`는 branch-name text에서 바로 ad hoc worktree를 시작한다. 즉시
 준비된 TaskDocument를 실행하는 표면은 `wt task run [<task>...]`이다. 여러
@@ -125,9 +139,10 @@ profile이 작업 묶음인지 다시 추론해야 한다. 이런 혼동은 기�
 
 애매한 조합은 추론하지 말고 거부한다.
 
-예를 들어 `--profile`은 “하나의 profile 선택”을 뜻하고 `--matrix`는 “모든
-profile로 확장”을 뜻한다면, 둘을 동시에 받은 상태에서 임의로 우선순위를 정하지
-않는다.
+예를 들어 direct `--profile`은 “하나의 profile 선택”을 뜻하고, `wt workflow task --mode
+matrix --profiles`는 “명시한 profile subset을 저장된 workflow로 확장”을 뜻한다.
+`--profile`과 `--profiles`, direct `wt task run --matrix`, matrix workflow의 여러 task처럼
+이 조합들이 충돌하면 임의로 우선순위를 정하지 않는다.
 
 명령은 사용자가 의도를 잘못 표현했을 때 조용히 다른 일을 해서는 안 된다. 빠르게
 실패하고, 어떤 선택을 해야 하는지 알려줘야 한다.

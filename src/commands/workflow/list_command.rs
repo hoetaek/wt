@@ -6,8 +6,8 @@ use crate::workflow as workflow_store;
 use crate::workflow::planner::runnable_workflow_info;
 use crate::workflow::render::workflow_relative_path;
 use crate::workflow::run::{
-    WorkflowTaskState, read_batch_workflow_task_states, read_single_workflow_task_states,
-    read_stack_workflow_task_states, task_run_record,
+    WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
+    read_single_workflow_task_states, read_stack_workflow_task_states, task_run_record,
 };
 use crate::workflow::{WorkflowMetadata, WorkflowMode};
 use anyhow::Result;
@@ -43,6 +43,7 @@ struct WorkflowListRow {
     base_mode: String,
     base: Option<String>,
     profile: Option<String>,
+    profiles: Vec<String>,
     policy: WorkflowPolicySummary,
     updated_at: String,
     state_error: Option<String>,
@@ -129,6 +130,7 @@ fn workflow_row(ctx: &Ctx, path: &Path, id: String, metadata: WorkflowMetadata) 
         base_mode: metadata.base_mode,
         base: metadata.base,
         profile: metadata.profile,
+        profiles: metadata.profiles,
         policy: WorkflowPolicySummary {
             pull_request: metadata.policy.pull_request.as_str().into(),
             landing: metadata.policy.landing.as_str().into(),
@@ -147,12 +149,13 @@ fn read_workflow_states(
         WorkflowMode::Single => read_single_workflow_task_states(ctx, path, metadata),
         WorkflowMode::Batch => read_batch_workflow_task_states(ctx, path, metadata),
         WorkflowMode::Stack => read_stack_workflow_task_states(ctx, path, metadata),
+        WorkflowMode::Matrix => read_matrix_workflow_task_states(ctx, path, metadata),
     }
 }
 
 fn task_run_summary(ctx: &Ctx, metadata: &WorkflowMetadata) -> TaskRunSummary {
     let mut summary = TaskRunSummary {
-        total: metadata.tasks.len(),
+        total: workflow_run_count(metadata),
         prepared: 0,
         running: 0,
         done: 0,
@@ -162,8 +165,8 @@ fn task_run_summary(ctx: &Ctx, metadata: &WorkflowMetadata) -> TaskRunSummary {
         summary: String::new(),
     };
 
-    for row in &metadata.tasks {
-        match task_run_record(ctx, &row.run).map(|run| run.status) {
+    for run_id in workflow_run_ids(metadata) {
+        match task_run_record(ctx, run_id).map(|run| run.status) {
             Some(STATUS_PREPARED) => summary.prepared += 1,
             Some(STATUS_RUNNING) => summary.running += 1,
             Some(STATUS_DONE) => summary.done += 1,
@@ -175,6 +178,25 @@ fn task_run_summary(ctx: &Ctx, metadata: &WorkflowMetadata) -> TaskRunSummary {
 
     summary.summary = task_run_summary_text(&summary);
     summary
+}
+
+fn workflow_run_count(metadata: &WorkflowMetadata) -> usize {
+    if matches!(metadata.mode, WorkflowMode::Matrix) {
+        metadata.tasks.iter().map(|row| row.runs.len()).sum()
+    } else {
+        metadata.tasks.len()
+    }
+}
+
+fn workflow_run_ids(metadata: &WorkflowMetadata) -> Vec<&str> {
+    if matches!(metadata.mode, WorkflowMode::Matrix) {
+        return metadata
+            .tasks
+            .iter()
+            .flat_map(|row| row.runs.iter().map(|run| run.run.as_str()))
+            .collect();
+    }
+    metadata.tasks.iter().map(|row| row.run.as_str()).collect()
 }
 
 fn task_run_summary_text(summary: &TaskRunSummary) -> String {
@@ -211,6 +233,7 @@ fn runnable_metadata(mode: &WorkflowMode, states: &[WorkflowTaskState]) -> Runna
                 WorkflowMode::Single => "single_all_task_runs_runnable",
                 WorkflowMode::Batch => "batch_has_runnable_task_runs",
                 WorkflowMode::Stack => "stack_next_task_run_runnable",
+                WorkflowMode::Matrix => "matrix_has_runnable_profile_runs",
             }
             .into(),
         };
@@ -228,6 +251,7 @@ fn non_runnable_reason(mode: &WorkflowMode, states: &[WorkflowTaskState]) -> &'s
     match mode {
         WorkflowMode::Single => "single_requires_all_task_runs_prepared_or_failed",
         WorkflowMode::Batch => "batch_has_no_prepared_or_failed_task_runs",
+        WorkflowMode::Matrix => "matrix_has_no_prepared_or_failed_profile_runs",
         WorkflowMode::Stack
             if states
                 .iter()
@@ -274,7 +298,7 @@ fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
             row.task_runs.summary,
             runnable_label(&row.runnable),
             row_base_label(row),
-            row.profile.as_deref().unwrap_or("-"),
+            row_profile_label(row),
             row.policy.pull_request,
             row.policy.landing,
             row.updated_at
@@ -313,6 +337,14 @@ fn row_base_label(row: &WorkflowListRow) -> String {
     row.base
         .clone()
         .unwrap_or_else(|| format!("({})", row.base_mode))
+}
+
+fn row_profile_label(row: &WorkflowListRow) -> String {
+    if !row.profiles.is_empty() {
+        row.profiles.join(",")
+    } else {
+        row.profile.as_deref().unwrap_or("-").into()
+    }
 }
 
 fn write_json(report: &WorkflowListReport) -> Result<()> {

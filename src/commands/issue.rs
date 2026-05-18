@@ -1,4 +1,5 @@
 use crate::cli::BaseMode;
+use crate::commands::profile_selection::{self, ProfileSelection};
 use crate::commands::profile_workspace::{
     ProfileBranchDecision, PromptPolicy, resolve_profile_branch,
 };
@@ -66,10 +67,6 @@ impl IssueRunPartialFailure {
             message: err.to_string(),
         }
     }
-
-    pub(crate) fn message(&self) -> &str {
-        &self.message
-    }
 }
 
 impl fmt::Display for IssueRunPartialFailure {
@@ -110,7 +107,7 @@ pub fn run(
         ctx,
         target,
         base_raw,
-        profile,
+        ProfileSelection::new(profile, &[]),
         matrix,
         None,
         PromptPolicy::Allow,
@@ -129,25 +126,7 @@ pub(crate) fn run_with_issue_snapshot(
         ctx,
         None,
         base_raw,
-        profile,
-        matrix,
-        Some(&prepared),
-        PromptPolicy::Allow,
-    )
-}
-
-pub(crate) fn run_with_issue_snapshot_many(
-    ctx: &Ctx,
-    base_raw: &Option<String>,
-    profile: Option<&str>,
-    matrix: bool,
-    prepared: PreparedIssueContext<'_>,
-) -> Result<Vec<IssueRunResult>> {
-    run_inner_many(
-        ctx,
-        None,
-        base_raw,
-        profile,
+        ProfileSelection::new(profile, &[]),
         matrix,
         Some(&prepared),
         PromptPolicy::Allow,
@@ -165,7 +144,7 @@ pub(crate) fn run_with_issue_snapshot_non_interactive(
         ctx,
         None,
         base_raw,
-        profile,
+        ProfileSelection::new(profile, &[]),
         matrix,
         Some(&prepared),
         PromptPolicy::Deny,
@@ -180,7 +159,8 @@ pub(crate) fn planned_worktrees_for_prepared_issue(
     naming: Option<&WorktreeNamingResult>,
 ) -> Result<Vec<PlannedIssueWorktree>> {
     if profile.is_some() {
-        let profiles = load_selected_profiles(ctx, profile)?;
+        let profiles =
+            profile_selection::load_profile_selection(ctx, ProfileSelection::new(profile, &[]))?;
         return profiles
             .into_iter()
             .map(|(profile_name, profile_config)| {
@@ -221,7 +201,7 @@ fn run_inner(
     ctx: &Ctx,
     target: Option<&str>,
     base_raw: &Option<String>,
-    profile: Option<&str>,
+    profile_selection: ProfileSelection<'_>,
     matrix: bool,
     prepared_issue: Option<&PreparedIssueContext<'_>>,
     prompt_policy: PromptPolicy,
@@ -230,7 +210,7 @@ fn run_inner(
         ctx,
         target,
         base_raw,
-        profile,
+        profile_selection,
         matrix,
         prepared_issue,
         prompt_policy,
@@ -244,11 +224,20 @@ fn run_inner_many(
     ctx: &Ctx,
     target: Option<&str>,
     base_raw: &Option<String>,
-    profile: Option<&str>,
+    profile_selection: ProfileSelection<'_>,
     matrix: bool,
     prepared_issue: Option<&PreparedIssueContext<'_>>,
     prompt_policy: PromptPolicy,
 ) -> Result<Vec<IssueRunResult>> {
+    let profile_configs = if matrix || profile_selection.uses_profiles() {
+        Some(profile_selection::load_profile_selection(
+            ctx,
+            profile_selection,
+        )?)
+    } else {
+        None
+    };
+
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
     // 1. Resolve issue
@@ -333,14 +322,14 @@ fn run_inner_many(
         .map(|issue| issue.on_start_issue_id)
         .unwrap_or(Some(raw_id));
 
-    if matrix || profile.is_some() {
+    if matrix || profile_selection.uses_profiles() {
         return run_profiles(
             ctx,
             &title,
             &branch_name,
             naming.as_ref(),
             base_raw,
-            profile,
+            profile_configs.expect("profile configs loaded before issue resolution"),
             ProfileRunOptions {
                 prepared_issue,
                 on_start_issue_id,
@@ -519,7 +508,7 @@ fn run_profiles(
     branch_name: &str,
     naming: Option<&WorktreeNamingResult>,
     base_raw: &Option<String>,
-    profile: Option<&str>,
+    profiles: Vec<(String, Config)>,
     options: ProfileRunOptions<'_>,
 ) -> Result<Vec<IssueRunResult>> {
     let issue_snapshot = options.prepared_issue.map(|issue| &issue.snapshot);
@@ -544,8 +533,6 @@ fn run_profiles(
     let additional_prompt_scope = options
         .prepared_issue
         .and_then(|issue| issue.additional_prompt_scope);
-    let profiles = load_selected_profiles(ctx, profile)?;
-
     ctx.ui.print_step(&format!(
         "Found {} profiles: {}",
         profiles.len(),
@@ -891,20 +878,6 @@ fn should_resolve_provider_branch_base(
         && prepared_issue.and_then(|issue| issue.branch_name).is_none()
 }
 
-fn load_selected_profiles(ctx: &Ctx, profile: Option<&str>) -> Result<Vec<(String, Config)>> {
-    if let Some(profile) = profile {
-        let config = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
-            .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))?;
-        return Ok(vec![(profile.to_string(), config)]);
-    }
-
-    let profiles = Config::load_profiles(&ctx.repo_root, &ctx.base_config)?;
-    if profiles.is_empty() {
-        bail!("No profile configs found in .local/profiles/*/profile.toml");
-    }
-    Ok(profiles)
-}
-
 pub fn build_provider<'a>(ctx: &'a Ctx) -> Result<Box<dyn IssueProvider + 'a>> {
     let issues_config = ctx.config.issues.as_ref().ok_or_else(|| {
         anyhow::anyhow!("No [issues] section in .wt.toml. Set provider = \"linear\" or \"github\"")
@@ -1047,6 +1020,18 @@ mod tests {
         let profile_dir = root.join(".local/profiles").join(name);
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+    }
+
+    fn run(
+        ctx: &Ctx,
+        target: Option<&str>,
+        base_raw: &Option<String>,
+        profile: Option<&str>,
+        selected_profiles: &[String],
+        matrix: bool,
+    ) -> Result<()> {
+        assert!(selected_profiles.is_empty());
+        super::run(ctx, target, base_raw, profile, matrix)
     }
 
     fn count_linear_start_updates(calls: &[CommandCall], issue_id: &str) -> usize {
@@ -1266,7 +1251,7 @@ mod tests {
             "new",
             None,
             "Use this task before changing code.",
-            Some("## Task Run Coordinator Handoff\n\nSend the report."),
+            Some("## Workflow Coordinator Handoff\n\nSend the report."),
             None,
         );
 
@@ -1362,7 +1347,7 @@ mod tests {
         );
         let base = Some("main".to_string());
 
-        let results = run_with_issue_snapshot_many(
+        let result = run_with_issue_snapshot(
             &ctx,
             &base,
             Some("codex"),
@@ -1388,8 +1373,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].branch_name, "add-schema-codex");
+        assert_eq!(result.branch_name, "add-schema-codex");
 
         let calls = runner.calls.lock().unwrap();
         assert!(calls.iter().any(|(cmd, args, _)| {
@@ -1523,7 +1507,7 @@ mod tests {
         );
 
         // This will fail at setup (no real filesystem) but proves the flow up to worktree creation
-        let result = run(&ctx, Some("680"), &None, None, false);
+        let result = run(&ctx, Some("680"), &None, None, &[], false);
         // We expect it to get past issue resolution and worktree creation
         // It may fail at setup::run_setup due to filesystem ops — that's OK for unit test
         assert!(result.is_ok() || result.unwrap_err().to_string().contains("setup"));
@@ -1552,7 +1536,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some("100"), &None, None, false);
+        let result = run(&ctx, Some("100"), &None, None, &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No branch name"));
     }
@@ -1591,7 +1575,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some("1"), &None, None, false);
+        let result = run(&ctx, Some("1"), &None, None, &[], false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
     }
 
@@ -1653,7 +1637,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some("672"), &None, None, false);
+        let result = run(&ctx, Some("672"), &None, None, &[], false);
         assert!(result.is_ok());
 
         let calls = runner.calls.lock().unwrap();
@@ -1765,7 +1749,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some("672"), &None, None, false);
+        let result = run(&ctx, Some("672"), &None, None, &[], false);
         assert!(result.is_ok());
 
         let calls = runner.calls.lock().unwrap();
@@ -1850,7 +1834,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, Some("672"), &Some(".".into()), None, false).unwrap();
+        run(&ctx, Some("672"), &Some(".".into()), None, &[], false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -1917,7 +1901,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, Some("5"), &Some(".".into()), None, false).unwrap();
+        run(&ctx, Some("5"), &Some(".".into()), None, &[], false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         assert!(calls.iter().any(|(cmd, args, _)| {
@@ -1993,7 +1977,7 @@ mod tests {
             &ctx,
             Some("123"),
             &Some("main".into()),
-            Some("codex"),
+            ProfileSelection::new(Some("codex"), &[]),
             false,
             None,
             PromptPolicy::Allow,
@@ -2046,7 +2030,7 @@ mod tests {
             &ctx,
             Some("123"),
             &Some("main".into()),
-            None,
+            ProfileSelection::new(None, &[]),
             true,
             None,
             PromptPolicy::Allow,
@@ -2102,7 +2086,7 @@ mod tests {
             &ctx,
             Some("123"),
             &Some("main".into()),
-            Some("codex"),
+            ProfileSelection::new(Some("codex"), &[]),
             false,
             None,
             PromptPolicy::Allow,
@@ -2145,7 +2129,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some("1"), &Some("main".into()), None, false);
+        let result = run(&ctx, Some("1"), &Some("main".into()), None, &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }
