@@ -732,11 +732,11 @@ fn grouped_task_runs(mut runs: Vec<TaskRunSummary>) -> Vec<WorkflowTaskRunGroup>
 
 fn task_run_status_order(status: &str) -> usize {
     match status {
-        "failed" => 0,
+        "prepared" => 0,
         "running" => 1,
-        "prepared" => 2,
+        "done" => 2,
         "skipped" => 3,
-        "done" => 4,
+        "failed" => 4,
         _ => 5,
     }
 }

@@ -138,6 +138,11 @@ mod tests {
         assert!(APP_JS.contains("summary-full full-text"));
         assert!(!APP_JS.contains("</summary><div class=\"full-text\""));
         assert!(APP_JS.contains("전문 보기"));
+        assert!(APP_JS.contains("확인 필요"));
+        assert!(APP_JS.contains("tabWorkflows: \"워크플로우\""));
+        assert!(APP_JS.contains("tabTaskRuns: \"작업 실행\""));
+        assert!(APP_JS.contains("workflowUiGroup"));
+        assert!(APP_JS.contains("taskRunNeedsAttention"));
         assert!(APP_JS.contains("config.source_files || []"));
         assert!(APP_JS.contains("effective_text"));
         assert!(APP_JS.contains("localStorage.setItem(LOCALE_KEY"));
