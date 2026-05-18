@@ -67,7 +67,7 @@ fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorRepo
 
 enum ResolvedConfig<'a> {
     Base(&'a Config),
-    Profile(Config),
+    Profile(Box<Config>),
 }
 
 impl<'a> ResolvedConfig<'a> {
@@ -85,7 +85,7 @@ fn resolve_config<'a>(ctx: &'a Ctx, profile: Option<&str>) -> Result<ResolvedCon
     };
     let config = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
         .ok_or_else(|| anyhow!("Profile '{profile}' not found"))?;
-    Ok(ResolvedConfig::Profile(config))
+    Ok(ResolvedConfig::Profile(Box::new(config)))
 }
 
 #[derive(Serialize)]

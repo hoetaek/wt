@@ -16,8 +16,6 @@ minor version instead of moving to `x.0.0`.
   omission default for `wt profile list`, and the `default` profile name stays
   reserved.
 
-## 0.29.0 - 2026-05-19
-
 - Added `wt doctor --profile <NAME>`, which runs the existing provider and
   tool readiness checks against the effective config produced by
   `.local/profiles/<name>` instead of the base effective config. The selected
@@ -26,8 +24,6 @@ minor version instead of moving to `x.0.0`.
   behavior and omits the field. Missing, invalid, or reserved profile names
   fail before any checks run with the same error style as other
   profile-aware commands.
-- Bumped the package version to `0.29.0` because `wt doctor --profile` adds a
-  user-facing CLI flag while `wt` is still pre-1.0.
 
 ## 0.28.0 - 2026-05-18
 
