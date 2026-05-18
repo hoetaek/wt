@@ -279,6 +279,8 @@ pub(super) fn screen_status(screen: &str) -> Option<AgentStatus> {
     }
     if lower.contains("working")
         || lower.contains("running")
+        || lower.contains("starting")
+        || lower.contains("waiting")
         || lower.contains("thinking")
         || lower.contains("exploring")
     {
@@ -293,7 +295,9 @@ pub(super) fn screen_status(screen: &str) -> Option<AgentStatus> {
 
 fn normalize_status(value: &str) -> Option<AgentStatus> {
     match normalize_token(value).as_str() {
-        "running" | "working" | "busy" | "thinking" => Some(AgentStatus::Running),
+        "running" | "working" | "busy" | "starting" | "waiting" | "thinking" => {
+            Some(AgentStatus::Running)
+        }
         "idle" | "ready" => Some(AgentStatus::Idle),
         "needs_input" | "needsinput" | "waiting_for_input" | "permissionrequest" => {
             Some(AgentStatus::NeedsInput)
@@ -411,6 +415,8 @@ mod tests {
     fn classifies_codex_running_and_idle_from_installed_hook_signals() {
         for (raw, expected) in [
             ("Running", AgentStatus::Running),
+            ("Starting", AgentStatus::Running),
+            ("Waiting", AgentStatus::Running),
             ("Idle", AgentStatus::Idle),
         ] {
             let events = vec![event(
@@ -482,6 +488,21 @@ mod tests {
             state.metadata.get("codex_hooks").map(String::as_str),
             Some("missing_or_inactive")
         );
+    }
+
+    #[test]
+    fn codex_waiting_screen_without_hook_signal_is_running() {
+        let observation = AgentObservation::new(
+            Some("gpt-5.5 xhigh . ~/dev/tools/wt . develop . Waiting . 5h 87%"),
+            &[],
+            &[],
+        );
+
+        let state = classify(&observation);
+
+        assert_eq!(state.agent_kind, AgentKind::Codex);
+        assert_eq!(state.status, AgentStatus::Running);
+        assert_eq!(state.warning.as_deref(), Some("codex_hooks_missing"));
     }
 
     #[test]

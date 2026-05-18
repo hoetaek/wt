@@ -1344,6 +1344,32 @@ mod tests {
     }
 
     #[test]
+    fn observe_work_uses_cmux_status_when_codex_footer_is_waiting() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
+        add_selected_surface(&mut runner);
+        runner.add_response(
+            "gpt-5.5 xhigh . ~/dev/tools/wt . develop . Waiting . 5h 87% . weekly 65%",
+            true,
+        );
+        runner.add_response("codex=Running", true);
+        runner.add_response("", true);
+        let ctx = fixture.ctx(runner);
+
+        let work = observe_work(&ctx, Some("feature")).unwrap();
+
+        assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
+        assert_eq!(work.state.agent_kind, AgentKind::Codex);
+        assert_eq!(work.state.status, AgentStatus::Running);
+        assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:4"));
+    }
+
+    #[test]
     fn observe_work_does_not_bind_selected_non_agent_surface_with_gpt_text() {
         let fixture = Fixture::new();
         let mut runner = MockRunner::new();

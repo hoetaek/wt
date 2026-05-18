@@ -32,19 +32,43 @@ pub(crate) fn screen_has_codex_ui_marker(screen: Option<&str>) -> bool {
 
 fn screen_has_codex_literal_marker(line: &str) -> bool {
     let line = line.trim();
-    let Some((first, rest)) = line.split_once(char::is_whitespace) else {
+    let mut tokens = line
+        .split_whitespace()
+        .map(trim_token)
+        .filter(|token| !token.is_empty());
+    let Some(first) = tokens.next() else {
         return false;
     };
     if trim_token(first) != "codex" {
         return false;
     }
-    rest.split_whitespace()
-        .any(|token| is_codex_status_token(token) || is_version_token(token))
+    let Some(second) = tokens.next() else {
+        return false;
+    };
+    is_codex_status_token(second)
+        || is_version_token(second)
+        || (second == "cli" && tokens.next().is_some_and(is_version_token))
 }
 
 fn screen_has_codex_model_status_line(line: &str) -> bool {
     let line = line.trim();
-    line.starts_with("gpt-") && line.split_whitespace().any(is_codex_status_token)
+    let tokens = line
+        .split_whitespace()
+        .map(trim_token)
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    if !is_gpt_model_token(first) {
+        return false;
+    }
+    let Some(status_index) = tokens.iter().position(|token| is_codex_status_token(token)) else {
+        return false;
+    };
+    status_index == 1
+        || tokens.iter().any(|token| is_reasoning_effort_token(token))
+        || (tokens.contains(&"context") && tokens.contains(&"left"))
 }
 
 fn screen_has_codex_modern_header(line: &str) -> bool {
@@ -71,6 +95,8 @@ fn is_codex_status_token(token: &str) -> bool {
         trim_token(token),
         "working"
             | "running"
+            | "starting"
+            | "waiting"
             | "thinking"
             | "exploring"
             | "ready"
@@ -107,8 +133,29 @@ mod tests {
     }
 
     #[test]
+    fn codex_waiting_footer_is_ui_marker() {
+        let screen = "gpt-5.5 xhigh . ~/dev/tools/wt . develop . Waiting . 5h 87% . weekly 65%";
+
+        assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn codex_starting_footer_is_ui_marker() {
+        let screen = "gpt-5.5 xhigh . ~/dev/tools/wt . develop . Starting . 5h 87% . weekly 65%";
+
+        assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
     fn generic_gpt_model_note_is_not_ui_marker() {
         let screen = "notes about gpt-5.5 model behavior";
+
+        assert!(!screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn generic_gpt_or_codex_waiting_prose_is_not_ui_marker() {
+        let screen = "gpt-5.5 is Waiting in this note\nCodex is Waiting for GPT output";
 
         assert!(!screen_has_codex_ui_marker(Some(screen)));
     }
