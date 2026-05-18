@@ -1218,6 +1218,41 @@ browser = "Google Chrome"
 }
 
 #[test]
+fn effective_site_materializes_runtime_defaults() {
+    let toml_str = r#"
+[site]
+provider = "herd"
+"#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    let site = config.effective_site().unwrap();
+    assert_eq!(site.provider, SiteProvider::Herd);
+    assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
+    assert_eq!(site.root.as_deref(), Some("."));
+    assert_eq!(site.secure, Some(true));
+    assert_eq!(site.open_browser, Some(false));
+    assert_eq!(site.url.as_deref(), Some("https://{{site_name}}.test"));
+    assert_eq!(site.target, None);
+}
+
+#[test]
+fn effective_traefik_site_materializes_target_default() {
+    let toml_str = r#"
+[site]
+provider = "traefik"
+secure = false
+"#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    let site = config.effective_site().unwrap();
+    assert_eq!(site.provider, SiteProvider::Traefik);
+    assert_eq!(site.secure, Some(false));
+    assert_eq!(site.url.as_deref(), Some("http://{{site_name}}.test"));
+    assert_eq!(
+        site.target.as_deref(),
+        Some("http://127.0.0.1:{{vite_port}}")
+    );
+}
+
+#[test]
 fn site_provider_none_disables_effective_site() {
     let toml_str = r#"
 [site]

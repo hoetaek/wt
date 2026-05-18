@@ -229,6 +229,13 @@ When `[workspace]` is configured, `wt config` also prints effective workspace
 colors, including built-in defaults. To change or disable a color, copy that
 line into the owning config file and override the value there.
 
+When an active `[site]` provider is configured, `wt config` prints the site
+defaults runtime setup uses, such as the generated name template, root,
+security, browser-opening behavior, URL template, and Traefik target. A
+disabled `provider = "none"` site section is omitted from effective output.
+When `[editor]` is configured, `wt config` prints the effective editor
+placement default, `cmux_surface`, unless it is overridden.
+
 `wt workflow task` and `wt workflow issue` snapshot the effective workflow
 policy into `.local/workflows/<id>.toml` for the prepared workflow.
 `wt workflow show` reads that prepared policy from the workflow file, not from

@@ -10,7 +10,7 @@ pub fn open_file(ctx: &Ctx, path: &Path) -> Result<()> {
     let path = normalize_path(path);
     let command = render_editor_command(&ctx.config.editor, &path);
 
-    match effective_placement(&ctx.config.editor) {
+    match ctx.config.editor.effective_placement() {
         EditorPlacement::CmuxSurface => open_in_cmux_surface(ctx, &command, &path),
         EditorPlacement::Process => open_as_process(ctx, &command),
     }
@@ -64,13 +64,6 @@ fn render_editor_command(config: &EditorConfig, path: &Path) -> String {
     vars.insert("path".into(), shell_quote(&raw_path));
     vars.insert("path_raw".into(), raw_path);
     template::render(&template, &vars)
-}
-
-fn effective_placement(config: &EditorConfig) -> EditorPlacement {
-    config
-        .placement
-        .clone()
-        .unwrap_or(EditorPlacement::CmuxSurface)
 }
 
 fn env_editor_command() -> Option<String> {

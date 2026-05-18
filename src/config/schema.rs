@@ -1,6 +1,7 @@
 use anyhow::bail;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 pub const RESERVED_PROFILE_NAME: &str = "default";
@@ -17,6 +18,9 @@ pub const WORKSPACE_DEFAULT_COLORS: [(&str, &str); 4] = [
     (WORKSPACE_COLOR_KIND_NEW, "green"),
     (WORKSPACE_COLOR_KIND_PR, "magenta"),
 ];
+const DEFAULT_SITE_NAME_TEMPLATE: &str = "{{repo}}-{{branch_slug}}";
+const DEFAULT_SITE_ROOT: &str = ".";
+const DEFAULT_TRAEFIK_SITE_TARGET_TEMPLATE: &str = "http://127.0.0.1:{{vite_port}}";
 
 pub fn default_workspace_color(kind: &str) -> Option<&'static str> {
     WORKSPACE_DEFAULT_COLORS
@@ -231,6 +235,14 @@ pub enum EditorPlacement {
     Process,
 }
 
+impl EditorConfig {
+    pub fn effective_placement(&self) -> EditorPlacement {
+        self.placement
+            .clone()
+            .unwrap_or(EditorPlacement::CmuxSurface)
+    }
+}
+
 impl Default for SiteConfig {
     fn default() -> Self {
         Self {
@@ -244,6 +256,58 @@ impl Default for SiteConfig {
             target: None,
         }
     }
+}
+
+impl SiteConfig {
+    pub fn with_effective_defaults(&self) -> Self {
+        let mut site = self.clone();
+        site.name
+            .get_or_insert_with(|| DEFAULT_SITE_NAME_TEMPLATE.into());
+        site.root.get_or_insert_with(|| DEFAULT_SITE_ROOT.into());
+        site.secure.get_or_insert(true);
+        site.open_browser.get_or_insert(false);
+        if site.url.is_none() {
+            site.url = Some(default_site_url(site.secure.unwrap_or(true)));
+        }
+        if site.target.is_none() && site.provider == SiteProvider::Traefik {
+            site.target = Some(DEFAULT_TRAEFIK_SITE_TARGET_TEMPLATE.into());
+        }
+        site
+    }
+
+    pub fn effective_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(DEFAULT_SITE_NAME_TEMPLATE)
+    }
+
+    pub fn effective_root(&self) -> &str {
+        self.root.as_deref().unwrap_or(DEFAULT_SITE_ROOT)
+    }
+
+    pub fn effective_secure(&self) -> bool {
+        self.secure.unwrap_or(true)
+    }
+
+    pub fn effective_open_browser(&self) -> bool {
+        self.open_browser.unwrap_or(false)
+    }
+
+    pub fn effective_url(&self) -> Cow<'_, str> {
+        match self.url.as_deref() {
+            Some(url) => Cow::Borrowed(url),
+            None => Cow::Owned(default_site_url(self.effective_secure())),
+        }
+    }
+
+    pub fn effective_target(&self) -> Option<&str> {
+        self.target.as_deref().or_else(|| {
+            (self.provider == SiteProvider::Traefik).then_some(DEFAULT_TRAEFIK_SITE_TARGET_TEMPLATE)
+        })
+    }
+}
+
+fn default_site_url(secure: bool) -> String {
+    let scheme = if secure { "https" } else { "http" };
+    format!("{scheme}://{{{{site_name}}}}.test")
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq, Clone)]
@@ -670,7 +734,17 @@ impl Config {
         if site.provider == SiteProvider::None {
             return None;
         }
-        Some(site.clone())
+        Some(site.with_effective_defaults())
+    }
+
+    pub fn effective_editor(&self) -> Option<EditorConfig> {
+        if self.editor == EditorConfig::default() {
+            return None;
+        }
+        Some(EditorConfig {
+            command: self.editor.command.clone(),
+            placement: Some(self.editor.effective_placement()),
+        })
     }
 
     pub fn has_site(&self) -> bool {

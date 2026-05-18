@@ -1269,6 +1269,73 @@ fn config_preserves_empty_workspace_color_overrides() {
 }
 
 #[test]
+fn config_renders_active_site_runtime_defaults() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[site]\nprovider = \"traefik\"\nsecure = false\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[site]"))
+        .stdout(predicate::str::contains(
+            "name = \"{{repo}}-{{branch_slug}}\"",
+        ))
+        .stdout(predicate::str::contains("root = \".\""))
+        .stdout(predicate::str::contains("open_browser = false"))
+        .stdout(predicate::str::contains(
+            "url = \"http://{{site_name}}.test\"",
+        ))
+        .stdout(predicate::str::contains(
+            "target = \"http://127.0.0.1:{{vite_port}}\"",
+        ));
+}
+
+#[test]
+fn config_omits_inactive_site_section() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[site]\nprovider = \"none\"\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[site]").not());
+}
+
+#[test]
+fn config_renders_editor_placement_default_when_editor_is_active() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[editor]\ncommand = \"code {{path}}\"\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[editor]"))
+        .stdout(predicate::str::contains("command = \"code {{path}}\""))
+        .stdout(predicate::str::contains("placement = \"cmux_surface\""));
+}
+
+#[test]
 fn list_supports_json_and_directory_override() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());

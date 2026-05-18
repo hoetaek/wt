@@ -71,6 +71,11 @@ Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 �
 merge된 layer, convention file, built-in default를 사용자가 복사해 수정할 수 있는 형태로
 보여준다. 명령 구현은 user-facing default를 각 call site에서 새로 해석하지 말고 config
 모델의 effective accessor나 effective policy snapshot을 거쳐 적용해야 한다.
+활성 section의 runtime default는 `wt config` 출력에 materialize한다. 예를 들어 active
+`[site]` provider는 name/root/secure/open_browser/url과 Traefik target default까지 보여주고,
+active `[editor]` 설정은 생략된 placement의 `cmux_surface` default를 보여준다. 반대로
+`provider = "none"`처럼 feature가 inactive인 section은 effective output에 unrelated section으로
+내보내지 않는다.
 
 `[workspace].colors`는 workspace를 시작하는 command surface의 기본 cmux 색상이다.
 Canonical 색상 key는 `task`, `issue`, `new`, `pr`이다. `task`는 TaskDocument에
