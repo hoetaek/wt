@@ -73,6 +73,7 @@ fn is_codex_status_token(token: &str) -> bool {
             | "running"
             | "thinking"
             | "exploring"
+            | "waiting"
             | "ready"
             | "idle"
             | "failed"
@@ -107,8 +108,22 @@ mod tests {
     }
 
     #[test]
+    fn waiting_codex_footer_is_ui_marker() {
+        let screen = "gpt-5.5 xhigh ... Waiting ...";
+
+        assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
     fn generic_gpt_model_note_is_not_ui_marker() {
         let screen = "notes about gpt-5.5 model behavior";
+
+        assert!(!screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn generic_gpt_waiting_note_is_not_ui_marker() {
+        let screen = "notes about gpt-5.5 Waiting behavior";
 
         assert!(!screen_has_codex_ui_marker(Some(screen)));
     }

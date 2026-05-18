@@ -293,7 +293,7 @@ pub(super) fn screen_status(screen: &str) -> Option<AgentStatus> {
 
 fn normalize_status(value: &str) -> Option<AgentStatus> {
     match normalize_token(value).as_str() {
-        "running" | "working" | "busy" | "thinking" => Some(AgentStatus::Running),
+        "running" | "working" | "busy" | "thinking" | "waiting" => Some(AgentStatus::Running),
         "idle" | "ready" => Some(AgentStatus::Idle),
         "needs_input" | "needsinput" | "waiting_for_input" | "permissionrequest" => {
             Some(AgentStatus::NeedsInput)
@@ -411,6 +411,7 @@ mod tests {
     fn classifies_codex_running_and_idle_from_installed_hook_signals() {
         for (raw, expected) in [
             ("Running", AgentStatus::Running),
+            ("Waiting", AgentStatus::Running),
             ("Idle", AgentStatus::Idle),
         ] {
             let events = vec![event(

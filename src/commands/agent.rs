@@ -675,6 +675,29 @@ mod tests {
     }
 
     #[test]
+    fn json_status_uses_workspace_status_for_codex_waiting_footer() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        add_selected_surface(&mut runner);
+        runner.add_response("gpt-5.5 xhigh ... Waiting ...", true);
+        runner.add_response("codex=Running icon=bolt.fill color=#4C8DFF", true);
+        runner.add_response("", true);
+        let ctx = fixture.ctx(runner, OutputMode::Json);
+
+        let (report, exit_code) = observe_status(&ctx, Some("feature"), "status").unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(report.agent.kind, "codex");
+        assert_eq!(report.agent.state, "running");
+        assert_eq!(report.cmux.surface.as_deref(), Some("surface:4"));
+        assert_eq!(report.cmux.candidates[0].agent, "codex");
+        assert!(report.cmux.candidates[0].live_agent_candidate);
+    }
+
+    #[test]
     fn human_output_names_target_agent_status_and_cmux_contact() {
         let fixture = Fixture::new();
         let mut runner = MockRunner::new();
