@@ -888,13 +888,13 @@ fn agent_kind_from_processes(processes: &[CmuxProcessInfo]) -> Option<AgentKind>
 
 fn process_matches_codex(process: &CmuxProcessInfo) -> bool {
     process_name_is(&process.name, &["codex"])
-        || process_path_has_agent_component(process.path.as_deref(), &["codex"])
+        || process_path_basename_is(process.path.as_deref(), &["codex"])
         || process_path_has_vendor_package(process.path.as_deref(), "@openai", "codex")
 }
 
 fn process_matches_claude(process: &CmuxProcessInfo) -> bool {
     process_name_is(&process.name, &["claude", "claude-code", "claude_code"])
-        || process_path_has_agent_component(
+        || process_path_basename_is(
             process.path.as_deref(),
             &["claude", "claude-code", "claude_code"],
         )
@@ -906,13 +906,20 @@ fn process_name_is(name: &str, expected: &[&str]) -> bool {
     expected.iter().any(|expected| name == *expected)
 }
 
-fn process_path_has_agent_component(path: Option<&str>, components: &[&str]) -> bool {
+fn process_path_basename_is(path: Option<&str>, expected: &[&str]) -> bool {
     let Some(path) = path else {
         return false;
     };
-    path.to_ascii_lowercase()
-        .split('/')
-        .any(|component| components.contains(&component))
+    let path = path.to_ascii_lowercase();
+    let Some(basename) = path.rsplit('/').find(|part| !part.is_empty()) else {
+        return false;
+    };
+    expected.iter().any(|expected| {
+        basename == *expected
+            || basename
+                .strip_suffix(".js")
+                .is_some_and(|stem| stem == *expected)
+    })
 }
 
 fn process_path_has_vendor_package(path: Option<&str>, scope: &str, package: &str) -> bool {
@@ -1488,6 +1495,31 @@ mod tests {
             Some("agent_status_signals_missing")
         );
         assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:4"));
+    }
+
+    #[test]
+    fn process_path_detection_ignores_parent_directory_agent_names() {
+        let node_under_codex_home = CmuxProcessInfo {
+            name: "node".into(),
+            path: Some("/Users/codex/.nvm/versions/node/bin/node".into()),
+        };
+        let node_under_claude_home = CmuxProcessInfo {
+            name: "node".into(),
+            path: Some("/Users/claude/.nvm/versions/node/bin/node".into()),
+        };
+        let codex_binary = CmuxProcessInfo {
+            name: "node".into(),
+            path: Some("/opt/tools/codex".into()),
+        };
+        let claude_binary = CmuxProcessInfo {
+            name: "node".into(),
+            path: Some("/opt/tools/claude-code.js".into()),
+        };
+
+        assert!(!process_matches_codex(&node_under_codex_home));
+        assert!(!process_matches_claude(&node_under_claude_home));
+        assert!(process_matches_codex(&codex_binary));
+        assert!(process_matches_claude(&claude_binary));
     }
 
     #[test]
