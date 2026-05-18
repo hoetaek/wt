@@ -388,14 +388,15 @@ Workspaces can opt into an isolated debuggable Chrome instance during setup:
 [workspace.chrome_devtools]
 enabled = true
 # port = 9222
-# user_data_dir = "{{worktree_path}}/.chrome-devtools-user-data"
+# user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
 # url = "{{site_url}}"
 ```
 
 When enabled, `wt` reserves a localhost port, launches Chrome with
-`--remote-debugging-address=127.0.0.1`, and uses a non-default worktree-local
-user data directory. Setup templates, post-deps tabs, local context, and agent
-bootstrap can use `{{chrome_debug_port}}`, `{{chrome_debug_url}}`, and
+`--remote-debugging-address=127.0.0.1`, and uses a non-default per-worktree user
+data directory under the worktree parent, outside the repository checkout.
+Setup templates, post-deps tabs, local context, and agent bootstrap can use
+`{{chrome_debug_port}}`, `{{chrome_debug_url}}`, and
 `{{chrome_user_data_dir}}`. A localhost Chrome remote debugging endpoint lets
 local processes control that browser instance, so enable it only for workspaces
 where that local access is acceptable.

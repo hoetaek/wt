@@ -1284,7 +1284,7 @@ fn config_renders_enabled_workspace_chrome_devtools_defaults() {
         .stdout(predicate::str::contains("[workspace.chrome_devtools]"))
         .stdout(predicate::str::contains("enabled = true"))
         .stdout(predicate::str::contains(
-            "user_data_dir = \"{{worktree_path}}/.chrome-devtools-user-data\"",
+            "user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"",
         ))
         .stdout(predicate::str::contains("url = \"{{site_url}}/dashboard\""))
         .stdout(predicate::str::contains("port =").not());
