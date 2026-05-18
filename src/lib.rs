@@ -37,6 +37,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             matrix,
         } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
         Commands::Task { command } => match command {
+            TaskCommand::List => commands::task_list::run(ctx),
             TaskCommand::Import { issues } => commands::task::import(ctx, issues),
             TaskCommand::Run {
                 tasks,

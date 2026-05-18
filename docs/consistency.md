@@ -193,6 +193,16 @@ profile convention file merge를 모두 끝낸 뒤 최종 effective config에서
 TaskDocument는 작업이 무엇인지를 담는 정의다. `.local/tasks/<task>.toml`
 아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
 
+`wt task list`는 `.local/tasks/<task>.toml`에 저장된 TaskDocument file의 canonical
+read-only inventory다. `wt task run`의 runnable selector가 아니므로 이미 완료된
+TaskRun 때문에 selector에서 빠지는 TaskDocument도 보여주고, selector의 10-row visible
+cap을 적용하지 않는다. Output은 TaskDocument의 key, path, title, branch,
+origin/publish state, local-vs-provider-origin source, 짧은 body summary를 보여준다.
+TaskDocument TOML parse/validation failure는 조용히 숨기지 않고 text warning 또는 JSON
+`invalid_tasks`로 보고한다. `wt task list`는 worktree, local branch, TaskRun, Workflow,
+provider issue, pull request, agent setup을 만들거나 수정하지 않는다. Workflow inventory는
+계속 `wt workflow list`, worktree/branch/site state는 계속 `wt list`가 맡는다.
+
 TaskDocument import는 configured issue provider의 기존 issue를 local task 정의로
 가져오는 side effect다. Canonical command shape는 `wt task import` 또는
 `wt task import <issue>...`다. Bare `wt task import`는 provider issue를
@@ -390,8 +400,9 @@ default도 all-workflow inventory로 확장하지 않는다. Output은 Workflow 
 `status`를 만들지 않고, linked TaskRun에서 파생한 task-run status count/summary와 mode별
 runnable metadata를 보여준다. Workflow TOML parse/validation failure는 조용히 숨기지 않고
 text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계속 Workflow `mode`
-값일 뿐이므로 `wt list workflow`, top-level `batch`/`stack`, `wt task list`, `wt profile list`
-같은 symmetry command를 추가하지 않는다.
+값일 뿐이므로 `wt list workflow`, top-level `batch`/`stack`, `wt profile list` 같은 symmetry
+command를 추가하지 않는다. `wt task list`는 symmetry command가 아니라 별도 TaskDocument
+inventory surface이며 Workflow, TaskRun, branch, worktree 목록 의미를 갖지 않는다.
 
 Workspace label은 저장 상태가 아니라 현재 실행을 찾기 위한 표시다. 좁은 탭에서 잘려도
 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을 앞에 붙이고, branch/path/site

@@ -79,6 +79,7 @@ wt task run add-profile-docs
 Prepare local TaskDocuments without starting work:
 
 ```bash
+wt task list
 wt task import PROJ-123
 wt task import
 wt task publish add-profile-docs
@@ -121,6 +122,9 @@ Land reviewed work with Git or pull requests first.
 - `wt issue` starts a worktree from an existing provider issue.
 - `wt pr` opens existing pull request branches as worktrees.
 - `TaskDocument` files in `.local/tasks/<task>.toml` define prepared local work.
+- `wt task list` is the canonical TaskDocument inventory. It lists all valid
+  local TaskDocument files, reports invalid task TOML files, and does not start
+  worktrees, branches, TaskRuns, Workflows, provider issues, or pull requests.
 - `wt task import [<issue>...]` imports provider issues as TaskDocuments,
   records title, branch, body, and `[origin]`, and may materialize the provider
   issue branch first; it does not start worktrees, local branches, TaskRuns,
@@ -258,6 +262,7 @@ name.
 | `wt issue` | Start work from a provider issue |
 | `wt pr` | Start worktrees from pull requests |
 | `wt new` | Start work from branch-name text |
+| `wt task list` | List saved local TaskDocuments |
 | `wt task import` | Import provider issues as local TaskDocuments |
 | `wt task run` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
