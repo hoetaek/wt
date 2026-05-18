@@ -73,6 +73,7 @@ fn is_codex_status_token(token: &str) -> bool {
             | "running"
             | "thinking"
             | "exploring"
+            | "waiting"
             | "ready"
             | "idle"
             | "failed"
@@ -102,6 +103,13 @@ mod tests {
     #[test]
     fn modern_codex_header_is_ui_marker() {
         let screen = "remove-task-run-source . gpt-5.5 xhigh . Context 94% left . 5h 91%";
+
+        assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn codex_waiting_footer_is_ui_marker() {
+        let screen = "gpt-5.5 xhigh . Waiting . 5h 91%";
 
         assert!(screen_has_codex_ui_marker(Some(screen)));
     }
