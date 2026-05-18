@@ -481,10 +481,11 @@ read-only inventory다. `wt workflow run`의 runnable selector가 아니므로 r
 필터링하거나 selector의 10-row visible cap을 적용하지 않는다. `wt workflow show`의 latest
 default도 all-workflow inventory로 확장하지 않는다. Output은 Workflow 자체의 단일
 `status`를 만들지 않고, linked TaskRun에서 파생한 task-run status count/summary와 mode별
-runnable metadata를 보여준다. Human text output은 workflow id/mode, TaskRun summary,
-runnable summary, updated timestamp를 primary line에 두고 objective, base/profile/policy,
-path는 secondary detail line에 둔다. JSON output은 raw runnable reason identifiers를
-계속 machine-readable metadata로 보존한다. Workflow TOML parse/validation failure는 조용히 숨기지 않고
+runnable metadata를 보여준다. Human text output은 `runnable`, `waiting`, `done` 같은
+파생 presentation group 아래에 workflow id/mode, TaskRun summary, profile/policy preview를
+list row로 두고 objective, human reason, base, path는 secondary detail line에 둔다. JSON
+output은 raw runnable reason identifiers를 계속 machine-readable metadata로 보존한다.
+Workflow TOML parse/validation failure는 조용히 숨기지 않고
 text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계속 Workflow `mode`
 값일 뿐이므로 `wt list workflow`, top-level `batch`/`stack`, `wt profile list` 같은 symmetry
 command를 추가하지 않는다. `wt task list`는 symmetry command가 아니라 별도 TaskDocument

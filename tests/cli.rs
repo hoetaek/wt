@@ -454,6 +454,9 @@ fn workflow_list_help_explains_canonical_inventory() {
         ))
         .stdout(predicate::str::contains(
             "reports invalid workflow TOML files",
+        ))
+        .stdout(predicate::str::contains(
+            "derived action labels such as runnable, waiting, and done",
         ));
 }
 

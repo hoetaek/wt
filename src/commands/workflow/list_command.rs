@@ -290,13 +290,87 @@ fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
         return;
     }
 
-    for row in &report.workflows {
-        ctx.ui.print_step(&workflow_identity_label(row));
-        if let Some(objective) = row.objective_summary.as_deref() {
-            ctx.ui.print_dim(&format!("  Objective: {objective}"));
+    let mut printed_group = false;
+    for group in [
+        WorkflowDisplayGroup::Runnable,
+        WorkflowDisplayGroup::Waiting,
+        WorkflowDisplayGroup::Done,
+    ] {
+        let rows = report
+            .workflows
+            .iter()
+            .filter(|row| display_group(row) == group)
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            continue;
         }
-        ctx.ui.print_dim(&workflow_detail_label(row));
-        ctx.ui.print_dim(&format!("  Path: {}", row.path));
+        print_workflow_group(ctx, group, &rows, printed_group);
+        printed_group = true;
+    }
+
+    if !report.invalid_workflows.is_empty() {
+        if printed_group {
+            ctx.ui.print_dim("");
+        }
+        ctx.ui.print_step("invalid");
+        for invalid in &report.invalid_workflows {
+            ctx.ui.print_warning(&format!(
+                "{}  file {}  {}",
+                invalid.id,
+                invalid.path,
+                one_line(&invalid.error)
+            ));
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkflowDisplayGroup {
+    Runnable,
+    Waiting,
+    Done,
+}
+
+impl WorkflowDisplayGroup {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Runnable => "runnable",
+            Self::Waiting => "waiting",
+            Self::Done => "done",
+        }
+    }
+}
+
+fn display_group(row: &WorkflowListRow) -> WorkflowDisplayGroup {
+    if row.runnable.runnable {
+        return WorkflowDisplayGroup::Runnable;
+    }
+
+    let terminal = row.task_runs.done + row.task_runs.skipped;
+    if row.state_error.is_none() && row.task_runs.total > 0 && terminal == row.task_runs.total {
+        WorkflowDisplayGroup::Done
+    } else {
+        WorkflowDisplayGroup::Waiting
+    }
+}
+
+fn print_workflow_group(
+    ctx: &Ctx,
+    group: WorkflowDisplayGroup,
+    rows: &[&WorkflowListRow],
+    already_printed: bool,
+) {
+    if already_printed {
+        ctx.ui.print_dim("");
+    }
+    ctx.ui.print_step(group.label());
+
+    for row in rows {
+        ctx.ui.print_dim(&workflow_row_summary(row));
+        if let Some(objective) = row.objective_summary.as_deref() {
+            ctx.ui.print_dim(&format!("    {objective}"));
+        }
+        ctx.ui.print_dim(&workflow_detail_line(row, group));
         if let Some(error) = row.state_error.as_deref() {
             ctx.ui.print_warning(&format!(
                 "Workflow state unavailable for {}: {}",
@@ -305,60 +379,93 @@ fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
             ));
         }
     }
+}
 
-    for invalid in &report.invalid_workflows {
-        ctx.ui.print_warning(&format!(
-            "Invalid workflow {}: {}",
-            invalid.path,
-            one_line(&invalid.error)
-        ));
+fn workflow_row_summary(row: &WorkflowListRow) -> String {
+    let mut parts = vec![
+        row.id.clone(),
+        row.mode.clone(),
+        task_run_row_summary(&row.task_runs),
+    ];
+
+    if let Some(profile) = row_profile_preview(row) {
+        parts.push(profile);
+    }
+    parts.push(format!(
+        "{}/{}",
+        row.policy.pull_request, row.policy.landing
+    ));
+
+    format!("  {}", parts.join("  "))
+}
+
+fn task_run_row_summary(summary: &TaskRunSummary) -> String {
+    let counts = [
+        ("prepared", summary.prepared),
+        ("running", summary.running),
+        ("done", summary.done),
+        ("failed", summary.failed),
+        ("skipped", summary.skipped),
+        ("missing", summary.missing),
+    ];
+    let non_zero = counts
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .collect::<Vec<_>>();
+
+    match non_zero.as_slice() {
+        [] => "0 none".into(),
+        [(status, count)] if *count == summary.total => format!("{} {status}", summary.total),
+        _ => format!("{} mixed ({})", summary.total, summary.summary),
     }
 }
 
-fn workflow_identity_label(row: &WorkflowListRow) -> String {
-    format!(
-        "{}  mode {}  task_runs {}  runnable {}  updated {}",
-        row.id,
-        row.mode,
-        task_run_label(&row.task_runs),
-        runnable_label(&row.runnable),
-        row.updated_at
-    )
+fn workflow_detail_line(row: &WorkflowListRow, group: WorkflowDisplayGroup) -> String {
+    let mut details = Vec::new();
+    if let Some(action) = workflow_action_detail(row, group) {
+        details.push(action);
+    }
+    details.push(format!("base {}", row_base_label(row)));
+    details.push(format!("file {}", row.path));
+    format!("    {}", details.join(" · "))
 }
 
-fn workflow_detail_label(row: &WorkflowListRow) -> String {
-    format!(
-        "  Base: {}  Profile: {}  Policy: {}/{}",
-        row_base_label(row),
-        row_profile_label(row),
-        row.policy.pull_request,
-        row.policy.landing
-    )
-}
-
-fn task_run_label(summary: &TaskRunSummary) -> String {
-    format!("{} ({})", summary.total, summary.summary)
-}
-
-fn runnable_label(runnable: &RunnableMetadata) -> String {
-    if runnable.runnable {
-        format!("yes ({})", runnable.runnable_count)
-    } else {
-        format!("no ({})", non_runnable_label(&runnable.reason))
+fn workflow_action_detail(row: &WorkflowListRow, group: WorkflowDisplayGroup) -> Option<String> {
+    match group {
+        WorkflowDisplayGroup::Runnable => {
+            if let Some(task) = row.runnable.next_task.as_deref() {
+                Some(format!("next {}", truncate_chars(task, 48)))
+            } else if row.runnable.runnable_count > 0
+                && row.runnable.runnable_count < row.task_runs.total
+            {
+                Some(format!("runnable {}", row.runnable.runnable_count))
+            } else {
+                None
+            }
+        }
+        WorkflowDisplayGroup::Waiting => Some(format!(
+            "reason {}",
+            human_non_runnable_reason(&row.runnable.reason)
+        )),
+        WorkflowDisplayGroup::Done => None,
     }
 }
 
-fn non_runnable_label(reason: &str) -> &'static str {
+fn human_non_runnable_reason(reason: &str) -> &'static str {
     match reason {
         "single_requires_all_task_runs_prepared_or_failed" => {
-            "needs all task runs prepared or failed"
+            "waiting for all task runs to be prepared or failed"
         }
-        "batch_has_no_prepared_or_failed_task_runs" => "no prepared or failed task runs",
-        "matrix_has_no_prepared_or_failed_profile_runs" => "no prepared or failed profile runs",
-        "stack_has_running_task_run" => "running task must complete",
-        "stack_has_no_next_prepared_or_failed_task_run" => "no next prepared or failed task",
-        "state_unavailable" => "state unavailable",
-        _ => "not runnable",
+        "batch_has_no_prepared_or_failed_task_runs" => "waiting for a prepared or failed task run",
+        "matrix_has_no_prepared_or_failed_profile_runs" => {
+            "waiting for a prepared or failed profile run"
+        }
+        "stack_has_running_task_run" => "waiting for running task",
+        "stack_has_no_next_prepared_or_failed_task_run" => {
+            "waiting for next prepared or failed task"
+        }
+        "state_unavailable" => "workflow state unavailable",
+        _ => "not currently runnable",
     }
 }
 
@@ -368,27 +475,14 @@ fn row_base_label(row: &WorkflowListRow) -> String {
         .unwrap_or_else(|| format!("({})", row.base_mode))
 }
 
-fn row_profile_label(row: &WorkflowListRow) -> String {
+fn row_profile_preview(row: &WorkflowListRow) -> Option<String> {
     if !row.profiles.is_empty() {
-        let preview = row
-            .profiles
-            .iter()
-            .take(2)
-            .map(|profile| truncate_chars(profile, 24))
-            .collect::<Vec<_>>();
-        let remaining = row.profiles.len().saturating_sub(preview.len());
-        let mut parts = preview;
-        if remaining > 0 {
-            parts.push(format!("+{remaining}"));
-        }
-        let noun = if row.profiles.len() == 1 {
-            "profile"
-        } else {
-            "profiles"
-        };
-        format!("{} {} ({})", row.profiles.len(), noun, parts.join(", "))
+        Some(format!("profiles {}", row.profiles.len()))
     } else {
-        row.profile.as_deref().unwrap_or("-").into()
+        row.profile
+            .as_deref()
+            .filter(|profile| !profile.trim().is_empty())
+            .map(|profile| format!("profile {}", truncate_chars(profile, 24)))
     }
 }
 
@@ -489,28 +583,68 @@ run = "run-2026-05-18-001-schema"
     }
 
     #[test]
-    fn print_text_keeps_state_on_primary_line_and_details_secondary() {
+    fn print_text_groups_rows_by_derived_action_state() {
         let dir = tempfile::tempdir().unwrap();
         let (ctx, ui) = ctx_with_ui(dir.path(), OutputMode::Text);
-        write_task(dir.path(), "schema", "feature/schema");
+        write_task(dir.path(), "runnable-task", "feature/runnable");
         write_task_run(
             dir.path(),
-            "run-2026-05-18-001-schema",
-            "schema",
-            "feature/schema",
-            "done",
+            "run-2026-05-18-001-runnable",
+            "runnable-task",
+            "feature/runnable",
+            "prepared",
             "2026-05-18-001",
         );
         write_workflow(
             dir.path(),
             "2026-05-18-001",
-            "single",
+            "batch",
             r#"objective = "Ship search"
-profile = "codex"
 "#,
             r#"[[tasks]]
-task = "schema"
-run = "run-2026-05-18-001-schema"
+task = "runnable-task"
+run = "run-2026-05-18-001-runnable"
+"#,
+        );
+
+        write_task(dir.path(), "waiting-task", "feature/waiting");
+        write_task_run(
+            dir.path(),
+            "run-2026-05-18-002-waiting",
+            "waiting-task",
+            "feature/waiting",
+            "running",
+            "2026-05-18-002",
+        );
+        write_workflow(
+            dir.path(),
+            "2026-05-18-002",
+            "stack",
+            "",
+            r#"[[tasks]]
+task = "waiting-task"
+run = "run-2026-05-18-002-waiting"
+"#,
+        );
+
+        write_task(dir.path(), "done-task", "feature/done");
+        write_task_run(
+            dir.path(),
+            "run-2026-05-18-003-done",
+            "done-task",
+            "feature/done",
+            "done",
+            "2026-05-18-003",
+        );
+        write_workflow(
+            dir.path(),
+            "2026-05-18-003",
+            "single",
+            r#"profile = "codex"
+"#,
+            r#"[[tasks]]
+task = "done-task"
+run = "run-2026-05-18-003-done"
 "#,
         );
 
@@ -519,30 +653,41 @@ run = "run-2026-05-18-001-schema"
 
         let steps = ui.steps.lock().unwrap();
         let dims = ui.dims.lock().unwrap();
-        assert_eq!(steps.len(), 1);
-        let primary = &steps[0];
-        assert!(primary.contains("2026-05-18-001"));
-        assert!(primary.contains("mode single"));
-        assert!(primary.contains("task_runs 1 (1 done)"));
-        assert!(primary.contains("runnable no (needs all task runs prepared or failed)"));
-        assert!(primary.contains("updated 2026-05-18T00:00:00Z"));
-        assert!(!primary.contains("single_requires_all_task_runs_prepared_or_failed"));
-        assert!(!primary.contains("base main"));
-        assert!(!primary.contains("profile codex"));
-        assert!(dims.iter().any(|line| line == "  Objective: Ship search"));
-        assert!(dims.iter().any(|line| {
-            line.contains("Base: main")
-                && line.contains("Profile: codex")
-                && line.contains("Policy: none/manual")
-        }));
+        assert_eq!(steps.as_slice(), ["runnable", "waiting", "done"]);
         assert!(
             dims.iter()
-                .any(|line| line == "  Path: .local/workflows/2026-05-18-001.toml")
+                .any(|line| line == "  2026-05-18-001  batch  1 prepared  none/manual")
         );
+        assert!(dims.iter().any(|line| line == "    Ship search"));
+        assert!(
+            dims.iter().any(|line| {
+                line == "    base main · file .local/workflows/2026-05-18-001.toml"
+            })
+        );
+        assert!(
+            dims.iter()
+                .any(|line| line == "  2026-05-18-002  stack  1 running  none/manual")
+        );
+        assert!(dims.iter().any(|line| {
+            line == "    reason waiting for running task · base main · file .local/workflows/2026-05-18-002.toml"
+        }));
+        assert!(dims.iter().any(|line| {
+            line == "  2026-05-18-003  single  1 done  profile codex  none/manual"
+        }));
+
+        let rendered = steps
+            .iter()
+            .chain(dims.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!rendered.contains("stack_has_running_task_run"));
+        assert!(!rendered.contains("runnable no"));
+        assert!(!rendered.contains("updated 2026-05-18T00:00:00Z"));
     }
 
     #[test]
-    fn print_text_summarizes_matrix_profiles_off_primary_line() {
+    fn print_text_summarizes_matrix_profiles_as_row_preview() {
         let dir = tempfile::tempdir().unwrap();
         let (ctx, ui) = ctx_with_ui(dir.path(), OutputMode::Text);
         let workflow_id = "2026-05-18-002";
@@ -598,19 +743,22 @@ run = "run-{workflow_id}-2"
 
         let steps = ui.steps.lock().unwrap();
         let dims = ui.dims.lock().unwrap();
-        let primary = &steps[0];
-        assert!(primary.contains("mode matrix"));
-        assert!(primary.contains("task_runs 3 (3 prepared)"));
-        assert!(primary.contains("runnable yes (3)"));
-        assert!(!primary.contains("devtools-port-with-extra-long-label-alpha"));
+        assert_eq!(steps.as_slice(), ["runnable"]);
+        let row = dims
+            .iter()
+            .find(|line| line.contains("2026-05-18-002"))
+            .expect("matrix row should be rendered");
+        assert!(row.contains("matrix"));
+        assert!(row.contains("3 prepared"));
+        assert!(row.contains("profiles 3"));
+        assert!(row.contains("none/manual"));
+        assert!(!row.contains("devtools-port-with-extra-long-label-alpha"));
 
         let detail = dims
             .iter()
-            .find(|line| line.contains("Profile: 3 profiles"))
-            .expect("matrix profile summary should be on a detail line");
-        assert!(detail.contains("devtools-port-with-extra..."));
-        assert!(detail.contains("+1"));
-        assert!(!detail.contains("codex-review-profile-name-that-keeps-going"));
+            .find(|line| line.contains(".local/workflows/2026-05-18-002.toml"))
+            .expect("matrix detail should include workflow path");
+        assert!(detail.contains("base main"));
     }
 
     #[test]
