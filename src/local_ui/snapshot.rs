@@ -9,6 +9,7 @@ use crate::context::{
 use crate::task::{self, TaskDocument, TaskOrigin};
 use crate::task_run::{self, TaskRunContext, TaskRunRecord, TaskRunStatus};
 use crate::workflow::planner::runnable_workflow_info;
+use crate::workflow::render::workflow_title_label;
 use crate::workflow::run::{
     WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
     read_single_workflow_task_states, read_stack_workflow_task_states,
@@ -205,12 +206,13 @@ struct WorkflowCollection {
 struct WorkflowSummary {
     id: String,
     path: String,
-    title: Option<String>,
+    title: String,
     mode: String,
     presentation_group: String,
     body_summary: Option<String>,
     body: Option<String>,
     source_text: Option<String>,
+    origin: Option<WorkflowOriginSummary>,
     task_count: usize,
     task_runs: TaskRunCounts,
     task_run_groups: Vec<WorkflowTaskRunGroup>,
@@ -228,6 +230,12 @@ struct WorkflowSummary {
 struct WorkflowTaskRunGroup {
     status: String,
     items: Vec<TaskRunSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowOriginSummary {
+    provider: String,
+    id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -564,16 +572,27 @@ fn workflow_summary(
     let (runnable, state_error) = workflow_runnable(ctx, path, &metadata);
     let presentation_group = workflow_presentation_group(&counts, &runnable, state_error.as_ref());
     let task_run_groups = workflow_task_run_groups(ctx, &metadata);
+    let title = workflow_title_label(ctx, &id, &metadata);
+    let body_summary = metadata.body.as_deref().and_then(body_summary);
+    let body = non_empty_string(metadata.body);
+    let origin = metadata
+        .origin
+        .as_ref()
+        .map(|origin| WorkflowOriginSummary {
+            provider: origin.provider.clone(),
+            id: origin.id.clone(),
+        });
 
     WorkflowSummary {
         id,
         path: relative_path(ctx, path),
-        title: metadata.title,
+        title,
         mode: metadata.mode.as_str().into(),
         presentation_group,
-        body_summary: metadata.body.as_deref().and_then(short_summary),
-        body: non_empty_string(metadata.body),
+        body_summary,
+        body,
         source_text: read_known_source_text(ctx, path),
+        origin,
         task_count: metadata.tasks.len(),
         task_runs: counts,
         task_run_groups,

@@ -505,7 +505,7 @@ function taskCard(row) {
 }
 
 function workflowCard(row) {
-  return card(row.title || row.id, [
+  return card(row.title, [
     pill(`workflow ${row.id}`, "blue"),
     pill(row.mode, "blue"),
     pill(row.presentation_group, groupColor(row.presentation_group)),
@@ -513,6 +513,7 @@ function workflowCard(row) {
     row.runnable.runnable_count ? pill(`${row.runnable.runnable_count} runnable`, "green") : "",
     row.profile ? pill(`profile ${row.profile}`, "violet") : "",
     row.profiles.length ? pill(`${row.profiles.length} profiles`, "violet") : "",
+    row.origin ? pill(`${row.origin.provider} ${row.origin.id}`, "violet") : "",
     pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
   ], [row.path], row.body_summary || row.state_error, groupColor(row.presentation_group), [
     detail(t("body"), row.body || row.state_error, "prose", row.body_summary || row.state_error),
