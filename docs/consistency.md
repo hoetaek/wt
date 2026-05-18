@@ -262,8 +262,11 @@ setup은 만들지 않는다는 점, duplicate ids나 existing TaskDocument coll
 실패한다는 점을 보여줘야 한다.
 
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
-task, branch, status, source, group, error, creation_order, created_at,
-updated_at을 저장한다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
+task, branch, status, group, error, creation_order, created_at, updated_at을 저장한다.
+`group`은 Workflow file stem과 맞는 workflow-linked run을 식별하는 link이고, 직접
+`wt task run`으로 만든 TaskRun은 group을 저장하지 않는다. Legacy TaskRun TOML의
+source 값 `new`, `batch`, `stack`은 읽기 전용 migration compatibility로만 받으며 새
+TaskRun 출력에는 쓰지 않는다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
 초 단위 timestamp 우연성에 기대지 않도록 새 TaskRun마다 증가하는 실행 생성 순서다.
 `creation_order`가 없는 previous TaskRun은 계속 읽되 ordered TaskRun보다 앞에 정렬하고,
 previous끼리는 `created_at`과 id를 fallback으로 쓴다.
@@ -450,10 +453,10 @@ Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work
 commit/diff 정보, Agent Completion Report 기대치, 현재 cmux contact를 보여주는 canonical
 read-only dossier다. Agent observation snapshot을 같이 보여줄 수 있지만, `inspect`의 exit
 code는 command 자체의 성공/실패만 뜻한다. 관찰된 agent가 `needs_input`이거나 `failed`여도
-그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. 실제 완료 기록은 source별 명령이
-맡는다. `source = "new"`와 `source = "batch"` TaskRun은 landing/cleanup 안전 확인 뒤
-`wt done`이 정리하고, `source = "stack"` TaskRun은 stack-mode workflow completion command가
-전이한다.
+그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. 실제 완료 기록은 direct 또는
+workflow-linked context별 명령이 맡는다. 직접 `wt task run`이 만든 TaskRun은 review/landing
+확인 뒤 `wt done` cleanup이 정리할 수 있고, Workflow file의 `[[tasks]].run`과 matching
+`group`으로 연결된 TaskRun은 workflow completion command가 전이한다.
 
 `wt inspect`에서 `<target>` 생략은 interactive TTY human mode에서 inspectable work target
 selector를 여는 기본 동작이다. `--json`, `--quiet`, 또는 non-TTY automation에서는 selector를

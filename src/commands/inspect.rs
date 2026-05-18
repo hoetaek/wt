@@ -206,15 +206,12 @@ fn print_git_section(
 }
 
 fn print_task_run(ctx: &Ctx, record: &task_run::TaskRunRecord) -> Result<()> {
-    let group = record
-        .run
-        .group
-        .as_deref()
-        .map(|group| format!(", group={group}"))
-        .unwrap_or_default();
+    let context = task_run::resolve_context(ctx, record)
+        .map(|context| context.label())
+        .unwrap_or_else(|err| format!("unavailable ({err:#})"));
     ctx.ui.print_dim(&format!(
-        "  TaskRun: {} (status={}, source={}{})",
-        record.id, record.run.status, record.run.source, group
+        "  TaskRun: {} (status={}, context={})",
+        record.id, record.run.status, context
     ));
     if let Some(error) = record.run.error.as_deref() {
         ctx.ui.print_warning(&format!("  TaskRun error: {error}"));
@@ -511,17 +508,9 @@ fn print_next_section(ctx: &Ctx, target: &InspectTarget, workflows: &[WorkflowMa
 }
 
 fn print_workflow_next_step(ctx: &Ctx, workflow: &WorkflowMatch) {
-    if workflow.mode == "stack" {
-        ctx.ui.print_dim(&format!(
-            "  Complete: when accepted, run `{}`.",
-            workflow_complete_command(workflow)
-        ));
-        return;
-    }
-
     ctx.ui.print_dim(&format!(
-        "  Workflow: mode {} has no workflow completion command; review the worktree, report, and checks, then land when policy and safety checks allow.",
-        workflow.mode
+        "  Complete: when accepted, review the worktree, report, and checks, then run `{}`; land when policy and safety checks allow.",
+        workflow_complete_command(workflow)
     ));
 }
 
@@ -531,7 +520,9 @@ fn workflow_complete_command(workflow: &WorkflowMatch) -> String {
         shell_arg(&workflow.path.to_string_lossy()),
         shell_arg(&workflow.task)
     );
-    command.push_str(" --run-next");
+    if workflow.mode == "stack" {
+        command.push_str(" --run-next");
+    }
     command
 }
 
@@ -609,7 +600,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             repo.join(".local/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"new\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ngroup = \"2026-05-17-001\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         std::fs::write(
@@ -672,25 +663,27 @@ mod tests {
     }
 
     #[test]
-    fn inspect_next_omits_workflow_complete_for_single_workflow() {
+    fn inspect_next_includes_workflow_complete_for_single_workflow() {
         let dims = inspect_next_section_for_mode("single");
 
-        assert!(dims.contains("mode single has no workflow completion command"));
+        assert!(dims.contains("Complete: when accepted"));
+        assert!(dims.contains("wt workflow complete"));
         assert!(dims.contains("review the worktree, report, and checks"));
         assert!(dims.contains("land when policy and safety checks allow"));
         assert!(dims.contains("wt done feature"));
-        assert!(!dims.contains("wt workflow complete"));
+        assert!(!dims.contains("--run-next"));
     }
 
     #[test]
-    fn inspect_next_omits_workflow_complete_for_batch_workflow() {
+    fn inspect_next_includes_workflow_complete_for_batch_workflow() {
         let dims = inspect_next_section_for_mode("batch");
 
-        assert!(dims.contains("mode batch has no workflow completion command"));
+        assert!(dims.contains("Complete: when accepted"));
+        assert!(dims.contains("wt workflow complete"));
         assert!(dims.contains("review the worktree, report, and checks"));
         assert!(dims.contains("land when policy and safety checks allow"));
         assert!(dims.contains("wt done feature"));
-        assert!(!dims.contains("wt workflow complete"));
+        assert!(!dims.contains("--run-next"));
     }
 
     #[test]
@@ -754,12 +747,12 @@ mod tests {
         .unwrap();
         std::fs::write(
             repo.join(".local/task-runs/run-add-schema.toml"),
-            "task = \"add-schema\"\nbranch = \"team-run\"\nstatus = \"running\"\nsource = \"new\"\ncreation_order = 1\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            "task = \"add-schema\"\nbranch = \"team-run\"\nstatus = \"running\"\ncreation_order = 1\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         std::fs::write(
             repo.join(".local/task-runs/run-publish-issues.toml"),
-            "task = \"publish-issues\"\nbranch = \"team-run\"\nstatus = \"running\"\nsource = \"new\"\ncreation_order = 2\ncreated_at = \"2026-05-16T00:00:01Z\"\nupdated_at = \"2026-05-16T00:00:01Z\"\n",
+            "task = \"publish-issues\"\nbranch = \"team-run\"\nstatus = \"running\"\ncreation_order = 2\ncreated_at = \"2026-05-16T00:00:01Z\"\nupdated_at = \"2026-05-16T00:00:01Z\"\n",
         )
         .unwrap();
 
@@ -806,7 +799,7 @@ mod tests {
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
             repo.join(".local/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"stack\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
 
@@ -881,7 +874,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             repo.join(".local/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"stack\"\ngroup = \"stack-1\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ngroup = \"stack-1\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
 
@@ -917,7 +910,7 @@ mod tests {
         assert!(steps.contains("Inspect: run-feature"));
         assert!(dims.contains("TaskRun: run-feature"));
         assert!(dims.contains("status=running"));
-        assert!(dims.contains("source=stack"));
+        assert!(dims.contains("context=workflow group stack-1 (not discovered)"));
     }
 
     #[test]

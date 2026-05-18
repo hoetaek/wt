@@ -710,15 +710,7 @@ mod tests {
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
         );
-        task_run::create(
-            &ctx,
-            "a-first",
-            "first",
-            task_run::SOURCE_NEW,
-            None,
-            task_run::STATUS_DONE,
-        )
-        .unwrap();
+        task_run::create(&ctx, "a-first", "first", None, task_run::STATUS_DONE).unwrap();
 
         let tasks = list_local_tasks(&ctx).unwrap();
 
@@ -743,15 +735,7 @@ mod tests {
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
         );
-        task_run::create(
-            &ctx,
-            "a-first",
-            "first",
-            task_run::SOURCE_NEW,
-            None,
-            task_run::STATUS_SKIPPED,
-        )
-        .unwrap();
+        task_run::create(&ctx, "a-first", "first", None, task_run::STATUS_SKIPPED).unwrap();
 
         let tasks = list_local_tasks(&ctx).unwrap();
 

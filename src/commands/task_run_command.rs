@@ -132,7 +132,6 @@ fn run_selected_task(
         ctx,
         &selected.key,
         &selected.document.branch,
-        task_run::SOURCE_NEW,
         None,
         task_run::STATUS_PREPARED,
     )?;
@@ -211,14 +210,7 @@ fn record_task_failure(ctx: &Ctx, selected: &task::SelectedTask, err: &anyhow::E
         task_run::STATUS_FAILED
     };
     let message = err.to_string();
-    if let Ok(run) = task_run::create(
-        ctx,
-        &selected.key,
-        &selected.document.branch,
-        task_run::SOURCE_NEW,
-        None,
-        status,
-    ) {
+    if let Ok(run) = task_run::create(ctx, &selected.key, &selected.document.branch, None, status) {
         let _ = task_run::update(ctx, &run.id, status, None, Some(&message));
     }
 }
@@ -233,7 +225,6 @@ fn record_task_profile_successes(
             ctx,
             &selected.key,
             &result.branch_name,
-            task_run::SOURCE_NEW,
             None,
             task_run::STATUS_RUNNING,
         )?;
@@ -267,7 +258,6 @@ fn record_task_profile_results(
             ctx,
             &selected.key,
             &failed.branch_name,
-            task_run::SOURCE_NEW,
             None,
             task_run::STATUS_FAILED,
         )?;
@@ -437,7 +427,6 @@ mod tests {
         let runs = task_run::list(&ctx).unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].run.task, "add-schema");
-        assert_eq!(runs[0].run.source, task_run::SOURCE_NEW);
         assert_eq!(runs[0].run.status, task_run::STATUS_RUNNING);
         assert_eq!(runs[0].run.branch, "add-schema");
     }
@@ -660,7 +649,6 @@ mod tests {
             &ctx,
             "add-schema",
             "add-schema",
-            task_run::SOURCE_NEW,
             None,
             task_run::STATUS_DONE,
         )
@@ -688,7 +676,6 @@ mod tests {
             .unwrap()
             .expect("expected latest task run");
         assert_eq!(latest.run.task, "add-schema");
-        assert_eq!(latest.run.source, task_run::SOURCE_NEW);
         assert_eq!(latest.run.status, task_run::STATUS_RUNNING);
         assert_eq!(latest.run.branch, "add-schema");
     }
@@ -754,7 +741,6 @@ mod tests {
         let runs = task_run::list(&ctx).unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].run.task, "b-second");
-        assert_eq!(runs[0].run.source, task_run::SOURCE_NEW);
         assert_eq!(runs[0].run.status, task_run::STATUS_RUNNING);
         assert_eq!(runs[0].run.branch, "second");
         assert_eq!(runs[0].run.group, None);
@@ -850,10 +836,6 @@ mod tests {
         let runs = task_run::list(&ctx).unwrap();
         assert_eq!(runs.len(), 2);
         assert!(runs.iter().all(|record| record.run.group.is_none()));
-        assert!(
-            runs.iter()
-                .all(|record| record.run.source == task_run::SOURCE_NEW)
-        );
         let branches = runs
             .iter()
             .map(|record| record.run.branch.as_str())
@@ -952,7 +934,6 @@ cli = "codex"
             .find(|record| record.run.branch == "add-schema-alpha")
             .expect("expected alpha profile TaskRun");
         assert_eq!(alpha.run.task, "add-schema");
-        assert_eq!(alpha.run.source, task_run::SOURCE_NEW);
         assert_eq!(alpha.run.status, task_run::STATUS_RUNNING);
         assert!(alpha.run.error.is_none());
 
@@ -961,7 +942,6 @@ cli = "codex"
             .find(|record| record.run.branch == "add-schema-beta")
             .expect("expected beta profile TaskRun");
         assert_eq!(beta.run.task, "add-schema");
-        assert_eq!(beta.run.source, task_run::SOURCE_NEW);
         assert_eq!(beta.run.status, task_run::STATUS_FAILED);
         assert!(beta.run.error.is_some());
         assert!(task_run::task_is_selectable(&ctx, "add-schema").unwrap());

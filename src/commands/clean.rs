@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_marks_matching_running_new_and_batch_task_runs_done() {
+    fn clean_marks_matching_running_direct_task_runs_done() {
         let repo = tempfile::tempdir().unwrap();
         let worktree = repo.path().with_file_name("test-repo-add-schema");
         let mut runner = MockRunner::new();
@@ -419,29 +419,18 @@ mod tests {
             Box::new(runner),
             Box::new(MockUi::new()),
         );
-        let new_run = task_run::create(
+        let direct_run = task_run::create(
             &ctx,
             "add-schema",
             "alice/add-schema",
-            task_run::SOURCE_NEW,
             None,
             task_run::STATUS_RUNNING,
         )
         .unwrap();
-        let batch_run = task_run::create(
+        let grouped_run = task_run::create(
             &ctx,
-            "batch-schema",
+            "workflow-schema",
             "alice/add-schema",
-            task_run::SOURCE_BATCH,
-            Some("2026-05-16-001"),
-            task_run::STATUS_RUNNING,
-        )
-        .unwrap();
-        let stack_run = task_run::create(
-            &ctx,
-            "stack-schema",
-            "alice/add-schema",
-            task_run::SOURCE_STACK,
             Some("2026-05-16-001"),
             task_run::STATUS_RUNNING,
         )
@@ -450,15 +439,11 @@ mod tests {
         run_with_targets(&ctx, &["alice/add-schema".into()]).unwrap();
 
         assert_eq!(
-            task_run::read(&new_run.path).unwrap().status,
+            task_run::read(&direct_run.path).unwrap().status,
             task_run::STATUS_DONE
         );
         assert_eq!(
-            task_run::read(&batch_run.path).unwrap().status,
-            task_run::STATUS_DONE
-        );
-        assert_eq!(
-            task_run::read(&stack_run.path).unwrap().status,
+            task_run::read(&grouped_run.path).unwrap().status,
             task_run::STATUS_RUNNING
         );
     }
@@ -498,7 +483,6 @@ mod tests {
             &ctx,
             "add-schema",
             "alice/add-schema",
-            task_run::SOURCE_NEW,
             None,
             task_run::STATUS_RUNNING,
         )

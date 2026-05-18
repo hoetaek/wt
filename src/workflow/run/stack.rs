@@ -34,7 +34,10 @@ pub(super) fn run_stack_workflow(
         bail!("Workflow has no tasks: {}", workflow_path.display());
     }
 
-    if let Some(state) = states.iter().find(|state| state.run.is_stack_completable()) {
+    if let Some(state) = states
+        .iter()
+        .find(|state| state.run.status.is_stack_completable())
+    {
         bail!(
             "{}",
             stack_task_already_running_message(workflow_path, &state.row)

@@ -82,7 +82,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Prepare, inspect, edit, run, repair workflows, or complete stack tasks
+    /// Prepare, inspect, edit, run, repair, or complete workflow tasks
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
@@ -312,7 +312,7 @@ pub enum TaskCommand {
     },
     /// Start one worktree per selected local TaskDocument
     #[command(
-        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a source = \"new\" TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
+        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
     )]
     Run {
         /// Local task keys from .local/tasks/<task>.toml
@@ -388,7 +388,7 @@ pub enum WorkflowCommand {
     },
     /// Start runnable tasks from a workflow
     #[command(
-        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation. Stack tasks also include their `wt workflow complete ... --run-next` command."
+        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
     )]
     Run {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -418,13 +418,13 @@ pub enum WorkflowCommand {
         #[arg(long)]
         apply: bool,
     },
-    /// Mark the running task in a stack-mode workflow as complete
+    /// Mark running workflow task runs as complete
     Complete {
         /// Workflow TOML path or shorthand id
         workflow: String,
         /// Running workflow task identifier to complete
         task: Option<String>,
-        /// Start the next workflow task after marking this one complete
+        /// Start the next stack-mode workflow task after marking this one complete
         #[arg(long)]
         run_next: bool,
     },
@@ -1080,7 +1080,7 @@ mod tests {
             .to_string();
 
         assert!(help.contains("one worktree per selected"));
-        assert!(help.contains("source = \"new\" TaskRun"));
+        assert!(help.contains("direct TaskRun"));
         assert!(help.contains("Omit task keys"));
         assert!(help.contains("Task Run Coordinator Handoff"));
         assert!(help.contains("Task-run agents report PR=none"));
@@ -1257,9 +1257,7 @@ mod tests {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_help().to_string();
-        assert!(
-            help.contains("Prepare, inspect, edit, run, repair workflows, or complete stack tasks")
-        );
+        assert!(help.contains("Prepare, inspect, edit, run, repair, or complete workflow tasks"));
         assert!(help.contains("repair"));
         assert!(help.contains("task"));
         assert!(help.contains("issue"));

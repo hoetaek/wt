@@ -228,7 +228,11 @@ fn non_runnable_reason(mode: &WorkflowMode, states: &[WorkflowTaskState]) -> &'s
     match mode {
         WorkflowMode::Single => "single_requires_all_task_runs_prepared_or_failed",
         WorkflowMode::Batch => "batch_has_no_prepared_or_failed_task_runs",
-        WorkflowMode::Stack if states.iter().any(|state| state.run.is_stack_completable()) => {
+        WorkflowMode::Stack
+            if states
+                .iter()
+                .any(|state| state.run.status.is_stack_completable()) =>
+        {
             "stack_has_running_task_run"
         }
         WorkflowMode::Stack => "stack_has_no_next_prepared_or_failed_task_run",
@@ -348,11 +352,10 @@ mod tests {
         write_task(dir.path(), "schema", "feature/schema");
         write_task_run(
             dir.path(),
-            "batch-2026-05-18-001-schema",
+            "run-2026-05-18-001-schema",
             "schema",
             "feature/schema",
             "prepared",
-            "batch",
             "2026-05-18-001",
         );
         write_workflow(
@@ -364,7 +367,7 @@ profile = "codex"
 "#,
             r#"[[tasks]]
 task = "schema"
-run = "batch-2026-05-18-001-schema"
+run = "run-2026-05-18-001-schema"
 "#,
         );
         fs::write(
@@ -433,15 +436,7 @@ body = "Task body"
         .unwrap();
     }
 
-    fn write_task_run(
-        root: &Path,
-        id: &str,
-        task: &str,
-        branch: &str,
-        status: &str,
-        source: &str,
-        group: &str,
-    ) {
+    fn write_task_run(root: &Path, id: &str, task: &str, branch: &str, status: &str, group: &str) {
         let dir = root.join(".local/task-runs");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
@@ -450,7 +445,6 @@ body = "Task body"
                 r#"task = "{task}"
 branch = "{branch}"
 status = "{status}"
-source = "{source}"
 group = "{group}"
 creation_order = 1
 created_at = "2026-05-18T00:00:00.000000000Z"

@@ -20,16 +20,24 @@ enum WorkflowCoordinatorHandoff<'a> {
 
 struct WorkflowCompletion<'a> {
     workflow_path: &'a Path,
-    row: &'a WorkflowTask,
+    row: Option<&'a WorkflowTask>,
+    run_next: bool,
 }
 
 impl WorkflowCompletion<'_> {
     fn complete_command(&self) -> String {
-        format!(
-            "wt workflow complete {} {} --run-next",
-            shell_arg(&self.workflow_path.to_string_lossy()),
-            shell_arg(workflow_task_label(self.row))
-        )
+        let mut command = format!(
+            "wt workflow complete {}",
+            shell_arg(&self.workflow_path.to_string_lossy())
+        );
+        if let Some(row) = self.row {
+            command.push(' ');
+            command.push_str(&shell_arg(workflow_task_label(row)));
+        }
+        if self.run_next {
+            command.push_str(" --run-next");
+        }
+        command
     }
 }
 
@@ -299,7 +307,12 @@ pub(crate) fn single_workflow_group_title(states: &[WorkflowTaskState]) -> Strin
 pub(crate) fn workflow_single_task_prompt_content(content: &str) -> String {
     workflow_task_prompt_content(
         content,
-        &workflow_single_task_handoff_section(&default_workflow_policy(), TEST_WORKFLOW_BASE),
+        &workflow_single_task_handoff_section(
+            Path::new("/repo/.local/workflows/test.toml"),
+            Some(&WorkflowTask::new("task", "run-task")),
+            &default_workflow_policy(),
+            TEST_WORKFLOW_BASE,
+        ),
     )
 }
 
@@ -310,15 +323,26 @@ pub(crate) fn workflow_single_task_prompt_content_for_policy(
 ) -> String {
     workflow_task_prompt_content(
         content,
-        &workflow_single_task_handoff_section(policy, TEST_WORKFLOW_BASE),
+        &workflow_single_task_handoff_section(
+            Path::new("/repo/.local/workflows/test.toml"),
+            Some(&WorkflowTask::new("task", "run-task")),
+            policy,
+            TEST_WORKFLOW_BASE,
+        ),
     )
 }
 
 #[cfg(test)]
 pub(crate) fn workflow_batch_task_prompt_content(content: &str) -> String {
+    let row = WorkflowTask::new("task", "run-task");
     workflow_task_prompt_content(
         content,
-        &workflow_batch_task_handoff_section(&default_workflow_policy(), TEST_WORKFLOW_BASE),
+        &workflow_batch_task_handoff_section(
+            Path::new("/repo/.local/workflows/test.toml"),
+            &row,
+            &default_workflow_policy(),
+            TEST_WORKFLOW_BASE,
+        ),
     )
 }
 
@@ -327,9 +351,15 @@ pub(crate) fn workflow_batch_task_prompt_content_for_policy(
     content: &str,
     policy: &WorkflowPolicy,
 ) -> String {
+    let row = WorkflowTask::new("task", "run-task");
     workflow_task_prompt_content(
         content,
-        &workflow_batch_task_handoff_section(policy, TEST_WORKFLOW_BASE),
+        &workflow_batch_task_handoff_section(
+            Path::new("/repo/.local/workflows/test.toml"),
+            &row,
+            policy,
+            TEST_WORKFLOW_BASE,
+        ),
     )
 }
 
@@ -348,6 +378,8 @@ pub(crate) fn workflow_stack_task_prompt_content(
 }
 
 pub(crate) fn workflow_single_task_handoff_section(
+    workflow_path: &Path,
+    row: Option<&WorkflowTask>,
     policy: &WorkflowPolicy,
     pr_base: &str,
 ) -> String {
@@ -355,11 +387,17 @@ pub(crate) fn workflow_single_task_handoff_section(
         policy,
         pr_base,
         pr_base_label: "workflow base branch",
-        completion: None,
+        completion: Some(WorkflowCompletion {
+            workflow_path,
+            row,
+            run_next: false,
+        }),
     })
 }
 
 pub(crate) fn workflow_batch_task_handoff_section(
+    workflow_path: &Path,
+    row: &WorkflowTask,
     policy: &WorkflowPolicy,
     pr_base: &str,
 ) -> String {
@@ -367,7 +405,11 @@ pub(crate) fn workflow_batch_task_handoff_section(
         policy,
         pr_base,
         pr_base_label: "workflow base branch",
-        completion: None,
+        completion: Some(WorkflowCompletion {
+            workflow_path,
+            row: Some(row),
+            run_next: false,
+        }),
     })
 }
 
@@ -381,7 +423,11 @@ pub(crate) fn workflow_stack_task_handoff_section(
         policy,
         pr_base: validated_parent,
         pr_base_label: "workflow parent branch",
-        completion: Some(WorkflowCompletion { workflow_path, row }),
+        completion: Some(WorkflowCompletion {
+            workflow_path,
+            row: Some(row),
+            run_next: true,
+        }),
     })
 }
 

@@ -47,7 +47,7 @@ use display::show_workflow;
 #[cfg(test)]
 use selection::list_runnable_workflow_candidates;
 use selection::resolve_run_workflow_path;
-use stack_completion::complete_stack_workflow;
+use stack_completion::complete_workflow;
 
 pub fn list(ctx: &Ctx) -> Result<()> {
     list_command::run(ctx)
@@ -129,7 +129,7 @@ pub fn run(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
 }
 
 pub fn complete(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
-    complete_stack_workflow(ctx, workflow, task, run_next)
+    complete_workflow(ctx, workflow, task, run_next)
 }
 
 fn resolve_read_target(ctx: &Ctx, workflow: Option<&str>) -> Result<std::path::PathBuf> {
@@ -251,7 +251,8 @@ mod tests {
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains("coordinator cmux target is unavailable or stale"));
-        assert!(!content.contains("wt workflow complete"));
+        assert!(content.contains("wt workflow complete"));
+        assert!(!content.contains("--run-next"));
     }
 
     fn assert_workflow_handoff_precedes_task_body(content: &str, body: &str) {
@@ -374,12 +375,9 @@ mod tests {
         assert_eq!(runs.len(), 2);
         assert!(
             runs.iter()
-                .all(|record| record.run.source == task_run::SOURCE_BATCH)
-        );
-        assert!(
-            runs.iter()
                 .all(|record| record.run.status == STATUS_PREPARED)
         );
+        assert!(runs.iter().all(|record| record.run.group.is_some()));
     }
 
     #[test]
@@ -402,11 +400,7 @@ mod tests {
         let states = read_batch_workflow_task_states(&ctx, &record.path, &record.workflow).unwrap();
 
         assert_eq!(states.len(), 2);
-        assert!(
-            states
-                .iter()
-                .all(|state| state.run.source == task_run::SOURCE_BATCH)
-        );
+        assert!(states.iter().all(|state| state.run.group.is_some()));
     }
 
     #[test]
@@ -426,11 +420,7 @@ mod tests {
         .unwrap();
 
         let mut record = workflow_store::list(&ctx).unwrap().remove(0);
-        let foreign_run = replace_first_workflow_run_with_foreign_group(
-            &ctx,
-            &mut record.workflow,
-            task_run::SOURCE_NEW,
-        );
+        let foreign_run = replace_first_workflow_run_with_foreign_group(&ctx, &mut record.workflow);
 
         let err =
             read_single_workflow_task_states(&ctx, &record.path, &record.workflow).unwrap_err();
@@ -460,11 +450,7 @@ mod tests {
         .unwrap();
 
         let mut record = workflow_store::list(&ctx).unwrap().remove(0);
-        let foreign_run = replace_first_workflow_run_with_foreign_group(
-            &ctx,
-            &mut record.workflow,
-            task_run::SOURCE_BATCH,
-        );
+        let foreign_run = replace_first_workflow_run_with_foreign_group(&ctx, &mut record.workflow);
 
         let err =
             read_batch_workflow_task_states(&ctx, &record.path, &record.workflow).unwrap_err();
@@ -555,7 +541,7 @@ mod tests {
         assert_eq!(workflow.tasks.len(), 1);
         let runs = task_run::list(&ctx).unwrap();
         assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].run.source, task_run::SOURCE_NEW);
+        assert!(runs[0].run.group.is_some());
         assert_eq!(runs[0].run.status, STATUS_PREPARED);
     }
 
@@ -911,16 +897,43 @@ landing = "auto"
     }
 
     #[test]
-    fn workflow_complete_rejects_non_stack_workflows() {
+    fn workflow_complete_marks_non_stack_workflow_tasks_done() {
+        for mode in [WorkflowModeArg::Single, WorkflowModeArg::Batch] {
+            let dir = tempfile::tempdir().unwrap();
+            let ctx = ctx(dir.path());
+            let record = prepare_workflow(&ctx, mode, &["feature"]);
+            update_task_run(
+                &ctx,
+                &record.workflow.tasks[0],
+                STATUS_RUNNING,
+                Some("feature"),
+            );
+
+            complete(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap();
+
+            assert_eq!(
+                task_run_record(&ctx, &record.workflow.tasks[0].run)
+                    .unwrap()
+                    .status,
+                STATUS_DONE
+            );
+        }
+    }
+
+    #[test]
+    fn workflow_complete_run_next_rejects_non_stack_workflows() {
         for mode in [WorkflowModeArg::Single, WorkflowModeArg::Batch] {
             let dir = tempfile::tempdir().unwrap();
             let ctx = ctx(dir.path());
             let record = prepare_workflow(&ctx, mode, &["feature"]);
 
             let err =
-                complete(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+                complete(&ctx, record.path.to_str().unwrap(), Some("feature"), true).unwrap_err();
 
-            assert!(err.to_string().contains("only supports mode stack"));
+            assert!(
+                err.to_string()
+                    .contains("--run-next only supports mode stack")
+            );
         }
     }
 
@@ -1374,7 +1387,6 @@ landing = "auto"
                     task: "api".into(),
                     branch: "shared".into(),
                     status: STATUS_PREPARED,
-                    source: task_run::SOURCE_NEW,
                     group: None,
                     error: None,
                     creation_order: None,
@@ -1401,7 +1413,6 @@ landing = "auto"
                     task: "docs".into(),
                     branch: "shared".into(),
                     status: STATUS_PREPARED,
-                    source: task_run::SOURCE_NEW,
                     group: None,
                     error: None,
                     creation_order: None,
@@ -1476,7 +1487,6 @@ landing = "auto"
     fn replace_first_workflow_run_with_foreign_group(
         ctx: &Ctx,
         workflow: &mut WorkflowMetadata,
-        source: task_run::TaskRunSource,
     ) -> String {
         let row = workflow.tasks.first_mut().unwrap();
         let document = task_store::read_task_document(ctx, &row.task).unwrap();
@@ -1484,7 +1494,6 @@ landing = "auto"
             ctx,
             &row.task,
             &document.branch,
-            source,
             Some("foreign-workflow"),
             STATUS_PREPARED,
         )

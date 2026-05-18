@@ -1,5 +1,6 @@
 use crate::context::Ctx;
 use crate::task;
+use crate::workflow::{self, WorkflowMode};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::cmp::Ordering;
@@ -13,10 +14,6 @@ pub(crate) const STATUS_RUNNING: TaskRunStatus = TaskRunStatus::Running;
 pub(crate) const STATUS_DONE: TaskRunStatus = TaskRunStatus::Done;
 pub(crate) const STATUS_FAILED: TaskRunStatus = TaskRunStatus::Failed;
 pub(crate) const STATUS_SKIPPED: TaskRunStatus = TaskRunStatus::Skipped;
-
-pub(crate) const SOURCE_NEW: TaskRunSource = TaskRunSource::New;
-pub(crate) const SOURCE_BATCH: TaskRunSource = TaskRunSource::Batch;
-pub(crate) const SOURCE_STACK: TaskRunSource = TaskRunSource::Stack;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TaskRunStatus {
@@ -78,54 +75,11 @@ impl From<TaskRunStatus> for String {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum TaskRunSource {
-    New,
-    Batch,
-    Stack,
-}
-
-impl TaskRunSource {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::New => "new",
-            Self::Batch => "batch",
-            Self::Stack => "stack",
-        }
-    }
-
-    pub(crate) fn parse(source: &str) -> Result<Self> {
-        match source {
-            "new" => Ok(Self::New),
-            "batch" => Ok(Self::Batch),
-            "stack" => Ok(Self::Stack),
-            _ => bail!("Unknown task run source: {source}"),
-        }
-    }
-
-    pub(crate) fn is_cleanup_completable(self) -> bool {
-        matches!(self, Self::New | Self::Batch)
-    }
-}
-
-impl fmt::Display for TaskRunSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl From<TaskRunSource> for String {
-    fn from(source: TaskRunSource) -> Self {
-        source.as_str().to_string()
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TaskRun {
     pub(crate) task: String,
     pub(crate) branch: String,
     pub(crate) status: TaskRunStatus,
-    pub(crate) source: TaskRunSource,
     pub(crate) group: Option<String>,
     pub(crate) error: Option<String>,
     pub(crate) creation_order: Option<u64>,
@@ -137,14 +91,6 @@ impl TaskRun {
     pub(crate) fn is_runnable(&self) -> bool {
         self.status.is_runnable()
     }
-
-    pub(crate) fn is_cleanup_completable(&self) -> bool {
-        self.status.is_cleanup_completable() && self.source.is_cleanup_completable()
-    }
-
-    pub(crate) fn is_stack_completable(&self) -> bool {
-        self.status.is_stack_completable() && self.source == SOURCE_STACK
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -153,7 +99,8 @@ struct RawTaskRun {
     task: String,
     branch: String,
     status: String,
-    source: String,
+    #[serde(default)]
+    source: Option<String>,
     #[serde(default)]
     group: Option<String>,
     #[serde(default)]
@@ -168,11 +115,13 @@ impl TryFrom<RawTaskRun> for TaskRun {
     type Error = anyhow::Error;
 
     fn try_from(raw: RawTaskRun) -> Result<Self> {
+        if let Some(source) = raw.source.as_deref() {
+            validate_legacy_source(source)?;
+        }
         let run = TaskRun {
             task: raw.task,
             branch: raw.branch,
             status: TaskRunStatus::parse(&raw.status)?,
-            source: TaskRunSource::parse(&raw.source)?,
             group: raw.group,
             error: raw.error,
             creation_order: raw.creation_order,
@@ -197,11 +146,43 @@ pub(crate) struct TaskRunRecord {
     pub(crate) run: TaskRun,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TaskRunContext {
+    Direct,
+    WorkflowLinked(WorkflowTaskRunContext),
+    UnresolvedWorkflowGroup { group: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WorkflowTaskRunContext {
+    pub(crate) workflow_id: String,
+    pub(crate) workflow_path: PathBuf,
+    pub(crate) mode: WorkflowMode,
+    pub(crate) task: String,
+}
+
+impl TaskRunContext {
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Direct => "direct".into(),
+            Self::WorkflowLinked(context) => {
+                format!(
+                    "workflow {} mode {}",
+                    context.workflow_id,
+                    context.mode.as_str()
+                )
+            }
+            Self::UnresolvedWorkflowGroup { group } => {
+                format!("workflow group {group} (not discovered)")
+            }
+        }
+    }
+}
+
 pub(crate) fn create(
     ctx: &Ctx,
     task: &str,
     branch: &str,
-    source: TaskRunSource,
     group: Option<&str>,
     status: TaskRunStatus,
 ) -> Result<TaskRunRecord> {
@@ -211,7 +192,6 @@ pub(crate) fn create(
         task: task::safe_task_key(task),
         branch: branch.to_string(),
         status,
-        source,
         group: group.and_then(optional_string),
         error: None,
         creation_order: Some(creation_order),
@@ -340,10 +320,46 @@ pub(crate) fn task_is_selectable(ctx: &Ctx, task: &str) -> Result<bool> {
 }
 
 pub(crate) fn running_cleanup_matches(ctx: &Ctx, branch: &str) -> Result<Vec<TaskRunRecord>> {
-    Ok(list(ctx)?
-        .into_iter()
-        .filter(|record| record.run.branch == branch && record.run.is_cleanup_completable())
-        .collect())
+    let mut records = Vec::new();
+    for record in list(ctx)? {
+        if record.run.branch != branch || !record.run.status.is_cleanup_completable() {
+            continue;
+        }
+        if matches!(resolve_context(ctx, &record)?, TaskRunContext::Direct) {
+            records.push(record);
+        }
+    }
+    Ok(records)
+}
+
+pub(crate) fn resolve_context(ctx: &Ctx, record: &TaskRunRecord) -> Result<TaskRunContext> {
+    let Some(group) = record.run.group.as_deref() else {
+        return Ok(TaskRunContext::Direct);
+    };
+
+    for path in workflow::workflow_paths(ctx)? {
+        let workflow_id = workflow::id_from_path(&path)?;
+        if workflow_id != group {
+            continue;
+        }
+        let metadata = workflow::read(&path)?;
+        if let Some(row) = metadata
+            .tasks
+            .iter()
+            .find(|row| row.run == record.id && row.task == record.run.task)
+        {
+            return Ok(TaskRunContext::WorkflowLinked(WorkflowTaskRunContext {
+                workflow_id,
+                workflow_path: path,
+                mode: metadata.mode,
+                task: row.task.clone(),
+            }));
+        }
+    }
+
+    Ok(TaskRunContext::UnresolvedWorkflowGroup {
+        group: group.to_string(),
+    })
 }
 
 pub(crate) fn group_from_path(path: &Path) -> Result<String> {
@@ -375,7 +391,6 @@ fn write(path: &Path, run: &TaskRun) -> Result<()> {
     content.push_str(&format!("task = {}\n", toml_quote(&run.task)));
     content.push_str(&format!("branch = {}\n", toml_quote(&run.branch)));
     content.push_str(&format!("status = {}\n", toml_quote(run.status.as_str())));
-    content.push_str(&format!("source = {}\n", toml_quote(run.source.as_str())));
     if let Some(group) = run.group.as_deref() {
         content.push_str(&format!("group = {}\n", toml_quote(group)));
     }
@@ -473,7 +488,7 @@ fn next_available_task_run_path(dir: &Path, id_base: &str) -> (String, PathBuf) 
 }
 
 fn task_run_id_base(run: &TaskRun) -> String {
-    let mut parts = vec![run.source.as_str()];
+    let mut parts = vec!["run"];
     if let Some(group) = run.group.as_deref() {
         parts.push(group);
     }
@@ -483,6 +498,13 @@ fn task_run_id_base(run: &TaskRun) -> String {
         .map(task::safe_task_key)
         .collect::<Vec<_>>()
         .join("-")
+}
+
+fn validate_legacy_source(source: &str) -> Result<()> {
+    match source {
+        "new" | "batch" | "stack" => Ok(()),
+        _ => bail!("Unknown legacy task run source: {source}"),
+    }
 }
 
 fn task_run_id(path: &Path) -> Result<String> {
@@ -600,18 +622,16 @@ mod tests {
             &ctx,
             "add/schema",
             "add-schema",
-            SOURCE_BATCH,
             Some("2026-05-16-001"),
             STATUS_RUNNING,
         )
         .unwrap();
 
-        assert_eq!(record.id, "batch-2026-05-16-001-add-schema");
+        assert_eq!(record.id, "run-2026-05-16-001-add-schema");
         let parsed = read(&record.path).unwrap();
         assert_eq!(parsed.task, "add-schema");
         assert_eq!(parsed.branch, "add-schema");
         assert_eq!(parsed.status, STATUS_RUNNING);
-        assert_eq!(parsed.source, SOURCE_BATCH);
         assert_eq!(parsed.group.as_deref(), Some("2026-05-16-001"));
         assert!(parsed.error.is_none());
         assert_eq!(parsed.creation_order, Some(1));
@@ -634,7 +654,7 @@ mod tests {
 
         let content = std::fs::read_to_string(updated.path).unwrap();
         assert!(content.contains("task = \"add-schema\""));
-        assert!(content.contains("source = \"batch\""));
+        assert!(!content.contains("source ="));
         assert!(content.contains("group = \"2026-05-16-001\""));
         assert!(content.contains("error = \"setup failed\""));
         assert!(content.contains("creation_order = 1"));
@@ -653,7 +673,6 @@ mod tests {
             r#"task = "add-schema"
 branch = "add-schema"
 status = "started"
-source = "new"
 created_at = "2026-05-16T00:00:00Z"
 updated_at = "2026-05-16T00:00:00Z"
 "#,
@@ -676,7 +695,7 @@ updated_at = "2026-05-16T00:00:00Z"
     }
 
     #[test]
-    fn read_rejects_runtime_binding_fields() {
+    fn read_accepts_legacy_source_without_rewriting() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("run.toml");
 
@@ -686,6 +705,30 @@ updated_at = "2026-05-16T00:00:00Z"
 branch = "add-schema"
 status = "running"
 source = "new"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let parsed = read(&path).unwrap();
+        assert_eq!(parsed.status, STATUS_RUNNING);
+
+        write(&path, &parsed).unwrap();
+        let content = std::fs::read_to_string(path).unwrap();
+        assert!(!content.contains("source ="));
+    }
+
+    #[test]
+    fn read_rejects_runtime_binding_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.toml");
+
+        std::fs::write(
+            &path,
+            r#"task = "add-schema"
+branch = "add-schema"
+status = "running"
 cmux_workspace = "workspace:1"
 cmux_surface = "surface:4"
 created_at = "2026-05-16T00:00:00Z"
@@ -704,27 +747,11 @@ updated_at = "2026-05-16T00:00:00Z"
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
 
-        let first = create(
-            &ctx,
-            "add-schema",
-            "add-schema",
-            SOURCE_NEW,
-            None,
-            STATUS_DONE,
-        )
-        .unwrap();
-        let second = create(
-            &ctx,
-            "add-schema",
-            "add-schema",
-            SOURCE_NEW,
-            None,
-            STATUS_RUNNING,
-        )
-        .unwrap();
+        let first = create(&ctx, "add-schema", "add-schema", None, STATUS_DONE).unwrap();
+        let second = create(&ctx, "add-schema", "add-schema", None, STATUS_RUNNING).unwrap();
 
-        assert_eq!(first.id, "new-add-schema");
-        assert_eq!(second.id, "new-add-schema-002");
+        assert_eq!(first.id, "run-add-schema");
+        assert_eq!(second.id, "run-add-schema-002");
         assert_eq!(first.run.creation_order, Some(1));
         assert_eq!(second.run.creation_order, Some(2));
         assert!(first.path.exists());
@@ -738,45 +765,13 @@ updated_at = "2026-05-16T00:00:00Z"
         let ctx = ctx(dir.path());
 
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
-        create(
-            &ctx,
-            "add-schema",
-            "add-schema",
-            SOURCE_NEW,
-            None,
-            STATUS_RUNNING,
-        )
-        .unwrap();
+        create(&ctx, "add-schema", "add-schema", None, STATUS_RUNNING).unwrap();
         assert!(!task_is_selectable(&ctx, "add-schema").unwrap());
-        create(
-            &ctx,
-            "add-schema",
-            "add-schema",
-            SOURCE_NEW,
-            None,
-            STATUS_FAILED,
-        )
-        .unwrap();
+        create(&ctx, "add-schema", "add-schema", None, STATUS_FAILED).unwrap();
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
-        create(
-            &ctx,
-            "add-schema",
-            "add-schema",
-            SOURCE_NEW,
-            None,
-            STATUS_SKIPPED,
-        )
-        .unwrap();
+        create(&ctx, "add-schema", "add-schema", None, STATUS_SKIPPED).unwrap();
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
-        create(
-            &ctx,
-            "add-schema",
-            "add-schema",
-            SOURCE_NEW,
-            None,
-            STATUS_DONE,
-        )
-        .unwrap();
+        create(&ctx, "add-schema", "add-schema", None, STATUS_DONE).unwrap();
         assert!(!task_is_selectable(&ctx, "add-schema").unwrap());
     }
 
@@ -901,7 +896,6 @@ updated_at = "2026-05-16T00:00:00Z"
             task: task.into(),
             branch: task.into(),
             status,
-            source: SOURCE_NEW,
             group: None,
             error: None,
             creation_order,

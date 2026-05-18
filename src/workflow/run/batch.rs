@@ -50,9 +50,9 @@ pub(super) fn run_batch_workflow(
 
     let base = workflow_base_raw(metadata)?.expect("workflow base is validated");
     let failed = if jobs <= 1 {
-        run_batch_workflow_sequential(ctx, metadata, runnable, base)?
+        run_batch_workflow_sequential(ctx, workflow_path, metadata, runnable, base)?
     } else {
-        run_batch_workflow_parallel(ctx, metadata, runnable, base, jobs)?
+        run_batch_workflow_parallel(ctx, workflow_path, metadata, runnable, base, jobs)?
     };
 
     if failed {
@@ -63,6 +63,7 @@ pub(super) fn run_batch_workflow(
 
 fn run_batch_workflow_sequential(
     ctx: &Ctx,
+    workflow_path: &Path,
     metadata: &WorkflowMetadata,
     states: Vec<WorkflowTaskState>,
     base: String,
@@ -76,6 +77,7 @@ fn run_batch_workflow_sequential(
         let result = run_batch_workflow_task(
             ctx,
             BatchWorkflowTaskContext {
+                workflow_path,
                 state,
                 base: &base,
                 policy: &metadata.policy,
@@ -107,6 +109,7 @@ fn run_batch_workflow_sequential(
 
 fn run_batch_workflow_parallel(
     ctx: &Ctx,
+    workflow_path: &Path,
     metadata: &WorkflowMetadata,
     states: Vec<WorkflowTaskState>,
     base: String,
@@ -147,6 +150,7 @@ fn run_batch_workflow_parallel(
                     let result = run_batch_workflow_task(
                         ctx,
                         BatchWorkflowTaskContext {
+                            workflow_path,
                             state: &state,
                             base: &base,
                             policy: &metadata.policy,
@@ -350,6 +354,7 @@ fn batch_workflow_plan(
 }
 
 struct BatchWorkflowTaskContext<'a> {
+    workflow_path: &'a Path,
     state: &'a WorkflowTaskState,
     base: &'a str,
     policy: &'a WorkflowPolicy,
@@ -363,9 +368,10 @@ fn run_batch_workflow_task(
     ctx: &Ctx,
     task: BatchWorkflowTaskContext<'_>,
 ) -> Result<issue::IssueRunResult> {
-    let completion_section = workflow_batch_task_handoff_section(task.policy, task.base);
     let workflow_context = workflow_objective_prompt_context(task.objective);
     let state = task.state;
+    let completion_section =
+        workflow_batch_task_handoff_section(task.workflow_path, &state.row, task.policy, task.base);
     let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);

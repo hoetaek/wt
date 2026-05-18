@@ -2,6 +2,7 @@ use crate::agents::AgentStatus;
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::work::{self, WorkSessionState};
+use crate::task_run;
 use anyhow::Result;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -65,7 +66,7 @@ fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) ->
 
     loop {
         let work = work::observe_target(ctx, target.clone())?;
-        let report = AgentStatusReport::from_work(&work);
+        let report = AgentStatusReport::from_work(ctx, &work);
         let exit_code = exit_code_for(&work);
         let signature = report.transition_signature();
         let now = Instant::now();
@@ -151,7 +152,7 @@ struct AgentStatusReport {
 struct TaskRunStatusReport {
     id: Option<String>,
     status: Option<String>,
-    source: Option<String>,
+    context: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -200,7 +201,7 @@ fn observe_status(
     let target = resolve_agent_target(ctx, target, command)?;
     let work = work::observe_target(ctx, target)?;
     let exit_code = exit_code_for(&work);
-    Ok((AgentStatusReport::from_work(&work), exit_code))
+    Ok((AgentStatusReport::from_work(ctx, &work), exit_code))
 }
 
 fn resolve_agent_target(
@@ -224,9 +225,14 @@ fn agent_target_required_message(command: &str) -> String {
 }
 
 impl AgentStatusReport {
-    fn from_work(work: &work::Work) -> Self {
+    fn from_work(ctx: &Ctx, work: &work::Work) -> Self {
         let cmux = work.cmux.as_ref();
         let task_run = work.target.task_run.as_ref();
+        let task_run_context = task_run.map(|record| {
+            task_run::resolve_context(ctx, record)
+                .map(|context| context.label())
+                .unwrap_or_else(|err| format!("unavailable ({err:#})"))
+        });
         Self {
             target: work.target.label.clone(),
             branch: work.target.branch.clone(),
@@ -238,7 +244,7 @@ impl AgentStatusReport {
             task_run: TaskRunStatusReport {
                 id: task_run.map(|record| record.id.clone()),
                 status: task_run.map(|record| record.run.status.to_string()),
-                source: task_run.map(|record| record.run.source.to_string()),
+                context: task_run_context,
             },
             agent: AgentObservationReport {
                 kind: work.state.agent_kind.as_str().to_string(),
@@ -280,7 +286,7 @@ impl AgentStatusReport {
             self.cmux.candidates,
             self.task_run.id,
             self.task_run.status,
-            self.task_run.source,
+            self.task_run.context,
             self.agent.last_tool,
             self.agent.last_event_at,
             self.warnings
@@ -449,10 +455,10 @@ fn print_task_run_text(ctx: &Ctx, report: &AgentStatusReport) {
     match (
         report.task_run.id.as_deref(),
         report.task_run.status.as_deref(),
-        report.task_run.source.as_deref(),
+        report.task_run.context.as_deref(),
     ) {
-        (Some(id), Some(status), Some(source)) => ctx.ui.print_dim(&format!(
-            "  TaskRun: {id} (status={status}, source={source})"
+        (Some(id), Some(status), Some(context)) => ctx.ui.print_dim(&format!(
+            "  TaskRun: {id} (status={status}, context={context})"
         )),
         (Some(id), Some(status), None) => ctx
             .ui
@@ -933,7 +939,7 @@ mod tests {
         std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
         std::fs::write(
             fixture.repo.join(".local/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"stack\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         let mut runner = MockRunner::new();
@@ -954,7 +960,7 @@ mod tests {
         assert_eq!(report.branch, "feature");
         assert_eq!(report.task_run.id.as_deref(), Some("run-feature"));
         assert_eq!(report.task_run.status.as_deref(), Some("running"));
-        assert_eq!(report.task_run.source.as_deref(), Some("stack"));
+        assert_eq!(report.task_run.context.as_deref(), Some("direct"));
     }
 
     #[test]
@@ -963,7 +969,7 @@ mod tests {
         std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
         std::fs::write(
             fixture.repo.join(".local/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"stack\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         let mut runner = MockRunner::new();
@@ -1088,7 +1094,7 @@ mod tests {
         std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
         std::fs::write(
             fixture.repo.join(".local/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"batch\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         let mut runner = MockRunner::new();
@@ -1126,7 +1132,7 @@ mod tests {
         assert!(steps.contains("Agent watch: run-feature running (codex)"));
         assert!(steps.contains("Agent watch heartbeat: elapsed 0s; run-feature running (codex)"));
         assert!(steps.contains("Agent watch: run-feature idle (codex)"));
-        assert!(dims.contains("TaskRun: run-feature (status=running, source=batch)"));
+        assert!(dims.contains("TaskRun: run-feature (status=running, context=direct)"));
         assert!(dims.contains("Last tool: Bash"));
         assert!(dims.contains("Session: codex-session"));
         assert!(dims.contains("cmux: workspace:1 surface:4"));

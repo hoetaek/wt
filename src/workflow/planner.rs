@@ -43,7 +43,10 @@ pub(crate) fn runnable_workflow_info(
             })
         }
         WorkflowMode::Stack => {
-            if states.iter().any(|state| state.run.is_stack_completable()) {
+            if states
+                .iter()
+                .any(|state| state.run.status.is_stack_completable())
+            {
                 return None;
             }
             next_runnable_stack_task(states).map(|next_idx| RunnableWorkflowInfo {
@@ -161,13 +164,5 @@ pub(crate) fn workflow_mode(mode: WorkflowModeArg) -> WorkflowMode {
         WorkflowModeArg::Single => WorkflowMode::Single,
         WorkflowModeArg::Batch => WorkflowMode::Batch,
         WorkflowModeArg::Stack => WorkflowMode::Stack,
-    }
-}
-
-pub(crate) fn source_for_mode(mode: WorkflowModeArg) -> crate::task_run::TaskRunSource {
-    match mode {
-        WorkflowModeArg::Single => crate::task_run::SOURCE_NEW,
-        WorkflowModeArg::Batch => crate::task_run::SOURCE_BATCH,
-        WorkflowModeArg::Stack => crate::task_run::SOURCE_STACK,
     }
 }

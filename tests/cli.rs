@@ -96,15 +96,7 @@ body = "Task body"
     .unwrap();
 }
 
-fn write_task_run_file(
-    root: &Path,
-    id: &str,
-    task: &str,
-    branch: &str,
-    status: &str,
-    source: &str,
-    group: &str,
-) {
+fn write_task_run_file(root: &Path, id: &str, task: &str, branch: &str, status: &str, group: &str) {
     let dir = root.join(".local/task-runs");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
@@ -113,7 +105,6 @@ fn write_task_run_file(
             r#"task = "{task}"
 branch = "{branch}"
 status = "{status}"
-source = "{source}"
 group = "{group}"
 creation_order = 1
 created_at = "2026-05-18T00:00:00.000000000Z"
@@ -235,7 +226,7 @@ fn task_run_help_explains_task_execution() {
         .assert()
         .success()
         .stdout(predicate::str::contains("one worktree per selected"))
-        .stdout(predicate::str::contains("source = \"new\" TaskRun"))
+        .stdout(predicate::str::contains("direct TaskRun"))
         .stdout(predicate::str::contains("Task Run Coordinator Handoff"))
         .stdout(predicate::str::contains("Task-run agents report PR=none"))
         .stdout(predicate::str::contains("wt workflow task --mode batch"))
@@ -327,11 +318,10 @@ fn workflow_list_supports_json_and_reports_invalid_workflows() {
     write_task_document(temp.path(), "schema", "feature/schema");
     write_task_run_file(
         temp.path(),
-        "batch-2026-05-18-001-schema",
+        "run-2026-05-18-001-schema",
         "schema",
         "feature/schema",
         "prepared",
-        "batch",
         "2026-05-18-001",
     );
     write_workflow_file(
@@ -343,7 +333,7 @@ profile = "codex"
 "#,
         r#"[[tasks]]
 task = "schema"
-run = "batch-2026-05-18-001-schema"
+run = "run-2026-05-18-001-schema"
 "#,
     );
     std::fs::write(

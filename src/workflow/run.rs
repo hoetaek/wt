@@ -9,8 +9,8 @@ use crate::task::{self as task_store, PreparedTask};
 use crate::task_run::{self, STATUS_PREPARED, STATUS_RUNNING};
 use crate::workflow as workflow_store;
 use crate::workflow::planner::{
-    source_for_mode, validate_single_mode_branches, workflow_base_raw, workflow_mode,
-    workflow_policy, workflow_pr_mode,
+    validate_single_mode_branches, workflow_base_raw, workflow_mode, workflow_policy,
+    workflow_pr_mode,
 };
 use crate::workflow::render::{
     no_tasks_selected_message, prepared_workflow_message, render_single_workflow_snapshot,
@@ -121,6 +121,7 @@ fn run_single_workflow(
     let base = workflow_base_raw(metadata)?;
     let result = if states.len() == 1 {
         run_single_workflow_task(
+            workflow_path,
             metadata,
             ctx,
             &states[0],
@@ -128,7 +129,14 @@ fn run_single_workflow(
             metadata.profile.as_deref(),
         )
     } else {
-        run_single_workflow_group(metadata, ctx, &states, &base, metadata.profile.as_deref())
+        run_single_workflow_group(
+            workflow_path,
+            metadata,
+            ctx,
+            &states,
+            &base,
+            metadata.profile.as_deref(),
+        )
     };
 
     let result = match result {
@@ -156,14 +164,19 @@ fn run_single_workflow(
 }
 
 fn run_single_workflow_task(
+    workflow_path: &Path,
     metadata: &WorkflowMetadata,
     ctx: &Ctx,
     state: &WorkflowTaskState,
     base: &Option<String>,
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
-    let completion_section =
-        workflow_single_task_handoff_section(&metadata.policy, workflow_pr_base(base));
+    let completion_section = workflow_single_task_handoff_section(
+        workflow_path,
+        Some(&state.row),
+        &metadata.policy,
+        workflow_pr_base(base),
+    );
     let workflow_context = workflow_objective_prompt_context(metadata.objective.as_deref());
     let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
@@ -201,6 +214,7 @@ fn run_single_workflow_task(
 }
 
 fn run_single_workflow_group(
+    workflow_path: &Path,
     metadata: &WorkflowMetadata,
     ctx: &Ctx,
     states: &[WorkflowTaskState],
@@ -214,8 +228,12 @@ fn run_single_workflow_group(
         .collect::<Vec<_>>()
         .join(", ");
     let snapshot_content = render_single_workflow_snapshot(states);
-    let completion_section =
-        workflow_single_task_handoff_section(&metadata.policy, workflow_pr_base(base));
+    let completion_section = workflow_single_task_handoff_section(
+        workflow_path,
+        None,
+        &metadata.policy,
+        workflow_pr_base(base),
+    );
     let workflow_context = workflow_objective_prompt_context(metadata.objective.as_deref());
     let title = single_workflow_group_title(states);
 
@@ -319,20 +337,14 @@ fn workflow_tasks_from_prepared(
     let mut tasks = Vec::new();
     let mut task_runs = Vec::new();
     for task in prepared_tasks {
-        let run = match task_run::create(
-            ctx,
-            &task.key,
-            &task.branch,
-            source_for_mode(mode),
-            Some(&group),
-            STATUS_PREPARED,
-        ) {
-            Ok(run) => run,
-            Err(err) => {
-                rollback_task_runs(&task_runs);
-                return Err(err);
-            }
-        };
+        let run =
+            match task_run::create(ctx, &task.key, &task.branch, Some(&group), STATUS_PREPARED) {
+                Ok(run) => run,
+                Err(err) => {
+                    rollback_task_runs(&task_runs);
+                    return Err(err);
+                }
+            };
 
         let mut row = WorkflowTask::new(task.key.clone(), run.id.clone());
         if mode == WorkflowModeArg::Stack {

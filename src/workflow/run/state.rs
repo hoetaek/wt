@@ -21,11 +21,7 @@ pub(crate) fn read_single_workflow_task_states(
     workflow_path: &Path,
     metadata: &WorkflowMetadata,
 ) -> Result<Vec<WorkflowTaskState>> {
-    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
-    for state in &states {
-        validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_NEW)?;
-    }
-    Ok(states)
+    read_workflow_task_states(ctx, workflow_path, metadata)
 }
 
 pub(crate) fn read_batch_workflow_task_states(
@@ -33,11 +29,7 @@ pub(crate) fn read_batch_workflow_task_states(
     workflow_path: &Path,
     metadata: &WorkflowMetadata,
 ) -> Result<Vec<WorkflowTaskState>> {
-    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
-    for state in &states {
-        validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_BATCH)?;
-    }
-    Ok(states)
+    read_workflow_task_states(ctx, workflow_path, metadata)
 }
 
 pub(crate) fn read_stack_workflow_task_states(
@@ -45,11 +37,7 @@ pub(crate) fn read_stack_workflow_task_states(
     workflow_path: &Path,
     metadata: &WorkflowMetadata,
 ) -> Result<Vec<WorkflowTaskState>> {
-    let states = read_workflow_task_states(ctx, workflow_path, metadata)?;
-    for state in &states {
-        validate_workflow_task_run_source(&state.row, &state.run, task_run::SOURCE_STACK)?;
-    }
-    Ok(states)
+    read_workflow_task_states(ctx, workflow_path, metadata)
 }
 
 fn read_workflow_task_states(
@@ -111,22 +99,6 @@ fn validate_workflow_task_run_group(
             row.task,
             row.run,
             group
-        );
-    }
-    Ok(())
-}
-
-fn validate_workflow_task_run_source(
-    row: &WorkflowTask,
-    run: &task_run::TaskRun,
-    source: task_run::TaskRunSource,
-) -> Result<()> {
-    if run.source != source {
-        bail!(
-            "Workflow task {} references TaskRun {} with source {}",
-            row.task,
-            row.run,
-            run.source
         );
     }
     Ok(())

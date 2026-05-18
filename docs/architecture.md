@@ -33,9 +33,11 @@ workflow membership, profile choice, or cmux transport data.
 
 `TaskRun` is one execution instance of a `TaskDocument`. Its source-of-truth
 module is `src/task_run.rs`, and its durable location is
-`.local/task-runs/<id>.toml`. It owns task, branch, status, source, group,
-error, creation_order, and timestamps. It records execution state, not branch
-landing or review state.
+`.local/task-runs/<id>.toml`. It owns task, branch, status, group, error,
+creation_order, and timestamps. Workflow mode stays on `Workflow`; legacy
+TaskRun `source` values are read only for migration compatibility and are not
+written as canonical state. It records execution state, not branch landing or
+review state.
 
 `Workflow` is the saved prepared-work plan. Its current source-of-truth module
 is `src/workflow.rs`, and its durable location is
