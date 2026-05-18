@@ -176,7 +176,7 @@ function ideaCard(row) {
     pill(row.kind),
     row.source ? pill(row.source) : "",
     ...row.tags.map((tag) => pill(tag, "violet")),
-  ], [row.path], row.body_summary, statusColor(row.status));
+  ], [row.path], row.body_summary, statusColor(row.status), row.body);
 }
 
 function taskCard(row) {
@@ -184,7 +184,7 @@ function taskCard(row) {
     pill(`task ${row.key}`, "blue"),
     row.branch ? pill(`branch ${row.branch}`) : "",
     row.origin ? pill(`${row.origin.provider} ${row.origin.id}`, "violet") : pill(row.source),
-  ], [row.path], row.body_summary, "blue");
+  ], [row.path], row.body_summary, "blue", row.body);
 }
 
 function workflowCard(row) {
@@ -196,7 +196,7 @@ function workflowCard(row) {
     row.profile ? pill(`profile ${row.profile}`, "violet") : "",
     row.profiles.length ? pill(`${row.profiles.length} profiles`, "violet") : "",
     pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
-  ], [row.path], row.objective_summary || row.state_error, groupColor(row.presentation_group));
+  ], [row.path], row.objective_summary || row.state_error, groupColor(row.presentation_group), row.objective || row.state_error);
 }
 
 function taskRunCard(row) {
@@ -219,21 +219,46 @@ function profileCard(row) {
 }
 
 function invalidCard(row) {
-  return `<article class="invalid-card"><h3>${escapeHtml(row.key)}</h3>${paths([row.path])}<p class="error">${escapeHtml(row.error)}</p></article>`;
+  return `<article class="record-card invalid-card"><div class="record-primary"><h3>${escapeHtml(row.key)}</h3><p class="error">${escapeHtml(row.error)}</p></div><div class="record-aside">${paths([row.path])}</div></article>`;
 }
 
-function card(title, pills, pathRows, summary, tone) {
+function card(title, pills, pathRows, summary, tone, fullText) {
   const meta = pills.filter(Boolean).join("");
   const pathHtml = paths(pathRows);
-  const summaryHtml = summary ? `<p class="summary">${escapeHtml(summary)}</p>` : "";
+  const summaryHtml = readableText(fullText || summary, summary);
+  const metaHtml = meta ? `<div class="meta">${meta}</div>` : "";
   const toneClass = tone ? ` tone-${tone}` : "";
-  return `<article class="card${toneClass}"><h3>${escapeHtml(title)}</h3><div class="meta">${meta}</div>${pathHtml}${summaryHtml}</article>`;
+  return `<article class="record-card${toneClass}"><div class="record-primary"><h3>${escapeHtml(title)}</h3>${summaryHtml}</div><div class="record-aside">${metaHtml}${pathHtml}</div></article>`;
 }
 
 function section(title, rows, emptyText) {
-  const body = rows.length ? `<div class="grid">${rows.join("")}</div>` : `<div class="empty">${escapeHtml(emptyText)}</div>`;
+  const body = rows.length ? `<div class="record-list">${rows.join("")}</div>` : `<div class="empty">${escapeHtml(emptyText)}</div>`;
   const count = rows.length === 1 ? "1 record" : `${rows.length} records`;
   return `<section class="section-block"><div class="section-heading"><h2 class="section-title">${escapeHtml(title)}</h2><span class="section-count">${count}</span></div>${body}</section>`;
+}
+
+function readableText(fullText, fallbackPreview) {
+  if (!fullText) {
+    return "";
+  }
+  const text = String(fullText).trim();
+  if (!text) {
+    return "";
+  }
+  const preview = fallbackPreview || compactText(text, 190);
+  if (text.length <= 220 && !text.includes("\n")) {
+    return `<p class="summary">${escapeHtml(text)}</p>`;
+  }
+  return `<details class="read-more"><summary><span class="summary-preview">${escapeHtml(preview)}</span><span class="summary-action"><span class="when-closed">Read full</span><span class="when-open">Collapse</span></span></summary><p class="full-text">${escapeHtml(text)}</p></details>`;
+}
+
+function compactText(value, maxChars) {
+  const compact = String(value).split(/\s+/).filter(Boolean).join(" ");
+  const chars = Array.from(compact);
+  if (chars.length <= maxChars) {
+    return compact;
+  }
+  return `${chars.slice(0, maxChars).join("")}...`;
 }
 
 function paths(rows) {

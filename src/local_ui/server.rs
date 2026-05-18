@@ -111,8 +111,11 @@ mod tests {
         assert!(INDEX_HTML.contains("class=\"state-strip\""));
         assert!(INDEX_HTML.contains("aria-current=\"page\""));
         assert!(APP_CSS.contains(".section-heading"));
-        assert!(APP_CSS.contains(".card.tone-green::before"));
+        assert!(APP_CSS.contains(".record-list"));
+        assert!(APP_CSS.contains(".record-card.tone-green::before"));
+        assert!(APP_CSS.contains(".read-more[open]"));
         assert!(APP_JS.contains("metric invalid"));
+        assert!(APP_JS.contains("details class=\"read-more\""));
         assert!(APP_JS.contains("tab.setAttribute(\"aria-current\", \"page\")"));
     }
 

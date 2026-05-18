@@ -155,6 +155,7 @@ struct IdeaSummary {
     tags: Vec<String>,
     updated_at: Option<String>,
     body_summary: Option<String>,
+    body: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -172,6 +173,7 @@ struct TaskSummary {
     origin: Option<TaskOriginSummary>,
     source: String,
     body_summary: Option<String>,
+    body: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -193,6 +195,7 @@ struct WorkflowSummary {
     mode: String,
     presentation_group: String,
     objective_summary: Option<String>,
+    objective: Option<String>,
     task_count: usize,
     task_runs: TaskRunCounts,
     runnable: RunnableSummary,
@@ -384,6 +387,7 @@ fn read_toml_idea(ctx: &Ctx, path: &Path) -> Result<IdeaSummary> {
         tags: idea.tags.unwrap_or_default(),
         updated_at: non_empty_string(idea.updated_at),
         body_summary: idea.body.as_deref().and_then(body_summary),
+        body: non_empty_string(idea.body),
     })
 }
 
@@ -408,6 +412,7 @@ fn read_markdown_idea(ctx: &Ctx, path: &Path) -> Result<IdeaSummary> {
         tags: Vec::new(),
         updated_at: None,
         body_summary: body_summary(&content),
+        body: non_empty_body(&content),
     })
 }
 
@@ -449,6 +454,7 @@ fn task_summary(key: String, path: String, document: &TaskDocument) -> TaskSumma
         },
         origin,
         body_summary: body_summary(&document.body),
+        body: non_empty_body(&document.body),
     }
 }
 
@@ -495,6 +501,7 @@ fn workflow_summary(
         mode: metadata.mode.as_str().into(),
         presentation_group,
         objective_summary: metadata.objective.as_deref().and_then(short_summary),
+        objective: non_empty_string(metadata.objective),
         task_count: metadata.tasks.len(),
         task_runs: counts,
         runnable,
@@ -859,6 +866,11 @@ fn non_empty_string(value: Option<String>) -> Option<String> {
     })
 }
 
+fn non_empty_body(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 fn body_summary(value: &str) -> Option<String> {
     short_summary(value)
 }
@@ -1028,6 +1040,8 @@ mod tests {
             vec![".wt.toml", ".local/.wt.toml"]
         );
         assert_eq!(snapshot.tasks.items[0].path, ".local/tasks/demo.toml");
+        assert_eq!(snapshot.tasks.items[0].body.as_deref(), Some("Demo body"));
+        assert_eq!(snapshot.ideas.items[0].body.as_deref(), Some("Idea body"));
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
             "state_error"
