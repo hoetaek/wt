@@ -25,6 +25,10 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
     if let Some(profile) = metadata.profile.as_deref() {
         ctx.ui.print_dim(&format!("  Profile: {profile}"));
     }
+    if !metadata.profiles.is_empty() {
+        ctx.ui
+            .print_dim(&format!("  Profiles: {}", metadata.profiles.join(", ")));
+    }
     if let Some(color) = metadata.color.as_deref() {
         ctx.ui.print_dim(&format!("  Color: {color}"));
     }
@@ -38,11 +42,14 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
         .print_dim(&format!("  Tasks: {}", metadata.tasks.len()));
 
     for (idx, item) in metadata.tasks.iter().enumerate() {
-        let run = task_run_record(ctx, &item.run);
-        let status = run
-            .as_ref()
-            .map(|run| run.status.as_str())
-            .unwrap_or("missing");
+        let status = if metadata.mode == crate::workflow::WorkflowMode::Matrix {
+            format!("{} profile runs", item.runs.len())
+        } else {
+            task_run_record(ctx, &item.run)
+                .as_ref()
+                .map(|run| run.status.as_str().to_string())
+                .unwrap_or_else(|| "missing".into())
+        };
         let task_doc = task_store::read_task_document(ctx, &item.task);
         let title = task_doc
             .as_ref()
@@ -71,7 +78,24 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
         if let Some(parent) = item.parent.as_deref() {
             ctx.ui.print_dim(&format!("     Parent: {parent}"));
         }
-        if let Some(error) = run.and_then(|run| run.error) {
+        if metadata.mode == crate::workflow::WorkflowMode::Matrix {
+            for profile_run in &item.runs {
+                let run = task_run_record(ctx, &profile_run.run);
+                let status = run
+                    .as_ref()
+                    .map(|run| run.status.as_str())
+                    .unwrap_or("missing");
+                ctx.ui.print_dim(&format!(
+                    "     Profile {}: {} [{}]",
+                    profile_run.profile, profile_run.run, status
+                ));
+                if let Some(error) = run.and_then(|run| run.error) {
+                    if !error.trim().is_empty() {
+                        ctx.ui.print_dim(&format!("       Error: {error}"));
+                    }
+                }
+            }
+        } else if let Some(error) = task_run_record(ctx, &item.run).and_then(|run| run.error) {
             if !error.trim().is_empty() {
                 ctx.ui.print_dim(&format!("     Error: {error}"));
             }

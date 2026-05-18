@@ -1,7 +1,9 @@
 use super::state::{WorkflowTaskState, read_batch_workflow_task_states};
-use super::{apply_workflow_color, is_cancelled, validate_profile};
+use super::{apply_workflow_color, is_cancelled, task_issue_closing_references, validate_profile};
 use crate::commands::issue;
+use crate::config::AGENT_PROMPT_WORKFLOW_SCOPE;
 use crate::context::Ctx;
+use crate::setup;
 use crate::task as task_store;
 use crate::task_run::{self, STATUS_FAILED, STATUS_RUNNING};
 use crate::workflow as workflow_store;
@@ -50,9 +52,9 @@ pub(super) fn run_batch_workflow(
 
     let base = workflow_base_raw(metadata)?.expect("workflow base is validated");
     let failed = if jobs <= 1 {
-        run_batch_workflow_sequential(ctx, metadata, runnable, base)?
+        run_batch_workflow_sequential(ctx, workflow_path, metadata, runnable, base)?
     } else {
-        run_batch_workflow_parallel(ctx, metadata, runnable, base, jobs)?
+        run_batch_workflow_parallel(ctx, workflow_path, metadata, runnable, base, jobs)?
     };
 
     if failed {
@@ -63,6 +65,7 @@ pub(super) fn run_batch_workflow(
 
 fn run_batch_workflow_sequential(
     ctx: &Ctx,
+    workflow_path: &Path,
     metadata: &WorkflowMetadata,
     states: Vec<WorkflowTaskState>,
     base: String,
@@ -76,6 +79,7 @@ fn run_batch_workflow_sequential(
         let result = run_batch_workflow_task(
             ctx,
             BatchWorkflowTaskContext {
+                workflow_path,
                 state,
                 base: &base,
                 policy: &metadata.policy,
@@ -107,6 +111,7 @@ fn run_batch_workflow_sequential(
 
 fn run_batch_workflow_parallel(
     ctx: &Ctx,
+    workflow_path: &Path,
     metadata: &WorkflowMetadata,
     states: Vec<WorkflowTaskState>,
     base: String,
@@ -147,6 +152,7 @@ fn run_batch_workflow_parallel(
                     let result = run_batch_workflow_task(
                         ctx,
                         BatchWorkflowTaskContext {
+                            workflow_path,
                             state: &state,
                             base: &base,
                             policy: &metadata.policy,
@@ -350,6 +356,7 @@ fn batch_workflow_plan(
 }
 
 struct BatchWorkflowTaskContext<'a> {
+    workflow_path: &'a Path,
     state: &'a WorkflowTaskState,
     base: &'a str,
     policy: &'a WorkflowPolicy,
@@ -363,9 +370,15 @@ fn run_batch_workflow_task(
     ctx: &Ctx,
     task: BatchWorkflowTaskContext<'_>,
 ) -> Result<issue::IssueRunResult> {
-    let completion_section = workflow_batch_task_handoff_section(task.policy, task.base);
     let workflow_context = workflow_objective_prompt_context(task.objective);
     let state = task.state;
+    let completion_section = workflow_batch_task_handoff_section(
+        task.workflow_path,
+        &state.row,
+        task.policy,
+        task.base,
+        &task_issue_closing_references(&state.document),
+    );
     let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
@@ -386,7 +399,9 @@ fn run_batch_workflow_task(
         identifier: &identifier,
         title: &title,
         branch_name,
-        mode: state.document.mode(),
+        setup_mode: state.document.setup_mode(),
+        additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
+        workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
         on_start_issue_id: state
             .document
             .origin

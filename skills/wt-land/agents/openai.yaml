@@ -1,0 +1,4 @@
+interface:
+  display_name: "WT Land"
+  short_description: "Land and clean reviewed wt work"
+  default_prompt: "Use $wt-land after review passes to respect workflow policy, complete workflow-linked tasks when needed, merge, prove ancestry, and clean with `wt done`."

@@ -82,7 +82,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Prepare, inspect, edit, run, repair workflows, or complete stack tasks
+    /// Prepare, inspect, edit, run, repair, or complete workflow tasks
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
@@ -99,8 +99,11 @@ pub enum Commands {
         target: Option<String>,
     },
     /// Remove worktrees, clean integrations, and delete local branches
+    #[command(
+        long_about = "Remove checked-out worktrees, clean integrations, mark matching direct running TaskRuns done, and delete local branches.\n\nPass branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id. Workflow-linked TaskRun ids are completed with `wt workflow complete`, not `wt done`. Omit TARGETS to choose worktrees interactively."
+    )]
     Done {
-        /// Branch, issue number/key, or worktree directory names to remove
+        /// Branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id to remove
         targets: Vec<String>,
     },
     /// Read a work dossier for a branch, worktree, or TaskRun
@@ -301,6 +304,11 @@ pub enum InitSiteProvider {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum TaskCommand {
+    /// List saved local TaskDocument files
+    #[command(
+        long_about = "List all saved .local/tasks/<task>.toml TaskDocument files.\n\nThis is the canonical read-only inventory for local TaskDocuments. It lists valid TaskDocument files whether or not they are selectable by wt task run, reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
+    )]
+    List,
     /// Import provider issues as local TaskDocuments
     #[command(
         long_about = "Import existing provider issues into .local/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
@@ -312,7 +320,7 @@ pub enum TaskCommand {
     },
     /// Start one worktree per selected local TaskDocument
     #[command(
-        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a source = \"new\" TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
+        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
     )]
     Run {
         /// Local task keys from .local/tasks/<task>.toml
@@ -324,9 +332,6 @@ pub enum TaskCommand {
         /// Create a profiled task worktree from .local/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
-        /// Start one task worktree for each named profile
-        #[arg(long, conflicts_with = "profile")]
-        matrix: bool,
     },
     /// Publish local TaskDocuments as provider issues
     #[command(
@@ -341,6 +346,11 @@ pub enum TaskCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum WorkflowCommand {
+    /// List saved workflow files
+    #[command(
+        long_about = "List all saved .local/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns."
+    )]
+    List,
     /// Prepare local tasks as a workflow file without starting workspaces
     Task {
         /// Task titles or existing task keys to prepare (omit to select multiple existing tasks)
@@ -349,8 +359,11 @@ pub enum WorkflowCommand {
         #[arg(long, value_enum)]
         mode: WorkflowModeArg,
         /// Named profile from .local/profiles/<name> for all tasks
-        #[arg(long)]
+        #[arg(long, conflicts_with = "profiles")]
         profile: Option<String>,
+        /// With --mode matrix, selected named profiles to run in order
+        #[arg(long, value_name = "PROFILE", value_delimiter = ',')]
+        profiles: Vec<String>,
         /// Human context explaining the larger objective this workflow is meant to complete
         #[arg(long)]
         objective: Option<String>,
@@ -383,7 +396,7 @@ pub enum WorkflowCommand {
     },
     /// Start runnable tasks from a workflow
     #[command(
-        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation. Stack tasks also include their `wt workflow complete ... --run-next` command."
+        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
     )]
     Run {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -413,13 +426,13 @@ pub enum WorkflowCommand {
         #[arg(long)]
         apply: bool,
     },
-    /// Mark the running task in a stack-mode workflow as complete
+    /// Mark running workflow task runs as complete
     Complete {
         /// Workflow TOML path or shorthand id
         workflow: String,
         /// Running workflow task identifier to complete
         task: Option<String>,
-        /// Start the next workflow task after marking this one complete
+        /// Start the next stack-mode workflow task after marking this one complete
         #[arg(long)]
         run_next: bool,
     },
@@ -430,6 +443,7 @@ pub enum WorkflowModeArg {
     Single,
     Batch,
     Stack,
+    Matrix,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -574,7 +588,7 @@ mod tests {
                 target: None,
                 base: None,
                 profile: None,
-                matrix: false
+                matrix: false,
             })
         ));
     }
@@ -632,6 +646,27 @@ mod tests {
     #[test]
     fn issue_rejects_matrix_with_profile() {
         let result = Cli::try_parse_from(["wt", "issue", "680", "--matrix", "--profile", "codex"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn issue_rejects_profiles_flag() {
+        let result = Cli::try_parse_from(["wt", "issue", "680", "--profiles", "alpha,beta"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn issue_rejects_profiles_with_profile() {
+        let result = Cli::try_parse_from([
+            "wt",
+            "issue",
+            "680",
+            "--matrix",
+            "--profiles",
+            "alpha",
+            "--profile",
+            "codex",
+        ]);
         assert!(result.is_err());
     }
 
@@ -1002,10 +1037,8 @@ mod tests {
     }
 
     #[test]
-    fn task_run_accepts_task_keys_base_profile_and_matrix() {
-        let cli = parse(&[
-            "wt", "task", "run", "task-a", "task-b", "--base", "main", "--matrix",
-        ]);
+    fn task_run_accepts_task_keys_base_and_profile() {
+        let cli = parse(&["wt", "task", "run", "task-a", "task-b", "--base", "main"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Task {
@@ -1013,7 +1046,6 @@ mod tests {
                     ref tasks,
                     base: Some(ref base),
                     profile: None,
-                    matrix: true,
                 }
             }) if tasks == &vec!["task-a".to_string(), "task-b".to_string()]
                 && base == "main"
@@ -1026,7 +1058,6 @@ mod tests {
                 command: TaskCommand::Run {
                     ref tasks,
                     profile: Some(ref profile),
-                    matrix: false,
                     ..
                 }
             }) if tasks == &vec!["task-a".to_string()] && profile == "codex"
@@ -1043,20 +1074,33 @@ mod tests {
                     ref tasks,
                     base: None,
                     profile: None,
-                    matrix: false,
                 }
             }) if tasks.is_empty()
         ));
     }
 
     #[test]
-    fn task_run_rejects_matrix_with_profile() {
+    fn task_run_rejects_matrix() {
+        let result = Cli::try_parse_from(["wt", "task", "run", "task-a", "--matrix"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn task_run_rejects_profiles_without_matrix() {
+        let result =
+            Cli::try_parse_from(["wt", "task", "run", "task-a", "--profiles", "alpha,beta"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn task_run_rejects_profiles_with_profile() {
         let result = Cli::try_parse_from([
             "wt",
             "task",
             "run",
             "task-a",
-            "--matrix",
+            "--profiles",
+            "alpha",
             "--profile",
             "codex",
         ]);
@@ -1075,12 +1119,14 @@ mod tests {
             .to_string();
 
         assert!(help.contains("one worktree per selected"));
-        assert!(help.contains("source = \"new\" TaskRun"));
+        assert!(help.contains("direct TaskRun"));
         assert!(help.contains("Omit task keys"));
         assert!(help.contains("Task Run Coordinator Handoff"));
         assert!(help.contains("Task-run agents report PR=none"));
         assert!(help.contains("wt workflow task --mode batch"));
         assert!(help.contains("wt workflow task --mode single"));
+        assert!(!help.contains("--matrix"));
+        assert!(!help.contains("--profiles"));
     }
 
     #[test]
@@ -1115,12 +1161,14 @@ mod tests {
                     ref tasks,
                     mode: WorkflowModeArg::Stack,
                     profile: Some(ref profile),
+                    ref profiles,
                     objective: Some(ref objective),
                     base: Some(ref base),
                     pr: Some(WorkflowPrModeArg::Ready),
                 }
             }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
+                && profiles.is_empty()
                 && objective == "Ship the split workflow"
                 && base == "main"
         ));
@@ -1136,11 +1184,45 @@ mod tests {
                     ref tasks,
                     mode: WorkflowModeArg::Batch,
                     profile: None,
+                    ref profiles,
                     objective: None,
                     base: None,
                     pr: None,
                 }
-            }) if tasks.is_empty()
+            }) if tasks.is_empty() && profiles.is_empty()
+        ));
+    }
+
+    #[test]
+    fn workflow_task_accepts_matrix_profiles() {
+        let cli = parse(&[
+            "wt",
+            "workflow",
+            "task",
+            "--mode",
+            "matrix",
+            "--profiles",
+            "alpha,beta",
+            "--profiles",
+            "gamma",
+            "add-schema",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Task {
+                    ref tasks,
+                    mode: WorkflowModeArg::Matrix,
+                    profile: None,
+                    ref profiles,
+                    ..
+                }
+            }) if tasks == &vec!["add-schema".to_string()]
+                && profiles == &vec![
+                    "alpha".to_string(),
+                    "beta".to_string(),
+                    "gamma".to_string(),
+                ]
         ));
     }
 
@@ -1252,9 +1334,7 @@ mod tests {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_help().to_string();
-        assert!(
-            help.contains("Prepare, inspect, edit, run, repair workflows, or complete stack tasks")
-        );
+        assert!(help.contains("Prepare, inspect, edit, run, repair, or complete workflow tasks"));
         assert!(help.contains("repair"));
         assert!(help.contains("task"));
         assert!(help.contains("issue"));
@@ -1339,6 +1419,29 @@ mod tests {
             "some",
             "feature",
             "--matrix",
+            "--profile",
+            "codex",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn new_rejects_profiles_flag() {
+        let result =
+            Cli::try_parse_from(["wt", "new", "some", "feature", "--profiles", "alpha,beta"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn new_rejects_profiles_with_profile() {
+        let result = Cli::try_parse_from([
+            "wt",
+            "new",
+            "some",
+            "feature",
+            "--matrix",
+            "--profiles",
+            "alpha",
             "--profile",
             "codex",
         ]);

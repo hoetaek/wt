@@ -217,7 +217,7 @@ mod tests {
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
             repo.join(".local/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"stack\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
 
@@ -720,8 +720,7 @@ mod tests {
         runner.add_response(surface, true);
         runner.add_response(
             &format!(
-                r#"{{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"{}","selected_surface_ref":"{}"}}]}}"#,
-                surface_id, surface
+                r#"{{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"{surface_id}","selected_surface_ref":"{surface}"}}]}}"#
             ),
             true,
         );

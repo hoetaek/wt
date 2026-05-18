@@ -7,30 +7,29 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
 
-const DEFAULT_SITE_NAME_TEMPLATE: &str = "{{repo}}-{{branch_slug}}";
-
 pub(crate) fn apply_site_template_vars(
     config: &Config,
     vars: &mut HashMap<String, String>,
 ) -> Option<SiteDescriptor> {
     let site = config.effective_site()?;
-    let name_template = site.name.as_deref().unwrap_or(DEFAULT_SITE_NAME_TEMPLATE);
-    let name = render_site_name(name_template, vars);
+    let name = render_site_name(site.effective_name(), vars);
     vars.insert("site_name".into(), name.clone());
 
-    let secure = site.secure.unwrap_or(true);
-    let url = render_site_url(&site, &name, secure, vars);
+    let secure = site.effective_secure();
+    let url = render_site_url(&site, vars);
     vars.insert("site_url".into(), url.clone());
     let target = render_site_target(&site, vars);
+    let root = site.effective_root().into();
+    let open_browser = Some(site.effective_open_browser());
 
     Some(SiteDescriptor {
         provider: site.provider,
         name,
         url,
-        root: site.root.unwrap_or_else(|| ".".into()),
+        root,
         secure,
         target,
-        open_browser: site.open_browser,
+        open_browser,
         browser: site.browser,
     })
 }
@@ -104,25 +103,11 @@ fn render_site_name(template_value: &str, vars: &HashMap<String, String>) -> Str
     }
 }
 
-fn render_site_url(
-    site: &SiteConfig,
-    site_name: &str,
-    secure: bool,
-    vars: &HashMap<String, String>,
-) -> String {
-    if let Some(url_template) = site.url.as_deref() {
-        return template::render(url_template, vars);
-    }
-
-    let scheme = if secure { "https" } else { "http" };
-    format!("{scheme}://{site_name}.test")
+fn render_site_url(site: &SiteConfig, vars: &HashMap<String, String>) -> String {
+    template::render(site.effective_url().as_ref(), vars)
 }
 
 fn render_site_target(site: &SiteConfig, vars: &HashMap<String, String>) -> Option<String> {
-    let template_value = match site.target.as_deref() {
-        Some(target) => target,
-        None if site.provider == SiteProvider::Traefik => "http://127.0.0.1:{{vite_port}}",
-        None => return None,
-    };
+    let template_value = site.effective_target()?;
     Some(template::render(template_value, vars))
 }

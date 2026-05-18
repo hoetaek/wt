@@ -1,12 +1,35 @@
 use anyhow::bail;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 pub const RESERVED_PROFILE_NAME: &str = "default";
+pub const AGENT_PROMPT_WORKFLOW_SCOPE: &str = "workflow";
 const PROMPT_APPEND_PREFIX: &str = "\u{0}append:";
 pub(super) const PROMPT_COMMON_SCOPE: &str = "common";
 pub(super) const PROMPT_RUNTIME_MODES: [&str; 3] = ["issue", "new", "pr"];
+pub const WORKSPACE_COLOR_KIND_ISSUE: &str = "issue";
+pub const WORKSPACE_COLOR_KIND_NEW: &str = "new";
+pub const WORKSPACE_COLOR_KIND_PR: &str = "pr";
+pub const WORKSPACE_COLOR_KIND_TASK: &str = "task";
+pub const WORKSPACE_DEFAULT_COLORS: [(&str, &str); 4] = [
+    (WORKSPACE_COLOR_KIND_TASK, "blue"),
+    (WORKSPACE_COLOR_KIND_ISSUE, "blue"),
+    (WORKSPACE_COLOR_KIND_NEW, "green"),
+    (WORKSPACE_COLOR_KIND_PR, "magenta"),
+];
+const DEFAULT_SITE_NAME_TEMPLATE: &str = "{{repo}}-{{branch_slug}}";
+const DEFAULT_SITE_ROOT: &str = ".";
+const DEFAULT_TRAEFIK_SITE_TARGET_TEMPLATE: &str = "http://127.0.0.1:{{vite_port}}";
+const DEFAULT_CHROME_DEVTOOLS_USER_DATA_DIR: &str = "{{worktree_path}}/.chrome-devtools-user-data";
+const DEFAULT_CHROME_DEVTOOLS_URL: &str = "{{site_url}}";
+
+pub fn default_workspace_color(kind: &str) -> Option<&'static str> {
+    WORKSPACE_DEFAULT_COLORS
+        .iter()
+        .find_map(|(default_kind, color)| (*default_kind == kind).then_some(*color))
+}
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -215,6 +238,14 @@ pub enum EditorPlacement {
     Process,
 }
 
+impl EditorConfig {
+    pub fn effective_placement(&self) -> EditorPlacement {
+        self.placement
+            .clone()
+            .unwrap_or(EditorPlacement::CmuxSurface)
+    }
+}
+
 impl Default for SiteConfig {
     fn default() -> Self {
         Self {
@@ -228,6 +259,58 @@ impl Default for SiteConfig {
             target: None,
         }
     }
+}
+
+impl SiteConfig {
+    pub fn with_effective_defaults(&self) -> Self {
+        let mut site = self.clone();
+        site.name
+            .get_or_insert_with(|| DEFAULT_SITE_NAME_TEMPLATE.into());
+        site.root.get_or_insert_with(|| DEFAULT_SITE_ROOT.into());
+        site.secure.get_or_insert(true);
+        site.open_browser.get_or_insert(false);
+        if site.url.is_none() {
+            site.url = Some(default_site_url(site.secure.unwrap_or(true)));
+        }
+        if site.target.is_none() && site.provider == SiteProvider::Traefik {
+            site.target = Some(DEFAULT_TRAEFIK_SITE_TARGET_TEMPLATE.into());
+        }
+        site
+    }
+
+    pub fn effective_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(DEFAULT_SITE_NAME_TEMPLATE)
+    }
+
+    pub fn effective_root(&self) -> &str {
+        self.root.as_deref().unwrap_or(DEFAULT_SITE_ROOT)
+    }
+
+    pub fn effective_secure(&self) -> bool {
+        self.secure.unwrap_or(true)
+    }
+
+    pub fn effective_open_browser(&self) -> bool {
+        self.open_browser.unwrap_or(false)
+    }
+
+    pub fn effective_url(&self) -> Cow<'_, str> {
+        match self.url.as_deref() {
+            Some(url) => Cow::Borrowed(url),
+            None => Cow::Owned(default_site_url(self.effective_secure())),
+        }
+    }
+
+    pub fn effective_target(&self) -> Option<&str> {
+        self.target.as_deref().or_else(|| {
+            (self.provider == SiteProvider::Traefik).then_some(DEFAULT_TRAEFIK_SITE_TARGET_TEMPLATE)
+        })
+    }
+}
+
+fn default_site_url(secure: bool) -> String {
+    let scheme = if secure { "https" } else { "http" };
+    format!("{scheme}://{{{{site_name}}}}.test")
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq, Clone)]
@@ -250,6 +333,73 @@ pub struct WorkspaceConfig {
     pub open_url: Option<String>,
     pub open_browser: Option<bool>,
     pub browser: Option<String>,
+    pub chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
+}
+
+impl WorkspaceConfig {
+    pub fn effective_color(&self, kind: &str) -> Option<&str> {
+        self.colors
+            .get(kind)
+            .map(String::as_str)
+            .or_else(|| default_workspace_color(kind))
+    }
+
+    pub fn effective_colors(&self) -> Vec<(&str, &str)> {
+        let mut colors = WORKSPACE_DEFAULT_COLORS
+            .iter()
+            .map(|(kind, default_color)| {
+                (
+                    *kind,
+                    self.colors
+                        .get(*kind)
+                        .map(String::as_str)
+                        .unwrap_or(default_color),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let mut custom_colors = self
+            .colors
+            .iter()
+            .filter(|(kind, _)| {
+                !WORKSPACE_DEFAULT_COLORS
+                    .iter()
+                    .any(|(default_kind, _)| default_kind == &kind.as_str())
+            })
+            .map(|(kind, color)| (kind.as_str(), color.as_str()))
+            .collect::<Vec<_>>();
+        custom_colors.sort_by(|a, b| a.0.cmp(b.0));
+        colors.extend(custom_colors);
+        colors
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspaceChromeDevtoolsConfig {
+    pub enabled: bool,
+    pub port: Option<u16>,
+    pub user_data_dir: Option<String>,
+    pub url: Option<String>,
+}
+
+impl WorkspaceChromeDevtoolsConfig {
+    pub fn effective_user_data_dir(&self) -> &str {
+        self.user_data_dir
+            .as_deref()
+            .unwrap_or(DEFAULT_CHROME_DEVTOOLS_USER_DATA_DIR)
+    }
+
+    pub fn effective_url<'a>(&'a self, workspace: &'a WorkspaceConfig) -> Cow<'a, str> {
+        if let Some(url) = self.url.as_deref() {
+            return Cow::Borrowed(url);
+        }
+
+        match workspace.open_url.as_deref().filter(|url| !url.is_empty()) {
+            Some(url) => Cow::Borrowed(url),
+            None => Cow::Borrowed(DEFAULT_CHROME_DEVTOOLS_URL),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -616,7 +766,17 @@ impl Config {
         if site.provider == SiteProvider::None {
             return None;
         }
-        Some(site.clone())
+        Some(site.with_effective_defaults())
+    }
+
+    pub fn effective_editor(&self) -> Option<EditorConfig> {
+        if self.editor == EditorConfig::default() {
+            return None;
+        }
+        Some(EditorConfig {
+            command: self.editor.command.clone(),
+            placement: Some(self.editor.effective_placement()),
+        })
     }
 
     pub fn has_site(&self) -> bool {

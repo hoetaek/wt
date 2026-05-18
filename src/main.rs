@@ -4,7 +4,7 @@ use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use wt::cli::{AgentCommand, Cli, ColorMode, Commands};
+use wt::cli::{AgentCommand, Cli, ColorMode, Commands, TaskCommand, WorkflowCommand};
 use wt::config::{Config, ConfigSource};
 use wt::context::{Ctx, CtxOptions, OutputMode};
 use wt::error::WtError;
@@ -38,7 +38,7 @@ fn try_main() -> Result<()> {
 
     if cli.json && !supports_json(command) {
         bail!(
-            "JSON output is supported for: wt version, wt list, wt agent status, wt agent watch, wt doctor, wt profile"
+            "JSON output is supported for: wt version, wt list, wt task list, wt workflow list, wt agent status, wt agent watch, wt doctor, wt profile"
         );
     }
 
@@ -156,6 +156,12 @@ fn supports_json(command: &Commands) -> bool {
         command,
         Commands::Version
             | Commands::List { .. }
+            | Commands::Workflow {
+                command: WorkflowCommand::List,
+            }
+            | Commands::Task {
+                command: TaskCommand::List,
+            }
             | Commands::Agent {
                 command: AgentCommand::Status { .. },
             }

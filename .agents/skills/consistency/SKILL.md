@@ -1,6 +1,8 @@
 ---
 name: consistency
 description: "Review or implement product, CLI, config, documentation, and state-model changes for wt UX consistency. Use when working in the wt repository on consistency, 일관성, UX coherence, naming philosophy, default behavior, help text accuracy, config shape, command design, or whether code follows docs/consistency.md."
+metadata:
+  internal: true
 ---
 
 # Consistency

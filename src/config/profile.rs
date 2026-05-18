@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use super::merge::append_prompt_blocks;
-use super::schema::PROMPT_COMMON_SCOPE;
+use super::schema::{AGENT_PROMPT_WORKFLOW_SCOPE, PROMPT_COMMON_SCOPE};
 use super::{Config, CopyAsEntry};
 
 pub(super) fn apply_profile_conventions(
@@ -11,7 +11,13 @@ pub(super) fn apply_profile_conventions(
     config: &mut Config,
 ) -> anyhow::Result<()> {
     if let Some(agent) = config.agent.as_mut() {
-        for mode in [PROMPT_COMMON_SCOPE, "issue", "new", "pr"] {
+        for mode in [
+            PROMPT_COMMON_SCOPE,
+            "issue",
+            "new",
+            "pr",
+            AGENT_PROMPT_WORKFLOW_SCOPE,
+        ] {
             let prompt_path = profile_dir.join("prompts").join(format!("{mode}.md"));
             if prompt_path.exists() {
                 let prompt = std::fs::read_to_string(prompt_path)?;

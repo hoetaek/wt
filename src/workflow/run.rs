@@ -1,16 +1,20 @@
 use crate::cli::{BaseMode, WorkflowModeArg, WorkflowPrModeArg};
 use crate::commands::issue;
-use crate::config::{Config, WorkflowDefaultPolicy, validate_profile_name};
+use crate::commands::profile_selection;
+use crate::config::{
+    AGENT_PROMPT_WORKFLOW_SCOPE, Config, WorkflowDefaultPolicy, validate_profile_name,
+};
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::cmux::CmuxService;
 use crate::services::git::GitService;
+use crate::setup;
 use crate::task::{self as task_store, PreparedTask};
 use crate::task_run::{self, STATUS_PREPARED, STATUS_RUNNING};
 use crate::workflow as workflow_store;
 use crate::workflow::planner::{
-    source_for_mode, validate_single_mode_branches, workflow_base_raw, workflow_mode,
-    workflow_policy, workflow_pr_mode,
+    validate_single_mode_branches, workflow_base_raw, workflow_mode, workflow_policy,
+    workflow_pr_mode,
 };
 use crate::workflow::render::{
     no_tasks_selected_message, prepared_workflow_message, render_single_workflow_snapshot,
@@ -18,63 +22,104 @@ use crate::workflow::render::{
     workflow_single_group_prompt_intro, workflow_single_task_handoff_section,
     workflow_single_task_prompt_intro,
 };
-use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask};
+use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask, WorkflowTaskRun};
 use anyhow::{Result, bail};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 mod batch;
+mod matrix;
 mod stack;
 pub(crate) mod state;
 
 use batch::run_batch_workflow;
+use matrix::run_matrix_workflow;
 use stack::run_stack_workflow;
 pub(crate) use state::{
-    WorkflowTaskState, read_batch_workflow_task_states, read_single_workflow_task_states,
-    read_stack_workflow_task_states, task_run_record, update_workflow_task_run,
+    WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
+    read_single_workflow_task_states, read_stack_workflow_task_states, task_run_record,
+    update_workflow_profile_task_run, update_workflow_task_run,
 };
+
+#[derive(Clone, Copy)]
+pub(crate) struct PrepareWorkflowOptions<'a> {
+    pub(crate) mode: WorkflowModeArg,
+    pub(crate) profile: Option<&'a str>,
+    pub(crate) profiles: &'a [String],
+    pub(crate) objective: Option<&'a str>,
+    pub(crate) base: &'a Option<String>,
+    pub(crate) pr: Option<WorkflowPrModeArg>,
+}
 
 pub(crate) fn validate_prepare_options(
     ctx: &Ctx,
     mode: WorkflowModeArg,
     profile: Option<&str>,
+    profiles: &[String],
     pr: Option<WorkflowPrModeArg>,
 ) -> Result<()> {
-    validate_profile(ctx, profile)?;
+    if mode == WorkflowModeArg::Matrix {
+        if profile.is_some() {
+            bail!("--profile cannot be used with --mode matrix; use --profiles");
+        }
+        if profiles.is_empty() {
+            bail!("--profiles is required with --mode matrix");
+        }
+        profile_selection::load_selected_profiles(ctx, profiles)?;
+    } else {
+        if !profiles.is_empty() {
+            bail!("--profiles requires --mode matrix");
+        }
+        validate_profile(ctx, profile)?;
+    }
     validate_mode_options(mode, pr)
 }
 
 pub(crate) fn prepare_workflow(
     ctx: &Ctx,
-    mode: WorkflowModeArg,
-    profile: Option<&str>,
-    objective: Option<&str>,
-    base: &Option<String>,
+    options: PrepareWorkflowOptions<'_>,
     prepared_tasks: Vec<PreparedTask>,
-    pr: Option<WorkflowPrModeArg>,
 ) -> Result<()> {
     if prepared_tasks.is_empty() {
         ctx.ui.print_warning(no_tasks_selected_message());
         return Ok(());
     }
 
-    validate_prepare_options(ctx, mode, profile, pr)?;
-    validate_single_mode_branches(mode, &prepared_tasks)?;
-    let resolved_base = resolve_workflow_base(ctx, base)?;
+    validate_prepare_options(
+        ctx,
+        options.mode,
+        options.profile,
+        options.profiles,
+        options.pr,
+    )?;
+    if options.mode == WorkflowModeArg::Matrix && prepared_tasks.len() != 1 {
+        bail!("matrix mode workflow requires exactly one task");
+    }
+    validate_single_mode_branches(options.mode, &prepared_tasks)?;
+    let resolved_base = resolve_workflow_base(ctx, options.base)?;
     let workflow_path = workflow_store::next_available_path(ctx)?;
-    let default_policy = workflow_default_policy(ctx, profile)?;
-    let pull_request = workflow_pr_mode(pr, default_policy);
-    let prepared =
-        workflow_tasks_from_prepared(ctx, mode, &workflow_path, &resolved_base, prepared_tasks)?;
+    let default_policy = workflow_default_policy(ctx, options.profile)?;
+    let pull_request = workflow_pr_mode(options.pr, default_policy);
+    let prepared = workflow_tasks_from_prepared(
+        ctx,
+        options.mode,
+        &workflow_path,
+        &resolved_base,
+        prepared_tasks,
+        options.profiles,
+    )?;
 
     let mut metadata = WorkflowMetadata::new(
-        workflow_mode(mode),
+        workflow_mode(options.mode),
         "explicit",
         Some(resolved_base),
         prepared.tasks,
     );
-    metadata.profile = profile.map(str::to_string);
-    metadata.objective = normalized_objective(objective)?;
+    metadata.profile = options.profile.map(str::to_string);
+    if options.mode == WorkflowModeArg::Matrix {
+        metadata.profiles = options.profiles.to_vec();
+    }
+    metadata.objective = normalized_objective(options.objective)?;
     metadata.policy = workflow_policy(default_policy, pull_request);
 
     if let Err(err) = workflow_store::write(ctx, &workflow_path, &mut metadata) {
@@ -93,6 +138,7 @@ pub(crate) fn run_workflow(ctx: &Ctx, workflow_path: &Path, jobs: usize) -> Resu
         WorkflowMode::Single => run_single_workflow(ctx, workflow_path, &mut metadata),
         WorkflowMode::Batch => run_batch_workflow(ctx, workflow_path, &mut metadata, jobs),
         WorkflowMode::Stack => run_stack_workflow(ctx, workflow_path, &mut metadata),
+        WorkflowMode::Matrix => run_matrix_workflow(ctx, workflow_path, &mut metadata, jobs),
     }
 }
 
@@ -121,6 +167,7 @@ fn run_single_workflow(
     let base = workflow_base_raw(metadata)?;
     let result = if states.len() == 1 {
         run_single_workflow_task(
+            workflow_path,
             metadata,
             ctx,
             &states[0],
@@ -128,7 +175,14 @@ fn run_single_workflow(
             metadata.profile.as_deref(),
         )
     } else {
-        run_single_workflow_group(metadata, ctx, &states, &base, metadata.profile.as_deref())
+        run_single_workflow_group(
+            workflow_path,
+            metadata,
+            ctx,
+            &states,
+            &base,
+            metadata.profile.as_deref(),
+        )
     };
 
     let result = match result {
@@ -156,14 +210,20 @@ fn run_single_workflow(
 }
 
 fn run_single_workflow_task(
+    workflow_path: &Path,
     metadata: &WorkflowMetadata,
     ctx: &Ctx,
     state: &WorkflowTaskState,
     base: &Option<String>,
     profile: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
-    let completion_section =
-        workflow_single_task_handoff_section(&metadata.policy, workflow_pr_base(base));
+    let completion_section = workflow_single_task_handoff_section(
+        workflow_path,
+        Some(&state.row),
+        &metadata.policy,
+        workflow_pr_base(base),
+        &task_issue_closing_references(&state.document),
+    );
     let workflow_context = workflow_objective_prompt_context(metadata.objective.as_deref());
     let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
@@ -181,7 +241,9 @@ fn run_single_workflow_task(
             identifier: &identifier,
             title: &title,
             branch_name,
-            mode: state.document.mode(),
+            setup_mode: state.document.setup_mode(),
+            additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
+            workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: state
                 .document
                 .origin
@@ -201,6 +263,7 @@ fn run_single_workflow_task(
 }
 
 fn run_single_workflow_group(
+    workflow_path: &Path,
     metadata: &WorkflowMetadata,
     ctx: &Ctx,
     states: &[WorkflowTaskState],
@@ -214,8 +277,13 @@ fn run_single_workflow_group(
         .collect::<Vec<_>>()
         .join(", ");
     let snapshot_content = render_single_workflow_snapshot(states);
-    let completion_section =
-        workflow_single_task_handoff_section(&metadata.policy, workflow_pr_base(base));
+    let completion_section = workflow_single_task_handoff_section(
+        workflow_path,
+        None,
+        &metadata.policy,
+        workflow_pr_base(base),
+        &workflow_issue_closing_references(states),
+    );
     let workflow_context = workflow_objective_prompt_context(metadata.objective.as_deref());
     let title = single_workflow_group_title(states);
 
@@ -228,7 +296,9 @@ fn run_single_workflow_group(
             identifier: &branch,
             title: &title,
             branch_name: Some(&branch),
-            mode: "new",
+            setup_mode: setup::WORKSPACE_COLOR_KIND_NEW,
+            additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
+            workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: None,
             prompt_intro: workflow_single_group_prompt_intro(),
             completion_section: Some(&completion_section),
@@ -275,6 +345,24 @@ pub(crate) fn is_cancelled(err: &anyhow::Error) -> bool {
         .is_some_and(|err| matches!(err, WtError::Cancelled))
 }
 
+pub(super) fn task_issue_closing_references(document: &task_store::TaskDocument) -> Vec<String> {
+    document
+        .origin
+        .as_ref()
+        .map(|origin| origin.id.trim())
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .into_iter()
+        .collect()
+}
+
+fn workflow_issue_closing_references(states: &[WorkflowTaskState]) -> Vec<String> {
+    states
+        .iter()
+        .flat_map(|state| task_issue_closing_references(&state.document))
+        .collect()
+}
+
 pub(crate) fn apply_workflow_color(ctx: &Ctx, worktree_path: &Path, color: Option<&str>) {
     let Some(color) = color.map(str::trim).filter(|color| !color.is_empty()) else {
         return;
@@ -313,26 +401,25 @@ fn workflow_tasks_from_prepared(
     workflow_path: &Path,
     initial_parent: &str,
     prepared_tasks: Vec<PreparedTask>,
+    profiles: &[String],
 ) -> Result<PreparedWorkflowTasks> {
+    if mode == WorkflowModeArg::Matrix {
+        return matrix_workflow_tasks_from_prepared(ctx, workflow_path, prepared_tasks, profiles);
+    }
+
     let group = task_run::group_from_path(workflow_path)?;
     let mut parent = Some(initial_parent.to_string());
     let mut tasks = Vec::new();
     let mut task_runs = Vec::new();
     for task in prepared_tasks {
-        let run = match task_run::create(
-            ctx,
-            &task.key,
-            &task.branch,
-            source_for_mode(mode),
-            Some(&group),
-            STATUS_PREPARED,
-        ) {
-            Ok(run) => run,
-            Err(err) => {
-                rollback_task_runs(&task_runs);
-                return Err(err);
-            }
-        };
+        let run =
+            match task_run::create(ctx, &task.key, &task.branch, Some(&group), STATUS_PREPARED) {
+                Ok(run) => run,
+                Err(err) => {
+                    rollback_task_runs(&task_runs);
+                    return Err(err);
+                }
+            };
 
         let mut row = WorkflowTask::new(task.key.clone(), run.id.clone());
         if mode == WorkflowModeArg::Stack {
@@ -343,6 +430,49 @@ fn workflow_tasks_from_prepared(
         tasks.push(row);
     }
     Ok(PreparedWorkflowTasks { tasks, task_runs })
+}
+
+fn matrix_workflow_tasks_from_prepared(
+    ctx: &Ctx,
+    workflow_path: &Path,
+    prepared_tasks: Vec<PreparedTask>,
+    profiles: &[String],
+) -> Result<PreparedWorkflowTasks> {
+    let Some(task) = prepared_tasks.into_iter().next() else {
+        bail!("matrix mode workflow requires exactly one task");
+    };
+    let group = task_run::group_from_path(workflow_path)?;
+    let mut task_runs = Vec::new();
+    let mut runs = Vec::new();
+    for profile in profiles {
+        let branch = matrix_profile_branch(&task.branch, profile)?;
+        let run = match task_run::create(ctx, &task.key, &branch, Some(&group), STATUS_PREPARED) {
+            Ok(run) => run,
+            Err(err) => {
+                rollback_task_runs(&task_runs);
+                return Err(err);
+            }
+        };
+        runs.push(WorkflowTaskRun {
+            profile: profile.clone(),
+            run: run.id.clone(),
+        });
+        task_runs.push(run);
+    }
+
+    let mut row = WorkflowTask::new(task.key, "");
+    row.runs = runs;
+    Ok(PreparedWorkflowTasks {
+        tasks: vec![row],
+        task_runs,
+    })
+}
+
+fn matrix_profile_branch(branch: &str, profile: &str) -> Result<String> {
+    let Some(branch) = task_store::prepared_branch_name(branch) else {
+        bail!("matrix mode workflow task has no branch");
+    };
+    Ok(format!("{branch}-{profile}"))
 }
 
 fn validate_mode_options(mode: WorkflowModeArg, pr: Option<WorkflowPrModeArg>) -> Result<()> {

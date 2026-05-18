@@ -37,31 +37,36 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             matrix,
         } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
         Commands::Task { command } => match command {
+            TaskCommand::List => commands::task_list::run(ctx),
             TaskCommand::Import { issues } => commands::task::import(ctx, issues),
             TaskCommand::Run {
                 tasks,
                 base,
                 profile,
-                matrix,
-            } => commands::task_run_command::run(ctx, tasks, base, profile.as_deref(), *matrix),
+            } => commands::task_run_command::run(ctx, tasks, base, profile.as_deref()),
             TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
         },
         Commands::Workflow { command } => match command {
+            WorkflowCommand::List => commands::workflow::list(ctx),
             WorkflowCommand::Task {
                 tasks,
                 mode,
                 profile,
+                profiles,
                 objective,
                 base,
                 pr,
             } => commands::workflow::task(
                 ctx,
                 tasks,
-                *mode,
-                profile.as_deref(),
-                objective.as_deref(),
-                base,
-                *pr,
+                commands::workflow::TaskOptions {
+                    mode: *mode,
+                    profile: profile.as_deref(),
+                    profiles,
+                    objective: objective.as_deref(),
+                    base,
+                    pr: *pr,
+                },
             ),
             WorkflowCommand::Issue {
                 issues,

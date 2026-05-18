@@ -325,7 +325,7 @@ fn selectable_targets(ctx: &Ctx) -> Result<Vec<SelectableWorkTarget>> {
     let mut task_run_candidates = task_runs
         .into_iter()
         .filter(|record| seen_task_runs.insert(record.id.clone()))
-        .map(|record| task_run_selectable_target(record, &worktrees))
+        .map(|record| task_run_selectable_target(ctx, record, &worktrees))
         .collect::<Vec<_>>();
     task_run_candidates.sort_by(|left, right| left.sort_key.cmp(&right.sort_key));
     candidates.extend(task_run_candidates);
@@ -356,14 +356,18 @@ fn branch_selectable_target(branch: &str, worktrees: &[WorktreeEntry]) -> Select
 }
 
 fn task_run_selectable_target(
+    ctx: &Ctx,
     record: task_run::TaskRunRecord,
     worktrees: &[WorktreeEntry],
 ) -> SelectableWorkTarget {
+    let context = task_run::resolve_context(ctx, &record)
+        .map(|context| context.label())
+        .unwrap_or_else(|err| format!("context unavailable: {err:#}"));
     let hint = vec![
         "TaskRun".into(),
         format!("branch {}", record.run.branch),
         format!("status {}", record.run.status),
-        format!("source {}", record.run.source),
+        format!("context {context}"),
     ];
     let worktree = worktree_for_branch(worktrees, &record.run.branch);
     SelectableWorkTarget {
@@ -1036,7 +1040,7 @@ mod tests {
         std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
         std::fs::write(
             fixture.repo.join(".local/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"stack\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
 
@@ -1100,7 +1104,7 @@ mod tests {
         std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
         std::fs::write(
             fixture.repo.join(".local/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"stack\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
 
@@ -1124,7 +1128,7 @@ mod tests {
         std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
         std::fs::write(
             fixture.repo.join(".local/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nsource = \"stack\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
 
@@ -1322,8 +1326,11 @@ mod tests {
         runner.add_response("pane:3", true);
         runner.add_response("surface:4", true);
         add_selected_surface(&mut runner);
-        runner.add_response("gpt-5.5  Working", true);
-        runner.add_response("codex=Running", true);
+        runner.add_response(
+            "remove-task-run-source . gpt-5.5 xhigh . Context 94% left . 5h 91%",
+            true,
+        );
+        runner.add_response("codex=Idle", true);
         runner.add_response("", true);
         let ctx = fixture.ctx(runner);
 
@@ -1331,7 +1338,7 @@ mod tests {
 
         assert_eq!(work.session_state, WorkSessionState::TerminalSurfaceReady);
         assert_eq!(work.state.agent_kind, AgentKind::Codex);
-        assert_eq!(work.state.status, AgentStatus::Running);
+        assert_eq!(work.state.status, AgentStatus::Idle);
         assert_eq!(work.cmux.unwrap().surface_ref.as_deref(), Some("surface:4"));
         assert!(!fixture.repo.join(".local").exists());
     }

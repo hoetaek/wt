@@ -66,9 +66,48 @@ Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 �
 생략되면 `wt`가 내장 cmux named-color palette의 다음 색을 고르고 workflow file에
 기록한다. 색상은 mode나 task의 의미가 아니라 workflow-level 표시다.
 
-`matrix`는 하나의 issue, branch-name 입력, 또는 명시적으로 선택한 prepared task를
-named profile 목록으로 확장하는 개념이다. `batch`나 `stack`처럼 여러 task 자체를
-뜻하지 않고, profile 축으로 여러 worktree를 만드는 실행 형태다.
+`wt config` 출력은 runtime behavior를 판단하는 effective source of truth다. `.wt.toml`,
+`.local/.wt.toml`, profile file은 사용자 intent와 override를 저장하고, `wt config`는
+merge된 layer, convention file, built-in default를 사용자가 복사해 수정할 수 있는 형태로
+보여준다. 명령 구현은 user-facing default를 각 call site에서 새로 해석하지 말고 config
+모델의 effective accessor나 effective policy snapshot을 거쳐 적용해야 한다.
+활성 section의 runtime default는 `wt config` 출력에 materialize한다. 예를 들어 active
+`[site]` provider는 name/root/secure/open_browser/url과 Traefik target default까지 보여주고,
+active `[editor]` 설정은 생략된 placement의 `cmux_surface` default를 보여준다. 반대로
+`provider = "none"`처럼 feature가 inactive인 section은 effective output에 unrelated section으로
+내보내지 않는다.
+
+`[workspace].colors`는 workspace를 시작하는 command surface의 기본 cmux 색상이다.
+Canonical 색상 key는 `task`, `issue`, `new`, `pr`이다. `task`는 TaskDocument에
+`[origin]`이 있는지와 무관하게 즉시 실행 표면인 `wt task run`에 대응한다. `issue`는
+직접 provider issue에서 시작하는 `wt issue`, `new`는 branch-name text에서 시작하는
+`wt new`, `pr`은 pull request branch를 여는 `wt pr`에만 대응한다. 이 key들은 prompt
+setup mode, profile 이름, workflow `mode = "single" | "batch" | "stack" | "matrix"`
+값이 아니다.
+Workflow run은 필요한 경우 TaskDocument setup을 거치더라도 최종 visible grouping color는
+저장된 `workflow.color`를 적용한다. `[workspace].colors` key를 생략하면 내장 기본값
+`task = "blue"`, `issue = "blue"`, `new = "green"`, `pr = "magenta"`를 쓴다.
+`wt config`는 이 effective 색상값을 출력하므로 사용자가 수정할 기준은 `wt config` 출력이다.
+`wt init`은 이 기본값을 active config로 쓰지 않고 commented override 예시로만 보여준다.
+Active `colors = { ... }`는 사용자가 기본값과 다른 색을 고정하려는 의도일 때만 둔다. 색을
+아예 쓰지 않을 kind는 `task = ""`처럼 빈 문자열로 override한다.
+
+`matrix`는 하나의 local TaskDocument를 명시한 named profile 목록으로 확장하는 saved
+Workflow mode다. 첫 버전의 `mode = "matrix"`는 exactly one task x many named profiles만
+허용한다. `batch`나 `stack`처럼 여러 task 자체를 뜻하지 않고, profile 축으로 여러
+profile-specific TaskRun/worktree를 만드는 실행 형태다. `wt workflow task --mode matrix
+--profiles <name>[,<name>...] <task>`가 canonical creation surface이고, profile list는
+Workflow TOML의 `profiles = [...]`에 사용자가 넘긴 순서로 저장한다. `--profiles`는
+repeatable할 수 있지만 `--mode matrix` 없이 쓰면 안 되고, `--profile`과 동시에 쓰면 안
+된다. Unknown profile, duplicate profile, reserved `default` profile name은 worktree,
+TaskRun, Workflow 파일을 만들기 전에 실패해야 한다. 수동 Workflow TOML도 `mode =
+"matrix"`에서 task가 1개가 아니거나 `profiles`가 비어 있거나 task row가 profile별
+`[[tasks.runs]]`를 정확히 저장하지 않으면 invalid state로 거부한다.
+
+Direct `wt task run`은 immediate single-worktree path다. `wt task run <task>`와
+`wt task run <task> --profile <name>`만 소유하고, profile fan-out을 소유하지 않는다.
+Direct `wt issue --matrix`와 `wt new --matrix`의 legacy all-named-profiles behavior는
+보존하되 selected profile subset은 Workflow matrix로 표현한다.
 
 `wt new <words...>`는 branch-name text에서 바로 ad hoc worktree를 시작한다. 즉시
 준비된 TaskDocument를 실행하는 표면은 `wt task run [<task>...]`이다. 여러
@@ -100,9 +139,10 @@ profile이 작업 묶음인지 다시 추론해야 한다. 이런 혼동은 기�
 
 애매한 조합은 추론하지 말고 거부한다.
 
-예를 들어 `--profile`은 “하나의 profile 선택”을 뜻하고 `--matrix`는 “모든
-profile로 확장”을 뜻한다면, 둘을 동시에 받은 상태에서 임의로 우선순위를 정하지
-않는다.
+예를 들어 direct `--profile`은 “하나의 profile 선택”을 뜻하고, `wt workflow task --mode
+matrix --profiles`는 “명시한 profile subset을 저장된 workflow로 확장”을 뜻한다.
+`--profile`과 `--profiles`, direct `wt task run --matrix`, matrix workflow의 여러 task처럼
+이 조합들이 충돌하면 임의로 우선순위를 정하지 않는다.
 
 명령은 사용자가 의도를 잘못 표현했을 때 조용히 다른 일을 해서는 안 된다. 빠르게
 실패하고, 어떤 선택을 해야 하는지 알려줘야 한다.
@@ -186,12 +226,35 @@ profile convention file merge를 모두 끝낸 뒤 최종 effective config에서
 `issue`, `new`, `pr` prompt 앞에 펼친다. `common`을 각 layer마다 mode별 prompt로
 복사하지 않는다.
 
+`workflow`도 Workflow `mode = "single" | "batch" | "stack"`나 setup mode가 아니라
+`[agent.prompt]` / `[agent.prompt.append]` 안의 workflow-started task 전용 scope다.
+`wt workflow run`으로 시작한 task에만 적용하고, direct `wt task run`, `wt issue`,
+`wt new`, `wt pr`에는 적용하지 않는다. Workflow task의 setup mode는 계속
+TaskDocument origin에 따라 `issue` 또는 `new`를 사용하므로 기존 setup-mode prompt도
+함께 적용된다. `common`은 `workflow`로 펼치지 않는다. Workflow task는 이미 `issue` 또는
+`new` prompt를 받기 때문에 `common`을 `workflow`에도 펼치면 같은 공통 지시가 중복된다.
+Profile convention file은 `.local/profiles/<name>/prompts/workflow.md`와
+`.local/profiles/<name>/prompts/workflow.append.md`를 같은 scope로 읽는다.
+
 ### State Is Explicit
 
 저장되는 상태는 사용자가 이해할 수 있는 상태여야 한다.
 
 TaskDocument는 작업이 무엇인지를 담는 정의다. `.local/tasks/<task>.toml`
 아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
+
+`wt task list`는 `.local/tasks/<task>.toml`에 저장된 TaskDocument file의 canonical
+read-only inventory다. `wt task run`의 runnable selector가 아니므로 이미 완료된
+TaskRun 때문에 selector에서 빠지는 TaskDocument도 보여주고, selector의 10-row visible
+cap을 적용하지 않는다. Text output은 selector와 같은 TaskDocument display order인
+title, origin/publish state, task key, branch를 먼저 보여주고, inventory-only field인
+source, path, origin, 짧은 body summary를 함께 보여준다. JSON output은 TaskDocument의
+key, path, title, branch, origin/publish state, local-vs-provider-origin source, 짧은
+body summary를 stable shape로 보여준다.
+TaskDocument TOML parse/validation failure는 조용히 숨기지 않고 text warning 또는 JSON
+`invalid_tasks`로 보고한다. `wt task list`는 worktree, local branch, TaskRun, Workflow,
+provider issue, pull request, agent setup을 만들거나 수정하지 않는다. Workflow inventory는
+계속 `wt workflow list`, worktree/branch/site state는 계속 `wt list`가 맡는다.
 
 TaskDocument import는 configured issue provider의 기존 issue를 local task 정의로
 가져오는 side effect다. Canonical command shape는 `wt task import` 또는
@@ -262,8 +325,11 @@ setup은 만들지 않는다는 점, duplicate ids나 existing TaskDocument coll
 실패한다는 점을 보여줘야 한다.
 
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `.local/task-runs/<id>.toml` 아래에
-task, branch, status, source, group, error, creation_order, created_at,
-updated_at을 저장한다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
+task, branch, status, group, error, creation_order, created_at, updated_at을 저장한다.
+`group`은 Workflow file stem과 맞는 workflow-linked run을 식별하는 link이고, 직접
+`wt task run`으로 만든 TaskRun은 group을 저장하지 않는다. Legacy TaskRun TOML의
+source 값 `new`, `batch`, `stack`은 읽기 전용 migration compatibility로만 받으며 새
+TaskRun 출력에는 쓰지 않는다. `creation_order`는 같은 task의 최신 실행을 고를 때 파일명이나
 초 단위 timestamp 우연성에 기대지 않도록 새 TaskRun마다 증가하는 실행 생성 순서다.
 `creation_order`가 없는 previous TaskRun은 계속 읽되 ordered TaskRun보다 앞에 정렬하고,
 previous끼리는 `created_at`과 id를 fallback으로 쓴다.
@@ -380,6 +446,17 @@ Stack-mode에서 `running`은 agent prompt 전송이 아니라 사용자나 agen
 `prepared` 또는 `failed` task가 있고 현재 `running` task가 없을 때 runnable이다. 명시
 workflow id/path는 automation surface로 남긴다.
 
+`wt workflow list`는 `.local/workflows/<id>.toml`에 저장된 Workflow file의 canonical
+read-only inventory다. `wt workflow run`의 runnable selector가 아니므로 runnable workflow만
+필터링하거나 selector의 10-row visible cap을 적용하지 않는다. `wt workflow show`의 latest
+default도 all-workflow inventory로 확장하지 않는다. Output은 Workflow 자체의 단일
+`status`를 만들지 않고, linked TaskRun에서 파생한 task-run status count/summary와 mode별
+runnable metadata를 보여준다. Workflow TOML parse/validation failure는 조용히 숨기지 않고
+text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계속 Workflow `mode`
+값일 뿐이므로 `wt list workflow`, top-level `batch`/`stack`, `wt profile list` 같은 symmetry
+command를 추가하지 않는다. `wt task list`는 symmetry command가 아니라 별도 TaskDocument
+inventory surface이며 Workflow, TaskRun, branch, worktree 목록 의미를 갖지 않는다.
+
 Workspace label은 저장 상태가 아니라 현재 실행을 찾기 위한 표시다. 좁은 탭에서 잘려도
 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을 앞에 붙이고, branch/path/site
 이름에는 `batch`나 `stack` 같은 mode label을 섞지 않는다. `B`/`S` prefix는 workflow
@@ -404,6 +481,8 @@ Workflow file, TaskRun, TaskDocument에 저장하지 않는다. 좌표가 unavai
 agent는 같은 `Agent Completion Report`를 task session에 남기고 기다린다. Handoff section과
 그 안의 `cmux send`/enter 명령은 긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서
 terminal prompt가 축약되어도 coordinator 좌표가 앞쪽에 남게 한다.
+사용자 정의 `[agent.prompt.workflow]` prompt가 있으면 이 built-in handoff와 TaskDocument
+snapshot 뒤, 기존 `issue`/`new` setup-mode prompt 앞에 보낸다.
 
 보고 형식은 workflow mode와 무관하게
 `Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>`
@@ -413,7 +492,9 @@ push하고 준비된 workflow base 또는 parent branch를 base로 draft pull re
 남긴다는 뜻이다. `"ready"`는 draft를 만들었다가 전환하지 않고 바로 review-ready pull request를
 연다는 뜻이다. PR을 여는 workflow task는 `.github/pull_request_template.md`에서
 `<pr-body-file>`을 만들고 summary, context, changes, validation, risks/follow-ups 중심의
-review-focused 본문을 채운 뒤 `gh pr create --body-file <pr-body-file>` 경로로 PR을 생성한다.
+review-focused 본문을 채운다. TaskDocument에 `[origin]`이 있으면 PR merge가 provider
+issue를 닫도록 `Closes <origin.id>` issue-closing keyword도 PR 본문에 포함한다. 그런 뒤
+`gh pr create --body-file <pr-body-file>` 경로로 PR을 생성한다.
 Agent Completion Report는 coordinator transport/report 형식이며 PR 본문으로 복사하지 않는다.
 이것은 PR 자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은
 transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow에 포함된다. Codex/GitHub
@@ -430,6 +511,13 @@ workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch comm
 단계로 landing을 문서화한다. Stack-mode workflow branch는 workflow가 보여주는 base-to-top
 순서대로 landing한다.
 
+`wt done <target>`의 explicit cleanup target은 branch, worktree path/name,
+issue-like branch-name shorthand, direct TaskRun id다. Direct TaskRun id는 해당 TaskRun의
+branch를 checked-out worktree로 해석한 뒤 같은 cleanup path를 탄다. Workflow-linked
+TaskRun id는 workflow completion을 우회하지 않도록 거부하고 `wt inspect`와
+`wt workflow complete` 경로를 안내한다. Issue shorthand는 provider issue lookup이 아니라
+현재 branch text에 대한 compatibility shorthand다.
+
 Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work definition이므로
 기본적으로 보존한다. 한 번 실행하고 끝난 task라도 linked TaskRun과 Workflow reference가
 정리되기 전까지 TaskDocument 삭제를 execution completion에 섞지 않는다. 나중에 `wt land`,
@@ -440,10 +528,10 @@ Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work
 commit/diff 정보, Agent Completion Report 기대치, 현재 cmux contact를 보여주는 canonical
 read-only dossier다. Agent observation snapshot을 같이 보여줄 수 있지만, `inspect`의 exit
 code는 command 자체의 성공/실패만 뜻한다. 관찰된 agent가 `needs_input`이거나 `failed`여도
-그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. 실제 완료 기록은 source별 명령이
-맡는다. `source = "new"`와 `source = "batch"` TaskRun은 landing/cleanup 안전 확인 뒤
-`wt done`이 정리하고, `source = "stack"` TaskRun은 stack-mode workflow completion command가
-전이한다.
+그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. 실제 완료 기록은 direct 또는
+workflow-linked context별 명령이 맡는다. 직접 `wt task run`이 만든 TaskRun은 review/landing
+확인 뒤 `wt done` cleanup이 정리할 수 있고, Workflow file의 `[[tasks]].run`과 matching
+`group`으로 연결된 TaskRun은 workflow completion command가 전이한다.
 
 `wt inspect`에서 `<target>` 생략은 interactive TTY human mode에서 inspectable work target
 selector를 여는 기본 동작이다. `--json`, `--quiet`, 또는 non-TTY automation에서는 selector를

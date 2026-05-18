@@ -81,6 +81,63 @@ fn current_branch(path: &Path) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
+fn write_task_document(root: &Path, key: &str, branch: &str) {
+    let dir = root.join(".local/tasks");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{key}.toml")),
+        format!(
+            r#"title = "{key}"
+branch = "{branch}"
+body = "Task body"
+"#
+        ),
+    )
+    .unwrap();
+}
+
+fn write_task_run_file(root: &Path, id: &str, task: &str, branch: &str, status: &str, group: &str) {
+    let dir = root.join(".local/task-runs");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{id}.toml")),
+        format!(
+            r#"task = "{task}"
+branch = "{branch}"
+status = "{status}"
+group = "{group}"
+creation_order = 1
+created_at = "2026-05-18T00:00:00.000000000Z"
+updated_at = "2026-05-18T00:00:00.000000000Z"
+"#
+        ),
+    )
+    .unwrap();
+}
+
+fn write_workflow_file(root: &Path, id: &str, mode: &str, extra: &str, tasks: &str) {
+    let dir = root.join(".local/workflows");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{id}.toml")),
+        format!(
+            r#"mode = "{mode}"
+{extra}base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-18T00:00:00Z"
+updated_at = "2026-05-18T00:00:00Z"
+
+[policy]
+pull_request = "draft"
+landing = "manual"
+
+{tasks}"#
+        ),
+    )
+    .unwrap();
+}
+
 #[test]
 fn version_flag_prints_package_version() {
     wt_command()
@@ -169,7 +226,7 @@ fn task_run_help_explains_task_execution() {
         .assert()
         .success()
         .stdout(predicate::str::contains("one worktree per selected"))
-        .stdout(predicate::str::contains("source = \"new\" TaskRun"))
+        .stdout(predicate::str::contains("direct TaskRun"))
         .stdout(predicate::str::contains("Task Run Coordinator Handoff"))
         .stdout(predicate::str::contains("Task-run agents report PR=none"))
         .stdout(predicate::str::contains("wt workflow task --mode batch"))
@@ -177,14 +234,160 @@ fn task_run_help_explains_task_execution() {
 }
 
 #[test]
-fn task_help_lists_import_run_and_publish() {
+fn task_help_lists_list_import_run_and_publish() {
     wt_command()
         .args(["task", "--help"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("list"))
         .stdout(predicate::str::contains("import"))
         .stdout(predicate::str::contains("run"))
         .stdout(predicate::str::contains("publish"));
+}
+
+#[test]
+fn task_list_help_explains_canonical_inventory() {
+    wt_command()
+        .args(["task", "list", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical read-only inventory"))
+        .stdout(predicate::str::contains(
+            "whether or not they are selectable by wt task run",
+        ))
+        .stdout(predicate::str::contains(
+            "reports invalid TaskDocument TOML files",
+        ))
+        .stdout(predicate::str::contains("does not start workspaces"))
+        .stdout(predicate::str::contains("create TaskRuns"))
+        .stdout(predicate::str::contains("prepare workflows"));
+}
+
+#[test]
+fn task_list_supports_json_and_reports_invalid_tasks() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "completed", "feature/completed");
+    write_task_run_file(
+        temp.path(),
+        "run-completed",
+        "completed",
+        "feature/completed",
+        "done",
+        "",
+    );
+    write_task_document(temp.path(), "local", "feature/local");
+    std::fs::write(
+        temp.path().join(".local/tasks/provider.toml"),
+        r#"title = "Provider task"
+branch = "alice/provider-task"
+body = "Imported provider task body"
+
+[origin]
+provider = "linear"
+id = "PROJ-123"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join(".local/tasks/bad.toml"),
+        "unknown = true\n",
+    )
+    .unwrap();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "task",
+            "list",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let tasks = value["tasks"].as_array().unwrap();
+    let invalid = value["invalid_tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 3);
+    assert_eq!(invalid.len(), 1);
+
+    let completed = tasks
+        .iter()
+        .find(|row| row["key"] == "completed")
+        .expect("completed task should be listed even after a done TaskRun");
+    assert_eq!(completed["path"], ".local/tasks/completed.toml");
+    assert_eq!(completed["branch"], "feature/completed");
+    assert_eq!(completed["publish_state"], "local");
+    assert_eq!(completed["source"], "local");
+    assert!(completed["origin"].is_null());
+
+    let provider = tasks
+        .iter()
+        .find(|row| row["key"] == "provider")
+        .expect("provider-origin task should be listed");
+    assert_eq!(provider["title"], "Provider task");
+    assert_eq!(provider["branch"], "alice/provider-task");
+    assert_eq!(provider["publish_state"], "published");
+    assert_eq!(provider["source"], "provider-origin");
+    assert_eq!(provider["origin"]["provider"], "linear");
+    assert_eq!(provider["origin"]["id"], "PROJ-123");
+    assert_eq!(provider["body_summary"], "Imported provider task body");
+
+    assert_eq!(invalid[0]["key"], "bad");
+    assert_eq!(invalid[0]["path"], ".local/tasks/bad.toml");
+    assert!(
+        invalid[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Failed to parse task")
+    );
+}
+
+#[test]
+fn task_list_text_includes_stable_task_fields_and_invalid_warning() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "local", "feature/local");
+    std::fs::write(
+        temp.path().join(".local/tasks/provider.toml"),
+        r#"title = "Provider task"
+branch = "alice/provider-task"
+body = "Provider task body"
+
+[origin]
+provider = "linear"
+id = "PROJ-123"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join(".local/tasks/bad.toml"),
+        "unknown = true\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "task", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "local  not published | task local | branch feature/local | source local",
+        ))
+        .stdout(predicate::str::contains(
+            "Provider task  Linear PROJ-123 | task provider | branch alice/provider-task | source provider-origin",
+        ))
+        .stdout(predicate::str::contains("Path: .local/tasks/local.toml"))
+        .stdout(predicate::str::contains("Origin: none"))
+        .stdout(predicate::str::contains("Origin: linear:PROJ-123"))
+        .stdout(predicate::str::contains("Summary: Task body"))
+        .stdout(predicate::str::contains("Summary: Provider task body"))
+        .stderr(predicate::str::contains(
+            "Invalid task .local/tasks/bad.toml",
+        ));
 }
 
 #[test]
@@ -237,6 +440,97 @@ fn workflow_run_help_explains_omitted_target_selection() {
         .stdout(predicate::str::contains(
             "omit to select a runnable workflow",
         ));
+}
+
+#[test]
+fn workflow_list_help_explains_canonical_inventory() {
+    wt_command()
+        .args(["workflow", "list", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical read-only inventory"))
+        .stdout(predicate::str::contains(
+            "whether or not they are currently runnable",
+        ))
+        .stdout(predicate::str::contains(
+            "reports invalid workflow TOML files",
+        ));
+}
+
+#[test]
+fn workflow_list_supports_json_and_reports_invalid_workflows() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "schema", "feature/schema");
+    write_task_run_file(
+        temp.path(),
+        "run-2026-05-18-001-schema",
+        "schema",
+        "feature/schema",
+        "prepared",
+        "2026-05-18-001",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-001",
+        "batch",
+        r#"objective = "Ship search"
+profile = "codex"
+"#,
+        r#"[[tasks]]
+task = "schema"
+run = "run-2026-05-18-001-schema"
+"#,
+    );
+    std::fs::write(
+        temp.path().join(".local/workflows/bad.toml"),
+        "mode = \"batch\"\n",
+    )
+    .unwrap();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "workflow",
+            "list",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let workflows = value["workflows"].as_array().unwrap();
+    let invalid = value["invalid_workflows"].as_array().unwrap();
+    assert_eq!(workflows.len(), 1);
+    assert_eq!(invalid.len(), 1);
+
+    let row = &workflows[0];
+    assert_eq!(row["id"], "2026-05-18-001");
+    assert_eq!(row["path"], ".local/workflows/2026-05-18-001.toml");
+    assert_eq!(row["mode"], "batch");
+    assert_eq!(row["objective_summary"], "Ship search");
+    assert_eq!(row["task_count"], 1);
+    assert_eq!(row["task_runs"]["prepared"], 1);
+    assert_eq!(row["task_runs"]["summary"], "1 prepared");
+    assert_eq!(row["runnable"]["runnable"], true);
+    assert_eq!(row["runnable"]["runnable_count"], 1);
+    assert_eq!(row["base"], "main");
+    assert_eq!(row["profile"], "codex");
+    assert_eq!(row["policy"]["pull_request"], "draft");
+    assert_eq!(row["policy"]["landing"], "manual");
+    assert!(row["state_error"].is_null());
+    assert_eq!(invalid[0]["id"], "bad");
+    assert_eq!(invalid[0]["path"], ".local/workflows/bad.toml");
+    assert!(
+        invalid[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Failed to parse workflow")
+    );
 }
 
 #[test]
@@ -341,6 +635,18 @@ fn inspect_help_explains_optional_target_selection() {
         .stdout(predicate::str::contains(
             "Omit TARGET in an interactive terminal",
         ));
+}
+
+#[test]
+fn done_help_explains_cleanup_target_contract() {
+    wt_command()
+        .args(["done", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("worktree path/name"))
+        .stdout(predicate::str::contains("issue-like branch-name shorthand"))
+        .stdout(predicate::str::contains("direct TaskRun id"))
+        .stdout(predicate::str::contains("wt workflow complete"));
 }
 
 #[test]
@@ -892,6 +1198,13 @@ CODEX_MODE = "1"
         &vec!["from common prompt file\n\nfrom common append file\n".to_string()]
     );
 
+    let workspace = config.workspace.unwrap();
+    assert_eq!(workspace.tabs, vec!["pnpm dev"]);
+    assert_eq!(workspace.colors.get("task").unwrap(), "blue");
+    assert_eq!(workspace.colors.get("issue").unwrap(), "blue");
+    assert_eq!(workspace.colors.get("new").unwrap(), "green");
+    assert_eq!(workspace.colors.get("pr").unwrap(), "magenta");
+
     let copy_as = config.worktree.copy_as;
     assert!(
         copy_as
@@ -912,6 +1225,138 @@ fn config_renders_builtin_workflow_defaults() {
         .stdout(predicate::str::contains("[workflow]"))
         .stdout(predicate::str::contains("pull_request = \"none\""))
         .stdout(predicate::str::contains("landing = \"manual\""));
+}
+
+#[test]
+fn config_renders_builtin_workspace_color_defaults() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[workspace]\ntabs = [\"lazygit\"]\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[workspace]"))
+        .stdout(predicate::str::contains(
+            "colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }",
+        ));
+}
+
+#[test]
+fn config_renders_enabled_workspace_chrome_devtools_defaults() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[workspace]\nopen_url = \"{{site_url}}/dashboard\"\n\n[workspace.chrome_devtools]\nenabled = true\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[workspace.chrome_devtools]"))
+        .stdout(predicate::str::contains("enabled = true"))
+        .stdout(predicate::str::contains(
+            "user_data_dir = \"{{worktree_path}}/.chrome-devtools-user-data\"",
+        ))
+        .stdout(predicate::str::contains("url = \"{{site_url}}/dashboard\""))
+        .stdout(predicate::str::contains("port =").not());
+}
+
+#[test]
+fn config_preserves_empty_workspace_color_overrides() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[workspace]\ncolors = { task = \"\", issue = \"\", new = \"\", pr = \"\" }\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "colors = { task = \"\", issue = \"\", new = \"\", pr = \"\" }",
+        ));
+}
+
+#[test]
+fn config_renders_active_site_runtime_defaults() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[site]\nprovider = \"traefik\"\nsecure = false\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[site]"))
+        .stdout(predicate::str::contains(
+            "name = \"{{repo}}-{{branch_slug}}\"",
+        ))
+        .stdout(predicate::str::contains("root = \".\""))
+        .stdout(predicate::str::contains("open_browser = false"))
+        .stdout(predicate::str::contains(
+            "url = \"http://{{site_name}}.test\"",
+        ))
+        .stdout(predicate::str::contains(
+            "target = \"http://127.0.0.1:{{vite_port}}\"",
+        ));
+}
+
+#[test]
+fn config_omits_inactive_site_section() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[site]\nprovider = \"none\"\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[site]").not());
+}
+
+#[test]
+fn config_renders_editor_placement_default_when_editor_is_active() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[editor]\ncommand = \"code {{path}}\"\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[editor]"))
+        .stdout(predicate::str::contains("command = \"code {{path}}\""))
+        .stdout(predicate::str::contains("placement = \"cmux_surface\""));
 }
 
 #[test]

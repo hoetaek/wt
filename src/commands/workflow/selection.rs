@@ -7,8 +7,8 @@ use crate::workflow::render::{
     workflow_selection_status_counts, workflow_task_title_label,
 };
 use crate::workflow::run::{
-    WorkflowTaskState, read_batch_workflow_task_states, read_single_workflow_task_states,
-    read_stack_workflow_task_states,
+    WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
+    read_single_workflow_task_states, read_stack_workflow_task_states,
 };
 use crate::workflow::{WorkflowMetadata, WorkflowMode};
 use anyhow::{Context, Result, bail};
@@ -105,6 +105,7 @@ fn read_workflow_candidate_states(
         WorkflowMode::Single => read_single_workflow_task_states(ctx, workflow_path, metadata),
         WorkflowMode::Batch => read_batch_workflow_task_states(ctx, workflow_path, metadata),
         WorkflowMode::Stack => read_stack_workflow_task_states(ctx, workflow_path, metadata),
+        WorkflowMode::Matrix => read_matrix_workflow_task_states(ctx, workflow_path, metadata),
     }
 }
 
@@ -118,7 +119,7 @@ fn workflow_selection_item(
 ) -> PromptItem {
     let mut fields = vec![format!("mode {}", metadata.mode.as_str())];
     match metadata.mode {
-        WorkflowMode::Single | WorkflowMode::Batch => {
+        WorkflowMode::Single | WorkflowMode::Batch | WorkflowMode::Matrix => {
             fields.push(format!("{} runnable", info.runnable_count));
             fields.push(format!(
                 "tasks {}",
@@ -144,6 +145,9 @@ fn workflow_selection_item(
     fields.push(format!("base {}", base_label(metadata)));
     if let Some(profile) = metadata.profile.as_deref() {
         fields.push(format!("profile {profile}"));
+    }
+    if !metadata.profiles.is_empty() {
+        fields.push(format!("profiles {}", metadata.profiles.join(",")));
     }
     fields.push(format!(
         "path {}",

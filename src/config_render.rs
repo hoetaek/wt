@@ -1,7 +1,8 @@
 use crate::config::{
     AgentCli, AgentConfig, Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
-    ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig, WorkflowConfig,
-    WorkflowDefaultLandingPolicy, WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
+    ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig,
+    WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
+    WorkspaceConfig, WorktreeConfig,
 };
 
 pub fn render_effective_config(config: &Config) -> String {
@@ -9,14 +10,16 @@ pub fn render_effective_config(config: &Config) -> String {
 
     append_worktree_section(&mut s, &config.worktree);
     append_setup_section(&mut s, &config.setup);
-    append_workflow_section(&mut s, &config.workflow);
+    append_workflow_section(&mut s, config.workflow_default_policy());
     if let Some(issues) = config.issues.as_ref() {
         append_issues_section(&mut s, issues);
     }
-    if let Some(site) = config.site.as_ref() {
-        append_site_section(&mut s, site);
+    if let Some(site) = config.effective_site() {
+        append_site_section(&mut s, &site);
     }
-    append_editor_section(&mut s, &config.editor);
+    if let Some(editor) = config.effective_editor() {
+        append_editor_section(&mut s, &editor);
+    }
     if let Some(workspace) = config.workspace.as_ref() {
         append_workspace_section(&mut s, workspace);
     }
@@ -121,22 +124,15 @@ fn append_setup_section(s: &mut String, setup: &SetupConfig) {
     }
 }
 
-fn append_workflow_section(s: &mut String, workflow: &WorkflowConfig) {
-    let pull_request = workflow
-        .pull_request
-        .unwrap_or(WorkflowDefaultPullRequestMode::None);
-    let landing = workflow
-        .landing
-        .unwrap_or(WorkflowDefaultLandingPolicy::Manual);
-
+fn append_workflow_section(s: &mut String, policy: WorkflowDefaultPolicy) {
     s.push_str("\n[workflow]\n");
     s.push_str(&format!(
         "pull_request = {}\n",
-        toml_quote(workflow_default_pull_request_name(pull_request))
+        toml_quote(workflow_default_pull_request_name(policy.pull_request))
     ));
     s.push_str(&format!(
         "landing = {}\n",
-        toml_quote(workflow_default_landing_name(landing))
+        toml_quote(workflow_default_landing_name(policy.landing))
     ));
 }
 
@@ -208,12 +204,10 @@ fn append_workspace_section(s: &mut String, workspace: &WorkspaceConfig) {
             toml_array(&workspace.post_deps_tabs)
         ));
     }
-    if !workspace.colors.is_empty() {
-        s.push_str(&format!(
-            "colors = {}\n",
-            toml_inline_string_map(&workspace.colors)
-        ));
-    }
+    s.push_str(&format!(
+        "colors = {}\n",
+        toml_inline_string_entries(&workspace.effective_colors())
+    ));
     if let Some(open_url) = workspace.open_url.as_deref() {
         s.push_str(&format!("open_url = {}\n", toml_quote(open_url)));
     }
@@ -222,6 +216,25 @@ fn append_workspace_section(s: &mut String, workspace: &WorkspaceConfig) {
     }
     if let Some(browser) = workspace.browser.as_deref() {
         s.push_str(&format!("browser = {}\n", toml_quote(browser)));
+    }
+    if let Some(chrome_devtools) = workspace.chrome_devtools.as_ref() {
+        s.push_str("\n[workspace.chrome_devtools]\n");
+        s.push_str(&format!("enabled = {}\n", chrome_devtools.enabled));
+        if let Some(port) = chrome_devtools.port {
+            s.push_str(&format!("port = {port}\n"));
+        }
+        if chrome_devtools.enabled || chrome_devtools.user_data_dir.is_some() {
+            s.push_str(&format!(
+                "user_data_dir = {}\n",
+                toml_quote(chrome_devtools.effective_user_data_dir())
+            ));
+        }
+        if chrome_devtools.enabled || chrome_devtools.url.is_some() {
+            s.push_str(&format!(
+                "url = {}\n",
+                toml_quote(chrome_devtools.effective_url(workspace).as_ref())
+            ));
+        }
     }
 }
 
@@ -356,11 +369,9 @@ fn toml_array(values: &[String]) -> String {
     )
 }
 
-fn toml_inline_string_map(values: &std::collections::HashMap<String, String>) -> String {
-    let mut entries = values.iter().collect::<Vec<_>>();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    let rendered = entries
-        .into_iter()
+fn toml_inline_string_entries(values: &[(&str, &str)]) -> String {
+    let rendered = values
+        .iter()
         .map(|(key, value)| format!("{} = {}", toml_key(key), toml_quote(value)))
         .collect::<Vec<_>>()
         .join(", ");
@@ -394,4 +405,114 @@ fn toml_quote(value: &str) -> String {
     }
     out.push('"');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_effective_config;
+    use crate::config::{
+        Config, EditorConfig, EditorPlacement, SiteConfig, SiteProvider, WorkflowConfig,
+        WorkflowDefaultPullRequestMode,
+    };
+
+    #[test]
+    fn workflow_section_uses_effective_policy_defaults() {
+        let rendered = render_effective_config(&Config {
+            workflow: WorkflowConfig {
+                pull_request: Some(WorkflowDefaultPullRequestMode::Draft),
+                landing: None,
+            },
+            ..Config::default()
+        });
+
+        assert!(rendered.contains("[workflow]\n"));
+        assert!(rendered.contains("pull_request = \"draft\"\n"));
+        assert!(rendered.contains("landing = \"manual\"\n"));
+    }
+
+    #[test]
+    fn active_site_section_materializes_runtime_defaults() {
+        let rendered = render_effective_config(&Config {
+            site: Some(SiteConfig {
+                provider: SiteProvider::Herd,
+                ..SiteConfig::default()
+            }),
+            ..Config::default()
+        });
+
+        assert!(rendered.contains("[site]\n"));
+        assert!(rendered.contains("provider = \"herd\"\n"));
+        assert!(rendered.contains("name = \"{{repo}}-{{branch_slug}}\"\n"));
+        assert!(rendered.contains("root = \".\"\n"));
+        assert!(rendered.contains("secure = true\n"));
+        assert!(rendered.contains("open_browser = false\n"));
+        assert!(rendered.contains("url = \"https://{{site_name}}.test\"\n"));
+        assert!(!rendered.contains("target = "));
+    }
+
+    #[test]
+    fn traefik_site_section_materializes_target_default() {
+        let rendered = render_effective_config(&Config {
+            site: Some(SiteConfig {
+                provider: SiteProvider::Traefik,
+                secure: Some(false),
+                ..SiteConfig::default()
+            }),
+            ..Config::default()
+        });
+
+        assert!(rendered.contains("provider = \"traefik\"\n"));
+        assert!(rendered.contains("secure = false\n"));
+        assert!(rendered.contains("url = \"http://{{site_name}}.test\"\n"));
+        assert!(rendered.contains("target = \"http://127.0.0.1:{{vite_port}}\"\n"));
+    }
+
+    #[test]
+    fn inactive_site_section_is_omitted() {
+        let rendered = render_effective_config(&Config {
+            site: Some(SiteConfig {
+                provider: SiteProvider::None,
+                ..SiteConfig::default()
+            }),
+            ..Config::default()
+        });
+
+        assert!(!rendered.contains("[site]\n"));
+    }
+
+    #[test]
+    fn active_editor_section_materializes_placement_default() {
+        let rendered = render_effective_config(&Config {
+            editor: EditorConfig {
+                command: Some("code {{path}}".into()),
+                placement: None,
+            },
+            ..Config::default()
+        });
+
+        assert!(rendered.contains("[editor]\n"));
+        assert!(rendered.contains("command = \"code {{path}}\"\n"));
+        assert!(rendered.contains("placement = \"cmux_surface\"\n"));
+    }
+
+    #[test]
+    fn editor_section_is_omitted_when_inactive() {
+        let rendered = render_effective_config(&Config::default());
+
+        assert!(!rendered.contains("[editor]\n"));
+    }
+
+    #[test]
+    fn explicit_editor_placement_is_preserved() {
+        let rendered = render_effective_config(&Config {
+            editor: EditorConfig {
+                command: None,
+                placement: Some(EditorPlacement::Process),
+            },
+            ..Config::default()
+        });
+
+        assert!(rendered.contains("[editor]\n"));
+        assert!(rendered.contains("placement = \"process\"\n"));
+    }
 }

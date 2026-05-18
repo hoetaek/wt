@@ -599,8 +599,7 @@ fn push_agent_tool_notice(ctx: &Ctx, notices: &mut Vec<InitNotice>, agent: &Agen
             notices,
             &command,
             format!(
-                "{} command missing; generated agent config can be saved, but agent launch needs {}",
-                command, command
+                "{command} command missing; generated agent config can be saved, but agent launch needs {command}"
             ),
         ),
         Ok(None) => {}
@@ -761,7 +760,16 @@ fn append_active_common_config(
     s.push_str("# open_url = \"{{site_url}}\"\n");
     s.push_str("# open_browser = true\n");
     s.push_str("# browser = \"Google Chrome\"\n");
-    s.push_str("# colors = { issue = \"blue\", pr = \"magenta\", new = \"green\" }\n\n");
+    s.push_str("#\n");
+    s.push_str("# [workspace.chrome_devtools]\n");
+    s.push_str("# enabled = true\n");
+    s.push_str("# user_data_dir = \"{{worktree_path}}/.chrome-devtools-user-data\"\n");
+    s.push_str("# url = \"{{site_url}}\"\n");
+    s.push_str("# Workspace colors have built-in defaults; uncomment only to override.\n");
+    s.push_str("# Use \"\" to disable a color kind.\n");
+    s.push_str(
+        "# colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }\n\n",
+    );
 }
 
 fn append_command_entry(s: &mut String, command: &InitCommand) {
@@ -2232,9 +2240,9 @@ mod tests {
         assert!(content.contains("# [editor]"));
         assert!(content.contains("# [test]"));
         assert!(content.contains("# post_deps_tabs = [\"npm run dev\"]"));
-        assert!(
-            content.contains("# colors = { issue = \"blue\", pr = \"magenta\", new = \"green\" }")
-        );
+        assert!(content.contains(
+            "# colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }"
+        ));
         assert!(config.worktree.path.is_none());
         assert!(config.worktree.naming.is_none());
         let profile = config.profile.unwrap();

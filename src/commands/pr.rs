@@ -109,7 +109,7 @@ fn run_resolved_pr(
                 existing,
                 &names,
                 Some(title),
-                "pr",
+                setup::WORKSPACE_COLOR_KIND_PR,
                 Some(&extra_vars),
                 profile_config,
             )?;
@@ -144,7 +144,7 @@ fn run_resolved_pr(
                     &names.path,
                     &names,
                     Some(title),
-                    "pr",
+                    setup::WORKSPACE_COLOR_KIND_PR,
                     Some(&extra_vars),
                     profile_config,
                 )?;
@@ -177,7 +177,7 @@ fn run_resolved_pr(
         &names.path,
         &names,
         Some(title),
-        "pr",
+        setup::WORKSPACE_COLOR_KIND_PR,
         Some(&extra_vars),
         profile_config,
     )?;

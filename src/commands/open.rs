@@ -278,11 +278,6 @@ fn open_worktree(ctx: &Ctx, opened: &OpenedWorktree) -> Result<()> {
         };
         let ws_handle = cmux.new_workspace(&entry.path, &names.workspace, &command)?;
 
-        let color = ws_config.colors.get("issue").cloned().unwrap_or_default();
-        if !color.is_empty() {
-            cmux.set_color(&ws_handle, &color)?;
-        }
-
         let panes = cmux.list_panes(&ws_handle)?;
         if let Some(pane) = panes.first() {
             for tab_cmd in &ws_config.tabs {
@@ -715,6 +710,12 @@ mod tests {
             "codex --model repo-feature --cd /tmp/repo-feature"
         );
 
+        assert!(!calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux"
+                && args.first().is_some_and(|a| a == "workspace-action")
+                && args.iter().any(|a| a == "set-color")
+        }));
+
         let send_call = calls
             .iter()
             .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send"))
@@ -789,6 +790,7 @@ args = ["--model", "gpt-5.5"]
         runner.add_response(r#"{"windows":[]}"#, true);
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
 
@@ -896,6 +898,7 @@ args = ["--yolo"]
         runner.add_response(r#"{"windows":[]}"#, true);
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
 
@@ -987,6 +990,7 @@ args = ["--yolo"]
         runner.add_response(r#"{"windows":[]}"#, true);
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
 

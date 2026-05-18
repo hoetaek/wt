@@ -1,4 +1,5 @@
 use crate::cli::BaseMode;
+use crate::commands::profile_selection::{self, ProfileSelection};
 use crate::commands::profile_workspace::{
     ProfileBranchDecision, PromptPolicy, resolve_profile_branch,
 };
@@ -29,7 +30,9 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) identifier: &'a str,
     pub(crate) title: &'a str,
     pub(crate) branch_name: Option<&'a str>,
-    pub(crate) mode: &'a str,
+    pub(crate) setup_mode: &'a str,
+    pub(crate) additional_prompt_scope: Option<&'a str>,
+    pub(crate) workspace_color_kind: &'a str,
     pub(crate) on_start_issue_id: Option<&'a str>,
     pub(crate) prompt_intro: &'a str,
     pub(crate) completion_section: Option<&'a str>,
@@ -63,10 +66,6 @@ impl IssueRunPartialFailure {
             failed,
             message: err.to_string(),
         }
-    }
-
-    pub(crate) fn message(&self) -> &str {
-        &self.message
     }
 }
 
@@ -108,7 +107,7 @@ pub fn run(
         ctx,
         target,
         base_raw,
-        profile,
+        ProfileSelection::new(profile, &[]),
         matrix,
         None,
         PromptPolicy::Allow,
@@ -127,25 +126,7 @@ pub(crate) fn run_with_issue_snapshot(
         ctx,
         None,
         base_raw,
-        profile,
-        matrix,
-        Some(&prepared),
-        PromptPolicy::Allow,
-    )
-}
-
-pub(crate) fn run_with_issue_snapshot_many(
-    ctx: &Ctx,
-    base_raw: &Option<String>,
-    profile: Option<&str>,
-    matrix: bool,
-    prepared: PreparedIssueContext<'_>,
-) -> Result<Vec<IssueRunResult>> {
-    run_inner_many(
-        ctx,
-        None,
-        base_raw,
-        profile,
+        ProfileSelection::new(profile, &[]),
         matrix,
         Some(&prepared),
         PromptPolicy::Allow,
@@ -163,7 +144,7 @@ pub(crate) fn run_with_issue_snapshot_non_interactive(
         ctx,
         None,
         base_raw,
-        profile,
+        ProfileSelection::new(profile, &[]),
         matrix,
         Some(&prepared),
         PromptPolicy::Deny,
@@ -178,7 +159,8 @@ pub(crate) fn planned_worktrees_for_prepared_issue(
     naming: Option<&WorktreeNamingResult>,
 ) -> Result<Vec<PlannedIssueWorktree>> {
     if profile.is_some() {
-        let profiles = load_selected_profiles(ctx, profile)?;
+        let profiles =
+            profile_selection::load_profile_selection(ctx, ProfileSelection::new(profile, &[]))?;
         return profiles
             .into_iter()
             .map(|(profile_name, profile_config)| {
@@ -219,7 +201,7 @@ fn run_inner(
     ctx: &Ctx,
     target: Option<&str>,
     base_raw: &Option<String>,
-    profile: Option<&str>,
+    profile_selection: ProfileSelection<'_>,
     matrix: bool,
     prepared_issue: Option<&PreparedIssueContext<'_>>,
     prompt_policy: PromptPolicy,
@@ -228,7 +210,7 @@ fn run_inner(
         ctx,
         target,
         base_raw,
-        profile,
+        profile_selection,
         matrix,
         prepared_issue,
         prompt_policy,
@@ -242,11 +224,20 @@ fn run_inner_many(
     ctx: &Ctx,
     target: Option<&str>,
     base_raw: &Option<String>,
-    profile: Option<&str>,
+    profile_selection: ProfileSelection<'_>,
     matrix: bool,
     prepared_issue: Option<&PreparedIssueContext<'_>>,
     prompt_policy: PromptPolicy,
 ) -> Result<Vec<IssueRunResult>> {
+    let profile_configs = if matrix || profile_selection.uses_profiles() {
+        Some(profile_selection::load_profile_selection(
+            ctx,
+            profile_selection,
+        )?)
+    } else {
+        None
+    };
+
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
 
     // 1. Resolve issue
@@ -286,12 +277,18 @@ fn run_inner_many(
     let suggested_branch = issue.branch_name;
     let issue_snapshot = prepared_issue.map(|issue| &issue.snapshot);
     let workspace_label = prepared_issue.and_then(|issue| issue.workspace_label.as_deref());
-    let setup_mode = prepared_issue.map(|issue| issue.mode).unwrap_or("issue");
+    let setup_mode = prepared_issue
+        .map(|issue| issue.setup_mode)
+        .unwrap_or(setup::WORKSPACE_COLOR_KIND_ISSUE);
+    let workspace_color_kind = prepared_issue
+        .map(|issue| issue.workspace_color_kind)
+        .unwrap_or(setup::WORKSPACE_COLOR_KIND_ISSUE);
     let prompt_intro = prepared_issue
         .map(|issue| issue.prompt_intro)
         .unwrap_or("Use this issue snapshot before changing code.");
     let completion_section = prepared_issue.and_then(|issue| issue.completion_section);
     let pre_snapshot_context = prepared_issue.and_then(|issue| issue.pre_snapshot_context);
+    let additional_prompt_scope = prepared_issue.and_then(|issue| issue.additional_prompt_scope);
 
     ctx.ui.print_step(&format!("{identifier}: {title}"));
 
@@ -325,14 +322,14 @@ fn run_inner_many(
         .map(|issue| issue.on_start_issue_id)
         .unwrap_or(Some(raw_id));
 
-    if matrix || profile.is_some() {
+    if matrix || profile_selection.uses_profiles() {
         return run_profiles(
             ctx,
             &title,
             &branch_name,
             naming.as_ref(),
             base_raw,
-            profile,
+            profile_configs.expect("profile configs loaded before issue resolution"),
             ProfileRunOptions {
                 prepared_issue,
                 on_start_issue_id,
@@ -347,6 +344,7 @@ fn run_inner_many(
             &ctx.config,
             snapshot,
             setup_mode,
+            additional_prompt_scope,
             prompt_intro,
             completion_section,
             pre_snapshot_context,
@@ -370,12 +368,12 @@ fn run_inner_many(
                 "Branch already checked out at: {}",
                 existing.display()
             ));
-            setup::run_setup(
+            setup::run_setup_with_workspace_color_kind(
                 ctx,
                 existing,
                 &names,
                 Some(&title),
-                setup_mode,
+                setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
                 naming.as_ref().map(|n| &n.vars),
                 snapshot_config.as_ref(),
             )?;
@@ -414,12 +412,12 @@ fn run_inner_many(
                 }
             }
             1 => {
-                setup::run_setup(
+                setup::run_setup_with_workspace_color_kind(
                     ctx,
                     &names.path,
                     &names,
                     Some(&title),
-                    setup_mode,
+                    setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
                     naming.as_ref().map(|n| &n.vars),
                     snapshot_config.as_ref(),
                 )?;
@@ -451,12 +449,12 @@ fn run_inner_many(
     }
 
     // 6. Setup
-    setup::run_setup(
+    setup::run_setup_with_workspace_color_kind(
         ctx,
         &names.path,
         &names,
         Some(&title),
-        setup_mode,
+        setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
         naming.as_ref().map(|n| &n.vars),
         snapshot_config.as_ref(),
     )?;
@@ -510,14 +508,18 @@ fn run_profiles(
     branch_name: &str,
     naming: Option<&WorktreeNamingResult>,
     base_raw: &Option<String>,
-    profile: Option<&str>,
+    profiles: Vec<(String, Config)>,
     options: ProfileRunOptions<'_>,
 ) -> Result<Vec<IssueRunResult>> {
     let issue_snapshot = options.prepared_issue.map(|issue| &issue.snapshot);
     let setup_mode = options
         .prepared_issue
-        .map(|issue| issue.mode)
-        .unwrap_or("issue");
+        .map(|issue| issue.setup_mode)
+        .unwrap_or(setup::WORKSPACE_COLOR_KIND_ISSUE);
+    let workspace_color_kind = options
+        .prepared_issue
+        .map(|issue| issue.workspace_color_kind)
+        .unwrap_or(setup::WORKSPACE_COLOR_KIND_ISSUE);
     let prompt_intro = options
         .prepared_issue
         .map(|issue| issue.prompt_intro)
@@ -528,8 +530,9 @@ fn run_profiles(
     let pre_snapshot_context = options
         .prepared_issue
         .and_then(|issue| issue.pre_snapshot_context);
-    let profiles = load_selected_profiles(ctx, profile)?;
-
+    let additional_prompt_scope = options
+        .prepared_issue
+        .and_then(|issue| issue.additional_prompt_scope);
     ctx.ui.print_step(&format!(
         "Found {} profiles: {}",
         profiles.len(),
@@ -551,6 +554,7 @@ fn run_profiles(
                 profile_config,
                 snapshot,
                 setup_mode,
+                additional_prompt_scope,
                 prompt_intro,
                 completion_section,
                 pre_snapshot_context,
@@ -604,12 +608,12 @@ fn run_profiles(
                     branch_name: profile_branch,
                     worktree_path: path.clone(),
                 };
-                if let Err(err) = setup::run_setup(
+                if let Err(err) = setup::run_setup_with_workspace_color_kind(
                     ctx,
                     &path,
                     &names,
                     Some(&profile_title),
-                    setup_mode,
+                    setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
                     Some(&profile_extra_vars),
                     Some(profile_config),
                 ) {
@@ -637,12 +641,12 @@ fn run_profiles(
             worktree_path: names.path.clone(),
         };
 
-        if let Err(err) = setup::run_setup(
+        if let Err(err) = setup::run_setup_with_workspace_color_kind(
             ctx,
             &names.path,
             &names,
             Some(&profile_title),
-            setup_mode,
+            setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
             Some(&profile_extra_vars),
             Some(profile_config),
         ) {
@@ -699,17 +703,20 @@ fn profile_config_with_issue_snapshot(
     config: &Config,
     snapshot: &IssueSnapshotContext<'_>,
     mode: &str,
+    additional_prompt_scope: Option<&str>,
     prompt_intro: &str,
     completion_section: Option<&str>,
     pre_snapshot_context: Option<&str>,
 ) -> Config {
     let mut config = config.clone();
     if let Some(agent) = config.agent.as_mut() {
+        let additional_prompts = additional_prompt_scope
+            .and_then(|scope| agent.prompt.remove(scope))
+            .unwrap_or_default();
         let prompts = agent.prompt.entry(mode.into()).or_default();
         if let Some(completion_section) = completion_section {
             let handoff_prompt = format!(
-                "{}\n\nThe TaskDocument prompt follows next. Do not start work until it arrives.",
-                completion_section
+                "{completion_section}\n\nThe TaskDocument prompt follows next. Do not start work until it arrives."
             );
             let snapshot_prompt = prepared_snapshot_prompt(
                 pre_snapshot_context,
@@ -718,10 +725,17 @@ fn profile_config_with_issue_snapshot(
                 snapshot.path,
                 snapshot.content,
             );
-            if let Some(first_prompt) = prompts.first_mut() {
-                *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+            if additional_prompts.is_empty() {
+                if let Some(first_prompt) = prompts.first_mut() {
+                    *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+                } else {
+                    prompts.push(snapshot_prompt);
+                }
             } else {
+                let mode_prompts = std::mem::take(prompts);
                 prompts.push(snapshot_prompt);
+                prompts.extend(additional_prompts);
+                prompts.extend(mode_prompts);
             }
             prompts.insert(0, handoff_prompt);
         } else {
@@ -733,10 +747,17 @@ fn profile_config_with_issue_snapshot(
                 snapshot.content,
                 agent_report::prompt_section()
             );
-            if let Some(first_prompt) = prompts.first_mut() {
-                *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+            if additional_prompts.is_empty() {
+                if let Some(first_prompt) = prompts.first_mut() {
+                    *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
+                } else {
+                    prompts.push(snapshot_prompt);
+                }
             } else {
+                let mode_prompts = std::mem::take(prompts);
                 prompts.push(snapshot_prompt);
+                prompts.extend(additional_prompts);
+                prompts.extend(mode_prompts);
             }
         }
     }
@@ -857,20 +878,6 @@ fn should_resolve_provider_branch_base(
         && prepared_issue.and_then(|issue| issue.branch_name).is_none()
 }
 
-fn load_selected_profiles(ctx: &Ctx, profile: Option<&str>) -> Result<Vec<(String, Config)>> {
-    if let Some(profile) = profile {
-        let config = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
-            .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))?;
-        return Ok(vec![(profile.to_string(), config)]);
-    }
-
-    let profiles = Config::load_profiles(&ctx.repo_root, &ctx.base_config)?;
-    if profiles.is_empty() {
-        bail!("No profile configs found in .local/profiles/*/profile.toml");
-    }
-    Ok(profiles)
-}
-
 pub fn build_provider<'a>(ctx: &'a Ctx) -> Result<Box<dyn IssueProvider + 'a>> {
     let issues_config = ctx.config.issues.as_ref().ok_or_else(|| {
         anyhow::anyhow!("No [issues] section in .wt.toml. Set provider = \"linear\" or \"github\"")
@@ -980,7 +987,8 @@ fn create_worktree(
 mod tests {
     use super::*;
     use crate::config::{
-        AgentCli, AgentConfig, Config, IssueProviderType, IssuesConfig, ReadyMode, SubmitMode,
+        AGENT_PROMPT_WORKFLOW_SCOPE, AgentCli, AgentConfig, Config, IssueProviderType,
+        IssuesConfig, ReadyMode, SubmitMode,
     };
     use crate::context::mock::{CommandCall, MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
@@ -1012,6 +1020,18 @@ mod tests {
         let profile_dir = root.join(".local/profiles").join(name);
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+    }
+
+    fn run(
+        ctx: &Ctx,
+        target: Option<&str>,
+        base_raw: &Option<String>,
+        profile: Option<&str>,
+        selected_profiles: &[String],
+        matrix: bool,
+    ) -> Result<()> {
+        assert!(selected_profiles.is_empty());
+        super::run(ctx, target, base_raw, profile, matrix)
     }
 
     fn count_linear_start_updates(calls: &[CommandCall], issue_id: &str) -> usize {
@@ -1078,6 +1098,7 @@ mod tests {
             &config,
             &snapshot,
             "issue",
+            None,
             "Use this issue snapshot before changing code.",
             None,
             None,
@@ -1124,6 +1145,7 @@ mod tests {
             &config,
             &snapshot,
             "new",
+            None,
             "Use this task before changing code.",
             Some("## Workflow Coordinator Handoff\n\nSend the report."),
             Some("Workflow objective:\n\nShip the broader migration."),
@@ -1144,6 +1166,107 @@ mod tests {
         assert!(
             prompts[1].find("Workflow objective").unwrap()
                 < prompts[1].find("title = \"Add schema\"").unwrap()
+        );
+    }
+
+    #[test]
+    fn workflow_prompt_scope_is_inserted_between_snapshot_and_setup_prompt() {
+        let config = Config {
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: std::collections::HashMap::from([
+                    (
+                        AGENT_PROMPT_WORKFLOW_SCOPE.into(),
+                        vec!["Workflow prompt".into(), "Workflow follow-up".into()],
+                    ),
+                    ("new".into(), vec!["New branch prompt".into()]),
+                ]),
+            }),
+            ..Config::default()
+        };
+        let snapshot = IssueSnapshotContext {
+            path_label: "Task path",
+            path: ".local/tasks/add-schema.toml",
+            content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        };
+
+        let config = profile_config_with_issue_snapshot(
+            &config,
+            &snapshot,
+            "new",
+            Some(AGENT_PROMPT_WORKFLOW_SCOPE),
+            "Use this task before changing code.",
+            Some("## Workflow Coordinator Handoff\n\nSend the report."),
+            Some("Workflow objective:\n\nShip the broader migration."),
+        );
+
+        let mut agent = config.agent.unwrap();
+        let prompts = agent.prompt.remove("new").unwrap();
+        assert_eq!(prompts.len(), 5);
+        assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
+        assert!(prompts[1].contains("Workflow objective"));
+        assert!(prompts[1].contains("Task path: `.local/tasks/add-schema.toml`"));
+        assert_eq!(prompts[2], "Workflow prompt");
+        assert_eq!(prompts[3], "Workflow follow-up");
+        assert_eq!(prompts[4], "New branch prompt");
+        assert!(!agent.prompt.contains_key(AGENT_PROMPT_WORKFLOW_SCOPE));
+    }
+
+    #[test]
+    fn workflow_prompt_scope_is_not_used_without_explicit_workflow_context() {
+        let config = Config {
+            agent: Some(AgentConfig {
+                cli: AgentCli::Codex,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: std::collections::HashMap::from([
+                    (
+                        AGENT_PROMPT_WORKFLOW_SCOPE.into(),
+                        vec!["Workflow prompt".into()],
+                    ),
+                    ("new".into(), vec!["New branch prompt".into()]),
+                ]),
+            }),
+            ..Config::default()
+        };
+        let snapshot = IssueSnapshotContext {
+            path_label: "Task path",
+            path: ".local/tasks/add-schema.toml",
+            content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        };
+
+        let config = profile_config_with_issue_snapshot(
+            &config,
+            &snapshot,
+            "new",
+            None,
+            "Use this task before changing code.",
+            Some("## Workflow Coordinator Handoff\n\nSend the report."),
+            None,
+        );
+
+        let mut agent = config.agent.unwrap();
+        let prompts = agent.prompt.remove("new").unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[1].contains("New branch prompt"));
+        assert!(
+            !prompts
+                .iter()
+                .any(|prompt| prompt.contains("Workflow prompt"))
+        );
+        assert_eq!(
+            agent.prompt.get(AGENT_PROMPT_WORKFLOW_SCOPE).unwrap(),
+            &vec!["Workflow prompt".to_string()]
         );
     }
 
@@ -1175,6 +1298,7 @@ mod tests {
             &config,
             &snapshot,
             "new",
+            None,
             "Use this task before changing code.",
             None,
             None,
@@ -1223,7 +1347,7 @@ mod tests {
         );
         let base = Some("main".to_string());
 
-        let results = run_with_issue_snapshot_many(
+        let result = run_with_issue_snapshot(
             &ctx,
             &base,
             Some("codex"),
@@ -1232,7 +1356,9 @@ mod tests {
                 identifier: "add-schema",
                 title: "Add schema",
                 branch_name: Some("add-schema"),
-                mode: "issue",
+                setup_mode: setup::WORKSPACE_COLOR_KIND_ISSUE,
+                additional_prompt_scope: None,
+                workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",
                 completion_section: None,
@@ -1247,8 +1373,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].branch_name, "add-schema-codex");
+        assert_eq!(result.branch_name, "add-schema-codex");
 
         let calls = runner.calls.lock().unwrap();
         assert!(calls.iter().any(|(cmd, args, _)| {
@@ -1300,7 +1425,9 @@ mod tests {
                 identifier: "add-schema",
                 title: "Add schema",
                 branch_name: Some("add-schema"),
-                mode: "issue",
+                setup_mode: setup::WORKSPACE_COLOR_KIND_ISSUE,
+                additional_prompt_scope: None,
+                workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: None,
                 prompt_intro: "Use this issue snapshot before changing code.",
                 completion_section: None,
@@ -1380,7 +1507,7 @@ mod tests {
         );
 
         // This will fail at setup (no real filesystem) but proves the flow up to worktree creation
-        let result = run(&ctx, Some("680"), &None, None, false);
+        let result = run(&ctx, Some("680"), &None, None, &[], false);
         // We expect it to get past issue resolution and worktree creation
         // It may fail at setup::run_setup due to filesystem ops — that's OK for unit test
         assert!(result.is_ok() || result.unwrap_err().to_string().contains("setup"));
@@ -1409,7 +1536,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some("100"), &None, None, false);
+        let result = run(&ctx, Some("100"), &None, None, &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No branch name"));
     }
@@ -1448,7 +1575,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some("1"), &None, None, false);
+        let result = run(&ctx, Some("1"), &None, None, &[], false);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
     }
 
@@ -1510,7 +1637,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some("672"), &None, None, false);
+        let result = run(&ctx, Some("672"), &None, None, &[], false);
         assert!(result.is_ok());
 
         let calls = runner.calls.lock().unwrap();
@@ -1622,7 +1749,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some("672"), &None, None, false);
+        let result = run(&ctx, Some("672"), &None, None, &[], false);
         assert!(result.is_ok());
 
         let calls = runner.calls.lock().unwrap();
@@ -1707,7 +1834,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, Some("672"), &Some(".".into()), None, false).unwrap();
+        run(&ctx, Some("672"), &Some(".".into()), None, &[], false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -1774,7 +1901,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, Some("5"), &Some(".".into()), None, false).unwrap();
+        run(&ctx, Some("5"), &Some(".".into()), None, &[], false).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         assert!(calls.iter().any(|(cmd, args, _)| {
@@ -1850,7 +1977,7 @@ mod tests {
             &ctx,
             Some("123"),
             &Some("main".into()),
-            Some("codex"),
+            ProfileSelection::new(Some("codex"), &[]),
             false,
             None,
             PromptPolicy::Allow,
@@ -1903,7 +2030,7 @@ mod tests {
             &ctx,
             Some("123"),
             &Some("main".into()),
-            None,
+            ProfileSelection::new(None, &[]),
             true,
             None,
             PromptPolicy::Allow,
@@ -1959,7 +2086,7 @@ mod tests {
             &ctx,
             Some("123"),
             &Some("main".into()),
-            Some("codex"),
+            ProfileSelection::new(Some("codex"), &[]),
             false,
             None,
             PromptPolicy::Allow,
@@ -2002,7 +2129,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, Some("1"), &Some("main".into()), None, false);
+        let result = run(&ctx, Some("1"), &Some("main".into()), None, &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }

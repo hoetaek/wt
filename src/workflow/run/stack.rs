@@ -1,7 +1,9 @@
 use super::state::{read_stack_workflow_task_states, update_workflow_task_run};
-use super::{apply_workflow_color, is_cancelled, validate_profile};
+use super::{apply_workflow_color, is_cancelled, task_issue_closing_references, validate_profile};
 use crate::commands::issue;
+use crate::config::AGENT_PROMPT_WORKFLOW_SCOPE;
 use crate::context::Ctx;
+use crate::setup;
 use crate::task as task_store;
 use crate::task_run::{self, STATUS_FAILED, STATUS_RUNNING, STATUS_SKIPPED};
 use crate::workflow as workflow_store;
@@ -34,7 +36,10 @@ pub(super) fn run_stack_workflow(
         bail!("Workflow has no tasks: {}", workflow_path.display());
     }
 
-    if let Some(state) = states.iter().find(|state| state.run.is_stack_completable()) {
+    if let Some(state) = states
+        .iter()
+        .find(|state| state.run.status.is_stack_completable())
+    {
         bail!(
             "{}",
             stack_task_already_running_message(workflow_path, &state.row)
@@ -110,8 +115,13 @@ fn run_stack_workflow_task(
     task: StackWorkflowTaskContext<'_>,
 ) -> Result<issue::IssueRunResult> {
     let (task_doc, task_path, content) = task_store::read_task_file(ctx, &task.row.task)?;
-    let completion_section =
-        workflow_stack_task_handoff_section(task.workflow_path, task.row, task.policy, task.parent);
+    let completion_section = workflow_stack_task_handoff_section(
+        task.workflow_path,
+        task.row,
+        task.policy,
+        task.parent,
+        &task_issue_closing_references(&task_doc),
+    );
     let workflow_context = workflow_objective_prompt_context(task.objective);
     let branch_name = task_store::prepared_branch_name(&task_doc.branch);
     if branch_name.is_none() && task_doc.origin.is_none() {
@@ -138,7 +148,9 @@ fn run_stack_workflow_task(
             identifier: &identifier,
             title: &title,
             branch_name,
-            mode: task_doc.mode(),
+            setup_mode: task_doc.setup_mode(),
+            additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
+            workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
             prompt_intro: workflow_stack_task_prompt_intro(),
             completion_section: Some(&completion_section),

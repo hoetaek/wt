@@ -1,3 +1,4 @@
+use crate::config::validate_profile_name;
 use crate::context::Ctx;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -20,6 +21,7 @@ pub enum WorkflowMode {
     Single,
     Batch,
     Stack,
+    Matrix,
 }
 
 impl WorkflowMode {
@@ -28,6 +30,7 @@ impl WorkflowMode {
             WorkflowMode::Single => "single",
             WorkflowMode::Batch => "batch",
             WorkflowMode::Stack => "stack",
+            WorkflowMode::Matrix => "matrix",
         }
     }
 }
@@ -40,6 +43,8 @@ pub struct WorkflowMetadata {
     pub objective: Option<String>,
     #[serde(default)]
     pub profile: Option<String>,
+    #[serde(default)]
+    pub profiles: Vec<String>,
     pub base_mode: String,
     #[serde(default)]
     pub base: Option<String>,
@@ -56,9 +61,19 @@ pub struct WorkflowMetadata {
 #[serde(deny_unknown_fields)]
 pub struct WorkflowTask {
     pub task: String,
+    #[serde(default)]
     pub run: String,
     #[serde(default)]
     pub parent: Option<String>,
+    #[serde(default)]
+    pub runs: Vec<WorkflowTaskRun>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowTaskRun {
+    pub profile: String,
+    pub run: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -121,6 +136,7 @@ impl WorkflowMetadata {
             mode,
             objective: None,
             profile: None,
+            profiles: Vec::new(),
             base_mode: base_mode.into(),
             base,
             color: None,
@@ -151,6 +167,7 @@ impl WorkflowTask {
             task: task.into(),
             run: run.into(),
             parent: None,
+            runs: Vec::new(),
         }
     }
 
@@ -184,23 +201,7 @@ pub fn read(path: &Path) -> Result<WorkflowMetadata> {
 }
 
 pub fn list(ctx: &Ctx) -> Result<Vec<WorkflowRecord>> {
-    let workflows_dir = workflows_dir(ctx);
-    if !workflows_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut paths = Vec::new();
-    for entry in fs::read_dir(&workflows_dir)
-        .with_context(|| "Failed to read workflow directory: .local/workflows")?
-    {
-        let path = entry?.path();
-        if path.extension().is_some_and(|ext| ext == "toml") {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-
-    paths
+    workflow_paths(ctx)?
         .into_iter()
         .map(|path| {
             let id = workflow_id(&path)?;
@@ -356,6 +357,14 @@ fn validate_workflow(workflow: &WorkflowMetadata) -> Result<()> {
     {
         bail!("Workflow objective cannot be empty");
     }
+    if workflow
+        .profile
+        .as_deref()
+        .is_some_and(|profile| profile.trim().is_empty())
+    {
+        bail!("Workflow profile cannot be empty");
+    }
+    validate_workflow_profiles(workflow)?;
     if workflow.created_at.trim().is_empty() {
         bail!("Workflow is missing created_at");
     }
@@ -370,17 +379,44 @@ fn validate_workflow(workflow: &WorkflowMetadata) -> Result<()> {
         bail!("Workflow color cannot be empty");
     }
     for item in &workflow.tasks {
-        validate_workflow_task(&workflow.mode, item)?;
+        validate_workflow_task(workflow, item)?;
     }
     Ok(())
 }
 
-fn validate_workflow_task(mode: &WorkflowMode, item: &WorkflowTask) -> Result<()> {
+fn validate_workflow_profiles(workflow: &WorkflowMetadata) -> Result<()> {
+    if !matches!(workflow.mode, WorkflowMode::Matrix) {
+        if !workflow.profiles.is_empty() {
+            bail!(
+                "{} mode workflow cannot store profiles; use mode = \"matrix\"",
+                workflow.mode.as_str()
+            );
+        }
+        return Ok(());
+    }
+
+    if workflow.profile.is_some() {
+        bail!("matrix mode workflow cannot store single profile; use profiles = [...]");
+    }
+    if workflow.profiles.is_empty() {
+        bail!("matrix mode workflow requires at least one profile");
+    }
+    let mut seen = std::collections::HashSet::new();
+    for profile in &workflow.profiles {
+        validate_profile_name(profile)?;
+        if !seen.insert(profile.as_str()) {
+            bail!("Duplicate profile: {profile}");
+        }
+    }
+    if workflow.tasks.len() != 1 {
+        bail!("matrix mode workflow requires exactly one task");
+    }
+    Ok(())
+}
+
+fn validate_workflow_task(workflow: &WorkflowMetadata, item: &WorkflowTask) -> Result<()> {
     if item.task.trim().is_empty() {
         bail!("Workflow task is missing task");
-    }
-    if item.run.trim().is_empty() {
-        bail!("Workflow task {} is missing TaskRun id", item.label());
     }
     if item
         .parent
@@ -389,12 +425,59 @@ fn validate_workflow_task(mode: &WorkflowMode, item: &WorkflowTask) -> Result<()
     {
         bail!("Workflow task {} has an empty parent", item.label());
     }
-    if !matches!(mode, WorkflowMode::Stack) && item.parent.is_some() {
+    if !matches!(workflow.mode, WorkflowMode::Stack) && item.parent.is_some() {
         bail!(
             "{} mode workflow task {} cannot store parent",
-            mode.as_str(),
+            workflow.mode.as_str(),
             item.label()
         );
+    }
+    if matches!(workflow.mode, WorkflowMode::Matrix) {
+        validate_matrix_workflow_task(workflow, item)
+    } else {
+        if item.run.trim().is_empty() {
+            bail!("Workflow task {} is missing TaskRun id", item.label());
+        }
+        if !item.runs.is_empty() {
+            bail!(
+                "{} mode workflow task {} cannot store profile runs",
+                workflow.mode.as_str(),
+                item.label()
+            );
+        }
+        Ok(())
+    }
+}
+
+fn validate_matrix_workflow_task(workflow: &WorkflowMetadata, item: &WorkflowTask) -> Result<()> {
+    if !item.run.trim().is_empty() {
+        bail!(
+            "matrix mode workflow task {} cannot store run",
+            item.label()
+        );
+    }
+    if item.runs.len() != workflow.profiles.len() {
+        bail!(
+            "matrix mode workflow task {} must store one run for each profile",
+            item.label()
+        );
+    }
+    for (idx, run) in item.runs.iter().enumerate() {
+        if run.profile != workflow.profiles[idx] {
+            bail!(
+                "matrix mode workflow task {} run {} must use profile {}",
+                item.label(),
+                idx + 1,
+                workflow.profiles[idx]
+            );
+        }
+        if run.run.trim().is_empty() {
+            bail!(
+                "matrix mode workflow task {} profile {} is missing TaskRun id",
+                item.label(),
+                run.profile
+            );
+        }
     }
     Ok(())
 }
@@ -407,6 +490,15 @@ fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
     }
     if let Some(profile) = workflow.profile.as_deref() {
         content.push_str(&format!("profile = {}\n", toml_quote(profile)));
+    }
+    if !workflow.profiles.is_empty() {
+        let profiles = workflow
+            .profiles
+            .iter()
+            .map(|profile| toml_quote(profile))
+            .collect::<Vec<_>>()
+            .join(", ");
+        content.push_str(&format!("profiles = [{profiles}]\n"));
     }
     content.push_str(&format!(
         "base_mode = {}\n",
@@ -439,13 +531,43 @@ fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
     for item in &workflow.tasks {
         content.push_str("\n[[tasks]]\n");
         content.push_str(&format!("task = {}\n", toml_quote(&item.task)));
-        content.push_str(&format!("run = {}\n", toml_quote(&item.run)));
+        if !item.run.trim().is_empty() {
+            content.push_str(&format!("run = {}\n", toml_quote(&item.run)));
+        }
         if let Some(parent) = item.parent.as_deref() {
             content.push_str(&format!("parent = {}\n", toml_quote(parent)));
+        }
+        for run in &item.runs {
+            content.push_str("\n[[tasks.runs]]\n");
+            content.push_str(&format!("profile = {}\n", toml_quote(&run.profile)));
+            content.push_str(&format!("run = {}\n", toml_quote(&run.run)));
         }
     }
 
     content
+}
+
+pub(crate) fn workflow_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
+    let workflows_dir = workflows_dir(ctx);
+    if !workflows_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&workflows_dir)
+        .with_context(|| "Failed to read workflow directory: .local/workflows")?
+    {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+pub(crate) fn id_from_path(path: &Path) -> Result<String> {
+    workflow_id(path)
 }
 
 fn workflows_dir(ctx: &Ctx) -> PathBuf {
@@ -552,6 +674,7 @@ mod tests {
             mode: WorkflowMode::Stack,
             objective: Some("Ship the workflow state model migration".into()),
             profile: Some("codex".into()),
+            profiles: Vec::new(),
             base_mode: "explicit".into(),
             base: Some("main".into()),
             color: Some("blue".into()),
@@ -565,6 +688,7 @@ mod tests {
                 task: "add-schema".into(),
                 run: "stack-2026-05-16-001-add-schema".into(),
                 parent: Some("main".into()),
+                runs: Vec::new(),
             }],
         };
 
@@ -737,6 +861,144 @@ pull_request = "draft"
         )
         .unwrap();
         assert!(error_report(read(&path)).contains("pull_request"));
+    }
+
+    #[test]
+    fn read_rejects_invalid_matrix_workflow_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workflow.toml");
+
+        fs::write(
+            &path,
+            r#"mode = "matrix"
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[[tasks]]
+task = "add-schema"
+
+[[tasks.runs]]
+profile = "alpha"
+run = "workflow-add-schema-alpha"
+"#,
+        )
+        .unwrap();
+        assert!(error_report(read(&path)).contains("requires at least one profile"));
+
+        fs::write(
+            &path,
+            r#"mode = "matrix"
+profiles = ["alpha"]
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[[tasks]]
+task = "add-schema"
+
+[[tasks.runs]]
+profile = "alpha"
+run = "workflow-add-schema-alpha"
+
+[[tasks]]
+task = "wire-api"
+
+[[tasks.runs]]
+profile = "alpha"
+run = "workflow-wire-api-alpha"
+"#,
+        )
+        .unwrap();
+        assert!(error_report(read(&path)).contains("requires exactly one task"));
+
+        fs::write(
+            &path,
+            r#"mode = "matrix"
+profiles = ["alpha"]
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[[tasks]]
+task = "add-schema"
+run = "workflow-add-schema"
+
+[[tasks.runs]]
+profile = "alpha"
+run = "workflow-add-schema-alpha"
+"#,
+        )
+        .unwrap();
+        assert!(error_report(read(&path)).contains("cannot store run"));
+
+        fs::write(
+            &path,
+            r#"mode = "matrix"
+profiles = ["alpha", "beta"]
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[[tasks]]
+task = "add-schema"
+
+[[tasks.runs]]
+profile = "alpha"
+run = "workflow-add-schema-alpha"
+"#,
+        )
+        .unwrap();
+        assert!(error_report(read(&path)).contains("one run for each profile"));
+
+        fs::write(
+            &path,
+            r#"mode = "matrix"
+profiles = ["default"]
+base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[[tasks]]
+task = "add-schema"
+
+[[tasks.runs]]
+profile = "default"
+run = "workflow-add-schema-default"
+"#,
+        )
+        .unwrap();
+        assert!(error_report(read(&path)).contains("reserved"));
     }
 
     #[test]
