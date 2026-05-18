@@ -25,16 +25,15 @@ pub(crate) use site::{apply_site_template_vars, open_site_url};
 pub(crate) use workspace::open_workspace_url;
 
 use crate::config::{Config, SiteProvider};
+pub(crate) use crate::config::{
+    WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_NEW, WORKSPACE_COLOR_KIND_PR,
+    WORKSPACE_COLOR_KIND_TASK,
+};
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
-
-pub(crate) const WORKSPACE_COLOR_KIND_ISSUE: &str = "issue";
-pub(crate) const WORKSPACE_COLOR_KIND_NEW: &str = "new";
-pub(crate) const WORKSPACE_COLOR_KIND_PR: &str = "pr";
-pub(crate) const WORKSPACE_COLOR_KIND_TASK: &str = "task";
 
 #[derive(Clone, Copy)]
 pub(crate) struct SetupModeKinds<'a> {

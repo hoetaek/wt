@@ -7,6 +7,22 @@ pub const RESERVED_PROFILE_NAME: &str = "default";
 const PROMPT_APPEND_PREFIX: &str = "\u{0}append:";
 pub(super) const PROMPT_COMMON_SCOPE: &str = "common";
 pub(super) const PROMPT_RUNTIME_MODES: [&str; 3] = ["issue", "new", "pr"];
+pub const WORKSPACE_COLOR_KIND_ISSUE: &str = "issue";
+pub const WORKSPACE_COLOR_KIND_NEW: &str = "new";
+pub const WORKSPACE_COLOR_KIND_PR: &str = "pr";
+pub const WORKSPACE_COLOR_KIND_TASK: &str = "task";
+pub const WORKSPACE_DEFAULT_COLORS: [(&str, &str); 4] = [
+    (WORKSPACE_COLOR_KIND_TASK, "blue"),
+    (WORKSPACE_COLOR_KIND_ISSUE, "blue"),
+    (WORKSPACE_COLOR_KIND_NEW, "green"),
+    (WORKSPACE_COLOR_KIND_PR, "magenta"),
+];
+
+pub fn default_workspace_color(kind: &str) -> Option<&'static str> {
+    WORKSPACE_DEFAULT_COLORS
+        .iter()
+        .find_map(|(default_kind, color)| (*default_kind == kind).then_some(*color))
+}
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -250,6 +266,44 @@ pub struct WorkspaceConfig {
     pub open_url: Option<String>,
     pub open_browser: Option<bool>,
     pub browser: Option<String>,
+}
+
+impl WorkspaceConfig {
+    pub fn effective_color(&self, kind: &str) -> Option<&str> {
+        self.colors
+            .get(kind)
+            .map(String::as_str)
+            .or_else(|| default_workspace_color(kind))
+    }
+
+    pub fn effective_colors(&self) -> Vec<(&str, &str)> {
+        let mut colors = WORKSPACE_DEFAULT_COLORS
+            .iter()
+            .map(|(kind, default_color)| {
+                (
+                    *kind,
+                    self.colors
+                        .get(*kind)
+                        .map(String::as_str)
+                        .unwrap_or(default_color),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let mut custom_colors = self
+            .colors
+            .iter()
+            .filter(|(kind, _)| {
+                !WORKSPACE_DEFAULT_COLORS
+                    .iter()
+                    .any(|(default_kind, _)| default_kind == &kind.as_str())
+            })
+            .map(|(kind, color)| (kind.as_str(), color.as_str()))
+            .collect::<Vec<_>>();
+        custom_colors.sort_by(|a, b| a.0.cmp(b.0));
+        colors.extend(custom_colors);
+        colors
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]

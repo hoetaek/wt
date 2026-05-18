@@ -66,6 +66,12 @@ Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 �
 생략되면 `wt`가 내장 cmux named-color palette의 다음 색을 고르고 workflow file에
 기록한다. 색상은 mode나 task의 의미가 아니라 workflow-level 표시다.
 
+`wt config` 출력은 runtime behavior를 판단하는 effective source of truth다. `.wt.toml`,
+`.local/.wt.toml`, profile file은 사용자 intent와 override를 저장하고, `wt config`는
+merge된 layer, convention file, built-in default를 사용자가 복사해 수정할 수 있는 형태로
+보여준다. 명령 구현은 user-facing default를 각 call site에서 새로 해석하지 말고 config
+모델의 effective accessor나 effective policy snapshot을 거쳐 적용해야 한다.
+
 `[workspace].colors`는 workspace를 시작하는 command surface의 기본 cmux 색상이다.
 Canonical 색상 key는 `task`, `issue`, `new`, `pr`이다. `task`는 TaskDocument에
 `[origin]`이 있는지와 무관하게 즉시 실행 표면인 `wt task run`에 대응한다. `issue`는
@@ -73,8 +79,12 @@ Canonical 색상 key는 `task`, `issue`, `new`, `pr`이다. `task`는 TaskDocume
 `wt new`, `pr`은 pull request branch를 여는 `wt pr`에만 대응한다. 이 key들은 prompt
 setup mode, profile 이름, workflow `mode = "single" | "batch" | "stack"` 값이 아니다.
 Workflow run은 필요한 경우 TaskDocument setup을 거치더라도 최종 visible grouping color는
-저장된 `workflow.color`를 적용한다. 권장 예시는
-`colors = { task = "blue", issue = "blue", new = "green", pr = "magenta" }`이다.
+저장된 `workflow.color`를 적용한다. `[workspace].colors` key를 생략하면 내장 기본값
+`task = "blue"`, `issue = "blue"`, `new = "green"`, `pr = "magenta"`를 쓴다.
+`wt config`는 이 effective 색상값을 출력하므로 사용자가 수정할 기준은 `wt config` 출력이다.
+`wt init`은 이 기본값을 active config로 쓰지 않고 commented override 예시로만 보여준다.
+Active `colors = { ... }`는 사용자가 기본값과 다른 색을 고정하려는 의도일 때만 둔다. 색을
+아예 쓰지 않을 kind는 `task = ""`처럼 빈 문자열로 override한다.
 
 `matrix`는 하나의 issue, branch-name 입력, 또는 명시적으로 선택한 prepared task를
 named profile 목록으로 확장하는 개념이다. `batch`나 `stack`처럼 여러 task 자체를

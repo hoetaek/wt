@@ -1,5 +1,5 @@
 use crate::commands::profile_match;
-use crate::config::{Config, IssueProviderType};
+use crate::config::{Config, IssueProviderType, WORKSPACE_COLOR_KIND_ISSUE};
 use crate::context::{Ctx, PromptItem};
 use crate::names::WorktreeNames;
 use crate::services::cmux::CmuxService;
@@ -278,9 +278,11 @@ fn open_worktree(ctx: &Ctx, opened: &OpenedWorktree) -> Result<()> {
         };
         let ws_handle = cmux.new_workspace(&entry.path, &names.workspace, &command)?;
 
-        let color = ws_config.colors.get("issue").cloned().unwrap_or_default();
+        let color = ws_config
+            .effective_color(WORKSPACE_COLOR_KIND_ISSUE)
+            .unwrap_or_default();
         if !color.is_empty() {
-            cmux.set_color(&ws_handle, &color)?;
+            cmux.set_color(&ws_handle, color)?;
         }
 
         let panes = cmux.list_panes(&ws_handle)?;
@@ -651,6 +653,7 @@ mod tests {
         runner.add_response(r#"{"windows":[]}"#, true);
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("", true);
         runner.add_response("pane:0", true);
         runner.add_response("surface:1", true);
         runner.add_response("", true);
@@ -714,6 +717,22 @@ mod tests {
             command_arg,
             "codex --model repo-feature --cd /tmp/repo-feature"
         );
+
+        let color_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "cmux"
+                    && args.first().is_some_and(|a| a == "workspace-action")
+                    && args.iter().any(|a| a == "set-color")
+            })
+            .expect("expected default workspace color to be set");
+        let color = color_call
+            .1
+            .iter()
+            .position(|arg| arg == "--color")
+            .and_then(|idx| color_call.1.get(idx + 1))
+            .unwrap();
+        assert_eq!(color, "blue");
 
         let send_call = calls
             .iter()
@@ -789,6 +808,7 @@ args = ["--model", "gpt-5.5"]
         runner.add_response(r#"{"windows":[]}"#, true);
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
 
@@ -896,6 +916,7 @@ args = ["--yolo"]
         runner.add_response(r#"{"windows":[]}"#, true);
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
 
@@ -987,6 +1008,7 @@ args = ["--yolo"]
         runner.add_response(r#"{"windows":[]}"#, true);
         runner.add_response(r#"{"caller":{"window_ref":"window:1"}}"#, true);
         runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("", true);
         runner.add_response("pane:0", true);
         let runner = Arc::new(runner);
 

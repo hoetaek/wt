@@ -1198,6 +1198,13 @@ CODEX_MODE = "1"
         &vec!["from common prompt file\n\nfrom common append file\n".to_string()]
     );
 
+    let workspace = config.workspace.unwrap();
+    assert_eq!(workspace.tabs, vec!["pnpm dev"]);
+    assert_eq!(workspace.colors.get("task").unwrap(), "blue");
+    assert_eq!(workspace.colors.get("issue").unwrap(), "blue");
+    assert_eq!(workspace.colors.get("new").unwrap(), "green");
+    assert_eq!(workspace.colors.get("pr").unwrap(), "magenta");
+
     let copy_as = config.worktree.copy_as;
     assert!(
         copy_as
@@ -1218,6 +1225,47 @@ fn config_renders_builtin_workflow_defaults() {
         .stdout(predicate::str::contains("[workflow]"))
         .stdout(predicate::str::contains("pull_request = \"none\""))
         .stdout(predicate::str::contains("landing = \"manual\""));
+}
+
+#[test]
+fn config_renders_builtin_workspace_color_defaults() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[workspace]\ntabs = [\"lazygit\"]\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[workspace]"))
+        .stdout(predicate::str::contains(
+            "colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }",
+        ));
+}
+
+#[test]
+fn config_preserves_empty_workspace_color_overrides() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[workspace]\ncolors = { task = \"\", issue = \"\", new = \"\", pr = \"\" }\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "colors = { task = \"\", issue = \"\", new = \"\", pr = \"\" }",
+        ));
 }
 
 #[test]

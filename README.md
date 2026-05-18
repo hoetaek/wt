@@ -200,6 +200,10 @@ wt config
 wt config --profile codex
 ```
 
+Treat `wt config` output as the source of truth for runtime behavior. Config
+files store user intent and overrides, while `wt config` shows merged profile
+layers plus built-in defaults in the shape users should copy and edit.
+
 Workflow preparation reads policy from the effective config:
 
 ```toml
@@ -220,6 +224,10 @@ bypassing dirty-worktree, check, review-thread, or ancestry safety gates.
 defaults above. `wt init` may include a commented optional `[workflow]` block so
 the policy is discoverable, but generated config does not actively enable PR
 creation or automatic landing by default.
+
+When `[workspace]` is configured, `wt config` also prints effective workspace
+colors, including built-in defaults. To change or disable a color, copy that
+line into the owning config file and override the value there.
 
 `wt workflow task` and `wt workflow issue` snapshot the effective workflow
 policy into `.local/workflows/<id>.toml` for the prepared workflow.
@@ -242,7 +250,9 @@ args = ["--model", "gpt-5.5"]
 
 [workspace]
 tabs = ["lazygit", "nvim"]
-colors = { task = "blue", issue = "blue", new = "green", pr = "magenta" }
+# Workspace colors have built-in defaults; set this only to override.
+# Use "" to disable a color kind.
+# colors = { task = "blue", issue = "blue", new = "green", pr = "magenta" }
 ```
 
 Use named profiles only when prompt files, scaffold files, or reusable runtime

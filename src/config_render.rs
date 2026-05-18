@@ -208,12 +208,10 @@ fn append_workspace_section(s: &mut String, workspace: &WorkspaceConfig) {
             toml_array(&workspace.post_deps_tabs)
         ));
     }
-    if !workspace.colors.is_empty() {
-        s.push_str(&format!(
-            "colors = {}\n",
-            toml_inline_string_map(&workspace.colors)
-        ));
-    }
+    s.push_str(&format!(
+        "colors = {}\n",
+        toml_inline_string_entries(&workspace.effective_colors())
+    ));
     if let Some(open_url) = workspace.open_url.as_deref() {
         s.push_str(&format!("open_url = {}\n", toml_quote(open_url)));
     }
@@ -356,11 +354,9 @@ fn toml_array(values: &[String]) -> String {
     )
 }
 
-fn toml_inline_string_map(values: &std::collections::HashMap<String, String>) -> String {
-    let mut entries = values.iter().collect::<Vec<_>>();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    let rendered = entries
-        .into_iter()
+fn toml_inline_string_entries(values: &[(&str, &str)]) -> String {
+    let rendered = values
+        .iter()
         .map(|(key, value)| format!("{} = {}", toml_key(key), toml_quote(value)))
         .collect::<Vec<_>>()
         .join(", ");
