@@ -5,6 +5,7 @@ pub mod config;
 pub mod config_render;
 pub mod context;
 pub mod error;
+pub mod local_ui;
 pub mod names;
 pub mod runner;
 pub mod services;
@@ -133,6 +134,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 heartbeat,
             } => commands::agent::watch(ctx, target.as_deref(), *interval, *timeout, *heartbeat),
         },
+        Commands::Ui { port } => commands::ui::run(ctx, *port),
         Commands::Send {
             target,
             message,

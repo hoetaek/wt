@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wt local state</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>wt local state</h1>
+          <p id="repo-label"></p>
+        </div>
+        <button id="refresh" type="button">Refresh</button>
+      </header>
+
+      <nav class="tabs" aria-label="Views">
+        <button class="active" type="button" data-view="overview">Overview</button>
+        <button type="button" data-view="ideas">Ideas</button>
+        <button type="button" data-view="tasks">TaskDocuments</button>
+        <button type="button" data-view="workflows">Workflows</button>
+        <button type="button" data-view="task-runs">TaskRuns</button>
+        <button type="button" data-view="profiles">Profiles</button>
+        <button type="button" data-view="config">Config</button>
+      </nav>
+
+      <main>
+        <section id="metrics" class="metrics" aria-label="Summary"></section>
+        <section id="content" class="content" aria-live="polite"></section>
+      </main>
+    </div>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

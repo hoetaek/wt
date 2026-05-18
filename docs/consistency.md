@@ -514,6 +514,26 @@ text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계
 command를 추가하지 않는다. `wt task list`는 symmetry command가 아니라 별도 TaskDocument
 inventory surface이며 Workflow, TaskRun, branch, worktree 목록 의미를 갖지 않는다.
 
+`wt ui [--port <PORT>]`는 `.local`과 wt config state를 읽기 쉽게 보는 read-only local web
+UI다. 이 명령은 `127.0.0.1`에만 bind하고, port `0`은 available port 선택을 뜻하며, 시작
+후 URL을 출력한다. Browser opening은 별도 명시 옵션이 생기기 전까지 기본 동작이 아니다.
+UI 서버는 binary에 embedded된 no-build HTML/CSS/JS asset과 allowlisted route만 제공한다.
+첫 API surface는 `GET /api/snapshot`이며 ideas, TaskDocuments, Workflows, TaskRuns,
+profile summaries, effective config summary/source paths를 한 snapshot으로 반환한다.
+
+`wt ui`는 inventory lens이지 새로운 state owner가 아니다. TaskDocument는 계속
+`.local/tasks`, Workflow는 `.local/workflows`, TaskRun은 `.local/task-runs`, config/profile
+layering은 `.wt.toml`, `.local/.wt.toml`, `.local/profiles`가 source of truth다. UI board
+group은 linked TaskRun 상태와 runnable metadata에서 파생한 presentation일 뿐이고,
+Workflow나 TaskDocument에 새 status/column 값을 쓰지 않는다. Parse/validation failure는
+snapshot과 UI에 invalid record로 드러내며, invalid TOML을 조용히 숨기지 않는다.
+
+MVP `wt ui`는 write API, drag/drop mutation, 별도 DB, frontend build pipeline, Tauri/Electron,
+arbitrary repo file serving, `.env` 읽기를 추가하지 않는다. `/api/snapshot`은 state-owner
+reader와 config/profile loader를 거쳐 요약 DTO만 만들고, CLI text output을 scrape하지 않는다.
+이후 write action을 추가하려면 먼저 canonical command preview나 명시 mutation contract를
+정의하고, path allowlist와 same-origin/token policy를 별도 설계해야 한다.
+
 Workspace label은 저장 상태가 아니라 현재 실행을 찾기 위한 표시다. 좁은 탭에서 잘려도
 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을 앞에 붙이고, branch/path/site
 이름에는 `batch`나 `stack` 같은 mode label을 섞지 않는다. `B`/`S` prefix는 workflow

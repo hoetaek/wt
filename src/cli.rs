@@ -119,6 +119,15 @@ pub enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Start a read-only local state web UI
+    #[command(
+        long_about = "Start a read-only local web UI for wt state. The server binds to 127.0.0.1, serves embedded no-build assets, and exposes only allowlisted routes including GET /api/snapshot for .local ideas, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
+    )]
+    Ui {
+        /// Port to bind on 127.0.0.1; 0 selects an available port
+        #[arg(long, default_value_t = 0, value_name = "PORT")]
+        port: u16,
+    },
     /// Send a message to a task agent's cmux surface
     Send {
         /// Branch, worktree path/name, or TaskRun id to contact

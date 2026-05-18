@@ -167,6 +167,12 @@ wt workflow repair 2026-05-16-001
 wt workflow complete 2026-05-16-001 add-schema --run-next
 ```
 
+Open a read-only local state UI:
+
+```bash
+wt ui --port 8424
+```
+
 Inspect, observe, message, and clean worktrees:
 
 ```bash
@@ -215,6 +221,11 @@ completed with `wt workflow complete`, not `wt done`.
   TOML files instead of hiding parse failures.
 - `TaskRun` files in `.local/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
+- `wt ui [--port <port>]` starts a read-only loopback web UI for `.local`
+  ideas, TaskDocuments, Workflows, TaskRuns, profile summaries, and effective
+  config source paths. It serves embedded assets, exposes
+  `GET /api/snapshot`, reports invalid TOML records, and does not write state
+  or serve arbitrary repo files.
 - `wt inspect [<target>]` is the read-only work dossier for a branch, worktree,
   or TaskRun.
 - `wt agent status [<target>]` observes the current agent/cmux state, and
@@ -430,6 +441,7 @@ there for one named profile.
 | `wt task run` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
 | `wt workflow` | Prepare, inspect, run, and repair saved workflows; complete stack tasks |
+| `wt ui` | Start the read-only local state web UI |
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
 | `wt agent status` | Observe the matching task agent surface once |
 | `wt agent watch` | Poll the matching task agent surface, with optional timeout and heartbeat |

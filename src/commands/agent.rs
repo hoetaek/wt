@@ -1195,6 +1195,7 @@ mod tests {
                 Box::new(MockUi::new()),
                 CtxOptions {
                     base_config: Config::default(),
+                    config_source: crate::config::ConfigSource::Default,
                     output_mode,
                     verbosity: 0,
                     quiet: false,

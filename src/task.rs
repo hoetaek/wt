@@ -192,6 +192,14 @@ pub(crate) fn list_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
 }
 
 pub(crate) fn list_local_task_documents(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
+    let mut tasks = Vec::new();
+    for path in task_document_paths(ctx)? {
+        tasks.push(read_task_document_path(ctx, &path)?);
+    }
+    Ok(tasks)
+}
+
+pub(crate) fn task_document_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
     let tasks_dir = ctx.repo_root.join(".local/tasks");
     if !tasks_dir.exists() {
         return Ok(Vec::new());
@@ -207,12 +215,21 @@ pub(crate) fn list_local_task_documents(ctx: &Ctx) -> Result<Vec<SelectedTask>> 
         }
     }
     paths.sort();
+    Ok(paths)
+}
 
-    let mut tasks = Vec::new();
-    for path in paths {
-        tasks.push(read_selected_task(ctx, path)?);
-    }
-    Ok(tasks)
+pub(crate) fn task_key_from_path(path: &Path) -> Result<String> {
+    let relative_path = path.to_string_lossy();
+    Ok(safe_task_key(
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("Task file is missing a key: {relative_path}"))?,
+    ))
+}
+
+pub(crate) fn read_task_document_path(ctx: &Ctx, path: &Path) -> Result<SelectedTask> {
+    read_selected_task(ctx, path.to_path_buf())
 }
 
 pub(crate) fn read_task_document(ctx: &Ctx, key: &str) -> Result<TaskDocument> {
@@ -364,12 +381,7 @@ fn read_selected_task(ctx: &Ctx, path: PathBuf) -> Result<SelectedTask> {
         .unwrap_or(&path)
         .to_string_lossy()
         .into_owned();
-    let key = safe_task_key(
-        path.file_stem()
-            .and_then(|stem| stem.to_str())
-            .filter(|stem| !stem.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Task file is missing a key: {relative_path}"))?,
-    );
+    let key = task_key_from_path(&path)?;
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read task: {relative_path}"))?;
     let document: TaskDocument = toml::from_str(&content)

@@ -210,6 +210,17 @@ pub(crate) fn read(path: &Path) -> Result<TaskRun> {
 }
 
 pub(crate) fn list(ctx: &Ctx) -> Result<Vec<TaskRunRecord>> {
+    task_run_paths(ctx)?
+        .into_iter()
+        .map(|path| {
+            let id = id_from_path(&path)?;
+            let run = read(&path)?;
+            Ok(TaskRunRecord { id, path, run })
+        })
+        .collect()
+}
+
+pub(crate) fn task_run_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
     let task_runs_dir = ctx.repo_root.join(".local/task-runs");
     if !task_runs_dir.exists() {
         return Ok(Vec::new());
@@ -225,15 +236,11 @@ pub(crate) fn list(ctx: &Ctx) -> Result<Vec<TaskRunRecord>> {
         }
     }
     paths.sort();
+    Ok(paths)
+}
 
-    paths
-        .into_iter()
-        .map(|path| {
-            let id = task_run_id(&path)?;
-            let run = read(&path)?;
-            Ok(TaskRunRecord { id, path, run })
-        })
-        .collect()
+pub(crate) fn id_from_path(path: &Path) -> Result<String> {
+    task_run_id(path)
 }
 
 pub(crate) fn resolve(ctx: &Ctx, target: &str) -> Result<PathBuf> {

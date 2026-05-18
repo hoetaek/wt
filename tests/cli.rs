@@ -180,7 +180,8 @@ fn no_args_prints_help_successfully() {
         .stdout(predicate::str::contains("issue"))
         .stdout(predicate::str::contains("pr"))
         .stdout(predicate::str::contains("new"))
-        .stdout(predicate::str::contains("agent"));
+        .stdout(predicate::str::contains("agent"))
+        .stdout(predicate::str::contains("ui"));
 }
 
 #[test]
@@ -622,6 +623,20 @@ fn agent_watch_help_explains_polling_target() {
         .stdout(predicate::str::contains(
             "Omit TARGET in an interactive terminal",
         ));
+}
+
+#[test]
+fn ui_help_explains_read_only_local_server_contract() {
+    wt_command()
+        .args(["ui", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("read-only local web UI"))
+        .stdout(predicate::str::contains("127.0.0.1"))
+        .stdout(predicate::str::contains("--port <PORT>"))
+        .stdout(predicate::str::contains("0 selects an available port"))
+        .stdout(predicate::str::contains("GET /api/snapshot"))
+        .stdout(predicate::str::contains("embedded no-build assets"));
 }
 
 #[test]
