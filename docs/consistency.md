@@ -437,7 +437,9 @@ push하고 준비된 workflow base 또는 parent branch를 base로 draft pull re
 남긴다는 뜻이다. `"ready"`는 draft를 만들었다가 전환하지 않고 바로 review-ready pull request를
 연다는 뜻이다. PR을 여는 workflow task는 `.github/pull_request_template.md`에서
 `<pr-body-file>`을 만들고 summary, context, changes, validation, risks/follow-ups 중심의
-review-focused 본문을 채운 뒤 `gh pr create --body-file <pr-body-file>` 경로로 PR을 생성한다.
+review-focused 본문을 채운다. TaskDocument에 `[origin]`이 있으면 PR merge가 provider
+issue를 닫도록 `Closes <origin.id>` issue-closing keyword도 PR 본문에 포함한다. 그런 뒤
+`gh pr create --body-file <pr-body-file>` 경로로 PR을 생성한다.
 Agent Completion Report는 coordinator transport/report 형식이며 PR 본문으로 복사하지 않는다.
 이것은 PR 자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은
 transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow에 포함된다. Codex/GitHub

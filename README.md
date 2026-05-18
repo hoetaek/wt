@@ -175,7 +175,9 @@ configuration, pass `--pr none` to report `PR=none`, pass `--pr draft` to create
 a draft PR and leave it draft, or pass `--pr ready` to create a review-ready PR
 directly. PR-opening tasks create a body file from
 `.github/pull_request_template.md`, fill a review-focused description, and pass
-it to `gh pr create --body-file <pr-body-file>`. If Codex/GitHub review or
+it to `gh pr create --body-file <pr-body-file>`. If the TaskDocument has
+`[origin]`, the PR body includes an issue-closing keyword for that provider
+issue. If Codex/GitHub review or
 coordinator feedback asks for changes, the same agent updates the branch, reruns
 checks, pushes, refreshes the PR body only if it became stale, and sends an
 updated report. Review always happens. The prepared landing policy only decides

@@ -19,6 +19,7 @@ use crate::workflow::render::{
     started_stack_task_message, test_auto_landing_policy, test_workflow_policy,
     workflow_batch_task_prompt_content, workflow_batch_task_prompt_content_for_policy,
     workflow_single_task_prompt_content, workflow_single_task_prompt_content_for_policy,
+    workflow_single_task_prompt_content_for_policy_and_closing_refs,
     workflow_stack_task_prompt_content, workflow_task_prompt_content_with_policy,
     workflow_task_prompt_content_with_policy_and_parent,
 };
@@ -1342,6 +1343,22 @@ landing = "auto"
         assert!(content.contains("against the workflow base branch"));
         assert!(content.contains("gh pr create --draft --body-file <pr-body-file> --base main"));
         assert!(content.contains("PR=<pr-url>"));
+    }
+
+    #[test]
+    fn workflow_pr_handoff_includes_issue_closing_keywords() {
+        let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
+        let issue_closing_references = vec!["#52".into(), "PROJ-123".into()];
+        let content = workflow_single_task_prompt_content_for_policy_and_closing_refs(
+            "title = \"API\"\n",
+            &policy,
+            &issue_closing_references,
+        );
+
+        assert!(content.contains("issue-closing keywords"));
+        assert!(content.contains("`Closes #52`"));
+        assert!(content.contains("`Closes PROJ-123`"));
+        assert!(content.contains("gh pr create --body-file <pr-body-file> --base main"));
     }
 
     #[test]

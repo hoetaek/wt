@@ -1,5 +1,5 @@
 use super::state::{read_stack_workflow_task_states, update_workflow_task_run};
-use super::{apply_workflow_color, is_cancelled, validate_profile};
+use super::{apply_workflow_color, is_cancelled, task_issue_closing_references, validate_profile};
 use crate::commands::issue;
 use crate::context::Ctx;
 use crate::task as task_store;
@@ -113,8 +113,13 @@ fn run_stack_workflow_task(
     task: StackWorkflowTaskContext<'_>,
 ) -> Result<issue::IssueRunResult> {
     let (task_doc, task_path, content) = task_store::read_task_file(ctx, &task.row.task)?;
-    let completion_section =
-        workflow_stack_task_handoff_section(task.workflow_path, task.row, task.policy, task.parent);
+    let completion_section = workflow_stack_task_handoff_section(
+        task.workflow_path,
+        task.row,
+        task.policy,
+        task.parent,
+        &task_issue_closing_references(&task_doc),
+    );
     let workflow_context = workflow_objective_prompt_context(task.objective);
     let branch_name = task_store::prepared_branch_name(&task_doc.branch);
     if branch_name.is_none() && task_doc.origin.is_none() {

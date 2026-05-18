@@ -1,5 +1,5 @@
 use super::state::{WorkflowTaskState, read_batch_workflow_task_states};
-use super::{apply_workflow_color, is_cancelled, validate_profile};
+use super::{apply_workflow_color, is_cancelled, task_issue_closing_references, validate_profile};
 use crate::commands::issue;
 use crate::context::Ctx;
 use crate::task as task_store;
@@ -370,8 +370,13 @@ fn run_batch_workflow_task(
 ) -> Result<issue::IssueRunResult> {
     let workflow_context = workflow_objective_prompt_context(task.objective);
     let state = task.state;
-    let completion_section =
-        workflow_batch_task_handoff_section(task.workflow_path, &state.row, task.policy, task.base);
+    let completion_section = workflow_batch_task_handoff_section(
+        task.workflow_path,
+        &state.row,
+        task.policy,
+        task.base,
+        &task_issue_closing_references(&state.document),
+    );
     let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);

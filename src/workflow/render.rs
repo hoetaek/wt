@@ -14,6 +14,7 @@ enum WorkflowCoordinatorHandoff<'a> {
         policy: &'a WorkflowPolicy,
         pr_base: &'a str,
         pr_base_label: &'static str,
+        issue_closing_references: &'a [String],
         completion: Option<WorkflowCompletion<'a>>,
     },
 }
@@ -98,7 +99,7 @@ pub(crate) fn workflow_task_prompt_content_with_policy_and_parent(
 ) -> String {
     workflow_task_prompt_content(
         content,
-        &workflow_stack_task_handoff_section(workflow_path, row, policy, validated_parent),
+        &workflow_stack_task_handoff_section(workflow_path, row, policy, validated_parent, &[]),
     )
 }
 
@@ -312,6 +313,7 @@ pub(crate) fn workflow_single_task_prompt_content(content: &str) -> String {
             Some(&WorkflowTask::new("task", "run-task")),
             &default_workflow_policy(),
             TEST_WORKFLOW_BASE,
+            &[],
         ),
     )
 }
@@ -328,6 +330,25 @@ pub(crate) fn workflow_single_task_prompt_content_for_policy(
             Some(&WorkflowTask::new("task", "run-task")),
             policy,
             TEST_WORKFLOW_BASE,
+            &[],
+        ),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn workflow_single_task_prompt_content_for_policy_and_closing_refs(
+    content: &str,
+    policy: &WorkflowPolicy,
+    issue_closing_references: &[String],
+) -> String {
+    workflow_task_prompt_content(
+        content,
+        &workflow_single_task_handoff_section(
+            Path::new("/repo/.local/workflows/test.toml"),
+            Some(&WorkflowTask::new("task", "run-task")),
+            policy,
+            TEST_WORKFLOW_BASE,
+            issue_closing_references,
         ),
     )
 }
@@ -342,6 +363,7 @@ pub(crate) fn workflow_batch_task_prompt_content(content: &str) -> String {
             &row,
             &default_workflow_policy(),
             TEST_WORKFLOW_BASE,
+            &[],
         ),
     )
 }
@@ -359,6 +381,7 @@ pub(crate) fn workflow_batch_task_prompt_content_for_policy(
             &row,
             policy,
             TEST_WORKFLOW_BASE,
+            &[],
         ),
     )
 }
@@ -382,11 +405,13 @@ pub(crate) fn workflow_single_task_handoff_section(
     row: Option<&WorkflowTask>,
     policy: &WorkflowPolicy,
     pr_base: &str,
+    issue_closing_references: &[String],
 ) -> String {
     workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::Task {
         policy,
         pr_base,
         pr_base_label: "workflow base branch",
+        issue_closing_references,
         completion: Some(WorkflowCompletion {
             workflow_path,
             row,
@@ -400,11 +425,13 @@ pub(crate) fn workflow_batch_task_handoff_section(
     row: &WorkflowTask,
     policy: &WorkflowPolicy,
     pr_base: &str,
+    issue_closing_references: &[String],
 ) -> String {
     workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::Task {
         policy,
         pr_base,
         pr_base_label: "workflow base branch",
+        issue_closing_references,
         completion: Some(WorkflowCompletion {
             workflow_path,
             row: Some(row),
@@ -418,11 +445,13 @@ pub(crate) fn workflow_stack_task_handoff_section(
     row: &WorkflowTask,
     policy: &WorkflowPolicy,
     validated_parent: &str,
+    issue_closing_references: &[String],
 ) -> String {
     workflow_coordinator_handoff_section(WorkflowCoordinatorHandoff::Task {
         policy,
         pr_base: validated_parent,
         pr_base_label: "workflow parent branch",
+        issue_closing_references,
         completion: Some(WorkflowCompletion {
             workflow_path,
             row: Some(row),
@@ -455,6 +484,7 @@ fn workflow_handoff_policy(
             policy,
             pr_base,
             pr_base_label,
+            issue_closing_references,
             completion,
         } => {
             let pr_report_value = match policy.pull_request {
@@ -473,9 +503,11 @@ fn workflow_handoff_policy(
                         }
                         WorkflowPullRequestMode::None => unreachable!(),
                     };
+                    let closing_instruction =
+                        issue_closing_instruction(issue_closing_references);
                     format!(
-                        "Workflow policy sets `pull_request = \"{}\"`. When this task is complete and committed, push the branch and {mode_instruction} against the {pr_base_label}. Create `<pr-body-file>` from `.github/pull_request_template.md` and fill it with a review-focused PR description covering summary, context, changes, validation, and risks/follow-ups before creating the pull request:\n\n```bash\n{pr_command}\n```",
-                        policy.pull_request.as_str()
+                        "Workflow policy sets `pull_request = \"{}\"`. When this task is complete and committed, push the branch and {mode_instruction} against the {pr_base_label}. Create `<pr-body-file>` from `.github/pull_request_template.md` and fill it with a review-focused PR description covering summary, context, changes, validation, and risks/follow-ups{closing_instruction} before creating the pull request:\n\n```bash\n{pr_command}\n```",
+                        policy.pull_request.as_str(),
                     )
                 }
                 WorkflowPullRequestMode::None => {
@@ -500,6 +532,21 @@ fn workflow_handoff_policy(
             (pull_request_instructions, pr_report_value, after_send)
         }
     }
+}
+
+fn issue_closing_instruction(issue_closing_references: &[String]) -> String {
+    if issue_closing_references.is_empty() {
+        return String::new();
+    }
+
+    let keywords = issue_closing_references
+        .iter()
+        .map(|reference| format!("`Closes {reference}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        ", and issue-closing keywords in `<pr-body-file>` so linked provider issues close when the pull request merges: {keywords}"
+    )
 }
 
 fn workflow_pr_command(mode: WorkflowPullRequestMode, parent_branch: &str) -> String {

@@ -176,6 +176,7 @@ fn run_single_workflow_task(
         Some(&state.row),
         &metadata.policy,
         workflow_pr_base(base),
+        &task_issue_closing_references(&state.document),
     );
     let workflow_context = workflow_objective_prompt_context(metadata.objective.as_deref());
     let branch_name = task_store::prepared_branch_name(&state.document.branch);
@@ -233,6 +234,7 @@ fn run_single_workflow_group(
         None,
         &metadata.policy,
         workflow_pr_base(base),
+        &workflow_issue_closing_references(states),
     );
     let workflow_context = workflow_objective_prompt_context(metadata.objective.as_deref());
     let title = single_workflow_group_title(states);
@@ -291,6 +293,24 @@ fn mark_single_workflow_failed(ctx: &Ctx, states: &[WorkflowTaskState], err: &an
 pub(crate) fn is_cancelled(err: &anyhow::Error) -> bool {
     err.downcast_ref::<WtError>()
         .is_some_and(|err| matches!(err, WtError::Cancelled))
+}
+
+pub(super) fn task_issue_closing_references(document: &task_store::TaskDocument) -> Vec<String> {
+    document
+        .origin
+        .as_ref()
+        .map(|origin| origin.id.trim())
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .into_iter()
+        .collect()
+}
+
+fn workflow_issue_closing_references(states: &[WorkflowTaskState]) -> Vec<String> {
+    states
+        .iter()
+        .flat_map(|state| task_issue_closing_references(&state.document))
+        .collect()
 }
 
 pub(crate) fn apply_workflow_color(ctx: &Ctx, worktree_path: &Path, color: Option<&str>) {
