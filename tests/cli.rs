@@ -180,7 +180,8 @@ fn no_args_prints_help_successfully() {
         .stdout(predicate::str::contains("issue"))
         .stdout(predicate::str::contains("pr"))
         .stdout(predicate::str::contains("new"))
-        .stdout(predicate::str::contains("agent"));
+        .stdout(predicate::str::contains("agent"))
+        .stdout(predicate::str::contains("ui"));
 }
 
 #[test]
@@ -454,6 +455,9 @@ fn workflow_list_help_explains_canonical_inventory() {
         ))
         .stdout(predicate::str::contains(
             "reports invalid workflow TOML files",
+        ))
+        .stdout(predicate::str::contains(
+            "derived action labels such as runnable, waiting, and done",
         ));
 }
 
@@ -474,7 +478,7 @@ fn workflow_list_supports_json_and_reports_invalid_workflows() {
         temp.path(),
         "2026-05-18-001",
         "batch",
-        r#"objective = "Ship search"
+        r#"title = "Ship search"
 profile = "codex"
 "#,
         r#"[[tasks]]
@@ -512,7 +516,7 @@ run = "run-2026-05-18-001-schema"
     assert_eq!(row["id"], "2026-05-18-001");
     assert_eq!(row["path"], ".local/workflows/2026-05-18-001.toml");
     assert_eq!(row["mode"], "batch");
-    assert_eq!(row["objective_summary"], "Ship search");
+    assert_eq!(row["title"], "Ship search");
     assert_eq!(row["task_count"], 1);
     assert_eq!(row["task_runs"]["prepared"], 1);
     assert_eq!(row["task_runs"]["summary"], "1 prepared");
@@ -619,6 +623,20 @@ fn agent_watch_help_explains_polling_target() {
         .stdout(predicate::str::contains(
             "Omit TARGET in an interactive terminal",
         ));
+}
+
+#[test]
+fn ui_help_explains_read_only_local_server_contract() {
+    wt_command()
+        .args(["ui", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("read-only local web UI"))
+        .stdout(predicate::str::contains("127.0.0.1"))
+        .stdout(predicate::str::contains("--port <PORT>"))
+        .stdout(predicate::str::contains("0 selects an available port"))
+        .stdout(predicate::str::contains("GET /api/snapshot"))
+        .stdout(predicate::str::contains("embedded no-build assets"));
 }
 
 #[test]
@@ -1266,7 +1284,7 @@ fn config_renders_enabled_workspace_chrome_devtools_defaults() {
         .stdout(predicate::str::contains("[workspace.chrome_devtools]"))
         .stdout(predicate::str::contains("enabled = true"))
         .stdout(predicate::str::contains(
-            "user_data_dir = \"{{worktree_path}}/.chrome-devtools-user-data\"",
+            "user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"",
         ))
         .stdout(predicate::str::contains("url = \"{{site_url}}/dashboard\""))
         .stdout(predicate::str::contains("port =").not());

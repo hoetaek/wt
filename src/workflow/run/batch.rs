@@ -12,7 +12,7 @@ use crate::workflow::render::{
     failed_workflow_task_message, no_runnable_workflow_tasks_message,
     started_workflow_task_message, starting_workflow_task_message,
     workflow_batch_task_handoff_section, workflow_batch_task_prompt_intro,
-    workflow_objective_prompt_context,
+    workflow_metadata_prompt_context,
 };
 use crate::workflow::{WorkflowMetadata, WorkflowPolicy};
 use crate::worktree_naming;
@@ -72,6 +72,7 @@ fn run_batch_workflow_sequential(
 ) -> Result<bool> {
     let mut failed = false;
     let total = metadata.tasks.len();
+    let workflow_context = workflow_metadata_prompt_context(metadata);
     for (idx, state) in states.iter().enumerate() {
         ctx.ui
             .print_step(&starting_workflow_task_message(&state.row.task));
@@ -84,7 +85,7 @@ fn run_batch_workflow_sequential(
                 base: &base,
                 policy: &metadata.policy,
                 profile: metadata.profile.as_deref(),
-                objective: metadata.objective.as_deref(),
+                workflow_context: workflow_context.as_deref(),
                 allow_interactive_prompts: true,
                 total,
             },
@@ -135,7 +136,7 @@ fn run_batch_workflow_parallel(
     let mut active = 0;
     let mut cancelled = false;
     let total = metadata.tasks.len();
-    let objective = metadata.objective.clone();
+    let workflow_context = workflow_metadata_prompt_context(metadata);
 
     thread::scope(|scope| -> Result<()> {
         loop {
@@ -147,7 +148,7 @@ fn run_batch_workflow_parallel(
                 let tx = tx.clone();
                 let base = base.clone();
                 let profile = metadata.profile.clone();
-                let objective = objective.clone();
+                let workflow_context = workflow_context.clone();
                 scope.spawn(move || {
                     let result = run_batch_workflow_task(
                         ctx,
@@ -157,7 +158,7 @@ fn run_batch_workflow_parallel(
                             base: &base,
                             policy: &metadata.policy,
                             profile: profile.as_deref(),
-                            objective: objective.as_deref(),
+                            workflow_context: workflow_context.as_deref(),
                             allow_interactive_prompts: false,
                             total,
                         },
@@ -361,7 +362,7 @@ struct BatchWorkflowTaskContext<'a> {
     base: &'a str,
     policy: &'a WorkflowPolicy,
     profile: Option<&'a str>,
-    objective: Option<&'a str>,
+    workflow_context: Option<&'a str>,
     allow_interactive_prompts: bool,
     total: usize,
 }
@@ -370,7 +371,6 @@ fn run_batch_workflow_task(
     ctx: &Ctx,
     task: BatchWorkflowTaskContext<'_>,
 ) -> Result<issue::IssueRunResult> {
-    let workflow_context = workflow_objective_prompt_context(task.objective);
     let state = task.state;
     let completion_section = workflow_batch_task_handoff_section(
         task.workflow_path,
@@ -409,7 +409,7 @@ fn run_batch_workflow_task(
             .map(|origin| origin.id.as_str()),
         prompt_intro: workflow_batch_task_prompt_intro(),
         completion_section: Some(&completion_section),
-        pre_snapshot_context: workflow_context.as_deref(),
+        pre_snapshot_context: task.workflow_context,
         workspace_label: Some(workspace_label),
         snapshot: issue::IssueSnapshotContext {
             path_label: "Task path",

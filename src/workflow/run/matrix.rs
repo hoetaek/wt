@@ -16,7 +16,7 @@ use crate::workflow::render::{
     failed_workflow_task_message, no_runnable_workflow_tasks_message,
     started_workflow_task_message, starting_workflow_task_message,
     workflow_batch_task_prompt_intro, workflow_matrix_task_handoff_section,
-    workflow_objective_prompt_context,
+    workflow_metadata_prompt_context,
 };
 use crate::workflow::{WorkflowMetadata, WorkflowPolicy};
 use anyhow::{Result, bail};
@@ -51,6 +51,7 @@ pub(super) fn run_matrix_workflow(
     }
 
     let base = workflow_base_raw(metadata)?.expect("workflow base is validated");
+    let workflow_context = workflow_metadata_prompt_context(metadata);
     let mut failed = false;
     for (idx, state) in runnable.iter().enumerate() {
         let Some(profile) = state.profile.as_deref() else {
@@ -75,7 +76,7 @@ pub(super) fn run_matrix_workflow(
                 state,
                 base: &base,
                 policy: &metadata.policy,
-                objective: metadata.objective.as_deref(),
+                workflow_context: workflow_context.clone(),
                 profile,
             },
         );
@@ -108,7 +109,7 @@ struct MatrixWorkflowTaskContext<'a> {
     state: &'a WorkflowTaskState,
     base: &'a str,
     policy: &'a WorkflowPolicy,
-    objective: Option<&'a str>,
+    workflow_context: Option<String>,
     profile: &'a str,
 }
 
@@ -122,7 +123,6 @@ fn run_matrix_workflow_task(
     ctx: &Ctx,
     task: MatrixWorkflowTaskContext<'_>,
 ) -> Result<issue::IssueRunResult> {
-    let workflow_context = workflow_objective_prompt_context(task.objective);
     let state = task.state;
     let completion_section = workflow_matrix_task_handoff_section(
         task.workflow_path,
@@ -153,7 +153,7 @@ fn run_matrix_workflow_task(
             .map(|origin| origin.id.as_str()),
         prompt_intro: workflow_batch_task_prompt_intro(),
         completion_section: Some(&completion_section),
-        pre_snapshot_context: workflow_context.as_deref(),
+        pre_snapshot_context: task.workflow_context.as_deref(),
         workspace_label: None,
         snapshot: issue::IssueSnapshotContext {
             path_label: "Task path",

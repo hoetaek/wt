@@ -93,6 +93,7 @@ fn try_main() -> Result<()> {
         )),
         CtxOptions {
             base_config,
+            config_source: config_source.clone(),
             output_mode,
             verbosity: cli.verbose,
             quiet: cli.quiet,

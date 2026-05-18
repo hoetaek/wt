@@ -15,6 +15,26 @@ pub enum ConfigSource {
     Files(Vec<PathBuf>),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileRecord {
+    pub name: String,
+    pub path: PathBuf,
+    pub config: Config,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidProfileRecord {
+    pub name: String,
+    pub path: PathBuf,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileInventory {
+    pub profiles: Vec<ProfileRecord>,
+    pub invalid_profiles: Vec<InvalidProfileRecord>,
+}
+
 impl Config {
     /// Load config with .wt.toml as the shared base and .local/.wt.toml as
     /// the private override.
@@ -101,12 +121,35 @@ impl Config {
 
     /// Discover profile configs: .local/profiles/{name}/profile.toml
     pub fn load_profiles(repo_root: &Path, base: &Self) -> anyhow::Result<Vec<(String, Self)>> {
+        let inventory = Self::load_profile_inventory(repo_root, base)?;
+        if let Some(invalid) = inventory.invalid_profiles.first() {
+            bail!(
+                "Failed to load profile: {}: {}",
+                invalid.path.display(),
+                invalid.error
+            );
+        }
+        Ok(inventory
+            .profiles
+            .into_iter()
+            .map(|profile| (profile.name, profile.config))
+            .collect())
+    }
+
+    pub fn load_profile_inventory(
+        repo_root: &Path,
+        base: &Self,
+    ) -> anyhow::Result<ProfileInventory> {
         let profiles_dir = repo_root.join(".local/profiles");
         if !profiles_dir.exists() {
-            return Ok(Vec::new());
+            return Ok(ProfileInventory {
+                profiles: Vec::new(),
+                invalid_profiles: Vec::new(),
+            });
         }
 
         let mut profiles = Vec::new();
+        let mut invalid_profiles = Vec::new();
 
         for entry in std::fs::read_dir(&profiles_dir)? {
             let entry = entry?;
@@ -115,16 +158,31 @@ impl Config {
             }
             let profile_name = entry.file_name().to_string_lossy().into_owned();
             let profile_toml = entry.path().join("profile.toml");
-            if profile_toml.exists() {
-                validate_profile_name(&profile_name)?;
-                let config =
-                    Self::load_profile_from_dir(repo_root, &profile_name, &entry.path(), base)?;
-                profiles.push((profile_name, config));
+            if !profile_toml.exists() {
+                continue;
+            }
+            match validate_profile_name(&profile_name).and_then(|()| {
+                Self::load_profile_from_dir(repo_root, &profile_name, &entry.path(), base)
+            }) {
+                Ok(config) => profiles.push(ProfileRecord {
+                    name: profile_name,
+                    path: profile_toml,
+                    config,
+                }),
+                Err(err) => invalid_profiles.push(InvalidProfileRecord {
+                    name: profile_name,
+                    path: profile_toml,
+                    error: format!("{err:#}"),
+                }),
             }
         }
 
-        profiles.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(profiles)
+        profiles.sort_by(|a, b| a.name.cmp(&b.name));
+        invalid_profiles.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(ProfileInventory {
+            profiles,
+            invalid_profiles,
+        })
     }
 
     pub fn load_profile(repo_root: &Path, name: &str, base: &Self) -> anyhow::Result<Option<Self>> {

@@ -21,7 +21,14 @@
 `master`는 릴리즈된 코드만 담는 보호 브랜치다. 직접 push, force push, branch 삭제는
 허용하지 않는다. `master`로 들어가는 변경은 pull request를 거쳐야 하며, 최신 base 기준의
 필수 체크 `Rust`, `Security audit`, `cargo-deny`가 통과해야 한다. PR conversation은
-merge 전에 모두 resolve되어야 하고, linear history를 유지한다.
+merge 전에 모두 resolve되어야 하고, linear history를 유지한다. Review-agent inline comment는
+답글을 남긴 직후 바로 resolve하지 않고, follow-up 응답을 확인한 뒤 해결 또는 비조치 동의가
+확인될 때 resolve한다. Thread-specific addressed marker는 그 follow-up 확인으로 볼 수 있지만,
+PR body나 review-request comment의 tool-specific reaction/marker는 review 상태 신호로
+확인하되 thread/comment/check 확인을 대체하지 않는다. 예:
+
+- CodeRabbit inline comment는 후속 응답 확인 전 resolve하지 않는다.
+- Codex reaction은 기록할 상태 신호로만 취급한다.
 
 릴리즈할 때는 최신 `develop`에서 `release/vX.Y.Z` 브랜치를 만들고, 그 릴리즈에 포함된
 변경 중 가장 큰 범위에 맞춰 `Cargo.toml`의 version을 한 번 올린다. release 브랜치에서

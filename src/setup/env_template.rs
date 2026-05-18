@@ -24,6 +24,22 @@ pub(crate) fn build_template_vars(
         "worktree_path".into(),
         worktree_path.to_string_lossy().into_owned(),
     );
+    vars.insert(
+        "worktree_parent".into(),
+        worktree_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_string_lossy()
+            .into_owned(),
+    );
+    vars.insert(
+        "worktree_name".into(),
+        worktree_path
+            .file_name()
+            .unwrap_or(worktree_path.as_os_str())
+            .to_string_lossy()
+            .into_owned(),
+    );
     vars.insert("branch".into(), names.workspace.clone());
     if let Some(site) = &names.site {
         vars.insert("site_name".into(), site.clone());

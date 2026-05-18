@@ -138,7 +138,17 @@ fn parse_created_identifier_line(line: &str) -> Option<String> {
 }
 
 fn parse_created_identifier_token(token: &str) -> Option<String> {
-    let (_, issue) = token.split_once("/issue/")?;
+    let token = token.trim_matches(|ch: char| matches!(ch, '<' | '>' | '"' | '\'' | ',' | ';'));
+    let (prefix, issue) = token.split_once("/issue/")?;
+    let host = prefix
+        .split_once("://")
+        .map_or(prefix, |(_, rest)| rest)
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    if host != "linear.app" && !host.ends_with(".linear.app") {
+        return None;
+    }
     let issue = issue
         .split(['?', '#', '/', '\t', '\r', '\n'])
         .next()
@@ -264,5 +274,25 @@ mod tests {
         runner.add_response("", false);
         let svc = LinearService::new(&runner, None);
         assert!(svc.update_status("PROJ-1", "Done").is_err());
+    }
+
+    #[test]
+    fn created_identifier_parser_accepts_created_prefix_or_linear_url() {
+        assert_eq!(
+            parse_created_identifier("Created: proj-123", ""),
+            Some("PROJ-123".into())
+        );
+        assert_eq!(
+            parse_created_identifier("", "View https://linear.app/acme/issue/proj-124/title"),
+            Some("PROJ-124".into())
+        );
+    }
+
+    #[test]
+    fn created_identifier_parser_ignores_incidental_issue_paths() {
+        assert_eq!(
+            parse_created_identifier("", "debug: endpoint /issue/proj-125 failed"),
+            None
+        );
     }
 }

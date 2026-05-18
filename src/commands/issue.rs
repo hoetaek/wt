@@ -1148,7 +1148,9 @@ mod tests {
             None,
             "Use this task before changing code.",
             Some("## Workflow Coordinator Handoff\n\nSend the report."),
-            Some("Workflow objective:\n\nShip the broader migration."),
+            Some(
+                "Workflow title:\n\nWorkflow migration\n\nWorkflow body:\n\nShip the broader migration.\n\nWorkflow origin: linear:WT-123",
+            ),
         );
 
         let mut agent = config.agent.unwrap();
@@ -1156,15 +1158,21 @@ mod tests {
         assert_eq!(prompts.len(), 2);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
         assert!(prompts[0].contains("TaskDocument prompt follows next"));
-        assert!(!prompts[0].contains("Workflow objective"));
+        assert!(!prompts[0].contains("Workflow title"));
         assert!(
-            prompts[1].find("Workflow objective").unwrap()
+            prompts[1].find("Workflow title").unwrap() < prompts[1].find("Workflow body").unwrap()
+        );
+        assert!(
+            prompts[1].find("Workflow body").unwrap() < prompts[1].find("Workflow origin").unwrap()
+        );
+        assert!(
+            prompts[1].find("Workflow origin").unwrap()
                 < prompts[1]
                     .find("Task path: `.local/tasks/add-schema.toml`")
                     .unwrap()
         );
         assert!(
-            prompts[1].find("Workflow objective").unwrap()
+            prompts[1].find("Workflow body").unwrap()
                 < prompts[1].find("title = \"Add schema\"").unwrap()
         );
     }
@@ -1203,14 +1211,14 @@ mod tests {
             Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             "Use this task before changing code.",
             Some("## Workflow Coordinator Handoff\n\nSend the report."),
-            Some("Workflow objective:\n\nShip the broader migration."),
+            Some("Workflow body:\n\nShip the broader migration."),
         );
 
         let mut agent = config.agent.unwrap();
         let prompts = agent.prompt.remove("new").unwrap();
         assert_eq!(prompts.len(), 5);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
-        assert!(prompts[1].contains("Workflow objective"));
+        assert!(prompts[1].contains("Workflow body"));
         assert!(prompts[1].contains("Task path: `.local/tasks/add-schema.toml`"));
         assert_eq!(prompts[2], "Workflow prompt");
         assert_eq!(prompts[3], "Workflow follow-up");

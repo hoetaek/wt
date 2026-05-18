@@ -30,7 +30,6 @@ struct PublishFailure {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct PublishSummary {
     published: Vec<PublishResult>,
-    skipped: Vec<String>,
     failed: Vec<PublishFailure>,
 }
 
@@ -209,8 +208,6 @@ fn print_summary(ctx: &Ctx, summary: &PublishSummary) {
     ctx.ui
         .print_dim(&format!("  Published: {}", format_published(summary)));
     ctx.ui
-        .print_dim(&format!("  Skipped: {}", format_keys(&summary.skipped)));
-    ctx.ui
         .print_dim(&format!("  Failed: {}", format_failed(summary)));
 
     for failure in &summary.failed {
@@ -249,14 +246,6 @@ fn format_failed(summary: &PublishSummary) -> String {
         .map(|failure| failure.task_key.as_str())
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn format_keys(keys: &[String]) -> String {
-    if keys.is_empty() {
-        "none".into()
-    } else {
-        keys.join(", ")
-    }
 }
 
 fn first_error_line(error: &str) -> &str {
@@ -556,7 +545,7 @@ mod tests {
         assert!(dims.contains(
             &"  Published: task-a -> linear:PROJ-123, task-b -> linear:PROJ-124".to_string()
         ));
-        assert!(dims.contains(&"  Skipped: none".to_string()));
+        assert!(!dims.iter().any(|line| line.starts_with("  Skipped:")));
         assert!(dims.contains(&"  Failed: none".to_string()));
     }
 

@@ -1,10 +1,12 @@
-use crate::context::Ctx;
+use crate::context::{Ctx, PromptItem};
 use crate::task_run::{
     STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
 use crate::workflow as workflow_store;
 use crate::workflow::planner::runnable_workflow_info;
-use crate::workflow::render::workflow_relative_path;
+use crate::workflow::render::{
+    workflow_body_summary, workflow_relative_path, workflow_title_label,
+};
 use crate::workflow::run::{
     WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
     read_single_workflow_task_states, read_stack_workflow_task_states, task_run_record,
@@ -36,7 +38,10 @@ struct WorkflowListRow {
     id: String,
     path: String,
     mode: String,
-    objective_summary: Option<String>,
+    title: String,
+    body: Option<String>,
+    body_summary: Option<String>,
+    origin: Option<WorkflowOriginSummary>,
     task_count: usize,
     task_runs: TaskRunSummary,
     runnable: RunnableMetadata,
@@ -47,6 +52,12 @@ struct WorkflowListRow {
     policy: WorkflowPolicySummary,
     updated_at: String,
     state_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowOriginSummary {
+    provider: String,
+    id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,6 +117,16 @@ fn collect(ctx: &Ctx) -> Result<WorkflowListReport> {
 
 fn workflow_row(ctx: &Ctx, path: &Path, id: String, metadata: WorkflowMetadata) -> WorkflowListRow {
     let task_runs = task_run_summary(ctx, &metadata);
+    let title = workflow_title_label(ctx, &id, &metadata);
+    let body = metadata.body.clone();
+    let body_summary = workflow_body_summary(&metadata);
+    let origin = metadata
+        .origin
+        .as_ref()
+        .map(|origin| WorkflowOriginSummary {
+            provider: origin.provider.clone(),
+            id: origin.id.clone(),
+        });
     let (runnable, state_error) = match read_workflow_states(ctx, path, &metadata) {
         Ok(states) => (runnable_metadata(&metadata.mode, &states), None),
         Err(err) => (
@@ -123,7 +144,10 @@ fn workflow_row(ctx: &Ctx, path: &Path, id: String, metadata: WorkflowMetadata) 
         id,
         path: workflow_relative_path(ctx, path),
         mode: metadata.mode.as_str().into(),
-        objective_summary: objective_summary(metadata.objective.as_deref()),
+        title,
+        body,
+        body_summary,
+        origin,
         task_count: metadata.tasks.len(),
         task_runs,
         runnable,
@@ -263,13 +287,6 @@ fn non_runnable_reason(mode: &WorkflowMode, states: &[WorkflowTaskState]) -> &'s
     }
 }
 
-fn objective_summary(objective: Option<&str>) -> Option<String> {
-    objective
-        .map(one_line)
-        .filter(|objective| !objective.is_empty())
-        .map(|objective| truncate_chars(&objective, 80))
-}
-
 fn truncate_chars(value: &str, max_chars: usize) -> String {
     let mut chars = value.chars();
     let truncated = chars.by_ref().take(max_chars).collect::<String>();
@@ -290,23 +307,92 @@ fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
         return;
     }
 
-    for row in &report.workflows {
-        ctx.ui.print_step(&format!(
-            "{}  mode {}  task_runs {}  runnable {}  base {}  profile {}  policy {}/{}  updated {}",
-            row.id,
-            row.mode,
-            row.task_runs.summary,
-            runnable_label(&row.runnable),
-            row_base_label(row),
-            row_profile_label(row),
-            row.policy.pull_request,
-            row.policy.landing,
-            row.updated_at
-        ));
-        if let Some(objective) = row.objective_summary.as_deref() {
-            ctx.ui.print_dim(&format!("  Objective: {objective}"));
+    let mut printed_group = false;
+    for group in [
+        WorkflowDisplayGroup::Runnable,
+        WorkflowDisplayGroup::Waiting,
+        WorkflowDisplayGroup::Done,
+    ] {
+        let rows = report
+            .workflows
+            .iter()
+            .filter(|row| display_group(row) == group)
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            continue;
         }
-        ctx.ui.print_dim(&format!("  Path: {}", row.path));
+        print_workflow_group(ctx, group, &rows, printed_group);
+        printed_group = true;
+    }
+
+    if !report.invalid_workflows.is_empty() {
+        if printed_group {
+            ctx.ui.print_dim("");
+        }
+        ctx.ui.print_step("invalid");
+        for invalid in &report.invalid_workflows {
+            ctx.ui.print_warning(&format!(
+                "{}  file {}  {}",
+                invalid.id,
+                invalid.path,
+                invalid_workflow_error_summary(&invalid.error)
+            ));
+        }
+    }
+}
+
+fn invalid_workflow_error_summary(error: &str) -> String {
+    if error.contains("Workflow uses removed `objective`") {
+        "uses removed `objective`; edit the workflow file to use top-level `title`, `body`, and optional `[origin]`".into()
+    } else {
+        one_line(error)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkflowDisplayGroup {
+    Runnable,
+    Waiting,
+    Done,
+}
+
+impl WorkflowDisplayGroup {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Runnable => "runnable",
+            Self::Waiting => "waiting",
+            Self::Done => "done",
+        }
+    }
+}
+
+fn display_group(row: &WorkflowListRow) -> WorkflowDisplayGroup {
+    if row.runnable.runnable {
+        return WorkflowDisplayGroup::Runnable;
+    }
+
+    let terminal = row.task_runs.done + row.task_runs.skipped;
+    if row.state_error.is_none() && row.task_runs.total > 0 && terminal == row.task_runs.total {
+        WorkflowDisplayGroup::Done
+    } else {
+        WorkflowDisplayGroup::Waiting
+    }
+}
+
+fn print_workflow_group(
+    ctx: &Ctx,
+    group: WorkflowDisplayGroup,
+    rows: &[&WorkflowListRow],
+    already_printed: bool,
+) {
+    if already_printed {
+        ctx.ui.print_dim("");
+    }
+    ctx.ui.print_step(group.label());
+
+    for row in rows {
+        ctx.ui.print_dim(&workflow_row_summary(row));
+        ctx.ui.print_dim(&workflow_detail_line(row, group));
         if let Some(error) = row.state_error.as_deref() {
             ctx.ui.print_warning(&format!(
                 "Workflow state unavailable for {}: {}",
@@ -315,21 +401,114 @@ fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
             ));
         }
     }
+}
 
-    for invalid in &report.invalid_workflows {
-        ctx.ui.print_warning(&format!(
-            "Invalid workflow {}: {}",
-            invalid.path,
-            one_line(&invalid.error)
-        ));
+fn workflow_row_summary(row: &WorkflowListRow) -> String {
+    let mut parts = vec![
+        format!("id {}", row.id),
+        format!("mode {}", row.mode),
+        format!("runs {}", task_run_row_summary(&row.task_runs)),
+    ];
+
+    if let Some(profile) = row_profile_preview(row) {
+        parts.push(profile);
+    }
+    parts.push(format!(
+        "policy {}/{}",
+        row.policy.pull_request, row.policy.landing
+    ));
+
+    format!(
+        "  {}",
+        PromptItem::from_hint_parts(row.title.clone(), parts).render_plain()
+    )
+}
+
+fn task_run_row_summary(summary: &TaskRunSummary) -> String {
+    let counts = [
+        ("prepared", summary.prepared),
+        ("running", summary.running),
+        ("done", summary.done),
+        ("failed", summary.failed),
+        ("skipped", summary.skipped),
+        ("missing", summary.missing),
+    ];
+    let non_zero = counts
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .collect::<Vec<_>>();
+
+    match non_zero.as_slice() {
+        [] => "0 none".into(),
+        [(status, count)] if *count == summary.total => format!("{} {status}", summary.total),
+        _ => format!("{} mixed ({})", summary.total, summary.summary),
     }
 }
 
-fn runnable_label(runnable: &RunnableMetadata) -> String {
-    if runnable.runnable {
-        format!("yes ({})", runnable.runnable_count)
-    } else {
-        format!("no ({})", runnable.reason)
+fn workflow_detail_line(row: &WorkflowListRow, group: WorkflowDisplayGroup) -> String {
+    let mut details = Vec::new();
+    if let Some(summary) = row.body_summary.as_deref() {
+        details.push(format!("body {summary}"));
+    }
+    if let Some(origin) = workflow_list_origin_label(row) {
+        details.push(format!("origin {origin}"));
+    }
+    if let Some(action) = workflow_action_detail(row, group) {
+        details.push(action);
+    }
+    details.push(format!("base {}", row_base_label(row)));
+    details.push(format!("file {}", row.path));
+    format!("    {}", details.join(" · "))
+}
+
+fn workflow_list_origin_label(row: &WorkflowListRow) -> Option<String> {
+    row.origin.as_ref().and_then(|origin| {
+        let provider = origin.provider.trim();
+        let id = origin.id.trim();
+        if provider.is_empty() || id.is_empty() {
+            None
+        } else {
+            Some(format!("{provider}:{id}"))
+        }
+    })
+}
+
+fn workflow_action_detail(row: &WorkflowListRow, group: WorkflowDisplayGroup) -> Option<String> {
+    match group {
+        WorkflowDisplayGroup::Runnable => {
+            if let Some(task) = row.runnable.next_task.as_deref() {
+                Some(format!("next {}", truncate_chars(task, 48)))
+            } else if row.runnable.runnable_count > 0
+                && row.runnable.runnable_count < row.task_runs.total
+            {
+                Some(format!("runnable {}", row.runnable.runnable_count))
+            } else {
+                None
+            }
+        }
+        WorkflowDisplayGroup::Waiting => Some(format!(
+            "reason {}",
+            human_non_runnable_reason(&row.runnable.reason)
+        )),
+        WorkflowDisplayGroup::Done => None,
+    }
+}
+
+fn human_non_runnable_reason(reason: &str) -> &'static str {
+    match reason {
+        "single_requires_all_task_runs_prepared_or_failed" => {
+            "waiting for all task runs to be prepared or failed"
+        }
+        "batch_has_no_prepared_or_failed_task_runs" => "waiting for a prepared or failed task run",
+        "matrix_has_no_prepared_or_failed_profile_runs" => {
+            "waiting for a prepared or failed profile run"
+        }
+        "stack_has_running_task_run" => "waiting for running task",
+        "stack_has_no_next_prepared_or_failed_task_run" => {
+            "waiting for next prepared or failed task"
+        }
+        "state_unavailable" => "workflow state unavailable",
+        _ => "not currently runnable",
     }
 }
 
@@ -339,11 +518,14 @@ fn row_base_label(row: &WorkflowListRow) -> String {
         .unwrap_or_else(|| format!("({})", row.base_mode))
 }
 
-fn row_profile_label(row: &WorkflowListRow) -> String {
+fn row_profile_preview(row: &WorkflowListRow) -> Option<String> {
     if !row.profiles.is_empty() {
-        row.profiles.join(",")
+        Some(format!("profiles {}", row.profiles.len()))
     } else {
-        row.profile.as_deref().unwrap_or("-").into()
+        row.profile
+            .as_deref()
+            .filter(|profile| !profile.trim().is_empty())
+            .map(|profile| format!("profile {}", truncate_chars(profile, 24)))
     }
 }
 
@@ -362,6 +544,7 @@ mod tests {
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions, OutputMode};
     use std::fs;
+    use std::sync::Arc;
 
     fn ctx(root: &Path, output_mode: OutputMode) -> Ctx {
         Ctx::new_with_options(
@@ -375,6 +558,22 @@ mod tests {
                 ..CtxOptions::default()
             },
         )
+    }
+
+    fn ctx_with_ui(root: &Path, output_mode: OutputMode) -> (Ctx, Arc<MockUi>) {
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new_with_options(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui.clone()),
+            CtxOptions {
+                output_mode,
+                ..CtxOptions::default()
+            },
+        );
+        (ctx, ui)
     }
 
     #[test]
@@ -394,7 +593,9 @@ mod tests {
             dir.path(),
             "2026-05-18-001",
             "batch",
-            r#"objective = "Ship search"
+            r#"title = "Ship search"
+body = "Coordinate the search workflow without making list rows too long."
+origin = { provider = "linear", id = "WT-123" }
 profile = "codex"
 "#,
             r#"[[tasks]]
@@ -415,7 +616,17 @@ run = "run-2026-05-18-001-schema"
         let row = &report.workflows[0];
         assert_eq!(row.id, "2026-05-18-001");
         assert_eq!(row.mode, "batch");
-        assert_eq!(row.objective_summary.as_deref(), Some("Ship search"));
+        assert_eq!(row.title, "Ship search");
+        assert_eq!(
+            row.body.as_deref(),
+            Some("Coordinate the search workflow without making list rows too long.")
+        );
+        assert_eq!(
+            row.body_summary.as_deref(),
+            Some("Coordinate the search workflow without making list rows too long.")
+        );
+        assert_eq!(row.origin.as_ref().unwrap().provider, "linear");
+        assert_eq!(row.origin.as_ref().unwrap().id, "WT-123");
         assert_eq!(row.task_count, 1);
         assert_eq!(row.task_runs.prepared, 1);
         assert!(row.runnable.runnable);
@@ -424,6 +635,185 @@ run = "run-2026-05-18-001-schema"
         assert_eq!(row.policy.pull_request, "none");
         assert_eq!(row.state_error, None);
         assert_eq!(report.invalid_workflows[0].id, "bad");
+    }
+
+    #[test]
+    fn print_text_groups_rows_by_derived_action_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, ui) = ctx_with_ui(dir.path(), OutputMode::Text);
+        write_task(dir.path(), "runnable-task", "feature/runnable");
+        write_task_run(
+            dir.path(),
+            "run-2026-05-18-001-runnable",
+            "runnable-task",
+            "feature/runnable",
+            "prepared",
+            "2026-05-18-001",
+        );
+        write_workflow(
+            dir.path(),
+            "2026-05-18-001",
+            "batch",
+            r#"title = "Ship search"
+body = "Keep search work coordinated."
+"#,
+            r#"[[tasks]]
+task = "runnable-task"
+run = "run-2026-05-18-001-runnable"
+"#,
+        );
+
+        write_task(dir.path(), "waiting-task", "feature/waiting");
+        write_task_run(
+            dir.path(),
+            "run-2026-05-18-002-waiting",
+            "waiting-task",
+            "feature/waiting",
+            "running",
+            "2026-05-18-002",
+        );
+        write_workflow(
+            dir.path(),
+            "2026-05-18-002",
+            "stack",
+            "",
+            r#"[[tasks]]
+task = "waiting-task"
+run = "run-2026-05-18-002-waiting"
+"#,
+        );
+
+        write_task(dir.path(), "done-task", "feature/done");
+        write_task_run(
+            dir.path(),
+            "run-2026-05-18-003-done",
+            "done-task",
+            "feature/done",
+            "done",
+            "2026-05-18-003",
+        );
+        write_workflow(
+            dir.path(),
+            "2026-05-18-003",
+            "single",
+            r#"profile = "codex"
+"#,
+            r#"[[tasks]]
+task = "done-task"
+run = "run-2026-05-18-003-done"
+"#,
+        );
+
+        let report = collect(&ctx).unwrap();
+        print_text(&ctx, &report);
+
+        let steps = ui.steps.lock().unwrap();
+        let dims = ui.dims.lock().unwrap();
+        assert_eq!(steps.as_slice(), ["runnable", "waiting", "done"]);
+        assert!(
+            dims.iter()
+                .any(|line| line == "  Ship search  id 2026-05-18-001 | mode batch | runs 1 prepared | policy none/manual")
+        );
+        assert!(
+            dims.iter().any(|line| {
+                line == "    body Keep search work coordinated. · base main · file .local/workflows/2026-05-18-001.toml"
+            })
+        );
+        assert!(
+            dims.iter()
+                .any(|line| line == "  waiting-task  id 2026-05-18-002 | mode stack | runs 1 running | policy none/manual")
+        );
+        assert!(dims.iter().any(|line| {
+            line == "    reason waiting for running task · base main · file .local/workflows/2026-05-18-002.toml"
+        }));
+        assert!(dims.iter().any(|line| {
+            line == "  done-task  id 2026-05-18-003 | mode single | runs 1 done | profile codex | policy none/manual"
+        }));
+
+        let rendered = steps
+            .iter()
+            .chain(dims.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!rendered.contains("stack_has_running_task_run"));
+        assert!(!rendered.contains("runnable no"));
+        assert!(!rendered.contains("updated 2026-05-18T00:00:00Z"));
+    }
+
+    #[test]
+    fn print_text_summarizes_matrix_profiles_as_row_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, ui) = ctx_with_ui(dir.path(), OutputMode::Text);
+        let workflow_id = "2026-05-18-002";
+        let task = "profile-task";
+        let profiles = [
+            "devtools-port-with-extra-long-label-alpha",
+            "mcp-owned-profile-name-that-keeps-going",
+            "codex-review-profile-name-that-keeps-going",
+        ];
+
+        write_task(dir.path(), task, "feature/profile-task");
+        for (idx, profile) in profiles.iter().enumerate() {
+            write_task_run(
+                dir.path(),
+                &format!("run-{workflow_id}-{idx}"),
+                task,
+                &format!("feature/profile-task-{profile}"),
+                "prepared",
+                workflow_id,
+            );
+        }
+        write_workflow(
+            dir.path(),
+            workflow_id,
+            "matrix",
+            &format!(
+                r#"profiles = ["{}", "{}", "{}"]
+"#,
+                profiles[0], profiles[1], profiles[2]
+            ),
+            &format!(
+                r#"[[tasks]]
+task = "{task}"
+
+[[tasks.runs]]
+profile = "{}"
+run = "run-{workflow_id}-0"
+
+[[tasks.runs]]
+profile = "{}"
+run = "run-{workflow_id}-1"
+
+[[tasks.runs]]
+profile = "{}"
+run = "run-{workflow_id}-2"
+"#,
+                profiles[0], profiles[1], profiles[2]
+            ),
+        );
+
+        let report = collect(&ctx).unwrap();
+        print_text(&ctx, &report);
+
+        let steps = ui.steps.lock().unwrap();
+        let dims = ui.dims.lock().unwrap();
+        assert_eq!(steps.as_slice(), ["runnable"]);
+        let row = dims
+            .iter()
+            .find(|line| line.contains("2026-05-18-002"))
+            .expect("matrix row should be rendered");
+        assert!(row.contains("matrix"));
+        assert!(row.contains("3 prepared"));
+        assert!(row.contains("profiles 3"));
+        assert!(row.contains("none/manual"));
+        assert!(!row.contains("devtools-port-with-extra-long-label-alpha"));
+
+        let detail = dims
+            .iter()
+            .find(|line| line.contains(".local/workflows/2026-05-18-002.toml"))
+            .expect("matrix detail should include workflow path");
+        assert!(detail.contains("base main"));
     }
 
     #[test]
@@ -451,6 +841,37 @@ run = "run-{idx}"
         assert_eq!(report.workflows.len(), 11);
         assert_eq!(report.invalid_workflows.len(), 0);
         assert_eq!(report.workflows[10].id, "2026-05-18-011");
+    }
+
+    #[test]
+    fn collect_reports_removed_objective_guidance_for_old_workflows() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, ui) = ctx_with_ui(dir.path(), OutputMode::Text);
+        write_workflow(
+            dir.path(),
+            "2026-05-18-099",
+            "batch",
+            r#"objective = "Ship search"
+"#,
+            r#"[[tasks]]
+task = "schema"
+run = "run-2026-05-18-099-schema"
+"#,
+        );
+
+        let report = collect(&ctx).unwrap();
+
+        assert!(report.workflows.is_empty());
+        assert_eq!(report.invalid_workflows.len(), 1);
+        let error = &report.invalid_workflows[0].error;
+        assert!(error.contains("removed `objective`"));
+        assert!(error.contains("top-level `title`, `body`, and optional `[origin]`"));
+
+        print_text(&ctx, &report);
+        let warnings = ui.warnings.lock().unwrap();
+        assert!(warnings.iter().any(|warning| {
+            warning == "2026-05-18-099  file .local/workflows/2026-05-18-099.toml  uses removed `objective`; edit the workflow file to use top-level `title`, `body`, and optional `[origin]`"
+        }));
     }
 
     fn write_task(root: &Path, key: &str, branch: &str) {

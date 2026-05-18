@@ -158,13 +158,19 @@ Prepare saved workflows when local tasks or issues need coordination:
 
 ```bash
 wt workflow task --mode single add-schema wire-api --base .
-wt workflow task --mode batch add-schema wire-api --base main --objective "Ship search"
+wt workflow task --mode batch add-schema wire-api --base main --title "Ship search"
 wt workflow task --mode matrix --profiles devtools-port,mcp-owned add-profile-docs --base main
 wt workflow issue --mode stack 123 456 789 --base main --pr draft
 wt workflow list
 wt workflow run
 wt workflow repair 2026-05-16-001
 wt workflow complete 2026-05-16-001 add-schema --run-next
+```
+
+Open a read-only local state UI:
+
+```bash
+wt ui --port 8424
 ```
 
 Inspect, observe, message, and clean worktrees:
@@ -204,7 +210,10 @@ completed with `wt workflow complete`, not `wt done`.
 - `wt task publish [<task>...]` creates provider issues from TaskDocuments and
   records `[origin]`; it does not start worktrees.
 - `Workflow` files in `.local/workflows/<id>.toml` save coordinated execution.
-  Optional `objective` records the larger human goal for the saved plan.
+  Optional top-level `title`, `body`, and `[origin]` record the larger human
+  context for the saved plan. Workflow `[origin]` belongs to the large
+  issue-like unit represented by the Workflow; TaskDocument `[origin]` belongs
+  only to a runnable slice that is itself a provider issue.
   `single` shares one workspace, `batch` runs independent branches from one
   base, and `stack` runs ordered branches as a parent chain.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid
@@ -212,6 +221,11 @@ completed with `wt workflow complete`, not `wt done`.
   TOML files instead of hiding parse failures.
 - `TaskRun` files in `.local/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
+- `wt ui [--port <port>]` starts a read-only loopback web UI for `.local`
+  ideas, TaskDocuments, Workflows, TaskRuns, profile summaries, and effective
+  config source paths. It serves embedded assets, exposes
+  `GET /api/snapshot`, reports invalid TOML records, and does not write state
+  or serve arbitrary repo files.
 - `wt inspect [<target>]` is the read-only work dossier for a branch, worktree,
   or TaskRun.
 - `wt agent status [<target>]` observes the current agent/cmux state, and
@@ -247,13 +261,25 @@ directly. PR-opening tasks create a body file from
 `.github/pull_request_template.md`, fill a review-focused description, and pass
 it to `gh pr create --body-file <pr-body-file>`. If the TaskDocument has
 `[origin]`, the PR body includes an issue-closing keyword for that provider
-issue. If Codex/GitHub review or
+issue. Workflow-level `[origin]` is workflow context only and is not copied into
+child TaskDocuments or added as a closing keyword to child PR bodies. If
+pull-request review or
 coordinator feedback asks for changes, the same agent updates the branch, reruns
 checks, pushes, refreshes the PR body only if it became stale, and sends an
 updated report. Review always happens. The prepared landing policy only decides
 whether the coordinator stops after review or proceeds to landing and cleanup
 after review passes; automatic landing still has to satisfy dirty-worktree,
-check, review-thread, and ancestry safety checks.
+check, pull-request review, review-thread, and ancestry safety checks. When a PR
+exists, review passing must be proved from the PR conversation immediately before
+landing. Review-agent inline comments are conversational: after replying,
+refresh the thread and wait for follow-up before resolving it. Thread-specific
+addressed markers can satisfy that follow-up check; PR-level tool-specific
+reactions or markers are provider status signals, not a replacement for checking
+threads, comments, and checks. Examples:
+
+- CodeRabbit inline comments need a follow-up refresh before resolution.
+- Codex reactions are status signals to record before the normal review gate
+  continues.
 
 ## Configuration
 
@@ -288,7 +314,8 @@ landing = "manual"     # manual | auto
 `landing = "manual"` means review completes and the coordinator waits for an
 explicit landing direction. `landing = "auto"` means review passing is enough
 approval for the coordinator to proceed to landing and cleanup, without
-bypassing dirty-worktree, check, review-thread, or ancestry safety gates.
+bypassing dirty-worktree, check, pull-request review, review-thread, or ancestry
+safety gates.
 
 `wt config` prints the effective `[workflow]` policy, including the built-in
 defaults above. `wt init` may include a commented optional `[workflow]` block so
@@ -316,10 +343,16 @@ the current `.wt.toml`, so later config edits do not rewrite the meaning of
 existing workflow files. An explicit `--pr none|draft|ready` overrides the
 effective config for that prepared workflow only.
 
-`wt workflow task --objective <text>` and
-`wt workflow issue --objective <text>` write top-level workflow context for the
-larger goal without changing runnable selection, TaskRun lifecycle, landing
-policy, or cleanup behavior.
+Use `--title <text>` and `--body <text>` with `wt workflow task` or
+`wt workflow issue` to write top-level workflow context for the larger goal
+without changing runnable selection, TaskRun lifecycle, landing policy, or
+cleanup behavior. Use `--origin-provider` with `--origin-id` when the Workflow
+itself has a durable provider source. `wt workflow issue` treats selected
+provider issues as executable slice TaskDocuments and writes their origins on
+those TaskDocuments; it does not lift selected issue ids into Workflow
+`[origin]` automatically. To split one broad provider issue into local child
+slices, prepare child TaskDocuments and pass the broad issue as explicit
+workflow-level origin.
 
 Small private agent config can stay inline:
 
@@ -355,14 +388,15 @@ Workspaces can opt into an isolated debuggable Chrome instance during setup:
 [workspace.chrome_devtools]
 enabled = true
 # port = 9222
-# user_data_dir = "{{worktree_path}}/.chrome-devtools-user-data"
+# user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
 # url = "{{site_url}}"
 ```
 
 When enabled, `wt` reserves a localhost port, launches Chrome with
-`--remote-debugging-address=127.0.0.1`, and uses a non-default worktree-local
-user data directory. Setup templates, post-deps tabs, local context, and agent
-bootstrap can use `{{chrome_debug_port}}`, `{{chrome_debug_url}}`, and
+`--remote-debugging-address=127.0.0.1`, and uses a non-default per-worktree user
+data directory under the worktree parent, outside the repository checkout.
+Setup templates, post-deps tabs, local context, and agent bootstrap can use
+`{{chrome_debug_port}}`, `{{chrome_debug_url}}`, and
 `{{chrome_user_data_dir}}`. A localhost Chrome remote debugging endpoint lets
 local processes control that browser instance, so enable it only for workspaces
 where that local access is acceptable.
@@ -408,6 +442,7 @@ there for one named profile.
 | `wt task run` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
 | `wt workflow` | Prepare, inspect, run, and repair saved workflows; complete stack tasks |
+| `wt ui` | Start the read-only local state web UI |
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
 | `wt agent status` | Observe the matching task agent surface once |
 | `wt agent watch` | Poll the matching task agent surface, with optional timeout and heartbeat |

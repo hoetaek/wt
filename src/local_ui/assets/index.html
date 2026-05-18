@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wt local state</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="identity">
+          <p class="eyebrow">Read-only local inventory</p>
+          <h1>wt local state</h1>
+          <p id="repo-label"></p>
+        </div>
+        <div class="state-strip" aria-label="State file locations">
+          <div><span>TaskDocument</span><strong>.local/tasks</strong></div>
+          <div><span>Workflow</span><strong>.local/workflows</strong></div>
+          <div><span>TaskRun</span><strong>.local/task-runs</strong></div>
+          <div><span>Config</span><strong>.wt.toml layers</strong></div>
+        </div>
+        <div class="top-actions">
+          <button
+            id="language-toggle"
+            class="language-switch"
+            type="button"
+            aria-pressed="false"
+            data-current="en"
+          >
+            <span data-lang="en">EN</span>
+            <span data-lang="ko">KO</span>
+          </button>
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="Views" role="tablist">
+        <button
+          id="tab-overview"
+          class="active"
+          type="button"
+          role="tab"
+          data-view="overview"
+          aria-selected="true"
+          aria-controls="content"
+        >
+          Overview
+        </button>
+        <button
+          id="tab-config"
+          type="button"
+          role="tab"
+          data-view="config"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          Config
+        </button>
+        <button
+          id="tab-workflows"
+          type="button"
+          role="tab"
+          data-view="workflows"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          Workflow
+        </button>
+        <button
+          id="tab-task-runs"
+          type="button"
+          role="tab"
+          data-view="task-runs"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          TaskRuns
+        </button>
+        <button
+          id="tab-ideas"
+          type="button"
+          role="tab"
+          data-view="ideas"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          Ideas
+        </button>
+        <button
+          id="tab-retrospecs"
+          type="button"
+          role="tab"
+          data-view="retrospecs"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          Retrospecs
+        </button>
+      </nav>
+
+      <main>
+        <section id="metrics" class="metrics" aria-label="Summary"></section>
+        <section
+          id="content"
+          class="content"
+          role="tabpanel"
+          aria-labelledby="tab-overview"
+          tabindex="-1"
+        ></section>
+        <div id="status" class="sr-only" aria-live="polite"></div>
+      </main>
+    </div>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

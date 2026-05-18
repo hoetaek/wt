@@ -23,4 +23,5 @@ pub mod task;
 pub mod task_list;
 pub mod task_publish;
 pub mod task_run_command;
+pub mod ui;
 pub mod workflow;
