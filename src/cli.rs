@@ -156,6 +156,9 @@ pub enum Commands {
         command: Option<ConfigCommand>,
     },
     /// List or manage named profile configs
+    #[command(
+        long_about = "List or manage named profile configs stored under .local/profiles/<name>/profile.toml. Bare `wt profile` is an omission-default that runs `wt profile list`; the canonical inventory surface is the explicit `wt profile list` subcommand. Use `wt profile create <name>` to scaffold a new profile."
+    )]
     Profile {
         #[command(subcommand)]
         command: Option<ProfileCommand>,
@@ -230,6 +233,11 @@ pub enum ConfigCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum ProfileCommand {
+    /// List named profile configs
+    #[command(
+        long_about = "List named profile configs discovered under .local/profiles/<name>/profile.toml. Profiles are listed in deterministic name order with their copy, link, and agent summary. Invalid profile records are surfaced as warnings in text output and as `invalid_profiles` entries in JSON output rather than being silently hidden. The reserved `default` name is never shown as a valid named profile."
+    )]
+    List,
     /// Create a named profile scaffold
     Create {
         /// New profile name

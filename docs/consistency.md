@@ -510,9 +510,15 @@ output은 top-level `title`, `body`, optional `origin` metadata와 raw runnable 
 identifiers를 machine-readable metadata로 보존한다.
 Workflow TOML parse/validation failure는 조용히 숨기지 않고
 text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계속 Workflow `mode`
-값일 뿐이므로 `wt list workflow`, top-level `batch`/`stack`, `wt profile list` 같은 symmetry
+값일 뿐이므로 `wt list workflow`, top-level `batch`/`stack` 같은 symmetry
 command를 추가하지 않는다. `wt task list`는 symmetry command가 아니라 별도 TaskDocument
 inventory surface이며 Workflow, TaskRun, branch, worktree 목록 의미를 갖지 않는다.
+`wt profile list`는 named profile inventory를 위한 canonical surface이고,
+`.local/profiles/<name>/profile.toml`을 config/profile loader로 읽어 정렬된 valid
+profile 목록과 함께 invalid profile 레코드를 text warning 또는 JSON
+`invalid_profiles`로 보고한다. Bare `wt profile`은 omission default로 `wt profile list`를
+호출하며, 두 surface는 모두 `wt profile --help`와 `wt profile list --help`에 명시한다.
+`default`는 reserved이므로 valid profile로 표시하지 않는다.
 
 `wt ui [--port <PORT>]`는 `.local`과 wt config state를 읽기 쉽게 보는 read-only local web
 UI다. 이 명령은 `127.0.0.1`에만 bind하고, port `0`은 available port 선택을 뜻하며, 시작

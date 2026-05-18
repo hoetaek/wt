@@ -449,7 +449,7 @@ there for one named profile.
 | `wt send` | Send a message to the matching task agent surface |
 | `wt done` | Remove completed or disposable worktrees and branches |
 | `wt config` | Print, edit, extract, or inline config |
-| `wt profile` | List or create named profile configs |
+| `wt profile` | List named profiles (omission default for `wt profile list`) or scaffold a new one with `wt profile create <name>` |
 | `wt site` | Inspect and manage local site provider helpers |
 
 Run `wt <command> --help` for the current contract.
