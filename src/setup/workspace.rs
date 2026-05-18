@@ -256,74 +256,6 @@ fn restore_cmux_focus(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::workspace_color;
-    use crate::config::{Config, WorkspaceConfig};
-    use crate::setup::{
-        WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_NEW, WORKSPACE_COLOR_KIND_PR,
-        WORKSPACE_COLOR_KIND_TASK,
-    };
-    use std::collections::HashMap;
-
-    #[test]
-    fn workspace_color_uses_builtin_defaults_when_workspace_is_configured() {
-        let config = Config {
-            workspace: Some(WorkspaceConfig::default()),
-            ..Config::default()
-        };
-
-        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_TASK), "blue");
-        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_ISSUE), "blue");
-        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_NEW), "green");
-        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_PR), "magenta");
-    }
-
-    #[test]
-    fn workspace_color_prefers_configured_colors() {
-        let config = Config {
-            workspace: Some(WorkspaceConfig {
-                colors: HashMap::from([(WORKSPACE_COLOR_KIND_TASK.into(), "cyan".into())]),
-                ..WorkspaceConfig::default()
-            }),
-            ..Config::default()
-        };
-
-        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_TASK), "cyan");
-    }
-
-    #[test]
-    fn workspace_color_allows_empty_color_override() {
-        let config = Config {
-            workspace: Some(WorkspaceConfig {
-                colors: HashMap::from([(WORKSPACE_COLOR_KIND_TASK.into(), String::new())]),
-                ..WorkspaceConfig::default()
-            }),
-            ..Config::default()
-        };
-
-        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_TASK), "");
-    }
-
-    #[test]
-    fn workspace_color_has_no_default_without_workspace_config() {
-        assert_eq!(
-            workspace_color(&Config::default(), WORKSPACE_COLOR_KIND_TASK),
-            ""
-        );
-    }
-
-    #[test]
-    fn workspace_color_has_no_default_for_unknown_kind() {
-        let config = Config {
-            workspace: Some(WorkspaceConfig::default()),
-            ..Config::default()
-        };
-
-        assert_eq!(workspace_color(&config, "workflow"), "");
-    }
-}
-
 fn workspace_terminal_ready(cmux: &CmuxService<'_>, ws_handle: &str) -> bool {
     let Some(surface) = first_workspace_surface(cmux, ws_handle) else {
         return false;
@@ -394,4 +326,72 @@ fn shell_arg(value: &str) -> String {
     }
 
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workspace_color;
+    use crate::config::{Config, WorkspaceConfig};
+    use crate::setup::{
+        WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_NEW, WORKSPACE_COLOR_KIND_PR,
+        WORKSPACE_COLOR_KIND_TASK,
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn workspace_color_uses_builtin_defaults_when_workspace_is_configured() {
+        let config = Config {
+            workspace: Some(WorkspaceConfig::default()),
+            ..Config::default()
+        };
+
+        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_TASK), "blue");
+        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_ISSUE), "blue");
+        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_NEW), "green");
+        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_PR), "magenta");
+    }
+
+    #[test]
+    fn workspace_color_prefers_configured_colors() {
+        let config = Config {
+            workspace: Some(WorkspaceConfig {
+                colors: HashMap::from([(WORKSPACE_COLOR_KIND_TASK.into(), "cyan".into())]),
+                ..WorkspaceConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_TASK), "cyan");
+    }
+
+    #[test]
+    fn workspace_color_allows_empty_color_override() {
+        let config = Config {
+            workspace: Some(WorkspaceConfig {
+                colors: HashMap::from([(WORKSPACE_COLOR_KIND_TASK.into(), String::new())]),
+                ..WorkspaceConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_TASK), "");
+    }
+
+    #[test]
+    fn workspace_color_has_no_default_without_workspace_config() {
+        assert_eq!(
+            workspace_color(&Config::default(), WORKSPACE_COLOR_KIND_TASK),
+            ""
+        );
+    }
+
+    #[test]
+    fn workspace_color_has_no_default_for_unknown_kind() {
+        let config = Config {
+            workspace: Some(WorkspaceConfig::default()),
+            ..Config::default()
+        };
+
+        assert_eq!(workspace_color(&config, "workflow"), "");
+    }
 }
