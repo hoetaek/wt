@@ -304,6 +304,11 @@ pub enum InitSiteProvider {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum TaskCommand {
+    /// List saved local TaskDocument files
+    #[command(
+        long_about = "List all saved .local/tasks/<task>.toml TaskDocument files.\n\nThis is the canonical read-only inventory for local TaskDocuments. It lists valid TaskDocument files whether or not they are selectable by wt task run, reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
+    )]
+    List,
     /// Import provider issues as local TaskDocuments
     #[command(
         long_about = "Import existing provider issues into .local/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."

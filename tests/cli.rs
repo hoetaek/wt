@@ -234,14 +234,143 @@ fn task_run_help_explains_task_execution() {
 }
 
 #[test]
-fn task_help_lists_import_run_and_publish() {
+fn task_help_lists_list_import_run_and_publish() {
     wt_command()
         .args(["task", "--help"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("list"))
         .stdout(predicate::str::contains("import"))
         .stdout(predicate::str::contains("run"))
         .stdout(predicate::str::contains("publish"));
+}
+
+#[test]
+fn task_list_help_explains_canonical_inventory() {
+    wt_command()
+        .args(["task", "list", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical read-only inventory"))
+        .stdout(predicate::str::contains(
+            "whether or not they are selectable by wt task run",
+        ))
+        .stdout(predicate::str::contains(
+            "reports invalid TaskDocument TOML files",
+        ))
+        .stdout(predicate::str::contains("does not start workspaces"))
+        .stdout(predicate::str::contains("create TaskRuns"))
+        .stdout(predicate::str::contains("prepare workflows"));
+}
+
+#[test]
+fn task_list_supports_json_and_reports_invalid_tasks() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "completed", "feature/completed");
+    write_task_run_file(
+        temp.path(),
+        "run-completed",
+        "completed",
+        "feature/completed",
+        "done",
+        "",
+    );
+    write_task_document(temp.path(), "local", "feature/local");
+    std::fs::write(
+        temp.path().join(".local/tasks/provider.toml"),
+        r#"title = "Provider task"
+branch = "alice/provider-task"
+body = "Imported provider task body"
+
+[origin]
+provider = "linear"
+id = "PROJ-123"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join(".local/tasks/bad.toml"),
+        "unknown = true\n",
+    )
+    .unwrap();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "task",
+            "list",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let tasks = value["tasks"].as_array().unwrap();
+    let invalid = value["invalid_tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 3);
+    assert_eq!(invalid.len(), 1);
+
+    let completed = tasks
+        .iter()
+        .find(|row| row["key"] == "completed")
+        .expect("completed task should be listed even after a done TaskRun");
+    assert_eq!(completed["path"], ".local/tasks/completed.toml");
+    assert_eq!(completed["branch"], "feature/completed");
+    assert_eq!(completed["publish_state"], "local");
+    assert_eq!(completed["source"], "local");
+    assert!(completed["origin"].is_null());
+
+    let provider = tasks
+        .iter()
+        .find(|row| row["key"] == "provider")
+        .expect("provider-origin task should be listed");
+    assert_eq!(provider["title"], "Provider task");
+    assert_eq!(provider["branch"], "alice/provider-task");
+    assert_eq!(provider["publish_state"], "published");
+    assert_eq!(provider["source"], "provider-origin");
+    assert_eq!(provider["origin"]["provider"], "linear");
+    assert_eq!(provider["origin"]["id"], "PROJ-123");
+    assert_eq!(provider["body_summary"], "Imported provider task body");
+
+    assert_eq!(invalid[0]["key"], "bad");
+    assert_eq!(invalid[0]["path"], ".local/tasks/bad.toml");
+    assert!(
+        invalid[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Failed to parse task")
+    );
+}
+
+#[test]
+fn task_list_text_includes_stable_task_fields_and_invalid_warning() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "local", "feature/local");
+    std::fs::write(
+        temp.path().join(".local/tasks/bad.toml"),
+        "unknown = true\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "task", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "local  title local  branch feature/local  publish local  source local",
+        ))
+        .stdout(predicate::str::contains("Path: .local/tasks/local.toml"))
+        .stdout(predicate::str::contains("Origin: none"))
+        .stdout(predicate::str::contains("Summary: Task body"))
+        .stderr(predicate::str::contains(
+            "Invalid task .local/tasks/bad.toml",
+        ));
 }
 
 #[test]
