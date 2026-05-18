@@ -41,12 +41,14 @@ review state.
 
 `Workflow` is the saved prepared-work plan. Its current source-of-truth module
 is `src/workflow.rs`, and its durable location is
-`.local/workflows/<id>.toml`. It owns objective, mode, base, profile, color,
-timestamps, workflow-level effective policy, and `[[tasks]]` rows linking
-TaskDocuments to TaskRuns. It does not copy task branch names, task status
-fields, TaskDocument bodies, pull-request review state, merge state, or cleanup
-state; branch comes from `TaskDocument`, execution status comes from `TaskRun`,
-and actual landing remains an explicit Git/review workflow.
+`.local/workflows/<id>.toml`. It owns title, body, optional workflow-level
+origin, mode, base, profile, color, timestamps, workflow-level effective policy,
+and `[[tasks]]` rows linking TaskDocuments to TaskRuns. It does not copy task
+branch names, task status fields, TaskDocument titles, TaskDocument bodies,
+TaskDocument origins, pull-request review state, merge state, or cleanup state;
+branch and slice-level title/body/origin come from `TaskDocument`, execution
+status comes from `TaskRun`, and actual landing remains an explicit Git/review
+workflow.
 
 `batch` and `stack` are Workflow modes. New prepared-work state belongs in
 `.local/workflows` with `mode = "single" | "batch" | "stack"`. Batch/stack

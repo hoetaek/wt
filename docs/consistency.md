@@ -56,11 +56,15 @@ namespace가 아니다. 새 상태 파일은 `.local/workflows` 아래에만 만
 surface를 `wt workflow` 옆에 남기면 두 command surface가 모두 canonical처럼 보이므로
 새 CLI parser와 dispatch는 canonical `wt workflow`만 노출한다.
 
-Workflow file은 optional `objective`, mode, base, profile, color, timestamps,
-workflow-level policy, task/run link 같은 prepared-plan context와 orchestration만
-저장한다. `objective`는 workflow가 완수하려는 더 큰 목표를 설명하는 human context이며
-실행 상태가 아니다. Task branch name의 source of truth는 항상 TaskDocument의 `branch`다.
-Workflow task row는 branch 이름을 복사해 저장하지 않는다.
+Workflow file은 `title`, `body`, optional workflow-level `[origin]`, mode, base,
+profile, color, timestamps, workflow-level policy, task/run link 같은
+prepared-plan context와 orchestration만 저장한다. `title`은 list/select/show 표면의
+짧은 display text이고, `body`는 큰 issue context, requirements, acceptance criteria,
+planning notes, decomposition rationale을 담는 긴 human context다. Workflow-level
+`[origin]`은 Workflow 자체가 provider issue에서 온 경우 durable provider link를
+저장한다. Workflow는 여전히 prepared execution plan이며 parent TaskDocument나 nested-task
+container가 아니다. Task branch name의 source of truth는 항상 TaskDocument의 `branch`다.
+Workflow task row는 TaskDocument branch, status, body, origin을 복사해 저장하지 않는다.
 
 Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 묶는 표시다. 색상이
 생략되면 `wt`가 내장 cmux named-color palette의 다음 색을 고르고 workflow file에
@@ -337,18 +341,23 @@ status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이다.
 status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서 실패시킨다.
 
 통합 실행 상태 모델은 TaskDocument, Workflow, TaskRun의 책임을 나누는 데서 시작한다.
-TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, Workflow는 optional
-`objective`와 그 task set을 어떤 실행 shape로 이어갈지에 대한 저장된 계획이며,
-TaskRun은 TaskDocument 하나를 한 번 실행한 기록이다.
+TaskDocument는 무엇을 할지에 대한 재사용 가능한 slice-level 설명이고, Workflow는
+workflow-level `title`, `body`, optional `[origin]`과 그 task set을 어떤 실행 shape로
+이어갈지에 대한 저장된 계획이며, TaskRun은 TaskDocument 하나를 한 번 실행한 기록이다.
 
 Workflow 준비는 `.local/workflows/<id>.toml` 하나와 각 task의 TaskDocument/TaskRun link를
 만든다. Workflow의 canonical task 목록은 `[[tasks]]`이고, 각 row는 task key, linked
 TaskRun id, stack-mode parent처럼 orchestration에 필요한 link와 실행 지시만 저장한다.
 Workflow row는 status/error를 따로 가지지 않고, branch 이름도 복사하지 않는다. 실행
 인스턴스의 canonical 기록은 TaskRun이고, branch name의 canonical 기록은 TaskDocument다.
-`objective`는 workflow-level field로만 저장하고 TaskDocument `body`나 row-level field로
-복사하지 않는다. `body`, `description`, `goal_task`, `parent_task`, `subtasks`,
-`[[issues]]`, `[[items]]`처럼 같은 상태나 목표를 가리키는 다른 이름은 받지 않는다.
+TaskDocument `title`/`body`/`[origin]`은 slice-level source of truth이며 Workflow row로
+복사하지 않는다. Workflow-level `title`/`body`/`[origin]`은 task row가 아니라 Workflow
+top-level metadata다. `objective`는 장기 authoring alias가 아니다. Existing local
+Workflow files에 대한 support가 필요하면 migration/repair support로만 설명하고, 새
+authoring surface나 docs에서 `objective`를 equal canonical field처럼 받지 않는다.
+`objective`, `description`, `goal_task`, `parent_task`, `subtasks`, `[[issues]]`,
+`[[items]]`처럼 같은 상태나 목표를 가리키는 다른 이름은 새 canonical authoring shape가
+아니다.
 
 Workflow preparation accepts `--pr <none|draft|ready>` as a one-run override for
 pull-request handoff intent. Omitted `--pr` means use the effective `[workflow]`
@@ -440,18 +449,21 @@ default. `wt workflow show` displays the prepared policy snapshot from the workf
 not the current `.wt.toml` value.
 
 This model changes both `.wt.toml` config shape and `.local/workflows` state shape, so
-implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Adding
-workflow `objective` also changes the `.local/workflows` state shape and
-`wt workflow task` / `wt workflow issue` preparation surface, so it belongs in the same
-pre-1.0 minor model-change category. Ordinary development commits still do not bump
-`Cargo.toml`; the release branch owns the eventual version bump.
+implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Replacing
+workflow `objective` with workflow-level `title`, `body`, and optional `[origin]` also
+changes the `.local/workflows` state shape and `wt workflow task` / `wt workflow issue`
+preparation surface, so it belongs in the same pre-1.0 minor model-change category.
+Ordinary development commits still do not bump `Cargo.toml`; the release branch owns the
+eventual version bump.
 
-`wt workflow task --objective <text>`와 `wt workflow issue --objective <text>`는 저장된
-Workflow의 더 큰 목표를 `.local/workflows/<id>.toml`의 top-level `objective`로 기록한다.
-이 값은 `wt workflow show`와 workflow-started agent prompt에 context로 나타나지만,
-runnable selection, TaskRun lifecycle, landing policy, cleanup behavior를 바꾸지 않는다.
-Prompt에서는 coordinator handoff가 먼저 전달되고, objective는 그 뒤 TaskDocument snapshot
-근처에 배치된다.
+Workflow-level `title`/`body`/`[origin]` are saved to `.local/workflows/<id>.toml` as
+top-level Workflow metadata. They appear in `wt workflow show` and workflow-started agent
+prompts as context, but do not change runnable selection, TaskRun lifecycle, landing
+policy, or cleanup behavior. Prompt에서는 coordinator handoff가 먼저 전달되고, Workflow
+metadata는 그 뒤 TaskDocument snapshot 근처에 배치된다. Existing `objective` values may
+be read only to diagnose or repair old local files, and any explicit repair should
+rewrite them into the canonical title/body/origin shape instead of preserving
+`objective` as an authoring alias.
 Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
 두 번째 task source를 만들지 않는다.
@@ -482,8 +494,9 @@ read-only inventory다. `wt workflow run`의 runnable selector가 아니므로 r
 default도 all-workflow inventory로 확장하지 않는다. Output은 Workflow 자체의 단일
 `status`를 만들지 않고, linked TaskRun에서 파생한 task-run status count/summary와 mode별
 runnable metadata를 보여준다. Human text output은 `runnable`, `waiting`, `done` 같은
-파생 presentation group 아래에 workflow id/mode, TaskRun summary, profile/policy preview를
-list row로 두고 objective, human reason, base, path는 secondary detail line에 둔다. JSON
+파생 presentation group 아래에 workflow title, workflow id/mode, TaskRun summary,
+profile/policy preview를 list row로 두고 body summary, origin, human reason, base, path는
+secondary detail line에 둔다. JSON
 output은 raw runnable reason identifiers를 계속 machine-readable metadata로 보존한다.
 Workflow TOML parse/validation failure는 조용히 숨기지 않고
 text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계속 Workflow `mode`
