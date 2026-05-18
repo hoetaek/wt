@@ -152,6 +152,24 @@ pub(crate) fn select_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
     Ok(selected)
 }
 
+pub(crate) fn select_local_task_documents(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
+    let tasks = list_local_task_documents(ctx)?;
+    if tasks.is_empty() {
+        bail!("No task files found in .local/tasks");
+    }
+
+    let items = tasks.iter().map(task_selection_item).collect::<Vec<_>>();
+    let selections = ctx.ui.multi_select_items("Tasks", &items)?;
+    let mut selected = Vec::new();
+    for idx in selections {
+        let task = tasks
+            .get(idx)
+            .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
+        selected.push(task.clone());
+    }
+    Ok(selected)
+}
+
 pub(crate) fn select_local_task_by_key(ctx: &Ctx, key: &str) -> Result<SelectedTask> {
     let key = safe_task_key(key);
     let (document, path, content) = read_task_file(ctx, &key)?;
@@ -164,6 +182,16 @@ pub(crate) fn select_local_task_by_key(ctx: &Ctx, key: &str) -> Result<SelectedT
 }
 
 pub(crate) fn list_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
+    let mut tasks = Vec::new();
+    for task in list_local_task_documents(ctx)? {
+        if task_run::task_is_selectable(ctx, &task.key)? {
+            tasks.push(task);
+        }
+    }
+    Ok(tasks)
+}
+
+pub(crate) fn list_local_task_documents(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
     let tasks_dir = ctx.repo_root.join(".local/tasks");
     if !tasks_dir.exists() {
         return Ok(Vec::new());
@@ -182,10 +210,7 @@ pub(crate) fn list_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
 
     let mut tasks = Vec::new();
     for path in paths {
-        let task = read_selected_task(ctx, path)?;
-        if task_run::task_is_selectable(ctx, &task.key)? {
-            tasks.push(task);
-        }
+        tasks.push(read_selected_task(ctx, path)?);
     }
     Ok(tasks)
 }

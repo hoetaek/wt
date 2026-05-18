@@ -75,7 +75,7 @@ pub fn task(ctx: &Ctx, tasks: &[String], options: TaskOptions<'_>) -> Result<()>
         bail!("matrix mode workflow requires exactly one task");
     }
     let prepared_tasks = if tasks.is_empty() {
-        let selected = task_store::select_local_tasks(ctx)?;
+        let selected = task_store::select_local_task_documents(ctx)?;
         if options.mode == WorkflowModeArg::Matrix && selected.len() != 1 {
             bail!("matrix mode workflow requires exactly one task");
         }
@@ -510,6 +510,49 @@ cli = "none"
                 .all(|record| record.run.status == STATUS_PREPARED)
         );
         assert!(runs.iter().all(|record| record.run.group.is_some()));
+    }
+
+    #[test]
+    fn task_without_args_can_select_completed_task_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("wire-api.toml"),
+            "title = \"Wire API\"\nbranch = \"wire-api\"\n",
+        )
+        .unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+        task_run::create(&ctx, "add-schema", "add-schema", None, STATUS_DONE).unwrap();
+
+        task(
+            &ctx,
+            &[],
+            WorkflowModeArg::Batch,
+            None,
+            None,
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+
+        let workflow = workflow_store::list(&ctx).unwrap().remove(0).workflow;
+        assert_eq!(workflow.tasks.len(), 1);
+        assert_eq!(workflow.tasks[0].task, "add-schema");
     }
 
     #[test]
@@ -2007,6 +2050,45 @@ landing = "auto"
         );
 
         assert_eq!(candidate_ids(&ctx), vec![first_ready.id, retry_second.id]);
+    }
+
+    #[test]
+    fn runnable_workflow_candidates_skip_unreadable_workflows() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
+        let valid = prepare_workflow(&ctx, WorkflowModeArg::Single, &["valid workflow"]);
+        let workflows_dir = dir.path().join(".local/workflows");
+        fs::write(workflows_dir.join("bad.toml"), "mode = [").unwrap();
+
+        assert_eq!(candidate_ids(&ctx), vec![valid.id]);
+        assert!(
+            ui.warnings
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|warning| warning.contains("Skipping unreadable workflow"))
+        );
+    }
+
+    #[test]
+    fn runnable_workflow_candidates_skip_unreadable_workflow_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
+        let valid = prepare_workflow(&ctx, WorkflowModeArg::Single, &["valid state"]);
+        let stale = prepare_workflow(&ctx, WorkflowModeArg::Single, &["stale state"]);
+        let stale_run_path = task_run::resolve(&ctx, &stale.workflow.tasks[0].run).unwrap();
+        fs::remove_file(stale_run_path).unwrap();
+
+        assert_eq!(candidate_ids(&ctx), vec![valid.id]);
+        assert!(
+            ui.warnings
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|warning| warning.contains("Skipping workflow with unreadable state"))
+        );
     }
 
     #[test]
