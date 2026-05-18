@@ -291,21 +291,11 @@ fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
     }
 
     for row in &report.workflows {
-        ctx.ui.print_step(&format!(
-            "{}  mode {}  task_runs {}  runnable {}  base {}  profile {}  policy {}/{}  updated {}",
-            row.id,
-            row.mode,
-            row.task_runs.summary,
-            runnable_label(&row.runnable),
-            row_base_label(row),
-            row_profile_label(row),
-            row.policy.pull_request,
-            row.policy.landing,
-            row.updated_at
-        ));
+        ctx.ui.print_step(&workflow_identity_label(row));
         if let Some(objective) = row.objective_summary.as_deref() {
             ctx.ui.print_dim(&format!("  Objective: {objective}"));
         }
+        ctx.ui.print_dim(&workflow_detail_label(row));
         ctx.ui.print_dim(&format!("  Path: {}", row.path));
         if let Some(error) = row.state_error.as_deref() {
             ctx.ui.print_warning(&format!(
@@ -325,11 +315,50 @@ fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
     }
 }
 
+fn workflow_identity_label(row: &WorkflowListRow) -> String {
+    format!(
+        "{}  mode {}  task_runs {}  runnable {}  updated {}",
+        row.id,
+        row.mode,
+        task_run_label(&row.task_runs),
+        runnable_label(&row.runnable),
+        row.updated_at
+    )
+}
+
+fn workflow_detail_label(row: &WorkflowListRow) -> String {
+    format!(
+        "  Base: {}  Profile: {}  Policy: {}/{}",
+        row_base_label(row),
+        row_profile_label(row),
+        row.policy.pull_request,
+        row.policy.landing
+    )
+}
+
+fn task_run_label(summary: &TaskRunSummary) -> String {
+    format!("{} ({})", summary.total, summary.summary)
+}
+
 fn runnable_label(runnable: &RunnableMetadata) -> String {
     if runnable.runnable {
         format!("yes ({})", runnable.runnable_count)
     } else {
-        format!("no ({})", runnable.reason)
+        format!("no ({})", non_runnable_label(&runnable.reason))
+    }
+}
+
+fn non_runnable_label(reason: &str) -> &'static str {
+    match reason {
+        "single_requires_all_task_runs_prepared_or_failed" => {
+            "needs all task runs prepared or failed"
+        }
+        "batch_has_no_prepared_or_failed_task_runs" => "no prepared or failed task runs",
+        "matrix_has_no_prepared_or_failed_profile_runs" => "no prepared or failed profile runs",
+        "stack_has_running_task_run" => "running task must complete",
+        "stack_has_no_next_prepared_or_failed_task_run" => "no next prepared or failed task",
+        "state_unavailable" => "state unavailable",
+        _ => "not runnable",
     }
 }
 
@@ -341,7 +370,23 @@ fn row_base_label(row: &WorkflowListRow) -> String {
 
 fn row_profile_label(row: &WorkflowListRow) -> String {
     if !row.profiles.is_empty() {
-        row.profiles.join(",")
+        let preview = row
+            .profiles
+            .iter()
+            .take(2)
+            .map(|profile| truncate_chars(profile, 24))
+            .collect::<Vec<_>>();
+        let remaining = row.profiles.len().saturating_sub(preview.len());
+        let mut parts = preview;
+        if remaining > 0 {
+            parts.push(format!("+{remaining}"));
+        }
+        let noun = if row.profiles.len() == 1 {
+            "profile"
+        } else {
+            "profiles"
+        };
+        format!("{} {} ({})", row.profiles.len(), noun, parts.join(", "))
     } else {
         row.profile.as_deref().unwrap_or("-").into()
     }
@@ -362,6 +407,7 @@ mod tests {
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions, OutputMode};
     use std::fs;
+    use std::sync::Arc;
 
     fn ctx(root: &Path, output_mode: OutputMode) -> Ctx {
         Ctx::new_with_options(
@@ -375,6 +421,22 @@ mod tests {
                 ..CtxOptions::default()
             },
         )
+    }
+
+    fn ctx_with_ui(root: &Path, output_mode: OutputMode) -> (Ctx, Arc<MockUi>) {
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new_with_options(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui.clone()),
+            CtxOptions {
+                output_mode,
+                ..CtxOptions::default()
+            },
+        );
+        (ctx, ui)
     }
 
     #[test]
@@ -424,6 +486,131 @@ run = "run-2026-05-18-001-schema"
         assert_eq!(row.policy.pull_request, "none");
         assert_eq!(row.state_error, None);
         assert_eq!(report.invalid_workflows[0].id, "bad");
+    }
+
+    #[test]
+    fn print_text_keeps_state_on_primary_line_and_details_secondary() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, ui) = ctx_with_ui(dir.path(), OutputMode::Text);
+        write_task(dir.path(), "schema", "feature/schema");
+        write_task_run(
+            dir.path(),
+            "run-2026-05-18-001-schema",
+            "schema",
+            "feature/schema",
+            "done",
+            "2026-05-18-001",
+        );
+        write_workflow(
+            dir.path(),
+            "2026-05-18-001",
+            "single",
+            r#"objective = "Ship search"
+profile = "codex"
+"#,
+            r#"[[tasks]]
+task = "schema"
+run = "run-2026-05-18-001-schema"
+"#,
+        );
+
+        let report = collect(&ctx).unwrap();
+        print_text(&ctx, &report);
+
+        let steps = ui.steps.lock().unwrap();
+        let dims = ui.dims.lock().unwrap();
+        assert_eq!(steps.len(), 1);
+        let primary = &steps[0];
+        assert!(primary.contains("2026-05-18-001"));
+        assert!(primary.contains("mode single"));
+        assert!(primary.contains("task_runs 1 (1 done)"));
+        assert!(primary.contains("runnable no (needs all task runs prepared or failed)"));
+        assert!(primary.contains("updated 2026-05-18T00:00:00Z"));
+        assert!(!primary.contains("single_requires_all_task_runs_prepared_or_failed"));
+        assert!(!primary.contains("base main"));
+        assert!(!primary.contains("profile codex"));
+        assert!(dims.iter().any(|line| line == "  Objective: Ship search"));
+        assert!(dims.iter().any(|line| {
+            line.contains("Base: main")
+                && line.contains("Profile: codex")
+                && line.contains("Policy: none/manual")
+        }));
+        assert!(
+            dims.iter()
+                .any(|line| line == "  Path: .local/workflows/2026-05-18-001.toml")
+        );
+    }
+
+    #[test]
+    fn print_text_summarizes_matrix_profiles_off_primary_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, ui) = ctx_with_ui(dir.path(), OutputMode::Text);
+        let workflow_id = "2026-05-18-002";
+        let task = "profile-task";
+        let profiles = [
+            "devtools-port-with-extra-long-label-alpha",
+            "mcp-owned-profile-name-that-keeps-going",
+            "codex-review-profile-name-that-keeps-going",
+        ];
+
+        write_task(dir.path(), task, "feature/profile-task");
+        for (idx, profile) in profiles.iter().enumerate() {
+            write_task_run(
+                dir.path(),
+                &format!("run-{workflow_id}-{idx}"),
+                task,
+                &format!("feature/profile-task-{profile}"),
+                "prepared",
+                workflow_id,
+            );
+        }
+        write_workflow(
+            dir.path(),
+            workflow_id,
+            "matrix",
+            &format!(
+                r#"profiles = ["{}", "{}", "{}"]
+"#,
+                profiles[0], profiles[1], profiles[2]
+            ),
+            &format!(
+                r#"[[tasks]]
+task = "{task}"
+
+[[tasks.runs]]
+profile = "{}"
+run = "run-{workflow_id}-0"
+
+[[tasks.runs]]
+profile = "{}"
+run = "run-{workflow_id}-1"
+
+[[tasks.runs]]
+profile = "{}"
+run = "run-{workflow_id}-2"
+"#,
+                profiles[0], profiles[1], profiles[2]
+            ),
+        );
+
+        let report = collect(&ctx).unwrap();
+        print_text(&ctx, &report);
+
+        let steps = ui.steps.lock().unwrap();
+        let dims = ui.dims.lock().unwrap();
+        let primary = &steps[0];
+        assert!(primary.contains("mode matrix"));
+        assert!(primary.contains("task_runs 3 (3 prepared)"));
+        assert!(primary.contains("runnable yes (3)"));
+        assert!(!primary.contains("devtools-port-with-extra-long-label-alpha"));
+
+        let detail = dims
+            .iter()
+            .find(|line| line.contains("Profile: 3 profiles"))
+            .expect("matrix profile summary should be on a detail line");
+        assert!(detail.contains("devtools-port-with-extra..."));
+        assert!(detail.contains("+1"));
+        assert!(!detail.contains("codex-review-profile-name-that-keeps-going"));
     }
 
     #[test]
