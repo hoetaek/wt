@@ -51,7 +51,18 @@ lifecycle. The pack contains:
 - `wt-setup`
 - `wt-work`
 
-Install the full pack into Codex globally from GitHub with explicit skill names:
+For an interactive install, run one command and choose the skills, agent, and
+scope from the prompts:
+
+```bash
+npx skills add https://github.com/hoetaek/wt
+```
+
+Select the `wt-*` skills you want. The installer also discovers the repo-local
+`consistency` skill; choose it only when you are working on `wt` itself and want
+the repository UX consistency review workflow.
+
+For a non-interactive Codex global install, pass explicit skill names:
 
 ```bash
 npx --yes skills@latest add https://github.com/hoetaek/wt \
