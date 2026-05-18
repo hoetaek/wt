@@ -38,6 +38,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 mod display;
+mod list_command;
 mod repair;
 mod selection;
 mod stack_completion;
@@ -47,6 +48,10 @@ use display::show_workflow;
 use selection::list_runnable_workflow_candidates;
 use selection::resolve_run_workflow_path;
 use stack_completion::complete_stack_workflow;
+
+pub fn list(ctx: &Ctx) -> Result<()> {
+    list_command::run(ctx)
+}
 
 pub fn task(
     ctx: &Ctx,

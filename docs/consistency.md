@@ -380,6 +380,16 @@ Stack-mode에서 `running`은 agent prompt 전송이 아니라 사용자나 agen
 `prepared` 또는 `failed` task가 있고 현재 `running` task가 없을 때 runnable이다. 명시
 workflow id/path는 automation surface로 남긴다.
 
+`wt workflow list`는 `.local/workflows/<id>.toml`에 저장된 Workflow file의 canonical
+read-only inventory다. `wt workflow run`의 runnable selector가 아니므로 runnable workflow만
+필터링하거나 selector의 10-row visible cap을 적용하지 않는다. `wt workflow show`의 latest
+default도 all-workflow inventory로 확장하지 않는다. Output은 Workflow 자체의 단일
+`status`를 만들지 않고, linked TaskRun에서 파생한 task-run status count/summary와 mode별
+runnable metadata를 보여준다. Workflow TOML parse/validation failure는 조용히 숨기지 않고
+text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계속 Workflow `mode`
+값일 뿐이므로 `wt list workflow`, top-level `batch`/`stack`, `wt task list`, `wt profile list`
+같은 symmetry command를 추가하지 않는다.
+
 Workspace label은 저장 상태가 아니라 현재 실행을 찾기 위한 표시다. 좁은 탭에서 잘려도
 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을 앞에 붙이고, branch/path/site
 이름에는 `batch`나 `stack` 같은 mode label을 섞지 않는다. `B`/`S` prefix는 workflow

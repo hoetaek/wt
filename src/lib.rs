@@ -47,6 +47,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
         },
         Commands::Workflow { command } => match command {
+            WorkflowCommand::List => commands::workflow::list(ctx),
             WorkflowCommand::Task {
                 tasks,
                 mode,

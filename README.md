@@ -90,6 +90,7 @@ Prepare saved workflows when local tasks or issues need coordination:
 wt workflow task --mode single add-schema wire-api --base .
 wt workflow task --mode batch add-schema wire-api --base main --objective "Ship search"
 wt workflow issue --mode stack 123 456 789 --base main --pr draft
+wt workflow list
 wt workflow run
 wt workflow repair 2026-05-16-001
 wt workflow complete 2026-05-16-001 add-schema --run-next
@@ -131,6 +132,9 @@ Land reviewed work with Git or pull requests first.
   Optional `objective` records the larger human goal for the saved plan.
   `single` shares one workspace, `batch` runs independent branches from one
   base, and `stack` runs ordered branches as a parent chain.
+- `wt workflow list` is the canonical saved Workflow inventory. It lists valid
+  Workflow files whether or not they are runnable and reports invalid workflow
+  TOML files instead of hiding parse failures.
 - `TaskRun` files in `.local/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
 - `wt inspect [<target>]` is the read-only work dossier for a branch, worktree,

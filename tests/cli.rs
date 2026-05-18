@@ -81,6 +81,72 @@ fn current_branch(path: &Path) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
+fn write_task_document(root: &Path, key: &str, branch: &str) {
+    let dir = root.join(".local/tasks");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{key}.toml")),
+        format!(
+            r#"title = "{key}"
+branch = "{branch}"
+body = "Task body"
+"#
+        ),
+    )
+    .unwrap();
+}
+
+fn write_task_run_file(
+    root: &Path,
+    id: &str,
+    task: &str,
+    branch: &str,
+    status: &str,
+    source: &str,
+    group: &str,
+) {
+    let dir = root.join(".local/task-runs");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{id}.toml")),
+        format!(
+            r#"task = "{task}"
+branch = "{branch}"
+status = "{status}"
+source = "{source}"
+group = "{group}"
+creation_order = 1
+created_at = "2026-05-18T00:00:00.000000000Z"
+updated_at = "2026-05-18T00:00:00.000000000Z"
+"#
+        ),
+    )
+    .unwrap();
+}
+
+fn write_workflow_file(root: &Path, id: &str, mode: &str, extra: &str, tasks: &str) {
+    let dir = root.join(".local/workflows");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{id}.toml")),
+        format!(
+            r#"mode = "{mode}"
+{extra}base_mode = "explicit"
+base = "main"
+color = "red"
+created_at = "2026-05-18T00:00:00Z"
+updated_at = "2026-05-18T00:00:00Z"
+
+[policy]
+pull_request = "draft"
+landing = "manual"
+
+{tasks}"#
+        ),
+    )
+    .unwrap();
+}
+
 #[test]
 fn version_flag_prints_package_version() {
     wt_command()
@@ -237,6 +303,98 @@ fn workflow_run_help_explains_omitted_target_selection() {
         .stdout(predicate::str::contains(
             "omit to select a runnable workflow",
         ));
+}
+
+#[test]
+fn workflow_list_help_explains_canonical_inventory() {
+    wt_command()
+        .args(["workflow", "list", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("canonical read-only inventory"))
+        .stdout(predicate::str::contains(
+            "whether or not they are currently runnable",
+        ))
+        .stdout(predicate::str::contains(
+            "reports invalid workflow TOML files",
+        ));
+}
+
+#[test]
+fn workflow_list_supports_json_and_reports_invalid_workflows() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "schema", "feature/schema");
+    write_task_run_file(
+        temp.path(),
+        "batch-2026-05-18-001-schema",
+        "schema",
+        "feature/schema",
+        "prepared",
+        "batch",
+        "2026-05-18-001",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-18-001",
+        "batch",
+        r#"objective = "Ship search"
+profile = "codex"
+"#,
+        r#"[[tasks]]
+task = "schema"
+run = "batch-2026-05-18-001-schema"
+"#,
+    );
+    std::fs::write(
+        temp.path().join(".local/workflows/bad.toml"),
+        "mode = \"batch\"\n",
+    )
+    .unwrap();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "workflow",
+            "list",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let workflows = value["workflows"].as_array().unwrap();
+    let invalid = value["invalid_workflows"].as_array().unwrap();
+    assert_eq!(workflows.len(), 1);
+    assert_eq!(invalid.len(), 1);
+
+    let row = &workflows[0];
+    assert_eq!(row["id"], "2026-05-18-001");
+    assert_eq!(row["path"], ".local/workflows/2026-05-18-001.toml");
+    assert_eq!(row["mode"], "batch");
+    assert_eq!(row["objective_summary"], "Ship search");
+    assert_eq!(row["task_count"], 1);
+    assert_eq!(row["task_runs"]["prepared"], 1);
+    assert_eq!(row["task_runs"]["summary"], "1 prepared");
+    assert_eq!(row["runnable"]["runnable"], true);
+    assert_eq!(row["runnable"]["runnable_count"], 1);
+    assert_eq!(row["base"], "main");
+    assert_eq!(row["profile"], "codex");
+    assert_eq!(row["policy"]["pull_request"], "draft");
+    assert_eq!(row["policy"]["landing"], "manual");
+    assert!(row["state_error"].is_null());
+    assert_eq!(invalid[0]["id"], "bad");
+    assert_eq!(invalid[0]["path"], ".local/workflows/bad.toml");
+    assert!(
+        invalid[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Failed to parse workflow")
+    );
 }
 
 #[test]

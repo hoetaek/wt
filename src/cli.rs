@@ -341,6 +341,11 @@ pub enum TaskCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum WorkflowCommand {
+    /// List saved workflow files
+    #[command(
+        long_about = "List all saved .local/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns."
+    )]
+    List,
     /// Prepare local tasks as a workflow file without starting workspaces
     Task {
         /// Task titles or existing task keys to prepare (omit to select multiple existing tasks)

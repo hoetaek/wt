@@ -184,23 +184,7 @@ pub fn read(path: &Path) -> Result<WorkflowMetadata> {
 }
 
 pub fn list(ctx: &Ctx) -> Result<Vec<WorkflowRecord>> {
-    let workflows_dir = workflows_dir(ctx);
-    if !workflows_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut paths = Vec::new();
-    for entry in fs::read_dir(&workflows_dir)
-        .with_context(|| "Failed to read workflow directory: .local/workflows")?
-    {
-        let path = entry?.path();
-        if path.extension().is_some_and(|ext| ext == "toml") {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-
-    paths
+    workflow_paths(ctx)?
         .into_iter()
         .map(|path| {
             let id = workflow_id(&path)?;
@@ -446,6 +430,29 @@ fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
     }
 
     content
+}
+
+pub(crate) fn workflow_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
+    let workflows_dir = workflows_dir(ctx);
+    if !workflows_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&workflows_dir)
+        .with_context(|| "Failed to read workflow directory: .local/workflows")?
+    {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+pub(crate) fn id_from_path(path: &Path) -> Result<String> {
+    workflow_id(path)
 }
 
 fn workflows_dir(ctx: &Ctx) -> PathBuf {
