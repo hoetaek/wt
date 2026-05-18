@@ -247,13 +247,23 @@ directly. PR-opening tasks create a body file from
 `.github/pull_request_template.md`, fill a review-focused description, and pass
 it to `gh pr create --body-file <pr-body-file>`. If the TaskDocument has
 `[origin]`, the PR body includes an issue-closing keyword for that provider
-issue. If Codex/GitHub review or
+issue. If pull-request review or
 coordinator feedback asks for changes, the same agent updates the branch, reruns
 checks, pushes, refreshes the PR body only if it became stale, and sends an
 updated report. Review always happens. The prepared landing policy only decides
 whether the coordinator stops after review or proceeds to landing and cleanup
 after review passes; automatic landing still has to satisfy dirty-worktree,
-check, review-thread, and ancestry safety checks.
+check, pull-request review, review-thread, and ancestry safety checks. When a PR
+exists, review passing must be proved from the PR conversation immediately before
+landing. Review-agent inline comments are conversational: after replying,
+refresh the thread and wait for follow-up before resolving it. Thread-specific
+addressed markers can satisfy that follow-up check; PR-level tool-specific
+reactions or markers are provider status signals, not a replacement for checking
+threads, comments, and checks. Examples:
+
+- CodeRabbit inline comments need a follow-up refresh before resolution.
+- Codex reactions are status signals to record before the normal review gate
+  continues.
 
 ## Configuration
 
@@ -288,7 +298,8 @@ landing = "manual"     # manual | auto
 `landing = "manual"` means review completes and the coordinator waits for an
 explicit landing direction. `landing = "auto"` means review passing is enough
 approval for the coordinator to proceed to landing and cleanup, without
-bypassing dirty-worktree, check, review-thread, or ancestry safety gates.
+bypassing dirty-worktree, check, pull-request review, review-thread, or ancestry
+safety gates.
 
 `wt config` prints the effective `[workflow]` policy, including the built-in
 defaults above. `wt init` may include a commented optional `[workflow]` block so
