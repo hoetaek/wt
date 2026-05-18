@@ -188,15 +188,17 @@ function taskCard(row) {
 }
 
 function workflowCard(row) {
-  return card(row.id, [
+  return card(row.title, [
+    pill(`workflow ${row.id}`, "blue"),
     pill(row.mode, "blue"),
     pill(row.presentation_group, groupColor(row.presentation_group)),
     pill(row.task_runs.total ? `${row.task_runs.total} runs` : "0 runs"),
     row.runnable.runnable_count ? pill(`${row.runnable.runnable_count} runnable`, "green") : "",
     row.profile ? pill(`profile ${row.profile}`, "violet") : "",
     row.profiles.length ? pill(`${row.profiles.length} profiles`, "violet") : "",
+    row.origin ? pill(`${row.origin.provider} ${row.origin.id}`, "violet") : "",
     pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
-  ], [row.path], row.objective_summary || row.state_error, groupColor(row.presentation_group), row.objective || row.state_error);
+  ], [row.path], row.body_summary || row.state_error, groupColor(row.presentation_group), row.body || row.state_error);
 }
 
 function taskRunCard(row) {

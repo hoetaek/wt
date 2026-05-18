@@ -8,6 +8,7 @@ use crate::context::{
 use crate::task::{self, TaskDocument, TaskOrigin};
 use crate::task_run::{self, TaskRunContext, TaskRunRecord, TaskRunStatus};
 use crate::workflow::planner::runnable_workflow_info;
+use crate::workflow::render::workflow_title_label;
 use crate::workflow::run::{
     WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
     read_single_workflow_task_states, read_stack_workflow_task_states,
@@ -192,10 +193,12 @@ struct WorkflowCollection {
 struct WorkflowSummary {
     id: String,
     path: String,
+    title: String,
     mode: String,
     presentation_group: String,
-    objective_summary: Option<String>,
-    objective: Option<String>,
+    body_summary: Option<String>,
+    body: Option<String>,
+    origin: Option<WorkflowOriginSummary>,
     task_count: usize,
     task_runs: TaskRunCounts,
     runnable: RunnableSummary,
@@ -206,6 +209,12 @@ struct WorkflowSummary {
     policy: WorkflowPolicySummary,
     updated_at: String,
     state_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowOriginSummary {
+    provider: String,
+    id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -494,14 +503,26 @@ fn workflow_summary(
     let counts = workflow_task_run_counts(ctx, &metadata);
     let (runnable, state_error) = workflow_runnable(ctx, path, &metadata);
     let presentation_group = workflow_presentation_group(&counts, &runnable, state_error.as_ref());
+    let title = workflow_title_label(ctx, &id, &metadata);
+    let body_summary = metadata.body.as_deref().and_then(body_summary);
+    let body = non_empty_string(metadata.body);
+    let origin = metadata
+        .origin
+        .as_ref()
+        .map(|origin| WorkflowOriginSummary {
+            provider: origin.provider.clone(),
+            id: origin.id.clone(),
+        });
 
     WorkflowSummary {
         id,
         path: relative_path(ctx, path),
+        title,
         mode: metadata.mode.as_str().into(),
         presentation_group,
-        objective_summary: metadata.objective.as_deref().and_then(short_summary),
-        objective: non_empty_string(metadata.objective),
+        body_summary,
+        body,
+        origin,
         task_count: metadata.tasks.len(),
         task_runs: counts,
         runnable,
