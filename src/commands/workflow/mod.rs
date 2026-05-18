@@ -18,7 +18,8 @@ use crate::workflow::render::{
     render_single_workflow_snapshot, stack_task_already_running_message,
     started_stack_task_message, test_auto_landing_policy, test_workflow_policy,
     workflow_batch_task_prompt_content, workflow_batch_task_prompt_content_for_policy,
-    workflow_single_task_prompt_content, workflow_single_task_prompt_content_for_policy,
+    workflow_metadata_prompt_context, workflow_single_task_prompt_content,
+    workflow_single_task_prompt_content_for_policy,
     workflow_single_task_prompt_content_for_policy_and_closing_refs,
     workflow_stack_task_prompt_content, workflow_task_prompt_content_with_policy,
     workflow_task_prompt_content_with_policy_and_parent,
@@ -31,7 +32,8 @@ use crate::workflow::run::{
 };
 #[cfg(test)]
 use crate::workflow::{
-    WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowPullRequestMode, WorkflowTask,
+    WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowOrigin, WorkflowPullRequestMode,
+    WorkflowTask,
 };
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
@@ -1381,6 +1383,58 @@ landing = "auto"
     }
 
     #[test]
+    fn issue_keeps_selected_provider_origin_on_task_and_explicit_origin_on_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"proj-123-fix-editor","description":"Slice issue body"}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"proj-123-fix-editor","description":"Slice issue body"}"#,
+            true,
+        );
+        let config = Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            ..Config::default()
+        };
+        let ctx = ctx_with_config_and_runner(dir.path(), config, runner);
+
+        issue(
+            &ctx,
+            &["PROJ-123".into()],
+            IssueOptions {
+                mode: WorkflowModeArg::Stack,
+                profile: None,
+                title: Some("Broad provider issue"),
+                body: Some("Split the broad issue into executable slices."),
+                body_file: None,
+                origin_provider: Some("linear"),
+                origin_id: Some("PROJ-ROOT"),
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(record.workflow.origin.as_ref().unwrap().provider, "linear");
+        assert_eq!(record.workflow.origin.as_ref().unwrap().id, "PROJ-ROOT");
+        assert_eq!(record.workflow.tasks[0].task, "PROJ-123");
+
+        let child = task_store::read_task_document(&ctx, "PROJ-123").unwrap();
+        assert_eq!(child.origin.as_ref().unwrap().provider, "linear");
+        assert_eq!(child.origin.as_ref().unwrap().id, "PROJ-123");
+        assert_ne!(
+            record.workflow.origin.as_ref().unwrap().id,
+            child.origin.as_ref().unwrap().id
+        );
+    }
+
+    #[test]
     fn task_prepares_stack_mode_workflow_with_ready_pr_mode() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
@@ -1913,6 +1967,31 @@ landing = "auto"
         assert!(content.contains("issue-closing keywords"));
         assert!(content.contains("`Closes #52`"));
         assert!(content.contains("`Closes PROJ-123`"));
+        assert!(content.contains("gh pr create --body-file <pr-body-file> --base main"));
+    }
+
+    #[test]
+    fn workflow_pr_handoff_does_not_close_workflow_origin_without_task_origin() {
+        let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
+        let mut metadata = WorkflowMetadata::new(
+            WorkflowMode::Stack,
+            "explicit",
+            Some("main".into()),
+            vec![WorkflowTask::new("api", "run-api")],
+        );
+        metadata.origin = Some(WorkflowOrigin {
+            provider: "linear".into(),
+            id: "PROJ-ROOT".into(),
+        });
+        let workflow_context = workflow_metadata_prompt_context(&metadata).unwrap();
+
+        assert!(workflow_context.contains("Workflow origin: linear:PROJ-ROOT"));
+        assert!(workflow_context.contains("Do not add PR issue-closing keywords"));
+
+        let content = workflow_single_task_prompt_content_for_policy(&workflow_context, &policy);
+
+        assert!(!content.contains("`Closes PROJ-ROOT`"));
+        assert!(!content.contains("so linked provider issues close"));
         assert!(content.contains("gh pr create --body-file <pr-body-file> --base main"));
     }
 

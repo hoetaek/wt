@@ -205,7 +205,9 @@ completed with `wt workflow complete`, not `wt done`.
   records `[origin]`; it does not start worktrees.
 - `Workflow` files in `.local/workflows/<id>.toml` save coordinated execution.
   Optional top-level `title`, `body`, and `[origin]` record the larger human
-  context for the saved plan.
+  context for the saved plan. Workflow `[origin]` belongs to the large
+  issue-like unit represented by the Workflow; TaskDocument `[origin]` belongs
+  only to a runnable slice that is itself a provider issue.
   `single` shares one workspace, `batch` runs independent branches from one
   base, and `stack` runs ordered branches as a parent chain.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid
@@ -248,7 +250,9 @@ directly. PR-opening tasks create a body file from
 `.github/pull_request_template.md`, fill a review-focused description, and pass
 it to `gh pr create --body-file <pr-body-file>`. If the TaskDocument has
 `[origin]`, the PR body includes an issue-closing keyword for that provider
-issue. If pull-request review or
+issue. Workflow-level `[origin]` is workflow context only and is not copied into
+child TaskDocuments or added as a closing keyword to child PR bodies. If
+pull-request review or
 coordinator feedback asks for changes, the same agent updates the branch, reruns
 checks, pushes, refreshes the PR body only if it became stale, and sends an
 updated report. Review always happens. The prepared landing policy only decides
@@ -332,7 +336,12 @@ Use `--title <text>` and `--body <text>` with `wt workflow task` or
 `wt workflow issue` to write top-level workflow context for the larger goal
 without changing runnable selection, TaskRun lifecycle, landing policy, or
 cleanup behavior. Use `--origin-provider` with `--origin-id` when the Workflow
-itself has a durable provider source.
+itself has a durable provider source. `wt workflow issue` treats selected
+provider issues as executable slice TaskDocuments and writes their origins on
+those TaskDocuments; it does not lift selected issue ids into Workflow
+`[origin]` automatically. To split one broad provider issue into local child
+slices, prepare child TaskDocuments and pass the broad issue as explicit
+workflow-level origin.
 
 Small private agent config can stay inline:
 

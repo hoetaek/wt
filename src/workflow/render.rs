@@ -272,7 +272,9 @@ pub(crate) fn workflow_metadata_prompt_context(metadata: &WorkflowMetadata) -> O
         let provider = origin.provider.trim();
         let id = origin.id.trim();
         if !provider.is_empty() && !id.is_empty() {
-            sections.push(format!("Workflow origin: {provider}:{id}"));
+            sections.push(format!(
+                "Workflow origin: {provider}:{id}\n\nThis workflow-level origin is context for the larger source issue. Do not add PR issue-closing keywords for it unless this task explicitly says to close the workflow origin."
+            ));
         }
     }
     if sections.is_empty() {

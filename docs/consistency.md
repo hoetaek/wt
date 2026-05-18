@@ -62,8 +62,10 @@ prepared-plan context와 orchestration만 저장한다. `title`은 list/select/s
 짧은 display text이고, `body`는 큰 issue context, requirements, acceptance criteria,
 planning notes, decomposition rationale을 담는 긴 human context다. Workflow-level
 `[origin]`은 Workflow 자체가 provider issue에서 온 경우 durable provider link를
-저장한다. Workflow는 여전히 prepared execution plan이며 parent TaskDocument나 nested-task
-container가 아니다. Task branch name의 source of truth는 항상 TaskDocument의 `branch`다.
+저장한다. 이 origin은 larger issue-like unit의 출처이고, child TaskDocument의 provider
+origin처럼 실행 slice를 provider issue로 취급하게 만드는 값이 아니다. Workflow는 여전히
+prepared execution plan이며 parent TaskDocument나 nested-task container가 아니다. Task
+branch name의 source of truth는 항상 TaskDocument의 `branch`다.
 Workflow task row는 TaskDocument branch, status, body, origin을 복사해 저장하지 않는다.
 
 Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 묶는 표시다. 색상이
@@ -352,7 +354,13 @@ Workflow row는 status/error를 따로 가지지 않고, branch 이름도 복사
 인스턴스의 canonical 기록은 TaskRun이고, branch name의 canonical 기록은 TaskDocument다.
 TaskDocument `title`/`body`/`[origin]`은 slice-level source of truth이며 Workflow row로
 복사하지 않는다. Workflow-level `title`/`body`/`[origin]`은 task row가 아니라 Workflow
-top-level metadata다. `objective`는 장기 authoring alias가 아니다. Existing local
+top-level metadata다. `wt workflow issue`에서 선택한 provider issue들은 각각 executable
+slice TaskDocument가 되므로 provider origin도 각 TaskDocument에 저장된다. 선택한 issue id를
+Workflow `[origin]`으로 자동 승격하지 않는다. 하나의 broad provider issue를 여러 local
+slice TaskDocument로 쪼갠다면 `wt workflow task --origin-provider <provider> --origin-id
+<id>`처럼 explicit Workflow-level origin을 기록하고, child TaskDocument에는 그 slice가
+별도 provider issue일 때만 `[origin]`을 둔다. `objective`는 장기 authoring alias가 아니다.
+Existing local
 Workflow files에 대한 support가 필요하면 migration/repair support로만 설명하고, 새
 authoring surface나 docs에서 `objective`를 equal canonical field처럼 받지 않는다.
 `objective`, `description`, `goal_task`, `parent_task`, `subtasks`, `[[issues]]`,
@@ -459,7 +467,8 @@ eventual version bump.
 Workflow-level `title`/`body`/`[origin]` are saved to `.local/workflows/<id>.toml` as
 top-level Workflow metadata. They appear in `wt workflow show` and workflow-started agent
 prompts as context, but do not change runnable selection, TaskRun lifecycle, landing
-policy, or cleanup behavior. Prompt에서는 coordinator handoff가 먼저 전달되고, Workflow
+policy, cleanup behavior, provider issue status transitions, provider sync, or PR
+issue-closing keywords. Prompt에서는 coordinator handoff가 먼저 전달되고, Workflow
 metadata는 그 뒤 TaskDocument snapshot 근처에 배치된다. Existing `objective` values may
 be read only to diagnose or repair old local files, and any explicit repair should
 rewrite them into the canonical title/body/origin shape instead of preserving
@@ -541,7 +550,10 @@ push하고 준비된 workflow base 또는 parent branch를 base로 draft pull re
 연다는 뜻이다. PR을 여는 workflow task는 `.github/pull_request_template.md`에서
 `<pr-body-file>`을 만들고 summary, context, changes, validation, risks/follow-ups 중심의
 review-focused 본문을 채운다. TaskDocument에 `[origin]`이 있으면 PR merge가 provider
-issue를 닫도록 `Closes <origin.id>` issue-closing keyword도 PR 본문에 포함한다. 그런 뒤
+issue를 닫도록 `Closes <origin.id>` issue-closing keyword도 PR 본문에 포함한다.
+Workflow-level `[origin]`은 child PR의 closing keyword source가 아니다. 여러 child PR이
+같은 Workflow-level origin을 자동으로 닫으면 broad issue가 첫 slice merge에서 닫힐 수 있으므로,
+그 정책은 별도 명시/테스트 없이는 추가하지 않는다. 그런 뒤
 `gh pr create --body-file <pr-body-file>` 경로로 PR을 생성한다.
 Agent Completion Report는 coordinator transport/report 형식이며 PR 본문으로 복사하지 않는다.
 이것은 PR 자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은

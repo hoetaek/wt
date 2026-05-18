@@ -352,6 +352,9 @@ pub enum WorkflowCommand {
     )]
     List,
     /// Prepare local tasks as a workflow file without starting workspaces
+    #[command(
+        long_about = "Prepare local TaskDocuments as a saved Workflow without starting workspaces.\n\nUse --title, --body/--body-file, and --origin-provider with --origin-id for Workflow-level context when one larger issue-like unit is split into runnable child TaskDocuments. Workflow-level [origin] is stored only on the Workflow; it is not copied into child TaskDocuments and does not add issue-closing keywords to child PR bodies.\n\nTaskDocument [origin] still belongs only to a runnable slice that is itself a provider issue."
+    )]
     Task {
         /// Task titles or existing task keys to prepare (omit to select multiple existing tasks)
         tasks: Vec<String>,
@@ -387,6 +390,9 @@ pub enum WorkflowCommand {
         pr: Option<WorkflowPrModeArg>,
     },
     /// Prepare issues as a workflow file without starting workspaces
+    #[command(
+        long_about = "Prepare provider issues as a saved Workflow without starting workspaces.\n\nEach selected provider issue becomes an executable child TaskDocument, and that TaskDocument records [origin] for the selected issue. Selected issue ids are not automatically lifted into Workflow [origin]. Use --origin-provider with --origin-id only when the Workflow itself has a separate larger provider source.\n\nWorkflow-level [origin] is stored only on the Workflow; it is not copied into child TaskDocuments and does not add issue-closing keywords to child PR bodies."
+    )]
     Issue {
         /// Issue identifiers to import as tasks (omit to select interactively)
         issues: Vec<String>,
@@ -1405,6 +1411,8 @@ mod tests {
         assert!(task_help.contains("--body-file"));
         assert!(task_help.contains("--origin-provider"));
         assert!(task_help.contains("--origin-id"));
+        assert!(task_help.contains("Workflow-level [origin] is stored only on the Workflow"));
+        assert!(task_help.contains("does not add issue-closing keywords"));
         assert!(!task_help.contains("--objective"));
 
         let issue = workflow.find_subcommand_mut("issue").unwrap();
@@ -1414,6 +1422,12 @@ mod tests {
         assert!(issue_help.contains("--body-file"));
         assert!(issue_help.contains("--origin-provider"));
         assert!(issue_help.contains("--origin-id"));
+        assert!(
+            issue_help
+                .contains("Each selected provider issue becomes an executable child TaskDocument")
+        );
+        assert!(issue_help.contains("Selected issue ids are not automatically lifted"));
+        assert!(issue_help.contains("does not add issue-closing keywords"));
         assert!(!issue_help.contains("--objective"));
     }
 
