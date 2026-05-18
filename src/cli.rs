@@ -146,7 +146,11 @@ pub enum Commands {
         no_enter: bool,
     },
     /// Check configured providers and required local tools
-    Doctor,
+    Doctor {
+        /// Run checks against the effective config for .local/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Print, edit, or refactor wt config files
     Config {
         /// Show effective config using .local/profiles/<name>
@@ -616,14 +620,20 @@ mod tests {
         );
         assert_eq!(cli.color, ColorMode::Always);
         assert_eq!(cli.verbose, 2);
-        assert!(matches!(cli.command, Some(Commands::Doctor)));
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Doctor { profile: None })
+        ));
     }
 
     #[test]
     fn no_color_flag() {
         let cli = parse(&["wt", "--no-color", "doctor"]);
         assert!(cli.no_color);
-        assert!(matches!(cli.command, Some(Commands::Doctor)));
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Doctor { profile: None })
+        ));
     }
 
     #[test]
@@ -1613,7 +1623,21 @@ mod tests {
     #[test]
     fn doctor_subcommand() {
         let cli = parse(&["wt", "doctor"]);
-        assert!(matches!(cli.command, Some(Commands::Doctor)));
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Doctor { profile: None })
+        ));
+    }
+
+    #[test]
+    fn doctor_accepts_profile_flag() {
+        let cli = parse(&["wt", "doctor", "--profile", "codex"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Doctor {
+                profile: Some(ref profile),
+            }) if profile == "codex"
+        ));
     }
 
     #[test]

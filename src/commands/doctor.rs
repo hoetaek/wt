@@ -1,6 +1,6 @@
-use crate::config::{AgentCli, IssueProviderType, SiteProvider};
+use crate::config::{AgentCli, Config, IssueProviderType, SiteProvider};
 use crate::context::Ctx;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
@@ -16,35 +16,31 @@ const CODEX_CMUX_HOOK_EVENTS: [(&str, &str); 5] = [
     ("UserPromptSubmit", "user_prompt_submit"),
 ];
 
-pub fn run(ctx: &Ctx) -> Result<()> {
+pub fn run(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
+    let resolved = resolve_config(ctx, profile)?;
+    let config = resolved.config();
+
     if ctx.is_json() {
-        return run_json(ctx);
+        return run_json(ctx, config, profile);
     }
 
     ctx.ui.print_step("Doctor");
-    check_issue_provider(ctx);
-    check_github_cli(ctx);
-    check_site_provider(ctx);
-    check_agent_config(ctx);
-    check_workspace_config(ctx);
-    check_worktree_naming(ctx);
-    check_cmux(ctx);
-    check_codex_hook_readiness(ctx);
+    if let Some(profile) = profile {
+        ctx.ui.print_step(&format!("Profile: {profile}"));
+    }
+    check_issue_provider(ctx, config);
+    check_github_cli(ctx, config);
+    check_site_provider(ctx, config);
+    check_agent_config(ctx, config);
+    check_workspace_config(ctx, config);
+    check_worktree_naming(ctx, config);
+    check_cmux(ctx, config);
+    check_codex_hook_readiness(ctx, config);
     Ok(())
 }
 
-fn run_json(ctx: &Ctx) -> Result<()> {
-    let mut checks = Vec::new();
-    collect_issue_provider_checks(ctx, &mut checks);
-    collect_github_cli_check(ctx, &mut checks);
-    collect_site_provider_checks(ctx, &mut checks);
-    collect_agent_checks(ctx, &mut checks);
-    collect_workspace_config_checks(ctx, &mut checks);
-    collect_worktree_naming_checks(ctx, &mut checks);
-    collect_cmux_check(ctx, &mut checks);
-    collect_codex_hook_readiness_checks(ctx, &mut checks);
-
-    let report = DoctorReport { checks };
+fn run_json(ctx: &Ctx, config: &Config, profile: Option<&str>) -> Result<()> {
+    let report = build_report(ctx, config, profile);
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     serde_json::to_writer_pretty(&mut handle, &report)?;
@@ -52,8 +48,50 @@ fn run_json(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorReport {
+    let mut checks = Vec::new();
+    collect_issue_provider_checks(ctx, config, &mut checks);
+    collect_github_cli_check(ctx, config, &mut checks);
+    collect_site_provider_checks(ctx, config, &mut checks);
+    collect_agent_checks(ctx, config, &mut checks);
+    collect_workspace_config_checks(config, &mut checks);
+    collect_worktree_naming_checks(ctx, config, &mut checks);
+    collect_cmux_check(ctx, config, &mut checks);
+    collect_codex_hook_readiness_checks(config, &mut checks);
+
+    DoctorReport {
+        profile: profile.map(str::to_string),
+        checks,
+    }
+}
+
+enum ResolvedConfig<'a> {
+    Base(&'a Config),
+    Profile(Config),
+}
+
+impl<'a> ResolvedConfig<'a> {
+    fn config(&self) -> &Config {
+        match self {
+            ResolvedConfig::Base(config) => config,
+            ResolvedConfig::Profile(config) => config,
+        }
+    }
+}
+
+fn resolve_config<'a>(ctx: &'a Ctx, profile: Option<&str>) -> Result<ResolvedConfig<'a>> {
+    let Some(profile) = profile else {
+        return Ok(ResolvedConfig::Base(&ctx.config));
+    };
+    let config = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
+        .ok_or_else(|| anyhow!("Profile '{profile}' not found"))?;
+    Ok(ResolvedConfig::Profile(config))
+}
+
 #[derive(Serialize)]
 struct DoctorReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
     checks: Vec<DoctorCheck>,
 }
 
@@ -83,8 +121,8 @@ impl DoctorCheck {
     }
 }
 
-fn collect_issue_provider_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
-    match ctx.config.issues.as_ref().map(|issues| &issues.provider) {
+fn collect_issue_provider_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<DoctorCheck>) {
+    match config.issues.as_ref().map(|issues| &issues.provider) {
         Some(IssueProviderType::Linear) => {
             checks.push(DoctorCheck::ok("issue_provider", Some("linear".into())));
             collect_required_command(
@@ -109,9 +147,8 @@ fn collect_issue_provider_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     }
 }
 
-fn collect_github_cli_check(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
-    if ctx
-        .config
+fn collect_github_cli_check(ctx: &Ctx, config: &Config, checks: &mut Vec<DoctorCheck>) {
+    if config
         .issues
         .as_ref()
         .is_some_and(|issues| issues.provider == IssueProviderType::Github)
@@ -122,8 +159,8 @@ fn collect_github_cli_check(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     collect_optional_command(ctx, checks, "gh_cli_for_pr", "gh", "needed for wt pr");
 }
 
-fn collect_site_provider_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
-    let Some(site) = ctx.config.effective_site() else {
+fn collect_site_provider_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<DoctorCheck>) {
+    let Some(site) = config.effective_site() else {
         checks.push(DoctorCheck::ok("site_provider", Some("none".into())));
         return;
     };
@@ -170,8 +207,8 @@ fn collect_site_provider_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     }
 }
 
-fn collect_agent_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
-    let Some(agent) = ctx.config.agent.as_ref() else {
+fn collect_agent_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<DoctorCheck>) {
+    let Some(agent) = config.agent.as_ref() else {
         checks.push(DoctorCheck::ok("agent", Some("none".into())));
         return;
     };
@@ -254,8 +291,8 @@ fn collect_agent_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     }
 }
 
-fn collect_worktree_naming_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
-    let Some(naming) = ctx.config.worktree.naming.as_ref() else {
+fn collect_worktree_naming_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<DoctorCheck>) {
+    let Some(naming) = config.worktree.naming.as_ref() else {
         return;
     };
 
@@ -268,13 +305,13 @@ fn collect_worktree_naming_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     );
 }
 
-fn collect_workspace_config_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
-    if ctx.config.workspace.is_some() {
+fn collect_workspace_config_checks(config: &Config, checks: &mut Vec<DoctorCheck>) {
+    if config.workspace.is_some() {
         checks.push(DoctorCheck::ok(
             "workspace_config",
             Some("configured".into()),
         ));
-    } else if agent_launch_requested(ctx) {
+    } else if agent_launch_requested(config) {
         checks.push(DoctorCheck::warning(
             "workspace_config",
             "missing; add [workspace] to open a cmux workspace and launch the agent.",
@@ -284,8 +321,8 @@ fn collect_workspace_config_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     }
 }
 
-fn collect_cmux_check(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
-    let needs_cmux = cmux_relevant(ctx);
+fn collect_cmux_check(ctx: &Ctx, config: &Config, checks: &mut Vec<DoctorCheck>) {
+    let needs_cmux = cmux_relevant(config);
 
     if ctx.runner.has_command("cmux") {
         checks.push(DoctorCheck::ok("cmux_cli", Some("ok".into())));
@@ -305,8 +342,8 @@ fn collect_cmux_check(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     }
 }
 
-fn collect_codex_hook_readiness_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
-    if !codex_agent_configured(ctx) {
+fn collect_codex_hook_readiness_checks(config: &Config, checks: &mut Vec<DoctorCheck>) {
+    if !codex_agent_configured(config) {
         return;
     }
 
@@ -495,8 +532,8 @@ fn codex_home_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| format!("CODEX_HOME and HOME are unset. {CODEX_HOOK_INSTALL_HINT}"))
 }
 
-fn codex_agent_configured(ctx: &Ctx) -> bool {
-    ctx.config
+fn codex_agent_configured(config: &Config) -> bool {
+    config
         .agent
         .as_ref()
         .is_some_and(|agent| agent.cli == AgentCli::Codex)
@@ -550,8 +587,8 @@ fn collect_command_string(
     }
 }
 
-fn check_issue_provider(ctx: &Ctx) {
-    match ctx.config.issues.as_ref().map(|issues| &issues.provider) {
+fn check_issue_provider(ctx: &Ctx, config: &Config) {
+    match config.issues.as_ref().map(|issues| &issues.provider) {
         Some(IssueProviderType::Linear) => {
             ctx.ui.print_step("Issue provider: linear");
             check_required_command(
@@ -574,9 +611,8 @@ fn check_issue_provider(ctx: &Ctx) {
     }
 }
 
-fn check_github_cli(ctx: &Ctx) {
-    if ctx
-        .config
+fn check_github_cli(ctx: &Ctx, config: &Config) {
+    if config
         .issues
         .as_ref()
         .is_some_and(|issues| issues.provider == IssueProviderType::Github)
@@ -593,8 +629,8 @@ fn check_github_cli(ctx: &Ctx) {
         .print_step(&format!("gh CLI: {status} (needed for wt pr)"));
 }
 
-fn check_site_provider(ctx: &Ctx) {
-    let Some(site) = ctx.config.effective_site() else {
+fn check_site_provider(ctx: &Ctx, config: &Config) {
+    let Some(site) = config.effective_site() else {
         ctx.ui.print_step("Site provider: none");
         return;
     };
@@ -643,8 +679,8 @@ fn check_required_command(ctx: &Ctx, cmd: &str, label: &str, fix: &str) {
     }
 }
 
-fn check_agent_config(ctx: &Ctx) {
-    let Some(agent) = ctx.config.agent.as_ref() else {
+fn check_agent_config(ctx: &Ctx, config: &Config) {
+    let Some(agent) = config.agent.as_ref() else {
         ctx.ui.print_step("Agent: none");
         return;
     };
@@ -715,8 +751,8 @@ fn check_agent_config(ctx: &Ctx) {
     }
 }
 
-fn check_worktree_naming(ctx: &Ctx) {
-    let Some(naming) = ctx.config.worktree.naming.as_ref() else {
+fn check_worktree_naming(ctx: &Ctx, config: &Config) {
+    let Some(naming) = config.worktree.naming.as_ref() else {
         return;
     };
 
@@ -728,10 +764,10 @@ fn check_worktree_naming(ctx: &Ctx) {
     );
 }
 
-fn check_workspace_config(ctx: &Ctx) {
-    if ctx.config.workspace.is_some() {
+fn check_workspace_config(ctx: &Ctx, config: &Config) {
+    if config.workspace.is_some() {
         ctx.ui.print_step("Workspace config: configured");
-    } else if agent_launch_requested(ctx) {
+    } else if agent_launch_requested(config) {
         ctx.ui.print_warning(
             "Workspace config: missing. Add [workspace] to open a cmux workspace and launch the agent.",
         );
@@ -740,8 +776,8 @@ fn check_workspace_config(ctx: &Ctx) {
     }
 }
 
-fn check_cmux(ctx: &Ctx) {
-    let needs_cmux = cmux_relevant(ctx);
+fn check_cmux(ctx: &Ctx, config: &Config) {
+    let needs_cmux = cmux_relevant(config);
 
     if ctx.runner.has_command("cmux") {
         ctx.ui.print_step("cmux CLI: ok");
@@ -759,8 +795,8 @@ fn check_cmux(ctx: &Ctx) {
     }
 }
 
-fn check_codex_hook_readiness(ctx: &Ctx) {
-    if !codex_agent_configured(ctx) {
+fn check_codex_hook_readiness(ctx: &Ctx, config: &Config) {
+    if !codex_agent_configured(config) {
         return;
     }
 
@@ -790,18 +826,17 @@ fn codex_readiness_label(name: &str) -> &str {
     }
 }
 
-fn cmux_relevant(ctx: &Ctx) -> bool {
-    ctx.config.workspace.is_some()
-        || agent_launch_requested(ctx)
-        || ctx
-            .config
+fn cmux_relevant(config: &Config) -> bool {
+    config.workspace.is_some()
+        || agent_launch_requested(config)
+        || config
             .agent
             .as_ref()
             .is_some_and(|agent| !agent.prompt.is_empty())
 }
 
-fn agent_launch_requested(ctx: &Ctx) -> bool {
-    ctx.config
+fn agent_launch_requested(config: &Config) -> bool {
+    config
         .agent
         .as_ref()
         .is_some_and(|agent| agent.cli != AgentCli::None)
@@ -935,6 +970,21 @@ mod tests {
         )
     }
 
+    fn ctx_with_root(
+        repo_root: PathBuf,
+        config: Config,
+        runner: MockRunner,
+        ui: RecordingUi,
+    ) -> Ctx {
+        Ctx::new(
+            repo_root.clone(),
+            repo_root,
+            config,
+            Box::new(runner),
+            Box::new(ui),
+        )
+    }
+
     fn write_codex_hooks(home: &Path) {
         fs::create_dir_all(home).unwrap();
         let hooks = CODEX_CMUX_HOOK_EVENTS
@@ -1000,7 +1050,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("linear CLI: missing"));
@@ -1023,7 +1073,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, runner, ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let steps = steps.lock().unwrap().join("\n");
         assert!(steps.contains("Issue provider: github"));
@@ -1044,7 +1094,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("valet CLI: missing"));
@@ -1065,7 +1115,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let steps = steps.lock().unwrap().join("\n");
         assert!(steps.contains("Site provider: docker_proxy"));
@@ -1092,7 +1142,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("claude CLI: missing"));
@@ -1124,7 +1174,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, runner, ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let steps = steps.lock().unwrap().join("\n");
         assert!(steps.contains("claude CLI: ok"));
@@ -1151,7 +1201,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("claude CLI: missing"));
@@ -1177,7 +1227,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Agent command: missing"));
@@ -1203,7 +1253,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Agent command is ignored"));
@@ -1223,7 +1273,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("worktree.naming.command: missing"));
@@ -1240,7 +1290,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("cmux CLI: missing"));
@@ -1323,10 +1373,9 @@ mod tests {
             }),
             ..Default::default()
         };
-        let ctx = ctx_with(config, MockRunner::new(), RecordingUi::new());
         let mut checks = Vec::new();
 
-        collect_codex_hook_readiness_checks(&ctx, &mut checks);
+        collect_codex_hook_readiness_checks(&config, &mut checks);
 
         assert!(checks.is_empty());
     }
@@ -1350,11 +1399,147 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx).unwrap();
+        run(&ctx, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Workspace config: missing"));
         assert!(warnings.contains("launch the agent"));
         assert!(warnings.contains("cmux CLI: missing"));
+    }
+
+    fn write_profile_toml(repo_root: &Path, name: &str, body: &str) {
+        let profile_dir = repo_root.join(".local/profiles").join(name);
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::write(profile_dir.join("profile.toml"), body).unwrap();
+    }
+
+    #[test]
+    fn text_output_shows_selected_profile_and_uses_profile_config() {
+        let temp = TempDir::new().unwrap();
+        write_profile_toml(
+            temp.path(),
+            "codex",
+            r#"
+[issues]
+provider = "linear"
+"#,
+        );
+
+        let ui = RecordingUi::new();
+        let steps = Arc::clone(&ui.steps);
+        let warnings = Arc::clone(&ui.warnings);
+        let ctx = ctx_with_root(
+            temp.path().to_path_buf(),
+            Config::default(),
+            MockRunner::new(),
+            ui,
+        );
+
+        run(&ctx, Some("codex")).unwrap();
+
+        let steps_joined = steps.lock().unwrap().join("\n");
+        let warnings_joined = warnings.lock().unwrap().join("\n");
+        assert!(
+            steps_joined.contains("Profile: codex"),
+            "expected text output to surface selected profile, got steps:\n{steps_joined}"
+        );
+        assert!(
+            steps_joined.contains("Issue provider: linear"),
+            "expected linear provider from profile config, got steps:\n{steps_joined}"
+        );
+        assert!(
+            warnings_joined.contains("linear CLI: missing"),
+            "expected linear cli warning, got warnings:\n{warnings_joined}"
+        );
+    }
+
+    #[test]
+    fn run_fails_when_named_profile_is_missing() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_root(
+            temp.path().to_path_buf(),
+            Config::default(),
+            MockRunner::new(),
+            RecordingUi::new(),
+        );
+
+        let err = run(&ctx, Some("missing")).unwrap_err();
+        assert!(
+            err.to_string().contains("Profile 'missing' not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn run_rejects_reserved_profile_name() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_root(
+            temp.path().to_path_buf(),
+            Config::default(),
+            MockRunner::new(),
+            RecordingUi::new(),
+        );
+
+        let err = run(&ctx, Some("default")).unwrap_err();
+        assert!(
+            err.to_string().contains("reserved"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn json_report_includes_selected_profile_and_profile_checks() {
+        let temp = TempDir::new().unwrap();
+        write_profile_toml(
+            temp.path(),
+            "codex",
+            r#"
+[issues]
+provider = "linear"
+"#,
+        );
+        let ctx = ctx_with_root(
+            temp.path().to_path_buf(),
+            Config::default(),
+            MockRunner::new(),
+            RecordingUi::new(),
+        );
+
+        let config = Config::load_profile(&ctx.repo_root, "codex", &ctx.base_config)
+            .unwrap()
+            .unwrap();
+        let report = build_report(&ctx, &config, Some("codex"));
+
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["profile"], serde_json::Value::String("codex".into()));
+
+        let checks = value["checks"].as_array().unwrap();
+        let issue_provider = checks
+            .iter()
+            .find(|c| c["name"] == "issue_provider")
+            .unwrap();
+        assert_eq!(issue_provider["message"], "linear");
+
+        let linear_cli = checks.iter().find(|c| c["name"] == "linear_cli").unwrap();
+        assert_eq!(linear_cli["status"], "warning");
+    }
+
+    #[test]
+    fn json_report_omits_profile_when_none_selected() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_root(
+            temp.path().to_path_buf(),
+            Config::default(),
+            MockRunner::new(),
+            RecordingUi::new(),
+        );
+
+        let report = build_report(&ctx, &ctx.config, None);
+        let value = serde_json::to_value(&report).unwrap();
+        assert!(
+            value.get("profile").is_none(),
+            "expected no profile field when none selected, got {value}"
+        );
+        assert!(value["checks"].is_array());
     }
 }

@@ -169,7 +169,7 @@ fn supports_json(command: &Commands) -> bool {
             | Commands::Agent {
                 command: AgentCommand::Watch { .. },
             }
-            | Commands::Doctor
+            | Commands::Doctor { .. }
             | Commands::Profile { .. }
     )
 }
