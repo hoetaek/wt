@@ -149,7 +149,10 @@ mod tests {
         assert!(!APP_JS.contains("data-collapse"));
         assert!(APP_JS.contains("aria-selected"));
         assert!(APP_JS.contains("formatInlineMarkdown"));
-        assert!(APP_JS.contains("Linked TaskDocument"));
+        assert!(APP_JS.contains("TaskRun status"));
+        assert!(APP_JS.contains("formatTaskRunState"));
+        assert!(!APP_JS.contains("Linked TaskDocument"));
+        assert!(!APP_JS.contains("TaskRun TOML"));
         assert!(APP_JS.contains("formatWorkflowTaskRuns"));
         assert!(APP_JS.contains("retrospecs"));
     }

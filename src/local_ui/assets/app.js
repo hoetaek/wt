@@ -63,9 +63,8 @@ const STRINGS = {
     invalidIdeas: "Invalid ideas",
     retrospecs: "Retrospecs",
     invalidRetrospecs: "Invalid Retrospecs",
-    linkedTaskDocument: "Linked TaskDocument",
+    taskRunState: "TaskRun status",
     taskDocumentToml: "TaskDocument TOML",
-    taskRunToml: "TaskRun TOML",
     workflowTaskRuns: "Workflow TaskRuns",
     unlinkedTaskDocuments: "TaskDocuments without TaskRuns",
     invalidTaskDocuments: "Invalid TaskDocuments",
@@ -158,9 +157,8 @@ const STRINGS = {
     invalidIdeas: "오류 아이디어",
     retrospecs: "회고",
     invalidRetrospecs: "오류 회고",
-    linkedTaskDocument: "연결된 TaskDocument",
+    taskRunState: "TaskRun 상태",
     taskDocumentToml: "TaskDocument TOML",
-    taskRunToml: "TaskRun TOML",
     workflowTaskRuns: "워크플로우의 작업 실행",
     unlinkedTaskDocuments: "TaskRun이 없는 TaskDocument",
     invalidTaskDocuments: "오류 작업문서",
@@ -571,9 +569,8 @@ function taskRunCard(row) {
     row.group ? pill(`group ${row.group}`, "violet") : pill(row.context.label || "direct"),
     row.context.error ? pill("context error", "red") : "",
   ], [row.path, row.context.workflow_path, taskDocument && taskDocument.path].filter(Boolean), row.error || row.context.error || row.task_document_error || taskDocument?.body_summary || row.branch, statusColor(taskRunUiGroup(row)), [
-    detail(t("linkedTaskDocument"), formatLinkedDocument(row), "prose", taskDocument?.body_summary || row.task_document_error),
+    detail(t("taskRunState"), formatTaskRunState(row), "source", taskRunStatePreview(row)),
     detail(t("taskDocumentToml"), taskDocument?.source_text, "source"),
-    detail(t("taskRunToml"), row.source_text, "source"),
   ]);
 }
 
@@ -675,24 +672,30 @@ function workflowUiGroup(row) {
   return "waiting";
 }
 
-function formatLinkedDocument(row) {
-  if (row.task_document_error) {
-    return row.task_document_error;
-  }
-  const document = row.task_document;
-  if (!document) {
-    return "";
-  }
+function formatTaskRunState(row) {
   const lines = [
-    `${t("linkedTaskDocument")}: ${document.title}`,
-    `task: ${document.key}`,
-    document.branch ? `branch: ${document.branch}` : "",
-    document.origin ? `origin: ${document.origin.provider} ${document.origin.id}` : "",
+    `task: ${row.task}`,
+    `status: ${stateLabel(taskRunUiGroup(row))}`,
+    row.status !== taskRunUiGroup(row) ? `stored_status: ${row.status}` : "",
+    `branch: ${row.branch}`,
+    row.group ? `group: ${row.group}` : "",
+    row.context.label ? `context: ${row.context.label}` : "",
+    row.context.error ? `context_error: ${row.context.error}` : "",
+    row.error ? `error: ${row.error}` : "",
+    row.task_document_error ? `task_document_error: ${row.task_document_error}` : "",
+    !row.task_document && !row.task_document_error ? "task_document: missing" : "",
   ].filter(Boolean);
-  if (document.body) {
-    lines.push("", document.body);
-  }
   return lines.join("\n");
+}
+
+function taskRunStatePreview(row) {
+  const parts = [
+    stateLabel(taskRunUiGroup(row)),
+    `task ${row.task}`,
+    `branch ${row.branch}`,
+    row.error || row.context.error || row.task_document_error || "",
+  ].filter(Boolean);
+  return compactText(parts.join(" - "), 190);
 }
 
 function formatWorkflowTaskRuns(groups) {
