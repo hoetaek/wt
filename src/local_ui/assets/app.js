@@ -2,7 +2,7 @@ const LOCALE_KEY = "wt-ui-locale";
 
 const state = {
   snapshot: null,
-  view: "tasks",
+  view: "overview",
   locale: initialLocale(),
 };
 
@@ -33,27 +33,33 @@ const STRINGS = {
     record: "record",
     records: "records",
     tabOverview: "Overview",
-    tabIdeas: "Ideas",
-    tabTasks: "TaskDocuments",
-    tabWorkflows: "Workflows",
-    tabTaskRuns: "TaskRuns",
-    tabProfiles: "Profiles",
     tabConfig: "Config",
-    noteOverview: "Action-focused snapshot across runnable workflows, running TaskRuns, and invalid records.",
+    tabWorkflows: "Workflow",
+    tabTaskRuns: "TaskRuns",
+    tabIdeas: "Ideas",
+    tabRetrospecs: "Retrospecs",
+    noteOverview: "Action-focused snapshot across local state, runnable workflows, running TaskRuns, and invalid records.",
     noteIdeas: "Ideas are planning notes from .local/ideas.",
-    noteTasks: "TaskDocuments are saved work definitions from .local/tasks.",
-    noteWorkflows: "Workflows are saved execution plans from .local/workflows.",
-    noteTaskRuns: "TaskRuns are execution records from .local/task-runs.",
+    noteRetrospecs: "Retrospecs are completed-work reflections from .local/retrospectives.",
+    noteWorkflows: "Workflow rows are grouped by derived state and show linked TaskRuns inside each plan.",
+    noteTaskRuns: "TaskRuns are execution records from .local/task-runs with linked TaskDocument content.",
     noteProfiles: "Profiles are effective agent/config overlays from .local/profiles.",
-    noteConfig: "Config shows the rendered effective config plus the source .wt.toml layers.",
+    noteConfig: "Config shows effective config, source .wt.toml layers, and profiles.",
     runnableWorkflows: "Runnable workflows",
     runningTaskRuns: "Running TaskRuns",
+    localState: "Local state",
     invalidRecords: "Invalid records",
     ideas: "Ideas",
     invalidIdeas: "Invalid ideas",
-    taskDocuments: "TaskDocuments",
+    retrospecs: "Retrospecs",
+    invalidRetrospecs: "Invalid Retrospecs",
+    linkedTaskDocument: "Linked TaskDocument",
+    taskDocumentToml: "TaskDocument TOML",
+    taskRunToml: "TaskRun TOML",
+    workflowTaskRuns: "Workflow TaskRuns",
+    unlinkedTaskDocuments: "TaskDocuments without TaskRuns",
     invalidTaskDocuments: "Invalid TaskDocuments",
-    workflows: "Workflows",
+    workflows: "Workflow",
     invalidWorkflows: "Invalid workflows",
     taskRuns: "TaskRuns",
     invalidTaskRuns: "Invalid TaskRuns",
@@ -62,10 +68,13 @@ const STRINGS = {
     config: "Config",
     noRunnableWorkflows: "No runnable workflows",
     noRunningTaskRuns: "No running TaskRuns",
+    noLocalState: "No local state records",
     noInvalidRecords: "No invalid records",
     noIdeas: "No ideas",
     noInvalidIdeas: "No invalid ideas",
-    noTaskDocuments: "No TaskDocuments",
+    noRetrospecs: "No Retrospecs",
+    noInvalidRetrospecs: "No invalid Retrospecs",
+    noUnlinkedTaskDocuments: "Every valid TaskDocument has at least one TaskRun",
     noInvalidTaskDocuments: "No invalid TaskDocuments",
     noInvalidWorkflows: "No invalid workflows",
     noInvalidTaskRuns: "No invalid TaskRuns",
@@ -96,27 +105,33 @@ const STRINGS = {
     record: "개",
     records: "개",
     tabOverview: "개요",
-    tabIdeas: "아이디어",
-    tabTasks: "작업문서",
-    tabWorkflows: "워크플로",
-    tabTaskRuns: "실행기록",
-    tabProfiles: "프로필",
     tabConfig: "설정",
-    noteOverview: "실행 가능한 Workflow, 실행 중인 TaskRun, 오류 기록을 우선 보여줍니다.",
+    tabWorkflows: "Workflow",
+    tabTaskRuns: "TaskRuns",
+    tabIdeas: "아이디어",
+    tabRetrospecs: "Retrospecs",
+    noteOverview: "로컬 상태 전체와 실행 가능한 Workflow, 실행 중인 TaskRun, 오류 기록을 우선 보여줍니다.",
     noteIdeas: "Idea는 .local/ideas에 저장된 기획 노트입니다.",
-    noteTasks: "TaskDocument는 .local/tasks에 저장된 작업 정의입니다.",
-    noteWorkflows: "Workflow는 .local/workflows에 저장된 실행 계획입니다.",
-    noteTaskRuns: "TaskRun은 .local/task-runs에 저장된 실행 기록입니다.",
+    noteRetrospecs: "Retrospecs는 .local/retrospectives에 저장된 완료 작업 회고입니다.",
+    noteWorkflows: "Workflow는 파생 상태별로 정렬하고 각 계획 안에 연결된 TaskRun을 묶어 보여줍니다.",
+    noteTaskRuns: "TaskRun은 .local/task-runs 실행 기록이며 연결된 TaskDocument 본문을 함께 보여줍니다.",
     noteProfiles: "Profile은 .local/profiles의 agent/config overlay입니다.",
-    noteConfig: "Config는 렌더링된 effective config와 source .wt.toml 계층을 함께 보여줍니다.",
+    noteConfig: "Config는 effective config, source .wt.toml 계층, Profile을 함께 보여줍니다.",
     runnableWorkflows: "실행 가능한 Workflow",
     runningTaskRuns: "실행 중인 TaskRun",
+    localState: "로컬 상태",
     invalidRecords: "오류 기록",
     ideas: "아이디어 (Ideas)",
     invalidIdeas: "오류 아이디어",
-    taskDocuments: "작업문서 (TaskDocuments)",
+    retrospecs: "회고 (Retrospecs)",
+    invalidRetrospecs: "오류 Retrospecs",
+    linkedTaskDocument: "연결된 TaskDocument",
+    taskDocumentToml: "TaskDocument TOML",
+    taskRunToml: "TaskRun TOML",
+    workflowTaskRuns: "Workflow 안의 TaskRun",
+    unlinkedTaskDocuments: "TaskRun이 없는 TaskDocument",
     invalidTaskDocuments: "오류 작업문서",
-    workflows: "워크플로 (Workflows)",
+    workflows: "Workflow",
     invalidWorkflows: "오류 Workflow",
     taskRuns: "실행기록 (TaskRuns)",
     invalidTaskRuns: "오류 TaskRun",
@@ -125,10 +140,13 @@ const STRINGS = {
     config: "설정 (Config)",
     noRunnableWorkflows: "실행 가능한 Workflow가 없습니다",
     noRunningTaskRuns: "실행 중인 TaskRun이 없습니다",
+    noLocalState: "로컬 상태 기록이 없습니다",
     noInvalidRecords: "오류 기록이 없습니다",
     noIdeas: "Idea가 없습니다",
     noInvalidIdeas: "오류 Idea가 없습니다",
-    noTaskDocuments: "TaskDocument가 없습니다",
+    noRetrospecs: "Retrospecs가 없습니다",
+    noInvalidRetrospecs: "오류 Retrospecs가 없습니다",
+    noUnlinkedTaskDocuments: "모든 정상 TaskDocument에 TaskRun이 있습니다",
     noInvalidTaskDocuments: "오류 TaskDocument가 없습니다",
     noInvalidWorkflows: "오류 Workflow가 없습니다",
     noInvalidTaskRuns: "오류 TaskRun이 없습니다",
@@ -212,12 +230,11 @@ function applyLocale() {
 
 function tabLabelKey(view) {
   if (view === "overview") return "tabOverview";
-  if (view === "ideas") return "tabIdeas";
-  if (view === "tasks") return "tabTasks";
+  if (view === "config") return "tabConfig";
   if (view === "workflows") return "tabWorkflows";
   if (view === "task-runs") return "tabTaskRuns";
-  if (view === "profiles") return "tabProfiles";
-  if (view === "config") return "tabConfig";
+  if (view === "ideas") return "tabIdeas";
+  if (view === "retrospecs") return "tabRetrospecs";
   return view;
 }
 
@@ -290,12 +307,11 @@ function render() {
 
   const view = state.view;
   if (view === "overview") renderOverview(snapshot);
-  if (view === "ideas") renderIdeas(snapshot);
-  if (view === "tasks") renderTasks(snapshot);
+  if (view === "config") renderConfig(snapshot);
   if (view === "workflows") renderWorkflows(snapshot);
   if (view === "task-runs") renderTaskRuns(snapshot);
-  if (view === "profiles") renderProfiles(snapshot);
-  if (view === "config") renderConfig(snapshot);
+  if (view === "ideas") renderIdeas(snapshot);
+  if (view === "retrospecs") renderRetrospecs(snapshot);
   setStatus(tr("rendered", { view: viewLabel(view) }));
 }
 
@@ -306,6 +322,7 @@ function renderMetrics(snapshot) {
     ["Workflows", snapshot.workflows.items.length, snapshot.workflows.invalid.length],
     ["TaskRuns", snapshot.task_runs.items.length, snapshot.task_runs.invalid.length],
     ["Profiles", snapshot.profiles.items.length, snapshot.profiles.invalid.length],
+    ["Retrospecs", snapshot.retrospecs.items.length, snapshot.retrospecs.invalid.length],
   ];
   metrics.innerHTML = rows
     .map(([label, count, invalid]) => {
@@ -317,70 +334,119 @@ function renderMetrics(snapshot) {
 }
 
 function renderOverview(snapshot) {
-  const runnable = snapshot.workflows.items.filter((row) => row.presentation_group === "runnable");
-  const running = snapshot.task_runs.items.filter((row) => row.status === "running");
+  const runnable = sortedWorkflows(snapshot.workflows.items).filter((row) => row.presentation_group === "runnable");
+  const running = sortedTaskRuns(snapshot.task_runs.items).filter((row) => row.status === "running");
   const invalid = [
     ...snapshot.ideas.invalid,
     ...snapshot.tasks.invalid,
     ...snapshot.workflows.invalid,
     ...snapshot.task_runs.invalid,
     ...snapshot.profiles.invalid,
+    ...snapshot.retrospecs.invalid,
   ];
   content.innerHTML = [
+    section(t("localState"), overviewCards(snapshot), t("noLocalState"), t("noteOverview"), "overview-state"),
     section(
       t("runnableWorkflows"),
       runnable.map(workflowCard),
       t("noRunnableWorkflows"),
-      t("noteOverview")
+      "",
+      "overview-workflows"
     ),
-    section(t("runningTaskRuns"), running.map(taskRunCard), t("noRunningTaskRuns")),
-    section(t("invalidRecords"), invalid.map(invalidCard), t("noInvalidRecords")),
+    section(t("runningTaskRuns"), running.map(taskRunCard), t("noRunningTaskRuns"), "", "overview-task-runs"),
+    section(t("invalidRecords"), invalid.map(invalidCard), t("noInvalidRecords"), "", "overview-invalid"),
   ].join("");
+}
+
+function overviewCards(snapshot) {
+  const sourcePaths = [
+    snapshot.sources.tasks,
+    snapshot.sources.task_runs,
+    snapshot.sources.workflows,
+    snapshot.sources.ideas,
+    snapshot.sources.profiles,
+    snapshot.sources.retrospecs,
+  ];
+  const counts = [
+    `TaskDocuments ${snapshot.tasks.items.length}`,
+    `TaskRuns ${snapshot.task_runs.items.length}`,
+    `Workflows ${snapshot.workflows.items.length}`,
+    `Ideas ${snapshot.ideas.items.length}`,
+    `Profiles ${snapshot.profiles.items.length}`,
+    `Retrospecs ${snapshot.retrospecs.items.length}`,
+  ];
+  const invalidCount = [
+    snapshot.tasks.invalid,
+    snapshot.task_runs.invalid,
+    snapshot.workflows.invalid,
+    snapshot.ideas.invalid,
+    snapshot.profiles.invalid,
+    snapshot.retrospecs.invalid,
+  ].reduce((total, rows) => total + rows.length, 0);
+  return [
+    card(snapshot.repo.name, [
+      pill(`${snapshot.workflows.items.length} workflows`, "blue"),
+      pill(`${snapshot.task_runs.items.length} runs`, "green"),
+      invalidCount ? pill(`${invalidCount} invalid`, "red") : pill(t("valid"), "green"),
+    ], sourcePaths, snapshot.repo.root, "green"),
+    card(t("config"), [
+      pill(snapshot.config.source, "blue"),
+      pill(`PR ${snapshot.config.workflow.pull_request}`, "green"),
+      pill(`Landing ${snapshot.config.workflow.landing}`, "amber"),
+      snapshot.config.selected_profile ? pill(`Profile ${snapshot.config.selected_profile}`, "violet") : "",
+    ], snapshot.config.paths, bodyPreview(snapshot.config.effective_text), "blue", [
+      detail(t("effectiveConfig"), snapshot.config.effective_text, "source"),
+    ]),
+    card(t("taskRuns"), counts.map((count) => pill(count)), [snapshot.sources.task_runs], t("noteTaskRuns"), "violet"),
+  ];
 }
 
 function renderIdeas(snapshot) {
   content.innerHTML = [
-    section(t("ideas"), snapshot.ideas.items.map(ideaCard), t("noIdeas"), t("noteIdeas")),
-    section(t("invalidIdeas"), snapshot.ideas.invalid.map(invalidCard), t("noInvalidIdeas")),
+    section(t("ideas"), snapshot.ideas.items.map(ideaCard), t("noIdeas"), t("noteIdeas"), "ideas-valid"),
+    section(t("invalidIdeas"), snapshot.ideas.invalid.map(invalidCard), t("noInvalidIdeas"), "", "ideas-invalid"),
   ].join("");
 }
 
-function renderTasks(snapshot) {
+function renderRetrospecs(snapshot) {
   content.innerHTML = [
-    section(t("taskDocuments"), snapshot.tasks.items.map(taskCard), t("noTaskDocuments"), t("noteTasks")),
-    section(t("invalidTaskDocuments"), snapshot.tasks.invalid.map(invalidCard), t("noInvalidTaskDocuments")),
+    section(t("retrospecs"), snapshot.retrospecs.items.map(retrospecCard), t("noRetrospecs"), t("noteRetrospecs"), "retrospecs-valid"),
+    section(t("invalidRetrospecs"), snapshot.retrospecs.invalid.map(invalidCard), t("noInvalidRetrospecs"), "", "retrospecs-invalid"),
   ].join("");
 }
 
 function renderWorkflows(snapshot) {
   const groups = ["state_error", "runnable", "waiting", "done"];
-  content.innerHTML = [
-    section(t("invalidWorkflows"), snapshot.workflows.invalid.map(invalidCard), t("noInvalidWorkflows"), t("noteWorkflows")),
-  ]
-    .concat(groups.map((group) => {
-      const rows = snapshot.workflows.items.filter((row) => row.presentation_group === group);
-      return section(label(group), rows.map(workflowCard), `No ${label(group).toLowerCase()} workflows`);
-    }))
-    .join("");
+  const sections = [
+    section(t("invalidWorkflows"), snapshot.workflows.invalid.map(invalidCard), t("noInvalidWorkflows"), t("noteWorkflows"), "workflow-invalid"),
+  ].concat(groups.map((group) => {
+    const rows = sortedWorkflows(snapshot.workflows.items).filter((row) => row.presentation_group === group);
+    return section(label(group), rows.map(workflowCard), `No ${label(group).toLowerCase()} workflows`, "", `workflow-${group}`);
+  }));
+  content.innerHTML = jumpNav([
+    ["workflow-invalid", `${t("invalid")} ${snapshot.workflows.invalid.length}`],
+    ...groups.map((group) => [`workflow-${group}`, `${label(group)} ${snapshot.workflows.items.filter((row) => row.presentation_group === group).length}`]),
+  ]) + sections.join("");
 }
 
 function renderTaskRuns(snapshot) {
   const statuses = ["failed", "running", "prepared", "skipped", "done"];
-  content.innerHTML = [
-    section(t("invalidTaskRuns"), snapshot.task_runs.invalid.map(invalidCard), t("noInvalidTaskRuns"), t("noteTaskRuns")),
-  ]
-    .concat(statuses.map((status) => {
-      const rows = snapshot.task_runs.items.filter((row) => row.status === status);
-      return section(label(status), rows.map(taskRunCard), `No ${status} TaskRuns`);
-    }))
-    .join("");
-}
-
-function renderProfiles(snapshot) {
-  content.innerHTML = [
-    section(t("profiles"), snapshot.profiles.items.map(profileCard), t("noProfiles"), t("noteProfiles")),
-    section(t("invalidProfiles"), snapshot.profiles.invalid.map(invalidCard), t("noInvalidProfiles")),
-  ].join("");
+  const linkedTasks = new Set(snapshot.task_runs.items.map((row) => row.task));
+  const unlinkedTasks = snapshot.tasks.items.filter((row) => !linkedTasks.has(row.key));
+  const sections = [
+    section(t("invalidTaskRuns"), snapshot.task_runs.invalid.map(invalidCard), t("noInvalidTaskRuns"), t("noteTaskRuns"), "task-runs-invalid"),
+  ].concat(statuses.map((status) => {
+    const rows = sortedTaskRuns(snapshot.task_runs.items).filter((row) => row.status === status);
+    return section(label(status), rows.map(taskRunCard), `No ${status} TaskRuns`, "", `task-runs-${status}`);
+  })).concat([
+    section(t("unlinkedTaskDocuments"), unlinkedTasks.map(taskCard), t("noUnlinkedTaskDocuments"), "", "task-runs-unlinked-documents"),
+    section(t("invalidTaskDocuments"), snapshot.tasks.invalid.map(invalidCard), t("noInvalidTaskDocuments"), "", "task-runs-invalid-documents"),
+  ]);
+  content.innerHTML = jumpNav([
+    ["task-runs-invalid", `${t("invalid")} ${snapshot.task_runs.invalid.length}`],
+    ...statuses.map((status) => [`task-runs-${status}`, `${label(status)} ${snapshot.task_runs.items.filter((row) => row.status === status).length}`]),
+    ["task-runs-unlinked-documents", `${t("unlinkedTaskDocuments")} ${unlinkedTasks.length}`],
+  ]) + sections.join("");
 }
 
 function renderConfig(snapshot) {
@@ -408,8 +474,10 @@ function renderConfig(snapshot) {
     ], [], "", "violet"));
   }
   content.innerHTML = [
-    section(t("config"), cards, t("noConfigSummary"), t("noteConfig")),
-    section(t("sourceConfig"), (config.source_files || []).map(sourceFileCard), t("noSourceConfig")),
+    section(t("config"), cards, t("noConfigSummary"), t("noteConfig"), "config-summary"),
+    section(t("sourceConfig"), (config.source_files || []).map(sourceFileCard), t("noSourceConfig"), "", "config-sources"),
+    section(t("profiles"), snapshot.profiles.items.map(profileCard), t("noProfiles"), t("noteProfiles"), "config-profiles"),
+    section(t("invalidProfiles"), snapshot.profiles.invalid.map(invalidCard), t("noInvalidProfiles"), "", "config-invalid-profiles"),
   ].join("");
 }
 
@@ -448,21 +516,40 @@ function workflowCard(row) {
     pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
   ], [row.path], row.body_summary || row.state_error, groupColor(row.presentation_group), [
     detail(t("body"), row.body || row.state_error, "prose", row.body_summary || row.state_error),
+    detail(t("workflowTaskRuns"), formatWorkflowTaskRuns(row.task_run_groups || []), "source"),
     detail(t("sourceToml"), row.source_text, "source"),
   ]);
 }
 
 function taskRunCard(row) {
+  const taskDocument = row.task_document;
+  const taskTitle = taskDocument ? taskDocument.title : row.task;
   return card(row.id, [
     pill(row.status, statusColor(row.status)),
     pill(`task ${row.task}`, "blue"),
+    taskDocument ? pill(`document ${taskTitle}`, "blue") : pill("document missing", "red"),
     pill(`branch ${row.branch}`),
     row.context.workflow_id ? pill(`workflow ${row.context.workflow_id}`, "violet") : "",
     row.context.mode ? pill(`mode ${row.context.mode}`, "violet") : "",
     row.group ? pill(`group ${row.group}`, "violet") : pill(row.context.label || "direct"),
     row.context.error ? pill("context error", "red") : "",
-  ], [row.path, row.context.workflow_path].filter(Boolean), row.error || row.context.error || row.branch, statusColor(row.status), [
-    detail(t("sourceToml"), row.source_text, "source"),
+  ], [row.path, row.context.workflow_path, taskDocument && taskDocument.path].filter(Boolean), row.error || row.context.error || row.task_document_error || taskDocument?.body_summary || row.branch, statusColor(row.status), [
+    detail(t("linkedTaskDocument"), formatLinkedDocument(row), "prose", taskDocument?.body_summary || row.task_document_error),
+    detail(t("taskDocumentToml"), taskDocument?.source_text, "source"),
+    detail(t("taskRunToml"), row.source_text, "source"),
+  ]);
+}
+
+function retrospecCard(row) {
+  return card(row.title, [
+    row.outcome ? pill(row.outcome, statusColor(row.outcome)) : "",
+    row.target ? pill(row.target, "blue") : "",
+    pill(row.kind),
+    row.date ? pill(row.date, "amber") : "",
+    ...row.tags.map((tag) => pill(tag, "violet")),
+  ], [row.path], row.body_summary, statusColor(row.outcome), [
+    detail(t("body"), row.body, "prose", row.body_summary),
+    detail(t("source"), row.source_text, "source"),
   ]);
 }
 
@@ -493,6 +580,41 @@ function sourceFileCard(row) {
   ]);
 }
 
+function formatLinkedDocument(row) {
+  if (row.task_document_error) {
+    return row.task_document_error;
+  }
+  const document = row.task_document;
+  if (!document) {
+    return "";
+  }
+  const lines = [
+    `${t("linkedTaskDocument")}: ${document.title}`,
+    `task: ${document.key}`,
+    document.branch ? `branch: ${document.branch}` : "",
+    document.origin ? `origin: ${document.origin.provider} ${document.origin.id}` : "",
+  ].filter(Boolean);
+  if (document.body) {
+    lines.push("", document.body);
+  }
+  return lines.join("\n");
+}
+
+function formatWorkflowTaskRuns(groups) {
+  if (!groups.length) {
+    return "";
+  }
+  return groups
+    .map((group) => {
+      const rows = group.items.map((run) => {
+        const title = run.task_document ? ` - ${run.task_document.title}` : "";
+        return `- ${run.id} | task ${run.task} | branch ${run.branch}${title}`;
+      });
+      return `[${group.status}]\n${rows.join("\n")}`;
+    })
+    .join("\n\n");
+}
+
 function card(title, pills, pathRows, summary, tone, details) {
   const meta = pills.filter(Boolean).join("");
   const pathHtml = paths(pathRows);
@@ -506,11 +628,19 @@ function card(title, pills, pathRows, summary, tone, details) {
   return `<article class="record-card${toneClass}"><div class="record-primary"><h3>${escapeHtml(title)}</h3>${mobileMetaHtml}${summaryHtml}</div><div class="record-aside">${desktopMetaHtml}${pathHtml}</div></article>`;
 }
 
-function section(title, rows, emptyText, note = "") {
+function section(title, rows, emptyText, note = "", id = "") {
   const body = rows.length ? `<div class="record-list">${rows.join("")}</div>` : `<div class="empty">${escapeHtml(emptyText)}</div>`;
   const count = rows.length === 1 ? `1 ${t("record")}` : `${rows.length} ${t("records")}`;
   const noteHtml = note ? `<p class="section-note">${escapeHtml(note)}</p>` : "";
-  return `<section class="section-block"><div class="section-heading"><div><h2 class="section-title">${escapeHtml(title)}</h2>${noteHtml}</div><span class="section-count">${count}</span></div>${body}</section>`;
+  const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
+  return `<section class="section-block"${idAttr}><div class="section-heading"><div><h2 class="section-title">${escapeHtml(title)}</h2>${noteHtml}</div><span class="section-count">${count}</span></div>${body}</section>`;
+}
+
+function jumpNav(items) {
+  const links = items
+    .map(([id, text]) => `<a href="#${escapeHtml(id)}">${escapeHtml(text)}</a>`)
+    .join("");
+  return `<nav class="jump-nav" aria-label="Section shortcuts">${links}</nav>`;
 }
 
 function detail(label, text, kind = "prose", summary = null) {
@@ -584,8 +714,38 @@ function pill(text, tone = "") {
   return `<span class="pill ${tone}">${escapeHtml(String(text))}</span>`;
 }
 
+function sortedTaskRuns(rows) {
+  return [...rows].sort((left, right) => {
+    const status = taskRunStatusOrder(left.status) - taskRunStatusOrder(right.status);
+    if (status !== 0) return status;
+    const order = (right.creation_order || 0) - (left.creation_order || 0);
+    if (order !== 0) return order;
+    return String(right.updated_at).localeCompare(String(left.updated_at)) || String(left.id).localeCompare(String(right.id));
+  });
+}
+
+function sortedWorkflows(rows) {
+  return [...rows].sort((left, right) => {
+    const group = workflowGroupOrder(left.presentation_group) - workflowGroupOrder(right.presentation_group);
+    if (group !== 0) return group;
+    return String(right.updated_at).localeCompare(String(left.updated_at)) || String(left.id).localeCompare(String(right.id));
+  });
+}
+
+function taskRunStatusOrder(status) {
+  return ["failed", "running", "prepared", "skipped", "done"].indexOf(status) === -1
+    ? 99
+    : ["failed", "running", "prepared", "skipped", "done"].indexOf(status);
+}
+
+function workflowGroupOrder(group) {
+  return ["state_error", "runnable", "waiting", "done"].indexOf(group) === -1
+    ? 99
+    : ["state_error", "runnable", "waiting", "done"].indexOf(group);
+}
+
 function statusColor(status) {
-  if (status === "prepared" || status === "ready" || status === "running") return "green";
+  if (status === "prepared" || status === "ready" || status === "running" || status === "landed") return "green";
   if (status === "failed" || status === "state_error") return "red";
   if (status === "skipped" || status === "waiting") return "amber";
   if (status === "done") return "blue";

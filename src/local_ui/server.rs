@@ -111,9 +111,15 @@ mod tests {
         assert!(INDEX_HTML.contains("class=\"state-strip\""));
         assert!(INDEX_HTML.contains("role=\"tablist\""));
         assert!(INDEX_HTML.contains("aria-selected=\"true\""));
+        assert!(INDEX_HTML.contains("id=\"tab-overview\""));
+        assert!(INDEX_HTML.contains("data-view=\"config\""));
+        assert!(INDEX_HTML.contains("data-view=\"retrospecs\""));
+        assert!(!INDEX_HTML.contains("data-view=\"profiles\""));
+        assert!(!INDEX_HTML.contains("data-view=\"tasks\""));
         assert!(INDEX_HTML.contains("role=\"tabpanel\""));
         assert!(INDEX_HTML.contains("id=\"language-toggle\""));
         assert!(APP_CSS.contains(".section-heading"));
+        assert!(APP_CSS.contains(".jump-nav"));
         assert!(APP_CSS.contains(".record-list"));
         assert!(APP_CSS.contains(".record-card.tone-green::before"));
         assert!(APP_CSS.contains(".read-more[open]"));
@@ -128,7 +134,9 @@ mod tests {
         assert!(APP_JS.contains("localStorage.setItem(LOCALE_KEY"));
         assert!(APP_JS.contains("data-collapse"));
         assert!(APP_JS.contains("aria-selected"));
-        assert!(APP_JS.contains("TaskDocuments are saved work definitions"));
+        assert!(APP_JS.contains("Linked TaskDocument"));
+        assert!(APP_JS.contains("formatWorkflowTaskRuns"));
+        assert!(APP_JS.contains("retrospecs"));
     }
 
     #[tokio::test]

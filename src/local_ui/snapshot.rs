@@ -88,6 +88,7 @@ pub struct Snapshot {
     workflows: WorkflowCollection,
     task_runs: TaskRunCollection,
     profiles: ProfileCollection,
+    retrospecs: RetrospecCollection,
 }
 
 #[derive(Debug, Serialize)]
@@ -103,6 +104,7 @@ struct SourceSummary {
     workflows: String,
     task_runs: String,
     profiles: String,
+    retrospecs: String,
     config_paths: Vec<String>,
 }
 
@@ -211,6 +213,7 @@ struct WorkflowSummary {
     source_text: Option<String>,
     task_count: usize,
     task_runs: TaskRunCounts,
+    task_run_groups: Vec<WorkflowTaskRunGroup>,
     runnable: RunnableSummary,
     base_mode: String,
     base: Option<String>,
@@ -219,6 +222,12 @@ struct WorkflowSummary {
     policy: WorkflowPolicySummary,
     updated_at: String,
     state_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowTaskRunGroup {
+    status: String,
+    items: Vec<TaskRunSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -265,6 +274,20 @@ struct TaskRunSummary {
     created_at: String,
     updated_at: String,
     source_text: Option<String>,
+    task_document: Option<TaskDocumentLinkSummary>,
+    task_document_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TaskDocumentLinkSummary {
+    key: String,
+    path: String,
+    title: String,
+    branch: Option<String>,
+    origin: Option<TaskOriginSummary>,
+    body_summary: Option<String>,
+    body: Option<String>,
+    source_text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -292,6 +315,27 @@ struct ProfileSummary {
     agent: String,
     has_site: bool,
     test_count: usize,
+    source_text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RetrospecCollection {
+    items: Vec<RetrospecSummary>,
+    invalid: Vec<InvalidRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct RetrospecSummary {
+    key: String,
+    path: String,
+    kind: String,
+    title: String,
+    outcome: Option<String>,
+    target: Option<String>,
+    tags: Vec<String>,
+    date: Option<String>,
+    body_summary: Option<String>,
+    body: Option<String>,
     source_text: Option<String>,
 }
 
@@ -326,6 +370,7 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
             workflows: ".local/workflows".into(),
             task_runs: ".local/task-runs".into(),
             profiles: ".local/profiles".into(),
+            retrospecs: ".local/retrospectives".into(),
             config_paths: config_source_paths(&ctx),
         },
         config: config_summary(&ctx),
@@ -334,6 +379,7 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
         workflows: collect_workflows(&ctx)?,
         task_runs: collect_task_runs(&ctx)?,
         profiles: collect_profiles(&ctx)?,
+        retrospecs: collect_retrospecs(&ctx)?,
     })
 }
 
@@ -517,6 +563,7 @@ fn workflow_summary(
     let counts = workflow_task_run_counts(ctx, &metadata);
     let (runnable, state_error) = workflow_runnable(ctx, path, &metadata);
     let presentation_group = workflow_presentation_group(&counts, &runnable, state_error.as_ref());
+    let task_run_groups = workflow_task_run_groups(ctx, &metadata);
 
     WorkflowSummary {
         id,
@@ -529,6 +576,7 @@ fn workflow_summary(
         source_text: read_known_source_text(ctx, path),
         task_count: metadata.tasks.len(),
         task_runs: counts,
+        task_run_groups,
         runnable,
         base_mode: metadata.base_mode,
         base: metadata.base,
@@ -619,6 +667,61 @@ fn workflow_task_run_counts(ctx: &Ctx, metadata: &WorkflowMetadata) -> TaskRunCo
     counts
 }
 
+fn workflow_task_run_groups(ctx: &Ctx, metadata: &WorkflowMetadata) -> Vec<WorkflowTaskRunGroup> {
+    let runs = workflow_run_ids(metadata)
+        .into_iter()
+        .filter_map(|run_id| {
+            let path = task_run::resolve(ctx, &run_id).ok()?;
+            let run = task_run::read(&path).ok()?;
+            let id = task_run::id_from_path(&path).unwrap_or(run_id);
+            let record = TaskRunRecord { id, path, run };
+            Some(task_run_summary(ctx, &record))
+        })
+        .collect();
+    grouped_task_runs(runs)
+}
+
+fn grouped_task_runs(mut runs: Vec<TaskRunSummary>) -> Vec<WorkflowTaskRunGroup> {
+    runs.sort_by(|left, right| {
+        task_run_status_order(&left.status)
+            .cmp(&task_run_status_order(&right.status))
+            .then_with(|| {
+                right
+                    .creation_order
+                    .unwrap_or_default()
+                    .cmp(&left.creation_order.unwrap_or_default())
+            })
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let mut groups: Vec<WorkflowTaskRunGroup> = Vec::new();
+    for run in runs {
+        if let Some(group) = groups.last_mut()
+            && group.status == run.status
+        {
+            group.items.push(run);
+        } else {
+            groups.push(WorkflowTaskRunGroup {
+                status: run.status.clone(),
+                items: vec![run],
+            });
+        }
+    }
+    groups
+}
+
+fn task_run_status_order(status: &str) -> usize {
+    match status {
+        "failed" => 0,
+        "running" => 1,
+        "prepared" => 2,
+        "skipped" => 3,
+        "done" => 4,
+        _ => 5,
+    }
+}
+
 fn workflow_run_ids(metadata: &WorkflowMetadata) -> Vec<String> {
     if matches!(metadata.mode, WorkflowMode::Matrix) {
         return metadata
@@ -682,6 +785,7 @@ fn collect_task_runs(ctx: &Ctx) -> Result<TaskRunCollection> {
 }
 
 fn task_run_summary(ctx: &Ctx, record: &TaskRunRecord) -> TaskRunSummary {
+    let (task_document, task_document_error) = linked_task_document(ctx, &record.run.task);
     TaskRunSummary {
         id: record.id.clone(),
         path: relative_path(ctx, &record.path),
@@ -695,6 +799,34 @@ fn task_run_summary(ctx: &Ctx, record: &TaskRunRecord) -> TaskRunSummary {
         created_at: record.run.created_at.clone(),
         updated_at: record.run.updated_at.clone(),
         source_text: read_known_source_text(ctx, &record.path),
+        task_document,
+        task_document_error,
+    }
+}
+
+fn linked_task_document(
+    ctx: &Ctx,
+    task_key: &str,
+) -> (Option<TaskDocumentLinkSummary>, Option<String>) {
+    let key = task::safe_task_key(task_key);
+    match task::read_task_file(ctx, &key) {
+        Ok((document, path, content)) => {
+            let origin = document.origin.as_ref().map(task_origin_summary);
+            (
+                Some(TaskDocumentLinkSummary {
+                    key: key.clone(),
+                    path,
+                    title: document.title_or_key(&key),
+                    branch: task::prepared_branch_name(&document.branch).map(str::to_string),
+                    origin,
+                    body_summary: body_summary(&document.body),
+                    body: non_empty_body(&document.body),
+                    source_text: non_empty_body(&content),
+                }),
+                None,
+            )
+        }
+        Err(err) => (None, Some(format!("{err:#}"))),
     }
 }
 
@@ -777,6 +909,197 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
         .collect();
 
     Ok(ProfileCollection { items, invalid })
+}
+
+fn collect_retrospecs(ctx: &Ctx) -> Result<RetrospecCollection> {
+    let mut items = Vec::new();
+    let mut invalid = Vec::new();
+
+    for path in retrospec_paths(ctx)? {
+        let key = file_stem(&path).unwrap_or_else(|| "retrospec".into());
+        let relative_path = relative_path(ctx, &path);
+        match read_retrospec(ctx, &path) {
+            Ok(summary) => items.push(summary),
+            Err(err) => invalid.push(InvalidRecord {
+                key,
+                path: relative_path,
+                error: format!("{err:#}"),
+                source_text: read_known_source_text(ctx, &path),
+            }),
+        }
+    }
+
+    Ok(RetrospecCollection { items, invalid })
+}
+
+fn retrospec_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
+    let retrospecs_dir = ctx.repo_root.join(".local/retrospectives");
+    if !retrospecs_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&retrospecs_dir)
+        .with_context(|| "Failed to read retrospec directory: .local/retrospectives")?
+    {
+        let path = entry?.path();
+        let ext = path.extension().and_then(|ext| ext.to_str());
+        if matches!(ext, Some("toml" | "md" | "markdown")) {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn read_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("toml") => read_toml_retrospec(ctx, path),
+        Some("md" | "markdown") => read_markdown_retrospec(ctx, path),
+        _ => bail!("Unsupported retrospec file type: {}", path.display()),
+    }
+}
+
+fn read_toml_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
+    let relative_path = relative_path(ctx, path);
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read retrospec: {relative_path}"))?;
+    let value: toml::Value = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse retrospec: {relative_path}"))?;
+    let key = file_stem(path).unwrap_or_else(|| "retrospec".into());
+    let title = toml_string(&value, "title").unwrap_or_else(|| key.clone());
+    let body = retrospec_body(&value);
+    Ok(RetrospecSummary {
+        key,
+        path: relative_path,
+        kind: "toml".into(),
+        title,
+        outcome: toml_string(&value, "outcome"),
+        target: toml_string(&value, "target"),
+        tags: toml_string_array(&value, "tags"),
+        date: toml_string(&value, "date"),
+        body_summary: body.as_deref().and_then(body_summary),
+        body,
+        source_text: non_empty_body(&content),
+    })
+}
+
+fn read_markdown_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
+    let relative_path = relative_path(ctx, path);
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read retrospec: {relative_path}"))?;
+    let key = file_stem(path).unwrap_or_else(|| "retrospec".into());
+    let title = content
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("# ").map(str::trim))
+        .filter(|title| !title.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| key.clone());
+    Ok(RetrospecSummary {
+        key,
+        path: relative_path,
+        kind: "markdown".into(),
+        title,
+        outcome: None,
+        target: None,
+        tags: Vec::new(),
+        date: None,
+        body_summary: body_summary(&content),
+        body: non_empty_body(&content),
+        source_text: non_empty_body(&content),
+    })
+}
+
+fn retrospec_body(value: &toml::Value) -> Option<String> {
+    let mut blocks = Vec::new();
+
+    if let Some(context) = value.get("context").and_then(toml::Value::as_table) {
+        let mut lines = Vec::new();
+        for key in ["goal", "scope", "integration_branch"] {
+            if let Some(text) = table_string(context, key) {
+                lines.push(format!("{}: {text}", label(key)));
+            }
+        }
+        if !lines.is_empty() {
+            blocks.push(format!("Context\n{}", lines.join("\n")));
+        }
+    }
+
+    for section in ["keep", "problem", "try"] {
+        if let Some(table) = value.get(section).and_then(toml::Value::as_table) {
+            let items = table_string_array(table, "items");
+            if !items.is_empty() {
+                blocks.push(format!(
+                    "{}\n{}",
+                    label(section),
+                    items
+                        .into_iter()
+                        .map(|item| format!("- {item}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ));
+            }
+        }
+    }
+
+    if let Some(candidates) = value
+        .get("action_candidates")
+        .and_then(toml::Value::as_array)
+    {
+        let items = candidates
+            .iter()
+            .filter_map(toml::Value::as_table)
+            .filter_map(|table| table_string(table, "summary"))
+            .map(|summary| format!("- {summary}"))
+            .collect::<Vec<_>>();
+        if !items.is_empty() {
+            blocks.push(format!("Action candidates\n{}", items.join("\n")));
+        }
+    }
+
+    non_empty_body(&blocks.join("\n\n"))
+}
+
+fn toml_string(value: &toml::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(toml::Value::as_str)
+        .and_then(|value| non_empty_string(Some(value.to_string())))
+}
+
+fn toml_string_array(value: &toml::Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(toml::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .filter_map(|value| non_empty_string(Some(value.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn table_string(table: &toml::map::Map<String, toml::Value>, key: &str) -> Option<String> {
+    table
+        .get(key)
+        .and_then(toml::Value::as_str)
+        .and_then(|value| non_empty_string(Some(value.to_string())))
+}
+
+fn table_string_array(table: &toml::map::Map<String, toml::Value>, key: &str) -> Vec<String> {
+    table
+        .get(key)
+        .and_then(toml::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .filter_map(|value| non_empty_string(Some(value.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn config_summary(ctx: &Ctx) -> ConfigSummary {
@@ -910,6 +1233,20 @@ fn file_stem(path: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+fn label(value: &str) -> String {
+    value
+        .split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn non_empty_string(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim();
@@ -936,6 +1273,11 @@ fn is_known_state_or_config_path(relative: &str) -> bool {
     relative == ".wt.toml"
         || relative == ".local/.wt.toml"
         || (relative.starts_with(".local/ideas/")
+            && matches!(
+                Path::new(relative).extension().and_then(|ext| ext.to_str()),
+                Some("toml" | "md" | "markdown")
+            ))
+        || (relative.starts_with(".local/retrospectives/")
             && matches!(
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
@@ -1070,6 +1412,12 @@ mod tests {
         write_idea(dir.path(), "bad", "title = [\n");
         write_profile(dir.path(), "codex", "[agent]\ncli = \"codex\"\n");
         write_profile(dir.path(), "bad name", "[agent]\ncli = \"codex\"\n");
+        write_retrospec(
+            dir.path(),
+            "retro",
+            "title = \"Retro\"\ndate = \"2026-05-18\"\noutcome = \"landed\"\ntarget = \"demo\"\ntags = [\"ui\"]\n\n[context]\ngoal = \"Retro goal\"\n\n[keep]\nitems = [\"Keep this\"]\n",
+        );
+        write_retrospec(dir.path(), "bad", "title = [\n");
         fs::write(
             dir.path().join(".wt.toml"),
             "[workflow]\npull_request = \"ready\"\n",
@@ -1118,6 +1466,8 @@ mod tests {
         assert_eq!(snapshot.ideas.invalid.len(), 1);
         assert_eq!(snapshot.profiles.items.len(), 1);
         assert_eq!(snapshot.profiles.invalid.len(), 1);
+        assert_eq!(snapshot.retrospecs.items.len(), 1);
+        assert_eq!(snapshot.retrospecs.invalid.len(), 1);
         assert_eq!(snapshot.config.workflow.pull_request, "ready");
         assert_eq!(snapshot.config.workflow.landing, "auto");
         assert_eq!(snapshot.config.agent.as_deref(), Some("codex"));
@@ -1143,6 +1493,24 @@ mod tests {
                 .contains("status = \"prepared\"")
         );
         assert_eq!(
+            snapshot.task_runs.items[0]
+                .task_document
+                .as_ref()
+                .map(|document| document.title.as_str()),
+            Some("Demo")
+        );
+        assert_eq!(
+            snapshot.workflows.items[0].task_run_groups[0].status,
+            "prepared"
+        );
+        assert_eq!(
+            snapshot.workflows.items[0].task_run_groups[0].items[0]
+                .task_document
+                .as_ref()
+                .map(|document| document.body.as_deref()),
+            Some(Some("Demo body"))
+        );
+        assert_eq!(
             snapshot.workflows.items[0].body.as_deref(),
             Some("Workflow body")
         );
@@ -1162,6 +1530,10 @@ mod tests {
         );
         assert!(snapshot.config.effective_text.contains("[workflow]"));
         assert_eq!(snapshot.config.source_files.len(), 2);
+        assert_eq!(
+            snapshot.retrospecs.items[0].body.as_deref(),
+            Some("Context\nGoal: Retro goal\n\nKeep\n- Keep this")
+        );
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
             "state_error"
@@ -1196,5 +1568,11 @@ mod tests {
         let dir = root.join(".local/profiles").join(name);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("profile.toml"), content).unwrap();
+    }
+
+    fn write_retrospec(root: &Path, name: &str, content: &str) {
+        let dir = root.join(".local/retrospectives");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 }

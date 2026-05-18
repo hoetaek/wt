@@ -519,7 +519,8 @@ UI다. 이 명령은 `127.0.0.1`에만 bind하고, port `0`은 available port �
 후 URL을 출력한다. Browser opening은 별도 명시 옵션이 생기기 전까지 기본 동작이 아니다.
 UI 서버는 binary에 embedded된 no-build HTML/CSS/JS asset과 allowlisted route만 제공한다.
 첫 API surface는 `GET /api/snapshot`이며 ideas, TaskDocuments, Workflows, TaskRuns,
-profile summaries, effective config summary/source paths를 한 snapshot으로 반환한다.
+retrospectives, profile summaries, effective config summary/source paths를 한 snapshot으로
+반환한다.
 
 `wt ui`는 inventory lens이지 새로운 state owner가 아니다. TaskDocument는 계속
 `.local/tasks`, Workflow는 `.local/workflows`, TaskRun은 `.local/task-runs`, config/profile

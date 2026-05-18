@@ -21,66 +21,22 @@
           <div><span>Config</span><strong>.wt.toml layers</strong></div>
         </div>
         <div class="top-actions">
-          <button id="language-toggle" type="button" aria-pressed="false">한국어</button>
           <button id="refresh" type="button">Refresh</button>
+          <button id="language-toggle" type="button" aria-pressed="false">한국어</button>
         </div>
       </header>
 
       <nav class="tabs" aria-label="Views" role="tablist">
         <button
-          id="tab-tasks"
+          id="tab-overview"
           class="active"
           type="button"
           role="tab"
-          data-view="tasks"
+          data-view="overview"
           aria-selected="true"
           aria-controls="content"
         >
-          TaskDocuments
-        </button>
-        <button
-          id="tab-task-runs"
-          type="button"
-          role="tab"
-          data-view="task-runs"
-          aria-selected="false"
-          aria-controls="content"
-          tabindex="-1"
-        >
-          TaskRuns
-        </button>
-        <button
-          id="tab-workflows"
-          type="button"
-          role="tab"
-          data-view="workflows"
-          aria-selected="false"
-          aria-controls="content"
-          tabindex="-1"
-        >
-          Workflows
-        </button>
-        <button
-          id="tab-ideas"
-          type="button"
-          role="tab"
-          data-view="ideas"
-          aria-selected="false"
-          aria-controls="content"
-          tabindex="-1"
-        >
-          Ideas
-        </button>
-        <button
-          id="tab-profiles"
-          type="button"
-          role="tab"
-          data-view="profiles"
-          aria-selected="false"
-          aria-controls="content"
-          tabindex="-1"
-        >
-          Profiles
+          Overview
         </button>
         <button
           id="tab-config"
@@ -94,15 +50,48 @@
           Config
         </button>
         <button
-          id="tab-overview"
+          id="tab-workflows"
           type="button"
           role="tab"
-          data-view="overview"
+          data-view="workflows"
           aria-selected="false"
           aria-controls="content"
           tabindex="-1"
         >
-          Overview
+          Workflow
+        </button>
+        <button
+          id="tab-task-runs"
+          type="button"
+          role="tab"
+          data-view="task-runs"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          TaskRuns
+        </button>
+        <button
+          id="tab-ideas"
+          type="button"
+          role="tab"
+          data-view="ideas"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          Ideas
+        </button>
+        <button
+          id="tab-retrospecs"
+          type="button"
+          role="tab"
+          data-view="retrospecs"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          Retrospecs
         </button>
       </nav>
 
@@ -112,7 +101,7 @@
           id="content"
           class="content"
           role="tabpanel"
-          aria-labelledby="tab-tasks"
+          aria-labelledby="tab-overview"
           tabindex="-1"
         ></section>
         <div id="status" class="sr-only" aria-live="polite"></div>
