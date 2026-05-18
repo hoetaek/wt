@@ -353,6 +353,18 @@ fn task_list_text_includes_stable_task_fields_and_invalid_warning() {
     git_init(temp.path());
     write_task_document(temp.path(), "local", "feature/local");
     std::fs::write(
+        temp.path().join(".local/tasks/provider.toml"),
+        r#"title = "Provider task"
+branch = "alice/provider-task"
+body = "Provider task body"
+
+[origin]
+provider = "linear"
+id = "PROJ-123"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
         temp.path().join(".local/tasks/bad.toml"),
         "unknown = true\n",
     )
@@ -363,11 +375,16 @@ fn task_list_text_includes_stable_task_fields_and_invalid_warning() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "local  title local  branch feature/local  publish local  source local",
+            "local  not published | task local | branch feature/local | source local",
+        ))
+        .stdout(predicate::str::contains(
+            "Provider task  Linear PROJ-123 | task provider | branch alice/provider-task | source provider-origin",
         ))
         .stdout(predicate::str::contains("Path: .local/tasks/local.toml"))
         .stdout(predicate::str::contains("Origin: none"))
+        .stdout(predicate::str::contains("Origin: linear:PROJ-123"))
         .stdout(predicate::str::contains("Summary: Task body"))
+        .stdout(predicate::str::contains("Summary: Provider task body"))
         .stderr(predicate::str::contains(
             "Invalid task .local/tasks/bad.toml",
         ));

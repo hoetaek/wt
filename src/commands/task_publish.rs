@@ -619,7 +619,7 @@ mod tests {
 
         assert_eq!(
             publish_candidate_label(&candidate),
-            "Add publish  task add-publish | not published | branch team/add-publish"
+            "Add publish  not published | task add-publish | branch team/add-publish"
         );
     }
 

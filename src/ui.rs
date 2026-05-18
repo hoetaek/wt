@@ -348,6 +348,7 @@ fn prompt_result<T>(prompt: &str, result: io::Result<T>) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::task::{self, TaskDocument, TaskOrigin};
     use console::strip_ansi_codes;
 
     #[test]
@@ -475,6 +476,62 @@ mod tests {
     }
 
     #[test]
+    fn task_selector_origin_state_starts_in_same_rendered_column_for_full_width_titles() {
+        console::set_colors_enabled(true);
+        let local = task::task_resource_item(
+            "a",
+            &TaskDocument {
+                title: "짧은 제목".into(),
+                branch: "a".into(),
+                body: String::new(),
+                origin: None,
+            },
+            "origin:none",
+        );
+        let provider = task::task_resource_item(
+            "very-long-task-key",
+            &TaskDocument {
+                title: "인디위키 보호된 제목 목록 구현".into(),
+                branch: "team/very-long-task-key".into(),
+                body: String::new(),
+                origin: Some(TaskOrigin {
+                    provider: "linear".into(),
+                    id: "PROJ-123".into(),
+                }),
+            },
+            "origin:linear:PROJ-123",
+        );
+        let items = prompt_entries(&[local, provider]);
+
+        let local = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            true,
+            true,
+            &items[0].label,
+            &items[0].hint,
+        ))
+        .into_owned();
+        let provider = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            false,
+            false,
+            &items[1].label,
+            &items[1].hint,
+        ))
+        .into_owned();
+        console::set_colors_enabled(true);
+
+        assert_eq!(
+            rendered_column(&local, "not published"),
+            rendered_column(&provider, "Linear PROJ-123")
+        );
+        assert!(items[0].label.contains("not published | task a | branch a"));
+        assert!(items[1].label.contains(
+            "Linear PROJ-123 | task very-long-task-key | branch team/very-long-task-key"
+        ));
+    }
+
+    #[test]
     fn prompt_entries_keep_hint_text_searchable_without_rendering_search_suffix() {
         let items = prompt_entries(&[PromptItem::with_hint(
             "Fix editor",
@@ -512,5 +569,10 @@ mod tests {
     fn hint_column(row: &str, hint: &str) -> usize {
         row.find(hint)
             .unwrap_or_else(|| panic!("row did not contain hint {hint:?}: {row:?}"))
+    }
+
+    fn rendered_column(row: &str, hint: &str) -> usize {
+        let byte_index = hint_column(row, hint);
+        measure_text_width(&row[..byte_index])
     }
 }

@@ -196,8 +196,11 @@ TaskDocument는 작업이 무엇인지를 담는 정의다. `.local/tasks/<task>
 `wt task list`는 `.local/tasks/<task>.toml`에 저장된 TaskDocument file의 canonical
 read-only inventory다. `wt task run`의 runnable selector가 아니므로 이미 완료된
 TaskRun 때문에 selector에서 빠지는 TaskDocument도 보여주고, selector의 10-row visible
-cap을 적용하지 않는다. Output은 TaskDocument의 key, path, title, branch,
-origin/publish state, local-vs-provider-origin source, 짧은 body summary를 보여준다.
+cap을 적용하지 않는다. Text output은 selector와 같은 TaskDocument display order인
+title, origin/publish state, task key, branch를 먼저 보여주고, inventory-only field인
+source, path, origin, 짧은 body summary를 함께 보여준다. JSON output은 TaskDocument의
+key, path, title, branch, origin/publish state, local-vs-provider-origin source, 짧은
+body summary를 stable shape로 보여준다.
 TaskDocument TOML parse/validation failure는 조용히 숨기지 않고 text warning 또는 JSON
 `invalid_tasks`로 보고한다. `wt task list`는 worktree, local branch, TaskRun, Workflow,
 provider issue, pull request, agent setup을 만들거나 수정하지 않는다. Workflow inventory는

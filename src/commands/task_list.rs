@@ -1,4 +1,4 @@
-use crate::context::Ctx;
+use crate::context::{Ctx, PromptItem};
 use crate::task::{self, TaskDocument};
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -32,6 +32,8 @@ struct TaskListRow {
     publish_state: String,
     source: String,
     body_summary: Option<String>,
+    #[serde(skip_serializing)]
+    display: task::TaskDocumentDisplay,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,6 +102,7 @@ fn read_task_row(ctx: &Ctx, path: &Path) -> Result<TaskListRow> {
 }
 
 fn task_row(key: String, path: String, document: TaskDocument) -> TaskListRow {
+    let display = task::TaskDocumentDisplay::for_document(&key, &document);
     let origin = document.origin.as_ref().map(|origin| TaskOriginSummary {
         provider: origin.provider.clone(),
         id: origin.id.clone(),
@@ -124,6 +127,7 @@ fn task_row(key: String, path: String, document: TaskDocument) -> TaskListRow {
         publish_state: publish_state.into(),
         source: source.into(),
         body_summary: body_summary(&document.body),
+        display,
     }
 }
 
@@ -173,14 +177,7 @@ fn print_text(ctx: &Ctx, report: &TaskListReport) {
     }
 
     for row in &report.tasks {
-        ctx.ui.print_step(&format!(
-            "{}  title {}  branch {}  publish {}  source {}",
-            row.key,
-            title_label(row),
-            row.branch.as_deref().unwrap_or("-"),
-            row.publish_state,
-            row.source
-        ));
+        ctx.ui.print_step(&task_inventory_label(row));
         ctx.ui.print_dim(&format!("  Path: {}", row.path));
         ctx.ui
             .print_dim(&format!("  Origin: {}", origin_label(row)));
@@ -198,9 +195,10 @@ fn print_text(ctx: &Ctx, report: &TaskListReport) {
     }
 }
 
-fn title_label(row: &TaskListRow) -> &str {
-    let title = row.title.trim();
-    if title.is_empty() { &row.key } else { title }
+fn task_inventory_label(row: &TaskListRow) -> String {
+    let mut hint_parts = row.display.inventory_hint_parts();
+    hint_parts.push(format!("source {}", row.source));
+    PromptItem::from_hint_parts(row.display.label().to_string(), hint_parts).render_plain()
 }
 
 fn origin_label(row: &TaskListRow) -> String {

@@ -40,6 +40,60 @@ pub(crate) struct SelectedTask {
     pub(crate) document: TaskDocument,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TaskDocumentDisplay {
+    label: String,
+    origin_state: String,
+    task_key: String,
+    branch: Option<String>,
+}
+
+impl TaskDocumentDisplay {
+    pub(crate) fn for_document(key: &str, document: &TaskDocument) -> Self {
+        Self::for_status(key, document, &task_origin_status(document))
+    }
+
+    fn for_status(key: &str, document: &TaskDocument, status: &str) -> Self {
+        let title = document.title_or_key(key);
+        let label = title.trim();
+        let task_key = key.trim();
+        let label = if label.is_empty() { task_key } else { label };
+
+        Self {
+            label: label.to_string(),
+            origin_state: task_origin_state_label(status),
+            task_key: task_key.to_string(),
+            branch: prepared_branch_name(&document.branch).map(str::to_string),
+        }
+    }
+
+    pub(crate) fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub(crate) fn selector_hint_parts(&self) -> Vec<String> {
+        self.metadata_hint_parts()
+    }
+
+    pub(crate) fn inventory_hint_parts(&self) -> Vec<String> {
+        self.metadata_hint_parts()
+    }
+
+    fn metadata_hint_parts(&self) -> Vec<String> {
+        let mut hint_parts = Vec::new();
+        if !self.origin_state.is_empty() {
+            hint_parts.push(self.origin_state.clone());
+        }
+        if !self.task_key.is_empty() {
+            hint_parts.push(format!("task {}", self.task_key));
+        }
+        if let Some(branch) = &self.branch {
+            hint_parts.push(format!("branch {branch}"));
+        }
+        hint_parts
+    }
+}
+
 impl TaskDocument {
     pub(crate) fn title_or_key(&self, key: &str) -> String {
         if self.title.trim().is_empty() {
@@ -317,31 +371,18 @@ pub(crate) fn task_selection_item(task: &SelectedTask) -> PromptItem {
 }
 
 pub(crate) fn task_resource_item(key: &str, document: &TaskDocument, status: &str) -> PromptItem {
-    let title = document.title_or_key(key);
-    let label = title.trim();
-    let key = key.trim();
-    let label = if label.is_empty() { key } else { label };
-    let mut hint_parts = Vec::new();
-
-    if !key.is_empty() && label != key {
-        hint_parts.push(format!("task {key}"));
-    }
-    hint_parts.extend(task_status_hint_parts(status, key));
-    if let Some(branch) = prepared_branch_name(&document.branch) {
-        hint_parts.push(format!("branch {branch}"));
-    }
-
-    PromptItem::from_hint_parts(label.to_string(), hint_parts)
+    let display = TaskDocumentDisplay::for_status(key, document, status);
+    PromptItem::from_hint_parts(display.label().to_string(), display.selector_hint_parts())
 }
 
-fn task_status_hint_parts(status: &str, key: &str) -> Vec<String> {
+fn task_origin_state_label(status: &str) -> String {
     let status = status.trim();
     if status.is_empty() {
-        return Vec::new();
+        return String::new();
     }
 
     if status == "origin:none" {
-        return vec!["not published".into()];
+        return "not published".into();
     }
 
     if let Some(origin) = status.strip_prefix("origin:") {
@@ -349,13 +390,13 @@ fn task_status_hint_parts(status: &str, key: &str) -> Vec<String> {
         let provider = parts.next().unwrap_or_default();
         let id = parts.next().unwrap_or_default();
         let provider = provider_display_label(provider);
-        if id.trim().is_empty() || id == key {
-            return vec![provider];
+        if id.trim().is_empty() {
+            return provider;
         }
-        return vec![format!("{provider} {id}")];
+        return format!("{provider} {id}");
     }
 
-    vec![status.replace(':', " ")]
+    status.replace(':', " ")
 }
 
 fn provider_display_label(provider: &str) -> String {
@@ -487,12 +528,12 @@ mod tests {
 
         assert_eq!(
             task_selection_label(&task),
-            "Fix editor  task PROJ-123 | Linear | branch alice/proj-123-fix-editor"
+            "Fix editor  Linear PROJ-123 | task PROJ-123 | branch alice/proj-123-fix-editor"
         );
     }
 
     #[test]
-    fn task_selection_label_omits_duplicate_key_when_title_is_missing() {
+    fn task_selection_label_keeps_task_key_in_metadata_when_title_is_missing() {
         let task = SelectedTask {
             key: "local-task".into(),
             path: ".local/tasks/local-task.toml".into(),
@@ -507,7 +548,7 @@ mod tests {
 
         assert_eq!(
             task_selection_label(&task),
-            "local-task  not published | branch local-task"
+            "local-task  not published | task local-task | branch local-task"
         );
     }
 
