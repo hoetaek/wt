@@ -497,7 +497,8 @@ runnable metadata를 보여준다. Human text output은 `runnable`, `waiting`, `
 파생 presentation group 아래에 workflow title, workflow id/mode, TaskRun summary,
 profile/policy preview를 list row로 두고 body summary, origin, human reason, base, path는
 secondary detail line에 둔다. JSON
-output은 raw runnable reason identifiers를 계속 machine-readable metadata로 보존한다.
+output은 top-level `title`, `body`, optional `origin` metadata와 raw runnable reason
+identifiers를 machine-readable metadata로 보존한다.
 Workflow TOML parse/validation failure는 조용히 숨기지 않고
 text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계속 Workflow `mode`
 값일 뿐이므로 `wt list workflow`, top-level `batch`/`stack`, `wt profile list` 같은 symmetry

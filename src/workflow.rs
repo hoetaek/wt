@@ -206,11 +206,32 @@ pub fn create(ctx: &Ctx, mut workflow: WorkflowMetadata) -> Result<WorkflowRecor
 pub fn read(path: &Path) -> Result<WorkflowMetadata> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read workflow: {}", path.display()))?;
-    let workflow: WorkflowMetadata = toml::from_str(&content)
-        .with_context(|| format!("Failed to parse workflow: {}", path.display()))?;
+    let workflow: WorkflowMetadata = match toml::from_str(&content) {
+        Ok(workflow) => workflow,
+        Err(err) => {
+            let err = anyhow::Error::new(err)
+                .context(format!("Failed to parse workflow: {}", path.display()));
+            if has_removed_objective_field(&content) {
+                return Err(err).context(
+                    "Workflow uses removed `objective`; rewrite it as top-level `title`, `body`, and optional `[origin]`",
+                );
+            }
+            return Err(err);
+        }
+    };
     validate_workflow(&workflow)
         .with_context(|| format!("Invalid workflow: {}", path.display()))?;
     Ok(workflow)
+}
+
+fn has_removed_objective_field(content: &str) -> bool {
+    content.lines().any(|line| {
+        let line = line.trim_start();
+        !line.starts_with('#')
+            && line
+                .strip_prefix("objective")
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+    })
 }
 
 pub fn list(ctx: &Ctx) -> Result<Vec<WorkflowRecord>> {
@@ -1145,7 +1166,15 @@ run = "workflow-add-schema"
             )
             .unwrap();
 
-            assert!(error_report(read(&path)).contains(field));
+            let error = error_report(read(&path));
+            assert!(error.contains(field));
+            if field == "objective" {
+                assert!(
+                    error.contains(
+                        "rewrite it as top-level `title`, `body`, and optional `[origin]`"
+                    )
+                );
+            }
         }
     }
 

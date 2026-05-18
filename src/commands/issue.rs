@@ -1148,7 +1148,9 @@ mod tests {
             None,
             "Use this task before changing code.",
             Some("## Workflow Coordinator Handoff\n\nSend the report."),
-            Some("Workflow body:\n\nShip the broader migration."),
+            Some(
+                "Workflow title:\n\nWorkflow migration\n\nWorkflow body:\n\nShip the broader migration.\n\nWorkflow origin: linear:WT-123",
+            ),
         );
 
         let mut agent = config.agent.unwrap();
@@ -1156,9 +1158,15 @@ mod tests {
         assert_eq!(prompts.len(), 2);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
         assert!(prompts[0].contains("TaskDocument prompt follows next"));
-        assert!(!prompts[0].contains("Workflow body"));
+        assert!(!prompts[0].contains("Workflow title"));
         assert!(
-            prompts[1].find("Workflow body").unwrap()
+            prompts[1].find("Workflow title").unwrap() < prompts[1].find("Workflow body").unwrap()
+        );
+        assert!(
+            prompts[1].find("Workflow body").unwrap() < prompts[1].find("Workflow origin").unwrap()
+        );
+        assert!(
+            prompts[1].find("Workflow origin").unwrap()
                 < prompts[1]
                     .find("Task path: `.local/tasks/add-schema.toml`")
                     .unwrap()

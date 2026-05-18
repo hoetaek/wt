@@ -3,8 +3,8 @@ use crate::context::{Ctx, PromptItem};
 use crate::workflow as workflow_store;
 use crate::workflow::planner::{RunnableWorkflowInfo, runnable_workflow_info};
 use crate::workflow::render::{
-    base_label, shell_arg, workflow_filtered_task_summary, workflow_relative_path,
-    workflow_selection_status_counts, workflow_task_title_label,
+    base_label, shell_arg, workflow_relative_path, workflow_selection_status_counts,
+    workflow_title_label,
 };
 use crate::workflow::run::{
     WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
@@ -90,9 +90,9 @@ pub(super) fn list_runnable_workflow_candidates(
     }
 
     candidates.sort_by(|left, right| {
-        left.label
-            .cmp(&right.label)
-            .then_with(|| left.path.cmp(&right.path))
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.label.cmp(&right.label))
     });
     Ok(candidates)
 }
@@ -142,24 +142,18 @@ fn workflow_selection_item(
     states: &[WorkflowTaskState],
     info: &RunnableWorkflowInfo,
 ) -> PromptItem {
-    let mut fields = vec![format!("mode {}", metadata.mode.as_str())];
+    let mut fields = vec![
+        format!("id {workflow_id}"),
+        format!("mode {}", metadata.mode.as_str()),
+    ];
     match metadata.mode {
         WorkflowMode::Single | WorkflowMode::Batch | WorkflowMode::Matrix => {
-            fields.push(format!("{} runnable", info.runnable_count));
-            fields.push(format!(
-                "tasks {}",
-                workflow_filtered_task_summary(ctx, states, |state| { state.run.is_runnable() })
-                    .unwrap_or_else(|| "none".into())
-            ));
+            fields.push(format!("runnable {}", info.runnable_count));
         }
         WorkflowMode::Stack => {
             if let Some(next_idx) = info.next_idx {
                 let state = &states[next_idx];
-                fields.push(format!(
-                    "next {} [{}]",
-                    workflow_task_title_label(ctx, &state.row.task),
-                    state.run.status
-                ));
+                fields.push(format!("next {} [{}]", state.row.task, state.run.status));
             }
         }
     }
@@ -179,7 +173,7 @@ fn workflow_selection_item(
         workflow_relative_path(ctx, workflow_path)
     ));
 
-    PromptItem::from_hint_parts(workflow_id, fields)
+    PromptItem::from_hint_parts(workflow_title_label(ctx, workflow_id, metadata), fields)
 }
 
 fn multiple_runnable_workflows_message(

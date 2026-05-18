@@ -141,48 +141,6 @@ pub(crate) fn workflow_task_label(row: &WorkflowTask) -> &str {
     }
 }
 
-pub(crate) fn workflow_task_title_label(ctx: &Ctx, key: &str) -> String {
-    match task_store::read_task_document(ctx, key) {
-        Ok(document) => {
-            let title = document.title_or_key(key);
-            if title == key {
-                key.to_string()
-            } else {
-                format!("{title} ({key})")
-            }
-        }
-        Err(_) => format!("{key} (missing)"),
-    }
-}
-
-pub(crate) fn workflow_filtered_task_summary<F>(
-    ctx: &Ctx,
-    states: &[WorkflowTaskState],
-    include: F,
-) -> Option<String>
-where
-    F: Fn(&WorkflowTaskState) -> bool,
-{
-    let matching = states
-        .iter()
-        .filter(|state| include(state))
-        .collect::<Vec<_>>();
-    if matching.is_empty() {
-        return None;
-    }
-
-    let visible = matching
-        .iter()
-        .take(3)
-        .map(|state| workflow_task_title_label(ctx, &state.row.task))
-        .collect::<Vec<_>>();
-    let mut summary = visible.join(", ");
-    if matching.len() > visible.len() {
-        summary.push_str(&format!(", ...(+{})", matching.len() - visible.len()));
-    }
-    Some(summary)
-}
-
 pub(crate) fn workflow_selection_status_counts(items: &[WorkflowTaskState]) -> String {
     let counts = [
         STATUS_PREPARED,
@@ -216,6 +174,80 @@ pub(crate) fn workflow_relative_path(ctx: &Ctx, path: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
+}
+
+pub(crate) fn workflow_title_label(
+    ctx: &Ctx,
+    workflow_id: &str,
+    metadata: &WorkflowMetadata,
+) -> String {
+    metadata
+        .title
+        .as_deref()
+        .and_then(|title| truncated_one_line(title, 80))
+        .or_else(|| workflow_task_title_fallback(ctx, metadata))
+        .unwrap_or_else(|| workflow_id.to_string())
+}
+
+pub(crate) fn workflow_body_summary(metadata: &WorkflowMetadata) -> Option<String> {
+    metadata
+        .body
+        .as_deref()
+        .and_then(|body| truncated_one_line(body, 120))
+}
+
+pub(crate) fn workflow_origin_label(metadata: &WorkflowMetadata) -> Option<String> {
+    metadata.origin.as_ref().and_then(|origin| {
+        let provider = origin.provider.trim();
+        let id = origin.id.trim();
+        if provider.is_empty() || id.is_empty() {
+            None
+        } else {
+            Some(format!("{provider}:{id}"))
+        }
+    })
+}
+
+fn workflow_task_title_fallback(ctx: &Ctx, metadata: &WorkflowMetadata) -> Option<String> {
+    let first = metadata.tasks.first()?;
+    let first_title = match task_store::read_task_document(ctx, &first.task) {
+        Ok(document) => document.title_or_key(&first.task),
+        Err(_) => workflow_task_label(first).to_string(),
+    };
+    let first_title = one_line(&first_title);
+    if first_title.is_empty() {
+        return None;
+    }
+
+    let label = if metadata.tasks.len() > 1 {
+        format!("{first_title} (+{} tasks)", metadata.tasks.len() - 1)
+    } else {
+        first_title
+    };
+    truncated_one_line(&label, 80)
+}
+
+fn truncated_one_line(value: &str, max_chars: usize) -> Option<String> {
+    let value = one_line(value);
+    if value.is_empty() {
+        None
+    } else {
+        Some(truncate_chars(&value, max_chars))
+    }
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
+fn one_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub(crate) fn workflow_metadata_prompt_context(metadata: &WorkflowMetadata) -> Option<String> {

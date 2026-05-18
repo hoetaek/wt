@@ -1,7 +1,7 @@
 use crate::context::Ctx;
 use crate::task as task_store;
 use crate::workflow::WorkflowMetadata;
-use crate::workflow::render::base_label;
+use crate::workflow::render::{base_label, workflow_origin_label};
 use crate::workflow::run::task_run_record;
 use anyhow::Result;
 use std::path::Path;
@@ -18,19 +18,12 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
         .print_dim(&format!("  Mode: {}", metadata.mode.as_str()));
     ctx.ui
         .print_dim(&format!("  Base: {}", base_label(metadata)));
-    if let Some(title) = metadata.title.as_deref() {
-        ctx.ui.print_dim(&format!("  Title: {}", title.trim()));
-    }
-    if let Some(body) = metadata.body.as_deref() {
-        ctx.ui.print_dim(&format!("  Body: {}", body.trim()));
-    }
-    if let Some(origin) = &metadata.origin {
-        ctx.ui.print_dim(&format!(
-            "  Origin: {}:{}",
-            origin.provider.trim(),
-            origin.id.trim()
-        ));
-    }
+    print_optional_value(ctx, "Title", metadata.title.as_deref());
+    print_body(ctx, metadata.body.as_deref());
+    ctx.ui.print_dim(&format!(
+        "  Origin: {}",
+        workflow_origin_label(metadata).unwrap_or_else(|| "(none)".into())
+    ));
     if let Some(profile) = metadata.profile.as_deref() {
         ctx.ui.print_dim(&format!("  Profile: {profile}"));
     }
@@ -111,4 +104,33 @@ pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata)
         }
     }
     Ok(())
+}
+
+fn print_optional_value(ctx: &Ctx, label: &str, value: Option<&str>) {
+    let value = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("(none)");
+    ctx.ui.print_dim(&format!("  {label}: {value}"));
+}
+
+fn print_body(ctx: &Ctx, body: Option<&str>) {
+    let Some(body) = body.map(str::trim).filter(|body| !body.is_empty()) else {
+        ctx.ui.print_dim("  Body: (none)");
+        return;
+    };
+
+    if !body.contains('\n') {
+        ctx.ui.print_dim(&format!("  Body: {body}"));
+        return;
+    }
+
+    ctx.ui.print_dim("  Body:");
+    for line in body.lines() {
+        if line.trim().is_empty() {
+            ctx.ui.print_dim("    ");
+        } else {
+            ctx.ui.print_dim(&format!("    {}", line.trim_end()));
+        }
+    }
 }

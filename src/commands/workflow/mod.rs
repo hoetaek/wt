@@ -2266,8 +2266,10 @@ landing = "auto"
         );
         let items = ui.select_items.lock().unwrap();
         assert_eq!(items.len(), 1);
+        assert!(items[0][0].starts_with("first workflow"));
         assert!(items[0][0].contains(&first.id));
         assert!(items[0][0].contains("mode single"));
+        assert!(items[0][1].starts_with("second workflow"));
         assert!(items[0][1].contains(&second.id));
         assert!(items[0][1].contains("mode batch"));
     }

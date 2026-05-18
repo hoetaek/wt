@@ -158,7 +158,7 @@ Prepare saved workflows when local tasks or issues need coordination:
 
 ```bash
 wt workflow task --mode single add-schema wire-api --base .
-wt workflow task --mode batch add-schema wire-api --base main --objective "Ship search"
+wt workflow task --mode batch add-schema wire-api --base main --title "Ship search"
 wt workflow task --mode matrix --profiles devtools-port,mcp-owned add-profile-docs --base main
 wt workflow issue --mode stack 123 456 789 --base main --pr draft
 wt workflow list
@@ -204,7 +204,8 @@ completed with `wt workflow complete`, not `wt done`.
 - `wt task publish [<task>...]` creates provider issues from TaskDocuments and
   records `[origin]`; it does not start worktrees.
 - `Workflow` files in `.local/workflows/<id>.toml` save coordinated execution.
-  Optional `objective` records the larger human goal for the saved plan.
+  Optional top-level `title`, `body`, and `[origin]` record the larger human
+  context for the saved plan.
   `single` shares one workspace, `batch` runs independent branches from one
   base, and `stack` runs ordered branches as a parent chain.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid
@@ -327,10 +328,11 @@ the current `.wt.toml`, so later config edits do not rewrite the meaning of
 existing workflow files. An explicit `--pr none|draft|ready` overrides the
 effective config for that prepared workflow only.
 
-`wt workflow task --objective <text>` and
-`wt workflow issue --objective <text>` write top-level workflow context for the
-larger goal without changing runnable selection, TaskRun lifecycle, landing
-policy, or cleanup behavior.
+Use `--title <text>` and `--body <text>` with `wt workflow task` or
+`wt workflow issue` to write top-level workflow context for the larger goal
+without changing runnable selection, TaskRun lifecycle, landing policy, or
+cleanup behavior. Use `--origin-provider` with `--origin-id` when the Workflow
+itself has a durable provider source.
 
 Small private agent config can stay inline:
 
