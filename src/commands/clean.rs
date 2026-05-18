@@ -7,7 +7,7 @@ use crate::services::cmux::{CmuxService, CmuxWorkspace};
 use crate::services::git::GitService;
 use crate::services::site::{SiteService, provider_label};
 use crate::setup;
-use crate::task_run;
+use crate::task_run::{self, TaskRunContext, TaskRunRecord};
 use anyhow::{Result, bail};
 use std::path::Path;
 
@@ -25,6 +25,7 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
         .collect();
 
     if additional.is_empty() {
+        validate_task_run_targets_without_worktrees(ctx, targets)?;
         ctx.ui.print_warning("No additional worktrees found");
         return Ok(());
     }
@@ -34,7 +35,7 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
         ctx.ui
             .multi_select("Select worktrees to remove (Space to select)", &items)?
     } else {
-        resolve_targets(&additional, targets)?
+        resolve_targets(ctx, &additional, targets)?
     };
     if selected.is_empty() {
         ctx.ui.print_warning("No worktrees selected");
@@ -292,29 +293,110 @@ fn same_path(a: &Path, b: &Path) -> bool {
 }
 
 fn resolve_targets(
+    ctx: &Ctx,
     entries: &[crate::services::git::WorktreeEntry],
     targets: &[String],
 ) -> Result<Vec<usize>> {
     let mut selected = Vec::new();
     for target in targets {
-        let matches = entries
+        let worktree_matches = entries
             .iter()
             .enumerate()
             .filter(|(_, entry)| worktree_matches(entry, target))
             .map(|(idx, _)| idx)
             .collect::<Vec<_>>();
+        let task_run_match = direct_task_run_worktree_match(ctx, entries, target)?;
 
-        match matches.as_slice() {
-            [idx] => {
+        match (worktree_matches.as_slice(), task_run_match) {
+            ([idx], None) => {
                 if !selected.contains(idx) {
                     selected.push(*idx);
                 }
             }
-            [] => bail!("No worktree matches {target:?}"),
+            ([], Some(idx)) => {
+                if !selected.contains(&idx) {
+                    selected.push(idx);
+                }
+            }
+            ([], None) => bail!("No worktree matches {target:?}"),
+            (_, Some(_)) => {
+                bail!(
+                    "Work target is ambiguous: {target:?} matches both a worktree target and a TaskRun id"
+                )
+            }
             _ => bail!("Multiple worktrees match {target:?}"),
         }
     }
     Ok(selected)
+}
+
+fn direct_task_run_worktree_match(
+    ctx: &Ctx,
+    entries: &[crate::services::git::WorktreeEntry],
+    target: &str,
+) -> Result<Option<usize>> {
+    let Some(record) = task_run_record_for_id(ctx, target)? else {
+        return Ok(None);
+    };
+
+    reject_non_direct_task_run(ctx, &record)?;
+
+    let matches = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.branch == record.run.branch)
+        .map(|(idx, _)| idx)
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [idx] => Ok(Some(*idx)),
+        [] => bail!(
+            "No worktree matches TaskRun {:?} (branch {:?})",
+            record.id,
+            record.run.branch
+        ),
+        _ => bail!(
+            "Multiple worktrees match TaskRun {:?} (branch {:?})",
+            record.id,
+            record.run.branch
+        ),
+    }
+}
+
+fn validate_task_run_targets_without_worktrees(ctx: &Ctx, targets: &[String]) -> Result<()> {
+    for target in targets {
+        if task_run_record_for_id(ctx, target)?.is_some() {
+            direct_task_run_worktree_match(ctx, &[], target)?;
+        }
+    }
+    Ok(())
+}
+
+fn task_run_record_for_id(ctx: &Ctx, target: &str) -> Result<Option<TaskRunRecord>> {
+    Ok(task_run::list(ctx)?
+        .into_iter()
+        .find(|record| record.id == target))
+}
+
+fn reject_non_direct_task_run(ctx: &Ctx, record: &TaskRunRecord) -> Result<()> {
+    match task_run::resolve_context(ctx, record)? {
+        TaskRunContext::Direct => Ok(()),
+        TaskRunContext::WorkflowLinked(context) => bail!(
+            "TaskRun {} is workflow-linked to {} task {}. Use `wt inspect {}` for context and complete it with `wt workflow complete {} {}`; `wt done` only accepts direct TaskRun ids.",
+            record.id,
+            context.workflow_id,
+            context.task,
+            record.id,
+            context.workflow_path.display(),
+            context.task
+        ),
+        TaskRunContext::UnresolvedWorkflowGroup { group } => bail!(
+            "TaskRun {} belongs to workflow group {}, but the workflow file was not discovered. Use `wt inspect {}` for context and complete the workflow path instead; `wt done` only accepts direct TaskRun ids.",
+            record.id,
+            group,
+            record.id
+        ),
+    }
 }
 
 fn worktree_matches(entry: &crate::services::git::WorktreeEntry, target: &str) -> bool {
@@ -446,6 +528,140 @@ mod tests {
             task_run::read(&grouped_run.path).unwrap().status,
             task_run::STATUS_RUNNING
         );
+    }
+
+    #[test]
+    fn clean_accepts_direct_task_run_id_as_target() {
+        let repo = tempfile::tempdir().unwrap();
+        let worktree = repo.path().with_file_name("test-repo-add-schema");
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\nbranch refs/heads/alice/add-schema\n\n",
+                repo.path().display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("", true); // worktree remove
+        runner.add_response("", true); // branch delete
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let run = task_run::create(
+            &ctx,
+            "add-schema",
+            "alice/add-schema",
+            None,
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+
+        run_with_targets(&ctx, std::slice::from_ref(&run.id)).unwrap();
+
+        assert_eq!(
+            task_run::read(&run.path).unwrap().status,
+            task_run::STATUS_DONE
+        );
+    }
+
+    #[test]
+    fn clean_rejects_workflow_linked_task_run_id() {
+        let repo = tempfile::tempdir().unwrap();
+        let worktree = repo.path().with_file_name("test-repo-add-schema");
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\nworktree {}\nHEAD def\nbranch refs/heads/alice/add-schema\n\n",
+                repo.path().display(),
+                worktree.display()
+            ),
+            true,
+        );
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let run = task_run::create(
+            &ctx,
+            "workflow-schema",
+            "alice/add-schema",
+            Some("2026-05-16-001"),
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+        let workflow_path = repo.path().join(".local/workflows/2026-05-16-001.toml");
+        let mut workflow = crate::workflow::WorkflowMetadata::new(
+            crate::workflow::WorkflowMode::Batch,
+            "branch",
+            Some("main".into()),
+            vec![crate::workflow::WorkflowTask::new(
+                "workflow-schema",
+                run.id.clone(),
+            )],
+        );
+        crate::workflow::write(&ctx, &workflow_path, &mut workflow).unwrap();
+
+        let err = run_with_targets(&ctx, std::slice::from_ref(&run.id)).unwrap_err();
+        let message = format!("{err:#}");
+
+        assert!(message.contains("workflow-linked"));
+        assert!(message.contains("wt workflow complete"));
+        assert_eq!(
+            task_run::read(&run.path).unwrap().status,
+            task_run::STATUS_RUNNING
+        );
+    }
+
+    #[test]
+    fn clean_rejects_direct_task_run_id_without_matching_worktree() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(MockUi::new()),
+        );
+        let run = task_run::create(
+            &ctx,
+            "add-schema",
+            "alice/add-schema",
+            None,
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+
+        let err = run_with_targets(&ctx, std::slice::from_ref(&run.id)).unwrap_err();
+        let message = format!("{err:#}");
+
+        assert!(message.contains("No worktree matches TaskRun"));
+        assert!(message.contains("alice/add-schema"));
     }
 
     #[test]
@@ -818,5 +1034,34 @@ name = "profile-{{branch_slug}}"
         assert!(worktree_matches(&entry, "123"));
         assert!(worktree_matches(&entry, "PROJ-123"));
         assert!(!worktree_matches(&entry, "12"));
+    }
+
+    #[test]
+    fn explicit_targets_preserve_branch_path_and_issue_shorthand_matching() {
+        let repo = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+        let entries = vec![crate::services::git::WorktreeEntry {
+            path: "/tmp/sample-app-proj-123-fix-editor".into(),
+            branch: "alice/proj-123-fix-editor".into(),
+        }];
+
+        assert_eq!(
+            resolve_targets(&ctx, &entries, &["alice/proj-123-fix-editor".into()]).unwrap(),
+            vec![0]
+        );
+        assert_eq!(
+            resolve_targets(&ctx, &entries, &["sample-app-proj-123-fix-editor".into()]).unwrap(),
+            vec![0]
+        );
+        assert_eq!(
+            resolve_targets(&ctx, &entries, &["PROJ-123".into()]).unwrap(),
+            vec![0]
+        );
     }
 }

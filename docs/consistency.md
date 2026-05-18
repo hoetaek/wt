@@ -443,6 +443,13 @@ workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch comm
 단계로 landing을 문서화한다. Stack-mode workflow branch는 workflow가 보여주는 base-to-top
 순서대로 landing한다.
 
+`wt done <target>`의 explicit cleanup target은 branch, worktree path/name,
+issue-like branch-name shorthand, direct TaskRun id다. Direct TaskRun id는 해당 TaskRun의
+branch를 checked-out worktree로 해석한 뒤 같은 cleanup path를 탄다. Workflow-linked
+TaskRun id는 workflow completion을 우회하지 않도록 거부하고 `wt inspect`와
+`wt workflow complete` 경로를 안내한다. Issue shorthand는 provider issue lookup이 아니라
+현재 branch text에 대한 compatibility shorthand다.
+
 Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work definition이므로
 기본적으로 보존한다. 한 번 실행하고 끝난 task라도 linked TaskRun과 Workflow reference가
 정리되기 전까지 TaskDocument 삭제를 execution completion에 섞지 않는다. 나중에 `wt land`,

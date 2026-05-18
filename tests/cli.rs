@@ -492,6 +492,18 @@ fn inspect_help_explains_optional_target_selection() {
 }
 
 #[test]
+fn done_help_explains_cleanup_target_contract() {
+    wt_command()
+        .args(["done", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("worktree path/name"))
+        .stdout(predicate::str::contains("issue-like branch-name shorthand"))
+        .stdout(predicate::str::contains("direct TaskRun id"))
+        .stdout(predicate::str::contains("wt workflow complete"));
+}
+
+#[test]
 fn inspect_without_target_noninteractive_requires_explicit_target() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());

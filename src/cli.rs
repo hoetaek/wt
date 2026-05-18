@@ -99,8 +99,11 @@ pub enum Commands {
         target: Option<String>,
     },
     /// Remove worktrees, clean integrations, and delete local branches
+    #[command(
+        long_about = "Remove checked-out worktrees, clean integrations, mark matching direct running TaskRuns done, and delete local branches.\n\nPass branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id. Workflow-linked TaskRun ids are completed with `wt workflow complete`, not `wt done`. Omit TARGETS to choose worktrees interactively."
+    )]
     Done {
-        /// Branch, issue number/key, or worktree directory names to remove
+        /// Branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id to remove
         targets: Vec<String>,
     },
     /// Read a work dossier for a branch, worktree, or TaskRun

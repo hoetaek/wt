@@ -110,10 +110,11 @@ wt done <target>
 
 Omitting a work target opens a selector only in interactive human use. In
 `--json`, `--quiet`, or non-TTY automation, pass an explicit branch, worktree
-path/name, or TaskRun id.
+path/name, or direct TaskRun id.
 
 `wt done` removes worktrees and local branches. It does not merge the branch.
-Land reviewed work with Git or pull requests first.
+Land reviewed work with Git or pull requests first. Workflow-linked TaskRuns are
+completed with `wt workflow complete`, not `wt done`.
 
 ## Core Model
 
