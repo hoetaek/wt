@@ -14,28 +14,108 @@
           <h1>wt local state</h1>
           <p id="repo-label"></p>
         </div>
-        <div class="state-strip" aria-hidden="true">
+        <div class="state-strip" aria-label="State file locations">
           <div><span>TaskDocument</span><strong>.local/tasks</strong></div>
           <div><span>Workflow</span><strong>.local/workflows</strong></div>
           <div><span>TaskRun</span><strong>.local/task-runs</strong></div>
           <div><span>Config</span><strong>.wt.toml layers</strong></div>
         </div>
-        <button id="refresh" type="button">Refresh</button>
+        <div class="top-actions">
+          <button id="language-toggle" type="button" aria-pressed="false">한국어</button>
+          <button id="refresh" type="button">Refresh</button>
+        </div>
       </header>
 
-      <nav class="tabs" aria-label="Views">
-        <button class="active" type="button" data-view="overview" aria-current="page">Overview</button>
-        <button type="button" data-view="ideas">Ideas</button>
-        <button type="button" data-view="tasks">TaskDocuments</button>
-        <button type="button" data-view="workflows">Workflows</button>
-        <button type="button" data-view="task-runs">TaskRuns</button>
-        <button type="button" data-view="profiles">Profiles</button>
-        <button type="button" data-view="config">Config</button>
+      <nav class="tabs" aria-label="Views" role="tablist">
+        <button
+          id="tab-tasks"
+          class="active"
+          type="button"
+          role="tab"
+          data-view="tasks"
+          aria-selected="true"
+          aria-controls="content"
+        >
+          TaskDocuments
+        </button>
+        <button
+          id="tab-task-runs"
+          type="button"
+          role="tab"
+          data-view="task-runs"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          TaskRuns
+        </button>
+        <button
+          id="tab-workflows"
+          type="button"
+          role="tab"
+          data-view="workflows"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          Workflows
+        </button>
+        <button
+          id="tab-ideas"
+          type="button"
+          role="tab"
+          data-view="ideas"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          Ideas
+        </button>
+        <button
+          id="tab-profiles"
+          type="button"
+          role="tab"
+          data-view="profiles"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          Profiles
+        </button>
+        <button
+          id="tab-config"
+          type="button"
+          role="tab"
+          data-view="config"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          Config
+        </button>
+        <button
+          id="tab-overview"
+          type="button"
+          role="tab"
+          data-view="overview"
+          aria-selected="false"
+          aria-controls="content"
+          tabindex="-1"
+        >
+          Overview
+        </button>
       </nav>
 
       <main>
         <section id="metrics" class="metrics" aria-label="Summary"></section>
-        <section id="content" class="content" aria-live="polite"></section>
+        <section
+          id="content"
+          class="content"
+          role="tabpanel"
+          aria-labelledby="tab-tasks"
+          tabindex="-1"
+        ></section>
+        <div id="status" class="sr-only" aria-live="polite"></div>
       </main>
     </div>
     <script src="/assets/app.js"></script>

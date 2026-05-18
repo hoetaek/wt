@@ -2,6 +2,7 @@ use crate::config::{
     AgentCli, Config, ConfigSource, IssueProviderType, SiteProvider, WorkflowDefaultLandingPolicy,
     WorkflowDefaultPullRequestMode,
 };
+use crate::config_render::render_effective_config;
 use crate::context::{
     CmdOutput, CommandRunner, Ctx, CtxOptions, OutputMode, PromptItem, UserInterface,
 };
@@ -109,12 +110,20 @@ struct SourceSummary {
 struct ConfigSummary {
     source: String,
     paths: Vec<String>,
+    effective_text: String,
+    source_files: Vec<SourceFileSummary>,
     selected_profile: Option<String>,
     workflow: WorkflowDefaultSummary,
     agent: Option<String>,
     issues: Option<String>,
     site: Option<SiteSummary>,
     workspace: Option<WorkspaceSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct SourceFileSummary {
+    path: String,
+    text: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,6 +165,7 @@ struct IdeaSummary {
     updated_at: Option<String>,
     body_summary: Option<String>,
     body: Option<String>,
+    source_text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -174,6 +184,7 @@ struct TaskSummary {
     source: String,
     body_summary: Option<String>,
     body: Option<String>,
+    source_text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -192,10 +203,12 @@ struct WorkflowCollection {
 struct WorkflowSummary {
     id: String,
     path: String,
+    title: Option<String>,
     mode: String,
     presentation_group: String,
-    objective_summary: Option<String>,
-    objective: Option<String>,
+    body_summary: Option<String>,
+    body: Option<String>,
+    source_text: Option<String>,
     task_count: usize,
     task_runs: TaskRunCounts,
     runnable: RunnableSummary,
@@ -251,6 +264,7 @@ struct TaskRunSummary {
     creation_order: Option<u64>,
     created_at: String,
     updated_at: String,
+    source_text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -278,6 +292,7 @@ struct ProfileSummary {
     agent: String,
     has_site: bool,
     test_count: usize,
+    source_text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -285,6 +300,7 @@ struct InvalidRecord {
     key: String,
     path: String,
     error: String,
+    source_text: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -334,6 +350,7 @@ fn collect_ideas(ctx: &Ctx) -> Result<IdeaCollection> {
                 key,
                 path: relative_path,
                 error: format!("{err:#}"),
+                source_text: read_known_source_text(ctx, &path),
             }),
         }
     }
@@ -388,6 +405,7 @@ fn read_toml_idea(ctx: &Ctx, path: &Path) -> Result<IdeaSummary> {
         updated_at: non_empty_string(idea.updated_at),
         body_summary: idea.body.as_deref().and_then(body_summary),
         body: non_empty_string(idea.body),
+        source_text: non_empty_body(&content),
     })
 }
 
@@ -413,6 +431,7 @@ fn read_markdown_idea(ctx: &Ctx, path: &Path) -> Result<IdeaSummary> {
         updated_at: None,
         body_summary: body_summary(&content),
         body: non_empty_body(&content),
+        source_text: non_empty_body(&content),
     })
 }
 
@@ -427,12 +446,14 @@ fn collect_tasks(ctx: &Ctx) -> Result<TaskCollection> {
             Ok(selected) => items.push(task_summary(
                 selected.key,
                 selected.path,
-                &selected.document,
+                selected.content,
+                selected.document,
             )),
             Err(err) => invalid.push(InvalidRecord {
                 key,
                 path: relative_path,
                 error: format!("{err:#}"),
+                source_text: read_known_source_text(ctx, &path),
             }),
         }
     }
@@ -440,7 +461,7 @@ fn collect_tasks(ctx: &Ctx) -> Result<TaskCollection> {
     Ok(TaskCollection { items, invalid })
 }
 
-fn task_summary(key: String, path: String, document: &TaskDocument) -> TaskSummary {
+fn task_summary(key: String, path: String, content: String, document: TaskDocument) -> TaskSummary {
     let origin = document.origin.as_ref().map(task_origin_summary);
     TaskSummary {
         key: key.clone(),
@@ -455,6 +476,7 @@ fn task_summary(key: String, path: String, document: &TaskDocument) -> TaskSumma
         origin,
         body_summary: body_summary(&document.body),
         body: non_empty_body(&document.body),
+        source_text: non_empty_body(&content),
     }
 }
 
@@ -478,6 +500,7 @@ fn collect_workflows(ctx: &Ctx) -> Result<WorkflowCollection> {
                 key: id,
                 path: relative_path,
                 error: format!("{err:#}"),
+                source_text: read_known_source_text(ctx, &path),
             }),
         }
     }
@@ -498,10 +521,12 @@ fn workflow_summary(
     WorkflowSummary {
         id,
         path: relative_path(ctx, path),
+        title: metadata.title,
         mode: metadata.mode.as_str().into(),
         presentation_group,
-        objective_summary: metadata.objective.as_deref().and_then(short_summary),
-        objective: non_empty_string(metadata.objective),
+        body_summary: metadata.body.as_deref().and_then(short_summary),
+        body: non_empty_string(metadata.body),
+        source_text: read_known_source_text(ctx, path),
         task_count: metadata.tasks.len(),
         task_runs: counts,
         runnable,
@@ -648,6 +673,7 @@ fn collect_task_runs(ctx: &Ctx) -> Result<TaskRunCollection> {
                 key: id,
                 path: relative_path,
                 error: format!("{err:#}"),
+                source_text: read_known_source_text(ctx, &path),
             }),
         }
     }
@@ -668,6 +694,7 @@ fn task_run_summary(ctx: &Ctx, record: &TaskRunRecord) -> TaskRunSummary {
         creation_order: record.run.creation_order,
         created_at: record.run.created_at.clone(),
         updated_at: record.run.updated_at.clone(),
+        source_text: read_known_source_text(ctx, &record.path),
     }
 }
 
@@ -735,6 +762,7 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
                 .test
                 .map(|test| test.commands.len())
                 .unwrap_or(0),
+            source_text: read_known_source_text(ctx, &profile.path),
         })
         .collect();
     let invalid = inventory
@@ -744,6 +772,7 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
             key: profile.name,
             path: relative_path(ctx, &profile.path),
             error: profile.error,
+            source_text: read_known_source_text(ctx, &profile.path),
         })
         .collect();
 
@@ -755,6 +784,8 @@ fn config_summary(ctx: &Ctx) -> ConfigSummary {
     ConfigSummary {
         source: config_source_label(&ctx.config_source).into(),
         paths: config_source_paths(ctx),
+        effective_text: render_effective_config(&ctx.config),
+        source_files: config_source_files(ctx),
         selected_profile: ctx
             .base_config
             .profile
@@ -808,6 +839,26 @@ fn config_source_paths(ctx: &Ctx) -> Vec<String> {
         ConfigSource::Default => Vec::new(),
         ConfigSource::File(path) => vec![relative_path(ctx, path)],
         ConfigSource::Files(paths) => paths.iter().map(|path| relative_path(ctx, path)).collect(),
+    }
+}
+
+fn config_source_files(ctx: &Ctx) -> Vec<SourceFileSummary> {
+    config_source_path_bufs(&ctx.config_source)
+        .into_iter()
+        .filter_map(|path| {
+            read_known_source_text(ctx, &path).map(|text| SourceFileSummary {
+                path: relative_path(ctx, &path),
+                text,
+            })
+        })
+        .collect()
+}
+
+fn config_source_path_bufs(source: &ConfigSource) -> Vec<PathBuf> {
+    match source {
+        ConfigSource::Default => Vec::new(),
+        ConfigSource::File(path) => vec![path.clone()],
+        ConfigSource::Files(paths) => paths.clone(),
     }
 }
 
@@ -869,6 +920,30 @@ fn non_empty_string(value: Option<String>) -> Option<String> {
 fn non_empty_body(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn read_known_source_text(ctx: &Ctx, path: &Path) -> Option<String> {
+    let relative = relative_path(ctx, path);
+    if !is_known_state_or_config_path(&relative) {
+        return None;
+    }
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| non_empty_body(&content))
+}
+
+fn is_known_state_or_config_path(relative: &str) -> bool {
+    relative == ".wt.toml"
+        || relative == ".local/.wt.toml"
+        || (relative.starts_with(".local/ideas/")
+            && matches!(
+                Path::new(relative).extension().and_then(|ext| ext.to_str()),
+                Some("toml" | "md" | "markdown")
+            ))
+        || (relative.starts_with(".local/tasks/") && relative.ends_with(".toml"))
+        || (relative.starts_with(".local/workflows/") && relative.ends_with(".toml"))
+        || (relative.starts_with(".local/task-runs/") && relative.ends_with(".toml"))
+        || (relative.starts_with(".local/profiles/") && relative.ends_with("/profile.toml"))
 }
 
 fn body_summary(value: &str) -> Option<String> {
@@ -984,7 +1059,7 @@ mod tests {
         write_workflow(
             dir.path(),
             "2026-05-18-001",
-            "mode = \"batch\"\nbase_mode = \"explicit\"\nbase = \"main\"\ncreated_at = \"2026-05-18T00:00:00Z\"\nupdated_at = \"2026-05-18T00:00:00Z\"\n\n[policy]\npull_request = \"none\"\nlanding = \"manual\"\n\n[[tasks]]\ntask = \"demo\"\nrun = \"run-demo\"\n",
+            "title = \"Workflow demo\"\nbody = \"Workflow body\"\nmode = \"batch\"\nbase_mode = \"explicit\"\nbase = \"main\"\ncreated_at = \"2026-05-18T00:00:00Z\"\nupdated_at = \"2026-05-18T00:00:00Z\"\n\n[policy]\npull_request = \"none\"\nlanding = \"manual\"\n\n[[tasks]]\ntask = \"demo\"\nrun = \"run-demo\"\n",
         );
         write_workflow(dir.path(), "bad", "mode = \"batch\"\n");
         write_idea(
@@ -995,6 +1070,17 @@ mod tests {
         write_idea(dir.path(), "bad", "title = [\n");
         write_profile(dir.path(), "codex", "[agent]\ncli = \"codex\"\n");
         write_profile(dir.path(), "bad name", "[agent]\ncli = \"codex\"\n");
+        fs::write(
+            dir.path().join(".wt.toml"),
+            "[workflow]\npull_request = \"ready\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join(".local")).unwrap();
+        fs::write(
+            dir.path().join(".local/.wt.toml"),
+            "[workflow]\nlanding = \"auto\"\n",
+        )
+        .unwrap();
 
         let mut config = Config::default();
         config.workflow.pull_request = Some(WorkflowDefaultPullRequestMode::Ready);
@@ -1041,7 +1127,41 @@ mod tests {
         );
         assert_eq!(snapshot.tasks.items[0].path, ".local/tasks/demo.toml");
         assert_eq!(snapshot.tasks.items[0].body.as_deref(), Some("Demo body"));
+        assert!(
+            snapshot.tasks.items[0]
+                .source_text
+                .as_deref()
+                .unwrap()
+                .contains("branch = \"feature/demo\"")
+        );
         assert_eq!(snapshot.ideas.items[0].body.as_deref(), Some("Idea body"));
+        assert!(
+            snapshot.task_runs.items[0]
+                .source_text
+                .as_deref()
+                .unwrap()
+                .contains("status = \"prepared\"")
+        );
+        assert_eq!(
+            snapshot.workflows.items[0].body.as_deref(),
+            Some("Workflow body")
+        );
+        assert!(
+            snapshot.workflows.items[0]
+                .source_text
+                .as_deref()
+                .unwrap()
+                .contains("[[tasks]]")
+        );
+        assert!(
+            snapshot.profiles.items[0]
+                .source_text
+                .as_deref()
+                .unwrap()
+                .contains("cli = \"codex\"")
+        );
+        assert!(snapshot.config.effective_text.contains("[workflow]"));
+        assert_eq!(snapshot.config.source_files.len(), 2);
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
             "state_error"

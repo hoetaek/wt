@@ -109,14 +109,26 @@ mod tests {
     #[test]
     fn embedded_frontend_includes_operational_dashboard_shell() {
         assert!(INDEX_HTML.contains("class=\"state-strip\""));
-        assert!(INDEX_HTML.contains("aria-current=\"page\""));
+        assert!(INDEX_HTML.contains("role=\"tablist\""));
+        assert!(INDEX_HTML.contains("aria-selected=\"true\""));
+        assert!(INDEX_HTML.contains("role=\"tabpanel\""));
+        assert!(INDEX_HTML.contains("id=\"language-toggle\""));
         assert!(APP_CSS.contains(".section-heading"));
         assert!(APP_CSS.contains(".record-list"));
         assert!(APP_CSS.contains(".record-card.tone-green::before"));
         assert!(APP_CSS.contains(".read-more[open]"));
+        assert!(APP_CSS.contains(".collapse-inline"));
+        assert!(APP_CSS.contains(".mobile-meta"));
+        assert!(APP_CSS.contains(".full-text pre"));
         assert!(APP_JS.contains("metric invalid"));
         assert!(APP_JS.contains("details class=\"read-more\""));
-        assert!(APP_JS.contains("tab.setAttribute(\"aria-current\", \"page\")"));
+        assert!(APP_JS.contains("전문 보기"));
+        assert!(APP_JS.contains("config.source_files || []"));
+        assert!(APP_JS.contains("effective_text"));
+        assert!(APP_JS.contains("localStorage.setItem(LOCALE_KEY"));
+        assert!(APP_JS.contains("data-collapse"));
+        assert!(APP_JS.contains("aria-selected"));
+        assert!(APP_JS.contains("TaskDocuments are saved work definitions"));
     }
 
     #[tokio::test]
