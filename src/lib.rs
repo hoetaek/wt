@@ -140,7 +140,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             message,
             no_enter,
         } => commands::send::run(ctx, target, message, *no_enter),
-        Commands::Doctor => commands::doctor::run(ctx),
+        Commands::Doctor { profile } => commands::doctor::run(ctx, profile.as_deref()),
         Commands::Config { profile, command } => match command {
             Some(ConfigCommand::Edit { source }) => {
                 commands::config::edit(ctx, profile.as_deref(), source.as_deref())

@@ -131,6 +131,7 @@ wt init
 wt init --preset app --dry-run
 wt init --shared --preset issue --issue-provider github --yes
 wt doctor
+wt doctor --profile codex
 ```
 
 Start work:
