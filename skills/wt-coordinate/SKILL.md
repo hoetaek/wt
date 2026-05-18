@@ -53,9 +53,17 @@ wt --json agent status <target>
 ```
 
 If `wt agent status` says `running`, let the agent work unless it is clearly
-stuck. If you need to wait for a transition, use `wt agent watch <target>`.
-If it says `needs_input`, inspect and send feedback. If it says `idle`, review
-the worktree instead of polling.
+stuck. When waiting right after newly assigning work to an agent, prefer a quiet
+heartbeat so coordination does not become noise:
+
+```bash
+wt agent watch <target> --heartbeat 120
+```
+
+Use a shorter heartbeat only when actively debugging a suspected stall, waiting
+after focused feedback, or expecting an immediate transition. If the agent says
+`needs_input`, inspect and send feedback. If it says `idle`, review the worktree
+instead of polling.
 
 ## Review
 
