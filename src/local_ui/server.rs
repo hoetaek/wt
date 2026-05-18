@@ -102,8 +102,18 @@ mod tests {
     #[test]
     fn config_tab_passes_source_paths_to_card_renderer() {
         assert!(APP_JS.contains("function renderConfig(snapshot)"));
-        assert!(APP_JS.contains("], config.paths),"));
+        assert!(APP_JS.contains("], config.paths,"));
         assert!(!APP_JS.contains("], paths(config.paths)),"));
+    }
+
+    #[test]
+    fn embedded_frontend_includes_operational_dashboard_shell() {
+        assert!(INDEX_HTML.contains("class=\"state-strip\""));
+        assert!(INDEX_HTML.contains("aria-current=\"page\""));
+        assert!(APP_CSS.contains(".section-heading"));
+        assert!(APP_CSS.contains(".card.tone-green::before"));
+        assert!(APP_JS.contains("metric invalid"));
+        assert!(APP_JS.contains("tab.setAttribute(\"aria-current\", \"page\")"));
     }
 
     #[tokio::test]

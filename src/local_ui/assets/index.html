@@ -9,15 +9,22 @@
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <div>
+        <div class="identity">
+          <p class="eyebrow">Read-only local inventory</p>
           <h1>wt local state</h1>
           <p id="repo-label"></p>
+        </div>
+        <div class="state-strip" aria-hidden="true">
+          <div><span>TaskDocument</span><strong>.local/tasks</strong></div>
+          <div><span>Workflow</span><strong>.local/workflows</strong></div>
+          <div><span>TaskRun</span><strong>.local/task-runs</strong></div>
+          <div><span>Config</span><strong>.wt.toml layers</strong></div>
         </div>
         <button id="refresh" type="button">Refresh</button>
       </header>
 
       <nav class="tabs" aria-label="Views">
-        <button class="active" type="button" data-view="overview">Overview</button>
+        <button class="active" type="button" data-view="overview" aria-current="page">Overview</button>
         <button type="button" data-view="ideas">Ideas</button>
         <button type="button" data-view="tasks">TaskDocuments</button>
         <button type="button" data-view="workflows">Workflows</button>

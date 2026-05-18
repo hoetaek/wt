@@ -12,7 +12,15 @@ const refreshButton = document.querySelector("#refresh");
 tabs.forEach((button) => {
   button.addEventListener("click", () => {
     state.view = button.dataset.view;
-    tabs.forEach((tab) => tab.classList.toggle("active", tab === button));
+    tabs.forEach((tab) => {
+      const active = tab === button;
+      tab.classList.toggle("active", active);
+      if (active) {
+        tab.setAttribute("aria-current", "page");
+      } else {
+        tab.removeAttribute("aria-current");
+      }
+    });
     render();
   });
 });
@@ -67,7 +75,8 @@ function renderMetrics(snapshot) {
   metrics.innerHTML = rows
     .map(([label, count, invalid]) => {
       const invalidText = invalid ? `${invalid} invalid` : "valid";
-      return `<div class="metric"><strong>${count}</strong><span>${label} - ${invalidText}</span></div>`;
+      const className = invalid ? "metric invalid" : "metric";
+      return `<div class="${className}"><span class="metric-kicker">${escapeHtml(label)}</span><strong>${count}</strong><span class="metric-state">${escapeHtml(invalidText)}</span></div>`;
     })
     .join("");
 }
@@ -144,19 +153,19 @@ function renderConfig(snapshot) {
       pill(`pr ${config.workflow.pull_request}`, "green"),
       pill(`landing ${config.workflow.landing}`, "amber"),
       config.selected_profile ? pill(`profile ${config.selected_profile}`, "violet") : "",
-    ], config.paths),
+    ], config.paths, "", "blue"),
     card("Runtime", [
       pill(`agent ${config.agent || "none"}`),
       pill(`issues ${config.issues || "none"}`),
       pill(`site ${config.site ? config.site.provider : "none"}`),
-    ], []),
+    ], [], "", "green"),
   ];
   if (config.workspace) {
     cards.push(card("Workspace", [
       pill(`${config.workspace.tab_count} tabs`),
       pill(`${config.workspace.post_deps_tab_count} post-deps`),
       pill(`${config.workspace.color_count} colors`),
-    ], []));
+    ], [], "", "violet"));
   }
   content.innerHTML = section("Config", cards, "No config summary");
 }
@@ -167,7 +176,7 @@ function ideaCard(row) {
     pill(row.kind),
     row.source ? pill(row.source) : "",
     ...row.tags.map((tag) => pill(tag, "violet")),
-  ], [row.path], row.body_summary);
+  ], [row.path], row.body_summary, statusColor(row.status));
 }
 
 function taskCard(row) {
@@ -175,7 +184,7 @@ function taskCard(row) {
     pill(`task ${row.key}`, "blue"),
     row.branch ? pill(`branch ${row.branch}`) : "",
     row.origin ? pill(`${row.origin.provider} ${row.origin.id}`, "violet") : pill(row.source),
-  ], [row.path], row.body_summary);
+  ], [row.path], row.body_summary, "blue");
 }
 
 function workflowCard(row) {
@@ -187,7 +196,7 @@ function workflowCard(row) {
     row.profile ? pill(`profile ${row.profile}`, "violet") : "",
     row.profiles.length ? pill(`${row.profiles.length} profiles`, "violet") : "",
     pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
-  ], [row.path], row.objective_summary || row.state_error);
+  ], [row.path], row.objective_summary || row.state_error, groupColor(row.presentation_group));
 }
 
 function taskRunCard(row) {
@@ -196,7 +205,7 @@ function taskRunCard(row) {
     pill(`task ${row.task}`, "blue"),
     row.group ? pill(`group ${row.group}`, "violet") : pill("direct"),
     row.context.error ? pill("context error", "red") : "",
-  ], [row.path, row.context.workflow_path].filter(Boolean), row.error || row.context.error || row.branch);
+  ], [row.path, row.context.workflow_path].filter(Boolean), row.error || row.context.error || row.branch, statusColor(row.status));
 }
 
 function profileCard(row) {
@@ -206,27 +215,32 @@ function profileCard(row) {
     pill(`${row.link_count} link`),
     row.has_site ? pill("site", "green") : "",
     row.test_count ? pill(`${row.test_count} tests`, "amber") : "",
-  ], [row.path]);
+  ], [row.path], "", "violet");
 }
 
 function invalidCard(row) {
-  return `<article class="invalid-card"><h3>${escapeHtml(row.key)}</h3><p class="path">${escapeHtml(row.path)}</p><p class="error">${escapeHtml(row.error)}</p></article>`;
+  return `<article class="invalid-card"><h3>${escapeHtml(row.key)}</h3>${paths([row.path])}<p class="error">${escapeHtml(row.error)}</p></article>`;
 }
 
-function card(title, pills, pathRows, summary) {
+function card(title, pills, pathRows, summary, tone) {
   const meta = pills.filter(Boolean).join("");
   const pathHtml = paths(pathRows);
   const summaryHtml = summary ? `<p class="summary">${escapeHtml(summary)}</p>` : "";
-  return `<article class="card"><h3>${escapeHtml(title)}</h3><div class="meta">${meta}</div>${pathHtml}${summaryHtml}</article>`;
+  const toneClass = tone ? ` tone-${tone}` : "";
+  return `<article class="card${toneClass}"><h3>${escapeHtml(title)}</h3><div class="meta">${meta}</div>${pathHtml}${summaryHtml}</article>`;
 }
 
 function section(title, rows, emptyText) {
   const body = rows.length ? `<div class="grid">${rows.join("")}</div>` : `<div class="empty">${escapeHtml(emptyText)}</div>`;
-  return `<section><h2 class="section-title">${escapeHtml(title)}</h2>${body}</section>`;
+  const count = rows.length === 1 ? "1 record" : `${rows.length} records`;
+  return `<section class="section-block"><div class="section-heading"><h2 class="section-title">${escapeHtml(title)}</h2><span class="section-count">${count}</span></div>${body}</section>`;
 }
 
 function paths(rows) {
-  return rows.map((path) => `<p class="path">${escapeHtml(path)}</p>`).join("");
+  if (!rows.length) {
+    return "";
+  }
+  return `<div class="path-list">${rows.map((path) => `<p class="path">${escapeHtml(path)}</p>`).join("")}</div>`;
 }
 
 function pill(text, tone = "") {
