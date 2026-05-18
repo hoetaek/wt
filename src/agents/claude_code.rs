@@ -21,10 +21,11 @@ pub(crate) fn screen_has_claude_ui_marker(screen: Option<&str>) -> bool {
         return false;
     };
     screen.lines().any(|line| {
-        let line = line.trim().to_ascii_lowercase();
-        line == "claude code"
-            || line.starts_with("claude code ")
-            || line.starts_with("claude-code ")
+        let lowered = line.trim().to_ascii_lowercase();
+        let normalized = lowered.trim_start_matches(|c: char| !c.is_alphanumeric());
+        normalized == "claude code"
+            || normalized.starts_with("claude code ")
+            || normalized.starts_with("claude-code ")
     })
 }
 
@@ -41,6 +42,25 @@ mod tests {
     fn claude_code_prose_is_not_ui_marker() {
         assert!(!screen_has_claude_ui_marker(Some(
             "Task says Claude Code should inspect files"
+        )));
+    }
+
+    #[test]
+    fn surface_title_glyph_decorated_header_is_ui_marker() {
+        assert!(screen_has_claude_ui_marker(Some("✳ Claude Code")));
+    }
+
+    #[test]
+    fn banner_decorated_header_is_ui_marker() {
+        assert!(screen_has_claude_ui_marker(Some(
+            "▐▛███▜▌   Claude Code v9.99.0"
+        )));
+    }
+
+    #[test]
+    fn non_english_prose_prefix_is_not_ui_marker() {
+        assert!(!screen_has_claude_ui_marker(Some(
+            "작업: Claude Code should inspect files"
         )));
     }
 }
