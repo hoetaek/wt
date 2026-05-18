@@ -210,6 +210,17 @@ pub(crate) fn read(path: &Path) -> Result<TaskRun> {
 }
 
 pub(crate) fn list(ctx: &Ctx) -> Result<Vec<TaskRunRecord>> {
+    task_run_paths(ctx)?
+        .into_iter()
+        .map(|path| {
+            let id = id_from_path(&path)?;
+            let run = read(&path)?;
+            Ok(TaskRunRecord { id, path, run })
+        })
+        .collect()
+}
+
+pub(crate) fn task_run_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
     let task_runs_dir = ctx.repo_root.join(".local/task-runs");
     if !task_runs_dir.exists() {
         return Ok(Vec::new());
@@ -225,15 +236,11 @@ pub(crate) fn list(ctx: &Ctx) -> Result<Vec<TaskRunRecord>> {
         }
     }
     paths.sort();
+    Ok(paths)
+}
 
-    paths
-        .into_iter()
-        .map(|path| {
-            let id = task_run_id(&path)?;
-            let run = read(&path)?;
-            Ok(TaskRunRecord { id, path, run })
-        })
-        .collect()
+pub(crate) fn id_from_path(path: &Path) -> Result<String> {
+    task_run_id(path)
 }
 
 pub(crate) fn resolve(ctx: &Ctx, target: &str) -> Result<PathBuf> {
@@ -325,7 +332,7 @@ pub(crate) fn running_cleanup_matches(ctx: &Ctx, branch: &str) -> Result<Vec<Tas
         if record.run.branch != branch || !record.run.status.is_cleanup_completable() {
             continue;
         }
-        if matches!(resolve_context(ctx, &record)?, TaskRunContext::Direct) {
+        if matches!(resolve_context(ctx, &record), Ok(TaskRunContext::Direct)) {
             records.push(record);
         }
     }
@@ -772,6 +779,33 @@ updated_at = "2026-05-16T00:00:00Z"
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
         create(&ctx, "add-schema", "add-schema", None, STATUS_DONE).unwrap();
         assert!(!task_is_selectable(&ctx, "add-schema").unwrap());
+    }
+
+    #[test]
+    fn running_cleanup_matches_skips_unreadable_workflow_contexts() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        std::fs::create_dir_all(dir.path().join(".local/workflows")).unwrap();
+
+        let direct = create(&ctx, "direct-task", "feature", None, STATUS_RUNNING).unwrap();
+        create(
+            &ctx,
+            "workflow-task",
+            "feature",
+            Some("broken-workflow"),
+            STATUS_RUNNING,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(".local/workflows/broken-workflow.toml"),
+            "mode = [",
+        )
+        .unwrap();
+
+        let records = running_cleanup_matches(&ctx, "feature").unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, direct.id);
     }
 
     #[test]

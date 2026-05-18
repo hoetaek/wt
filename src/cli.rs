@@ -119,6 +119,15 @@ pub enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Start a read-only local state web UI
+    #[command(
+        long_about = "Start a read-only local web UI for wt state. The server binds to 127.0.0.1, serves embedded no-build assets, and exposes only allowlisted routes including GET /api/snapshot for .local ideas, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
+    )]
+    Ui {
+        /// Port to bind on 127.0.0.1; 0 selects an available port
+        #[arg(long, default_value_t = 0, value_name = "PORT")]
+        port: u16,
+    },
     /// Send a message to a task agent's cmux surface
     Send {
         /// Branch, worktree path/name, or TaskRun id to contact
@@ -232,7 +241,7 @@ pub enum ProfileCommand {
 pub enum AgentCommand {
     /// Observe a task agent's current runtime state once
     #[command(
-        long_about = "Observe a task agent's current runtime state from the matching cmux surface. This is read-only: it observes cmux screen, status, and hook signals without updating TaskRuns or provider issues. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use. Codex status is weaker until cmux Codex hooks are installed with `cmux hooks codex install --yes`."
+        long_about = "Observe a task agent's current runtime state from the matching cmux surface. This is read-only: it observes surface process evidence, cmux screen fallback, status, and hook signals without updating TaskRuns or provider issues. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use. Codex status is weaker until cmux Codex hooks are installed with `cmux hooks codex install --yes`."
     )]
     Status {
         /// Branch, worktree path/name, or TaskRun id to observe
@@ -348,10 +357,13 @@ pub enum TaskCommand {
 pub enum WorkflowCommand {
     /// List saved workflow files
     #[command(
-        long_about = "List all saved .local/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns."
+        long_about = "List all saved .local/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and done, with indented rows and secondary detail lines."
     )]
     List,
     /// Prepare local tasks as a workflow file without starting workspaces
+    #[command(
+        long_about = "Prepare local TaskDocuments as a saved Workflow without starting workspaces.\n\nUse --title, --body/--body-file, and --origin-provider with --origin-id for Workflow-level context when one larger issue-like unit is split into runnable child TaskDocuments. Workflow-level [origin] is stored only on the Workflow; it is not copied into child TaskDocuments and does not add issue-closing keywords to child PR bodies.\n\nTaskDocument [origin] still belongs only to a runnable slice that is itself a provider issue."
+    )]
     Task {
         /// Task titles or existing task keys to prepare (omit to select multiple existing tasks)
         tasks: Vec<String>,
@@ -364,9 +376,21 @@ pub enum WorkflowCommand {
         /// With --mode matrix, selected named profiles to run in order
         #[arg(long, value_name = "PROFILE", value_delimiter = ',')]
         profiles: Vec<String>,
-        /// Human context explaining the larger objective this workflow is meant to complete
+        /// Short workflow title for list, select, and show surfaces
         #[arg(long)]
-        objective: Option<String>,
+        title: Option<String>,
+        /// Long workflow body with larger context and requirements
+        #[arg(long, conflicts_with = "body_file")]
+        body: Option<String>,
+        /// Read the workflow body from a file
+        #[arg(long = "body-file", value_name = "PATH", conflicts_with = "body")]
+        body_file: Option<PathBuf>,
+        /// Provider for the workflow-level origin link
+        #[arg(long = "origin-provider", requires = "origin_id")]
+        origin_provider: Option<String>,
+        /// Provider issue id for the workflow-level origin link
+        #[arg(long = "origin-id", requires = "origin_provider")]
+        origin_id: Option<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
@@ -375,6 +399,9 @@ pub enum WorkflowCommand {
         pr: Option<WorkflowPrModeArg>,
     },
     /// Prepare issues as a workflow file without starting workspaces
+    #[command(
+        long_about = "Prepare provider issues as a saved Workflow without starting workspaces.\n\nEach selected provider issue becomes an executable child TaskDocument, and that TaskDocument records [origin] for the selected issue. Selected issue ids are not automatically lifted into Workflow [origin]. Use --origin-provider with --origin-id only when the Workflow itself has a separate larger provider source.\n\nWorkflow-level [origin] is stored only on the Workflow; it is not copied into child TaskDocuments and does not add issue-closing keywords to child PR bodies."
+    )]
     Issue {
         /// Issue identifiers to import as tasks (omit to select interactively)
         issues: Vec<String>,
@@ -384,9 +411,21 @@ pub enum WorkflowCommand {
         /// Named profile from .local/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
-        /// Human context explaining the larger objective this workflow is meant to complete
+        /// Short workflow title for list, select, and show surfaces
         #[arg(long)]
-        objective: Option<String>,
+        title: Option<String>,
+        /// Long workflow body with larger context and requirements
+        #[arg(long, conflicts_with = "body_file")]
+        body: Option<String>,
+        /// Read the workflow body from a file
+        #[arg(long = "body-file", value_name = "PATH", conflicts_with = "body")]
+        body_file: Option<PathBuf>,
+        /// Provider for the workflow-level origin link
+        #[arg(long = "origin-provider", requires = "origin_id")]
+        origin_provider: Option<String>,
+        /// Provider issue id for the workflow-level origin link
+        #[arg(long = "origin-id", requires = "origin_provider")]
+        origin_id: Option<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
@@ -1147,8 +1186,14 @@ mod tests {
             "stack",
             "--profile",
             "codex",
-            "--objective",
+            "--title",
+            "Split workflow",
+            "--body",
             "Ship the split workflow",
+            "--origin-provider",
+            "linear",
+            "--origin-id",
+            "WT-123",
             "--base",
             "main",
             "--pr",
@@ -1162,14 +1207,21 @@ mod tests {
                     mode: WorkflowModeArg::Stack,
                     profile: Some(ref profile),
                     ref profiles,
-                    objective: Some(ref objective),
+                    title: Some(ref title),
+                    body: Some(ref body),
+                    body_file: None,
+                    origin_provider: Some(ref origin_provider),
+                    origin_id: Some(ref origin_id),
                     base: Some(ref base),
                     pr: Some(WorkflowPrModeArg::Ready),
                 }
             }) if tasks == &vec!["add-schema".to_string(), "wire-api".to_string()]
                 && profile == "codex"
                 && profiles.is_empty()
-                && objective == "Ship the split workflow"
+                && title == "Split workflow"
+                && body == "Ship the split workflow"
+                && origin_provider == "linear"
+                && origin_id == "WT-123"
                 && base == "main"
         ));
     }
@@ -1185,12 +1237,51 @@ mod tests {
                     mode: WorkflowModeArg::Batch,
                     profile: None,
                     ref profiles,
-                    objective: None,
+                    title: None,
+                    body: None,
+                    body_file: None,
+                    origin_provider: None,
+                    origin_id: None,
                     base: None,
                     pr: None,
                 }
             }) if tasks.is_empty() && profiles.is_empty()
         ));
+    }
+
+    #[test]
+    fn workflow_task_rejects_removed_objective_flag() {
+        let err = Cli::try_parse_from([
+            "wt",
+            "workflow",
+            "task",
+            "--mode",
+            "batch",
+            "--objective",
+            "Ship workflow",
+            "add-schema",
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("--objective"));
+    }
+
+    #[test]
+    fn workflow_task_rejects_body_and_body_file_together() {
+        let err = Cli::try_parse_from([
+            "wt",
+            "workflow",
+            "task",
+            "--mode",
+            "batch",
+            "--body",
+            "inline",
+            "--body-file",
+            "workflow.md",
+            "add-schema",
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("--body"));
+        assert!(err.to_string().contains("--body-file"));
     }
 
     #[test]
@@ -1236,7 +1327,11 @@ mod tests {
                     ref issues,
                     mode: WorkflowModeArg::Batch,
                     profile: None,
-                    objective: None,
+                    title: None,
+                    body: None,
+                    body_file: None,
+                    origin_provider: None,
+                    origin_id: None,
                     base: None,
                     pr: None,
                 }
@@ -1314,19 +1409,35 @@ mod tests {
     }
 
     #[test]
-    fn workflow_prepare_help_describes_objective_option() {
+    fn workflow_prepare_help_describes_title_body_origin_options() {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
 
         let task = workflow.find_subcommand_mut("task").unwrap();
         let task_help = task.render_long_help().to_string();
-        assert!(task_help.contains("--objective"));
-        assert!(task_help.contains("larger objective"));
+        assert!(task_help.contains("--title"));
+        assert!(task_help.contains("--body"));
+        assert!(task_help.contains("--body-file"));
+        assert!(task_help.contains("--origin-provider"));
+        assert!(task_help.contains("--origin-id"));
+        assert!(task_help.contains("Workflow-level [origin] is stored only on the Workflow"));
+        assert!(task_help.contains("does not add issue-closing keywords"));
+        assert!(!task_help.contains("--objective"));
 
         let issue = workflow.find_subcommand_mut("issue").unwrap();
         let issue_help = issue.render_long_help().to_string();
-        assert!(issue_help.contains("--objective"));
-        assert!(issue_help.contains("larger objective"));
+        assert!(issue_help.contains("--title"));
+        assert!(issue_help.contains("--body"));
+        assert!(issue_help.contains("--body-file"));
+        assert!(issue_help.contains("--origin-provider"));
+        assert!(issue_help.contains("--origin-id"));
+        assert!(
+            issue_help
+                .contains("Each selected provider issue becomes an executable child TaskDocument")
+        );
+        assert!(issue_help.contains("Selected issue ids are not automatically lifted"));
+        assert!(issue_help.contains("does not add issue-closing keywords"));
+        assert!(!issue_help.contains("--objective"));
     }
 
     #[test]

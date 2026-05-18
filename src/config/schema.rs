@@ -22,7 +22,8 @@ pub const WORKSPACE_DEFAULT_COLORS: [(&str, &str); 4] = [
 const DEFAULT_SITE_NAME_TEMPLATE: &str = "{{repo}}-{{branch_slug}}";
 const DEFAULT_SITE_ROOT: &str = ".";
 const DEFAULT_TRAEFIK_SITE_TARGET_TEMPLATE: &str = "http://127.0.0.1:{{vite_port}}";
-const DEFAULT_CHROME_DEVTOOLS_USER_DATA_DIR: &str = "{{worktree_path}}/.chrome-devtools-user-data";
+const DEFAULT_CHROME_DEVTOOLS_USER_DATA_DIR: &str =
+    "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}";
 const DEFAULT_CHROME_DEVTOOLS_URL: &str = "{{site_url}}";
 
 pub fn default_workspace_color(kind: &str) -> Option<&'static str> {

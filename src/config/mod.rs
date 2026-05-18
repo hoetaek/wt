@@ -4,7 +4,7 @@ mod merge;
 mod profile;
 mod schema;
 
-pub use loader::ConfigSource;
+pub use loader::{ConfigSource, InvalidProfileRecord, ProfileInventory, ProfileRecord};
 pub use schema::{
     AGENT_PROMPT_WORKFLOW_SCOPE, AgentCli, AgentConfig, Config, CopyAsEntry, DepCommand,
     EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig, ProfileConfig,

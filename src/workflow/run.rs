@@ -18,13 +18,16 @@ use crate::workflow::planner::{
 };
 use crate::workflow::render::{
     no_tasks_selected_message, prepared_workflow_message, render_single_workflow_snapshot,
-    single_workflow_group_title, workflow_objective_prompt_context,
+    single_workflow_group_title, workflow_metadata_prompt_context,
     workflow_single_group_prompt_intro, workflow_single_task_handoff_section,
     workflow_single_task_prompt_intro,
 };
-use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask, WorkflowTaskRun};
-use anyhow::{Result, bail};
+use crate::workflow::{
+    WorkflowMetadata, WorkflowMode, WorkflowOrigin, WorkflowTask, WorkflowTaskRun,
+};
+use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 mod batch;
@@ -46,7 +49,11 @@ pub(crate) struct PrepareWorkflowOptions<'a> {
     pub(crate) mode: WorkflowModeArg,
     pub(crate) profile: Option<&'a str>,
     pub(crate) profiles: &'a [String],
-    pub(crate) objective: Option<&'a str>,
+    pub(crate) title: Option<&'a str>,
+    pub(crate) body: Option<&'a str>,
+    pub(crate) body_file: Option<&'a Path>,
+    pub(crate) origin_provider: Option<&'a str>,
+    pub(crate) origin_id: Option<&'a str>,
     pub(crate) base: &'a Option<String>,
     pub(crate) pr: Option<WorkflowPrModeArg>,
 }
@@ -75,6 +82,17 @@ pub(crate) fn validate_prepare_options(
     validate_mode_options(mode, pr)
 }
 
+pub(crate) fn validate_workflow_metadata_options(
+    title: Option<&str>,
+    body: Option<&str>,
+    body_file: Option<&Path>,
+    origin_provider: Option<&str>,
+    origin_id: Option<&str>,
+) -> Result<()> {
+    workflow_metadata_from_raw(title, body, body_file, origin_provider, origin_id)?;
+    Ok(())
+}
+
 pub(crate) fn prepare_workflow(
     ctx: &Ctx,
     options: PrepareWorkflowOptions<'_>,
@@ -95,6 +113,7 @@ pub(crate) fn prepare_workflow(
     if options.mode == WorkflowModeArg::Matrix && prepared_tasks.len() != 1 {
         bail!("matrix mode workflow requires exactly one task");
     }
+    let workflow_metadata = workflow_metadata_from_options(&options)?;
     validate_single_mode_branches(options.mode, &prepared_tasks)?;
     let resolved_base = resolve_workflow_base(ctx, options.base)?;
     let workflow_path = workflow_store::next_available_path(ctx)?;
@@ -119,7 +138,9 @@ pub(crate) fn prepare_workflow(
     if options.mode == WorkflowModeArg::Matrix {
         metadata.profiles = options.profiles.to_vec();
     }
-    metadata.objective = normalized_objective(options.objective)?;
+    metadata.title = workflow_metadata.title;
+    metadata.body = workflow_metadata.body;
+    metadata.origin = workflow_metadata.origin;
     metadata.policy = workflow_policy(default_policy, pull_request);
 
     if let Err(err) = workflow_store::write(ctx, &workflow_path, &mut metadata) {
@@ -224,7 +245,7 @@ fn run_single_workflow_task(
         workflow_pr_base(base),
         &task_issue_closing_references(&state.document),
     );
-    let workflow_context = workflow_objective_prompt_context(metadata.objective.as_deref());
+    let workflow_context = workflow_metadata_prompt_context(metadata);
     let branch_name = task_store::prepared_branch_name(&state.document.branch);
     if branch_name.is_none() && state.document.origin.is_none() {
         bail!("Workflow task {} has no branch", state.row.task);
@@ -284,7 +305,7 @@ fn run_single_workflow_group(
         workflow_pr_base(base),
         &workflow_issue_closing_references(states),
     );
-    let workflow_context = workflow_objective_prompt_context(metadata.objective.as_deref());
+    let workflow_context = workflow_metadata_prompt_context(metadata);
     let title = single_workflow_group_title(states);
 
     issue::run_with_issue_snapshot(
@@ -480,15 +501,77 @@ fn validate_mode_options(mode: WorkflowModeArg, pr: Option<WorkflowPrModeArg>) -
     Ok(())
 }
 
-fn normalized_objective(objective: Option<&str>) -> Result<Option<String>> {
-    let Some(objective) = objective else {
+struct PreparedWorkflowMetadata {
+    title: Option<String>,
+    body: Option<String>,
+    origin: Option<WorkflowOrigin>,
+}
+
+fn workflow_metadata_from_options(
+    options: &PrepareWorkflowOptions<'_>,
+) -> Result<PreparedWorkflowMetadata> {
+    workflow_metadata_from_raw(
+        options.title,
+        options.body,
+        options.body_file,
+        options.origin_provider,
+        options.origin_id,
+    )
+}
+
+fn workflow_metadata_from_raw(
+    title: Option<&str>,
+    body: Option<&str>,
+    body_file: Option<&Path>,
+    origin_provider: Option<&str>,
+    origin_id: Option<&str>,
+) -> Result<PreparedWorkflowMetadata> {
+    if body.is_some() && body_file.is_some() {
+        bail!("--body cannot be used with --body-file");
+    }
+    let title = normalized_metadata_field("Workflow title", title)?;
+    let body = if let Some(path) = body_file {
+        let body = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read workflow body file: {}", path.display()))?;
+        normalized_metadata_field("Workflow body", Some(&body))?
+    } else {
+        normalized_metadata_field("Workflow body", body)?
+    };
+    let origin = workflow_origin_from_options(origin_provider, origin_id)?;
+    Ok(PreparedWorkflowMetadata {
+        title,
+        body,
+        origin,
+    })
+}
+
+fn normalized_metadata_field(label: &str, value: Option<&str>) -> Result<Option<String>> {
+    let Some(value) = value else {
         return Ok(None);
     };
-    let objective = objective.trim();
-    if objective.is_empty() {
-        bail!("Workflow objective cannot be empty");
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("{label} cannot be empty");
     }
-    Ok(Some(objective.to_string()))
+    Ok(Some(value.to_string()))
+}
+
+fn workflow_origin_from_options(
+    provider: Option<&str>,
+    id: Option<&str>,
+) -> Result<Option<WorkflowOrigin>> {
+    match (provider, id) {
+        (None, None) => Ok(None),
+        (Some(_), None) => bail!("--origin-provider requires --origin-id"),
+        (None, Some(_)) => bail!("--origin-id requires --origin-provider"),
+        (Some(provider), Some(id)) => {
+            let provider = normalized_metadata_field("Workflow origin provider", Some(provider))?
+                .expect("provider is present");
+            let id =
+                normalized_metadata_field("Workflow origin id", Some(id))?.expect("id is present");
+            Ok(Some(WorkflowOrigin { provider, id }))
+        }
+    }
 }
 
 fn workflow_pr_base(base: &Option<String>) -> &str {

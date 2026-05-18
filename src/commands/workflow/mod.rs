@@ -18,7 +18,8 @@ use crate::workflow::render::{
     render_single_workflow_snapshot, stack_task_already_running_message,
     started_stack_task_message, test_auto_landing_policy, test_workflow_policy,
     workflow_batch_task_prompt_content, workflow_batch_task_prompt_content_for_policy,
-    workflow_single_task_prompt_content, workflow_single_task_prompt_content_for_policy,
+    workflow_metadata_prompt_context, workflow_single_task_prompt_content,
+    workflow_single_task_prompt_content_for_policy,
     workflow_single_task_prompt_content_for_policy_and_closing_refs,
     workflow_stack_task_prompt_content, workflow_task_prompt_content_with_policy,
     workflow_task_prompt_content_with_policy_and_parent,
@@ -31,12 +32,11 @@ use crate::workflow::run::{
 };
 #[cfg(test)]
 use crate::workflow::{
-    WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowPullRequestMode, WorkflowTask,
+    WorkflowLandingPolicy, WorkflowMetadata, WorkflowMode, WorkflowOrigin, WorkflowPullRequestMode,
+    WorkflowTask,
 };
 use anyhow::{Result, bail};
-#[cfg(test)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod display;
 mod list_command;
@@ -58,7 +58,23 @@ pub struct TaskOptions<'a> {
     pub mode: WorkflowModeArg,
     pub profile: Option<&'a str>,
     pub profiles: &'a [String],
-    pub objective: Option<&'a str>,
+    pub title: Option<&'a str>,
+    pub body: Option<&'a str>,
+    pub body_file: Option<&'a Path>,
+    pub origin_provider: Option<&'a str>,
+    pub origin_id: Option<&'a str>,
+    pub base: &'a Option<String>,
+    pub pr: Option<WorkflowPrModeArg>,
+}
+
+pub struct IssueOptions<'a> {
+    pub mode: WorkflowModeArg,
+    pub profile: Option<&'a str>,
+    pub title: Option<&'a str>,
+    pub body: Option<&'a str>,
+    pub body_file: Option<&'a Path>,
+    pub origin_provider: Option<&'a str>,
+    pub origin_id: Option<&'a str>,
     pub base: &'a Option<String>,
     pub pr: Option<WorkflowPrModeArg>,
 }
@@ -71,11 +87,18 @@ pub fn task(ctx: &Ctx, tasks: &[String], options: TaskOptions<'_>) -> Result<()>
         options.profiles,
         options.pr,
     )?;
+    workflow_runner::validate_workflow_metadata_options(
+        options.title,
+        options.body,
+        options.body_file,
+        options.origin_provider,
+        options.origin_id,
+    )?;
     if options.mode == WorkflowModeArg::Matrix && tasks.len() > 1 {
         bail!("matrix mode workflow requires exactly one task");
     }
     let prepared_tasks = if tasks.is_empty() {
-        let selected = task_store::select_local_tasks(ctx)?;
+        let selected = task_store::select_local_task_documents(ctx)?;
         if options.mode == WorkflowModeArg::Matrix && selected.len() != 1 {
             bail!("matrix mode workflow requires exactly one task");
         }
@@ -95,7 +118,11 @@ pub fn task(ctx: &Ctx, tasks: &[String], options: TaskOptions<'_>) -> Result<()>
             mode: options.mode,
             profile: options.profile,
             profiles: options.profiles,
-            objective: options.objective,
+            title: options.title,
+            body: options.body,
+            body_file: options.body_file,
+            origin_provider: options.origin_provider,
+            origin_id: options.origin_id,
             base: options.base,
             pr: options.pr,
         },
@@ -103,21 +130,20 @@ pub fn task(ctx: &Ctx, tasks: &[String], options: TaskOptions<'_>) -> Result<()>
     )
 }
 
-pub fn issue(
-    ctx: &Ctx,
-    issues: &[String],
-    mode: WorkflowModeArg,
-    profile: Option<&str>,
-    objective: Option<&str>,
-    base: &Option<String>,
-    pr: Option<WorkflowPrModeArg>,
-) -> Result<()> {
-    if mode == WorkflowModeArg::Matrix {
+pub fn issue(ctx: &Ctx, issues: &[String], options: IssueOptions<'_>) -> Result<()> {
+    if options.mode == WorkflowModeArg::Matrix {
         bail!(
             "wt workflow issue does not support mode matrix; use wt workflow task --mode matrix with one local TaskDocument"
         );
     }
-    workflow_runner::validate_prepare_options(ctx, mode, profile, &[], pr)?;
+    workflow_runner::validate_prepare_options(ctx, options.mode, options.profile, &[], options.pr)?;
+    workflow_runner::validate_workflow_metadata_options(
+        options.title,
+        options.body,
+        options.body_file,
+        options.origin_provider,
+        options.origin_id,
+    )?;
 
     let selected_issues = if issues.is_empty() {
         issue_selection::select_issues(ctx, "Select issues for workflow")?
@@ -137,12 +163,16 @@ pub fn issue(
     workflow_runner::prepare_workflow(
         ctx,
         workflow_runner::PrepareWorkflowOptions {
-            mode,
-            profile,
+            mode: options.mode,
+            profile: options.profile,
             profiles: &[],
-            objective,
-            base,
-            pr,
+            title: options.title,
+            body: options.body,
+            body_file: options.body_file,
+            origin_provider: options.origin_provider,
+            origin_id: options.origin_id,
+            base: options.base,
+            pr: options.pr,
         },
         prepared_tasks,
     )
@@ -293,7 +323,7 @@ cli = "none"
         tasks: &[String],
         mode: WorkflowModeArg,
         profile: Option<&str>,
-        objective: Option<&str>,
+        title: Option<&str>,
         base: &Option<String>,
         pr: Option<WorkflowPrModeArg>,
     ) -> Result<()> {
@@ -304,7 +334,11 @@ cli = "none"
                 mode,
                 profile,
                 profiles: &[],
-                objective,
+                title,
+                body: None,
+                body_file: None,
+                origin_provider: None,
+                origin_id: None,
                 base,
                 pr,
             },
@@ -342,7 +376,11 @@ cli = "none"
                 mode: WorkflowModeArg::Matrix,
                 profile: None,
                 profiles,
-                objective: None,
+                title: None,
+                body: None,
+                body_file: None,
+                origin_provider: None,
+                origin_id: None,
                 base: &base,
                 pr: None,
             },
@@ -431,34 +469,135 @@ cli = "none"
     }
 
     #[test]
-    fn task_prepares_workflow_with_objective_and_show_displays_it() {
+    fn task_prepares_workflow_with_title_body_origin_and_show_displays_it() {
         let dir = tempfile::tempdir().unwrap();
         let ui = Arc::new(MockUi::new());
         let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
 
-        task(
+        super::task(
             &ctx,
             &["workflow docs".into()],
-            WorkflowModeArg::Batch,
-            None,
-            Some("Ship the larger workflow migration"),
-            &Some("main".into()),
-            None,
+            TaskOptions {
+                mode: WorkflowModeArg::Batch,
+                profile: None,
+                profiles: &[],
+                title: Some("Workflow migration"),
+                body: Some("Ship the larger workflow migration"),
+                body_file: None,
+                origin_provider: Some("linear"),
+                origin_id: Some("WT-123"),
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(record.workflow.title.as_deref(), Some("Workflow migration"));
+        assert_eq!(
+            record.workflow.body.as_deref(),
+            Some("Ship the larger workflow migration")
+        );
+        assert_eq!(record.workflow.origin.as_ref().unwrap().provider, "linear");
+        assert_eq!(record.workflow.origin.as_ref().unwrap().id, "WT-123");
+        let content = std::fs::read_to_string(&record.path).unwrap();
+        assert!(content.contains("title = \"Workflow migration\""));
+        assert!(content.contains("body = \"\"\"Ship the larger workflow migration\"\"\""));
+        assert!(content.contains("[origin]"));
+        assert!(content.contains("provider = \"linear\""));
+        assert!(content.contains("id = \"WT-123\""));
+        assert!(!content.contains("objective ="));
+
+        show(&ctx, Some(&record.id)).unwrap();
+
+        let dims = ui.dims.lock().unwrap().join("\n");
+        assert!(dims.contains("Title: Workflow migration"));
+        assert!(dims.contains("Body: Ship the larger workflow migration"));
+        assert!(dims.contains("Origin: linear:WT-123"));
+    }
+
+    #[test]
+    fn task_reads_workflow_body_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let body_path = dir.path().join("workflow-body.md");
+        fs::write(&body_path, "Large workflow context\n").unwrap();
+
+        super::task(
+            &ctx,
+            &["workflow docs".into()],
+            TaskOptions {
+                mode: WorkflowModeArg::Batch,
+                profile: None,
+                profiles: &[],
+                title: Some("Workflow migration"),
+                body: None,
+                body_file: Some(&body_path),
+                origin_provider: None,
+                origin_id: None,
+                base: &Some("main".into()),
+                pr: None,
+            },
         )
         .unwrap();
 
         let record = workflow_store::list(&ctx).unwrap().remove(0);
         assert_eq!(
-            record.workflow.objective.as_deref(),
-            Some("Ship the larger workflow migration")
+            record.workflow.body.as_deref(),
+            Some("Large workflow context")
         );
-        let content = std::fs::read_to_string(&record.path).unwrap();
-        assert!(content.contains("objective = \"Ship the larger workflow migration\""));
+    }
 
-        show(&ctx, Some(&record.id)).unwrap();
+    #[test]
+    fn task_rejects_ambiguous_workflow_metadata_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let body_path = dir.path().join("workflow-body.md");
+        fs::write(&body_path, "Large workflow context").unwrap();
 
-        let dims = ui.dims.lock().unwrap().join("\n");
-        assert!(dims.contains("Objective: Ship the larger workflow migration"));
+        let err = super::task(
+            &ctx,
+            &["workflow docs".into()],
+            TaskOptions {
+                mode: WorkflowModeArg::Batch,
+                profile: None,
+                profiles: &[],
+                title: None,
+                body: Some("inline"),
+                body_file: Some(&body_path),
+                origin_provider: None,
+                origin_id: None,
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("--body cannot be used with --body-file")
+        );
+
+        let err = super::task(
+            &ctx,
+            &["workflow docs".into()],
+            TaskOptions {
+                mode: WorkflowModeArg::Batch,
+                profile: None,
+                profiles: &[],
+                title: None,
+                body: None,
+                body_file: None,
+                origin_provider: Some("linear"),
+                origin_id: None,
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("--origin-provider requires --origin-id")
+        );
     }
 
     #[test]
@@ -510,6 +649,49 @@ cli = "none"
                 .all(|record| record.run.status == STATUS_PREPARED)
         );
         assert!(runs.iter().all(|record| record.run.group.is_some()));
+    }
+
+    #[test]
+    fn task_without_args_can_select_completed_task_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks_dir = dir.path().join(".local/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tasks_dir.join("wire-api.toml"),
+            "title = \"Wire API\"\nbranch = \"wire-api\"\n",
+        )
+        .unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0]);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+        task_run::create(&ctx, "add-schema", "add-schema", None, STATUS_DONE).unwrap();
+
+        task(
+            &ctx,
+            &[],
+            WorkflowModeArg::Batch,
+            None,
+            None,
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+
+        let workflow = workflow_store::list(&ctx).unwrap().remove(0).workflow;
+        assert_eq!(workflow.tasks.len(), 1);
+        assert_eq!(workflow.tasks[0].task, "add-schema");
     }
 
     #[test]
@@ -1175,11 +1357,17 @@ landing = "auto"
         issue(
             &ctx,
             &["PROJ-123".into()],
-            WorkflowModeArg::Stack,
-            None,
-            None,
-            &Some("main".into()),
-            None,
+            IssueOptions {
+                mode: WorkflowModeArg::Stack,
+                profile: None,
+                title: None,
+                body: None,
+                body_file: None,
+                origin_provider: None,
+                origin_id: None,
+                base: &Some("main".into()),
+                pr: None,
+            },
         )
         .unwrap();
 
@@ -1192,6 +1380,58 @@ landing = "auto"
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("pull_request = \"ready\""));
         assert!(content.contains("[policy]"));
+    }
+
+    #[test]
+    fn issue_keeps_selected_provider_origin_on_task_and_explicit_origin_on_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"proj-123-fix-editor","description":"Slice issue body"}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"identifier":"PROJ-123","title":"Fix editor","branchName":"proj-123-fix-editor","description":"Slice issue body"}"#,
+            true,
+        );
+        let config = Config {
+            issues: Some(IssuesConfig {
+                provider: IssueProviderType::Linear,
+                gh_user: None,
+            }),
+            ..Config::default()
+        };
+        let ctx = ctx_with_config_and_runner(dir.path(), config, runner);
+
+        issue(
+            &ctx,
+            &["PROJ-123".into()],
+            IssueOptions {
+                mode: WorkflowModeArg::Stack,
+                profile: None,
+                title: Some("Broad provider issue"),
+                body: Some("Split the broad issue into executable slices."),
+                body_file: None,
+                origin_provider: Some("linear"),
+                origin_id: Some("PROJ-ROOT"),
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(record.workflow.origin.as_ref().unwrap().provider, "linear");
+        assert_eq!(record.workflow.origin.as_ref().unwrap().id, "PROJ-ROOT");
+        assert_eq!(record.workflow.tasks[0].task, "PROJ-123");
+
+        let child = task_store::read_task_document(&ctx, "PROJ-123").unwrap();
+        assert_eq!(child.origin.as_ref().unwrap().provider, "linear");
+        assert_eq!(child.origin.as_ref().unwrap().id, "PROJ-123");
+        assert_ne!(
+            record.workflow.origin.as_ref().unwrap().id,
+            child.origin.as_ref().unwrap().id
+        );
     }
 
     #[test]
@@ -1731,6 +1971,31 @@ landing = "auto"
     }
 
     #[test]
+    fn workflow_pr_handoff_does_not_close_workflow_origin_without_task_origin() {
+        let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
+        let mut metadata = WorkflowMetadata::new(
+            WorkflowMode::Stack,
+            "explicit",
+            Some("main".into()),
+            vec![WorkflowTask::new("api", "run-api")],
+        );
+        metadata.origin = Some(WorkflowOrigin {
+            provider: "linear".into(),
+            id: "PROJ-ROOT".into(),
+        });
+        let workflow_context = workflow_metadata_prompt_context(&metadata).unwrap();
+
+        assert!(workflow_context.contains("Workflow origin: linear:PROJ-ROOT"));
+        assert!(workflow_context.contains("Do not add PR issue-closing keywords"));
+
+        let content = workflow_single_task_prompt_content_for_policy(&workflow_context, &policy);
+
+        assert!(!content.contains("`Closes PROJ-ROOT`"));
+        assert!(!content.contains("so linked provider issues close"));
+        assert!(content.contains("gh pr create --body-file <pr-body-file> --base main"));
+    }
+
+    #[test]
     fn workflow_batch_prompt_uses_ready_pr_handoff_policy() {
         let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
         let content = workflow_batch_task_prompt_content_for_policy("title = \"API\"\n", &policy);
@@ -2010,6 +2275,45 @@ landing = "auto"
     }
 
     #[test]
+    fn runnable_workflow_candidates_skip_unreadable_workflows() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
+        let valid = prepare_workflow(&ctx, WorkflowModeArg::Single, &["valid workflow"]);
+        let workflows_dir = dir.path().join(".local/workflows");
+        fs::write(workflows_dir.join("bad.toml"), "mode = [").unwrap();
+
+        assert_eq!(candidate_ids(&ctx), vec![valid.id]);
+        assert!(
+            ui.warnings
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|warning| warning.contains("Skipping unreadable workflow"))
+        );
+    }
+
+    #[test]
+    fn runnable_workflow_candidates_skip_unreadable_workflow_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
+        let valid = prepare_workflow(&ctx, WorkflowModeArg::Single, &["valid state"]);
+        let stale = prepare_workflow(&ctx, WorkflowModeArg::Single, &["stale state"]);
+        let stale_run_path = task_run::resolve(&ctx, &stale.workflow.tasks[0].run).unwrap();
+        fs::remove_file(stale_run_path).unwrap();
+
+        assert_eq!(candidate_ids(&ctx), vec![valid.id]);
+        assert!(
+            ui.warnings
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|warning| warning.contains("Skipping workflow with unreadable state"))
+        );
+    }
+
+    #[test]
     fn bare_workflow_run_with_one_candidate_returns_it_without_prompt() {
         let dir = tempfile::tempdir().unwrap();
         let ui = Arc::new(MockUi::new());
@@ -2041,8 +2345,10 @@ landing = "auto"
         );
         let items = ui.select_items.lock().unwrap();
         assert_eq!(items.len(), 1);
+        assert!(items[0][0].starts_with("first workflow"));
         assert!(items[0][0].contains(&first.id));
         assert!(items[0][0].contains("mode single"));
+        assert!(items[0][1].starts_with("second workflow"));
         assert!(items[0][1].contains(&second.id));
         assert!(items[0][1].contains("mode batch"));
     }

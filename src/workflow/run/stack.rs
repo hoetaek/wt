@@ -10,7 +10,7 @@ use crate::workflow as workflow_store;
 use crate::workflow::planner::{next_runnable_stack_task, parent_for_stack_task};
 use crate::workflow::render::{
     no_runnable_workflow_tasks_message, stack_task_already_running_message,
-    started_stack_task_message, workflow_objective_prompt_context,
+    started_stack_task_message, workflow_metadata_prompt_context,
     workflow_stack_task_handoff_section, workflow_stack_task_prompt_intro, workflow_task_label,
 };
 use crate::workflow::{WorkflowMetadata, WorkflowPolicy, WorkflowTask};
@@ -67,7 +67,7 @@ pub(super) fn run_stack_workflow(
             total_tasks: metadata.tasks.len(),
             parent: &parent,
             profile: metadata.profile.as_deref(),
-            objective: metadata.objective.as_deref(),
+            workflow_context: workflow_metadata_prompt_context(metadata),
         },
     );
 
@@ -107,7 +107,7 @@ struct StackWorkflowTaskContext<'a> {
     total_tasks: usize,
     parent: &'a str,
     profile: Option<&'a str>,
-    objective: Option<&'a str>,
+    workflow_context: Option<String>,
 }
 
 fn run_stack_workflow_task(
@@ -122,7 +122,6 @@ fn run_stack_workflow_task(
         task.parent,
         &task_issue_closing_references(&task_doc),
     );
-    let workflow_context = workflow_objective_prompt_context(task.objective);
     let branch_name = task_store::prepared_branch_name(&task_doc.branch);
     if branch_name.is_none() && task_doc.origin.is_none() {
         bail!(
@@ -154,7 +153,7 @@ fn run_stack_workflow_task(
             on_start_issue_id: task_doc.origin.as_ref().map(|origin| origin.id.as_str()),
             prompt_intro: workflow_stack_task_prompt_intro(),
             completion_section: Some(&completion_section),
-            pre_snapshot_context: workflow_context.as_deref(),
+            pre_snapshot_context: task.workflow_context.as_deref(),
             workspace_label: Some(workspace_label),
             snapshot: issue::IssueSnapshotContext {
                 path_label: "Task path",

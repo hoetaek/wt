@@ -3,15 +3,15 @@ use crate::context::{Ctx, PromptItem};
 use crate::workflow as workflow_store;
 use crate::workflow::planner::{RunnableWorkflowInfo, runnable_workflow_info};
 use crate::workflow::render::{
-    base_label, shell_arg, workflow_filtered_task_summary, workflow_relative_path,
-    workflow_selection_status_counts, workflow_task_title_label,
+    base_label, shell_arg, workflow_relative_path, workflow_selection_status_counts,
+    workflow_title_label,
 };
 use crate::workflow::run::{
     WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
     read_single_workflow_task_states, read_stack_workflow_task_states,
 };
 use crate::workflow::{WorkflowMetadata, WorkflowMode};
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
 pub(super) struct RunnableWorkflowCandidate {
@@ -60,40 +60,65 @@ pub(super) fn list_runnable_workflow_candidates(
     ctx: &Ctx,
 ) -> Result<Vec<RunnableWorkflowCandidate>> {
     let mut candidates = Vec::new();
-    for record in workflow_store::list(ctx)? {
-        let states = read_workflow_candidate_states(ctx, &record.path, &record.workflow)
-            .with_context(|| {
-                format!(
-                    "Failed to read workflow task state: {}",
-                    record.path.display()
-                )
-            })?;
-        let Some(info) = runnable_workflow_info(&record.workflow.mode, &states) else {
+    for path in workflow_store::workflow_paths(ctx)? {
+        let id = workflow_store::id_from_path(&path)?;
+        let workflow = match workflow_store::read(&path) {
+            Ok(workflow) => workflow,
+            Err(err) => {
+                warn_skipped_workflow(ctx, &path, &err);
+                continue;
+            }
+        };
+        let states = match read_workflow_candidate_states(ctx, &path, &workflow) {
+            Ok(states) => states,
+            Err(err) => {
+                warn_skipped_workflow_state(ctx, &path, &err);
+                continue;
+            }
+        };
+        let Some(info) = runnable_workflow_info(&workflow.mode, &states) else {
             continue;
         };
-        let item = workflow_selection_item(
-            ctx,
-            &record.path,
-            &record.id,
-            &record.workflow,
-            &states,
-            &info,
-        );
+        let item = workflow_selection_item(ctx, &path, &id, &workflow, &states, &info);
         let label = item.render_plain();
         candidates.push(RunnableWorkflowCandidate {
-            id: record.id,
-            path: record.path,
+            id,
+            path,
             item,
             label,
         });
     }
 
     candidates.sort_by(|left, right| {
-        left.label
-            .cmp(&right.label)
-            .then_with(|| left.path.cmp(&right.path))
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.label.cmp(&right.label))
     });
     Ok(candidates)
+}
+
+fn warn_skipped_workflow(ctx: &Ctx, path: &Path, err: &anyhow::Error) {
+    ctx.ui.print_warning(&format!(
+        "Skipping unreadable workflow {}: {}",
+        workflow_relative_path(ctx, path),
+        first_error_line(err)
+    ));
+}
+
+fn warn_skipped_workflow_state(ctx: &Ctx, path: &Path, err: &anyhow::Error) {
+    ctx.ui.print_warning(&format!(
+        "Skipping workflow with unreadable state {}: {}",
+        workflow_relative_path(ctx, path),
+        first_error_line(err)
+    ));
+}
+
+fn first_error_line(err: &anyhow::Error) -> String {
+    format!("{err:#}")
+        .lines()
+        .next()
+        .unwrap_or("unknown error")
+        .to_string()
 }
 
 fn read_workflow_candidate_states(
@@ -117,24 +142,18 @@ fn workflow_selection_item(
     states: &[WorkflowTaskState],
     info: &RunnableWorkflowInfo,
 ) -> PromptItem {
-    let mut fields = vec![format!("mode {}", metadata.mode.as_str())];
+    let mut fields = vec![
+        format!("id {workflow_id}"),
+        format!("mode {}", metadata.mode.as_str()),
+    ];
     match metadata.mode {
         WorkflowMode::Single | WorkflowMode::Batch | WorkflowMode::Matrix => {
-            fields.push(format!("{} runnable", info.runnable_count));
-            fields.push(format!(
-                "tasks {}",
-                workflow_filtered_task_summary(ctx, states, |state| { state.run.is_runnable() })
-                    .unwrap_or_else(|| "none".into())
-            ));
+            fields.push(format!("runnable {}", info.runnable_count));
         }
         WorkflowMode::Stack => {
             if let Some(next_idx) = info.next_idx {
                 let state = &states[next_idx];
-                fields.push(format!(
-                    "next {} [{}]",
-                    workflow_task_title_label(ctx, &state.row.task),
-                    state.run.status
-                ));
+                fields.push(format!("next {} [{}]", state.row.task, state.run.status));
             }
         }
     }
@@ -154,7 +173,7 @@ fn workflow_selection_item(
         workflow_relative_path(ctx, workflow_path)
     ));
 
-    PromptItem::from_hint_parts(workflow_id, fields)
+    PromptItem::from_hint_parts(workflow_title_label(ctx, workflow_id, metadata), fields)
 }
 
 fn multiple_runnable_workflows_message(

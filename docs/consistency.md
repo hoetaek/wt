@@ -56,11 +56,17 @@ namespace가 아니다. 새 상태 파일은 `.local/workflows` 아래에만 만
 surface를 `wt workflow` 옆에 남기면 두 command surface가 모두 canonical처럼 보이므로
 새 CLI parser와 dispatch는 canonical `wt workflow`만 노출한다.
 
-Workflow file은 optional `objective`, mode, base, profile, color, timestamps,
-workflow-level policy, task/run link 같은 prepared-plan context와 orchestration만
-저장한다. `objective`는 workflow가 완수하려는 더 큰 목표를 설명하는 human context이며
-실행 상태가 아니다. Task branch name의 source of truth는 항상 TaskDocument의 `branch`다.
-Workflow task row는 branch 이름을 복사해 저장하지 않는다.
+Workflow file은 `title`, `body`, optional workflow-level `[origin]`, mode, base,
+profile, color, timestamps, workflow-level policy, task/run link 같은
+prepared-plan context와 orchestration만 저장한다. `title`은 list/select/show 표면의
+짧은 display text이고, `body`는 큰 issue context, requirements, acceptance criteria,
+planning notes, decomposition rationale을 담는 긴 human context다. Workflow-level
+`[origin]`은 Workflow 자체가 provider issue에서 온 경우 durable provider link를
+저장한다. 이 origin은 larger issue-like unit의 출처이고, child TaskDocument의 provider
+origin처럼 실행 slice를 provider issue로 취급하게 만드는 값이 아니다. Workflow는 여전히
+prepared execution plan이며 parent TaskDocument나 nested-task container가 아니다. Task
+branch name의 source of truth는 항상 TaskDocument의 `branch`다.
+Workflow task row는 TaskDocument branch, status, body, origin을 복사해 저장하지 않는다.
 
 Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 묶는 표시다. 색상이
 생략되면 `wt`가 내장 cmux named-color palette의 다음 색을 고르고 workflow file에
@@ -337,18 +343,29 @@ status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이다.
 status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서 실패시킨다.
 
 통합 실행 상태 모델은 TaskDocument, Workflow, TaskRun의 책임을 나누는 데서 시작한다.
-TaskDocument는 무엇을 할지에 대한 재사용 가능한 설명이고, Workflow는 optional
-`objective`와 그 task set을 어떤 실행 shape로 이어갈지에 대한 저장된 계획이며,
-TaskRun은 TaskDocument 하나를 한 번 실행한 기록이다.
+TaskDocument는 무엇을 할지에 대한 재사용 가능한 slice-level 설명이고, Workflow는
+workflow-level `title`, `body`, optional `[origin]`과 그 task set을 어떤 실행 shape로
+이어갈지에 대한 저장된 계획이며, TaskRun은 TaskDocument 하나를 한 번 실행한 기록이다.
 
 Workflow 준비는 `.local/workflows/<id>.toml` 하나와 각 task의 TaskDocument/TaskRun link를
 만든다. Workflow의 canonical task 목록은 `[[tasks]]`이고, 각 row는 task key, linked
 TaskRun id, stack-mode parent처럼 orchestration에 필요한 link와 실행 지시만 저장한다.
 Workflow row는 status/error를 따로 가지지 않고, branch 이름도 복사하지 않는다. 실행
 인스턴스의 canonical 기록은 TaskRun이고, branch name의 canonical 기록은 TaskDocument다.
-`objective`는 workflow-level field로만 저장하고 TaskDocument `body`나 row-level field로
-복사하지 않는다. `body`, `description`, `goal_task`, `parent_task`, `subtasks`,
-`[[issues]]`, `[[items]]`처럼 같은 상태나 목표를 가리키는 다른 이름은 받지 않는다.
+TaskDocument `title`/`body`/`[origin]`은 slice-level source of truth이며 Workflow row로
+복사하지 않는다. Workflow-level `title`/`body`/`[origin]`은 task row가 아니라 Workflow
+top-level metadata다. `wt workflow issue`에서 선택한 provider issue들은 각각 executable
+slice TaskDocument가 되므로 provider origin도 각 TaskDocument에 저장된다. 선택한 issue id를
+Workflow `[origin]`으로 자동 승격하지 않는다. 하나의 broad provider issue를 여러 local
+slice TaskDocument로 쪼갠다면 `wt workflow task --origin-provider <provider> --origin-id
+<id>`처럼 explicit Workflow-level origin을 기록하고, child TaskDocument에는 그 slice가
+별도 provider issue일 때만 `[origin]`을 둔다. `objective`는 장기 authoring alias가 아니다.
+Existing local
+Workflow files에 대한 support가 필요하면 migration/repair support로만 설명하고, 새
+authoring surface나 docs에서 `objective`를 equal canonical field처럼 받지 않는다.
+`objective`, `description`, `goal_task`, `parent_task`, `subtasks`, `[[issues]]`,
+`[[items]]`처럼 같은 상태나 목표를 가리키는 다른 이름은 새 canonical authoring shape가
+아니다.
 
 Workflow preparation accepts `--pr <none|draft|ready>` as a one-run override for
 pull-request handoff intent. Omitted `--pr` means use the effective `[workflow]`
@@ -385,6 +402,36 @@ to landing and cleanup. `auto` does not bypass dirty-worktree checks, configured
 commands, required pull-request checks, unresolved review threads, branch ancestry
 checks, workflow mode ordering, or any other landing safety gate.
 
+If a pull request exists, "review passes" is an evidence-backed pull-request review
+gate, not an inferred state from green checks or an agent completion report. The
+coordinator must refresh the pull-request review surfaces immediately before landing:
+submitted reviews, review threads, PR comments, relevant check runs, PR body reactions,
+and reactions on any review-request comments. Flat `gh pr view` output is not enough
+when thread state, reviewer or review-agent replies, or reactions matter. `auto` may
+proceed only after that gate is satisfied.
+
+Review-thread resolution is part of the same gate. A thread can be resolved when the
+issue is fixed on the PR branch and the reviewer or review agent has acknowledged it,
+when the reviewer or review agent clearly agrees it is not actionable, or when a human
+explicitly overrides with evidence in the PR conversation. Conversational review agents
+are not one-shot signals: after the coordinator replies to an inline review comment,
+the coordinator must refresh the thread and wait for the follow-up response before
+resolving it. A thread-specific addressed marker or equivalent explicit acknowledgment
+can satisfy that follow-up check; a follow-up saying the PR branch still contains the
+issue keeps the thread unresolved. Tool-specific reactions or markers on the PR body or
+review-request comment are provider status hints and must be recorded as such, not
+treated as a substitute for checking threads, comments, and checks. When reviewing old
+or closed PR threads against current `develop`, a later mainline fix may be useful
+evidence for a reply, but it does not by itself prove the old PR branch's thread should
+be resolved.
+
+Provider examples are illustrative, not the canonical provider list:
+
+- CodeRabbit inline comments require a refresh after replying, and resolve only after
+  an addressed marker, explicit no-action agreement, or equivalent follow-up.
+- Codex PR body or review-request reactions are status signals to record while still
+  checking reviews, threads, comments, and checks.
+
 The Workflow file stores the effective policy snapshot once at workflow level:
 
 ```toml
@@ -410,18 +457,22 @@ default. `wt workflow show` displays the prepared policy snapshot from the workf
 not the current `.wt.toml` value.
 
 This model changes both `.wt.toml` config shape and `.local/workflows` state shape, so
-implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Adding
-workflow `objective` also changes the `.local/workflows` state shape and
-`wt workflow task` / `wt workflow issue` preparation surface, so it belongs in the same
-pre-1.0 minor model-change category. Ordinary development commits still do not bump
-`Cargo.toml`; the release branch owns the eventual version bump.
+implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Replacing
+workflow `objective` with workflow-level `title`, `body`, and optional `[origin]` also
+changes the `.local/workflows` state shape and `wt workflow task` / `wt workflow issue`
+preparation surface, so it belongs in the same pre-1.0 minor model-change category.
+Ordinary development commits still do not bump `Cargo.toml`; the release branch owns the
+eventual version bump.
 
-`wt workflow task --objective <text>`와 `wt workflow issue --objective <text>`는 저장된
-Workflow의 더 큰 목표를 `.local/workflows/<id>.toml`의 top-level `objective`로 기록한다.
-이 값은 `wt workflow show`와 workflow-started agent prompt에 context로 나타나지만,
-runnable selection, TaskRun lifecycle, landing policy, cleanup behavior를 바꾸지 않는다.
-Prompt에서는 coordinator handoff가 먼저 전달되고, objective는 그 뒤 TaskDocument snapshot
-근처에 배치된다.
+Workflow-level `title`/`body`/`[origin]` are saved to `.local/workflows/<id>.toml` as
+top-level Workflow metadata. They appear in `wt workflow show` and workflow-started agent
+prompts as context, but do not change runnable selection, TaskRun lifecycle, landing
+policy, cleanup behavior, provider issue status transitions, provider sync, or PR
+issue-closing keywords. Prompt에서는 coordinator handoff가 먼저 전달되고, Workflow
+metadata는 그 뒤 TaskDocument snapshot 근처에 배치된다. Existing `objective` values may
+be read only to diagnose or repair old local files, and any explicit repair should
+rewrite them into the canonical title/body/origin shape instead of preserving
+`objective` as an authoring alias.
 Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-select로 고른다.
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
 두 번째 task source를 만들지 않는다.
@@ -451,11 +502,38 @@ read-only inventory다. `wt workflow run`의 runnable selector가 아니므로 r
 필터링하거나 selector의 10-row visible cap을 적용하지 않는다. `wt workflow show`의 latest
 default도 all-workflow inventory로 확장하지 않는다. Output은 Workflow 자체의 단일
 `status`를 만들지 않고, linked TaskRun에서 파생한 task-run status count/summary와 mode별
-runnable metadata를 보여준다. Workflow TOML parse/validation failure는 조용히 숨기지 않고
+runnable metadata를 보여준다. Human text output은 `runnable`, `waiting`, `done` 같은
+파생 presentation group 아래에 workflow title, workflow id/mode, TaskRun summary,
+profile/policy preview를 list row로 두고 body summary, origin, human reason, base, path는
+secondary detail line에 둔다. JSON
+output은 top-level `title`, `body`, optional `origin` metadata와 raw runnable reason
+identifiers를 machine-readable metadata로 보존한다.
+Workflow TOML parse/validation failure는 조용히 숨기지 않고
 text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계속 Workflow `mode`
 값일 뿐이므로 `wt list workflow`, top-level `batch`/`stack`, `wt profile list` 같은 symmetry
 command를 추가하지 않는다. `wt task list`는 symmetry command가 아니라 별도 TaskDocument
 inventory surface이며 Workflow, TaskRun, branch, worktree 목록 의미를 갖지 않는다.
+
+`wt ui [--port <PORT>]`는 `.local`과 wt config state를 읽기 쉽게 보는 read-only local web
+UI다. 이 명령은 `127.0.0.1`에만 bind하고, port `0`은 available port 선택을 뜻하며, 시작
+후 URL을 출력한다. Browser opening은 별도 명시 옵션이 생기기 전까지 기본 동작이 아니다.
+UI 서버는 binary에 embedded된 no-build HTML/CSS/JS asset과 allowlisted route만 제공한다.
+첫 API surface는 `GET /api/snapshot`이며 ideas, TaskDocuments, Workflows, TaskRuns,
+retrospectives, profile summaries, effective config summary/source paths를 한 snapshot으로
+반환한다.
+
+`wt ui`는 inventory lens이지 새로운 state owner가 아니다. TaskDocument는 계속
+`.local/tasks`, Workflow는 `.local/workflows`, TaskRun은 `.local/task-runs`, config/profile
+layering은 `.wt.toml`, `.local/.wt.toml`, `.local/profiles`가 source of truth다. UI board
+group은 linked TaskRun 상태와 runnable metadata에서 파생한 presentation일 뿐이고,
+Workflow나 TaskDocument에 새 status/column 값을 쓰지 않는다. Parse/validation failure는
+snapshot과 UI에 invalid record로 드러내며, invalid TOML을 조용히 숨기지 않는다.
+
+MVP `wt ui`는 write API, drag/drop mutation, 별도 DB, frontend build pipeline, Tauri/Electron,
+arbitrary repo file serving, `.env` 읽기를 추가하지 않는다. `/api/snapshot`은 state-owner
+reader와 config/profile loader를 거쳐 요약 DTO만 만들고, CLI text output을 scrape하지 않는다.
+이후 write action을 추가하려면 먼저 canonical command preview나 명시 mutation contract를
+정의하고, path allowlist와 same-origin/token policy를 별도 설계해야 한다.
 
 Workspace label은 저장 상태가 아니라 현재 실행을 찾기 위한 표시다. 좁은 탭에서 잘려도
 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을 앞에 붙이고, branch/path/site
@@ -493,15 +571,22 @@ push하고 준비된 workflow base 또는 parent branch를 base로 draft pull re
 연다는 뜻이다. PR을 여는 workflow task는 `.github/pull_request_template.md`에서
 `<pr-body-file>`을 만들고 summary, context, changes, validation, risks/follow-ups 중심의
 review-focused 본문을 채운다. TaskDocument에 `[origin]`이 있으면 PR merge가 provider
-issue를 닫도록 `Closes <origin.id>` issue-closing keyword도 PR 본문에 포함한다. 그런 뒤
+issue를 닫도록 `Closes <origin.id>` issue-closing keyword도 PR 본문에 포함한다.
+Workflow-level `[origin]`은 child PR의 closing keyword source가 아니다. 여러 child PR이
+같은 Workflow-level origin을 자동으로 닫으면 broad issue가 첫 slice merge에서 닫힐 수 있으므로,
+그 정책은 별도 명시/테스트 없이는 추가하지 않는다. 그런 뒤
 `gh pr create --body-file <pr-body-file>` 경로로 PR을 생성한다.
 Agent Completion Report는 coordinator transport/report 형식이며 PR 본문으로 복사하지 않는다.
 이것은 PR 자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은
-transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow에 포함된다. Codex/GitHub
+transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow에 포함된다. Pull request
 review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한 check를 다시 돌린 뒤
 commit/push하고 PR 본문이 stale해졌을 때만 PR 본문과 Agent Completion Report를 갱신한다.
 실행자나 coordinator가 `wt inspect`, 필요한 경우 pull request, 보고를 확인한 뒤 workflow
-completion command를 실행할 때 TaskRun 상태가 전이된다.
+completion command를 실행할 때 TaskRun 상태가 전이된다. Pull request가 있으면 coordinator는
+workflow completion이나 landing 전에 pull-request review gate를 통과했는지 별도로 확인한다.
+이 gate는 unresolved thread가 0인지뿐 아니라 최근 reviewer 또는 review-agent 답글, PR comment,
+review-request reaction, check 상태를 포함한다. Review-agent thread는 coordinator 답글 직후
+바로 resolve하지 않고, follow-up을 refresh해서 해결 또는 비조치 동의가 확인된 뒤 resolve한다.
 
 `wt done`은 worktree와 local branch cleanup 명령이다. `done`은 cleanup 신호이고,
 workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch commit을 `master` 같은

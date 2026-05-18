@@ -8,6 +8,19 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.28.0 - 2026-05-18
+
+- Added `wt ui [--port <PORT>]`, a read-only loopback web UI that serves
+  embedded no-build assets and exposes `GET /api/snapshot` for local ideas,
+  TaskDocuments, Workflows, TaskRuns, profile summaries, and effective config
+  source paths.
+- The snapshot reports invalid TOML records instead of hiding parse or
+  validation failures, keeps board groups derived from existing TaskRun and
+  Workflow state, and does not add write APIs, schema changes, a database, or
+  arbitrary repo file serving.
+- Bumped the package version to `0.28.0` because `wt ui` adds a user-facing CLI
+  command and local web server dependencies while `wt` is still pre-1.0.
+
 ## 0.26.2 - 2026-05-18
 
 - Fixed stack workflow status messages so generated `wt workflow complete`

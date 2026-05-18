@@ -4,6 +4,7 @@ use crate::services::git::GitService;
 use crate::services::work;
 use crate::task;
 use crate::task_run;
+use crate::workflow::render::{workflow_body_summary, workflow_origin_label, workflow_title_label};
 use crate::workflow::{self, WorkflowPullRequestMode, WorkflowRecord};
 use anyhow::{Context, Result};
 use std::collections::HashSet;
@@ -68,6 +69,9 @@ struct WorkflowMatch {
     id: String,
     path: PathBuf,
     mode: String,
+    title: String,
+    body_summary: Option<String>,
+    origin: Option<String>,
     task: String,
     parent: Option<String>,
     pull_request: WorkflowPullRequestMode,
@@ -86,8 +90,19 @@ fn workflows_for_task_runs(
     }
 
     let mut matches = Vec::new();
-    for record in workflow::list(ctx)? {
-        add_workflow_matches(&mut matches, &record, &run_ids);
+    for path in workflow::workflow_paths(ctx)? {
+        let id = workflow::id_from_path(&path)?;
+        match workflow::read(&path) {
+            Ok(metadata) => {
+                let record = WorkflowRecord {
+                    id,
+                    path,
+                    workflow: metadata,
+                };
+                add_workflow_matches(ctx, &mut matches, &record, &run_ids);
+            }
+            Err(err) => warn_skipped_workflow(ctx, &path, &err),
+        }
     }
     matches.sort_by(|left, right| {
         left.id
@@ -100,16 +115,23 @@ fn workflows_for_task_runs(
 }
 
 fn add_workflow_matches(
+    ctx: &Ctx,
     matches: &mut Vec<WorkflowMatch>,
     record: &WorkflowRecord,
     run_ids: &HashSet<&str>,
 ) {
+    let title = workflow_title_label(ctx, &record.id, &record.workflow);
+    let body_summary = workflow_body_summary(&record.workflow);
+    let origin = workflow_origin_label(&record.workflow);
     for row in &record.workflow.tasks {
         if run_ids.contains(row.run.as_str()) {
             matches.push(WorkflowMatch {
                 id: record.id.clone(),
                 path: record.path.clone(),
                 mode: record.workflow.mode.as_str().into(),
+                title: title.clone(),
+                body_summary: body_summary.clone(),
+                origin: origin.clone(),
                 task: workflow_task_label(&row.task),
                 parent: row.parent.clone(),
                 pull_request: record.workflow.policy.pull_request,
@@ -123,12 +145,35 @@ fn add_workflow_matches(
                 id: record.id.clone(),
                 path: record.path.clone(),
                 mode: record.workflow.mode.as_str().into(),
+                title: title.clone(),
+                body_summary: body_summary.clone(),
+                origin: origin.clone(),
                 task: format!("{}:{}", workflow_task_label(&row.task), profile_run.profile),
                 parent: row.parent.clone(),
                 pull_request: record.workflow.policy.pull_request,
             });
         }
     }
+}
+
+fn warn_skipped_workflow(ctx: &Ctx, path: &Path, err: &anyhow::Error) {
+    ctx.ui.print_warning(&format!(
+        "Skipping workflow {}: {}",
+        workflow_relative_path(ctx, path),
+        inspect_error_summary(err)
+    ));
+}
+
+fn inspect_error_summary(err: &anyhow::Error) -> String {
+    let message = format!("{err:#}");
+    if message.contains("Workflow uses removed `objective`") {
+        return "uses removed `objective`; edit the workflow file to use top-level `title`, `body`, and optional `[origin]`".into();
+    }
+    message
+        .lines()
+        .next()
+        .unwrap_or("workflow could not be read")
+        .to_string()
 }
 
 fn workflow_task_label(task: &str) -> String {
@@ -190,17 +235,24 @@ fn print_workflows(ctx: &Ctx, workflows: &[WorkflowMatch]) {
 
 fn print_workflow(ctx: &Ctx, workflow: &WorkflowMatch) {
     let mut details = vec![
+        format!("id={}", workflow.id),
         format!("mode={}", workflow.mode),
         format!("task={}", workflow.task),
         workflow_relative_path(ctx, &workflow.path),
     ];
+    if let Some(summary) = workflow.body_summary.as_deref() {
+        details.push(format!("body={summary}"));
+    }
+    if let Some(origin) = workflow.origin.as_deref() {
+        details.push(format!("origin={origin}"));
+    }
     if let Some(parent) = workflow.parent.as_deref() {
         details.push(format!("parent={parent}"));
     }
     details.push(format!("pull_request={}", workflow.pull_request.as_str()));
     ctx.ui.print_dim(&format!(
         "  Workflow: {} ({})",
-        workflow.id,
+        workflow.title,
         details.join(", ")
     ));
 }
@@ -220,7 +272,7 @@ fn print_git_section(
 fn print_task_run(ctx: &Ctx, record: &task_run::TaskRunRecord) -> Result<()> {
     let context = task_run::resolve_context(ctx, record)
         .map(|context| context.label())
-        .unwrap_or_else(|err| format!("unavailable ({err:#})"));
+        .unwrap_or_else(|err| format!("unavailable ({})", inspect_error_summary(&err)));
     ctx.ui.print_dim(&format!(
         "  TaskRun: {} (status={}, context={})",
         record.id, record.run.status, context
@@ -528,10 +580,13 @@ fn print_workflow_next_step(ctx: &Ctx, workflow: &WorkflowMatch) {
 
 fn workflow_complete_command(workflow: &WorkflowMatch) -> String {
     let mut command = format!(
-        "wt workflow complete {} {}",
-        shell_arg(&workflow.path.to_string_lossy()),
-        shell_arg(&workflow.task)
+        "wt workflow complete {}",
+        shell_arg(&workflow.path.to_string_lossy())
     );
+    if workflow.mode != "single" {
+        command.push(' ');
+        command.push_str(&shell_arg(&workflow.task));
+    }
     if workflow.mode == "stack" {
         command.push_str(" --run-next");
     }
@@ -617,7 +672,46 @@ mod tests {
         .unwrap();
         std::fs::write(
             repo.join(".local/workflows/2026-05-17-001.toml"),
-            "mode = \"stack\"\nbase_mode = \"explicit\"\nbase = \"main\"\ncreated_at = \"2026-05-17T00:00:00Z\"\nupdated_at = \"2026-05-17T00:00:00Z\"\n\n[policy]\npull_request = \"draft\"\nlanding = \"manual\"\n\n[[tasks]]\ntask = \"feature\"\nrun = \"run-feature\"\nparent = \"main\"\n",
+            r#"title = "Ship feature workflow"
+body = """Coordinate inspect rendering without letting this deliberately verbose workflow body dominate the inspect dossier output or hide useful metadata. Hidden tail should not render."""
+mode = "stack"
+base_mode = "explicit"
+base = "main"
+created_at = "2026-05-17T00:00:00Z"
+updated_at = "2026-05-17T00:00:00Z"
+
+[origin]
+provider = "linear"
+id = "WT-123"
+
+[policy]
+pull_request = "draft"
+landing = "manual"
+
+[[tasks]]
+task = "feature"
+run = "run-feature"
+parent = "main"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join(".local/workflows/2026-05-17-099.toml"),
+            r#"objective = "Old workflow"
+mode = "batch"
+base_mode = "explicit"
+base = "main"
+created_at = "2026-05-17T00:00:00Z"
+updated_at = "2026-05-17T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[[tasks]]
+task = "unrelated"
+run = "run-unrelated"
+"#,
         )
         .unwrap();
 
@@ -663,7 +757,11 @@ mod tests {
         assert!(dims.contains("PR=<pr>"));
         assert!(dims.contains("TaskRun: run-feature"));
         assert!(dims.contains("Task: .local/tasks/feature.toml (Feature)"));
-        assert!(dims.contains("Workflow: 2026-05-17-001"));
+        assert!(dims.contains("Workflow: Ship feature workflow"));
+        assert!(dims.contains("id=2026-05-17-001"));
+        assert!(dims.contains("body=Coordinate inspect rendering"));
+        assert!(!dims.contains("Hidden tail should not render"));
+        assert!(dims.contains("origin=linear:WT-123"));
         assert!(dims.contains("Parent: main"));
         assert!(dims.contains("Commits ahead of parent: 2"));
         assert!(dims.contains("dirty (1 paths)"));
@@ -672,6 +770,8 @@ mod tests {
         assert!(dims.contains("--run-next"));
         let warnings = ui.warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Cmux: cmux command not found"));
+        assert!(warnings.contains("Skipping workflow .local/workflows/2026-05-17-099.toml"));
+        assert!(warnings.contains("uses removed `objective`"));
     }
 
     #[test]
@@ -680,6 +780,7 @@ mod tests {
 
         assert!(dims.contains("Complete: when accepted"));
         assert!(dims.contains("wt workflow complete"));
+        assert!(!dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("review the worktree, report, and checks"));
         assert!(dims.contains("land when policy and safety checks allow"));
         assert!(dims.contains("wt done feature"));
@@ -692,6 +793,7 @@ mod tests {
 
         assert!(dims.contains("Complete: when accepted"));
         assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("review the worktree, report, and checks"));
         assert!(dims.contains("land when policy and safety checks allow"));
         assert!(dims.contains("wt done feature"));
@@ -704,6 +806,7 @@ mod tests {
 
         assert!(dims.contains("Complete: when accepted"));
         assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("--run-next"));
         assert!(dims.contains("wt done feature"));
     }
@@ -729,6 +832,9 @@ mod tests {
             id: "2026-05-17-001".into(),
             path: repo.join(".local/workflows/2026-05-17-001.toml"),
             mode: mode.into(),
+            title: "Feature workflow".into(),
+            body_summary: None,
+            origin: None,
             task: "feature".into(),
             parent: None,
             pull_request: WorkflowPullRequestMode::None,
@@ -995,6 +1101,10 @@ mod tests {
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
             true,
         );
+        runner.add_response(
+            r#"{"windows":[{"workspaces":[{"panes":[{"surfaces":[]}]}]}]}"#,
+            true,
+        );
         runner.add_response("Codex Ready", true);
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
@@ -1055,6 +1165,10 @@ mod tests {
         runner.add_response("surface:4", true);
         runner.add_response(
             r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"windows":[{"workspaces":[{"panes":[{"surfaces":[]}]}]}]}"#,
             true,
         );
         runner.add_response("Terminal surface not found", false);

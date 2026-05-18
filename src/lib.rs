@@ -5,6 +5,7 @@ pub mod config;
 pub mod config_render;
 pub mod context;
 pub mod error;
+pub mod local_ui;
 pub mod names;
 pub mod runner;
 pub mod services;
@@ -53,7 +54,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 mode,
                 profile,
                 profiles,
-                objective,
+                title,
+                body,
+                body_file,
+                origin_provider,
+                origin_id,
                 base,
                 pr,
             } => commands::workflow::task(
@@ -63,7 +68,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     mode: *mode,
                     profile: profile.as_deref(),
                     profiles,
-                    objective: objective.as_deref(),
+                    title: title.as_deref(),
+                    body: body.as_deref(),
+                    body_file: body_file.as_deref(),
+                    origin_provider: origin_provider.as_deref(),
+                    origin_id: origin_id.as_deref(),
                     base,
                     pr: *pr,
                 },
@@ -72,17 +81,27 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 issues,
                 mode,
                 profile,
-                objective,
+                title,
+                body,
+                body_file,
+                origin_provider,
+                origin_id,
                 base,
                 pr,
             } => commands::workflow::issue(
                 ctx,
                 issues,
-                *mode,
-                profile.as_deref(),
-                objective.as_deref(),
-                base,
-                *pr,
+                commands::workflow::IssueOptions {
+                    mode: *mode,
+                    profile: profile.as_deref(),
+                    title: title.as_deref(),
+                    body: body.as_deref(),
+                    body_file: body_file.as_deref(),
+                    origin_provider: origin_provider.as_deref(),
+                    origin_id: origin_id.as_deref(),
+                    base,
+                    pr: *pr,
+                },
             ),
             WorkflowCommand::Run { workflow, jobs } => {
                 commands::workflow::run(ctx, workflow.as_deref(), *jobs)
@@ -115,6 +134,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 heartbeat,
             } => commands::agent::watch(ctx, target.as_deref(), *interval, *timeout, *heartbeat),
         },
+        Commands::Ui { port } => commands::ui::run(ctx, *port),
         Commands::Send {
             target,
             message,

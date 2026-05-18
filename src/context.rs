@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::config::Config;
+use crate::config::{Config, ConfigSource};
 
 /// Output from running an external command.
 #[derive(Debug, Clone)]
@@ -130,6 +130,7 @@ pub enum OutputMode {
 #[derive(Debug, Clone)]
 pub struct CtxOptions {
     pub base_config: Config,
+    pub config_source: ConfigSource,
     pub output_mode: OutputMode,
     pub verbosity: u8,
     pub quiet: bool,
@@ -139,6 +140,7 @@ impl Default for CtxOptions {
     fn default() -> Self {
         Self {
             base_config: Config::default(),
+            config_source: ConfigSource::Default,
             output_mode: OutputMode::Text,
             verbosity: 0,
             quiet: false,
@@ -154,6 +156,7 @@ pub struct Ctx {
     pub repo_name: String,
     pub config: Config,
     pub base_config: Config,
+    pub config_source: ConfigSource,
     pub runner: Box<dyn CommandRunner>,
     pub ui: Box<dyn UserInterface>,
     pub output_mode: OutputMode,
@@ -171,6 +174,7 @@ impl Ctx {
     ) -> Self {
         let options = CtxOptions {
             base_config: config.clone(),
+            config_source: ConfigSource::Default,
             output_mode: OutputMode::Text,
             verbosity: 0,
             quiet: false,
@@ -199,6 +203,7 @@ impl Ctx {
             repo_name,
             config,
             base_config: options.base_config,
+            config_source: options.config_source,
             runner,
             ui,
             output_mode: options.output_mode,

@@ -494,6 +494,11 @@ mod tests {
             vars.get("worktree_path").unwrap(),
             "/tmp/existing-sample-app-proj-680"
         );
+        assert_eq!(vars.get("worktree_parent").unwrap(), "/tmp");
+        assert_eq!(
+            vars.get("worktree_name").unwrap(),
+            "existing-sample-app-proj-680"
+        );
         assert_eq!(vars.get("site_name").unwrap(), "sample-app-proj-680");
         assert_eq!(vars.get("branch_slug").unwrap(), "proj-680-document-editor");
         assert_eq!(vars.get("issue_title").unwrap(), "Document editor");
@@ -790,6 +795,12 @@ mod tests {
             workspace: "test".into(),
             site: None,
         };
+        let expected_user_data_dir = wt
+            .parent()
+            .unwrap()
+            .join(".chrome-devtools")
+            .join(wt.file_name().unwrap());
+        let expected_user_data_dir_text = expected_user_data_dir.to_string_lossy().into_owned();
 
         run_setup(&ctx, &wt, &names, Some("GitHub Issue"), "issue", None, None).unwrap();
 
@@ -802,15 +813,21 @@ mod tests {
         assert!(launch_args.contains("--remote-debugging-address=127.0.0.1"));
         assert!(launch_args.contains("--remote-debugging-port="));
         assert!(launch_args.contains("--user-data-dir="));
-        assert!(launch_args.contains(".chrome-devtools-user-data"));
+        assert!(launch_args.contains(&expected_user_data_dir_text));
+        assert!(!launch_args.contains("{{worktree_"));
 
         let context = fs::read_to_string(wt.join("CLAUDE.local.md")).unwrap();
         assert!(context.contains("- debug: http://127.0.0.1:"));
         assert!(context.contains("- profile: "));
-        assert!(context.contains(".chrome-devtools-user-data"));
+        assert!(context.contains(&expected_user_data_dir_text));
         assert!(!context.contains("{{chrome_"));
+        assert!(!context.contains("{{worktree_"));
         assert!(!context.contains(&repo.join(".local").to_string_lossy().to_string()));
 
+        fs::remove_dir_all(&expected_user_data_dir).ok();
+        if let Some(parent) = expected_user_data_dir.parent() {
+            fs::remove_dir(parent).ok();
+        }
         fs::remove_dir_all(&repo).ok();
         fs::remove_dir_all(&wt).ok();
     }
@@ -886,6 +903,12 @@ mod tests {
             workspace: "test".into(),
             site: None,
         };
+        let expected_user_data_dir = wt
+            .parent()
+            .unwrap()
+            .join(".chrome-devtools")
+            .join(wt.file_name().unwrap());
+        let expected_user_data_dir_text = expected_user_data_dir.to_string_lossy().into_owned();
 
         run_setup(&ctx, &wt, &names, Some("GitHub Issue"), "new", None, None).unwrap();
 
@@ -896,9 +919,14 @@ mod tests {
             .expect("expected post-deps cmux send");
         let sent = send_call.1.last().unwrap();
         assert!(sent.contains("echo http://127.0.0.1:"));
-        assert!(sent.contains(".chrome-devtools-user-data"));
+        assert!(sent.contains(&expected_user_data_dir_text));
         assert!(!sent.contains("{{chrome_"));
+        assert!(!sent.contains("{{worktree_"));
 
+        fs::remove_dir_all(&expected_user_data_dir).ok();
+        if let Some(parent) = expected_user_data_dir.parent() {
+            fs::remove_dir(parent).ok();
+        }
         fs::remove_dir_all(&repo).ok();
         fs::remove_dir_all(&wt).ok();
     }

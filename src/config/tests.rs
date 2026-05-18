@@ -60,7 +60,7 @@ browser = "Google Chrome"
 [workspace.chrome_devtools]
 enabled = true
 port = 9222
-user_data_dir = "{{worktree_path}}/.chrome-devtools-user-data"
+user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
 url = "{{site_url}}"
 
 [agent]
@@ -169,7 +169,7 @@ commands = [
     assert_eq!(chrome_devtools.port, Some(9222));
     assert_eq!(
         chrome_devtools.user_data_dir.as_deref(),
-        Some("{{worktree_path}}/.chrome-devtools-user-data")
+        Some("{{worktree_parent}}/.chrome-devtools/{{worktree_name}}")
     );
     assert_eq!(chrome_devtools.url.as_deref(), Some("{{site_url}}"));
 
