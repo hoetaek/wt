@@ -127,6 +127,8 @@ mod tests {
         assert!(APP_CSS.contains(".metrics[data-view]:not([data-view=\"overview\"])"));
         assert!(APP_CSS.contains(".focus-panel"));
         assert!(APP_CSS.contains(".focus-inspector"));
+        assert!(APP_CSS.contains(".scan-list"));
+        assert!(APP_CSS.contains(".scan-row"));
         assert!(APP_CSS.contains(".record-list"));
         assert!(APP_CSS.contains(".record-card.tone-green::before"));
         assert!(APP_CSS.contains(".read-more.is-open"));
@@ -138,6 +140,9 @@ mod tests {
         assert!(APP_JS.contains("metric invalid"));
         assert!(APP_JS.contains("Focus inspector"));
         assert!(APP_JS.contains("overviewFocusModel"));
+        assert!(APP_JS.contains("Config cockpit"));
+        assert!(APP_JS.contains("workflowScanRow"));
+        assert!(APP_JS.contains("taskRunScanRow"));
         assert!(APP_JS.contains("data-read-toggle"));
         assert!(APP_JS.contains("summary-full full-text"));
         assert!(!APP_JS.contains("</summary><div class=\"full-text\""));

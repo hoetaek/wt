@@ -50,6 +50,30 @@ const STRINGS = {
     noteTaskRuns: "TaskRuns are execution records from .local/task-runs with linked TaskDocument content. Failed or broken links are grouped under Needs attention.",
     noteProfiles: "Profiles are effective agent/config overlays from .local/profiles.",
     noteConfig: "Config shows effective config, source .wt.toml layers, and profiles.",
+    cockpitConfigTitle: "Config cockpit",
+    cockpitConfigSubtitle: "Effective config, workflow policy, profile overlays, and source layers.",
+    cockpitWorkflowTitle: "Workflow cockpit",
+    cockpitWorkflowSubtitle: "Derived Workflow state, runnable work, linked TaskRuns, and source paths.",
+    cockpitTaskRunTitle: "TaskRun cockpit",
+    cockpitTaskRunSubtitle: "Execution records grouped for comparison by status, branch, context, and source path.",
+    cockpitIdeasTitle: "Ideas cockpit",
+    cockpitIdeasSubtitle: "Planning records with status, source, tags, and source paths kept close to the title.",
+    cockpitRetrospecsTitle: "Retrospecs cockpit",
+    cockpitRetrospecsSubtitle: "Completed-work reflections with outcome, target, date, tags, and source paths.",
+    workflowIndex: "Workflow index",
+    taskRunIndex: "TaskRun index",
+    ideaIndex: "Idea index",
+    retrospecIndex: "Retrospec index",
+    configIndex: "Config index",
+    workflowPolicy: "Workflow policy",
+    sourceLayers: "Source layers",
+    selectedProfile: "Selected profile",
+    noSelectedProfile: "No selected profile",
+    validProfiles: "valid profiles",
+    sourceFiles: "source files",
+    statusGroups: "status groups",
+    outcomeGroups: "outcome groups",
+    taggedRecords: "tagged records",
     focusTitle: "Focus inspector",
     focusSubtitle: "Current work, prepared work, and records needing attention",
     focusInvalid: "Invalid record",
@@ -74,6 +98,7 @@ const STRINGS = {
     preparedWorkflowCount: "prepared Workflows",
     runningRunCount: "running TaskRuns",
     attentionCount: "need attention",
+    invalidRecords: "invalid records",
     ideas: "Ideas",
     invalidIdeas: "Invalid ideas",
     retrospecs: "Retrospecs",
@@ -158,6 +183,30 @@ const STRINGS = {
     noteTaskRuns: "작업 실행은 .local/task-runs 실행 기록입니다. 실패했거나 연결이 깨진 항목은 확인 필요로 묶습니다.",
     noteProfiles: "프로필은 .local/profiles의 agent/config overlay입니다.",
     noteConfig: "설정은 effective config, source .wt.toml 계층, 프로필을 함께 보여줍니다.",
+    cockpitConfigTitle: "설정 현황",
+    cockpitConfigSubtitle: "effective config, 워크플로우 정책, 프로필 overlay, 설정 원본을 먼저 보여줍니다.",
+    cockpitWorkflowTitle: "워크플로우 현황",
+    cockpitWorkflowSubtitle: "파생 Workflow 상태, 실행 가능한 작업, 연결된 TaskRun, 원본 경로를 비교합니다.",
+    cockpitTaskRunTitle: "TaskRun 현황",
+    cockpitTaskRunSubtitle: "실행 기록을 상태, branch, context, 원본 경로 기준으로 비교합니다.",
+    cockpitIdeasTitle: "아이디어 현황",
+    cockpitIdeasSubtitle: "기획 기록의 상태, 원본, 태그, source path를 제목 가까이에 둡니다.",
+    cockpitRetrospecsTitle: "회고 현황",
+    cockpitRetrospecsSubtitle: "완료 작업 기록의 결과, 대상, 날짜, 태그, source path를 먼저 보여줍니다.",
+    workflowIndex: "워크플로우 색인",
+    taskRunIndex: "TaskRun 색인",
+    ideaIndex: "아이디어 색인",
+    retrospecIndex: "회고 색인",
+    configIndex: "설정 색인",
+    workflowPolicy: "워크플로우 정책",
+    sourceLayers: "설정 원본",
+    selectedProfile: "선택된 프로필",
+    noSelectedProfile: "선택된 프로필 없음",
+    validProfiles: "정상 프로필",
+    sourceFiles: "원본 파일",
+    statusGroups: "상태 그룹",
+    outcomeGroups: "결과 그룹",
+    taggedRecords: "태그 있는 기록",
     focusTitle: "중점 확인",
     focusSubtitle: "현재 작업, 준비된 작업, 확인이 필요한 기록",
     focusInvalid: "오류 기록",
@@ -462,6 +511,7 @@ function overviewCards(snapshot) {
 
 function renderIdeas(snapshot) {
   content.innerHTML = [
+    ideasCockpit(snapshot),
     section(t("ideas"), snapshot.ideas.items.map(ideaCard), t("noIdeas"), t("noteIdeas"), "ideas-valid"),
     optionalSection(t("invalidIdeas"), snapshot.ideas.invalid.map(invalidCard), "", "ideas-invalid"),
   ].join("");
@@ -469,6 +519,7 @@ function renderIdeas(snapshot) {
 
 function renderRetrospecs(snapshot) {
   content.innerHTML = [
+    retrospecsCockpit(snapshot),
     section(t("retrospecs"), snapshot.retrospecs.items.map(retrospecCard), t("noRetrospecs"), t("noteRetrospecs"), "retrospecs-valid"),
     optionalSection(t("invalidRetrospecs"), snapshot.retrospecs.invalid.map(invalidCard), "", "retrospecs-invalid"),
   ].join("");
@@ -487,9 +538,13 @@ function renderWorkflows(snapshot) {
   const sections = grouped
     .filter((entry) => entry.rows.length)
     .map((entry) => section(stateLabel(entry.group), entry.rows, t("noWorkflows"), entry.group === "prepared" ? t("noteWorkflows") : "", `workflow-${entry.group}`));
-  content.innerHTML = jumpNav(grouped
-    .filter((entry) => entry.rows.length)
-    .map((entry) => [`workflow-${entry.group}`, `${stateLabel(entry.group)} ${entry.rows.length}`])) + (sections.join("") || section(t("workflows"), [], t("noWorkflows"), t("noteWorkflows"), "workflow-empty"));
+  content.innerHTML = [
+    workflowsCockpit(snapshot),
+    jumpNav(grouped
+      .filter((entry) => entry.rows.length)
+      .map((entry) => [`workflow-${entry.group}`, `${stateLabel(entry.group)} ${entry.rows.length}`])),
+    sections.join("") || section(t("workflows"), [], t("noWorkflows"), t("noteWorkflows"), "workflow-empty"),
+  ].join("");
 }
 
 function renderTaskRuns(snapshot) {
@@ -505,9 +560,13 @@ function renderTaskRuns(snapshot) {
   const sections = grouped
     .filter((entry) => entry.rows.length)
     .map((entry) => section(stateLabel(entry.status), entry.rows, t("noTaskRuns"), entry.status === "prepared" ? t("noteTaskRuns") : "", `task-runs-${entry.status}`));
-  content.innerHTML = jumpNav(grouped
-    .filter((entry) => entry.rows.length)
-    .map((entry) => [`task-runs-${entry.status}`, `${stateLabel(entry.status)} ${entry.rows.length}`])) + (sections.join("") || section(t("taskRuns"), [], t("noTaskRuns"), t("noteTaskRuns"), "task-runs-empty"));
+  content.innerHTML = [
+    taskRunsCockpit(snapshot),
+    jumpNav(grouped
+      .filter((entry) => entry.rows.length)
+      .map((entry) => [`task-runs-${entry.status}`, `${stateLabel(entry.status)} ${entry.rows.length}`])),
+    sections.join("") || section(t("taskRuns"), [], t("noTaskRuns"), t("noteTaskRuns"), "task-runs-empty"),
+  ].join("");
 }
 
 function renderConfig(snapshot) {
@@ -535,6 +594,7 @@ function renderConfig(snapshot) {
     ], [], "", "violet"));
   }
   content.innerHTML = [
+    configCockpit(snapshot),
     section(t("config"), cards, t("noConfigSummary"), t("noteConfig"), "config-summary"),
     section(t("sourceConfig"), (config.source_files || []).map(sourceFileCard), t("noSourceConfig"), "", "config-sources"),
     section(t("profiles"), snapshot.profiles.items.map(profileCard), t("noProfiles"), t("noteProfiles"), "config-profiles"),
@@ -644,6 +704,133 @@ function sourceFileCard(row) {
   ]);
 }
 
+function configCockpit(snapshot) {
+  const config = snapshot.config;
+  const profileCount = snapshot.profiles.items.length;
+  const invalidProfileCount = snapshot.profiles.invalid.length;
+  const sourceFileCount = (config.source_files || []).length;
+  const stats = [
+    { label: t("effectiveConfig"), value: config.source, tone: "blue" },
+    { label: t("workflowPolicy"), value: `${config.workflow.pull_request}/${config.workflow.landing}`, tone: "green" },
+    { label: t("sourceLayers"), value: config.paths.length, tone: config.paths.length ? "blue" : "" },
+    { label: t("profiles"), value: profileCount, tone: invalidProfileCount ? "red" : "violet" },
+  ];
+  const rows = [
+    scanRow({
+      tone: "blue",
+      kicker: t("effectiveConfig"),
+      title: `${t("effectiveConfig")} - ${config.source}`,
+      summary: bodyPreview(config.effective_text),
+      pills: [
+        pill(config.source, "blue"),
+        pill(`PR ${config.workflow.pull_request}`, "green"),
+        pill(`Landing ${config.workflow.landing}`, "amber"),
+        config.selected_profile ? pill(`${t("selectedProfile")}: ${config.selected_profile}`, "violet") : pill(t("noSelectedProfile")),
+      ],
+      paths: config.paths,
+      detail: config.effective_text,
+    }),
+    scanRow({
+      tone: "green",
+      kicker: t("runtime"),
+      title: `Agent ${config.agent || "none"}`,
+      summary: [`Issues ${config.issues || "none"}`, `Site ${config.site ? config.site.provider : "none"}`].join(" - "),
+      pills: [
+        pill(`Agent ${config.agent || "none"}`, "blue"),
+        pill(`Issues ${config.issues || "none"}`),
+        config.site ? pill(`Site ${config.site.provider}`, config.site.active ? "green" : "amber") : pill("Site none"),
+      ],
+      paths: [],
+      detail: "",
+    }),
+    config.workspace ? scanRow({
+      tone: "violet",
+      kicker: t("workspace"),
+      title: t("workspace"),
+      summary: "",
+      pills: [
+        pill(`tabs ${config.workspace.tab_count}`, "violet"),
+        pill(`post-deps ${config.workspace.post_deps_tab_count}`, "violet"),
+        pill(`colors ${config.workspace.color_count}`, "amber"),
+      ],
+      paths: [],
+      detail: "",
+    }) : "",
+    scanRow({
+      tone: invalidProfileCount ? "red" : "violet",
+      kicker: t("profiles"),
+      title: `${profileCount} ${t("validProfiles")}`,
+      summary: invalidProfileCount ? `${invalidProfileCount} ${t("invalidRecords")}` : t("noInvalidProfiles"),
+      pills: [
+        pill(`${profileCount} ${t("validProfiles")}`, "violet"),
+        invalidProfileCount ? pill(`${invalidProfileCount} ${t("invalid")}`, "red") : pill(t("valid"), "green"),
+        pill(`${sourceFileCount} ${t("sourceFiles")}`, "blue"),
+      ],
+      paths: snapshot.profiles.items.slice(0, 4).map((row) => row.path),
+      detail: snapshot.profiles.items.map((row) => `${row.name}: ${row.path}`).join("\n"),
+    }),
+  ].filter(Boolean);
+  return cockpitPanel(t("cockpitConfigTitle"), t("cockpitConfigSubtitle"), stats, t("configIndex"), rows, t("noConfigSummary"), "config-cockpit");
+}
+
+function workflowsCockpit(snapshot) {
+  const workflows = sortedWorkflows(snapshot.workflows.items);
+  const groups = countBy(workflows, workflowUiGroup);
+  const invalid = snapshot.workflows.invalid.map((row) => invalidScanRow(row, t("invalidWorkflows")));
+  const rows = workflows.map(workflowScanRow).concat(invalid);
+  const stats = [
+    { label: t("preparedWorkflows"), value: groups.prepared || 0, tone: groups.prepared ? "blue" : "" },
+    { label: t("runningTaskRuns"), value: groups.running || 0, tone: groups.running ? "green" : "" },
+    { label: t("needsAttention"), value: (groups.needs_attention || 0) + snapshot.workflows.invalid.length, tone: (groups.needs_attention || snapshot.workflows.invalid.length) ? "red" : "green" },
+    { label: t("metricWorkflows"), value: workflows.length, tone: "violet" },
+  ];
+  return cockpitPanel(t("cockpitWorkflowTitle"), t("cockpitWorkflowSubtitle"), stats, t("workflowIndex"), rows, t("noWorkflows"), "workflow-cockpit");
+}
+
+function taskRunsCockpit(snapshot) {
+  const runs = sortedTaskRuns(snapshot.task_runs.items);
+  const groups = countBy(runs, taskRunUiGroup);
+  const rows = runs
+    .map(taskRunScanRow)
+    .concat(snapshot.task_runs.invalid.map((row) => invalidScanRow(row, t("invalidTaskRuns"))))
+    .concat(unlinkedTaskDocuments(snapshot).map(taskDocumentScanRow));
+  const stats = [
+    { label: t("statePrepared"), value: groups.prepared || 0, tone: groups.prepared ? "blue" : "" },
+    { label: t("stateRunning"), value: groups.running || 0, tone: groups.running ? "green" : "" },
+    { label: t("needsAttention"), value: (groups.needs_attention || 0) + snapshot.task_runs.invalid.length, tone: (groups.needs_attention || snapshot.task_runs.invalid.length) ? "red" : "green" },
+    { label: t("metricTaskRuns"), value: runs.length, tone: "violet" },
+  ];
+  return cockpitPanel(t("cockpitTaskRunTitle"), t("cockpitTaskRunSubtitle"), stats, t("taskRunIndex"), rows, t("noTaskRuns"), "task-runs-cockpit");
+}
+
+function ideasCockpit(snapshot) {
+  const ideas = sortedIdeas(snapshot.ideas.items);
+  const statusGroups = uniqueCount(ideas, (row) => row.status || "unspecified");
+  const tagged = ideas.filter((row) => row.tags.length).length;
+  const rows = ideas.map(ideaScanRow).concat(snapshot.ideas.invalid.map((row) => invalidScanRow(row, t("invalidIdeas"))));
+  const stats = [
+    { label: t("ideas"), value: ideas.length, tone: "blue" },
+    { label: t("statusGroups"), value: statusGroups, tone: "green" },
+    { label: t("taggedRecords"), value: tagged, tone: tagged ? "violet" : "" },
+    { label: t("invalidRecords"), value: snapshot.ideas.invalid.length, tone: snapshot.ideas.invalid.length ? "red" : "green" },
+  ];
+  return cockpitPanel(t("cockpitIdeasTitle"), t("cockpitIdeasSubtitle"), stats, t("ideaIndex"), rows, t("noIdeas"), "ideas-cockpit");
+}
+
+function retrospecsCockpit(snapshot) {
+  const retrospecs = sortedRetrospecs(snapshot.retrospecs.items);
+  const outcomeGroups = uniqueCount(retrospecs, (row) => row.outcome || "unspecified");
+  const tagged = retrospecs.filter((row) => row.tags.length).length;
+  const rows = retrospecs.map(retrospecScanRow).concat(snapshot.retrospecs.invalid.map((row) => invalidScanRow(row, t("invalidRetrospecs"))));
+  const stats = [
+    { label: t("retrospecs"), value: retrospecs.length, tone: "blue" },
+    { label: t("outcomeGroups"), value: outcomeGroups, tone: "green" },
+    { label: t("taggedRecords"), value: tagged, tone: tagged ? "violet" : "" },
+    { label: t("invalidRecords"), value: snapshot.retrospecs.invalid.length, tone: snapshot.retrospecs.invalid.length ? "red" : "green" },
+  ];
+  return cockpitPanel(t("cockpitRetrospecsTitle"), t("cockpitRetrospecsSubtitle"), stats, t("retrospecIndex"), rows, t("noRetrospecs"), "retrospecs-cockpit");
+}
+
 function overviewFocusModel(snapshot) {
   return {
     prepared: sortedWorkflows(snapshot.workflows.items).filter((row) => workflowUiGroup(row) === "prepared"),
@@ -689,6 +876,15 @@ function focusPanel(focus) {
   return `<section class="focus-panel" aria-labelledby="focus-heading"><div class="focus-heading"><div><h2 id="focus-heading" class="section-title">${escapeHtml(t("focusTitle"))}</h2><p class="section-note">${escapeHtml(t("focusSubtitle"))}</p></div><div class="focus-stats">${stats}</div></div><div class="focus-grid">${columns}</div></section>`;
 }
 
+function cockpitPanel(title, subtitle, stats, listTitle, rows, emptyText, id) {
+  const statsHtml = stats
+    .map((stat) => `<div class="focus-stat tone-${stat.tone || "neutral"}"><span>${escapeHtml(stat.label)}</span><strong>${escapeHtml(stat.value)}</strong></div>`)
+    .join("");
+  const body = rows.length ? `<div class="scan-list">${rows.join("")}</div>` : `<div class="focus-empty">${escapeHtml(emptyText)}</div>`;
+  const count = rows.length === 1 ? `1 ${t("record")}` : `${rows.length} ${t("records")}`;
+  return `<section class="focus-panel view-cockpit" id="${escapeHtml(id)}" aria-labelledby="${escapeHtml(id)}-heading"><div class="focus-heading"><div><h2 id="${escapeHtml(id)}-heading" class="section-title">${escapeHtml(title)}</h2><p class="section-note">${escapeHtml(subtitle)}</p></div><div class="focus-stats">${statsHtml}</div></div><div class="scan-heading"><h3>${escapeHtml(listTitle)}</h3><span>${escapeHtml(count)}</span></div>${body}</section>`;
+}
+
 function focusColumn(group) {
   const limit = 4;
   const visible = group.items.slice(0, limit);
@@ -699,6 +895,132 @@ function focusColumn(group) {
     ? `<a class="focus-more" href="#${escapeHtml(group.sectionId)}">${escapeHtml(tr("focusMore", { count: group.items.length - limit }))}</a>`
     : "";
   return `<section class="focus-column tone-${group.tone || "neutral"}" aria-labelledby="focus-${group.key}"><div class="focus-column-heading"><h3 id="focus-${group.key}">${escapeHtml(group.title)}</h3><span>${group.count}</span></div>${body}${more}</section>`;
+}
+
+function scanRow(row) {
+  const meta = (row.pills || []).filter(Boolean).join("");
+  const pathsHtml = row.paths && row.paths.length
+    ? `<div class="scan-paths">${row.paths.slice(0, 3).map((path) => `<p class="focus-path">${escapeHtml(path)}</p>`).join("")}</div>`
+    : "";
+  const summary = row.summary ? `<p class="focus-summary">${escapeHtml(row.summary)}</p>` : "";
+  const detailText = scanDetailText(row);
+  const details = detailText
+    ? `<details class="focus-inspector scan-inspector"><summary>${escapeHtml(t("focusSource"))}</summary>${formatFullText(detailText, row.detailKind || "source")}</details>`
+    : "";
+  return `<article class="scan-row tone-${row.tone || "neutral"}"><div class="scan-main"><span class="focus-kicker">${escapeHtml(row.kicker)}</span><h4>${escapeHtml(row.title)}</h4>${summary}<div class="meta">${meta}</div></div><div class="scan-side">${pathsHtml}${details}</div></article>`;
+}
+
+function scanDetailText(row) {
+  const parts = [];
+  if (row.detail) {
+    parts.push(row.detail);
+  }
+  if (row.paths && row.paths.length) {
+    parts.push(`${t("source")}:\n${row.paths.join("\n")}`);
+  }
+  return parts.join("\n\n");
+}
+
+function workflowScanRow(row) {
+  const group = workflowUiGroup(row);
+  return scanRow({
+    tone: groupColor(group),
+    kicker: `Workflow ${row.id}`,
+    title: row.title,
+    summary: row.state_error || row.body_summary || "",
+    pills: [
+      pill(stateLabel(group), groupColor(group)),
+      pill(row.mode, "blue"),
+      pill(`${row.task_runs.total} ${t("metricTaskRuns")}`),
+      row.runnable.runnable_count ? pill(`${row.runnable.runnable_count} runnable`, "green") : "",
+      row.task_runs.running ? pill(`${row.task_runs.running} ${stateLabel("running").toLowerCase()}`, "green") : "",
+      row.task_runs.failed ? pill(`${row.task_runs.failed} ${stateLabel("failed").toLowerCase()}`, "red") : "",
+      row.task_runs.missing ? pill(`${row.task_runs.missing} missing`, "red") : "",
+      pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
+    ],
+    paths: [row.path],
+    detail: formatWorkflowTaskRuns(row.task_run_groups || []) || row.source_text,
+  });
+}
+
+function taskRunScanRow(row) {
+  const taskDocument = row.task_document;
+  return scanRow({
+    tone: statusColor(taskRunUiGroup(row)),
+    kicker: `TaskRun ${row.id}`,
+    title: taskDocument ? taskDocument.title : row.task,
+    summary: row.error || row.context.error || row.task_document_error || taskDocument?.body_summary || row.branch,
+    pills: [
+      pill(stateLabel(taskRunUiGroup(row)), statusColor(taskRunUiGroup(row))),
+      pill(`task ${row.task}`, "blue"),
+      pill(`branch ${row.branch}`),
+      row.context.workflow_id ? pill(`workflow ${row.context.workflow_id}`, "violet") : pill(row.context.label || "direct"),
+      row.context.mode ? pill(row.context.mode, "violet") : "",
+    ],
+    paths: [row.path, row.context.workflow_path, taskDocument && taskDocument.path].filter(Boolean),
+    detail: formatTaskRunState(row),
+  });
+}
+
+function taskDocumentScanRow(row) {
+  return scanRow({
+    tone: "amber",
+    kicker: "TaskDocument",
+    title: row.title,
+    summary: row.body_summary,
+    pills: [
+      pill(t("focusUnlinkedTaskDocument"), "amber"),
+      pill(`task ${row.key}`, "blue"),
+      row.branch ? pill(`branch ${row.branch}`) : "",
+    ],
+    paths: [row.path],
+    detail: row.source_text,
+  });
+}
+
+function ideaScanRow(row) {
+  return scanRow({
+    tone: statusColor(row.status),
+    kicker: row.kind,
+    title: row.title,
+    summary: row.body_summary,
+    pills: [
+      pill(row.status || "unspecified", statusColor(row.status)),
+      row.source ? pill(row.source, "blue") : "",
+      ...row.tags.slice(0, 4).map((tag) => pill(tag, "violet")),
+    ],
+    paths: [row.path],
+    detail: row.source_text,
+  });
+}
+
+function retrospecScanRow(row) {
+  return scanRow({
+    tone: statusColor(row.outcome),
+    kicker: row.kind,
+    title: row.title,
+    summary: row.body_summary,
+    pills: [
+      row.outcome ? pill(row.outcome, statusColor(row.outcome)) : "",
+      row.target ? pill(row.target, "blue") : "",
+      row.date ? pill(row.date, "amber") : "",
+      ...row.tags.slice(0, 4).map((tag) => pill(tag, "violet")),
+    ],
+    paths: [row.path],
+    detail: row.source_text,
+  });
+}
+
+function invalidScanRow(row, labelText) {
+  return scanRow({
+    tone: "red",
+    kicker: labelText,
+    title: row.key,
+    summary: row.error,
+    pills: [pill(t("invalid"), "red")],
+    paths: [row.path],
+    detail: [row.error, row.source_text].filter(Boolean).join("\n\n"),
+  });
 }
 
 function focusItem(item) {
@@ -1128,6 +1450,22 @@ function pill(text, tone = "") {
   return `<span class="pill ${tone}">${escapeHtml(String(text))}</span>`;
 }
 
+function sortedIdeas(rows) {
+  return [...rows].sort((left, right) => {
+    const updated = String(right.updated_at || "").localeCompare(String(left.updated_at || ""));
+    if (updated !== 0) return updated;
+    return String(left.title).localeCompare(String(right.title));
+  });
+}
+
+function sortedRetrospecs(rows) {
+  return [...rows].sort((left, right) => {
+    const dated = String(right.date || "").localeCompare(String(left.date || ""));
+    if (dated !== 0) return dated;
+    return String(left.title).localeCompare(String(right.title));
+  });
+}
+
 function sortedTaskRuns(rows) {
   return [...rows].sort((left, right) => {
     const status = taskRunStatusOrder(left.status) - taskRunStatusOrder(right.status);
@@ -1156,6 +1494,18 @@ function workflowGroupOrder(group) {
   return ["prepared", "running", "waiting", "done", "needs_attention"].indexOf(group) === -1
     ? 99
     : ["prepared", "running", "waiting", "done", "needs_attention"].indexOf(group);
+}
+
+function countBy(rows, mapper) {
+  return rows.reduce((counts, row) => {
+    const key = mapper(row);
+    counts[key] = (counts[key] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+function uniqueCount(rows, mapper) {
+  return new Set(rows.map(mapper).filter(Boolean)).size;
 }
 
 function statusColor(status) {

@@ -380,7 +380,7 @@ main {
 
 .focus-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
   gap: 8px;
 }
 
@@ -427,6 +427,14 @@ main {
 
 .focus-stat.tone-blue strong {
   color: var(--blue);
+}
+
+.focus-stat.tone-amber strong {
+  color: var(--amber);
+}
+
+.focus-stat.tone-violet strong {
+  color: var(--violet);
 }
 
 .focus-grid {
@@ -618,6 +626,111 @@ main {
   color: var(--muted);
   font-size: 12px;
   text-align: center;
+}
+
+.view-cockpit {
+  gap: 11px;
+}
+
+.scan-heading {
+  min-height: 30px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0 0;
+}
+
+.scan-heading h3 {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1.25;
+}
+
+.scan-heading span {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.scan-list {
+  display: grid;
+  gap: 6px;
+}
+
+.scan-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 430px);
+  gap: 14px;
+  align-items: start;
+  padding: 11px 12px 11px 14px;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.scan-row.tone-red {
+  border-color: #e6b9b9;
+  border-left-color: var(--red);
+  background: #fffafa;
+}
+
+.scan-row.tone-amber {
+  border-color: #ead3af;
+  border-left-color: var(--amber);
+  background: #fffaf1;
+}
+
+.scan-row.tone-green {
+  border-left-color: var(--green);
+}
+
+.scan-row.tone-blue {
+  border-left-color: var(--blue);
+}
+
+.scan-row.tone-violet {
+  border-left-color: var(--violet);
+}
+
+.scan-main,
+.scan-side,
+.scan-paths {
+  min-width: 0;
+}
+
+.scan-main,
+.scan-side {
+  display: grid;
+  gap: 7px;
+}
+
+.scan-row h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 760;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+}
+
+.scan-paths {
+  display: grid;
+  gap: 3px;
+}
+
+.scan-inspector {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.scan-inspector .full-text {
+  max-height: 220px;
 }
 
 .jump-nav {
@@ -1067,6 +1180,10 @@ main {
   }
 
   .record-card {
+    grid-template-columns: 1fr;
+  }
+
+  .scan-row {
     grid-template-columns: 1fr;
   }
 
