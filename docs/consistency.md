@@ -78,8 +78,10 @@ merge된 layer, convention file, built-in default를 사용자가 복사해 수�
 보여준다. 명령 구현은 user-facing default를 각 call site에서 새로 해석하지 말고 config
 모델의 effective accessor나 effective policy snapshot을 거쳐 적용해야 한다.
 활성 section의 runtime default는 `wt config` 출력에 materialize한다. 예를 들어 active
-`[site]` provider는 name/root/secure/open_browser/url과 Traefik target default까지 보여주고,
-active `[editor]` 설정은 생략된 placement의 `cmux_surface` default를 보여준다. 반대로
+`[site]` provider는 name/root/secure/url과 Traefik target default까지 보여주고,
+`[workspace.browser]`는 setup/open 때 browser를 띄울지와 어떤 URL을 열지 결정한다.
+`[site]`는 `site_url`을 만들고, browser launch policy를 소유하지 않는다. active `[editor]`
+설정은 생략된 placement의 `cmux_surface` default를 보여준다. 반대로
 `provider = "none"`처럼 feature가 inactive인 section은 effective output에 unrelated section으로
 내보내지 않는다.
 

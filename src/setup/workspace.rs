@@ -3,7 +3,6 @@ use crate::config::Config;
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
 use crate::services::cmux::{CmuxCaller, CmuxService};
-use crate::template;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
@@ -185,33 +184,6 @@ pub(super) fn open_workspace(
         handle: ws_handle,
         coordinator: caller_context,
     }))
-}
-
-pub(crate) fn open_workspace_url(
-    ctx: &Ctx,
-    config: &Config,
-    vars: &HashMap<String, String>,
-) -> Result<Option<String>> {
-    let ws = match &config.workspace {
-        Some(ws) => ws,
-        None => return Ok(None),
-    };
-    if !ws.open_browser.unwrap_or(true) {
-        return Ok(None);
-    }
-    let url_template = match ws.open_url.as_deref() {
-        Some(url) if !url.is_empty() => url,
-        _ => return Ok(None),
-    };
-
-    let url = template::render(url_template, vars);
-    if let Some(browser) = ws.browser.as_deref() {
-        ctx.runner.run("open", &["-a", browser, &url], None).ok();
-    } else {
-        ctx.runner.run("open", &[&url], None).ok();
-    }
-
-    Ok(Some(url))
 }
 
 fn restore_cmux_focus(
