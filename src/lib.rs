@@ -21,7 +21,8 @@ pub mod worktree_naming;
 
 use anyhow::Result;
 use cli::{
-    AgentCommand, Commands, ConfigCommand, MsgCommand, RunCommand, TaskCommand, WorkflowCommand,
+    AgentCommand, AgentHookCommand, AgentHookInstallCommand, AgentHookUninstallCommand, Commands,
+    ConfigCommand, MsgCommand, RunCommand, TaskCommand, WorkflowCommand,
 };
 use context::Ctx;
 
@@ -156,6 +157,18 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 timeout,
                 heartbeat,
             } => commands::agent::watch(ctx, target.as_deref(), *interval, *timeout, *heartbeat),
+            AgentCommand::Hook { command } => match command {
+                AgentHookCommand::Install { command } => match command {
+                    AgentHookInstallCommand::Claude { agent } => {
+                        commands::agent_hook::install_claude(ctx, agent)
+                    }
+                },
+                AgentHookCommand::Uninstall { command } => match command {
+                    AgentHookUninstallCommand::Claude { agent } => {
+                        commands::agent_hook::uninstall_claude(ctx, agent)
+                    }
+                },
+            },
         },
         Commands::Ui { port } => commands::ui::run(ctx, *port),
         Commands::Msg { command } => match command {

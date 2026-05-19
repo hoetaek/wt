@@ -22,6 +22,9 @@ const GIT_LOCAL_ENV_KEYS: &[&str] = &[
     "GIT_COMMON_DIR",
 ];
 
+const CLAUDE_INBOX_HOOK_COMMAND: &str =
+    "wt msg check-inbox --agent agents/claude # wt-agent-hook:claude-inbox";
+
 fn git_command() -> StdCommand {
     let mut command = StdCommand::new("git");
     for key in GIT_LOCAL_ENV_KEYS {
@@ -65,6 +68,23 @@ fn git_commit(path: &Path) {
             "commit",
             "-m",
             "initial",
+        ])
+        .current_dir(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+fn git_commit_message(path: &Path, message: &str) {
+    let status = git_command()
+        .args([
+            "-c",
+            "user.name=wt test",
+            "-c",
+            "user.email=wt@example.com",
+            "commit",
+            "-m",
+            message,
         ])
         .current_dir(path)
         .status()
@@ -221,6 +241,37 @@ fn toml_files(dir: &Path) -> Vec<PathBuf> {
         .collect::<Vec<_>>();
     files.sort();
     files
+}
+
+fn json_file(path: &Path) -> serde_json::Value {
+    let content = std::fs::read_to_string(path).unwrap();
+    serde_json::from_str(&content).unwrap()
+}
+
+fn claude_user_prompt_commands(settings: &serde_json::Value) -> Vec<String> {
+    settings["hooks"]["UserPromptSubmit"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|entry| {
+            entry["hooks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|hook| hook["command"].as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn git_status_short(path: &Path) -> String {
+    let output = git_command()
+        .args(["status", "--short"])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap()
 }
 
 #[test]
@@ -1211,6 +1262,463 @@ fn agent_watch_help_explains_polling_target() {
         .stdout(predicate::str::contains(
             "Omit TARGET in an interactive terminal",
         ));
+}
+
+#[test]
+fn agent_hook_help_explains_claude_file_inbox_adapter() {
+    wt_command()
+        .args(["agent", "hook", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("local agent hook adapters"))
+        .stdout(predicate::str::contains("Claude-specific"))
+        .stdout(predicate::str::contains(".claude/settings.local.json"))
+        .stdout(predicate::str::contains(
+            "wt msg check-inbox --agent <agent>",
+        ))
+        .stdout(predicate::str::contains("file inbox"))
+        .stdout(predicate::str::contains("per-worktree Git exclude"))
+        .stdout(predicate::str::contains("does not modify tracked source"));
+
+    wt_command()
+        .args(["agent", "hook", "install", "claude", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Claude Code"))
+        .stdout(predicate::str::contains("UserPromptSubmit"))
+        .stdout(predicate::str::contains(
+            "wt msg check-inbox --agent <agent>",
+        ))
+        .stdout(predicate::str::contains(
+            "preserves existing local Claude settings",
+        ))
+        .stdout(predicate::str::contains("Agent id as NAME or agents/NAME"));
+
+    wt_command()
+        .args(["agent", "hook", "uninstall", "claude", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Claude-specific"))
+        .stdout(predicate::str::contains(
+            "wt-managed Claude UserPromptSubmit",
+        ))
+        .stdout(predicate::str::contains("Other local Claude settings"))
+        .stdout(predicate::str::contains("Agent id as NAME or agents/NAME"));
+}
+
+#[test]
+fn agent_hook_install_claude_creates_git_excluded_local_settings() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "claude",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Claude hook installed"))
+        .stdout(predicate::str::contains(
+            "wt msg check-inbox --agent agents/claude",
+        ));
+
+    let settings_path = temp.path().join(".claude/settings.local.json");
+    let settings = json_file(&settings_path);
+    let commands = claude_user_prompt_commands(&settings);
+    assert_eq!(commands, vec![CLAUDE_INBOX_HOOK_COMMAND]);
+    assert_eq!(
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["type"].as_str(),
+        Some("command")
+    );
+
+    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
+    assert!(exclude.contains(".claude/settings.local.json"));
+    assert_eq!(git_status_short(temp.path()), "");
+}
+
+#[test]
+fn agent_hook_install_claude_reinstall_is_idempotent() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    for _ in 0..2 {
+        wt_command()
+            .args([
+                "-C",
+                temp.path().to_str().unwrap(),
+                "agent",
+                "hook",
+                "install",
+                "claude",
+                "--agent",
+                "agents/claude",
+            ])
+            .assert()
+            .success();
+    }
+
+    let settings = json_file(&temp.path().join(".claude/settings.local.json"));
+    let commands = claude_user_prompt_commands(&settings);
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|command| command.as_str() == CLAUDE_INBOX_HOOK_COMMAND)
+            .count(),
+        1
+    );
+
+    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
+    assert_eq!(exclude.matches(".claude/settings.local.json").count(), 1);
+}
+
+#[test]
+fn agent_hook_uninstall_claude_removes_only_wt_managed_empty_settings() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "claude",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "uninstall",
+            "claude",
+            "--agent",
+            "agents/claude",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Claude hook uninstalled"));
+
+    assert!(!temp.path().join(".claude/settings.local.json").exists());
+    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
+    assert!(exclude.contains(".claude/settings.local.json"));
+}
+
+#[test]
+fn agent_hook_claude_preserves_non_wt_hooks_on_install_and_uninstall() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let settings_path = temp.path().join(".claude/settings.local.json");
+    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &settings_path,
+        r#"{
+  "permissions": { "allow": ["Bash(echo:*)"] },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "echo keep-user-prompt" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "echo keep-stop" }
+        ]
+      }
+    ]
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "claude",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .success();
+
+    let settings = json_file(&settings_path);
+    let commands = claude_user_prompt_commands(&settings);
+    assert!(commands.contains(&"echo keep-user-prompt".to_string()));
+    assert!(commands.contains(&CLAUDE_INBOX_HOOK_COMMAND.to_string()));
+    assert_eq!(
+        settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
+        Some("echo keep-stop")
+    );
+    assert_eq!(
+        settings["permissions"]["allow"][0].as_str(),
+        Some("Bash(echo:*)")
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "uninstall",
+            "claude",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .success();
+
+    let settings = json_file(&settings_path);
+    let commands = claude_user_prompt_commands(&settings);
+    assert_eq!(commands, vec!["echo keep-user-prompt".to_string()]);
+    assert_eq!(
+        settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
+        Some("echo keep-stop")
+    );
+    assert_eq!(
+        settings["permissions"]["allow"][0].as_str(),
+        Some("Bash(echo:*)")
+    );
+}
+
+#[test]
+fn agent_hook_install_claude_rejects_tracked_local_settings() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let settings_path = temp.path().join(".claude/settings.local.json");
+    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    std::fs::write(&settings_path, "{\"hooks\":{}}\n").unwrap();
+    let status = git_command()
+        .args(["add", ".claude/settings.local.json"])
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "claude",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Refusing to modify tracked Claude settings file",
+        ))
+        .stderr(predicate::str::contains(
+            "only writes worktree-local untracked settings",
+        ))
+        .stderr(predicate::str::contains("shared project hook"));
+
+    assert_eq!(
+        std::fs::read_to_string(&settings_path).unwrap(),
+        "{\"hooks\":{}}\n"
+    );
+}
+
+#[test]
+fn agent_hook_install_claude_preserves_tracked_source_files() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::write(temp.path().join("AGENTS.md"), "tracked agents\n").unwrap();
+    std::fs::write(temp.path().join("CLAUDE.md"), "tracked claude\n").unwrap();
+    std::fs::write(temp.path().join(".gitignore"), "target/\n").unwrap();
+    let status = git_command()
+        .args(["add", "AGENTS.md", "CLAUDE.md", ".gitignore"])
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    git_commit_message(temp.path(), "tracked source files");
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "claude",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("AGENTS.md")).unwrap(),
+        "tracked agents\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("CLAUDE.md")).unwrap(),
+        "tracked claude\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
+        "target/\n"
+    );
+    assert_eq!(git_status_short(temp.path()), "");
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_hook_install_claude_excludes_symlinked_local_settings_target() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir(temp.path().join(".agents")).unwrap();
+    std::os::unix::fs::symlink(".agents", temp.path().join(".claude")).unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "claude",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .success();
+
+    assert!(temp.path().join(".agents/settings.local.json").exists());
+    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
+    assert!(exclude.contains(".claude/settings.local.json"));
+    assert!(exclude.contains(".agents/settings.local.json"));
+    assert_eq!(git_status_short(temp.path()), "?? .claude\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_hook_install_claude_rejects_tracked_symlinked_local_settings_target() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir(temp.path().join(".agents")).unwrap();
+    std::os::unix::fs::symlink(".agents", temp.path().join(".claude")).unwrap();
+    std::fs::write(
+        temp.path().join(".agents/settings.local.json"),
+        "{\"hooks\":{}}\n",
+    )
+    .unwrap();
+    let status = git_command()
+        .args(["add", ".agents/settings.local.json"])
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "claude",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Refusing to modify tracked Claude settings file `.agents/settings.local.json`",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_hook_claude_marker_is_safe_as_a_shell_comment() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "claude",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .success();
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "claude",
+            "marker",
+            "smoke",
+        ])
+        .assert()
+        .success();
+
+    let settings = json_file(&temp.path().join(".claude/settings.local.json"));
+    let command = claude_user_prompt_commands(&settings)
+        .into_iter()
+        .find(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
+        .unwrap();
+    let wt_bin = assert_cmd::cargo::cargo_bin("wt");
+    let wt_bin_dir = wt_bin.parent().unwrap();
+    let mut paths = vec![wt_bin_dir.to_path_buf()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    let output = StdCommand::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .current_dir(temp.path())
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        value["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("marker smoke")
+    );
 }
 
 #[test]

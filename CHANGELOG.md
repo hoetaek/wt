@@ -8,6 +8,16 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added `wt agent hook install claude --agent <agent>` and
+  `wt agent hook uninstall claude --agent <agent>` for Claude Code inbox
+  delivery through worktree-local `.claude/settings.local.json`
+  `UserPromptSubmit` hooks. Installation writes only untracked local settings
+  plus the per-worktree Git exclude file, preserves non-wt Claude hooks, rejects
+  tracked local settings, and installs the hook command
+  `wt msg check-inbox --agent <agent>` with a shell-comment wt marker.
+- Bumped the package version to `0.35.0` because the Claude hook adapter adds a
+  new user-facing CLI subcommand while `wt` is still pre-1.0.
+
 - Added `wt msg send --to <agent> <message>` and
   `wt msg check-inbox --agent <agent>` as the file-based agent inbox MVP. Messages
   are stored under `<git-common-dir>/wt/messages/agents/<agent>/inbox`, use a

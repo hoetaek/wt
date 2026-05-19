@@ -268,6 +268,13 @@ merge.
   transitions by default; `--timeout <seconds>` bounds the wait, and
   `--heartbeat <seconds>` opts into unchanged running reports. Agent state is
   separate from `TaskRun.status`.
+- `wt agent hook install claude --agent <agent>` installs a Claude-specific
+  Claude Code `UserPromptSubmit` hook in worktree-local
+  `.claude/settings.local.json`. The hook delivers the file inbox by running
+  `wt msg check-inbox --agent <agent>`, and `wt agent hook uninstall claude
+  --agent <agent>` removes only wt-managed hook entries. The generated command
+  stores its wt marker after `#`, so shell execution treats the marker as a
+  comment rather than as an argument.
 
 `wt workflow` is the canonical prepared-work surface. `single`, `batch`,
 `stack`, and `matrix` are workflow mode values, not separate command surfaces. Use
@@ -491,6 +498,8 @@ there for one named profile.
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
 | `wt agent status` | Observe the matching task agent surface once |
 | `wt agent watch` | Poll the matching task agent surface, with optional timeout and heartbeat |
+| `wt agent hook install claude` | Install Claude Code file inbox delivery through local hooks |
+| `wt agent hook uninstall claude` | Remove wt-managed Claude Code inbox hook entries |
 | `wt send` | Send a message to the matching task agent surface |
 | `wt done` | Remove completed or disposable worktrees and branches |
 | `wt config` | Print, edit, extract, or inline config |

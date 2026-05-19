@@ -300,6 +300,54 @@ pub enum AgentCommand {
         #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
         heartbeat: Option<u64>,
     },
+    /// Install or uninstall local agent hook adapters
+    #[command(
+        long_about = "Install or uninstall local agent hook adapters.\n\nThe Claude adapter is Claude-specific: it uses Claude Code worktree-local `.claude/settings.local.json` hooks to deliver the wt file inbox by running `wt msg check-inbox --agent <agent>`. Adapter installation writes only untracked local adapter files and the per-worktree Git exclude file; it does not modify tracked source, tracked instruction files, tracked settings, or `.gitignore`."
+    )]
+    Hook {
+        #[command(subcommand)]
+        command: AgentHookCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum AgentHookCommand {
+    /// Install a local hook adapter
+    Install {
+        #[command(subcommand)]
+        command: AgentHookInstallCommand,
+    },
+    /// Uninstall a local hook adapter
+    Uninstall {
+        #[command(subcommand)]
+        command: AgentHookUninstallCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum AgentHookInstallCommand {
+    /// Install Claude Code UserPromptSubmit inbox polling
+    #[command(
+        long_about = "Install the Claude-specific wt inbox hook for Claude Code.\n\nThis writes a worktree-local `.claude/settings.local.json` UserPromptSubmit hook that runs `wt msg check-inbox --agent <agent>`, then adds that local settings path to the per-worktree Git exclude file. It preserves existing local Claude settings and fails instead of modifying tracked settings or source files."
+    )]
+    Claude {
+        /// Agent id as NAME or agents/NAME
+        #[arg(long)]
+        agent: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum AgentHookUninstallCommand {
+    /// Uninstall Claude Code UserPromptSubmit inbox polling
+    #[command(
+        long_about = "Uninstall the Claude-specific wt inbox hook for Claude Code.\n\nThis removes only wt-managed Claude UserPromptSubmit hook entries for the selected agent from worktree-local `.claude/settings.local.json`. Other local Claude settings and user-managed hooks are preserved."
+    )]
+    Claude {
+        /// Agent id as NAME or agents/NAME
+        #[arg(long)]
+        agent: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]

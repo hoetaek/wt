@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_hook;
 pub mod agent_report;
 pub mod clean;
 pub mod config;
