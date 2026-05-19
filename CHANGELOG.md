@@ -8,6 +8,17 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added `wt agent hook install codex` and `wt agent hook uninstall codex` for
+  Codex inbox delivery through a user-level `hooks.json` `UserPromptSubmit`
+  dispatcher hook. The installed hook reads `WT_AGENT_ID` at runtime and no-ops
+  when it is unset, so hook installation is separate from per-run agent binding.
+  Installation writes the matching Codex `config.toml` trusted hook state,
+  enables Codex hooks, preserves existing cmux/non-wt hooks and trust entries,
+  and removes only wt-managed Codex hook/trust entries on uninstall. `--agent`
+  remains only as a manual/test override.
+- Bumped the package version to `0.36.0` because the Codex hook adapter adds a
+  new user-facing CLI subcommand while `wt` is still pre-1.0.
+
 - Added `wt agent hook install claude --agent <agent>` and
   `wt agent hook uninstall claude --agent <agent>` for Claude Code inbox
   delivery through worktree-local `.claude/settings.local.json`

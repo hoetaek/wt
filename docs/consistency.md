@@ -209,6 +209,52 @@ Tracked `.claude/settings.local.json` 또는 symlink target local settings file�
 install/uninstall은 실패한다. Tracked `CLAUDE.md`, `AGENTS.md`, `.gitignore`,
 `.claude/settings.json` 같은 shared source/config는 adapter가 수정하지 않는다.
 
+### Codex Hook Adapter
+
+Codex inbox polling의 canonical install surface는 다음 두 명령이다.
+
+```bash
+wt agent hook install codex
+wt agent hook uninstall codex
+```
+
+이 adapter는 Codex 전용이다. 현재 Codex는 project-local `.codex/hooks.json` discovery를
+신뢰할 수 없으므로 user-level `$CODEX_HOME/hooks.json` 또는 `~/.codex/hooks.json`에만
+`UserPromptSubmit` hook dispatcher를 추가한다. User-level hook은 특정 agent id에 영구로
+묶이면 안 된다. 기본 hook command는 runtime env `WT_AGENT_ID`를 읽어 다음 delivery command를
+실행하고, `WT_AGENT_ID`가 없으면 성공으로 조용히 종료한다.
+
+```bash
+wt msg check-inbox --agent "$WT_AGENT_ID"
+```
+
+Codex는 user-level custom hook을 실행하기 전에 matching trust state를 요구한다. Install은
+Codex가 쓰는 hook identity와 같은 방식으로 `trusted_hash`를 계산해
+`$CODEX_HOME/config.toml` 또는 `~/.codex/config.toml`의 `[hooks.state]` 아래에 쓴다. Hash
+identity는 event key `user_prompt_submit`, normalized command handler, default timeout
+`600`, `async = false`를 canonical JSON으로 정렬한 뒤 SHA-256으로 계산한다. Install은
+`[features].hooks = true`도 보장한다.
+
+`--agent <agent>`가 남아 있다면 manual/test override다. 이 override는 user-level hook을
+특정 agent에 묶으므로 normal run UX의 일부가 아니다. `wt run issue`, `wt run task`,
+`wt run workflow`는 사용자가 매번 hook을 다시 설치하게 하지 않고, Codex launch 시 per-run
+`WT_AGENT_ID`를 설정해 dispatcher에 agent binding을 제공해야 한다.
+
+수동으로 agent id를 지정해 agent command를 실행하는 wrapper가 필요하면 canonical 후보는
+다음 짧은 형태다.
+
+```bash
+wt as <agent-id> -- <command...>
+wt as main/coordinator -- codex
+```
+
+긴 `wt agent shell --agent <agent> ...` 형태를 최종 UX로 문서화하지 않는다.
+
+Reinstall은 wt-managed Codex dispatcher hook을 하나만 남기는 idempotent operation이다.
+Uninstall은 wt-managed Codex `UserPromptSubmit` dispatcher entry와 matching trust state만
+제거한다. `--agent <agent>` uninstall은 manual/test override entry만 대상으로 한다. cmux가
+설치한 Codex hook, 사용자가 작성한 다른 Codex hook, 다른 `hooks.state` entry는 보존한다.
+
 ## Canonical Interfaces
 
 이 섹션은 구현이 향해야 할 interface boundary를 적는다. 구체적 CLI와 schema는 해당 기능의
@@ -913,9 +959,13 @@ Agent별 상태 신호 준비도는 `agent status`나 `agent watch`가 고치는
 신뢰도 조건이다. Claude Code는 cmux의 Claude 통합에서 status/sidebar 신호가 나오고, Codex는
 사용자가 `cmux hooks codex install --yes`를 명시적으로 실행한 뒤에야 `agent.hook.*`와
 `set_status codex Running/Idle` 신호가 나온다. Codex hook이 없으면 agent commands는 화면
-텍스트 fallback을 쓸 수 있지만 약한 관찰이라는 warning을 남겨야 한다. `wt doctor`는 이
-준비도를 보고만 하고, 일반 wt 명령이 전역 Codex hook을 자동 설치하거나 사용자 agent config를
-몰래 수정하면 안 된다.
+텍스트 fallback을 쓸 수 있지만 약한 관찰이라는 warning을 남겨야 한다. `wt doctor`는 cmux
+상태 신호 준비도를 보고만 한다.
+
+Codex inbox delivery는 상태 신호와 다른 명시적 adapter surface다.
+`wt agent hook install codex`는 사용자가 요청한 경우에만 user-level Codex `hooks.json`과
+`config.toml` trust state를 수정한다. 일반 `wt agent status/watch`, `wt doctor`, `wt msg`
+같은 명령이 전역 Codex hook을 자동 설치하거나 사용자 agent config를 몰래 수정하면 안 된다.
 
 Agent runtime observation은 `wt agent status`와 `wt agent watch` 아래에 둔다. Git의
 `status` 문서(`https://git-scm.com/docs/git-status.html`)는 worktree/index state를 뜻하므로

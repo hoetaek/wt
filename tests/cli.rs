@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use assert_fs::TempDir;
 use predicates::prelude::*;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 
@@ -24,6 +25,7 @@ const GIT_LOCAL_ENV_KEYS: &[&str] = &[
 
 const CLAUDE_INBOX_HOOK_COMMAND: &str =
     "wt msg check-inbox --agent agents/claude # wt-agent-hook:claude-inbox";
+const CODEX_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 
 fn git_command() -> StdCommand {
     let mut command = StdCommand::new("git");
@@ -262,6 +264,142 @@ fn claude_user_prompt_commands(settings: &serde_json::Value) -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+fn codex_user_prompt_commands(hooks: &serde_json::Value) -> Vec<String> {
+    hooks["hooks"]["UserPromptSubmit"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|entry| {
+            entry["hooks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|hook| hook["command"].as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn codex_hook_command(agent: &str) -> String {
+    format!("wt msg check-inbox --agent agents/{agent} {CODEX_INBOX_HOOK_MARKER}")
+}
+
+fn codex_dispatcher_command() -> String {
+    format!(
+        "if [ -n \"${{WT_AGENT_ID:-}}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi {CODEX_INBOX_HOOK_MARKER}"
+    )
+}
+
+fn codex_trust_key(codex_home: &Path, group_index: usize, handler_index: usize) -> String {
+    format!(
+        "{}:user_prompt_submit:{group_index}:{handler_index}",
+        codex_home.join("hooks.json").display()
+    )
+}
+
+fn codex_hook_trusted_hash(command: &str) -> String {
+    let identity = serde_json::json!({
+        "event_name": "user_prompt_submit",
+        "hooks": [
+            {
+                "async": false,
+                "command": command,
+                "timeout": 600,
+                "type": "command",
+            }
+        ]
+    });
+    let canonical = canonical_json(&identity);
+    let serialized = serde_json::to_vec(&canonical).unwrap();
+    let mut hasher = Sha256::new();
+    hasher.update(serialized);
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn canonical_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut sorted = serde_json::Map::new();
+            let mut keys = map.keys().collect::<Vec<_>>();
+            keys.sort();
+            for key in keys {
+                sorted.insert(key.clone(), canonical_json(&map[key]));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(canonical_json).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+fn toml_file(path: &Path) -> toml::Value {
+    let content = std::fs::read_to_string(path).unwrap();
+    toml::from_str(&content).unwrap()
+}
+
+fn codex_trusted_hash(config: &toml::Value, key: &str) -> Option<String> {
+    config
+        .get("hooks")
+        .and_then(|hooks| hooks.get("state"))
+        .and_then(|state| state.get(key))
+        .and_then(|entry| entry.get("trusted_hash"))
+        .and_then(toml::Value::as_str)
+        .map(String::from)
+}
+
+fn write_codex_home_with_cmux(codex_home: &Path) {
+    std::fs::create_dir_all(codex_home).unwrap();
+    std::fs::write(
+        codex_home.join("hooks.json"),
+        r#"{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmux hooks codex prompt-submit",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmux hooks codex stop"
+          }
+        ]
+      }
+    ]
+  }
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"[features]
+hooks = true
+
+[hooks.state."{}:user_prompt_submit:0:0"]
+trusted_hash = "sha256:cmux"
+
+[hooks.state."{}:stop:0:0"]
+trusted_hash = "sha256:cmux-stop"
+"#,
+            codex_home.join("hooks.json").display(),
+            codex_home.join("hooks.json").display()
+        ),
+    )
+    .unwrap();
 }
 
 fn git_status_short(path: &Path) -> String {
@@ -1272,13 +1410,15 @@ fn agent_hook_help_explains_claude_file_inbox_adapter() {
         .success()
         .stdout(predicate::str::contains("local agent hook adapters"))
         .stdout(predicate::str::contains("Claude-specific"))
+        .stdout(predicate::str::contains("Codex-specific"))
         .stdout(predicate::str::contains(".claude/settings.local.json"))
+        .stdout(predicate::str::contains("hooks.json"))
+        .stdout(predicate::str::contains("trusted hook state"))
         .stdout(predicate::str::contains(
             "wt msg check-inbox --agent <agent>",
         ))
         .stdout(predicate::str::contains("file inbox"))
-        .stdout(predicate::str::contains("per-worktree Git exclude"))
-        .stdout(predicate::str::contains("does not modify tracked source"));
+        .stdout(predicate::str::contains("per-worktree Git exclude"));
 
     wt_command()
         .args(["agent", "hook", "install", "claude", "--help"])
@@ -1304,6 +1444,31 @@ fn agent_hook_help_explains_claude_file_inbox_adapter() {
         ))
         .stdout(predicate::str::contains("Other local Claude settings"))
         .stdout(predicate::str::contains("Agent id as NAME or agents/NAME"));
+
+    wt_command()
+        .args(["agent", "hook", "install", "codex", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex-specific"))
+        .stdout(predicate::str::contains("UserPromptSubmit"))
+        .stdout(predicate::str::contains("hooks.json"))
+        .stdout(predicate::str::contains("config.toml"))
+        .stdout(predicate::str::contains("trusted hook state"))
+        .stdout(predicate::str::contains("non-wt and cmux hooks"))
+        .stdout(predicate::str::contains("WT_AGENT_ID"))
+        .stdout(predicate::str::contains("manual or test override"));
+
+    wt_command()
+        .args(["agent", "hook", "uninstall", "codex", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex-specific"))
+        .stdout(predicate::str::contains(
+            "wt-managed Codex UserPromptSubmit",
+        ))
+        .stdout(predicate::str::contains("trust state"))
+        .stdout(predicate::str::contains("Other Codex hooks"))
+        .stdout(predicate::str::contains("manual/test override"));
 }
 
 #[test]
@@ -1586,6 +1751,264 @@ fn agent_hook_install_claude_preserves_tracked_source_files() {
         "target/\n"
     );
     assert_eq!(git_status_short(temp.path()), "");
+}
+
+#[test]
+fn agent_hook_install_codex_preserves_existing_hooks_and_writes_trust_state() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let codex_home = temp.path().join("codex-home");
+    write_codex_home_with_cmux(&codex_home);
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "codex",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex hook installed"))
+        .stdout(predicate::str::contains("WT_AGENT_ID"))
+        .stdout(predicate::str::contains(
+            "wt msg check-inbox --agent \"$WT_AGENT_ID\"",
+        ));
+
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    let commands = codex_user_prompt_commands(&hooks);
+    assert!(commands.contains(&"cmux hooks codex prompt-submit".to_string()));
+    assert!(commands.contains(&codex_dispatcher_command()));
+    assert_eq!(
+        hooks["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
+        Some("cmux hooks codex stop")
+    );
+
+    let config = toml_file(&codex_home.join("config.toml"));
+    assert_eq!(
+        config["hooks"]["state"][&codex_trust_key(&codex_home, 0, 0)]["trusted_hash"].as_str(),
+        Some("sha256:cmux")
+    );
+    let wt_key = codex_trust_key(&codex_home, 1, 0);
+    assert_eq!(
+        codex_trusted_hash(&config, &wt_key).as_deref(),
+        Some(codex_hook_trusted_hash(&codex_dispatcher_command()).as_str())
+    );
+    assert_eq!(
+        config["hooks"]["state"][&wt_key]["enabled"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(config["features"]["hooks"].as_bool(), Some(true));
+}
+
+#[test]
+fn agent_hook_install_codex_reinstall_is_idempotent() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let codex_home = temp.path().join("codex-home");
+
+    for _ in 0..2 {
+        wt_command()
+            .env("CODEX_HOME", &codex_home)
+            .args([
+                "-C",
+                temp.path().to_str().unwrap(),
+                "agent",
+                "hook",
+                "install",
+                "codex",
+            ])
+            .assert()
+            .success();
+    }
+
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    let commands = codex_user_prompt_commands(&hooks);
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|command| command.as_str() == codex_dispatcher_command())
+            .count(),
+        1
+    );
+
+    let config = toml_file(&codex_home.join("config.toml"));
+    let wt_key = codex_trust_key(&codex_home, 0, 0);
+    assert_eq!(
+        codex_trusted_hash(&config, &wt_key).as_deref(),
+        Some(codex_hook_trusted_hash(&codex_dispatcher_command()).as_str())
+    );
+}
+
+#[test]
+fn agent_hook_install_codex_agent_flag_is_manual_override() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let codex_home = temp.path().join("codex-home");
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "codex",
+            "--agent",
+            "agents/manual",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("manual override agents/manual"));
+
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    assert_eq!(
+        codex_user_prompt_commands(&hooks),
+        vec![codex_hook_command("manual")]
+    );
+}
+
+#[test]
+fn agent_hook_install_codex_dispatcher_replaces_wt_managed_manual_override() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let codex_home = temp.path().join("codex-home");
+    write_codex_home_with_cmux(&codex_home);
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "codex",
+            "--agent",
+            "agents/manual",
+        ])
+        .assert()
+        .success();
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "codex",
+        ])
+        .assert()
+        .success();
+
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    let commands = codex_user_prompt_commands(&hooks);
+    assert_eq!(
+        commands,
+        vec![
+            "cmux hooks codex prompt-submit".to_string(),
+            codex_dispatcher_command()
+        ]
+    );
+    assert!(!commands.contains(&codex_hook_command("manual")));
+
+    let config = toml_file(&codex_home.join("config.toml"));
+    let wt_key = codex_trust_key(&codex_home, 1, 0);
+    assert_eq!(
+        codex_trusted_hash(&config, &wt_key).as_deref(),
+        Some(codex_hook_trusted_hash(&codex_dispatcher_command()).as_str())
+    );
+}
+
+#[test]
+fn agent_hook_uninstall_codex_removes_only_wt_managed_hook_and_trust() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let codex_home = temp.path().join("codex-home");
+    write_codex_home_with_cmux(&codex_home);
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "codex",
+        ])
+        .assert()
+        .success();
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "uninstall",
+            "codex",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex hook uninstalled"));
+
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    let commands = codex_user_prompt_commands(&hooks);
+    assert_eq!(commands, vec!["cmux hooks codex prompt-submit".to_string()]);
+    assert_eq!(
+        hooks["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
+        Some("cmux hooks codex stop")
+    );
+
+    let config = toml_file(&codex_home.join("config.toml"));
+    assert_eq!(
+        config["hooks"]["state"][&codex_trust_key(&codex_home, 0, 0)]["trusted_hash"].as_str(),
+        Some("sha256:cmux")
+    );
+    assert!(
+        codex_trusted_hash(&config, &codex_trust_key(&codex_home, 1, 0)).is_none(),
+        "wt-managed Codex trust state should be removed"
+    );
+}
+
+#[test]
+fn agent_hook_install_codex_reports_malformed_config_without_changing_hooks() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let codex_home = temp.path().join("codex-home");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(codex_home.join("hooks.json"), r#"{"hooks":{}}"#).unwrap();
+    std::fs::write(codex_home.join("config.toml"), "[features\n").unwrap();
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "codex",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Failed to parse Codex config TOML",
+        ))
+        .stderr(predicate::str::contains("config.toml"));
+
+    assert_eq!(
+        std::fs::read_to_string(codex_home.join("hooks.json")).unwrap(),
+        r#"{"hooks":{}}"#
+    );
 }
 
 #[cfg(unix)]

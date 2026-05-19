@@ -1,3 +1,4 @@
+use crate::commands::agent_hook;
 use crate::config::{AgentCli, Config, IssueProviderType, SiteProvider};
 use crate::context::Ctx;
 use anyhow::{Result, anyhow};
@@ -8,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 const CODEX_HOOK_INSTALL_HINT: &str =
     "Run cmux hooks codex install --yes to enable reliable Codex status events.";
+const CODEX_WT_HOOK_INSTALL_HINT: &str = "Run wt agent hook install codex to enable wt inbox delivery through the Codex WT_AGENT_ID dispatcher hook.";
 const CODEX_CMUX_HOOK_EVENTS: [(&str, &str); 5] = [
     ("PermissionRequest", "permission_request"),
     ("PreToolUse", "pre_tool_use"),
@@ -418,7 +420,59 @@ fn codex_hook_readiness_checks_for_home(codex_home: &Path) -> Vec<DoctorCheck> {
         Err(message) => checks.push(DoctorCheck::warning("codex_config_hooks", message)),
     }
 
+    checks.extend(codex_wt_inbox_hook_checks_for_home(
+        &hooks_path,
+        &config_path,
+    ));
+
     checks
+}
+
+fn codex_wt_inbox_hook_checks_for_home(hooks_path: &Path, config_path: &Path) -> Vec<DoctorCheck> {
+    let mut checks = Vec::new();
+    let hooks = match wt_codex_inbox_hooks(hooks_path) {
+        Ok(hooks) => hooks,
+        Err(message) => {
+            checks.push(DoctorCheck::warning("codex_wt_inbox_hook", message));
+            return checks;
+        }
+    };
+
+    if hooks.is_empty() {
+        checks.push(DoctorCheck::warning(
+            "codex_wt_inbox_hook",
+            format!("missing wt-managed Codex UserPromptSubmit hook. {CODEX_WT_HOOK_INSTALL_HINT}"),
+        ));
+        return checks;
+    }
+
+    checks.push(DoctorCheck::ok(
+        "codex_wt_inbox_hook",
+        Some(format!("{} wt-managed inbox hook entries", hooks.len())),
+    ));
+
+    match missing_wt_codex_inbox_trust(config_path, &hooks) {
+        Ok(missing) if missing.is_empty() => checks.push(DoctorCheck::ok(
+            "codex_wt_inbox_trust",
+            Some(format!("{} trusted inbox hook entries", hooks.len())),
+        )),
+        Ok(missing) => checks.push(DoctorCheck::warning(
+            "codex_wt_inbox_trust",
+            format!(
+                "missing or stale trusted_hash entries for {}. {CODEX_WT_HOOK_INSTALL_HINT}",
+                missing.join(", ")
+            ),
+        )),
+        Err(message) => checks.push(DoctorCheck::warning("codex_wt_inbox_trust", message)),
+    }
+
+    checks
+}
+
+#[derive(Debug, Clone)]
+struct WtCodexInboxHook {
+    key: String,
+    command: String,
 }
 
 struct CodexConfigReadiness {
@@ -520,6 +574,70 @@ fn missing_trusted_hook_events(config: &toml::Value, hooks_path: &Path) -> Vec<&
             (!trusted).then_some(*event)
         })
         .collect()
+}
+
+fn wt_codex_inbox_hooks(hooks_path: &Path) -> Result<Vec<WtCodexInboxHook>, String> {
+    let content = read_codex_file(hooks_path, "hooks.json")
+        .map_err(|message| message.replace(CODEX_HOOK_INSTALL_HINT, CODEX_WT_HOOK_INSTALL_HINT))?;
+    let value = serde_json::from_str::<serde_json::Value>(&content)
+        .map_err(|err| format!("invalid JSON: {err}. {CODEX_WT_HOOK_INSTALL_HINT}"))?;
+    let Some(user_prompt_submit) = value
+        .get("hooks")
+        .and_then(|hooks| hooks.get("UserPromptSubmit"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut hooks = Vec::new();
+    for (group_index, group) in user_prompt_submit.iter().enumerate() {
+        let Some(group_hooks) = group.get("hooks").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for (handler_index, hook) in group_hooks.iter().enumerate() {
+            let Some(command) = hook.get("command").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            if agent_hook::is_wt_managed_codex_command(command) {
+                hooks.push(WtCodexInboxHook {
+                    key: agent_hook::codex_user_prompt_trust_key(
+                        hooks_path,
+                        group_index,
+                        handler_index,
+                    ),
+                    command: command.to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(hooks)
+}
+
+fn missing_wt_codex_inbox_trust(
+    config_path: &Path,
+    hooks: &[WtCodexInboxHook],
+) -> Result<Vec<String>, String> {
+    let content = read_codex_file(config_path, "config.toml")
+        .map_err(|message| message.replace(CODEX_HOOK_INSTALL_HINT, CODEX_WT_HOOK_INSTALL_HINT))?;
+    let value = toml::from_str::<toml::Value>(&content)
+        .map_err(|err| format!("invalid TOML: {err}. {CODEX_WT_HOOK_INSTALL_HINT}"))?;
+    let state = value
+        .get("hooks")
+        .and_then(|hooks| hooks.get("state"))
+        .and_then(toml::Value::as_table);
+
+    Ok(hooks
+        .iter()
+        .filter_map(|hook| {
+            let trusted_hash = state
+                .and_then(|state| state.get(&hook.key))
+                .and_then(|entry| entry.get("trusted_hash"))
+                .and_then(toml::Value::as_str);
+            let expected_hash = agent_hook::codex_command_hook_hash(&hook.command);
+            (trusted_hash != Some(expected_hash.as_str())).then_some(hook.key.clone())
+        })
+        .collect())
 }
 
 fn codex_trust_key_matches(key: &str, event: &str, hooks_path: &str) -> bool {
@@ -827,6 +945,8 @@ fn codex_readiness_label(name: &str) -> &str {
         "codex_hooks_json" => "Codex hooks.json",
         "codex_config_hooks" => "Codex config hooks",
         "codex_hook_trust" => "Codex hook trust",
+        "codex_wt_inbox_hook" => "Codex wt inbox hook",
+        "codex_wt_inbox_trust" => "Codex wt inbox trust",
         _ => name,
     }
 }
@@ -1032,6 +1152,37 @@ mod tests {
             }
         }
 
+        fs::write(home.join("config.toml"), content).unwrap();
+    }
+
+    fn write_wt_codex_inbox_hook(home: &Path, include_trust: bool) {
+        fs::create_dir_all(home).unwrap();
+        let hooks_path = home.join("hooks.json");
+        let command = "if [ -n \"${WT_AGENT_ID:-}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi # wt-agent-hook:codex-inbox";
+        fs::write(
+            &hooks_path,
+            serde_json::to_string_pretty(&json!({
+                "hooks": {
+                    "UserPromptSubmit": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": command,
+                        }],
+                    }],
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut content = String::from("[features]\nhooks = true\n");
+        if include_trust {
+            content.push_str(&format!(
+                "\n[hooks.state.\"{}:user_prompt_submit:0:0\"]\nenabled = true\ntrusted_hash = \"{}\"\n",
+                hooks_path.display(),
+                crate::commands::agent_hook::codex_command_hook_hash(command)
+            ));
+        }
         fs::write(home.join("config.toml"), content).unwrap();
     }
 
@@ -1365,6 +1516,36 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .contains("PermissionRequest")
+        );
+    }
+
+    #[test]
+    fn codex_hook_readiness_reports_wt_inbox_hook_trust() {
+        let temp = TempDir::new().unwrap();
+        write_wt_codex_inbox_hook(temp.path(), true);
+
+        let checks = codex_hook_readiness_checks_for_home(temp.path());
+
+        assert_eq!(check_by_name(&checks, "codex_wt_inbox_hook").status, "ok");
+        assert_eq!(check_by_name(&checks, "codex_wt_inbox_trust").status, "ok");
+    }
+
+    #[test]
+    fn codex_hook_readiness_warns_when_wt_inbox_trust_is_missing() {
+        let temp = TempDir::new().unwrap();
+        write_wt_codex_inbox_hook(temp.path(), false);
+
+        let checks = codex_hook_readiness_checks_for_home(temp.path());
+
+        assert_eq!(check_by_name(&checks, "codex_wt_inbox_hook").status, "ok");
+        let trust = check_by_name(&checks, "codex_wt_inbox_trust");
+        assert_eq!(trust.status, "warning");
+        assert!(
+            trust
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("user_prompt_submit")
         );
     }
 
