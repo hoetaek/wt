@@ -674,6 +674,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -806,6 +807,7 @@ args = ["--model", "gpt-5.5"]
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -914,6 +916,7 @@ args = ["--yolo"]
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -1006,6 +1009,7 @@ args = ["--yolo"]
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };

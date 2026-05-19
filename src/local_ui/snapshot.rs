@@ -1481,6 +1481,7 @@ mod tests {
             timeout: 15,
             send_after: 3,
             prompt: HashMap::new(),
+            ..AgentConfig::default()
         });
         let state = SnapshotState::new(
             dir.path().to_path_buf(),

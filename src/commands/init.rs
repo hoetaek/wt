@@ -1458,6 +1458,7 @@ fn build_profile(
             timeout: 30,
             send_after: 2,
             prompt: Default::default(),
+            ..AgentConfig::default()
         },
     })
 }

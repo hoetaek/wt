@@ -223,6 +223,7 @@ mod tests {
             timeout: 30,
             send_after: 2,
             prompt: HashMap::new(),
+            ..AgentConfig::default()
         }
     }
 
@@ -1583,6 +1584,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: HashMap::new(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -1690,6 +1692,7 @@ mod tests {
                 "issue".into(),
                 vec!["start {{api_url}} on {{task_agent_cmux_surface}}\n".into()],
             )]),
+            ..AgentConfig::default()
         };
         let vars = HashMap::from([("api_url".into(), "http://127.0.0.1:15001".into())]);
 
@@ -1774,6 +1777,7 @@ mod tests {
                 "issue".into(),
                 vec!["claude start {{api_url}} on {{task_agent_cmux_surface}}\n".into()],
             )]),
+            ..AgentConfig::default()
         };
         let vars = HashMap::from([("api_url".into(), "http://127.0.0.1:15002".into())]);
 
@@ -1866,6 +1870,7 @@ mod tests {
                 "issue".into(),
                 vec!["gemini start {{api_url}} on {{task_agent_cmux_surface}}\n".into()],
             )]),
+            ..AgentConfig::default()
         };
         let vars = HashMap::from([("api_url".into(), "http://127.0.0.1:15003".into())]);
 
@@ -1918,6 +1923,7 @@ mod tests {
             timeout: 1,
             send_after: 0,
             prompt: HashMap::new(),
+            ..AgentConfig::default()
         };
 
         bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new()).unwrap();
@@ -1947,6 +1953,7 @@ mod tests {
                 "issue".into(),
                 vec!["first prompt".into(), "second prompt".into()],
             )]),
+            ..AgentConfig::default()
         };
 
         let err = bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new())
@@ -1982,6 +1989,7 @@ mod tests {
             timeout: 1,
             send_after: 0,
             prompt: HashMap::from([("issue".into(), vec!["first prompt".into()])]),
+            ..AgentConfig::default()
         };
 
         let err = bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new())
@@ -2023,6 +2031,7 @@ mod tests {
                 "issue".into(),
                 vec!["first prompt".into(), "second prompt".into()],
             )]),
+            ..AgentConfig::default()
         };
 
         bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new()).unwrap();

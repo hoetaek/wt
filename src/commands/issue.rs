@@ -1085,6 +1085,7 @@ mod tests {
                         "Then run verification.".into(),
                     ],
                 )]),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -1132,6 +1133,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: std::collections::HashMap::new(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -1195,6 +1197,7 @@ mod tests {
                     ),
                     ("branch".into(), vec!["Branch prompt".into()]),
                 ]),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -1244,6 +1247,7 @@ mod tests {
                     ),
                     ("branch".into(), vec!["Branch prompt".into()]),
                 ]),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -1293,6 +1297,7 @@ mod tests {
                     ("issue".into(), vec!["Issue prompt".into()]),
                     ("branch".into(), vec!["Branch prompt".into()]),
                 ]),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };

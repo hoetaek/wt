@@ -1135,6 +1135,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Default::default()
         };
@@ -1162,6 +1163,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             workspace: Some(Default::default()),
             ..Default::default()
@@ -1194,6 +1196,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Default::default()
         };
@@ -1220,6 +1223,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Default::default()
         };
@@ -1246,6 +1250,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Default::default()
         };
@@ -1370,6 +1375,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Default::default()
         };
@@ -1392,6 +1398,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Default::default()
         };

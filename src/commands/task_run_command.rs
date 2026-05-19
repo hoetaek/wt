@@ -605,6 +605,7 @@ id = "PROJ-123"
                     timeout: 1,
                     send_after: 0,
                     prompt: HashMap::from([("branch".into(), vec!["Existing prompt".into()])]),
+                    ..AgentConfig::default()
                 }),
                 ..Config::default()
             },
@@ -702,6 +703,7 @@ id = "PROJ-123"
                     timeout: 1,
                     send_after: 0,
                     prompt: HashMap::from([("branch".into(), vec!["Existing prompt".into()])]),
+                    ..AgentConfig::default()
                 }),
                 ..Config::default()
             },

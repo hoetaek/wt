@@ -485,7 +485,7 @@ impl WorkspaceChromeDevtoolsConfig {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub struct AgentConfig {
     pub cli: AgentCli,
     pub args: Vec<String>,
@@ -495,26 +495,14 @@ pub struct AgentConfig {
     pub timeout: u64,
     pub send_after: u64,
     pub prompt: HashMap<String, Vec<String>>,
+    #[doc(hidden)]
+    pub presence: AgentConfigPresence,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct AgentConfigRaw {
-    cli: Option<AgentCli>,
-    args: Vec<String>,
-    command: Option<String>,
-    ready: ReadyMode,
-    submit: SubmitMode,
-    timeout: u64,
-    send_after: u64,
-    #[serde(default, deserialize_with = "deserialize_agent_prompts")]
-    prompt: HashMap<String, Vec<String>>,
-}
-
-impl Default for AgentConfigRaw {
+impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            cli: None,
+            cli: AgentCli::None,
             args: Vec::new(),
             command: None,
             ready: default_agent_ready(),
@@ -522,8 +510,64 @@ impl Default for AgentConfigRaw {
             timeout: default_agent_timeout(),
             send_after: default_agent_send_after(),
             prompt: HashMap::new(),
+            presence: AgentConfigPresence::default(),
         }
     }
+}
+
+impl PartialEq for AgentConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.cli == other.cli
+            && self.args == other.args
+            && self.command == other.command
+            && self.ready == other.ready
+            && self.submit == other.submit
+            && self.timeout == other.timeout
+            && self.send_after == other.send_after
+            && self.prompt == other.prompt
+    }
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AgentConfigPresence {
+    pub cli: bool,
+    pub args: bool,
+    pub command: bool,
+    pub ready: bool,
+    pub submit: bool,
+    pub timeout: bool,
+    pub send_after: bool,
+}
+
+impl AgentConfigPresence {
+    pub fn has_runtime_fields(self) -> bool {
+        self.cli
+            || self.args
+            || self.command
+            || self.ready
+            || self.submit
+            || self.timeout
+            || self.send_after
+    }
+
+    pub fn has_runtime_fields_without_cli(self) -> bool {
+        self.args || self.command || self.ready || self.submit || self.timeout || self.send_after
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct AgentConfigRaw {
+    cli: Option<AgentCli>,
+    args: Option<Vec<String>>,
+    command: Option<String>,
+    ready: Option<ReadyMode>,
+    submit: Option<SubmitMode>,
+    timeout: Option<u64>,
+    send_after: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_agent_prompts")]
+    prompt: HashMap<String, Vec<String>>,
 }
 
 impl<'de> Deserialize<'de> for AgentConfig {
@@ -532,30 +576,32 @@ impl<'de> Deserialize<'de> for AgentConfig {
         D: Deserializer<'de>,
     {
         let raw = AgentConfigRaw::deserialize(deserializer)?;
-        let is_prompt_only_patch = raw.cli.is_none()
-            && raw.args.is_empty()
-            && raw.command.is_none()
-            && raw.ready == default_agent_ready()
-            && raw.submit == default_agent_submit()
-            && raw.timeout == default_agent_timeout()
-            && raw.send_after == default_agent_send_after()
-            && !raw.prompt.is_empty();
+        let presence = AgentConfigPresence {
+            cli: raw.cli.is_some(),
+            args: raw.args.is_some(),
+            command: raw.command.is_some(),
+            ready: raw.ready.is_some(),
+            submit: raw.submit.is_some(),
+            timeout: raw.timeout.is_some(),
+            send_after: raw.send_after.is_some(),
+        };
 
-        if raw.cli.is_none() && !is_prompt_only_patch {
+        if !presence.has_runtime_fields() && raw.prompt.is_empty() {
             return Err(D::Error::custom(
-                "agent.cli is required unless the section only contains agent.prompt or agent.prompt.append",
+                "agent.cli is required unless the section only contains agent.prompt or agent.prompt.append, or inherits agent.cli from a lower-precedence config layer",
             ));
         }
 
         Ok(Self {
             cli: raw.cli.unwrap_or(AgentCli::None),
-            args: raw.args,
+            args: raw.args.unwrap_or_default(),
             command: raw.command,
-            ready: raw.ready,
-            submit: raw.submit,
-            timeout: raw.timeout,
-            send_after: raw.send_after,
+            ready: raw.ready.unwrap_or_else(default_agent_ready),
+            submit: raw.submit.unwrap_or_else(default_agent_submit),
+            timeout: raw.timeout.unwrap_or_else(default_agent_timeout),
+            send_after: raw.send_after.unwrap_or_else(default_agent_send_after),
             prompt: raw.prompt,
+            presence,
         })
     }
 }
@@ -851,6 +897,23 @@ Rules:
 }
 
 impl Config {
+    pub(crate) fn validate_effective_agent(&self) -> anyhow::Result<()> {
+        let Some(agent) = self.agent.as_ref() else {
+            return Ok(());
+        };
+
+        if agent.cli == AgentCli::None
+            && !agent.presence.cli
+            && agent.presence.has_runtime_fields_without_cli()
+        {
+            bail!(
+                "agent.cli is required when [agent] sets args, command, ready, submit, timeout, or send_after without inheriting agent.cli from a lower-precedence config layer"
+            );
+        }
+
+        Ok(())
+    }
+
     pub fn workflow_default_policy(&self) -> WorkflowDefaultPolicy {
         WorkflowDefaultPolicy {
             pull_request: self

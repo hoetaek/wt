@@ -2,8 +2,7 @@ use anyhow::{Context, bail};
 use std::path::{Path, PathBuf};
 
 use super::merge::{
-    finalize_config_common_prompt_scope, finalize_config_prompt_appends,
-    finalize_config_prompt_appends_for_merge_layer, merge_config,
+    finalize_config_common_prompt_scope, finalize_config_prompt_appends, merge_config,
 };
 use super::profile::apply_profile_conventions;
 use super::{Config, validate_profile_name};
@@ -71,8 +70,7 @@ impl Config {
             (true, true) => {
                 let mut root = Self::load_file(&root_path)?;
                 finalize_config_prompt_appends(&mut root);
-                let mut local = Self::load_file(&local_path)?;
-                finalize_config_prompt_appends_for_merge_layer(&mut local);
+                let local = Self::load_file(&local_path)?;
                 (
                     merge_config(&root, local),
                     ConfigSource::Files(vec![root_path, local_path]),
@@ -99,6 +97,7 @@ impl Config {
     pub fn resolve_effective_profile(repo_root: &Path, mut config: Self) -> anyhow::Result<Self> {
         let Some(profile) = config.profile.take() else {
             finalize_config_common_prompt_scope(&mut config);
+            config.validate_effective_agent()?;
             return Ok(config);
         };
 
@@ -106,16 +105,19 @@ impl Config {
             let mut config = Self::load_profile(repo_root, name, &config)?
                 .with_context(|| format!("Profile '{name}' not found"))?;
             finalize_config_common_prompt_scope(&mut config);
+            config.validate_effective_agent()?;
             return Ok(config);
         }
 
         if profile.has_inline_settings() {
             let mut config = merge_config(&config, profile.into_config());
             finalize_config_common_prompt_scope(&mut config);
+            config.validate_effective_agent()?;
             return Ok(config);
         }
 
         finalize_config_common_prompt_scope(&mut config);
+        config.validate_effective_agent()?;
         Ok(config)
     }
 
@@ -217,6 +219,7 @@ impl Config {
         config.profile = None;
         apply_profile_conventions(repo_root, name, profile_dir, &mut config)?;
         finalize_config_common_prompt_scope(&mut config);
+        config.validate_effective_agent()?;
         Ok(config)
     }
 }

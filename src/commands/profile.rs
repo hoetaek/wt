@@ -350,6 +350,7 @@ fn default_profile_agent() -> AgentConfig {
         timeout: 30,
         send_after: 2,
         prompt: Default::default(),
+        ..AgentConfig::default()
     }
 }
 
@@ -862,6 +863,7 @@ cli = "codex"
                 timeout: 30,
                 send_after: 2,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -948,6 +950,7 @@ cli = "codex"
             timeout: 22,
             send_after: 4,
             prompt: HashMap::from([("issue".into(), vec!["say \"hi\"\npath C:\\tmp".into()])]),
+            ..AgentConfig::default()
         };
 
         let generated = generate_toml(&agent);

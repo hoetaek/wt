@@ -429,6 +429,10 @@ wt config extract .local/.wt.toml
 wt config inline .local/profiles/codex/profile.toml
 ```
 
+Named profile `profile.toml` is an override layer: omitted `[agent]` fields
+inherit lower-precedence config, present fields override, and `args = []`
+explicitly clears inherited agent args.
+
 Omitting `--profile` means the effective config. `default` is not a profile
 name.
 

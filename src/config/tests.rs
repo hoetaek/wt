@@ -754,6 +754,122 @@ issue = ["local append\n"]
 }
 
 #[test]
+fn named_profile_agent_fields_merge_by_presence_and_prompt_overlay() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile_dir = dir.path().join(".local/profiles/codex");
+    std::fs::create_dir_all(&profile_dir).unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
+[agent]
+cli = "codex"
+args = ["--model", "gpt-5.5"]
+command = "env WT_AGENT=1 codex"
+ready = "BASE_READY"
+submit = "newline"
+timeout = 99
+send_after = 8
+
+[agent.prompt]
+common = ["base common\n"]
+issue = ["base issue\n"]
+branch = ["base branch\n"]
+pr = ["base pr\n"]
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+    std::fs::write(
+        dir.path().join(".local/.wt.toml"),
+        r#"
+[profile]
+name = "codex"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        profile_dir.join("profile.toml"),
+        r#"
+[agent]
+args = ["--yolo"]
+
+[agent.prompt]
+issue = ["profile issue\n"]
+
+[agent.prompt.append]
+issue = ["profile issue append\n"]
+"#,
+    )
+    .unwrap();
+
+    let config = Config::load(dir.path()).unwrap();
+    let agent = config.agent.unwrap();
+    assert_eq!(agent.cli, AgentCli::Codex);
+    assert_eq!(agent.args, vec!["--yolo"]);
+    assert_eq!(agent.command.as_deref(), Some("env WT_AGENT=1 codex"));
+    assert_eq!(agent.ready, ReadyMode::Marker("BASE_READY".into()));
+    assert_eq!(agent.submit, SubmitMode::Newline);
+    assert_eq!(agent.timeout, 99);
+    assert_eq!(agent.send_after, 8);
+    assert!(!agent.prompt.contains_key("common"));
+    assert_eq!(
+        agent.prompt.get("issue").unwrap(),
+        &vec![
+            "base common\n".to_string(),
+            "profile issue\n\nprofile issue append\n".to_string(),
+        ]
+    );
+    assert_eq!(
+        agent.prompt.get("branch").unwrap(),
+        &vec!["base common\n".to_string(), "base branch\n".to_string()]
+    );
+    assert_eq!(
+        agent.prompt.get("pr").unwrap(),
+        &vec!["base common\n".to_string(), "base pr\n".to_string()]
+    );
+}
+
+#[test]
+fn named_profile_empty_args_clears_inherited_args() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile_dir = dir.path().join(".local/profiles/codex");
+    std::fs::create_dir_all(&profile_dir).unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
+[agent]
+cli = "codex"
+args = ["--model", "gpt-5.5"]
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+    std::fs::write(
+        dir.path().join(".local/.wt.toml"),
+        r#"
+[profile]
+name = "codex"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        profile_dir.join("profile.toml"),
+        r#"
+[agent]
+args = []
+"#,
+    )
+    .unwrap();
+
+    let config = Config::load(dir.path()).unwrap();
+    let agent = config.agent.unwrap();
+    assert_eq!(agent.cli, AgentCli::Codex);
+    assert!(agent.args.is_empty());
+}
+
+#[test]
 fn common_prompt_scope_expands_after_layers_before_mode_prompt() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".local")).unwrap();
@@ -823,7 +939,14 @@ issue = ["root issue\n"]
 "#,
     )
     .unwrap();
-    std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+    std::fs::write(
+        profile_dir.join("profile.toml"),
+        r#"
+[agent.prompt]
+issue = ["profile issue\n"]
+"#,
+    )
+    .unwrap();
     std::fs::write(profile_dir.join("prompts/common.md"), "file common\n").unwrap();
     std::fs::write(
         profile_dir.join("prompts/common.append.md"),
@@ -1121,12 +1244,19 @@ append = ["ambiguous\n"]
 
 #[test]
 fn rejects_partial_agent_without_prompt_patch() {
-    let toml_str = r#"
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
 [agent]
 args = ["--yolo"]
-"#;
-    let err = toml::from_str::<Config>(toml_str).unwrap_err();
-    assert!(err.to_string().contains("agent.cli is required"));
+"#,
+    )
+    .unwrap();
+
+    let err = Config::load(dir.path()).unwrap_err().to_string();
+    assert!(err.contains("agent.cli is required"));
+    assert!(err.contains("inheriting agent.cli"));
 }
 
 #[test]
@@ -1181,6 +1311,7 @@ fn agent_command_line_escapes_args_and_respects_override() {
         timeout: 15,
         send_after: 3,
         prompt: HashMap::new(),
+        ..AgentConfig::default()
     };
     assert_eq!(
         agent.command_line().unwrap(),
@@ -1228,6 +1359,7 @@ fn agent_command_line_escapes_args_and_respects_override() {
         timeout: 15,
         send_after: 3,
         prompt: HashMap::new(),
+        ..AgentConfig::default()
     };
     assert_eq!(
         templated_args_agent
@@ -1248,6 +1380,7 @@ fn agent_helpers_pick_ready_and_submit_by_cli() {
         timeout: 15,
         send_after: 3,
         prompt: HashMap::new(),
+        ..AgentConfig::default()
     };
     let claude = AgentConfig {
         cli: AgentCli::Claude,
@@ -1283,6 +1416,7 @@ fn agent_none_disables_command_even_with_override() {
         timeout: 15,
         send_after: 3,
         prompt: HashMap::new(),
+        ..AgentConfig::default()
     };
 
     assert_eq!(agent.command_line().unwrap(), None);
