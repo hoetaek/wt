@@ -459,7 +459,7 @@ function renderOverview(snapshot) {
   const attention = overviewAttentionRows(snapshot);
   content.innerHTML = [
     focusPanel(focus),
-    section(t("localState"), overviewCards(snapshot), t("noLocalState"), t("noteOverview"), "overview-state"),
+    section(t("localState"), overviewCards(snapshot, focus), t("noLocalState"), t("noteOverview"), "overview-state"),
     optionalSection(
       t("preparedWorkflows"),
       focus.prepared.map(workflowCard),
@@ -471,7 +471,7 @@ function renderOverview(snapshot) {
   ].join("");
 }
 
-function overviewCards(snapshot) {
+function overviewCards(snapshot, focus) {
   const sourcePaths = [
     snapshot.sources.tasks,
     snapshot.sources.task_runs,
@@ -488,8 +488,8 @@ function overviewCards(snapshot) {
     `${t("metricProfiles")} ${snapshot.profiles.items.length}`,
     `${t("metricRetrospecs")} ${snapshot.retrospecs.items.length}`,
   ];
-  const preparedCount = snapshot.workflows.items.filter((row) => workflowUiGroup(row) === "prepared").length;
-  const runningCount = snapshot.task_runs.items.filter((row) => row.status === "running" && !taskRunNeedsAttention(row)).length;
+  const preparedCount = focus.prepared.length;
+  const runningCount = focus.running.length;
   const attentionCount = overviewAttentionRows(snapshot).length;
   return [
     card(t("currentWork"), [
