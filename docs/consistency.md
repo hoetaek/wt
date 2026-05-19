@@ -110,8 +110,9 @@ TaskRun, Workflow 파일을 만들기 전에 실패해야 한다. 수동 Workflo
 "matrix"`에서 task가 1개가 아니거나 `profiles`가 비어 있거나 task row가 profile별
 `[[tasks.runs]]`를 정확히 저장하지 않으면 invalid state로 거부한다.
 
-Direct `wt run task`는 immediate single-worktree path다. `wt run task <task>`와
-`wt run task <task> --profile <name>`만 소유하고, profile fan-out을 소유하지 않는다.
+Direct `wt run task`는 immediate TaskDocument execution path다. `wt run task [<task>...]`와
+`wt run task [<task>...] --profile <name>`만 소유하고, selected TaskDocument마다
+하나의 worktree를 시작한다. Profile fan-out은 소유하지 않는다.
 Direct issue/branch 경로의 all-named-profiles legacy behavior는 보존한다. Selected
 profile subset은 direct command가 아니라 Workflow matrix가 소유하며,
 `wt workflow task --mode matrix --profiles ...`로 표현한다.
