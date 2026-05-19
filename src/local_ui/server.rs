@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn embedded_frontend_includes_operational_dashboard_shell() {
-        assert!(INDEX_HTML.contains("class=\"state-strip\""));
+        assert!(!INDEX_HTML.contains("class=\"state-strip\""));
         assert!(INDEX_HTML.contains("role=\"tablist\""));
         assert!(INDEX_HTML.contains("aria-selected=\"true\""));
         assert!(INDEX_HTML.contains("id=\"tab-overview\""));
@@ -124,6 +124,7 @@ mod tests {
         assert!(APP_CSS.contains(".jump-nav"));
         assert!(APP_CSS.contains(".top-actions .language-switch"));
         assert!(APP_CSS.contains(".language-switch[data-current=\"en\"]"));
+        assert!(!APP_CSS.contains(".state-strip"));
         assert!(APP_CSS.contains(".metrics[data-view]:not([data-view=\"overview\"])"));
         assert!(APP_CSS.contains(".focus-panel"));
         assert!(APP_CSS.contains(".focus-inspector"));
@@ -132,6 +133,9 @@ mod tests {
         assert!(APP_CSS.contains(".scan-list"));
         assert!(APP_CSS.contains(".scan-row"));
         assert!(APP_CSS.contains(".scan-meta"));
+        assert!(APP_CSS.contains(".master-detail-shell"));
+        assert!(APP_CSS.contains(".master-list-row"));
+        assert!(APP_CSS.contains(".detail-pane"));
         assert!(APP_CSS.contains(".record-list"));
         assert!(APP_CSS.contains(".record-card.tone-green::before"));
         assert!(APP_CSS.contains(".read-more.is-open"));
@@ -144,6 +148,9 @@ mod tests {
         assert!(APP_JS.contains("Focus inspector"));
         assert!(APP_JS.contains("overviewFocusModel"));
         assert!(APP_JS.contains("Config cockpit"));
+        assert!(APP_JS.contains("masterDetailPanel"));
+        assert!(APP_JS.contains("handleMasterDetailKeydown"));
+        assert!(APP_JS.contains("configMasterDetailRecords"));
         assert!(APP_JS.contains("workflowScanRow"));
         assert!(APP_JS.contains("taskRunScanRow"));
         assert!(APP_JS.contains("data-read-toggle"));

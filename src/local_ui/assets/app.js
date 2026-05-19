@@ -4,6 +4,7 @@ const state = {
   snapshot: null,
   view: "overview",
   locale: initialLocale(),
+  selection: {},
 };
 
 const tabs = Array.from(document.querySelectorAll(".tabs button"));
@@ -15,7 +16,6 @@ const statusRegion = document.querySelector("#status");
 
 const STRINGS = {
   en: {
-    eyebrow: "Read-only local inventory",
     switchToKorean: "Switch language to Korean",
     switchToEnglish: "Switch language to English",
     readFull: "Read full",
@@ -27,6 +27,30 @@ const STRINGS = {
     sourceConfig: "Source config files",
     runtime: "Runtime",
     workspace: "Workspace",
+    detailSummary: "Summary",
+    detailRelationships: "Relationships and source paths",
+    sourceContent: "Source content",
+    sourcePaths: "Source paths",
+    sourceHome: "Source home",
+    profileName: "Profile name",
+    agentLabel: "Agent",
+    issuesLabel: "Issues",
+    siteLabel: "Site",
+    activeLabel: "Active",
+    pullRequestLabel: "Pull request",
+    landingLabel: "Landing",
+    tabsLabel: "Tabs",
+    postDepsTabsLabel: "Post-deps tabs",
+    colorsLabel: "Colors",
+    browserLabel: "Browser",
+    copyLabel: "Copy",
+    linkLabel: "Link",
+    testsLabel: "Tests",
+    errorLabel: "Error",
+    configuredLabel: "Configured",
+    omittedLabel: "Omitted",
+    yes: "yes",
+    no: "no",
     valid: "valid",
     invalid: "invalid",
     record: "record",
@@ -148,7 +172,6 @@ const STRINGS = {
     stateError: "State error",
   },
   ko: {
-    eyebrow: "읽기 전용 로컬 인벤토리",
     switchToKorean: "한국어로 전환",
     switchToEnglish: "영어로 전환",
     readFull: "전문 보기",
@@ -160,6 +183,30 @@ const STRINGS = {
     sourceConfig: "설정 원본 파일",
     runtime: "실행 환경",
     workspace: "워크스페이스",
+    detailSummary: "요약",
+    detailRelationships: "관계와 원본 경로",
+    sourceContent: "원본 내용",
+    sourcePaths: "원본 경로",
+    sourceHome: "원본 위치",
+    profileName: "프로필 이름",
+    agentLabel: "에이전트",
+    issuesLabel: "이슈",
+    siteLabel: "사이트",
+    activeLabel: "활성",
+    pullRequestLabel: "PR",
+    landingLabel: "랜딩",
+    tabsLabel: "탭",
+    postDepsTabsLabel: "의존성 후 탭",
+    colorsLabel: "색상",
+    browserLabel: "브라우저",
+    copyLabel: "복사",
+    linkLabel: "링크",
+    testsLabel: "테스트",
+    errorLabel: "오류",
+    configuredLabel: "설정됨",
+    omittedLabel: "생략됨",
+    yes: "예",
+    no: "아니오",
     valid: "정상",
     invalid: "오류",
     record: "개",
@@ -295,6 +342,8 @@ languageButton.addEventListener("click", () => {
 });
 
 content.addEventListener("click", handleReadToggle);
+content.addEventListener("click", handleMasterDetailSelection);
+content.addEventListener("keydown", handleMasterDetailKeydown);
 
 applyLocale();
 loadSnapshot();
@@ -320,7 +369,6 @@ function tr(key, values) {
 
 function applyLocale() {
   document.documentElement.lang = state.locale;
-  document.querySelector(".eyebrow").textContent = t("eyebrow");
   languageButton.dataset.current = state.locale;
   languageButton.setAttribute("aria-pressed", state.locale === "ko" ? "true" : "false");
   languageButton.setAttribute(
@@ -399,6 +447,69 @@ function handleReadToggle(event) {
   button.setAttribute("aria-expanded", isOpen ? "true" : "false");
   previewText.hidden = isOpen;
   fullText.hidden = !isOpen;
+}
+
+function handleMasterDetailSelection(event) {
+  const button = event.target.closest("[data-md-record]");
+  if (!button || !content.contains(button)) {
+    return;
+  }
+  selectMasterDetailRecord(button.dataset.mdTab, button.dataset.mdRecord, { focusRecord: true });
+}
+
+function handleMasterDetailKeydown(event) {
+  const button = event.target.closest("[data-md-record]");
+  if (!button || !content.contains(button)) {
+    return;
+  }
+
+  const list = button.closest("[data-md-list]");
+  if (!list) {
+    return;
+  }
+
+  const rows = Array.from(list.querySelectorAll("[data-md-record]"));
+  const currentIndex = rows.indexOf(button);
+  if (currentIndex < 0) {
+    return;
+  }
+
+  let nextIndex = currentIndex;
+  if (event.key === "ArrowDown") {
+    nextIndex = Math.min(rows.length - 1, currentIndex + 1);
+  } else if (event.key === "ArrowUp") {
+    nextIndex = Math.max(0, currentIndex - 1);
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = rows.length - 1;
+  } else {
+    return;
+  }
+
+  event.preventDefault();
+  const next = rows[nextIndex];
+  selectMasterDetailRecord(next.dataset.mdTab, next.dataset.mdRecord, { focusRecord: true });
+}
+
+function selectMasterDetailRecord(tabKey, recordId, options = {}) {
+  if (!tabKey || !recordId) {
+    return;
+  }
+  state.selection[tabKey] = recordId;
+  render();
+  if (options.focusRecord) {
+    focusMasterDetailRecord(tabKey, recordId);
+  }
+}
+
+function focusMasterDetailRecord(tabKey, recordId) {
+  const selected = Array.from(content.querySelectorAll("[data-md-record][data-md-tab]")).find(
+    (row) => row.dataset.mdRecord === recordId && row.dataset.mdTab === tabKey
+  );
+  if (selected) {
+    selected.focus();
+  }
 }
 
 async function loadSnapshot() {
@@ -486,13 +597,7 @@ function renderTaskRuns(snapshot) {
 }
 
 function renderConfig(snapshot) {
-  const config = snapshot.config;
-  content.innerHTML = [
-    configCockpit(snapshot),
-    section(t("sourceConfig"), (config.source_files || []).map(sourceFileScanRow), t("noSourceConfig"), "", "config-sources"),
-    section(t("profiles"), snapshot.profiles.items.map(profileScanRow), t("noProfiles"), t("noteProfiles"), "config-profiles"),
-    optionalSection(t("invalidProfiles"), snapshot.profiles.invalid.map((row) => invalidScanRow(row, t("invalidProfiles"))), "", "config-invalid-profiles"),
-  ].join("");
+  content.innerHTML = configCockpit(snapshot);
 }
 
 function ideaCard(row) {
@@ -608,62 +713,218 @@ function configCockpit(snapshot) {
     { label: t("workflowPolicy"), value: `${config.workflow.pull_request}/${config.workflow.landing}` },
     { label: t("profiles"), value: profileCount },
   ];
-  const rows = [
-    scanRow({
-      tone: "",
-      kicker: t("effectiveConfig"),
-      title: `${t("effectiveConfig")} - ${config.source}`,
-      summary: bodyPreview(config.effective_text),
-      pills: [
-        pill(config.source, "blue"),
-        pill(`PR ${config.workflow.pull_request}`, "green"),
-        pill(`Landing ${config.workflow.landing}`, "amber"),
-        config.selected_profile ? pill(`${t("selectedProfile")}: ${config.selected_profile}`, "violet") : pill(t("noSelectedProfile")),
-      ],
-      paths: config.paths,
-      detail: config.effective_text,
-    }),
-    scanRow({
-      tone: "",
-      kicker: t("runtime"),
-      title: `Agent ${config.agent || "none"}`,
-      summary: [`Issues ${config.issues || "none"}`, `Site ${config.site ? config.site.provider : "none"}`].join(" - "),
-      pills: [
-        pill(`Agent ${config.agent || "none"}`, "blue"),
-        pill(`Issues ${config.issues || "none"}`),
-        config.site ? pill(`Site ${config.site.provider}`, config.site.active ? "green" : "amber") : pill("Site none"),
-      ],
-      paths: [],
-      detail: "",
-    }),
-    config.workspace ? scanRow({
-      tone: "",
-      kicker: t("workspace"),
-      title: t("workspace"),
-      summary: "",
-      pills: [
-        pill(`tabs ${config.workspace.tab_count}`, "violet"),
-        pill(`post-deps ${config.workspace.post_deps_tab_count}`, "violet"),
-        pill(`colors ${config.workspace.color_count}`, "amber"),
-      ],
-      paths: [],
-      detail: "",
-    }) : "",
-    scanRow({
-      tone: invalidProfileCount ? "red" : "",
-      kicker: t("profiles"),
-      title: `${profileCount} ${t("validProfiles")}`,
-      summary: invalidProfileCount ? `${invalidProfileCount} ${t("invalidRecords")}` : t("noInvalidProfiles"),
-      pills: [
-        pill(`${profileCount} ${t("validProfiles")}`, "violet"),
-        invalidProfileCount ? pill(`${invalidProfileCount} ${t("invalid")}`, "red") : pill(t("valid"), "green"),
-        pill(`${sourceFileCount} ${t("sourceFiles")}`, "blue"),
-      ],
-      paths: snapshot.profiles.items.slice(0, 4).map((row) => row.path),
-      detail: snapshot.profiles.items.map((row) => `${row.name}: ${row.path}`).join("\n"),
-    }),
-  ].filter(Boolean);
-  return cockpitPanel(t("cockpitConfigTitle"), t("cockpitConfigSubtitle"), stats, t("configIndex"), rows, t("noConfigSummary"), "config-cockpit");
+  return masterDetailPanel({
+    id: "config-cockpit",
+    tabKey: "config",
+    title: t("cockpitConfigTitle"),
+    subtitle: t("cockpitConfigSubtitle"),
+    stats,
+    listTitle: t("configIndex"),
+    records: configMasterDetailRecords(snapshot),
+    emptyText: t("noConfigSummary"),
+  });
+}
+
+function configMasterDetailRecords(snapshot) {
+  const config = snapshot.config;
+  const records = [
+    configEffectiveRecord(config),
+    configRuntimeRecord(config),
+    configWorkspaceRecord(config),
+    configProfilesSummaryRecord(snapshot),
+  ];
+  return records
+    .concat((config.source_files || []).map(sourceFileMasterDetailRecord))
+    .concat(snapshot.profiles.items.map(profileMasterDetailRecord))
+    .concat(snapshot.profiles.invalid.map(invalidProfileMasterDetailRecord))
+    .filter(Boolean);
+}
+
+function configEffectiveRecord(config) {
+  return {
+    id: "config-effective",
+    kicker: t("effectiveConfig"),
+    title: `${t("effectiveConfig")} - ${config.source}`,
+    summary: "",
+    pills: [
+      pill(config.source, "blue"),
+      pill(`${t("pullRequestLabel")} ${config.workflow.pull_request}`, "green"),
+      pill(`${t("landingLabel")} ${config.workflow.landing}`, "amber"),
+      config.selected_profile ? pill(`${t("selectedProfile")}: ${config.selected_profile}`, "violet") : pill(t("noSelectedProfile")),
+    ],
+    paths: config.paths,
+    fields: [
+      { label: t("source"), value: config.source },
+      { label: t("pullRequestLabel"), value: config.workflow.pull_request },
+      { label: t("landingLabel"), value: config.workflow.landing },
+      { label: t("selectedProfile"), value: config.selected_profile || t("noSelectedProfile") },
+      { label: t("sourceLayers"), value: config.paths.length },
+    ],
+    relationships: config.paths.map((path, index) => ({
+      label: `${t("sourceLayers")} ${index + 1}`,
+      value: path,
+    })),
+    sources: [{ label: t("effectiveConfig"), text: config.effective_text, kind: "source" }],
+  };
+}
+
+function configRuntimeRecord(config) {
+  const site = config.site ? `${config.site.provider} (${config.site.active ? t("activeLabel") : t("omittedLabel")})` : "none";
+  return {
+    id: "config-runtime",
+    kicker: t("runtime"),
+    title: `${t("agentLabel")} ${config.agent || "none"}`,
+    summary: [`${t("issuesLabel")} ${config.issues || "none"}`, `${t("siteLabel")} ${site}`].join(" - "),
+    pills: [
+      pill(`${t("agentLabel")} ${config.agent || "none"}`, "blue"),
+      pill(`${t("issuesLabel")} ${config.issues || "none"}`),
+      config.site ? pill(`${t("siteLabel")} ${config.site.provider}`, config.site.active ? "green" : "amber") : pill(`${t("siteLabel")} none`),
+    ],
+    paths: config.paths,
+    fields: [
+      { label: t("agentLabel"), value: config.agent || "none" },
+      { label: t("issuesLabel"), value: config.issues || "none" },
+      { label: t("siteLabel"), value: config.site ? config.site.provider : "none" },
+      { label: t("activeLabel"), value: config.site ? yesNo(config.site.active) : t("no") },
+    ],
+    relationships: [
+      { label: t("source"), value: config.source },
+      { label: t("workflowPolicy"), value: `${config.workflow.pull_request}/${config.workflow.landing}` },
+    ],
+    sources: [{ label: t("effectiveConfig"), text: config.effective_text, kind: "source" }],
+  };
+}
+
+function configWorkspaceRecord(config) {
+  const workspace = config.workspace;
+  const browser = workspace?.browser;
+  return {
+    id: "config-workspace",
+    kicker: t("workspace"),
+    title: t("workspace"),
+    summary: workspace
+      ? `${t("tabsLabel")} ${workspace.tab_count} - ${t("postDepsTabsLabel")} ${workspace.post_deps_tab_count}`
+      : t("omittedLabel"),
+    pills: workspace
+      ? [
+          pill(`${t("tabsLabel")} ${workspace.tab_count}`, "violet"),
+          pill(`${t("postDepsTabsLabel")} ${workspace.post_deps_tab_count}`, "violet"),
+          pill(`${t("colorsLabel")} ${workspace.color_count}`, "amber"),
+          browser ? pill(`${t("browserLabel")} ${browser.mode}`, "blue") : "",
+        ]
+      : [pill(t("omittedLabel"), "amber")],
+    paths: config.paths,
+    fields: workspace
+      ? [
+          { label: t("tabsLabel"), value: workspace.tab_count },
+          { label: t("postDepsTabsLabel"), value: workspace.post_deps_tab_count },
+          { label: t("colorsLabel"), value: workspace.color_count },
+          { label: t("browserLabel"), value: browser ? browser.mode : "none" },
+          { label: "URL", value: browser?.url },
+          { label: "App", value: browser?.app },
+        ]
+      : [{ label: t("configuredLabel"), value: t("no") }],
+    relationships: [{ label: t("source"), value: config.source }],
+    sources: [{ label: t("effectiveConfig"), text: config.effective_text, kind: "source" }],
+  };
+}
+
+function configProfilesSummaryRecord(snapshot) {
+  const config = snapshot.config;
+  const valid = snapshot.profiles.items.length;
+  const invalid = snapshot.profiles.invalid.length;
+  const sourceFileCount = (config.source_files || []).length;
+  const profilePaths = snapshot.profiles.items
+    .map((row) => row.path)
+    .concat(snapshot.profiles.invalid.map((row) => row.path));
+  const inventory = snapshot.profiles.items
+    .map((row) => `${row.name}: ${row.path}`)
+    .concat(snapshot.profiles.invalid.map((row) => `${row.key}: ${row.error}`))
+    .join("\n");
+  return {
+    id: "config-profiles",
+    tone: invalid ? "red" : "",
+    kicker: t("profiles"),
+    title: `${valid} ${t("validProfiles")}`,
+    summary: invalid ? `${invalid} ${t("invalidRecords")}` : t("noInvalidProfiles"),
+    pills: [
+      pill(`${valid} ${t("validProfiles")}`, "violet"),
+      invalid ? pill(`${invalid} ${t("invalid")}`, "red") : pill(t("valid"), "green"),
+      pill(`${sourceFileCount} ${t("sourceFiles")}`, "blue"),
+    ],
+    paths: profilePaths,
+    fields: [
+      { label: t("validProfiles"), value: valid },
+      { label: t("invalidProfiles"), value: invalid },
+      { label: t("sourceHome"), value: snapshot.sources.profiles },
+      { label: t("sourceFiles"), value: sourceFileCount },
+    ],
+    relationships: profilePaths.map((path) => ({ label: t("profiles"), value: path })),
+    sources: [{ label: t("profiles"), text: inventory, kind: "source" }],
+  };
+}
+
+function sourceFileMasterDetailRecord(row) {
+  return {
+    id: `config-source-${row.path}`,
+    kicker: t("sourceConfig"),
+    title: row.path,
+    summary: "",
+    pills: [pill(t("source"), "blue")],
+    paths: [row.path],
+    fields: [
+      { label: t("source"), value: t("sourceConfig") },
+      { label: t("sourcePaths"), value: row.path },
+    ],
+    relationships: [{ label: t("effectiveConfig"), value: t("sourceLayers") }],
+    sources: [{ label: t("sourceToml"), text: row.text, kind: "source" }],
+  };
+}
+
+function profileMasterDetailRecord(row) {
+  return {
+    id: `profile-${row.name}`,
+    kicker: t("profiles"),
+    title: row.name,
+    summary: "",
+    pills: [
+      pill(`${t("agentLabel")} ${row.agent}`, "blue"),
+      pill(`${row.copy_count} ${t("copyLabel")}`),
+      pill(`${row.link_count} ${t("linkLabel")}`),
+      row.has_site ? pill(t("siteLabel"), "green") : "",
+      row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
+    ],
+    paths: [row.path],
+    fields: [
+      { label: t("profileName"), value: row.name },
+      { label: t("agentLabel"), value: row.agent },
+      { label: t("copyLabel"), value: row.copy_count },
+      { label: t("linkLabel"), value: row.link_count },
+      { label: t("siteLabel"), value: yesNo(row.has_site) },
+      { label: t("testsLabel"), value: row.test_count },
+    ],
+    relationships: [{ label: t("sourceHome"), value: ".local/profiles" }],
+    sources: [{ label: t("sourceToml"), text: row.source_text, kind: "source" }],
+  };
+}
+
+function invalidProfileMasterDetailRecord(row) {
+  return {
+    id: `invalid-profile-${row.key}`,
+    tone: "red",
+    needsAttention: true,
+    kicker: t("invalidProfiles"),
+    title: row.key,
+    summary: row.error,
+    pills: [pill(t("invalid"), "red")],
+    paths: [row.path],
+    fields: [
+      { label: t("profileName"), value: row.key },
+      { label: t("errorLabel"), value: row.error },
+    ],
+    relationships: [{ label: t("sourceHome"), value: ".local/profiles" }],
+    sources: [{ label: t("sourceToml"), text: [row.error, row.source_text].filter(Boolean).join("\n\n"), kind: "source" }],
+  };
 }
 
 function workflowsCockpit(snapshot) {
@@ -772,6 +1033,80 @@ function cockpitPanel(title, subtitle, stats, listTitle, rows, emptyText, id) {
   const body = rows.length ? `<div class="scan-list">${rows.join("")}</div>` : `<div class="focus-empty">${escapeHtml(emptyText)}</div>`;
   const count = rows.length === 1 ? `1 ${t("record")}` : `${rows.length} ${t("records")}`;
   return `<section class="focus-panel view-cockpit" id="${escapeHtml(id)}" aria-labelledby="${escapeHtml(id)}-heading"><div class="focus-heading"><div><h2 id="${escapeHtml(id)}-heading" class="section-title">${escapeHtml(title)}</h2><p class="section-note">${escapeHtml(subtitle)}</p></div>${statusStrip(stats)}</div><div class="scan-heading"><h3>${escapeHtml(listTitle)}</h3><span>${escapeHtml(count)}</span></div>${body}</section>`;
+}
+
+function masterDetailPanel({ id, tabKey, title, subtitle, stats, listTitle, records, emptyText }) {
+  const visibleRecords = records.filter(Boolean);
+  const count = visibleRecords.length === 1 ? `1 ${t("record")}` : `${visibleRecords.length} ${t("records")}`;
+  const selectedId = selectedMasterDetailId(tabKey, visibleRecords);
+  const selected = visibleRecords.find((record) => record.id === selectedId);
+  const body = visibleRecords.length
+    ? `<div class="master-detail-shell" data-md-shell="${escapeHtml(tabKey)}"><div class="master-list" data-md-list="${escapeHtml(tabKey)}" aria-label="${escapeHtml(listTitle)}">${visibleRecords.map((record) => masterDetailListRow(tabKey, record, record.id === selectedId)).join("")}</div>${selected ? masterDetailPane(selected) : ""}</div>`
+    : `<div class="focus-empty">${escapeHtml(emptyText)}</div>`;
+  return `<section class="focus-panel view-cockpit master-detail-panel" id="${escapeHtml(id)}" aria-labelledby="${escapeHtml(id)}-heading"><div class="focus-heading"><div><h2 id="${escapeHtml(id)}-heading" class="section-title">${escapeHtml(title)}</h2><p class="section-note">${escapeHtml(subtitle)}</p></div>${statusStrip(stats)}</div><div class="scan-heading"><h3>${escapeHtml(listTitle)}</h3><span>${escapeHtml(count)}</span></div>${body}</section>`;
+}
+
+function selectedMasterDetailId(tabKey, records) {
+  const current = state.selection[tabKey];
+  if (records.some((record) => record.id === current)) {
+    return current;
+  }
+  const firstAttention =
+    records.find((record) => record.needsAttention) || records.find((record) => record.tone === "red");
+  const selected = firstAttention || records[0];
+  if (selected) {
+    state.selection[tabKey] = selected.id;
+    return selected.id;
+  }
+  return "";
+}
+
+function masterDetailListRow(tabKey, record, selected) {
+  const meta = (record.pills || []).filter(Boolean).join("");
+  const pathsHtml = record.paths && record.paths.length
+    ? `<span class="master-paths">${record.paths.slice(0, 3).map((path) => `<span class="focus-path">${escapeHtml(path)}</span>`).join("")}</span>`
+    : "";
+  const summary = record.summary ? `<span class="focus-summary">${escapeHtml(record.summary)}</span>` : "";
+  const selectedAttr = selected ? ` aria-pressed="true" aria-current="true"` : ` aria-pressed="false"`;
+  return `<button class="master-list-row tone-${record.tone || "neutral"}${selected ? " is-selected" : ""}" type="button" data-md-tab="${escapeHtml(tabKey)}" data-md-record="${escapeHtml(record.id)}"${selectedAttr}><span class="master-main"><span class="focus-kicker">${escapeHtml(record.kicker)}</span><span class="master-title">${escapeHtml(record.title)}</span>${summary}</span><span class="master-meta meta">${meta}</span>${pathsHtml}</button>`;
+}
+
+function masterDetailPane(record) {
+  const titleId = `detail-${domId(record.id)}-title`;
+  const meta = (record.pills || []).filter(Boolean).join("");
+  const summary = record.summary ? `<p class="focus-summary">${escapeHtml(record.summary)}</p>` : "";
+  const pathsHtml = record.paths && record.paths.length
+    ? `<div class="detail-path-block"><span class="detail-label">${escapeHtml(t("sourcePaths"))}</span>${paths(record.paths)}</div>`
+    : "";
+  const relationshipsHtml = detailFields(record.relationships || []);
+  const relationshipBody = [pathsHtml, relationshipsHtml].filter(Boolean).join("");
+  const sourceBody = detailSourceBlocks(record.sources || []);
+  return `<article class="detail-pane tone-${record.tone || "neutral"}" aria-labelledby="${escapeHtml(titleId)}"><header class="detail-header"><span class="focus-kicker">${escapeHtml(record.kicker)}</span><h3 id="${escapeHtml(titleId)}">${escapeHtml(record.title)}</h3>${summary}<div class="meta">${meta}</div></header>${detailSection(t("detailSummary"), detailFields(record.fields || []))}${detailSection(t("detailRelationships"), relationshipBody)}${detailSection(t("sourceContent"), sourceBody)}</article>`;
+}
+
+function detailSection(title, body) {
+  if (!body) {
+    return "";
+  }
+  return `<section class="detail-section"><h4>${escapeHtml(title)}</h4>${body}</section>`;
+}
+
+function detailFields(fields) {
+  const visible = fields.filter((field) => field && field.value !== null && field.value !== undefined && field.value !== "");
+  if (!visible.length) {
+    return "";
+  }
+  return `<dl class="detail-fields">${visible.map((field) => `<div><dt>${escapeHtml(field.label)}</dt><dd>${escapeHtml(field.value)}</dd></div>`).join("")}</dl>`;
+}
+
+function detailSourceBlocks(sources) {
+  const visible = sources.filter((source) => source && source.text);
+  if (!visible.length) {
+    return "";
+  }
+  return visible
+    .map((source) => `<div class="detail-source"><span class="detail-label">${escapeHtml(source.label)}</span><div class="source-panel full-text">${formatFullText(source.text, source.kind || "source")}</div></div>`)
+    .join("");
 }
 
 function statusStrip(stats) {
@@ -1492,6 +1827,17 @@ function label(value) {
 function viewLabel(value) {
   const tab = tabs.find((button) => button.dataset.view === value);
   return tab ? tab.textContent.trim() : label(value);
+}
+
+function yesNo(value) {
+  return value ? t("yes") : t("no");
+}
+
+function domId(value) {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "record";
 }
 
 function setStatus(message) {
