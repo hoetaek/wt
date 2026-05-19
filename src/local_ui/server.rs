@@ -127,8 +127,10 @@ mod tests {
         assert!(APP_CSS.contains(".metrics[data-view]:not([data-view=\"overview\"])"));
         assert!(APP_CSS.contains(".focus-panel"));
         assert!(APP_CSS.contains(".focus-inspector"));
+        assert!(APP_CSS.contains(".status-strip-inline"));
         assert!(APP_CSS.contains(".scan-list"));
         assert!(APP_CSS.contains(".scan-row"));
+        assert!(APP_CSS.contains(".scan-meta"));
         assert!(APP_CSS.contains(".record-list"));
         assert!(APP_CSS.contains(".record-card.tone-green::before"));
         assert!(APP_CSS.contains(".read-more.is-open"));

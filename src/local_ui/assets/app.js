@@ -456,148 +456,42 @@ function renderMetrics(snapshot) {
 
 function renderOverview(snapshot) {
   const focus = overviewFocusModel(snapshot);
-  const attentionRows = overviewAttentionRows(snapshot);
   content.innerHTML = [
     focusPanel(focus),
-    section(t("localState"), overviewCards(snapshot, focus, attentionRows.length), t("noLocalState"), t("noteOverview"), "overview-state"),
+    optionalSection(t("needsAttention"), focus.attention.map(focusScanRow), "", "overview-attention"),
+    optionalSection(t("runningTaskRuns"), focus.running.map(runningFocusItem).map(focusScanRow), "", "overview-task-runs"),
     optionalSection(
       t("preparedWorkflows"),
-      focus.prepared.map(workflowCard),
+      focus.prepared.map(preparedWorkflowFocusItem).map(focusScanRow),
       "",
       "overview-workflows"
     ),
-    optionalSection(t("runningTaskRuns"), focus.running.map(taskRunCard), "", "overview-task-runs"),
-    optionalSection(t("needsAttention"), attentionRows, "", "overview-attention"),
   ].join("");
-}
-
-function overviewCards(snapshot, focus, attentionCount) {
-  const sourcePaths = [
-    snapshot.sources.tasks,
-    snapshot.sources.task_runs,
-    snapshot.sources.workflows,
-    snapshot.sources.ideas,
-    snapshot.sources.profiles,
-    snapshot.sources.retrospecs,
-  ];
-  const counts = [
-    `${t("metricTaskDocuments")} ${snapshot.tasks.items.length}`,
-    `${t("metricTaskRuns")} ${snapshot.task_runs.items.length}`,
-    `${t("metricWorkflows")} ${snapshot.workflows.items.length}`,
-    `${t("metricIdeas")} ${snapshot.ideas.items.length}`,
-    `${t("metricProfiles")} ${snapshot.profiles.items.length}`,
-    `${t("metricRetrospecs")} ${snapshot.retrospecs.items.length}`,
-  ];
-  const preparedCount = focus.prepared.length;
-  const runningCount = focus.running.length;
-  return [
-    card(t("currentWork"), [
-      pill(`${preparedCount} ${t("preparedWorkflowCount")}`, preparedCount ? "green" : ""),
-      pill(`${runningCount} ${t("runningRunCount")}`, runningCount ? "green" : ""),
-      attentionCount ? pill(`${attentionCount} ${t("attentionCount")}`, "red") : pill(t("valid"), "green"),
-    ], [snapshot.sources.workflows, snapshot.sources.task_runs], snapshot.repo.root, runningCount || preparedCount ? "green" : "blue"),
-    card(t("config"), [
-      pill(snapshot.config.source, "blue"),
-      pill(`PR ${snapshot.config.workflow.pull_request}`, "green"),
-      pill(`Landing ${snapshot.config.workflow.landing}`, "amber"),
-      snapshot.config.selected_profile ? pill(`Profile ${snapshot.config.selected_profile}`, "violet") : "",
-    ], snapshot.config.paths, bodyPreview(snapshot.config.effective_text), "blue", [
-      detail(t("effectiveConfig"), snapshot.config.effective_text, "source"),
-    ]),
-    card(t("inventory"), counts.map((count) => pill(count)), sourcePaths, t("noteOverview"), "violet"),
-  ];
 }
 
 function renderIdeas(snapshot) {
-  content.innerHTML = [
-    ideasCockpit(snapshot),
-    section(t("ideas"), snapshot.ideas.items.map(ideaCard), t("noIdeas"), t("noteIdeas"), "ideas-valid"),
-    optionalSection(t("invalidIdeas"), snapshot.ideas.invalid.map(invalidCard), "", "ideas-invalid"),
-  ].join("");
+  content.innerHTML = ideasCockpit(snapshot);
 }
 
 function renderRetrospecs(snapshot) {
-  content.innerHTML = [
-    retrospecsCockpit(snapshot),
-    section(t("retrospecs"), snapshot.retrospecs.items.map(retrospecCard), t("noRetrospecs"), t("noteRetrospecs"), "retrospecs-valid"),
-    optionalSection(t("invalidRetrospecs"), snapshot.retrospecs.invalid.map(invalidCard), "", "retrospecs-invalid"),
-  ].join("");
+  content.innerHTML = retrospecsCockpit(snapshot);
 }
 
 function renderWorkflows(snapshot) {
-  const groups = ["prepared", "running", "waiting", "done", "needs_attention"];
-  const grouped = groups.map((group) => {
-    const rows = sortedWorkflows(snapshot.workflows.items).filter((row) => workflowUiGroup(row) === group);
-    const cards = rows.map(workflowCard);
-    if (group === "needs_attention") {
-      cards.unshift(...snapshot.workflows.invalid.map(invalidCard));
-    }
-    return { group, rows: cards };
-  });
-  const sections = grouped
-    .filter((entry) => entry.rows.length)
-    .map((entry) => section(stateLabel(entry.group), entry.rows, t("noWorkflows"), entry.group === "prepared" ? t("noteWorkflows") : "", `workflow-${entry.group}`));
-  content.innerHTML = [
-    workflowsCockpit(snapshot),
-    jumpNav(grouped
-      .filter((entry) => entry.rows.length)
-      .map((entry) => [`workflow-${entry.group}`, `${stateLabel(entry.group)} ${entry.rows.length}`])),
-    sections.join("") || section(t("workflows"), [], t("noWorkflows"), t("noteWorkflows"), "workflow-empty"),
-  ].join("");
+  content.innerHTML = workflowsCockpit(snapshot);
 }
 
 function renderTaskRuns(snapshot) {
-  const statuses = ["prepared", "running", "done", "skipped"];
-  const grouped = statuses.map((status) => {
-    const rows = sortedTaskRuns(snapshot.task_runs.items).filter((row) => row.status === status && !taskRunNeedsAttention(row));
-    return { status, rows: rows.map(taskRunCard) };
-  });
-  const attention = taskRunAttentionRows(snapshot);
-  if (attention.length) {
-    grouped.push({ status: "needs_attention", rows: attention });
-  }
-  const sections = grouped
-    .filter((entry) => entry.rows.length)
-    .map((entry) => section(stateLabel(entry.status), entry.rows, t("noTaskRuns"), entry.status === "prepared" ? t("noteTaskRuns") : "", `task-runs-${entry.status}`));
-  content.innerHTML = [
-    taskRunsCockpit(snapshot),
-    jumpNav(grouped
-      .filter((entry) => entry.rows.length)
-      .map((entry) => [`task-runs-${entry.status}`, `${stateLabel(entry.status)} ${entry.rows.length}`])),
-    sections.join("") || section(t("taskRuns"), [], t("noTaskRuns"), t("noteTaskRuns"), "task-runs-empty"),
-  ].join("");
+  content.innerHTML = taskRunsCockpit(snapshot);
 }
 
 function renderConfig(snapshot) {
   const config = snapshot.config;
-  const cards = [
-    card(t("effectiveConfig"), [
-      pill(config.source, "blue"),
-      pill(`Pull requests: ${config.workflow.pull_request}`, "green"),
-      pill(`Landing: ${config.workflow.landing}`, "amber"),
-      config.selected_profile ? pill(`Profile: ${config.selected_profile}`, "violet") : "",
-    ], config.paths, bodyPreview(config.effective_text), "blue", [
-      detail(t("effectiveConfig"), config.effective_text, "source"),
-    ]),
-    card(t("runtime"), [
-      pill(`Agent: ${config.agent || "none"}`),
-      pill(`Issues: ${config.issues || "none"}`),
-      pill(`Site: ${config.site ? config.site.provider : "none"}`),
-    ], [], "", "green"),
-  ];
-  if (config.workspace) {
-    cards.push(card(t("workspace"), [
-      pill(`Workspace tabs: ${config.workspace.tab_count}`),
-      pill(`Post-deps tabs: ${config.workspace.post_deps_tab_count}`),
-      pill(`Colors: ${config.workspace.color_count}`),
-    ], [], "", "violet"));
-  }
   content.innerHTML = [
     configCockpit(snapshot),
-    section(t("config"), cards, t("noConfigSummary"), t("noteConfig"), "config-summary"),
-    section(t("sourceConfig"), (config.source_files || []).map(sourceFileCard), t("noSourceConfig"), "", "config-sources"),
-    section(t("profiles"), snapshot.profiles.items.map(profileCard), t("noProfiles"), t("noteProfiles"), "config-profiles"),
-    optionalSection(t("invalidProfiles"), snapshot.profiles.invalid.map(invalidCard), "", "config-invalid-profiles"),
+    section(t("sourceConfig"), (config.source_files || []).map(sourceFileScanRow), t("noSourceConfig"), "", "config-sources"),
+    section(t("profiles"), snapshot.profiles.items.map(profileScanRow), t("noProfiles"), t("noteProfiles"), "config-profiles"),
+    optionalSection(t("invalidProfiles"), snapshot.profiles.invalid.map((row) => invalidScanRow(row, t("invalidProfiles"))), "", "config-invalid-profiles"),
   ].join("");
 }
 
@@ -709,14 +603,14 @@ function configCockpit(snapshot) {
   const invalidProfileCount = snapshot.profiles.invalid.length;
   const sourceFileCount = (config.source_files || []).length;
   const stats = [
-    { label: t("effectiveConfig"), value: config.source, tone: "blue" },
-    { label: t("workflowPolicy"), value: `${config.workflow.pull_request}/${config.workflow.landing}`, tone: "green" },
-    { label: t("sourceLayers"), value: config.paths.length, tone: config.paths.length ? "blue" : "" },
-    { label: t("profiles"), value: profileCount, tone: invalidProfileCount ? "red" : "violet" },
+    { label: t("needsAttention"), value: invalidProfileCount, tone: invalidProfileCount ? "red" : "" },
+    { label: t("effectiveConfig"), value: config.source },
+    { label: t("workflowPolicy"), value: `${config.workflow.pull_request}/${config.workflow.landing}` },
+    { label: t("profiles"), value: profileCount },
   ];
   const rows = [
     scanRow({
-      tone: "blue",
+      tone: "",
       kicker: t("effectiveConfig"),
       title: `${t("effectiveConfig")} - ${config.source}`,
       summary: bodyPreview(config.effective_text),
@@ -730,7 +624,7 @@ function configCockpit(snapshot) {
       detail: config.effective_text,
     }),
     scanRow({
-      tone: "green",
+      tone: "",
       kicker: t("runtime"),
       title: `Agent ${config.agent || "none"}`,
       summary: [`Issues ${config.issues || "none"}`, `Site ${config.site ? config.site.provider : "none"}`].join(" - "),
@@ -743,7 +637,7 @@ function configCockpit(snapshot) {
       detail: "",
     }),
     config.workspace ? scanRow({
-      tone: "violet",
+      tone: "",
       kicker: t("workspace"),
       title: t("workspace"),
       summary: "",
@@ -756,7 +650,7 @@ function configCockpit(snapshot) {
       detail: "",
     }) : "",
     scanRow({
-      tone: invalidProfileCount ? "red" : "violet",
+      tone: invalidProfileCount ? "red" : "",
       kicker: t("profiles"),
       title: `${profileCount} ${t("validProfiles")}`,
       summary: invalidProfileCount ? `${invalidProfileCount} ${t("invalidRecords")}` : t("noInvalidProfiles"),
@@ -777,11 +671,12 @@ function workflowsCockpit(snapshot) {
   const groups = countBy(workflows, workflowUiGroup);
   const invalid = snapshot.workflows.invalid.map((row) => invalidScanRow(row, t("invalidWorkflows")));
   const rows = workflows.map(workflowScanRow).concat(invalid);
+  const attentionCount = (groups.needs_attention || 0) + snapshot.workflows.invalid.length;
   const stats = [
-    { label: t("preparedWorkflows"), value: groups.prepared || 0, tone: groups.prepared ? "blue" : "" },
-    { label: t("runningTaskRuns"), value: groups.running || 0, tone: groups.running ? "green" : "" },
-    { label: t("needsAttention"), value: (groups.needs_attention || 0) + snapshot.workflows.invalid.length, tone: (groups.needs_attention || snapshot.workflows.invalid.length) ? "red" : "green" },
-    { label: t("metricWorkflows"), value: workflows.length, tone: "violet" },
+    { label: t("needsAttention"), value: attentionCount, tone: attentionCount ? "red" : "" },
+    { label: t("runningTaskRuns"), value: groups.running || 0 },
+    { label: t("preparedWorkflows"), value: groups.prepared || 0 },
+    { label: t("metricWorkflows"), value: workflows.length },
   ];
   return cockpitPanel(t("cockpitWorkflowTitle"), t("cockpitWorkflowSubtitle"), stats, t("workflowIndex"), rows, t("noWorkflows"), "workflow-cockpit");
 }
@@ -793,11 +688,12 @@ function taskRunsCockpit(snapshot) {
     .map(taskRunScanRow)
     .concat(snapshot.task_runs.invalid.map((row) => invalidScanRow(row, t("invalidTaskRuns"))))
     .concat(unlinkedTaskDocuments(snapshot).map(taskDocumentScanRow));
+  const attentionCount = (groups.needs_attention || 0) + snapshot.task_runs.invalid.length;
   const stats = [
-    { label: t("statePrepared"), value: groups.prepared || 0, tone: groups.prepared ? "blue" : "" },
-    { label: t("stateRunning"), value: groups.running || 0, tone: groups.running ? "green" : "" },
-    { label: t("needsAttention"), value: (groups.needs_attention || 0) + snapshot.task_runs.invalid.length, tone: (groups.needs_attention || snapshot.task_runs.invalid.length) ? "red" : "green" },
-    { label: t("metricTaskRuns"), value: runs.length, tone: "violet" },
+    { label: t("needsAttention"), value: attentionCount, tone: attentionCount ? "red" : "" },
+    { label: t("stateRunning"), value: groups.running || 0 },
+    { label: t("statePrepared"), value: groups.prepared || 0 },
+    { label: t("metricTaskRuns"), value: runs.length },
   ];
   return cockpitPanel(t("cockpitTaskRunTitle"), t("cockpitTaskRunSubtitle"), stats, t("taskRunIndex"), rows, t("noTaskRuns"), "task-runs-cockpit");
 }
@@ -808,10 +704,10 @@ function ideasCockpit(snapshot) {
   const tagged = ideas.filter((row) => row.tags.length).length;
   const rows = ideas.map(ideaScanRow).concat(snapshot.ideas.invalid.map((row) => invalidScanRow(row, t("invalidIdeas"))));
   const stats = [
-    { label: t("ideas"), value: ideas.length, tone: "blue" },
-    { label: t("statusGroups"), value: statusGroups, tone: "green" },
-    { label: t("taggedRecords"), value: tagged, tone: tagged ? "violet" : "" },
-    { label: t("invalidRecords"), value: snapshot.ideas.invalid.length, tone: snapshot.ideas.invalid.length ? "red" : "green" },
+    { label: t("needsAttention"), value: snapshot.ideas.invalid.length, tone: snapshot.ideas.invalid.length ? "red" : "" },
+    { label: t("ideas"), value: ideas.length },
+    { label: t("statusGroups"), value: statusGroups },
+    { label: t("taggedRecords"), value: tagged },
   ];
   return cockpitPanel(t("cockpitIdeasTitle"), t("cockpitIdeasSubtitle"), stats, t("ideaIndex"), rows, t("noIdeas"), "ideas-cockpit");
 }
@@ -822,10 +718,10 @@ function retrospecsCockpit(snapshot) {
   const tagged = retrospecs.filter((row) => row.tags.length).length;
   const rows = retrospecs.map(retrospecScanRow).concat(snapshot.retrospecs.invalid.map((row) => invalidScanRow(row, t("invalidRetrospecs"))));
   const stats = [
-    { label: t("retrospecs"), value: retrospecs.length, tone: "blue" },
-    { label: t("outcomeGroups"), value: outcomeGroups, tone: "green" },
-    { label: t("taggedRecords"), value: tagged, tone: tagged ? "violet" : "" },
-    { label: t("invalidRecords"), value: snapshot.retrospecs.invalid.length, tone: snapshot.retrospecs.invalid.length ? "red" : "green" },
+    { label: t("needsAttention"), value: snapshot.retrospecs.invalid.length, tone: snapshot.retrospecs.invalid.length ? "red" : "" },
+    { label: t("retrospecs"), value: retrospecs.length },
+    { label: t("outcomeGroups"), value: outcomeGroups },
+    { label: t("taggedRecords"), value: tagged },
   ];
   return cockpitPanel(t("cockpitRetrospecsTitle"), t("cockpitRetrospecsSubtitle"), stats, t("retrospecIndex"), rows, t("noRetrospecs"), "retrospecs-cockpit");
 }
@@ -844,7 +740,7 @@ function focusPanel(focus) {
       key: "attention",
       title: t("needsAttention"),
       count: focus.attention.length,
-      tone: focus.attention.length ? "red" : "green",
+      tone: focus.attention.length ? "red" : "",
       sectionId: "overview-attention",
       emptyText: t("noNeedsAttention"),
       items: focus.attention,
@@ -853,7 +749,7 @@ function focusPanel(focus) {
       key: "running",
       title: t("runningTaskRuns"),
       count: focus.running.length,
-      tone: focus.running.length ? "green" : "",
+      tone: "",
       sectionId: "overview-task-runs",
       emptyText: t("noRunningTaskRuns"),
       items: focus.running.map(runningFocusItem),
@@ -862,30 +758,35 @@ function focusPanel(focus) {
       key: "prepared",
       title: t("preparedWorkflows"),
       count: focus.prepared.length,
-      tone: focus.prepared.length ? "blue" : "",
+      tone: "",
       sectionId: "overview-workflows",
       emptyText: t("noPreparedWorkflows"),
       items: focus.prepared.map(preparedWorkflowFocusItem),
     },
   ];
-  const stats = groups
-    .map((group) => `<div class="focus-stat tone-${group.tone || "neutral"}"><span>${escapeHtml(group.title)}</span><strong>${group.count}</strong></div>`)
-    .join("");
-  const columns = groups.map(focusColumn).join("");
-  return `<section class="focus-panel" aria-labelledby="focus-heading"><div class="focus-heading"><div><h2 id="focus-heading" class="section-title">${escapeHtml(t("focusTitle"))}</h2><p class="section-note">${escapeHtml(t("focusSubtitle"))}</p></div><div class="focus-stats">${stats}</div></div><div class="focus-grid">${columns}</div></section>`;
+  const stats = groups.map((group) => ({ label: group.title, value: group.count, tone: group.tone }));
+  return `<section class="focus-panel" aria-labelledby="focus-heading"><div class="focus-heading"><div><h2 id="focus-heading" class="section-title">${escapeHtml(t("focusTitle"))}</h2><p class="section-note">${escapeHtml(t("focusSubtitle"))}</p></div>${statusStrip(stats)}</div>${priorityFlow(groups)}</section>`;
 }
 
 function cockpitPanel(title, subtitle, stats, listTitle, rows, emptyText, id) {
-  const statsHtml = stats
-    .map((stat) => `<div class="focus-stat tone-${stat.tone || "neutral"}"><span>${escapeHtml(stat.label)}</span><strong>${escapeHtml(stat.value)}</strong></div>`)
-    .join("");
   const body = rows.length ? `<div class="scan-list">${rows.join("")}</div>` : `<div class="focus-empty">${escapeHtml(emptyText)}</div>`;
   const count = rows.length === 1 ? `1 ${t("record")}` : `${rows.length} ${t("records")}`;
-  return `<section class="focus-panel view-cockpit" id="${escapeHtml(id)}" aria-labelledby="${escapeHtml(id)}-heading"><div class="focus-heading"><div><h2 id="${escapeHtml(id)}-heading" class="section-title">${escapeHtml(title)}</h2><p class="section-note">${escapeHtml(subtitle)}</p></div><div class="focus-stats">${statsHtml}</div></div><div class="scan-heading"><h3>${escapeHtml(listTitle)}</h3><span>${escapeHtml(count)}</span></div>${body}</section>`;
+  return `<section class="focus-panel view-cockpit" id="${escapeHtml(id)}" aria-labelledby="${escapeHtml(id)}-heading"><div class="focus-heading"><div><h2 id="${escapeHtml(id)}-heading" class="section-title">${escapeHtml(title)}</h2><p class="section-note">${escapeHtml(subtitle)}</p></div>${statusStrip(stats)}</div><div class="scan-heading"><h3>${escapeHtml(listTitle)}</h3><span>${escapeHtml(count)}</span></div>${body}</section>`;
 }
 
-function focusColumn(group) {
-  const limit = 4;
+function statusStrip(stats) {
+  const items = stats
+    .map((stat) => `<div class="status-counter tone-${stat.tone || "neutral"}"><span>${escapeHtml(stat.label)}</span><strong>${escapeHtml(stat.value)}</strong></div>`)
+    .join("");
+  return `<div class="status-strip-inline">${items}</div>`;
+}
+
+function priorityFlow(groups) {
+  return `<div class="priority-flow">${groups.map(priorityGroup).join("")}</div>`;
+}
+
+function priorityGroup(group) {
+  const limit = group.key === "attention" ? 5 : 3;
   const visible = group.items.slice(0, limit);
   const body = visible.length
     ? `<ul class="focus-list">${visible.map(focusItem).join("")}</ul>`
@@ -893,7 +794,7 @@ function focusColumn(group) {
   const more = group.items.length > limit
     ? `<a class="focus-more" href="#${escapeHtml(group.sectionId)}">${escapeHtml(tr("focusMore", { count: group.items.length - limit }))}</a>`
     : "";
-  return `<section class="focus-column tone-${group.tone || "neutral"}" aria-labelledby="focus-${group.key}"><div class="focus-column-heading"><h3 id="focus-${group.key}">${escapeHtml(group.title)}</h3><span>${group.count}</span></div>${body}${more}</section>`;
+  return `<section class="priority-group tone-${group.tone || "neutral"}" aria-labelledby="focus-${group.key}"><div class="priority-heading"><h3 id="focus-${group.key}">${escapeHtml(group.title)}</h3><span>${group.count}</span></div>${body}${more}</section>`;
 }
 
 function scanRow(row) {
@@ -906,7 +807,7 @@ function scanRow(row) {
   const details = detailText
     ? `<details class="focus-inspector scan-inspector"><summary>${escapeHtml(t("focusSource"))}</summary>${formatFullText(detailText, row.detailKind || "source")}</details>`
     : "";
-  return `<article class="scan-row tone-${row.tone || "neutral"}"><div class="scan-main"><span class="focus-kicker">${escapeHtml(row.kicker)}</span><h4>${escapeHtml(row.title)}</h4>${summary}<div class="meta">${meta}</div></div><div class="scan-side">${pathsHtml}${details}</div></article>`;
+  return `<article class="scan-row tone-${row.tone || "neutral"}"><div class="scan-main"><span class="focus-kicker">${escapeHtml(row.kicker)}</span><h4>${escapeHtml(row.title)}</h4>${summary}</div><div class="scan-meta meta">${meta}</div><div class="scan-side">${pathsHtml}${details}</div></article>`;
 }
 
 function scanDetailText(row) {
@@ -923,7 +824,7 @@ function scanDetailText(row) {
 function workflowScanRow(row) {
   const group = workflowUiGroup(row);
   return scanRow({
-    tone: groupColor(group),
+    tone: group === "needs_attention" ? "red" : "",
     kicker: `Workflow ${row.id}`,
     title: row.title,
     summary: row.state_error || row.body_summary || "",
@@ -944,13 +845,14 @@ function workflowScanRow(row) {
 
 function taskRunScanRow(row) {
   const taskDocument = row.task_document;
+  const group = taskRunUiGroup(row);
   return scanRow({
-    tone: statusColor(taskRunUiGroup(row)),
+    tone: group === "needs_attention" ? "red" : "",
     kicker: `TaskRun ${row.id}`,
     title: taskDocument ? taskDocument.title : row.task,
     summary: row.error || row.context.error || row.task_document_error || taskDocument?.body_summary || row.branch,
     pills: [
-      pill(stateLabel(taskRunUiGroup(row)), statusColor(taskRunUiGroup(row))),
+      pill(stateLabel(group), statusColor(group)),
       pill(`task ${row.task}`, "blue"),
       pill(`branch ${row.branch}`),
       row.context.workflow_id ? pill(`workflow ${row.context.workflow_id}`, "violet") : pill(row.context.label || "direct"),
@@ -963,7 +865,7 @@ function taskRunScanRow(row) {
 
 function taskDocumentScanRow(row) {
   return scanRow({
-    tone: "amber",
+    tone: "red",
     kicker: "TaskDocument",
     title: row.title,
     summary: row.body_summary,
@@ -979,7 +881,7 @@ function taskDocumentScanRow(row) {
 
 function ideaScanRow(row) {
   return scanRow({
-    tone: statusColor(row.status),
+    tone: "",
     kicker: row.kind,
     title: row.title,
     summary: row.body_summary,
@@ -995,7 +897,7 @@ function ideaScanRow(row) {
 
 function retrospecScanRow(row) {
   return scanRow({
-    tone: statusColor(row.outcome),
+    tone: "",
     kicker: row.kind,
     title: row.title,
     summary: row.body_summary,
@@ -1019,6 +921,52 @@ function invalidScanRow(row, labelText) {
     pills: [pill(t("invalid"), "red")],
     paths: [row.path],
     detail: [row.error, row.source_text].filter(Boolean).join("\n\n"),
+  });
+}
+
+function sourceFileScanRow(row) {
+  return scanRow({
+    tone: "",
+    kicker: t("sourceConfig"),
+    title: row.path,
+    summary: bodyPreview(row.text),
+    pills: [pill(t("source"), "blue")],
+    paths: [row.path],
+    detail: row.text,
+  });
+}
+
+function profileScanRow(row) {
+  return scanRow({
+    tone: "",
+    kicker: "profile",
+    title: row.name,
+    summary: bodyPreview(row.source_text),
+    pills: [
+      pill(`agent ${row.agent}`, "blue"),
+      pill(`${row.copy_count} copy`),
+      pill(`${row.link_count} link`),
+      row.has_site ? pill("site", "green") : "",
+      row.test_count ? pill(`${row.test_count} tests`, "amber") : "",
+    ],
+    paths: [row.path],
+    detail: row.source_text,
+  });
+}
+
+function focusScanRow(item) {
+  return scanRow({
+    tone: item.tone === "red" ? "red" : "",
+    kicker: item.kicker,
+    title: item.title,
+    summary: item.summary,
+    pills: [
+      pill(item.reason, item.tone === "red" ? "red" : ""),
+      item.meta ? pill(item.meta) : "",
+    ],
+    paths: item.paths,
+    detail: item.detail,
+    detailKind: item.detailKind,
   });
 }
 
@@ -1122,7 +1070,7 @@ function runningFocusItem(row) {
     summary: taskDocument?.body_summary || row.context.label || "",
     paths: [row.path, row.context.workflow_path, taskDocument && taskDocument.path].filter(Boolean),
     detail: formatTaskRunState(row),
-    tone: "green",
+    tone: "",
   };
 }
 
@@ -1135,7 +1083,7 @@ function preparedWorkflowFocusItem(row) {
     summary: row.body_summary,
     paths: [row.path],
     detail: formatWorkflowTaskRuns(row.task_run_groups || []) || row.source_text,
-    tone: "blue",
+    tone: "",
   };
 }
 
