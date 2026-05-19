@@ -385,10 +385,11 @@ function renderOverview(snapshot) {
       t("preparedWorkflows"),
       prepared.map(workflowCard),
       "",
-      "overview-workflows"
+      "overview-workflows",
+      "prepared"
     ),
-    optionalSection(t("runningTaskRuns"), running.map(taskRunCard), "", "overview-task-runs"),
-    optionalSection(t("needsAttention"), attention, "", "overview-attention"),
+    optionalSection(t("runningTaskRuns"), running.map(taskRunCard), "", "overview-task-runs", "running"),
+    optionalSection(t("needsAttention"), attention, "", "overview-attention", "attention"),
   ].join("");
 }
 
@@ -433,14 +434,14 @@ function overviewCards(snapshot) {
 function renderIdeas(snapshot) {
   content.innerHTML = [
     section(t("ideas"), snapshot.ideas.items.map(ideaCard), t("noIdeas"), t("noteIdeas"), "ideas-valid"),
-    optionalSection(t("invalidIdeas"), snapshot.ideas.invalid.map(invalidCard), "", "ideas-invalid"),
+    optionalSection(t("invalidIdeas"), snapshot.ideas.invalid.map(invalidCard), "", "ideas-invalid", "attention"),
   ].join("");
 }
 
 function renderRetrospecs(snapshot) {
   content.innerHTML = [
     section(t("retrospecs"), snapshot.retrospecs.items.map(retrospecCard), t("noRetrospecs"), t("noteRetrospecs"), "retrospecs-valid"),
-    optionalSection(t("invalidRetrospecs"), snapshot.retrospecs.invalid.map(invalidCard), "", "retrospecs-invalid"),
+    optionalSection(t("invalidRetrospecs"), snapshot.retrospecs.invalid.map(invalidCard), "", "retrospecs-invalid", "attention"),
   ].join("");
 }
 
@@ -456,7 +457,7 @@ function renderWorkflows(snapshot) {
   });
   const sections = grouped
     .filter((entry) => entry.rows.length)
-    .map((entry) => section(stateLabel(entry.group), entry.rows, t("noWorkflows"), entry.group === "prepared" ? t("noteWorkflows") : "", `workflow-${entry.group}`));
+    .map((entry) => section(stateLabel(entry.group), entry.rows, t("noWorkflows"), entry.group === "prepared" ? t("noteWorkflows") : "", `workflow-${entry.group}`, sectionTone(entry.group)));
   content.innerHTML = jumpNav(grouped
     .filter((entry) => entry.rows.length)
     .map((entry) => [`workflow-${entry.group}`, `${stateLabel(entry.group)} ${entry.rows.length}`])) + (sections.join("") || section(t("workflows"), [], t("noWorkflows"), t("noteWorkflows"), "workflow-empty"));
@@ -474,7 +475,7 @@ function renderTaskRuns(snapshot) {
   }
   const sections = grouped
     .filter((entry) => entry.rows.length)
-    .map((entry) => section(stateLabel(entry.status), entry.rows, t("noTaskRuns"), entry.status === "prepared" ? t("noteTaskRuns") : "", `task-runs-${entry.status}`));
+    .map((entry) => section(stateLabel(entry.status), entry.rows, t("noTaskRuns"), entry.status === "prepared" ? t("noteTaskRuns") : "", `task-runs-${entry.status}`, sectionTone(entry.status)));
   content.innerHTML = jumpNav(grouped
     .filter((entry) => entry.rows.length)
     .map((entry) => [`task-runs-${entry.status}`, `${stateLabel(entry.status)} ${entry.rows.length}`])) + (sections.join("") || section(t("taskRuns"), [], t("noTaskRuns"), t("noteTaskRuns"), "task-runs-empty"));
@@ -508,7 +509,7 @@ function renderConfig(snapshot) {
     section(t("config"), cards, t("noConfigSummary"), t("noteConfig"), "config-summary"),
     section(t("sourceConfig"), (config.source_files || []).map(sourceFileCard), t("noSourceConfig"), "", "config-sources"),
     section(t("profiles"), snapshot.profiles.items.map(profileCard), t("noProfiles"), t("noteProfiles"), "config-profiles"),
-    optionalSection(t("invalidProfiles"), snapshot.profiles.invalid.map(invalidCard), "", "config-invalid-profiles"),
+    optionalSection(t("invalidProfiles"), snapshot.profiles.invalid.map(invalidCard), "", "config-invalid-profiles", "attention"),
   ].join("");
 }
 
@@ -726,19 +727,20 @@ function card(title, pills, pathRows, summary, tone, details) {
   return `<article class="record-card${toneClass}"><div class="record-primary"><h3>${escapeHtml(title)}</h3>${mobileMetaHtml}${summaryHtml}</div><div class="record-aside">${desktopMetaHtml}${pathHtml}</div></article>`;
 }
 
-function section(title, rows, emptyText, note = "", id = "") {
+function section(title, rows, emptyText, note = "", id = "", tone = "") {
   const body = rows.length ? `<div class="record-list">${rows.join("")}</div>` : `<div class="empty">${escapeHtml(emptyText)}</div>`;
   const count = rows.length === 1 ? `1 ${t("record")}` : `${rows.length} ${t("records")}`;
   const noteHtml = note ? `<p class="section-note">${escapeHtml(note)}</p>` : "";
   const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
-  return `<section class="section-block"${idAttr}><div class="section-heading"><div><h2 class="section-title">${escapeHtml(title)}</h2>${noteHtml}</div><span class="section-count">${count}</span></div>${body}</section>`;
+  const toneAttr = tone ? ` data-tone="${escapeHtml(tone)}"` : "";
+  return `<section class="section-block"${idAttr}${toneAttr}><div class="section-heading"><div><h2 class="section-title">${escapeHtml(title)}</h2>${noteHtml}</div><span class="section-count">${count}</span></div>${body}</section>`;
 }
 
-function optionalSection(title, rows, note = "", id = "") {
+function optionalSection(title, rows, note = "", id = "", tone = "") {
   if (!rows.length) {
     return "";
   }
-  return section(title, rows, "", note, id);
+  return section(title, rows, "", note, id, tone);
 }
 
 function jumpNav(items) {
@@ -962,6 +964,15 @@ function stateLabel(value) {
     needs_attention: "needsAttention",
   };
   return keys[value] ? t(keys[value]) : label(value);
+}
+
+function sectionTone(group) {
+  if (group === "needs_attention" || group === "state_error" || group === "failed") return "attention";
+  if (group === "running") return "running";
+  if (group === "prepared" || group === "runnable") return "prepared";
+  if (group === "waiting" || group === "skipped") return "waiting";
+  if (group === "done") return "done";
+  return "";
 }
 
 function label(value) {

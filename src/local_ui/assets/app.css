@@ -1,25 +1,36 @@
 :root {
   color-scheme: light;
+  /* surface */
   --bg: #eef1ed;
   --bg-quiet: #f7f8f4;
   --panel: #ffffff;
-  --ink: #171b18;
-  --ink-soft: #2e3630;
-  --muted: #627066;
-  --line: #cfd8d0;
-  --line-strong: #aab7ad;
-  --soft: #eef3ee;
+  --panel-quiet: #f9fbf7;
+  /* ink — darkened muted/ink-mid for body legibility */
+  --ink: #14181a;
+  --ink-soft: #2a322d;
+  --ink-mid: #43504a;
+  --muted: #5a665f;
+  --muted-soft: #8a958e;
+  /* line */
+  --line: #d3dcd5;
+  --line-strong: #b3bfb6;
+  --soft: #ebf0eb;
+  /* header */
   --hero: #18211d;
-  --hero-2: #26362f;
-  --green: #19785c;
-  --amber: #9a6415;
-  --red: #b23b3b;
-  --blue: #315f86;
-  --violet: #6a5a92;
-  --rust: #a9542f;
+  --hero-2: #243029;
+  /* accents */
+  --green: #167659;
+  --green-strong: #0c5b43;
+  --amber: #8a560d;
+  --red: #a83737;
+  --red-strong: #861f1f;
+  --blue: #2c587e;
+  --violet: #604c8b;
+  --rust: #a3502c;
   --focus: #0b6f55;
-  --shadow-soft: 0 1px 2px rgba(23, 27, 24, 0.08);
-  --shadow-panel: 0 16px 42px rgba(23, 27, 24, 0.09);
+  /* effects */
+  --shadow-soft: 0 1px 2px rgba(20, 24, 22, 0.05);
+  --shadow-panel: 0 12px 36px rgba(20, 24, 22, 0.07);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -31,9 +42,12 @@
 body {
   margin: 0;
   background:
-    linear-gradient(135deg, rgba(49, 95, 134, 0.09), transparent 36%),
-    linear-gradient(180deg, var(--bg-quiet), var(--bg) 34%, #e5ebe5);
+    radial-gradient(120% 60% at 100% 0%, rgba(44, 88, 126, 0.07), transparent 60%),
+    linear-gradient(180deg, var(--bg-quiet), var(--bg) 38%, #e6ece6);
   color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
 button {
@@ -68,19 +82,23 @@ button:disabled {
   grid-template-rows: auto auto 1fr;
 }
 
+/* ============================================================
+   Header — quiet identity bar, not a hero
+   ============================================================ */
+
 .topbar {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 440px) auto;
-  gap: 24px;
-  align-items: stretch;
-  padding: 28px 32px;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 400px) auto;
+  gap: 20px;
+  align-items: center;
+  padding: 18px 32px;
   overflow: hidden;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   background:
-    linear-gradient(120deg, rgba(169, 84, 47, 0.2), transparent 42%),
+    linear-gradient(120deg, rgba(163, 80, 44, 0.14), transparent 46%),
     linear-gradient(135deg, var(--hero), var(--hero-2));
-  color: #f7faf4;
+  color: #f3f7f1;
 }
 
 .topbar::before {
@@ -89,8 +107,8 @@ button:disabled {
   content: "";
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(247, 250, 244, 0.055) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(247, 250, 244, 0.045) 1px, transparent 1px);
+    linear-gradient(rgba(243, 247, 241, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(243, 247, 241, 0.02) 1px, transparent 1px);
   background-size: 36px 36px;
   mask-image: linear-gradient(90deg, transparent, #000 22%, #000 82%, transparent);
 }
@@ -108,28 +126,29 @@ button:disabled {
 }
 
 .eyebrow {
-  margin: 0 0 8px;
-  color: #b9cbc1;
-  font-size: 12px;
+  margin: 0 0 4px;
+  color: #a9bbb1;
+  font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 h1 {
   margin: 0;
-  font-size: clamp(32px, 5vw, 56px);
-  font-weight: 680;
-  line-height: 0.98;
-  letter-spacing: 0;
+  font-size: clamp(22px, 2.6vw, 30px);
+  font-weight: 660;
+  line-height: 1.05;
+  letter-spacing: -0.005em;
 }
 
 #repo-label {
   max-width: 70ch;
-  margin: 14px 0 0;
-  color: #cbd8d0;
-  font-size: 13px;
-  line-height: 1.5;
+  margin: 8px 0 0;
+  color: #b9c7be;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
@@ -138,10 +157,9 @@ h1 {
   gap: 1px;
   align-self: center;
   overflow: hidden;
-  border: 1px solid rgba(247, 250, 244, 0.16);
+  border: 1px solid rgba(243, 247, 241, 0.12);
   border-radius: 8px;
-  background: rgba(247, 250, 244, 0.08);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
+  background: rgba(243, 247, 241, 0.06);
 }
 
 .sr-only {
@@ -156,46 +174,48 @@ h1 {
 }
 
 .state-strip div {
-  min-height: 46px;
+  min-height: 36px;
   display: grid;
-  grid-template-columns: minmax(110px, 0.75fr) minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: minmax(90px, 0.7fr) minmax(0, 1fr);
+  gap: 14px;
   align-items: center;
-  padding: 0 14px;
-  background: rgba(12, 17, 14, 0.28);
+  padding: 0 12px;
+  background: rgba(10, 14, 12, 0.22);
 }
 
 .state-strip span {
-  color: #dce6df;
-  font-size: 12px;
+  color: #c4d2c9;
+  font-size: 10.5px;
   font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .state-strip strong {
-  color: #9fb6aa;
+  color: #8aa39a;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 
 .top-actions {
   display: flex;
   gap: 0;
-  align-self: start;
+  align-self: center;
 }
 
 .top-actions button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-color: rgba(247, 250, 244, 0.26);
-  background: rgba(247, 250, 244, 0.08);
-  color: #f7faf4;
+  border-color: rgba(243, 247, 241, 0.2);
+  background: rgba(243, 247, 241, 0.06);
+  color: #f3f7f1;
 }
 
 .language-switch {
-  min-width: 108px;
+  min-width: 100px;
   grid-template-columns: 1fr 1fr;
   gap: 2px;
   padding: 3px;
@@ -207,32 +227,37 @@ h1 {
 }
 
 .language-switch span {
-  min-height: 30px;
+  min-height: 28px;
   display: grid;
   place-items: center;
   border-radius: 999px;
-  color: #c7d7cf;
-  font-size: 12px;
-  font-weight: 800;
+  color: #b6c5bd;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .language-switch[data-current="en"] [data-lang="en"],
 .language-switch[data-current="ko"] [data-lang="ko"] {
-  background: #f7faf4;
+  background: #f3f7f1;
   color: var(--hero);
   box-shadow: var(--shadow-soft);
 }
+
+/* ============================================================
+   Tabs — unchanged structure, slightly quieter
+   ============================================================ */
 
 .tabs {
   position: sticky;
   top: 0;
   z-index: 5;
   display: flex;
-  gap: 6px;
+  gap: 4px;
   overflow-x: auto;
-  padding: 10px 32px;
+  padding: 8px 32px;
   border-bottom: 1px solid var(--line);
-  background: rgba(251, 252, 247, 0.92);
+  background: rgba(251, 252, 247, 0.94);
   backdrop-filter: blur(14px);
 }
 
@@ -240,30 +265,32 @@ h1 {
   position: relative;
   display: inline-flex;
   align-items: center;
-  padding: 0 13px;
+  padding: 0 14px;
   white-space: nowrap;
   border-color: transparent;
   background: transparent;
   color: var(--muted);
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 650;
+  letter-spacing: 0.005em;
 }
 
 .tabs button[role="tab"] {
-  min-height: 40px;
+  min-height: 38px;
 }
 
 .tabs button:hover {
   border-color: var(--line);
   background: rgba(255, 255, 255, 0.65);
-  color: var(--ink);
+  color: var(--ink-soft);
 }
 
 .tabs button.active,
 .tabs button[aria-selected="true"] {
   border-color: var(--line);
   background: var(--panel);
-  color: var(--green);
+  color: var(--green-strong);
+  font-weight: 720;
   box-shadow: var(--shadow-soft);
 }
 
@@ -271,22 +298,31 @@ h1 {
 .tabs button[aria-selected="true"]::after {
   position: absolute;
   right: 12px;
-  bottom: -11px;
+  bottom: -9px;
   left: 12px;
   height: 2px;
   content: "";
   background: var(--green);
+  border-radius: 2px;
 }
+
+/* ============================================================
+   Main layout
+   ============================================================ */
 
 main {
   width: min(1320px, 100%);
   display: grid;
   grid-template-columns: 1fr;
-  gap: 18px;
+  gap: 22px;
   align-items: start;
   margin: 0 auto;
-  padding: 24px 32px 44px;
+  padding: 24px 32px 56px;
 }
+
+/* ============================================================
+   Metric row — hierarchy: dataful, with active/invalid emphasis
+   ============================================================ */
 
 .metrics {
   position: static;
@@ -302,94 +338,112 @@ main {
 .metric,
 .record-card {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--panel);
   box-shadow: var(--shadow-soft);
 }
 
 .metric {
   position: relative;
-  min-height: 74px;
-  padding: 12px 13px;
+  min-height: 78px;
+  padding: 12px 14px 14px;
   overflow: hidden;
 }
 
 .metric::after {
   position: absolute;
   right: 14px;
-  bottom: 13px;
-  width: 42px;
-  height: 3px;
+  bottom: 12px;
+  width: 36px;
+  height: 2px;
   content: "";
   background: linear-gradient(90deg, var(--green), var(--blue), var(--rust));
+  opacity: 0.55;
+}
+
+.metric.invalid {
+  border-color: #e2b6b6;
+  background: linear-gradient(180deg, #fff7f6 0%, #fffafa 100%);
 }
 
 .metric.invalid::after {
   background: linear-gradient(90deg, var(--red), var(--amber));
+  opacity: 0.85;
 }
 
 .metric-kicker,
 .metric-state {
   display: block;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 .metric-kicker {
-  font-weight: 800;
+  font-weight: 750;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .metric strong {
   display: block;
-  margin-top: 7px;
-  font-size: 26px;
-  font-weight: 620;
-  line-height: 0.9;
+  margin-top: 6px;
+  font-size: 30px;
+  font-weight: 580;
+  line-height: 0.95;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 .metric-state {
-  margin-top: 7px;
+  margin-top: 6px;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .metric.invalid .metric-state {
   color: var(--red);
-  font-weight: 700;
+  font-weight: 750;
+  letter-spacing: 0.01em;
 }
+
+/* ============================================================
+   Content
+   ============================================================ */
 
 .content {
   min-width: 0;
   display: grid;
-  gap: 26px;
-  scroll-margin-top: 74px;
+  gap: 32px;
+  scroll-margin-top: 72px;
 }
 
 .jump-nav {
   position: sticky;
-  top: 62px;
+  top: 56px;
   z-index: 4;
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: 6px;
   padding: 8px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: rgba(251, 252, 247, 0.94);
   box-shadow: var(--shadow-soft);
   backdrop-filter: blur(12px);
 }
 
 .jump-nav a {
-  min-height: 32px;
+  min-height: 30px;
   display: inline-flex;
   align-items: center;
-  padding: 0 10px;
+  padding: 0 11px;
   border: 1px solid transparent;
   border-radius: 999px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 700;
   text-decoration: none;
   white-space: nowrap;
 }
@@ -398,48 +452,125 @@ main {
 .jump-nav a:focus-visible {
   border-color: var(--line);
   background: var(--panel);
-  color: var(--green);
+  color: var(--green-strong);
 }
+
+/* ============================================================
+   Section — heading hierarchy with optional tone accent
+   ============================================================ */
 
 .section-block {
   min-width: 0;
   display: grid;
-  gap: 10px;
-  scroll-margin-top: 126px;
+  gap: 12px;
+  scroll-margin-top: 124px;
 }
 
 .section-heading {
-  min-height: 30px;
+  position: relative;
+  min-height: 32px;
   display: flex;
   align-items: end;
   justify-content: space-between;
   gap: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
 }
 
 .section-heading > div {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .section-title {
   margin: 0;
-  font-size: 18px;
-  font-weight: 760;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 720;
   line-height: 1.2;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+}
+
+/* Inline dot indicator before the section title for toned sections. */
+.section-block[data-tone] .section-title::before {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--muted-soft);
+  content: "";
+}
+
+.section-block[data-tone="prepared"] .section-title::before,
+.section-block[data-tone="running"] .section-title::before {
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(22, 118, 89, 0.14);
+}
+
+.section-block[data-tone="running"] .section-title::before {
+  background: var(--green-strong);
+  box-shadow: 0 0 0 3px rgba(22, 118, 89, 0.22);
+}
+
+.section-block[data-tone="attention"] .section-title::before {
+  background: var(--red);
+  box-shadow: 0 0 0 3px rgba(168, 55, 55, 0.18);
+}
+
+.section-block[data-tone="waiting"] .section-title::before {
+  background: var(--amber);
+}
+
+.section-block[data-tone="done"] .section-title::before {
+  background: var(--blue);
+}
+
+/* Pull strong tone accent onto the heading text itself for top-priority sections. */
+.section-block[data-tone="attention"] .section-title {
+  color: var(--red-strong);
+}
+
+.section-block[data-tone="running"] .section-title {
+  color: var(--green-strong);
 }
 
 .section-note {
-  max-width: 72ch;
-  margin: 5px 0 0;
+  max-width: 76ch;
+  margin: 0;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 12.5px;
+  line-height: 1.55;
 }
 
 .section-count {
+  align-self: end;
+  margin-bottom: 1px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
+
+.section-block[data-tone="attention"] .section-count {
+  color: var(--red);
+}
+
+.section-block[data-tone="running"] .section-count,
+.section-block[data-tone="prepared"] .section-count {
+  color: var(--green-strong);
+}
+
+/* ============================================================
+   Record cards — clearer primary/secondary/tertiary hierarchy
+   ============================================================ */
 
 .record-list {
   display: grid;
@@ -451,10 +582,15 @@ main {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
-  gap: 18px;
+  gap: 20px;
   align-items: start;
-  padding: 15px 17px 15px 19px;
+  padding: 16px 18px 16px 22px;
   overflow: hidden;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.record-card:hover {
+  border-color: var(--line-strong);
 }
 
 .record-card::before {
@@ -495,15 +631,16 @@ main {
 
 .record-primary {
   display: grid;
-  gap: 9px;
+  gap: 10px;
 }
 
 .record-card h3 {
   margin: 0;
-  color: var(--ink-soft);
-  font-size: 15px;
-  font-weight: 760;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 720;
   line-height: 1.32;
+  letter-spacing: -0.005em;
   overflow-wrap: anywhere;
 }
 
@@ -517,59 +654,83 @@ main {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
 }
 
 .mobile-meta {
   display: none;
 }
 
+/* ----- Pill tiers -------------------------------------------------
+   Toned pills (status, group, attention) read as primary signals.
+   Untoned pills are metadata: muted background, lighter weight.
+   ------------------------------------------------------------------ */
+
 .pill {
-  min-height: 23px;
+  min-height: 22px;
   display: inline-flex;
   align-items: center;
-  padding: 0 8px;
+  padding: 0 9px;
   border: 1px solid transparent;
   border-radius: 999px;
-  background: var(--soft);
-  color: var(--ink-soft);
-  font-size: 12px;
-  font-weight: 650;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
   line-height: 1;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+}
+
+/* Untoned (metadata) pill: barely-there chip so toned pills lead the eye. */
+.pill:not(.green):not(.amber):not(.red):not(.blue):not(.violet) {
+  border-color: var(--line);
+  background: var(--panel-quiet);
+  color: var(--ink-mid);
 }
 
 .pill.green {
-  border-color: #b8d8cb;
-  background: #e3f2ec;
-  color: var(--green);
+  border-color: #abd1c2;
+  background: #def1e8;
+  color: var(--green-strong);
+  font-weight: 720;
 }
 
 .pill.amber {
-  border-color: #ead3af;
-  background: #f6ead7;
+  border-color: #e5cda4;
+  background: #f5e7cf;
   color: var(--amber);
+  font-weight: 700;
 }
 
 .pill.red {
-  border-color: #e6b9b9;
-  background: #f7e2e2;
-  color: var(--red);
+  border-color: #e3a8a8;
+  background: #f7d6d6;
+  color: var(--red-strong);
+  font-weight: 740;
 }
 
 .pill.blue {
-  border-color: #bad0e4;
-  background: #e4edf7;
+  border-color: #aec5dd;
+  background: #dfe9f4;
   color: var(--blue);
+  font-weight: 700;
 }
 
 .pill.violet {
-  border-color: #d5cce9;
-  background: #ece8f6;
+  border-color: #ccc1e3;
+  background: #e7e1f2;
   color: var(--violet);
+  font-weight: 700;
 }
+
+/* ============================================================
+   Paths — clearly tertiary
+   ============================================================ */
 
 .path-list {
   display: grid;
-  gap: 5px;
+  gap: 3px;
 }
 
 .path,
@@ -578,21 +739,22 @@ main {
 .summary-preview,
 .full-text {
   margin: 0;
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.55;
   overflow-wrap: break-word;
 }
 
 .path {
-  color: var(--muted);
+  color: var(--muted-soft);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: 11.5px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
 .summary,
 .summary-preview {
-  color: #3d443e;
+  color: var(--ink-mid);
 }
 
 .summary-block {
@@ -602,9 +764,9 @@ main {
 
 .detail-label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 800;
-  letter-spacing: 0;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -612,7 +774,7 @@ main {
   min-width: 0;
   display: grid;
   gap: 8px;
-  padding: 10px 11px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfa;
@@ -648,21 +810,22 @@ main {
   gap: 6px;
   align-items: center;
   width: max-content;
-  padding: 0 8px;
+  padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel);
-  color: var(--green);
+  color: var(--green-strong);
   cursor: pointer;
   font-family: inherit;
-  font-size: 12px;
-  font-weight: 750;
+  font-size: 11.5px;
+  font-weight: 720;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
 .summary-action::before {
   content: "+";
-  color: var(--green);
+  color: var(--green-strong);
   font-weight: 900;
 }
 
@@ -676,8 +839,8 @@ main {
 }
 
 .read-more.is-open {
-  border-color: #b8d8cb;
-  background: #f3faf6;
+  border-color: #abd1c2;
+  background: #f1faf5;
 }
 
 .read-more.is-open .summary-preview,
@@ -704,6 +867,7 @@ main {
   display: grid;
   gap: 8px;
   max-width: 78ch;
+  color: var(--ink-soft);
 }
 
 .markdown-body p {
@@ -716,8 +880,9 @@ main {
 .markdown-body h3 {
   margin: 8px 0 0;
   color: var(--ink);
-  font-weight: 760;
+  font-weight: 740;
   line-height: 1.28;
+  letter-spacing: -0.005em;
 }
 
 .markdown-body h1 {
@@ -771,20 +936,24 @@ main {
 
 .invalid-card h3,
 .error {
-  color: var(--red);
+  color: var(--red-strong);
 }
 
 .empty,
 .loading {
-  min-height: 104px;
+  min-height: 96px;
   display: grid;
   place-items: center;
   border: 1px dashed var(--line-strong);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.54);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.55);
   color: var(--muted);
   font-size: 13px;
 }
+
+/* ============================================================
+   Responsive
+   ============================================================ */
 
 @media (max-width: 1100px) {
   main {
@@ -800,6 +969,8 @@ main {
 @media (max-width: 960px) {
   .topbar {
     grid-template-columns: 1fr;
+    gap: 14px;
+    padding: 18px 24px 20px;
   }
 
   .top-actions {
@@ -808,6 +979,7 @@ main {
 
   .record-card {
     grid-template-columns: 1fr;
+    padding: 14px 16px 16px 20px;
   }
 
   .record-aside {
@@ -817,11 +989,11 @@ main {
 
 @media (max-width: 680px) {
   .topbar {
-    padding: 22px 16px;
+    padding: 16px 16px 18px;
   }
 
   h1 {
-    font-size: 34px;
+    font-size: 22px;
   }
 
   .state-strip {
@@ -851,7 +1023,7 @@ main {
 
   .tabs button {
     min-height: 44px;
-    flex: 1 1 calc(50% - 6px);
+    flex: 1 1 calc(50% - 4px);
     justify-content: center;
     padding: 0 8px;
     font-size: 12px;
@@ -862,11 +1034,11 @@ main {
   }
 
   .metric {
-    min-height: 108px;
+    min-height: 96px;
   }
 
   .record-card {
-    padding: 14px 14px 14px 17px;
+    padding: 14px 14px 14px 18px;
   }
 
   .desktop-meta {
@@ -878,15 +1050,23 @@ main {
   }
 
   .record-primary {
-    gap: 8px;
+    gap: 9px;
   }
 
   .record-aside {
-    gap: 7px;
+    gap: 8px;
   }
 
   .read-more {
     padding: 10px;
+  }
+
+  .section-heading {
+    padding-bottom: 6px;
+  }
+
+  .section-title {
+    font-size: 16px;
   }
 }
 
@@ -899,5 +1079,10 @@ main {
     align-items: start;
     flex-direction: column;
     gap: 4px;
+    padding-bottom: 6px;
+  }
+
+  .section-count {
+    align-self: start;
   }
 }
