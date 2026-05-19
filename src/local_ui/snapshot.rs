@@ -505,7 +505,7 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
             root: state.repo_root.display().to_string(),
         },
         sources: SourceSummary {
-            ideas: ".local/ideas".into(),
+            ideas: ctx.storage_root.display_path(&ctx.storage_root.ideas_dir()),
             tasks: ctx.storage_root.display_path(&ctx.storage_root.tasks_dir()),
             workflows: ctx
                 .storage_root
@@ -516,7 +516,9 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
             profiles: ctx
                 .storage_root
                 .display_path(&ctx.storage_root.profiles_dir()),
-            retrospecs: ".local/retrospectives".into(),
+            retrospecs: ctx
+                .storage_root
+                .display_path(&ctx.storage_root.retrospectives_dir()),
             config_paths: config_source_paths(&ctx),
         },
         config: config_summary(&ctx),
@@ -551,14 +553,15 @@ fn collect_ideas(ctx: &Ctx) -> Result<IdeaCollection> {
 }
 
 fn idea_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
-    let ideas_dir = ctx.repo_root.join(".local/ideas");
+    let ideas_dir = ctx.storage_root.ideas_dir();
     if !ideas_dir.exists() {
         return Ok(Vec::new());
     }
 
     let mut paths = Vec::new();
-    for entry in
-        fs::read_dir(&ideas_dir).with_context(|| "Failed to read idea directory: .local/ideas")?
+    let display = ctx.storage_root.display_path(&ideas_dir);
+    for entry in fs::read_dir(&ideas_dir)
+        .with_context(|| format!("Failed to read idea directory: {display}"))?
     {
         let path = entry?.path();
         let ext = path.extension().and_then(|ext| ext.to_str());
@@ -1120,14 +1123,15 @@ fn collect_retrospecs(ctx: &Ctx) -> Result<RetrospecCollection> {
 }
 
 fn retrospec_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
-    let retrospecs_dir = ctx.repo_root.join(".local/retrospectives");
+    let retrospecs_dir = ctx.storage_root.retrospectives_dir();
     if !retrospecs_dir.exists() {
         return Ok(Vec::new());
     }
 
     let mut paths = Vec::new();
+    let display = ctx.storage_root.display_path(&retrospecs_dir);
     for entry in fs::read_dir(&retrospecs_dir)
-        .with_context(|| "Failed to read retrospec directory: .local/retrospectives")?
+        .with_context(|| format!("Failed to read retrospec directory: {display}"))?
     {
         let path = entry?.path();
         let ext = path.extension().and_then(|ext| ext.to_str());
@@ -1660,12 +1664,12 @@ fn read_known_source_text(ctx: &Ctx, path: &Path) -> Option<String> {
 fn is_known_state_or_config_path(relative: &str) -> bool {
     relative == ".wt.toml"
         || relative == "<git-common-dir>/wt/config.toml"
-        || (relative.starts_with(".local/ideas/")
+        || (relative.starts_with("<git-common-dir>/wt/ideas/")
             && matches!(
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
             ))
-        || (relative.starts_with(".local/retrospectives/")
+        || (relative.starts_with("<git-common-dir>/wt/retrospectives/")
             && matches!(
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
@@ -2069,7 +2073,7 @@ mod tests {
     }
 
     fn write_idea(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/ideas");
+        let dir = root.join(".git/wt/ideas");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
@@ -2081,7 +2085,7 @@ mod tests {
     }
 
     fn write_retrospec(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/retrospectives");
+        let dir = root.join(".git/wt/retrospectives");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }

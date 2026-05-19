@@ -73,6 +73,14 @@ impl StorageRoot {
         self.personal_root.join("task-runs")
     }
 
+    pub fn ideas_dir(&self) -> PathBuf {
+        self.personal_root.join("ideas")
+    }
+
+    pub fn retrospectives_dir(&self) -> PathBuf {
+        self.personal_root.join("retrospectives")
+    }
+
     pub fn task_run_path(&self, id: impl AsRef<str>) -> PathBuf {
         let id = id.as_ref();
         let file_name = if id.ends_with(".toml") {
@@ -142,6 +150,17 @@ impl StorageRoot {
         repo_root: impl AsRef<Path>,
     ) -> Option<LegacyLocalStorage> {
         self.detect_legacy_child(repo_root, "workflows")
+    }
+
+    pub fn detect_legacy_ideas(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
+        self.detect_legacy_child(repo_root, "ideas")
+    }
+
+    pub fn detect_legacy_retrospectives(
+        &self,
+        repo_root: impl AsRef<Path>,
+    ) -> Option<LegacyLocalStorage> {
+        self.detect_legacy_child(repo_root, "retrospectives")
     }
 
     fn detect_legacy_child(
