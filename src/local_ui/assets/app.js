@@ -50,6 +50,21 @@ const STRINGS = {
     noteTaskRuns: "TaskRuns are execution records from .local/task-runs with linked TaskDocument content. Failed or broken links are grouped under Needs attention.",
     noteProfiles: "Profiles are effective agent/config overlays from .local/profiles.",
     noteConfig: "Config shows effective config, source .wt.toml layers, and profiles.",
+    focusTitle: "Focus inspector",
+    focusSubtitle: "Current work, prepared work, and records needing attention",
+    focusInvalid: "Invalid record",
+    focusFailedTaskRun: "Failed TaskRun",
+    focusFailedLinkedTaskRun: "Failed linked TaskRun",
+    focusMissingTaskRun: "Missing TaskRun",
+    focusMissingTaskDocument: "Missing TaskDocument",
+    focusContextError: "Context error",
+    focusTaskDocumentError: "TaskDocument error",
+    focusTaskRunError: "TaskRun error",
+    focusUnlinkedTaskDocument: "No TaskRun yet",
+    focusRunnableWorkflow: "Runnable Workflow",
+    focusRunningTaskRun: "Running TaskRun",
+    focusSource: "Source",
+    focusMore: "{count} more below",
     preparedWorkflows: "Prepared Workflows",
     runningTaskRuns: "Running TaskRuns",
     needsAttention: "Needs attention",
@@ -143,6 +158,21 @@ const STRINGS = {
     noteTaskRuns: "작업 실행은 .local/task-runs 실행 기록입니다. 실패했거나 연결이 깨진 항목은 확인 필요로 묶습니다.",
     noteProfiles: "프로필은 .local/profiles의 agent/config overlay입니다.",
     noteConfig: "설정은 effective config, source .wt.toml 계층, 프로필을 함께 보여줍니다.",
+    focusTitle: "중점 확인",
+    focusSubtitle: "현재 작업, 준비된 작업, 확인이 필요한 기록",
+    focusInvalid: "오류 기록",
+    focusFailedTaskRun: "실패한 TaskRun",
+    focusFailedLinkedTaskRun: "실패한 연결 TaskRun",
+    focusMissingTaskRun: "누락된 TaskRun",
+    focusMissingTaskDocument: "누락된 TaskDocument",
+    focusContextError: "컨텍스트 오류",
+    focusTaskDocumentError: "TaskDocument 오류",
+    focusTaskRunError: "TaskRun 오류",
+    focusUnlinkedTaskDocument: "아직 TaskRun 없음",
+    focusRunnableWorkflow: "실행 가능한 Workflow",
+    focusRunningTaskRun: "실행 중인 TaskRun",
+    focusSource: "원본",
+    focusMore: "아래 {count}개 더",
     preparedWorkflows: "준비된 워크플로우",
     runningTaskRuns: "실행 중인 작업",
     needsAttention: "확인 필요",
@@ -376,18 +406,18 @@ function renderMetrics(snapshot) {
 }
 
 function renderOverview(snapshot) {
-  const prepared = sortedWorkflows(snapshot.workflows.items).filter((row) => workflowUiGroup(row) === "prepared");
-  const running = sortedTaskRuns(snapshot.task_runs.items).filter((row) => row.status === "running" && !taskRunNeedsAttention(row));
+  const focus = overviewFocusModel(snapshot);
   const attention = overviewAttentionRows(snapshot);
   content.innerHTML = [
+    focusPanel(focus),
     section(t("localState"), overviewCards(snapshot), t("noLocalState"), t("noteOverview"), "overview-state"),
     optionalSection(
       t("preparedWorkflows"),
-      prepared.map(workflowCard),
+      focus.prepared.map(workflowCard),
       "",
       "overview-workflows"
     ),
-    optionalSection(t("runningTaskRuns"), running.map(taskRunCard), "", "overview-task-runs"),
+    optionalSection(t("runningTaskRuns"), focus.running.map(taskRunCard), "", "overview-task-runs"),
     optionalSection(t("needsAttention"), attention, "", "overview-attention"),
   ].join("");
 }
@@ -614,9 +644,193 @@ function sourceFileCard(row) {
   ]);
 }
 
+function overviewFocusModel(snapshot) {
+  return {
+    prepared: sortedWorkflows(snapshot.workflows.items).filter((row) => workflowUiGroup(row) === "prepared"),
+    running: sortedTaskRuns(snapshot.task_runs.items).filter((row) => row.status === "running" && !taskRunNeedsAttention(row)),
+    attention: overviewAttentionItems(snapshot),
+  };
+}
+
+function focusPanel(focus) {
+  const groups = [
+    {
+      key: "attention",
+      title: t("needsAttention"),
+      count: focus.attention.length,
+      tone: focus.attention.length ? "red" : "green",
+      sectionId: "overview-attention",
+      emptyText: t("noNeedsAttention"),
+      items: focus.attention,
+    },
+    {
+      key: "running",
+      title: t("runningTaskRuns"),
+      count: focus.running.length,
+      tone: focus.running.length ? "green" : "",
+      sectionId: "overview-task-runs",
+      emptyText: t("noRunningTaskRuns"),
+      items: focus.running.map(runningFocusItem),
+    },
+    {
+      key: "prepared",
+      title: t("preparedWorkflows"),
+      count: focus.prepared.length,
+      tone: focus.prepared.length ? "blue" : "",
+      sectionId: "overview-workflows",
+      emptyText: t("noPreparedWorkflows"),
+      items: focus.prepared.map(preparedWorkflowFocusItem),
+    },
+  ];
+  const stats = groups
+    .map((group) => `<div class="focus-stat tone-${group.tone || "neutral"}"><span>${escapeHtml(group.title)}</span><strong>${group.count}</strong></div>`)
+    .join("");
+  const columns = groups.map(focusColumn).join("");
+  return `<section class="focus-panel" aria-labelledby="focus-heading"><div class="focus-heading"><div><h2 id="focus-heading" class="section-title">${escapeHtml(t("focusTitle"))}</h2><p class="section-note">${escapeHtml(t("focusSubtitle"))}</p></div><div class="focus-stats">${stats}</div></div><div class="focus-grid">${columns}</div></section>`;
+}
+
+function focusColumn(group) {
+  const limit = 4;
+  const visible = group.items.slice(0, limit);
+  const body = visible.length
+    ? `<ul class="focus-list">${visible.map(focusItem).join("")}</ul>`
+    : `<div class="focus-empty">${escapeHtml(group.emptyText)}</div>`;
+  const more = group.items.length > limit
+    ? `<a class="focus-more" href="#${escapeHtml(group.sectionId)}">${escapeHtml(tr("focusMore", { count: group.items.length - limit }))}</a>`
+    : "";
+  return `<section class="focus-column tone-${group.tone || "neutral"}" aria-labelledby="focus-${group.key}"><div class="focus-column-heading"><h3 id="focus-${group.key}">${escapeHtml(group.title)}</h3><span>${group.count}</span></div>${body}${more}</section>`;
+}
+
+function focusItem(item) {
+  const path = item.paths.find(Boolean);
+  const meta = [item.reason, item.meta].filter(Boolean).map((value, index) => pill(value, index === 0 ? item.tone : "")).join("");
+  const pathHtml = path ? `<p class="focus-path">${escapeHtml(path)}</p>` : "";
+  const summary = item.summary ? `<p class="focus-summary">${escapeHtml(item.summary)}</p>` : "";
+  const detailText = focusDetailText(item);
+  const details = detailText
+    ? `<details class="focus-inspector"><summary>${escapeHtml(t("focusSource"))}</summary>${formatFullText(detailText, item.detailKind || "source")}</details>`
+    : "";
+  return `<li class="focus-item tone-${item.tone || "neutral"}"><div class="focus-item-main"><span class="focus-kicker">${escapeHtml(item.kicker)}</span><h4>${escapeHtml(item.title)}</h4>${summary}<div class="meta">${meta}</div>${pathHtml}</div>${details}</li>`;
+}
+
+function focusDetailText(item) {
+  const parts = [];
+  if (item.detail) {
+    parts.push(item.detail);
+  }
+  if (item.paths.length) {
+    parts.push(`${t("source")}:\n${item.paths.join("\n")}`);
+  }
+  return parts.join("\n\n");
+}
+
+function overviewAttentionItems(snapshot) {
+  return [
+    ...sortedWorkflows(snapshot.workflows.items).filter((row) => workflowUiGroup(row) === "needs_attention").map(attentionWorkflowFocusItem),
+    ...sortedTaskRuns(snapshot.task_runs.items).filter(taskRunNeedsAttention).map(attentionTaskRunFocusItem),
+    ...unlinkedTaskDocuments(snapshot).map(unlinkedTaskFocusItem),
+    ...snapshot.ideas.invalid.map((row) => invalidFocusItem(row, t("invalidIdeas"))),
+    ...snapshot.tasks.invalid.map((row) => invalidFocusItem(row, t("invalidTaskDocuments"))),
+    ...snapshot.workflows.invalid.map((row) => invalidFocusItem(row, t("invalidWorkflows"))),
+    ...snapshot.task_runs.invalid.map((row) => invalidFocusItem(row, t("invalidTaskRuns"))),
+    ...snapshot.profiles.invalid.map((row) => invalidFocusItem(row, t("invalidProfiles"))),
+    ...snapshot.retrospecs.invalid.map((row) => invalidFocusItem(row, t("invalidRetrospecs"))),
+  ];
+}
+
+function attentionWorkflowFocusItem(row) {
+  return {
+    kicker: `Workflow ${row.id}`,
+    title: row.title,
+    reason: workflowAttentionReason(row),
+    meta: `${row.mode} - ${row.task_runs.total} runs`,
+    summary: row.state_error || row.body_summary,
+    paths: [row.path],
+    detail: formatWorkflowTaskRuns(row.task_run_groups || []) || row.source_text,
+    tone: "red",
+  };
+}
+
+function attentionTaskRunFocusItem(row) {
+  const taskDocument = row.task_document;
+  return {
+    kicker: `TaskRun ${row.id}`,
+    title: taskDocument ? taskDocument.title : row.task,
+    reason: taskRunAttentionReason(row),
+    meta: `branch ${row.branch}`,
+    summary: row.error || row.context.error || row.task_document_error || taskDocument?.body_summary || "",
+    paths: [row.path, row.context.workflow_path, taskDocument && taskDocument.path].filter(Boolean),
+    detail: formatTaskRunState(row),
+    tone: "red",
+  };
+}
+
+function unlinkedTaskFocusItem(row) {
+  return {
+    kicker: "TaskDocument",
+    title: row.title,
+    reason: t("focusUnlinkedTaskDocument"),
+    meta: row.branch ? `branch ${row.branch}` : row.key,
+    summary: row.body_summary,
+    paths: [row.path],
+    detail: row.source_text,
+    tone: "amber",
+  };
+}
+
+function invalidFocusItem(row, labelText) {
+  return {
+    kicker: labelText,
+    title: row.key,
+    reason: t("focusInvalid"),
+    meta: "",
+    summary: row.error,
+    paths: [row.path],
+    detail: [row.error, row.source_text].filter(Boolean).join("\n\n"),
+    tone: "red",
+  };
+}
+
+function runningFocusItem(row) {
+  const taskDocument = row.task_document;
+  return {
+    kicker: `TaskRun ${row.id}`,
+    title: taskDocument ? taskDocument.title : row.task,
+    reason: t("focusRunningTaskRun"),
+    meta: `branch ${row.branch}`,
+    summary: taskDocument?.body_summary || row.context.label || "",
+    paths: [row.path, row.context.workflow_path, taskDocument && taskDocument.path].filter(Boolean),
+    detail: formatTaskRunState(row),
+    tone: "green",
+  };
+}
+
+function preparedWorkflowFocusItem(row) {
+  return {
+    kicker: `Workflow ${row.id}`,
+    title: row.title,
+    reason: t("focusRunnableWorkflow"),
+    meta: `${row.mode} - ${row.runnable.runnable_count} runnable`,
+    summary: row.body_summary,
+    paths: [row.path],
+    detail: formatWorkflowTaskRuns(row.task_run_groups || []) || row.source_text,
+    tone: "blue",
+  };
+}
+
+function taskRunAttentionReason(row) {
+  if (row.status === "failed") return t("focusFailedTaskRun");
+  if (!row.task_document) return t("focusMissingTaskDocument");
+  if (row.context.error) return t("focusContextError");
+  if (row.task_document_error) return t("focusTaskDocumentError");
+  if (row.error) return t("focusTaskRunError");
+  return t("needsAttention");
+}
+
 function overviewAttentionRows(snapshot) {
   return [
-    ...snapshot.task_runs.items.filter(taskRunNeedsAttention).map(taskRunCard),
+    ...sortedWorkflows(snapshot.workflows.items).filter((row) => workflowUiGroup(row) === "needs_attention").map(workflowCard),
+    ...sortedTaskRuns(snapshot.task_runs.items).filter(taskRunNeedsAttention).map(taskRunCard),
     ...unlinkedTaskDocuments(snapshot).map(taskCard),
     ...snapshot.ideas.invalid.map(invalidCard),
     ...snapshot.tasks.invalid.map(invalidCard),
@@ -625,6 +839,13 @@ function overviewAttentionRows(snapshot) {
     ...snapshot.profiles.invalid.map(invalidCard),
     ...snapshot.retrospecs.invalid.map(invalidCard),
   ];
+}
+
+function workflowAttentionReason(row) {
+  if (row.state_error || row.presentation_group === "state_error") return t("stateError");
+  if (row.task_runs.missing) return t("focusMissingTaskRun");
+  if (row.task_runs.failed) return t("focusFailedLinkedTaskRun");
+  return t("needsAttention");
 }
 
 function taskRunAttentionRows(snapshot) {
