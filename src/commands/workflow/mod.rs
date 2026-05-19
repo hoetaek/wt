@@ -2371,8 +2371,8 @@ landing = "auto"
 
         let message = err.to_string();
         assert!(message.contains("Multiple runnable workflows found"));
-        assert!(message.contains(&format!("wt workflow run {}", first.id)));
-        assert!(message.contains(&format!("wt workflow run {}", second.id)));
+        assert!(message.contains(&format!("wt run workflow {}", first.id)));
+        assert!(message.contains(&format!("wt run workflow {}", second.id)));
         assert!(message.contains(".local/workflows/"));
         assert!(ui.prompts.lock().unwrap().is_empty());
         assert_eq!(fs::read_to_string(first_run_path).unwrap(), first_before);

@@ -140,7 +140,7 @@ Use a matrix workflow with exactly one task and the selected profile list:
   --profiles <profile-a>,<profile-b>,<profile-c> \
   --base <base> \
   --pr draft \
-  --objective "<comparison objective>" \
+  --title "<comparison objective>" \
   <task-key>
 ```
 
@@ -159,7 +159,7 @@ profile. It should not store variant prose or cmux runtime coordinates.
 Launch with `wt-start` or the explicit command:
 
 ```bash
-./target/debug/wt workflow run <workflow-id> --jobs <n>
+./target/debug/wt run workflow <workflow-id> --jobs <n>
 ```
 
 If `--jobs` does not fan out matrix profiles concurrently, record that as a

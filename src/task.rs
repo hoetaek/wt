@@ -107,7 +107,7 @@ impl TaskDocument {
         if self.origin.is_some() {
             "issue"
         } else {
-            "new"
+            "branch"
         }
     }
 

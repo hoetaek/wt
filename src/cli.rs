@@ -2,7 +2,12 @@ use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "wt", version, about = "Git worktree workspace manager")]
+#[command(
+    name = "wt",
+    version,
+    about = "Git worktree workspace manager",
+    after_help = "Start workspace execution with: wt run issue, wt run pr, wt run branch, wt run task, wt run workflow.\nUse wt open for existing branches or worktrees; use wt workflow for saved workflow files and lifecycle actions."
+)]
 pub struct Cli {
     /// Run wt from DIR
     #[arg(short = 'C', long = "directory", global = true, value_name = "DIR")]
@@ -39,50 +44,50 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
-    /// Start a workspace from an issue
-    Issue {
-        /// Issue number or provider-specific key
-        target: Option<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-        /// Create a profiled issue worktree from .local/profiles/<name>
-        #[arg(long)]
-        profile: Option<String>,
-        /// Start one workspace for each named profile
-        #[arg(long, conflicts_with = "profile")]
-        matrix: bool,
+    /// Start workspace execution from issue, PR, branch text, task, or workflow
+    #[command(
+        long_about = "Start workspace execution from issues, pull requests, branch-name text, local TaskDocuments, or saved Workflows.\n\nCanonical start surfaces are `wt run issue`, `wt run pr`, `wt run branch`, `wt run task`, and `wt run workflow`.\n\n`wt run` only starts workspace execution. Cleanup stays under `wt done`, inspection under `wt inspect`, agent observation under `wt agent`, and saved workflow lifecycle actions under `wt workflow`."
+    )]
+    Run {
+        #[command(subcommand)]
+        command: RunCommand,
     },
-    /// Start workspaces from pull requests
-    Pr {
-        /// Pull request numbers (omit to select multiple open PRs)
-        #[arg(value_name = "PR")]
-        numbers: Vec<u32>,
-        /// Apply config from .local/profiles/<name> to the PR worktree
-        #[arg(long)]
-        profile: Option<String>,
+    #[command(name = "issue", hide = true, disable_help_flag = true)]
+    DeprecatedIssue {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
     },
-    /// Start a workspace from branch-name text
-    New {
-        /// Branch name words
-        #[arg(num_args = 0..)]
-        name: Vec<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-        /// Create a profiled branch worktree from .local/profiles/<name>
-        #[arg(long)]
-        profile: Option<String>,
-        /// Start one workspace for each named profile
-        #[arg(long, conflicts_with = "profile")]
-        matrix: bool,
+    #[command(name = "pr", hide = true, disable_help_flag = true)]
+    DeprecatedPr {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
+    },
+    #[command(name = "new", hide = true, disable_help_flag = true)]
+    DeprecatedNew {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
     },
     /// Manage local TaskDocuments
     Task {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Prepare, inspect, edit, run, repair, or complete workflow tasks
+    /// Prepare, inspect, edit, repair, or complete workflow tasks
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
@@ -290,6 +295,77 @@ pub enum ColorMode {
     Never,
 }
 
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum RunCommand {
+    /// Start a workspace from an issue
+    Issue {
+        /// Issue number or provider-specific key
+        target: Option<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Create a profiled issue worktree from .local/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+        /// Start one workspace for each named profile
+        #[arg(long, conflicts_with = "profile")]
+        matrix: bool,
+    },
+    /// Start workspaces from pull requests
+    Pr {
+        /// Pull request numbers (omit to select multiple open PRs)
+        #[arg(value_name = "PR")]
+        numbers: Vec<u32>,
+        /// Apply config from .local/profiles/<name> to the PR worktree
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Start a workspace from branch-name text
+    #[command(
+        long_about = "Start one ad hoc workspace from branch-name text by creating a new local branch and worktree.\n\nThis does not open an existing branch or worktree. Use `wt open <branch|worktree>` for existing work."
+    )]
+    Branch {
+        /// Branch name words
+        #[arg(num_args = 0..)]
+        name: Vec<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Create a profiled branch worktree from .local/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+        /// Start one workspace for each named profile
+        #[arg(long, conflicts_with = "profile")]
+        matrix: bool,
+    },
+    /// Start one worktree per selected local TaskDocument
+    #[command(
+        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
+    )]
+    Task {
+        /// Local task keys from .local/tasks/<task>.toml
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Create a profiled task worktree from .local/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Start runnable tasks from a saved workflow
+    #[command(
+        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
+    )]
+    Workflow {
+        /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
+        workflow: Option<String>,
+        /// Maximum number of runnable batch-mode tasks to execute concurrently
+        #[arg(long, default_value_t = 1, value_parser = parse_positive_usize)]
+        jobs: usize,
+    },
+}
+
 #[derive(clap::ValueEnum, Debug, Clone, PartialEq)]
 pub enum InitAgent {
     Codex,
@@ -327,7 +403,7 @@ pub enum InitSiteProvider {
 pub enum TaskCommand {
     /// List saved local TaskDocument files
     #[command(
-        long_about = "List all saved .local/tasks/<task>.toml TaskDocument files.\n\nThis is the canonical read-only inventory for local TaskDocuments. It lists valid TaskDocument files whether or not they are selectable by wt task run, reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
+        long_about = "List all saved .local/tasks/<task>.toml TaskDocument files.\n\nThis is the canonical read-only inventory for local TaskDocuments. It lists valid TaskDocument files whether or not they are selectable by wt run task, reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
     )]
     List,
     /// Import provider issues as local TaskDocuments
@@ -339,24 +415,19 @@ pub enum TaskCommand {
         #[arg(value_name = "ISSUE")]
         issues: Vec<String>,
     },
-    /// Start one worktree per selected local TaskDocument
-    #[command(
-        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
-    )]
-    Run {
-        /// Local task keys from .local/tasks/<task>.toml
-        #[arg(value_name = "TASK")]
-        tasks: Vec<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-        /// Create a profiled task worktree from .local/profiles/<name>
-        #[arg(long)]
-        profile: Option<String>,
+    #[command(name = "run", hide = true, disable_help_flag = true)]
+    DeprecatedRun {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
     },
     /// Publish local TaskDocuments as provider issues
     #[command(
-        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt task run and wt workflow run treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
     )]
     Publish {
         /// Local task keys from .local/tasks/<task>.toml
@@ -445,16 +516,15 @@ pub enum WorkflowCommand {
         #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
         pr: Option<WorkflowPrModeArg>,
     },
-    /// Start runnable tasks from a workflow
-    #[command(
-        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
-    )]
-    Run {
-        /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
-        workflow: Option<String>,
-        /// Maximum number of runnable batch-mode tasks to execute concurrently
-        #[arg(long, default_value_t = 1, value_parser = parse_positive_usize)]
-        jobs: usize,
+    #[command(name = "run", hide = true, disable_help_flag = true)]
+    DeprecatedRun {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
     },
     /// Show workflow metadata and task statuses
     Show {
@@ -637,27 +707,32 @@ mod tests {
     }
 
     #[test]
-    fn issue_no_args_starts_interactive_issue_flow() {
-        let cli = parse(&["wt", "issue"]);
+    fn run_issue_no_args_starts_interactive_issue_flow() {
+        let cli = parse(&["wt", "run", "issue"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Issue {
-                target: None,
-                base: None,
-                profile: None,
-                matrix: false,
+            Some(Commands::Run {
+                command: RunCommand::Issue {
+                    target: None,
+                    base: None,
+                    profile: None,
+                    matrix: false,
+                }
             })
         ));
     }
 
     #[test]
-    fn issue_with_target() {
-        let cli = parse(&["wt", "issue", "PROJ-680"]);
-        if let Some(Commands::Issue {
-            target,
-            base,
-            profile,
-            matrix,
+    fn run_issue_with_target() {
+        let cli = parse(&["wt", "run", "issue", "PROJ-680"]);
+        if let Some(Commands::Run {
+            command:
+                RunCommand::Issue {
+                    target,
+                    base,
+                    profile,
+                    matrix,
+                },
         }) = cli.command
         {
             assert_eq!(target.as_deref(), Some("PROJ-680"));
@@ -670,9 +745,12 @@ mod tests {
     }
 
     #[test]
-    fn issue_with_base_interactive() {
-        let cli = parse(&["wt", "issue", "--base"]);
-        if let Some(Commands::Issue { base, .. }) = &cli.command {
+    fn run_issue_with_base_interactive() {
+        let cli = parse(&["wt", "run", "issue", "--base"]);
+        if let Some(Commands::Run {
+            command: RunCommand::Issue { base, .. },
+        }) = &cli.command
+        {
             assert_eq!(BaseMode::from_raw(base), BaseMode::Interactive);
         } else {
             panic!("expected Issue");
@@ -680,42 +758,55 @@ mod tests {
     }
 
     #[test]
-    fn issue_with_matrix_flag() {
-        let cli = parse(&["wt", "issue", "680", "--matrix"]);
+    fn run_issue_with_matrix_flag() {
+        let cli = parse(&["wt", "run", "issue", "680", "--matrix"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Issue { matrix: true, .. })
+            Some(Commands::Run {
+                command: RunCommand::Issue { matrix: true, .. }
+            })
         ));
     }
 
     #[test]
-    fn issue_with_profile_flag() {
-        let cli = parse(&["wt", "issue", "680", "--profile", "codex-yolo"]);
+    fn run_issue_with_profile_flag() {
+        let cli = parse(&["wt", "run", "issue", "680", "--profile", "codex-yolo"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Issue {
-                profile: Some(ref profile),
-                ..
+            Some(Commands::Run {
+                command: RunCommand::Issue {
+                    profile: Some(ref profile),
+                    ..
+                }
             }) if profile == "codex-yolo"
         ));
     }
 
     #[test]
-    fn issue_rejects_matrix_with_profile() {
-        let result = Cli::try_parse_from(["wt", "issue", "680", "--matrix", "--profile", "codex"]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn issue_rejects_profiles_flag() {
-        let result = Cli::try_parse_from(["wt", "issue", "680", "--profiles", "alpha,beta"]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn issue_rejects_profiles_with_profile() {
+    fn run_issue_rejects_matrix_with_profile() {
         let result = Cli::try_parse_from([
             "wt",
+            "run",
+            "issue",
+            "680",
+            "--matrix",
+            "--profile",
+            "codex",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_issue_rejects_profiles_flag() {
+        let result = Cli::try_parse_from(["wt", "run", "issue", "680", "--profiles", "alpha,beta"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_issue_rejects_profiles_with_profile() {
+        let result = Cli::try_parse_from([
+            "wt",
+            "run",
             "issue",
             "680",
             "--matrix",
@@ -728,51 +819,59 @@ mod tests {
     }
 
     #[test]
-    fn issue_rejects_removed_parallel_flag() {
-        let result = Cli::try_parse_from(["wt", "issue", "680", "--parallel"]);
+    fn run_issue_rejects_removed_parallel_flag() {
+        let result = Cli::try_parse_from(["wt", "run", "issue", "680", "--parallel"]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn pr_no_args_starts_interactive_pr_flow() {
-        let cli = parse(&["wt", "pr"]);
+    fn run_pr_no_args_starts_interactive_pr_flow() {
+        let cli = parse(&["wt", "run", "pr"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Pr {
-                ref numbers,
-                profile: None
+            Some(Commands::Run {
+                command: RunCommand::Pr {
+                    ref numbers,
+                    profile: None
+                }
             }) if numbers.is_empty()
         ));
     }
 
     #[test]
-    fn pr_with_number_and_profile() {
-        let cli = parse(&["wt", "pr", "42", "--profile", "codex"]);
+    fn run_pr_with_number_and_profile() {
+        let cli = parse(&["wt", "run", "pr", "42", "--profile", "codex"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Pr {
-                ref numbers,
-                profile: Some(ref profile),
+            Some(Commands::Run {
+                command: RunCommand::Pr {
+                    ref numbers,
+                    profile: Some(ref profile),
+                }
             }) if numbers == &vec![42] && profile == "codex"
         ));
     }
 
     #[test]
-    fn pr_with_multiple_numbers_and_profile() {
-        let cli = parse(&["wt", "pr", "42", "43", "44", "--profile", "codex"]);
+    fn run_pr_with_multiple_numbers_and_profile() {
+        let cli = parse(&["wt", "run", "pr", "42", "43", "44", "--profile", "codex"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Pr {
-                ref numbers,
-                profile: Some(ref profile),
+            Some(Commands::Run {
+                command: RunCommand::Pr {
+                    ref numbers,
+                    profile: Some(ref profile),
+                }
             }) if numbers == &vec![42, 43, 44] && profile == "codex"
         ));
     }
 
     #[test]
-    fn pr_help_describes_multiple_targets() {
+    fn run_pr_help_describes_multiple_targets() {
         let mut command = Cli::command();
         let help = command
+            .find_subcommand_mut("run")
+            .unwrap()
             .find_subcommand_mut("pr")
             .unwrap()
             .render_long_help()
@@ -1084,7 +1183,7 @@ mod tests {
         assert!(help.contains("provider issue"));
         assert!(help.contains("write [origin]"));
         assert!(help.contains("does not start workspaces"));
-        assert!(help.contains("later wt task run and wt workflow run"));
+        assert!(help.contains("later wt run task and wt run workflow"));
         assert!(help.contains("Omit task keys to choose unprocessed local TaskDocuments"));
         assert!(help.contains("tasks that already have [origin] are excluded"));
         assert!(!help.contains("--stack <STACK>"));
@@ -1094,12 +1193,12 @@ mod tests {
     }
 
     #[test]
-    fn task_run_accepts_task_keys_base_and_profile() {
-        let cli = parse(&["wt", "task", "run", "task-a", "task-b", "--base", "main"]);
+    fn run_task_accepts_task_keys_base_and_profile() {
+        let cli = parse(&["wt", "run", "task", "task-a", "task-b", "--base", "main"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Task {
-                command: TaskCommand::Run {
+            Some(Commands::Run {
+                command: RunCommand::Task {
                     ref tasks,
                     base: Some(ref base),
                     profile: None,
@@ -1108,11 +1207,11 @@ mod tests {
                 && base == "main"
         ));
 
-        let cli = parse(&["wt", "task", "run", "task-a", "--profile", "codex"]);
+        let cli = parse(&["wt", "run", "task", "task-a", "--profile", "codex"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Task {
-                command: TaskCommand::Run {
+            Some(Commands::Run {
+                command: RunCommand::Task {
                     ref tasks,
                     profile: Some(ref profile),
                     ..
@@ -1122,12 +1221,12 @@ mod tests {
     }
 
     #[test]
-    fn task_run_accepts_no_task_keys_for_interactive_selection() {
-        let cli = parse(&["wt", "task", "run"]);
+    fn run_task_accepts_no_task_keys_for_interactive_selection() {
+        let cli = parse(&["wt", "run", "task"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Task {
-                command: TaskCommand::Run {
+            Some(Commands::Run {
+                command: RunCommand::Task {
                     ref tasks,
                     base: None,
                     profile: None,
@@ -1137,24 +1236,24 @@ mod tests {
     }
 
     #[test]
-    fn task_run_rejects_matrix() {
-        let result = Cli::try_parse_from(["wt", "task", "run", "task-a", "--matrix"]);
+    fn run_task_rejects_matrix() {
+        let result = Cli::try_parse_from(["wt", "run", "task", "task-a", "--matrix"]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn task_run_rejects_profiles_without_matrix() {
+    fn run_task_rejects_profiles_without_matrix() {
         let result =
-            Cli::try_parse_from(["wt", "task", "run", "task-a", "--profiles", "alpha,beta"]);
+            Cli::try_parse_from(["wt", "run", "task", "task-a", "--profiles", "alpha,beta"]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn task_run_rejects_profiles_with_profile() {
+    fn run_task_rejects_profiles_with_profile() {
         let result = Cli::try_parse_from([
             "wt",
-            "task",
             "run",
+            "task",
             "task-a",
             "--profiles",
             "alpha",
@@ -1165,12 +1264,12 @@ mod tests {
     }
 
     #[test]
-    fn task_run_help_explains_task_execution_surface() {
+    fn run_task_help_explains_task_execution_surface() {
         let mut command = Cli::command();
         let help = command
-            .find_subcommand_mut("task")
-            .unwrap()
             .find_subcommand_mut("run")
+            .unwrap()
+            .find_subcommand_mut("task")
             .unwrap()
             .render_long_help()
             .to_string();
@@ -1182,6 +1281,7 @@ mod tests {
         assert!(help.contains("Task-run agents report PR=none"));
         assert!(help.contains("wt workflow task --mode batch"));
         assert!(help.contains("wt workflow task --mode single"));
+        assert!(help.contains("wt run workflow"));
         assert!(!help.contains("--matrix"));
         assert!(!help.contains("--profiles"));
     }
@@ -1376,12 +1476,12 @@ mod tests {
     }
 
     #[test]
-    fn workflow_run_accepts_jobs() {
-        let cli = parse(&["wt", "workflow", "run", "2026-05-16-001", "--jobs", "3"]);
+    fn run_workflow_accepts_jobs() {
+        let cli = parse(&["wt", "run", "workflow", "2026-05-16-001", "--jobs", "3"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Workflow {
-                command: WorkflowCommand::Run {
+            Some(Commands::Run {
+                command: RunCommand::Workflow {
                     ref workflow,
                     jobs: 3,
                 }
@@ -1415,11 +1515,13 @@ mod tests {
     }
 
     #[test]
-    fn workflow_run_help_describes_coordinator_handoff() {
+    fn run_workflow_help_describes_coordinator_handoff() {
         let mut command = Cli::command();
-        let workflow = command.find_subcommand_mut("workflow").unwrap();
-        let run = workflow.find_subcommand_mut("run").unwrap();
-        let help = run.render_long_help().to_string();
+        let run = command.find_subcommand_mut("run").unwrap();
+        let workflow = run.find_subcommand_mut("workflow").unwrap();
+        let help = workflow.render_long_help().to_string();
+        assert!(help.contains("saved workflow"));
+        assert!(help.contains("does not list, edit, repair, or complete workflow files"));
         assert!(help.contains("Workflow Coordinator Handoff"));
         assert!(help.contains("coordinator cmux send coordinates"));
         assert!(help.contains("prepared [policy].pull_request"));
@@ -1463,7 +1565,8 @@ mod tests {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, edit, run, repair, or complete workflow tasks"));
+        assert!(help.contains("Prepare, inspect, edit, repair, or complete workflow tasks"));
+        assert!(!help.contains("Start runnable tasks from a workflow"));
         assert!(help.contains("repair"));
         assert!(help.contains("task"));
         assert!(help.contains("issue"));
@@ -1497,29 +1600,33 @@ mod tests {
     }
 
     #[test]
-    fn new_with_matrix_flag() {
-        let cli = parse(&["wt", "new", "some", "feature", "--matrix"]);
-        if let Some(Commands::New { name, matrix, .. }) = &cli.command {
+    fn run_branch_with_matrix_flag() {
+        let cli = parse(&["wt", "run", "branch", "some", "feature", "--matrix"]);
+        if let Some(Commands::Run {
+            command: RunCommand::Branch { name, matrix, .. },
+        }) = &cli.command
+        {
             assert_eq!(name, &vec!["some".to_string(), "feature".to_string()]);
             assert!(*matrix);
         } else {
-            panic!("expected New");
+            panic!("expected Branch");
         }
     }
 
     #[test]
-    fn new_rejects_task_option() {
-        let err = Cli::try_parse_from(["wt", "new", "--task", "add-schema"])
+    fn run_branch_rejects_task_option() {
+        let err = Cli::try_parse_from(["wt", "run", "branch", "--task", "add-schema"])
             .unwrap_err()
             .to_string();
         assert!(err.contains("unexpected argument '--task'"));
     }
 
     #[test]
-    fn new_with_base_and_profile() {
+    fn run_branch_with_base_and_profile() {
         let cli = parse(&[
             "wt",
-            "new",
+            "run",
+            "branch",
             "some",
             "feature",
             "--base",
@@ -1529,11 +1636,13 @@ mod tests {
         ]);
         assert!(matches!(
             cli.command,
-            Some(Commands::New {
-                ref name,
-                base: Some(ref base),
-                profile: Some(ref profile),
-                matrix: false,
+            Some(Commands::Run {
+                command: RunCommand::Branch {
+                    ref name,
+                    base: Some(ref base),
+                    profile: Some(ref profile),
+                    matrix: false,
+                }
             }) if name == &vec!["some".to_string(), "feature".to_string()]
                 && base == "main"
                 && profile == "codex"
@@ -1541,10 +1650,11 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_matrix_with_profile() {
+    fn run_branch_rejects_matrix_with_profile() {
         let result = Cli::try_parse_from([
             "wt",
-            "new",
+            "run",
+            "branch",
             "some",
             "feature",
             "--matrix",
@@ -1555,17 +1665,25 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_profiles_flag() {
-        let result =
-            Cli::try_parse_from(["wt", "new", "some", "feature", "--profiles", "alpha,beta"]);
+    fn run_branch_rejects_profiles_flag() {
+        let result = Cli::try_parse_from([
+            "wt",
+            "run",
+            "branch",
+            "some",
+            "feature",
+            "--profiles",
+            "alpha,beta",
+        ]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn new_rejects_profiles_with_profile() {
+    fn run_branch_rejects_profiles_with_profile() {
         let result = Cli::try_parse_from([
             "wt",
-            "new",
+            "run",
+            "branch",
             "some",
             "feature",
             "--matrix",
@@ -1578,25 +1696,93 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_removed_parallel_flag() {
-        let result = Cli::try_parse_from(["wt", "new", "some", "feature", "--parallel"]);
+    fn run_branch_rejects_removed_parallel_flag() {
+        let result = Cli::try_parse_from(["wt", "run", "branch", "some", "feature", "--parallel"]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn new_help_explains_branch_text_and_task_selection() {
+    fn run_branch_help_explains_branch_text_and_task_selection() {
         let mut command = Cli::command();
-        let new = command.find_subcommand_mut("new").unwrap();
-        let help = new.render_help().to_string();
-        assert!(help.contains("Start a workspace from branch-name text"));
+        let branch = command
+            .find_subcommand_mut("run")
+            .unwrap()
+            .find_subcommand_mut("branch")
+            .unwrap();
+        let help = branch.render_long_help().to_string();
+        assert!(help.contains("branch-name text"));
+        assert!(help.contains("new local branch and worktree"));
+        assert!(help.contains("wt open"));
         assert!(!help.contains("--task"));
         assert!(!help.contains("prepared local task"));
+    }
+
+    #[test]
+    fn root_help_lists_canonical_start_surfaces() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("wt run issue"));
+        assert!(help.contains("wt run pr"));
+        assert!(help.contains("wt run branch"));
+        assert!(help.contains("wt run task"));
+        assert!(help.contains("wt run workflow"));
+        assert!(help.contains("Use wt open"));
+        assert!(!help.contains("wt new"));
+    }
+
+    #[test]
+    fn run_help_lists_execution_start_surfaces() {
+        let mut command = Cli::command();
+        let run = command.find_subcommand_mut("run").unwrap();
+        let help = run.render_long_help().to_string();
+        assert!(help.contains("wt run issue"));
+        assert!(help.contains("wt run pr"));
+        assert!(help.contains("wt run branch"));
+        assert!(help.contains("wt run task"));
+        assert!(help.contains("wt run workflow"));
+        assert!(help.contains("issue"));
+        assert!(help.contains("pr"));
+        assert!(help.contains("branch"));
+        assert!(help.contains("task"));
+        assert!(help.contains("workflow"));
+        assert!(help.contains("only starts workspace execution"));
+        assert!(help.contains("Cleanup stays under `wt done`"));
     }
 
     #[test]
     fn start_subcommand_is_removed() {
         let result = Cli::try_parse_from(["wt", "start"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn old_execution_start_subcommands_parse_as_hidden_deprecated_traps() {
+        let cli = parse(&["wt", "issue"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::DeprecatedIssue { .. })
+        ));
+
+        let cli = parse(&["wt", "pr"]);
+        assert!(matches!(cli.command, Some(Commands::DeprecatedPr { .. })));
+
+        let cli = parse(&["wt", "new"]);
+        assert!(matches!(cli.command, Some(Commands::DeprecatedNew { .. })));
+
+        let cli = parse(&["wt", "task", "run"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::DeprecatedRun { .. }
+            })
+        ));
+
+        let cli = parse(&["wt", "workflow", "run"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::DeprecatedRun { .. }
+            })
+        ));
     }
 
     #[test]

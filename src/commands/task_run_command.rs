@@ -340,7 +340,7 @@ mod tests {
                         "red".into(),
                     ),
                     (
-                        crate::setup::WORKSPACE_COLOR_KIND_NEW.into(),
+                        crate::setup::WORKSPACE_COLOR_KIND_BRANCH.into(),
                         "green".into(),
                     ),
                 ]),
@@ -604,7 +604,7 @@ id = "PROJ-123"
                     submit: SubmitMode::None,
                     timeout: 1,
                     send_after: 0,
-                    prompt: HashMap::from([("new".into(), vec!["Existing prompt".into()])]),
+                    prompt: HashMap::from([("branch".into(), vec!["Existing prompt".into()])]),
                 }),
                 ..Config::default()
             },
@@ -701,7 +701,7 @@ id = "PROJ-123"
                     submit: SubmitMode::None,
                     timeout: 1,
                     send_after: 0,
-                    prompt: HashMap::from([("new".into(), vec!["Existing prompt".into()])]),
+                    prompt: HashMap::from([("branch".into(), vec!["Existing prompt".into()])]),
                 }),
                 ..Config::default()
             },

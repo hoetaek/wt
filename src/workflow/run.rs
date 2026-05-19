@@ -317,7 +317,7 @@ fn run_single_workflow_group(
             identifier: &branch,
             title: &title,
             branch_name: Some(&branch),
-            setup_mode: setup::WORKSPACE_COLOR_KIND_NEW,
+            setup_mode: setup::WORKSPACE_COLOR_KIND_BRANCH,
             additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: None,

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
-use clap::{CommandFactory, Parser};
-use std::io::{self, IsTerminal};
+use clap::{Command as ClapCommand, CommandFactory, Parser};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -48,12 +48,21 @@ fn try_main() -> Result<()> {
             return Ok(());
         }
         Commands::Completion { shell } => {
-            let mut command = Cli::command();
+            let mut command = completion_command();
             let bin_name = command.get_name().to_string();
-            clap_complete::generate(*shell, &mut command, bin_name, &mut io::stdout());
+            let mut buffer = Vec::new();
+            clap_complete::generate(*shell, &mut command, bin_name, &mut buffer);
+            let script = String::from_utf8(buffer)?;
+            io::stdout().write_all(strip_removed_completion_entries(*shell, &script).as_bytes())?;
             return Ok(());
         }
         _ => {}
+    }
+
+    if let Some((old, new)) = wt::deprecated_start_replacement(command) {
+        bail!(
+            "`{old}` has moved. Use `{new}` to start workspace execution. The old command is not an alias."
+        );
     }
 
     let runner = RealRunner;
@@ -122,6 +131,146 @@ fn try_main() -> Result<()> {
     wt::dispatch(&ctx, command)
 }
 
+const HIDDEN_COMPLETION_PREFIX: &str = "__wt_removed_";
+
+fn completion_command() -> ClapCommand {
+    let mut hidden_index = 0;
+    rename_hidden_subcommands(Cli::command(), &mut hidden_index)
+}
+
+fn rename_hidden_subcommands(command: ClapCommand, hidden_index: &mut usize) -> ClapCommand {
+    command.mut_subcommands(|subcommand| {
+        let is_hidden = subcommand.is_hide_set();
+        let subcommand = rename_hidden_subcommands(subcommand, hidden_index);
+        if is_hidden {
+            // AOT completion scripts still walk hidden parser traps; keep them
+            // unreachable without teaching removed command names to shells.
+            // Clap stores command names as borrowed values; completion runs once
+            // and exits, so leaking this generated hidden name is intentional.
+            let hidden_name: &'static str =
+                Box::leak(format!("{HIDDEN_COMPLETION_PREFIX}{hidden_index}").into_boxed_str());
+            *hidden_index += 1;
+            subcommand.name(hidden_name)
+        } else {
+            subcommand
+        }
+    })
+}
+
+fn strip_removed_completion_entries(shell: clap_complete::Shell, script: &str) -> String {
+    let mut output = String::new();
+    let mut skipping_removed_case_arm_depth: Option<usize> = None;
+
+    for line in script.lines() {
+        let trimmed = line.trim_start();
+        if let Some(case_depth) = skipping_removed_case_arm_depth.as_mut() {
+            if trimmed.starts_with("case ") {
+                *case_depth += 1;
+            } else if trimmed == "esac" {
+                *case_depth = case_depth.saturating_sub(1);
+            } else if *case_depth == 0 && trimmed == ";;" {
+                skipping_removed_case_arm_depth = None;
+            }
+            continue;
+        }
+
+        if matches!(
+            shell,
+            clap_complete::Shell::Fish
+                | clap_complete::Shell::Elvish
+                | clap_complete::Shell::PowerShell
+        ) && contains_hidden_completion_name(trimmed)
+        {
+            continue;
+        }
+
+        if matches!(shell, clap_complete::Shell::Zsh)
+            && contains_hidden_completion_name(trimmed)
+            && (trimmed.starts_with('\'') || trimmed.starts_with('"'))
+        {
+            continue;
+        }
+
+        if contains_hidden_completion_name(trimmed)
+            && (trimmed.starts_with(HIDDEN_COMPLETION_PREFIX)
+                || trimmed
+                    .strip_prefix("case ")
+                    .is_some_and(|rest| rest.starts_with(HIDDEN_COMPLETION_PREFIX)))
+        {
+            continue;
+        }
+
+        if matches!(
+            shell,
+            clap_complete::Shell::Bash | clap_complete::Shell::Zsh
+        ) && contains_hidden_completion_name(trimmed)
+            && trimmed.ends_with(')')
+        {
+            skipping_removed_case_arm_depth = Some(0);
+            continue;
+        }
+
+        if !trimmed.contains(' ') && contains_hidden_completion_name(trimmed) {
+            continue;
+        }
+
+        let cleaned = strip_removed_completion_tokens(line);
+        if cleaned.trim().is_empty() && contains_hidden_completion_name(line) {
+            continue;
+        }
+        output.push_str(&cleaned);
+        output.push('\n');
+    }
+
+    output
+}
+
+fn contains_hidden_completion_name(line: &str) -> bool {
+    line.contains(HIDDEN_COMPLETION_PREFIX)
+}
+
+fn strip_removed_completion_tokens(line: &str) -> String {
+    let mut cleaned = line.to_string();
+
+    while let Some(start) = cleaned.find(HIDDEN_COMPLETION_PREFIX) {
+        let end = hidden_completion_name_end(&cleaned, start);
+        let (start, end) = expand_hidden_completion_token_range(&cleaned, start, end);
+        cleaned.replace_range(start..end, "");
+    }
+
+    cleaned
+}
+
+fn hidden_completion_name_end(line: &str, start: usize) -> usize {
+    let mut end = start + HIDDEN_COMPLETION_PREFIX.len();
+    for (offset, ch) in line[end..].char_indices() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            end = start + HIDDEN_COMPLETION_PREFIX.len() + offset + ch.len_utf8();
+        } else {
+            return end;
+        }
+    }
+    line.len()
+}
+
+fn expand_hidden_completion_token_range(line: &str, start: usize, end: usize) -> (usize, usize) {
+    if start > 0 {
+        let previous = line[..start].chars().next_back().unwrap();
+        if previous.is_whitespace() {
+            return (start - previous.len_utf8(), end);
+        }
+    }
+
+    if end < line.len() {
+        let next = line[end..].chars().next().unwrap();
+        if next.is_whitespace() {
+            return (start, end + next.len_utf8());
+        }
+    }
+
+    (start, end)
+}
+
 fn effective_color(cli: &Cli) -> ColorMode {
     if cli.no_color {
         ColorMode::Never
@@ -153,25 +302,26 @@ fn use_decorative_output(cli: &Cli) -> bool {
 }
 
 fn supports_json(command: &Commands) -> bool {
-    matches!(
-        command,
-        Commands::Version
-            | Commands::List { .. }
-            | Commands::Workflow {
-                command: WorkflowCommand::List,
-            }
-            | Commands::Task {
-                command: TaskCommand::List,
-            }
-            | Commands::Agent {
-                command: AgentCommand::Status { .. },
-            }
-            | Commands::Agent {
-                command: AgentCommand::Watch { .. },
-            }
-            | Commands::Doctor { .. }
-            | Commands::Profile { .. }
-    )
+    wt::deprecated_start_replacement(command).is_some()
+        || matches!(
+            command,
+            Commands::Version
+                | Commands::List { .. }
+                | Commands::Workflow {
+                    command: WorkflowCommand::List,
+                }
+                | Commands::Task {
+                    command: TaskCommand::List,
+                }
+                | Commands::Agent {
+                    command: AgentCommand::Status { .. },
+                }
+                | Commands::Agent {
+                    command: AgentCommand::Watch { .. },
+                }
+                | Commands::Doctor { .. }
+                | Commands::Profile { .. }
+        )
 }
 
 fn print_version(json: bool) {

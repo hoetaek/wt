@@ -156,7 +156,7 @@ fn collect_github_cli_check(ctx: &Ctx, config: &Config, checks: &mut Vec<DoctorC
         return;
     }
 
-    collect_optional_command(ctx, checks, "gh_cli_for_pr", "gh", "needed for wt pr");
+    collect_optional_command(ctx, checks, "gh_cli_for_pr", "gh", "needed for wt run pr");
 }
 
 fn collect_site_provider_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<DoctorCheck>) {
@@ -626,7 +626,7 @@ fn check_github_cli(ctx: &Ctx, config: &Config) {
         "missing"
     };
     ctx.ui
-        .print_step(&format!("gh CLI: {status} (needed for wt pr)"));
+        .print_step(&format!("gh CLI: {status} (needed for wt run pr)"));
 }
 
 fn check_site_provider(ctx: &Ctx, config: &Config) {

@@ -1,4 +1,4 @@
-use crate::config::{Config, WorkspaceChromeDevtoolsConfig, WorkspaceConfig};
+use crate::config::{WorkspaceBrowserConfig, WorkspaceChromeDevtoolsConfig};
 use crate::context::{CmdOutput, Ctx};
 use crate::template;
 use anyhow::{Context as AnyhowContext, Result, bail};
@@ -16,7 +16,7 @@ const CHROME_DEVTOOLS_COMMANDS: [&str; 4] = [
     "chromium-browser",
 ];
 
-pub(super) struct ChromeDevtoolsSession {
+pub(crate) struct ChromeDevtoolsSession {
     port: u16,
     debug_url: String,
     user_data_dir: PathBuf,
@@ -24,21 +24,12 @@ pub(super) struct ChromeDevtoolsSession {
     port_guard: TcpListener,
 }
 
-pub(super) fn apply_chrome_devtools_template_vars(
-    config: &Config,
+pub(super) fn prepare_chrome_devtools_session(
+    chrome_devtools: &WorkspaceChromeDevtoolsConfig,
+    browser: &WorkspaceBrowserConfig,
     wt_path: &Path,
     vars: &mut HashMap<String, String>,
-) -> Result<Option<ChromeDevtoolsSession>> {
-    let Some(workspace) = config.workspace.as_ref() else {
-        return Ok(None);
-    };
-    let Some(chrome_devtools) = workspace.chrome_devtools.as_ref() else {
-        return Ok(None);
-    };
-    if !chrome_devtools.enabled {
-        return Ok(None);
-    }
-
+) -> Result<ChromeDevtoolsSession> {
     let (port, port_guard) = reserve_debug_port(chrome_devtools.port)?;
     let debug_url = format!("http://{CHROME_DEBUG_ADDRESS}:{port}");
     vars.insert("chrome_debug_port".into(), port.to_string());
@@ -50,15 +41,15 @@ pub(super) fn apply_chrome_devtools_template_vars(
         user_data_dir.to_string_lossy().into_owned(),
     );
 
-    let url = render_url(chrome_devtools, workspace, vars)?;
+    let url = render_url(browser, vars)?;
 
-    Ok(Some(ChromeDevtoolsSession {
+    Ok(ChromeDevtoolsSession {
         port,
         debug_url,
         user_data_dir,
         url,
         port_guard,
-    }))
+    })
 }
 
 pub(super) fn launch_chrome_devtools(ctx: &Ctx, session: ChromeDevtoolsSession) -> Result<()> {
@@ -124,14 +115,16 @@ fn render_user_data_dir(
     })
 }
 
-fn render_url(
-    chrome_devtools: &WorkspaceChromeDevtoolsConfig,
-    workspace: &WorkspaceConfig,
-    vars: &HashMap<String, String>,
-) -> Result<String> {
-    let rendered = template::render(chrome_devtools.effective_url(workspace).as_ref(), vars);
+fn render_url(browser: &WorkspaceBrowserConfig, vars: &HashMap<String, String>) -> Result<String> {
+    let rendered = template::render(
+        browser
+            .effective_url()
+            .expect("chrome_devtools browser mode has a URL")
+            .as_ref(),
+        vars,
+    );
     if rendered.trim().is_empty() {
-        bail!("[workspace.chrome_devtools].url cannot render to an empty URL");
+        bail!("[workspace.browser].url cannot render to an empty URL");
     }
     Ok(rendered)
 }
