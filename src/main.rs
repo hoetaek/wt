@@ -145,6 +145,8 @@ fn rename_hidden_subcommands(command: ClapCommand, hidden_index: &mut usize) -> 
         if is_hidden {
             // AOT completion scripts still walk hidden parser traps; keep them
             // unreachable without teaching removed command names to shells.
+            // Clap stores command names as borrowed values; completion runs once
+            // and exits, so leaking this generated hidden name is intentional.
             let hidden_name: &'static str =
                 Box::leak(format!("{HIDDEN_COMPLETION_PREFIX}{hidden_index}").into_boxed_str());
             *hidden_index += 1;

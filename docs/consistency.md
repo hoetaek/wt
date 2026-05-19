@@ -112,8 +112,9 @@ TaskRun, Workflow 파일을 만들기 전에 실패해야 한다. 수동 Workflo
 
 Direct `wt run task`는 immediate single-worktree path다. `wt run task <task>`와
 `wt run task <task> --profile <name>`만 소유하고, profile fan-out을 소유하지 않는다.
-Direct `wt run issue --matrix`와 `wt run branch --matrix`의 all-named-profiles behavior는
-보존하되 selected profile subset은 Workflow matrix로 표현한다.
+Direct issue/branch 경로의 all-named-profiles legacy behavior는 보존한다. Selected
+profile subset은 direct command가 아니라 Workflow matrix가 소유하며,
+`wt workflow task --mode matrix --profiles ...`로 표현한다.
 
 `wt run` namespace는 workspace execution start만 소유한다. Canonical start source는
 `issue`, `pr`, `branch`, `task`, `workflow` 다섯 가지뿐이다. Cleanup은 `wt done`,
