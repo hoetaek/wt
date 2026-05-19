@@ -3,23 +3,84 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>wt personal state</title>
+    <title>wt ui</title>
     <link rel="stylesheet" href="/assets/app.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
         <div class="identity">
-          <p class="eyebrow">Read-only personal inventory</p>
-          <h1>wt personal state</h1>
+          <h1 id="workspace-label">wt ui</h1>
           <p id="repo-label"></p>
         </div>
-        <div class="state-strip" aria-label="State file locations">
-          <div><span>TaskDocument</span><strong>&lt;git-common-dir&gt;/wt/tasks</strong></div>
-          <div><span>Workflow</span><strong>&lt;git-common-dir&gt;/wt/workflows</strong></div>
-          <div><span>TaskRun</span><strong>&lt;git-common-dir&gt;/wt/task-runs</strong></div>
-          <div><span>Config</span><strong>.wt.toml layers</strong></div>
-        </div>
+        <nav class="tabs" aria-label="Views" role="tablist">
+          <button
+            id="tab-overview"
+            class="active"
+            type="button"
+            role="tab"
+            data-view="overview"
+            aria-selected="true"
+            aria-controls="content"
+          >
+            Overview
+          </button>
+          <button
+            id="tab-config"
+            type="button"
+            role="tab"
+            data-view="config"
+            aria-selected="false"
+            aria-controls="content"
+            tabindex="-1"
+          >
+            Config
+          </button>
+          <button
+            id="tab-workflows"
+            type="button"
+            role="tab"
+            data-view="workflows"
+            aria-selected="false"
+            aria-controls="content"
+            tabindex="-1"
+          >
+            Workflow
+          </button>
+          <button
+            id="tab-task-runs"
+            type="button"
+            role="tab"
+            data-view="task-runs"
+            aria-selected="false"
+            aria-controls="content"
+            tabindex="-1"
+          >
+            TaskRuns
+          </button>
+          <button
+            id="tab-ideas"
+            type="button"
+            role="tab"
+            data-view="ideas"
+            aria-selected="false"
+            aria-controls="content"
+            tabindex="-1"
+          >
+            Ideas
+          </button>
+          <button
+            id="tab-retrospecs"
+            type="button"
+            role="tab"
+            data-view="retrospecs"
+            aria-selected="false"
+            aria-controls="content"
+            tabindex="-1"
+          >
+            Retrospecs
+          </button>
+        </nav>
         <div class="top-actions">
           <button
             id="language-toggle"
@@ -33,75 +94,6 @@
           </button>
         </div>
       </header>
-
-      <nav class="tabs" aria-label="Views" role="tablist">
-        <button
-          id="tab-overview"
-          class="active"
-          type="button"
-          role="tab"
-          data-view="overview"
-          aria-selected="true"
-          aria-controls="content"
-        >
-          Overview
-        </button>
-        <button
-          id="tab-config"
-          type="button"
-          role="tab"
-          data-view="config"
-          aria-selected="false"
-          aria-controls="content"
-          tabindex="-1"
-        >
-          Config
-        </button>
-        <button
-          id="tab-workflows"
-          type="button"
-          role="tab"
-          data-view="workflows"
-          aria-selected="false"
-          aria-controls="content"
-          tabindex="-1"
-        >
-          Workflow
-        </button>
-        <button
-          id="tab-task-runs"
-          type="button"
-          role="tab"
-          data-view="task-runs"
-          aria-selected="false"
-          aria-controls="content"
-          tabindex="-1"
-        >
-          TaskRuns
-        </button>
-        <button
-          id="tab-ideas"
-          type="button"
-          role="tab"
-          data-view="ideas"
-          aria-selected="false"
-          aria-controls="content"
-          tabindex="-1"
-        >
-          Ideas
-        </button>
-        <button
-          id="tab-retrospecs"
-          type="button"
-          role="tab"
-          data-view="retrospecs"
-          aria-selected="false"
-          aria-controls="content"
-          tabindex="-1"
-        >
-          Retrospecs
-        </button>
-      </nav>
 
       <main>
         <section id="metrics" class="metrics" aria-label="Summary"></section>
