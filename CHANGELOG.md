@@ -8,6 +8,11 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added automated cmux-free cross-agent hook roundtrip coverage. The smoke uses
+  linked worktrees, `wt install`, `wt as`, `wt msg send`, and the installed
+  Claude/Codex dispatcher hooks to prove `CLAUDE_SENT` and
+  `CODEX_SENT REALWT_PONG_SEEN` delivery through the file inbox.
+
 - Added `wt install` and `wt uninstall` as the short setup surface for wt-managed
   agent inbox hooks. `wt install` detects supported agent CLIs on PATH and
   installs the matching Claude/Codex `WT_AGENT_ID` dispatcher hooks, while

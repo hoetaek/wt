@@ -113,6 +113,14 @@ fn path_with_fake_bin(fake_bin: &Path) -> std::ffi::OsString {
     std::env::join_paths(paths).unwrap()
 }
 
+fn path_with_bins(bins: &[PathBuf]) -> std::ffi::OsString {
+    let mut paths = bins.to_vec();
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    std::env::join_paths(paths).unwrap()
+}
+
 #[cfg(unix)]
 fn write_fake_gh(path: &Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -2580,6 +2588,161 @@ fn install_uninstall_help_explains_detected_agent_hook_setup() {
         .success()
         .stdout(predicate::str::contains("wt-managed inbox hooks"))
         .stdout(predicate::str::contains("preserving user-managed hooks"));
+}
+
+#[cfg(unix)]
+#[test]
+fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git_init(&repo);
+    git_commit(&repo);
+
+    let claude_wt = temp.path().join("repo-claude-smoke");
+    let codex_wt = temp.path().join("repo-codex-smoke");
+    let status = git_command()
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "claude-smoke",
+            claude_wt.to_str().unwrap(),
+        ])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let status = git_command()
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "codex-smoke",
+            codex_wt.to_str().unwrap(),
+        ])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let codex_home = temp.path().join("codex-home");
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+    write_fake_agent(temp.path(), "codex");
+    let wt_bin = assert_cmd::cargo::cargo_bin("wt");
+    let wt_bin_dir = wt_bin.parent().unwrap().to_path_buf();
+    let path = path_with_bins(&[wt_bin_dir, fake_bin]);
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .env("PATH", &path)
+        .args(["-C", claude_wt.to_str().unwrap(), "install"])
+        .assert()
+        .success();
+
+    let claude_settings = json_file(&claude_wt.join(".claude/settings.local.json"));
+    let claude_hook = claude_user_prompt_commands(&claude_settings)
+        .into_iter()
+        .find(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
+        .unwrap();
+    let codex_hooks = json_file(&codex_home.join("hooks.json"));
+    let codex_hook = codex_user_prompt_commands(&codex_hooks)
+        .into_iter()
+        .find(|command| command == &codex_dispatcher_command())
+        .unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            claude_wt.to_str().unwrap(),
+            "as",
+            "agents/claude-smoke",
+            "--",
+            wt_bin.to_str().unwrap(),
+            "-C",
+            claude_wt.to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex-smoke",
+            "CLAUDE_SENT",
+        ])
+        .assert()
+        .success();
+
+    let codex_delivery = StdCommand::new("sh")
+        .arg("-c")
+        .arg(&codex_hook)
+        .current_dir(&codex_wt)
+        .env("CODEX_HOME", &codex_home)
+        .env("PATH", &path)
+        .env("WT_AGENT_ID", "agents/codex-smoke")
+        .output()
+        .unwrap();
+    assert!(
+        codex_delivery.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&codex_delivery.stdout),
+        String::from_utf8_lossy(&codex_delivery.stderr)
+    );
+    let codex_json: serde_json::Value = serde_json::from_slice(&codex_delivery.stdout).unwrap();
+    let codex_context = codex_json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(codex_context.contains("WT INBOX for agents/codex-smoke"));
+    assert!(codex_context.contains("from: agents/claude-smoke"));
+    assert!(codex_context.contains("CLAUDE_SENT"));
+
+    wt_command()
+        .args([
+            "-C",
+            codex_wt.to_str().unwrap(),
+            "as",
+            "agents/codex-smoke",
+            "--",
+            wt_bin.to_str().unwrap(),
+            "-C",
+            codex_wt.to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/claude-smoke",
+            "CODEX_SENT",
+            "REALWT_PONG_SEEN",
+        ])
+        .assert()
+        .success();
+
+    let claude_delivery = StdCommand::new("sh")
+        .arg("-c")
+        .arg(&claude_hook)
+        .current_dir(&claude_wt)
+        .env("PATH", &path)
+        .env("WT_AGENT_ID", "agents/claude-smoke")
+        .output()
+        .unwrap();
+    assert!(
+        claude_delivery.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&claude_delivery.stdout),
+        String::from_utf8_lossy(&claude_delivery.stderr)
+    );
+    let claude_json: serde_json::Value = serde_json::from_slice(&claude_delivery.stdout).unwrap();
+    let claude_context = claude_json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(claude_context.contains("WT INBOX for agents/claude-smoke"));
+    assert!(claude_context.contains("from: agents/codex-smoke"));
+    assert!(claude_context.contains("CODEX_SENT REALWT_PONG_SEEN"));
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args(["-C", claude_wt.to_str().unwrap(), "uninstall"])
+        .assert()
+        .success();
+    assert!(!claude_wt.join(".claude/settings.local.json").exists());
+    let codex_hooks = json_file(&codex_home.join("hooks.json"));
+    assert!(!codex_user_prompt_commands(&codex_hooks).contains(&codex_dispatcher_command()));
 }
 
 #[test]

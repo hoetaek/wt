@@ -113,9 +113,9 @@ Activity, Inbox, Status는 다른 개념이다.
 | Status | hook 자동 | 누구나 | single TOML snapshot | `worktrees/<id>/status.toml` |
 
 Activity는 communication이 아니다. Hook은 activity와 status를 자동으로 채울 수 있지만,
-Inbox는 의도된 메시지 또는 정의된 lifecycle event만 받는다. Message bus와 hook delivery의
-세부 ack/read/claim semantics는 구현 진행 중인 영역이며, strict CLI contract는 해당 구현
-PR에서 이 문서에 추가한다.
+Inbox는 의도된 메시지 또는 정의된 lifecycle event만 받는다. Message bus MVP의 strict CLI
+contract는 아래 `wt msg` surface와 hook dispatcher delivery다. Ack, claim, `PostToolUse`
+polling, push delivery, and `wt://` artifacts are outside the current MVP.
 
 ### Message Bus MVP
 
@@ -312,6 +312,23 @@ wt as agents/coordinator -- codex
 
 `wt as`는 explicit `WT_AGENT_ID`를 그대로 쓰고, `WT_COORDINATOR_AGENT_ID=agents/coordinator`를
 함께 주입한다. 긴 `wt agent shell --agent <agent> ...` 형태를 최종 UX로 문서화하지 않는다.
+
+### Cross-Agent Hook Smoke
+
+Canonical non-LLM smoke는 실제 Claude/Codex 세션을 CI에서 띄우지 않고, 설치된 hook dispatcher와
+file inbox만 검증한다.
+
+1. 같은 git common dir을 공유하는 linked worktree 두 개를 만든다.
+2. `wt install`로 Claude worktree-local dispatcher와 Codex user-level dispatcher를 설치한다.
+3. `wt as agents/claude-smoke -- wt msg send --to agents/codex-smoke CLAUDE_SENT`로 Claude identity에서 Codex inbox로 보낸다.
+4. 설치된 Codex hook command를 `WT_AGENT_ID=agents/codex-smoke`로 실행해 `CLAUDE_SENT`를 delivery한다.
+5. `wt as agents/codex-smoke -- wt msg send --to agents/claude-smoke CODEX_SENT REALWT_PONG_SEEN`로 답장한다.
+6. 설치된 Claude hook command를 `WT_AGENT_ID=agents/claude-smoke`로 실행해 `CODEX_SENT REALWT_PONG_SEEN`를 delivery한다.
+7. `wt uninstall`로 wt-managed hook state를 정리한다.
+
+이 smoke는 cmux workspace/surface를 만들거나 읽지 않는다. Real Claude/Codex manual smoke는 같은
+message path를 실제 agent lifecycle에서 관찰하는 추가 검증이지, message transport의 canonical
+요구사항은 아니다.
 
 Reinstall은 wt-managed Codex dispatcher hook을 하나만 남기는 idempotent operation이다.
 Uninstall은 wt-managed Codex `UserPromptSubmit` dispatcher entry와 matching trust state만
