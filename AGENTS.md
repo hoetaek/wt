@@ -1,4 +1,20 @@
-# wt — Git worktree workspace manager
+# wt — worktree-based agent orchestration harness
+
+`wt`는 AI 코딩 에이전트와 함께 일하는 소프트웨어 엔지니어가 worktree 기반
+agent orchestration harness를 쉽게 셋업하도록 돕는 개인 도구다. GitHub, Linear
+같은 팀 시스템과 통합되지만, 팀원에게 `wt` 사용을 강요하는 팀 표준 도구는 아니다.
+
+## North Star
+
+전체 근거와 모델 방향은 `docs/north-star.md`를 먼저 확인한다.
+
+- `wt`는 능동 주체가 아니다. Agent가 일하고, `wt`는 worktree, 상태, 메시지, setup을 받친다.
+- `wt`는 외부 도구 의존을 강제하지 않는다. cmux와 특정 agent CLI는 교체 가능한 integration이다.
+- `wt`는 stateless CLI다. Daemon을 기본 모델로 두지 않는다.
+- `wt`는 파일 기반 contract를 선호한다. 상태, 메시지, config는 읽고 검증 가능한 파일이어야 한다.
+- `wt`는 위치를 contract로 다룬다. 어디에 무엇이 있는지가 사용자-facing 모델을 설명해야 한다.
+- `wt`는 Git에 commit되는 source를 자동으로 바꾸지 않는다. Tracked file 수정은 명시적 opt-in이 필요하다.
+- `wt`는 1.0 완성점보다 현재 모델의 선명함을 우선한다. Pre-1.0에서는 호환성보다 일관성을 택한다.
 
 ## 버전 관리 기준 (Pre-1.0 SemVer)
 

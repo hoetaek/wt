@@ -20,7 +20,7 @@ Apply these skills in order:
    completion step, land branches in the right order, prove ancestry, and clean
    up with `wt done`.
 5. `wt-retrospect`: capture keep/problem/try lessons and action candidates as a
-   TOML retrospective under `.local/retrospectives/` so future loops can learn
+   TOML retrospective under `<git-common-dir>/wt/retrospectives/` so future loops can learn
    from this one. Skip only when no useful lesson emerged (a retrospect that
    restates the diff is noise).
 

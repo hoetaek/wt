@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[command(
     name = "wt",
     version,
-    about = "Git worktree workspace manager",
+    about = "Worktree-based agent orchestration harness",
     after_help = "Start workspace execution with: wt run issue, wt run pr, wt run branch, wt run task, wt run workflow.\nUse wt open for existing branches or worktrees; use wt workflow for saved workflow files and lifecycle actions."
 )]
 pub struct Cli {

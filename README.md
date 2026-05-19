@@ -1,11 +1,32 @@
 # wt
 
-`wt` is a Git worktree workspace manager for starting ready-to-code branches
-from issues, pull requests, branch-name text, or local task files.
+`wt` is a worktree-based agent orchestration harness for software engineers
+working with AI coding agents.
 
-It creates the worktree, applies repo setup, opens a cmux workspace when
-configured, registers local development sites, and can hand a prepared prompt to
-an agent such as Codex, Claude, or Gemini.
+It starts ready-to-code worktrees from issues, pull requests, branch-name text,
+or local task files; applies repo setup; opens a cmux workspace when configured;
+registers local development sites; and can hand a prepared prompt to an agent
+such as Codex, Claude, or Gemini.
+
+`wt` is a personal tool. It connects to team systems such as GitHub and Linear,
+but the orchestration stays on your machine and does not require team-wide
+adoption.
+
+## Who This Is For
+
+`wt` is for software engineers who are comfortable with Git worktrees and CLI
+workflows, use AI coding agents as part of daily development, and want to shape
+their own parallel-agent workflow without adopting a hosted service, daemon, or
+team-wide tool.
+
+## What wt Is Not
+
+- `wt` is not a team standard tool.
+- `wt` is not an agent runtime; Codex, Claude, Gemini, and similar tools do the
+  agent work.
+- `wt` is not a chatbot or general AI agent framework.
+- `wt` is not a hosted service.
+- `wt` is not a daemon.
 
 ## Install
 
@@ -105,7 +126,7 @@ npx --yes skills@latest add /path/to/wt \
 
 Installing these skills only installs Agent Skills playbooks. It does not
 install the `wt` binary, run `wt init`, write `.wt.toml`, configure providers,
-or create `.local` task/workflow state.
+or create personal `wt` task/workflow state.
 
 ## Requirements
 
@@ -211,7 +232,7 @@ merge.
   under `wt workflow`.
 - `wt run workflow` starts runnable tasks from saved Workflow files. It does
   not list, edit, repair, or complete Workflow files.
-- `TaskDocument` files in `.local/tasks/<task>.toml` define prepared local work.
+- `TaskDocument` files in `<git-common-dir>/wt/tasks/<task>.toml` define prepared local work.
 - `wt task list` is the canonical TaskDocument inventory. It lists all valid
   local TaskDocument files, reports invalid task TOML files, and does not start
   worktrees, branches, TaskRuns, Workflows, provider issues, or pull requests.
@@ -222,7 +243,7 @@ merge.
 - `wt run task [<task>...]` starts one worktree per selected TaskDocument.
 - `wt task publish [<task>...]` creates provider issues from TaskDocuments and
   records `[origin]`; it does not start worktrees.
-- `Workflow` files in `.local/workflows/<id>.toml` save coordinated execution.
+- `Workflow` files in `<git-common-dir>/wt/workflows/<id>.toml` save coordinated execution.
   Optional top-level `title`, `body`, and `[origin]` record the larger human
   context for the saved plan. Workflow `[origin]` belongs to the large
   issue-like unit represented by the Workflow; TaskDocument `[origin]` belongs
@@ -232,9 +253,9 @@ merge.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid
   Workflow files whether or not they are runnable and reports invalid workflow
   TOML files instead of hiding parse failures.
-- `TaskRun` files in `.local/task-runs/<id>.toml` record execution attempts.
+- `TaskRun` files in `<git-common-dir>/wt/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
-- `wt ui [--port <port>]` starts a read-only loopback web UI for `.local`
+- `wt ui [--port <port>]` starts a read-only loopback web UI for personal `wt`
   ideas, TaskDocuments, Workflows, TaskRuns, profile summaries, and effective
   config source paths. It serves embedded assets, exposes
   `GET /api/snapshot`, reports invalid TOML records, and does not write state
@@ -301,7 +322,7 @@ threads, comments, and checks. Examples:
 
 1. `--config <path>`
 2. `.wt.toml` as shared project config
-3. `.local/.wt.toml` as private checkout config
+3. `<git-common-dir>/wt/config.toml` as personal repo config
 
 Inspect the effective config:
 
@@ -354,7 +375,7 @@ When `[editor]` is configured, `wt config` prints the effective editor
 placement default, `cmux_surface`, unless it is overridden.
 
 `wt workflow task` and `wt workflow issue` snapshot the effective workflow
-policy into `.local/workflows/<id>.toml` for the prepared workflow.
+policy into `<git-common-dir>/wt/workflows/<id>.toml` for the prepared workflow.
 `wt workflow show` reads that prepared policy from the workflow file, not from
 the current `.wt.toml`, so later config edits do not rewrite the meaning of
 existing workflow files. An explicit `--pr none|draft|ready` overrides the
@@ -425,8 +446,8 @@ bundles are needed:
 
 ```bash
 wt profile create codex
-wt config extract .local/.wt.toml
-wt config inline .local/profiles/codex/profile.toml
+wt config extract "$(git rev-parse --git-common-dir)/wt/config.toml"
+wt config inline "$(git rev-parse --git-common-dir)/wt/profiles/codex/profile.toml"
 ```
 
 Named profile `profile.toml` is an override layer: omitted `[agent]` fields

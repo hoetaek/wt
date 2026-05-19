@@ -21,11 +21,12 @@ Inspect local truth before asking questions:
 ```bash
 git status --short --branch
 find . -maxdepth 2 -name AGENTS.md -o -name AGENTS.override.md
-find .local/ideas .local/tasks .local/workflows -maxdepth 1 -type f 2>/dev/null | sort
+common_dir="$(git rev-parse --git-common-dir)"
+find "$common_dir/wt/ideas" "$common_dir/wt/tasks" "$common_dir/wt/workflows" -maxdepth 1 -type f 2>/dev/null | sort
 wt config 2>/dev/null || true
 ```
 
-Never read secret files such as `.env`. If `.local/ideas` does not exist,
+Never read secret files such as `.env`. If `<git-common-dir>/wt/ideas` does not exist,
 create it only when saving a new idea.
 
 ## Capture Standard
@@ -54,7 +55,8 @@ Start from the conversation and repository. Search existing local artifacts
 before creating a new one:
 
 ```bash
-rg -n "<keyword>|<related term>" .local/ideas .local/tasks docs app resources tests 2>/dev/null
+common_dir="$(git rev-parse --git-common-dir)"
+rg -n "<keyword>|<related term>" "$common_dir/wt/ideas" "$common_dir/wt/tasks" docs app resources tests 2>/dev/null
 ```
 
 Use external research when the user asks for best practices, the idea concerns
@@ -92,7 +94,7 @@ clear enough for `wt-ready` to proceed without rediscovering the basics.
 
 ## File Format
 
-Store ideas in `.local/ideas/<date>-<slug>.toml`. Use lowercase ASCII
+Store ideas in `<git-common-dir>/wt/ideas/<date>-<slug>.toml`. Use lowercase ASCII
 kebab-case slugs. If an idea already exists, update the existing file instead
 of creating a duplicate.
 
@@ -160,7 +162,7 @@ End with:
 - exact next skill invocation or target, for example:
 
 ```text
-$wt-ready .local/ideas/YYYY-MM-DD-slug.toml
+$wt-ready <git-common-dir>/wt/ideas/YYYY-MM-DD-slug.toml
 ```
 
 If the user asked only for a list or review of ideas, do not write files unless

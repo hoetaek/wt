@@ -20,7 +20,8 @@ Check the repo and runtime before choosing a command:
 ```bash
 git status --short --branch
 git worktree list
-find .local/tasks .local/task-runs .local/workflows -maxdepth 1 -type f 2>/dev/null | sort
+common_dir="$(git rev-parse --git-common-dir)"
+find "$common_dir/wt/tasks" "$common_dir/wt/task-runs" "$common_dir/wt/workflows" -maxdepth 1 -type f 2>/dev/null | sort
 wt doctor
 ```
 
@@ -33,8 +34,8 @@ Confirm:
 
 ## Task Model
 
-- `TaskDocument`: `.local/tasks/<task>.toml`; defines the work.
-- `TaskRun`: `.local/task-runs/<id>.toml`; records one execution attempt.
+- `TaskDocument`: `<git-common-dir>/wt/tasks/<task>.toml`; defines the work.
+- `TaskRun`: `<git-common-dir>/wt/task-runs/<id>.toml`; records one execution attempt.
 - workflow file: saved orchestration for `single`, `batch`, or `stack` execution.
 
 TaskDocuments store intent, not runtime status. TaskRuns store status, branch,
@@ -97,7 +98,8 @@ Verify the run and capture the inspect target:
 
 ```bash
 git worktree list
-find .local/task-runs -maxdepth 1 -type f 2>/dev/null | sort
+common_dir="$(git rev-parse --git-common-dir)"
+find "$common_dir/wt/task-runs" -maxdepth 1 -type f 2>/dev/null | sort
 wt inspect <branch|worktree|task-run-id>
 wt agent status <branch|worktree|task-run-id>
 ```

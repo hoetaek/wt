@@ -19,7 +19,8 @@ Inspect local truth before asking questions:
 ```bash
 git status --short --branch
 find . -maxdepth 2 -name AGENTS.md -o -name AGENTS.override.md
-find .local/tasks .local/workflows -maxdepth 1 -type f 2>/dev/null | sort
+common_dir="$(git rev-parse --git-common-dir)"
+find "$common_dir/wt/tasks" "$common_dir/wt/workflows" -maxdepth 1 -type f 2>/dev/null | sort
 ```
 
 For `wt` itself, read `docs/consistency.md` before proposing model, CLI,
@@ -39,8 +40,8 @@ against the repo when it is cheap.
 Useful evidence:
 
 - docs and glossary terms that define the domain model
-- current config shape and local overrides such as `.wt.toml` / `.local/.wt.toml`
-- current persisted state such as `.local/tasks` and `.local/workflows`
+- current config shape and local overrides such as `.wt.toml` / `<git-common-dir>/wt/config.toml`
+- current persisted state such as `<git-common-dir>/wt/tasks` and `<git-common-dir>/wt/workflows`
 - command help for user-facing CLI contracts
 - tests or small local experiments for uncertain behavior
 - external references only when the user asks or the decision depends on current
@@ -117,7 +118,7 @@ separate workflows over a false parent chain.
 
 ## Workflow Policy
 
-Treat `.wt.toml` / `.local/.wt.toml` `[workflow]` as workflow preparation
+Treat `.wt.toml` / `<git-common-dir>/wt/config.toml` `[workflow]` as workflow preparation
 policy and workflow TOML as the prepared run's effective policy snapshot.
 
 Read existing workflow policy when present. If policy is missing, stale, or

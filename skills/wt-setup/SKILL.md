@@ -26,7 +26,9 @@ wt doctor --help
 For existing config:
 
 ```bash
-find . .local -maxdepth 2 -name '.wt.toml' -o -name 'profile.toml' 2>/dev/null
+git rev-parse --git-common-dir
+find . "$(git rev-parse --git-common-dir 2>/dev/null)/wt" -maxdepth 3 \
+  -name '.wt.toml' -o -name 'config.toml' -o -name 'profile.toml' 2>/dev/null
 wt config
 wt doctor
 ```
@@ -51,11 +53,11 @@ Classify the request:
 
 Choose ownership:
 
-- `.local/.wt.toml`: private checkout config, local paths, local agent commands,
-  private runtime details, personal defaults.
-- `.wt.toml`: shared project config for contributors.
-- `.local/profiles/<name>/profile.toml`: named runtime profile only when the
-  user wants reusable structured profile config.
+- `<git-common-dir>/wt/config.toml`: personal repo config, local paths, local
+  agent commands, private runtime details, personal defaults.
+- `.wt.toml`: team integration/project config for contributors.
+- `<git-common-dir>/wt/profiles/<name>/profile.toml`: named runtime profile
+  only when the user wants reusable structured profile config.
 
 Do not silently move settings between shared/private ownership or normalize a
 mature config into one "correct" shape.
@@ -67,7 +69,7 @@ mature config into one "correct" shape.
 
 Set only the choices the user has decided:
 
-- target: `.local/.wt.toml` or `.wt.toml`
+- target: `<git-common-dir>/wt/config.toml` or `.wt.toml`
 - preset: `minimal`, `agent`, `issue`, or `app`
 - agent: `codex`, `claude`, `gemini`, or `none`
 - issue provider: `github`, `linear`, or `none`
@@ -78,8 +80,8 @@ Set only the choices the user has decided:
 Preview before writing:
 
 ```bash
-wt init --local --preset agent --agent codex --dry-run --yes
-wt init --local --preset agent --agent codex --yes
+wt init --preset agent --agent codex --dry-run --yes
+wt init --preset agent --agent codex --yes
 wt doctor
 ```
 
@@ -174,7 +176,7 @@ long prompt text last.
 8. `[workspace]`
 9. `[workspace.browser]`
 10. `[workspace.chrome_devtools]`
-11. `[profile]` or `[profile.agent]` in `.wt.toml` / `.local/.wt.toml`
+11. `[profile]` or `[profile.agent]` in `.wt.toml` / `<git-common-dir>/wt/config.toml`
 12. `[agent]`, `[agent.prompt]`, and `[agent.prompt.append]` in profile files
 
 Keep identity/provider fields before optional tuning fields. Preserve arrays
@@ -201,7 +203,7 @@ ancestry, cleanup, or TaskRun status.
 
 - Keep simple defaults inline under `[profile.agent]`.
 - Use `[profile] name = "<name>"` only to select
-  `.local/profiles/<name>/profile.toml`.
+  `<git-common-dir>/wt/profiles/<name>/profile.toml`.
 - Do not combine `[profile] name` with inline `[profile.agent]`,
   `[profile.worktree]`, `[profile.setup]`, `[profile.workspace]`,
   `[profile.site]`, or `[profile.test]`.

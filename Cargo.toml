@@ -4,12 +4,12 @@ version = "0.30.0"
 edition = "2024"
 rust-version = "1.85"
 publish = false
-description = "Git worktree workspace manager"
+description = "Worktree-based agent orchestration harness"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hoetaek/wt"
 homepage = "https://github.com/hoetaek/wt"
 readme = "README.md"
-keywords = ["git", "worktree", "cli", "automation"]
+keywords = ["git", "worktree", "agent", "cli", "orchestration"]
 categories = ["command-line-utilities", "development-tools"]
 include = [
     "Cargo.toml",

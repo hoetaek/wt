@@ -1,6 +1,6 @@
 ---
 name: wt-retrospect
-description: "Use after wt work has landed (or been intentionally discarded) to capture keep/problem/try lessons and action candidates as a TOML retrospective under .local/retrospectives. Triggers: 'retrospect', 'retrospective 작성', or end of a wt-work loop."
+description: "Use after wt work has landed (or been intentionally discarded) to capture keep/problem/try lessons and action candidates as a TOML retrospective under <git-common-dir>/wt/retrospectives. Triggers: 'retrospect', 'retrospective 작성', or end of a wt-work loop."
 ---
 
 # WT Retrospect
@@ -8,7 +8,7 @@ description: "Use after wt work has landed (or been intentionally discarded) to 
 Use this skill to capture a completed work item as a structured retrospective
 that future planning, coordination, review, landing, or skill guidance can
 learn from. Do not use it to track in-flight state — that belongs in
-`.local/tasks`, `.local/task-runs`, and `.local/workflows`.
+`<git-common-dir>/wt/tasks`, `<git-common-dir>/wt/task-runs`, and `<git-common-dir>/wt/workflows`.
 
 ## When to Use
 
@@ -17,7 +17,7 @@ learn from. Do not use it to track in-flight state — that belongs in
 - At the end of a `wt-work` loop, even when a phase blocked progress, if the
   lesson is worth preserving for the next cycle.
 - When the user explicitly says "retrospect", "retrospective 작성", or
-  references `.local/retrospectives/`.
+  references `<git-common-dir>/wt/retrospectives/`.
 
 Skip this skill when no useful keep/problem/try emerged. A retrospect that
 restates the diff is noise.
@@ -26,7 +26,7 @@ restates the diff is noise.
 
 - Retrospectives are learning artifacts, not execution state.
 - Never write TaskDocument/TaskRun/Workflow status into a retrospect file.
-- Keep future product ideas in `.local/ideas/`; promote a retrospect action
+- Keep future product ideas in `<git-common-dir>/wt/ideas/`; promote a retrospect action
   candidate into an idea or task only when the pattern is clear enough to act
   on.
 - Prefer one completed work item per file. If one run produced unrelated
@@ -48,7 +48,7 @@ When you split, set `related_retrospective` on each file to the other path.
 
 ## Place and Name
 
-- Path: `.local/retrospectives/YYYY-MM-DD-<slug>.toml`.
+- Path: `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`.
 - Slug is the work item's canonical short name (branch, PR title topic, or the
   concept the lesson centers on). Avoid generic slugs like
   `2026-05-19-cleanup`.
@@ -57,7 +57,7 @@ When you split, set `related_retrospective` on each file to the other path.
 
 ## Format
 
-Use TOML. Match the conventions in `.local/retrospectives/README.md`. Required
+Use TOML. Match the conventions in `<git-common-dir>/wt/retrospectives/README.md`. Required
 shape:
 
 ```toml
@@ -71,7 +71,7 @@ skills = ["wt-work", "wt-ready", ...]   # skills actually used in this loop
 tags = ["..."]                          # searchable topic tags
 
 # Optional when split into multiple files
-related_retrospective = ".local/retrospectives/<other-file>.toml"
+related_retrospective = "<git-common-dir>/wt/retrospectives/<other-file>.toml"
 
 [context]
 goal = """..."""
@@ -87,7 +87,7 @@ integration_branch = "develop"   # or actual branch
 [evidence]
 key_observations = ["..."]       # concrete facts established during the loop
 commands_that_proved_things = ["..."]
-experiments = [".local/experiments/<name>.md"]
+experiments = ["<git-common-dir>/wt/experiments/<name>.md"]
 prs = ["#<n>", ...]              # optional
 
 [keep]
@@ -109,7 +109,7 @@ items = [
 summary = "<one-line action this retrospective recommends>"
 owner = "<wt | wt-coordinate | wt-land | wt-ready | wt-start | coordinator | <user>>"
 status = "candidate"               # or "addressed" / "promoted"
-promote_to = ".local/ideas/"      # or a specific path when known
+promote_to = "<git-common-dir>/wt/ideas/"      # or a specific path when known
 done_when = "<observable criterion that closes this candidate>"
 ```
 
@@ -134,9 +134,9 @@ done_when = "<observable criterion that closes this candidate>"
 1. Confirm the work item is closed (landed or explicitly discarded). If still
    in flight, stop and let the matching lifecycle skill finish first.
 2. Decide scope: one file or split + cross-link.
-3. Draft the TOML directly under `.local/retrospectives/YYYY-MM-DD-<slug>.toml`
+3. Draft the TOML directly under `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`
    using the shape above. Skip optional sections that have no content.
-4. Cross-check against `.local/retrospectives/README.md` if conventions are
+4. Cross-check against `<git-common-dir>/wt/retrospectives/README.md` if conventions are
    uncertain.
 5. Re-read for adoptability: each `try` item should be something a future
    coordinator can actually do; each `action_candidate` should have a
@@ -151,4 +151,4 @@ After writing, report:
 - The created file path(s).
 - A short list of the most adoptable `try` items.
 - The highest-leverage `action_candidate` if any, and whether it should be
-  promoted to `.local/ideas/` or a TaskDocument next.
+  promoted to `<git-common-dir>/wt/ideas/` or a TaskDocument next.
