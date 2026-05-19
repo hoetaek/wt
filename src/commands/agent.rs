@@ -917,7 +917,7 @@ mod tests {
         add_worktree_list(&mut runner, &fixture);
         add_matching_workspace(&mut runner, &fixture);
         add_selected_surface(&mut runner);
-        runner.add_response("Claude Code\nWorking", true);
+        runner.add_response("⏵⏵ bypass permissions on\nWorking", true);
         runner.add_response("claude_code=Running", true);
         runner.add_response(
             r#"{"seq":12,"name":"agent.hook.PreToolUse","occurred_at":"2026-05-16T00:00:12Z","workspace_id":"uuid-workspace-1","surface_id":"uuid-surface-4","payload":{"tool_name":"Read","session_id":"claude-session"}}"#,
