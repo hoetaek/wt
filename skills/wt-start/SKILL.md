@@ -45,11 +45,11 @@ TaskRun.
 
 ## Command Choice
 
-Use `wt task run` when each selected TaskDocument should get its own worktree now:
+Use `wt run task` when each selected TaskDocument should get its own worktree now:
 
 ```bash
-wt task run <task-key> --base .
-wt task run
+wt run task <task-key> --base .
+wt run task
 ```
 
 Use `wt workflow task --mode single` when multiple TaskDocuments should share
@@ -57,7 +57,7 @@ one saved workspace run:
 
 ```bash
 wt workflow task --mode single <task-a> <task-b> --base .
-wt workflow run
+wt run workflow
 ```
 
 Use `wt workflow task --mode batch` when tasks are independent and may run from
@@ -65,7 +65,7 @@ the same base:
 
 ```bash
 wt workflow task --mode batch <task-a> <task-b> --base <base-branch>
-wt workflow run
+wt run workflow
 ```
 
 Use `wt workflow task --mode stack` when task order matters and each branch
@@ -73,7 +73,7 @@ should build on the previous task branch:
 
 ```bash
 wt workflow task --mode stack <task-a> <task-b> <task-c> --base <base-branch>
-wt workflow run
+wt run workflow
 ```
 
 For provider issues, use `wt workflow issue --mode <single|batch|stack> ...`
@@ -84,7 +84,7 @@ when a saved workflow is useful.
 - Prefer explicit task keys in scripts; omit keys only for interactive selection.
 - Use `--base .` for current branch, `--base <branch>` for an explicit base,
   or bare `--base` for interactive base selection.
-- Direct TaskDocument execution is `wt task run`; use workflow commands only for saved workflow execution.
+- Direct TaskDocument execution is `wt run task`; use workflow commands only for saved workflow execution.
 - Do not prepare a workflow when one direct worktree run is enough.
 - Do not use batch for parent-dependent tasks; use stack mode.
 - Do not decide PR or landing preferences here; use the prepared workflow policy

@@ -245,53 +245,147 @@ fn no_args_prints_help_successfully() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Usage: wt [OPTIONS] [COMMAND]"))
-        .stdout(predicate::str::contains("issue"))
-        .stdout(predicate::str::contains("pr"))
-        .stdout(predicate::str::contains("new"))
+        .stdout(predicate::str::contains("run"))
+        .stdout(predicate::str::contains("wt run issue"))
+        .stdout(predicate::str::contains("wt run pr"))
+        .stdout(predicate::str::contains("wt run branch"))
+        .stdout(predicate::str::contains("wt run task"))
+        .stdout(predicate::str::contains("wt run workflow"))
+        .stdout(predicate::str::contains("new").not())
         .stdout(predicate::str::contains("agent"))
         .stdout(predicate::str::contains("ui"));
 }
 
 #[test]
-fn new_without_args_requires_branch_text() {
+fn run_branch_without_args_requires_branch_text() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "new"])
+        .args(["-C", temp.path().to_str().unwrap(), "run", "branch"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "wt new starts one ad hoc worktree from branch-name text",
+            "wt run branch starts one ad hoc worktree from branch-name text",
         ));
 }
 
 #[test]
-fn new_task_option_is_unknown() {
+fn run_branch_task_option_is_unknown() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "new", "--task"])
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "branch",
+            "--task",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("unexpected argument '--task'"));
 }
 
 #[test]
-fn new_help_explains_branch_text_only() {
+fn run_branch_help_explains_branch_text_only() {
     wt_command()
-        .args(["new", "--help"])
+        .args(["run", "branch", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("branch-name text"))
+        .stdout(predicate::str::contains("wt open"))
         .stdout(predicate::str::contains("--task").not());
 }
 
 #[test]
-fn task_run_help_explains_task_execution() {
+fn run_help_lists_execution_start_surfaces() {
     wt_command()
-        .args(["task", "run", "--help"])
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wt run issue"))
+        .stdout(predicate::str::contains("wt run pr"))
+        .stdout(predicate::str::contains("wt run branch"))
+        .stdout(predicate::str::contains("wt run task"))
+        .stdout(predicate::str::contains("wt run workflow"));
+}
+
+#[test]
+fn run_issue_help_explains_issue_target() {
+    wt_command()
+        .args(["run", "issue", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Issue number or provider-specific key",
+        ))
+        .stdout(predicate::str::contains("--matrix"))
+        .stdout(predicate::str::contains("--profile"));
+}
+
+#[test]
+fn run_pr_help_explains_multiple_targets() {
+    wt_command()
+        .args(["run", "pr", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Pull request numbers"))
+        .stdout(predicate::str::contains("[PR]..."))
+        .stdout(predicate::str::contains("select multiple open PRs"));
+}
+
+#[test]
+fn old_execution_start_commands_are_removed() {
+    for (args, old, new) in [
+        (&["issue"][..], "wt issue", "wt run issue"),
+        (&["pr"][..], "wt pr", "wt run pr"),
+        (&["new"][..], "wt new", "wt run branch"),
+        (&["task", "run"][..], "wt task run", "wt run task"),
+        (
+            &["workflow", "run"][..],
+            "wt workflow run",
+            "wt run workflow",
+        ),
+    ] {
+        wt_command()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!("`{old}` has moved")))
+            .stderr(predicate::str::contains(format!("Use `{new}`")))
+            .stderr(predicate::str::contains("not an alias"));
+    }
+}
+
+#[test]
+fn old_execution_start_help_surfaces_are_removed() {
+    for (args, old, new) in [
+        (&["issue", "--help"][..], "wt issue", "wt run issue"),
+        (&["pr", "--help"][..], "wt pr", "wt run pr"),
+        (&["new", "--help"][..], "wt new", "wt run branch"),
+        (&["task", "run", "--help"][..], "wt task run", "wt run task"),
+        (
+            &["workflow", "run", "--help"][..],
+            "wt workflow run",
+            "wt run workflow",
+        ),
+    ] {
+        wt_command()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!("`{old}` has moved")))
+            .stderr(predicate::str::contains(format!("Use `{new}`")))
+            .stderr(predicate::str::contains("not an alias"));
+    }
+}
+
+#[test]
+fn run_task_help_explains_task_execution() {
+    wt_command()
+        .args(["run", "task", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("one worktree per selected"))
@@ -303,14 +397,14 @@ fn task_run_help_explains_task_execution() {
 }
 
 #[test]
-fn task_help_lists_list_import_run_and_publish() {
+fn task_help_lists_list_import_and_publish() {
     wt_command()
         .args(["task", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("list"))
         .stdout(predicate::str::contains("import"))
-        .stdout(predicate::str::contains("run"))
+        .stdout(predicate::str::contains("run").not())
         .stdout(predicate::str::contains("publish"));
 }
 
@@ -322,7 +416,7 @@ fn task_list_help_explains_canonical_inventory() {
         .success()
         .stdout(predicate::str::contains("canonical read-only inventory"))
         .stdout(predicate::str::contains(
-            "whether or not they are selectable by wt task run",
+            "whether or not they are selectable by wt run task",
         ))
         .stdout(predicate::str::contains(
             "reports invalid TaskDocument TOML files",
@@ -490,7 +584,7 @@ fn task_publish_help_explains_behavior() {
         .stdout(predicate::str::contains("provider issue"))
         .stdout(predicate::str::contains("write [origin]"))
         .stdout(predicate::str::contains("does not start workspaces"))
-        .stdout(predicate::str::contains("wt task run and wt workflow run"))
+        .stdout(predicate::str::contains("wt run task and wt run workflow"))
         .stdout(predicate::str::contains("Omit task keys"))
         .stdout(predicate::str::contains(
             "already have [origin] are excluded",
@@ -499,13 +593,16 @@ fn task_publish_help_explains_behavior() {
 }
 
 #[test]
-fn workflow_run_help_explains_omitted_target_selection() {
+fn run_workflow_help_explains_omitted_target_selection() {
     wt_command()
-        .args(["workflow", "run", "--help"])
+        .args(["run", "workflow", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Omit WORKFLOW"))
         .stdout(predicate::str::contains("choose from runnable workflows"))
+        .stdout(predicate::str::contains(
+            "does not list, edit, repair, or complete",
+        ))
         .stdout(predicate::str::contains(
             "omit to select a runnable workflow",
         ));
@@ -1145,11 +1242,98 @@ fn init_rejects_conflicting_preset_and_minimal() {
 
 #[test]
 fn completion_generates_script() {
-    wt_command()
+    let output = wt_command()
         .args(["completion", "bash"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("_wt"));
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("_wt"));
+    assert_canonical_completion_surface("bash", &output);
+    assert_bash_completion_syntax(&output);
+}
+
+#[test]
+fn all_completion_shells_hide_removed_start_commands() {
+    for shell in ["bash", "zsh", "fish", "elvish", "powershell"] {
+        let output = wt_command()
+            .args(["completion", shell])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let output = String::from_utf8(output).unwrap();
+        assert_canonical_completion_surface(shell, &output);
+    }
+}
+
+fn assert_canonical_completion_surface(shell: &str, output: &str) {
+    for required in ["run", "issue", "pr", "branch", "task", "workflow"] {
+        assert!(
+            output.contains(required),
+            "{shell} completion should contain {required}"
+        );
+    }
+
+    for stale in [
+        "__wt_removed_",
+        "wt issue",
+        "wt pr ",
+        "wt new",
+        "wt task run",
+        "wt workflow run",
+        "wt,issue)",
+        "wt,pr)",
+        "wt,new)",
+        "wt__subcmd__issue",
+        "wt__subcmd__pr)",
+        "wt__subcmd__pr,",
+        "wt__subcmd__new",
+        "wt__subcmd__task,run",
+        "wt__subcmd__workflow,run",
+        "_wt__subcmd__issue",
+        "_wt__subcmd__pr_commands",
+        "_wt__subcmd__new",
+        "_wt__subcmd__task__subcmd__run",
+        "_wt__subcmd__workflow__subcmd__run",
+        "__fish_wt_using_subcommand issue\"",
+        "__fish_wt_using_subcommand pr\"",
+        "__fish_wt_using_subcommand new\"",
+        "__fish_seen_subcommand_from new",
+        "__fish_seen_subcommand_from task run",
+        "__fish_seen_subcommand_from workflow run",
+        "cand ''",
+        "[CompletionResult]::new('',",
+        "'wt;issue'",
+        "'wt;pr'",
+        "'wt;new'",
+        "'wt;task;run'",
+        "'wt;workflow;run'",
+        "&'wt;issue'",
+        "&'wt;pr'",
+        "&'wt;new'",
+        "&'wt;task;run'",
+        "&'wt;workflow;run'",
+    ] {
+        assert!(
+            !output.contains(stale),
+            "{shell} completion should not contain stale surface {stale:?}"
+        );
+    }
+}
+
+fn assert_bash_completion_syntax(output: &str) {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("wt-completion.bash");
+    std::fs::write(&path, output).unwrap();
+    let Ok(status) = StdCommand::new("bash").arg("-n").arg(&path).status() else {
+        return;
+    };
+    assert!(status.success());
 }
 
 #[test]
@@ -1285,11 +1469,11 @@ args = ["--yolo"]
 [agent.prompt]
 common = ["profile common\n"]
 issue = ["from profile.toml\n"]
-new = ["new branch prompt\n"]
+branch = ["branch prompt\n"]
 
 [agent.prompt.append]
 common = ["profile common append\n"]
-new = ["new branch append\n"]
+branch = ["branch append\n"]
 
 [workspace]
 tabs = ["pnpm dev"]
@@ -1384,10 +1568,10 @@ CODEX_MODE = "1"
         ]
     );
     assert_eq!(
-        agent.prompt.get("new").unwrap(),
+        agent.prompt.get("branch").unwrap(),
         &vec![
             "from common prompt file\n\nfrom common append file\n".to_string(),
-            "new branch prompt\n\nnew branch append\n".to_string(),
+            "branch prompt\n\nbranch append\n".to_string(),
         ]
     );
     assert_eq!(
@@ -1399,7 +1583,7 @@ CODEX_MODE = "1"
     assert_eq!(workspace.tabs, vec!["pnpm dev"]);
     assert_eq!(workspace.colors.get("task").unwrap(), "blue");
     assert_eq!(workspace.colors.get("issue").unwrap(), "blue");
-    assert_eq!(workspace.colors.get("new").unwrap(), "green");
+    assert_eq!(workspace.colors.get("branch").unwrap(), "green");
     assert_eq!(workspace.colors.get("pr").unwrap(), "magenta");
 
     let copy_as = config.worktree.copy_as;
@@ -1441,8 +1625,27 @@ fn config_renders_builtin_workspace_color_defaults() {
         .success()
         .stdout(predicate::str::contains("[workspace]"))
         .stdout(predicate::str::contains(
-            "colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }",
+            "colors = { task = \"blue\", issue = \"blue\", branch = \"green\", pr = \"magenta\" }",
         ));
+}
+
+#[test]
+fn config_rejects_legacy_new_workspace_color_key() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[workspace]\ncolors = { new = \"green\" }\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("[workspace].colors.new"))
+        .stderr(predicate::str::contains("[workspace].colors.branch"));
 }
 
 #[test]
@@ -1478,7 +1681,7 @@ fn config_preserves_empty_workspace_color_overrides() {
     std::fs::create_dir_all(temp.path().join(".local")).unwrap();
     std::fs::write(
         temp.path().join(".local/.wt.toml"),
-        "[workspace]\ncolors = { task = \"\", issue = \"\", new = \"\", pr = \"\" }\n",
+        "[workspace]\ncolors = { task = \"\", issue = \"\", branch = \"\", pr = \"\" }\n",
     )
     .unwrap();
 
@@ -1487,7 +1690,7 @@ fn config_preserves_empty_workspace_color_overrides() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "colors = { task = \"\", issue = \"\", new = \"\", pr = \"\" }",
+            "colors = { task = \"\", issue = \"\", branch = \"\", pr = \"\" }",
         ));
 }
 

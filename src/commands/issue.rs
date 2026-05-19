@@ -1144,7 +1144,7 @@ mod tests {
         let config = profile_config_with_issue_snapshot(
             &config,
             &snapshot,
-            "new",
+            "branch",
             None,
             "Use this task before changing code.",
             Some("## Workflow Coordinator Handoff\n\nSend the report."),
@@ -1154,7 +1154,7 @@ mod tests {
         );
 
         let mut agent = config.agent.unwrap();
-        let prompts = agent.prompt.remove("new").unwrap();
+        let prompts = agent.prompt.remove("branch").unwrap();
         assert_eq!(prompts.len(), 2);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
         assert!(prompts[0].contains("TaskDocument prompt follows next"));
@@ -1193,7 +1193,7 @@ mod tests {
                         AGENT_PROMPT_WORKFLOW_SCOPE.into(),
                         vec!["Workflow prompt".into(), "Workflow follow-up".into()],
                     ),
-                    ("new".into(), vec!["New branch prompt".into()]),
+                    ("branch".into(), vec!["Branch prompt".into()]),
                 ]),
             }),
             ..Config::default()
@@ -1207,7 +1207,7 @@ mod tests {
         let config = profile_config_with_issue_snapshot(
             &config,
             &snapshot,
-            "new",
+            "branch",
             Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             "Use this task before changing code.",
             Some("## Workflow Coordinator Handoff\n\nSend the report."),
@@ -1215,14 +1215,14 @@ mod tests {
         );
 
         let mut agent = config.agent.unwrap();
-        let prompts = agent.prompt.remove("new").unwrap();
+        let prompts = agent.prompt.remove("branch").unwrap();
         assert_eq!(prompts.len(), 5);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
         assert!(prompts[1].contains("Workflow body"));
         assert!(prompts[1].contains("Task path: `.local/tasks/add-schema.toml`"));
         assert_eq!(prompts[2], "Workflow prompt");
         assert_eq!(prompts[3], "Workflow follow-up");
-        assert_eq!(prompts[4], "New branch prompt");
+        assert_eq!(prompts[4], "Branch prompt");
         assert!(!agent.prompt.contains_key(AGENT_PROMPT_WORKFLOW_SCOPE));
     }
 
@@ -1242,7 +1242,7 @@ mod tests {
                         AGENT_PROMPT_WORKFLOW_SCOPE.into(),
                         vec!["Workflow prompt".into()],
                     ),
-                    ("new".into(), vec!["New branch prompt".into()]),
+                    ("branch".into(), vec!["Branch prompt".into()]),
                 ]),
             }),
             ..Config::default()
@@ -1256,7 +1256,7 @@ mod tests {
         let config = profile_config_with_issue_snapshot(
             &config,
             &snapshot,
-            "new",
+            "branch",
             None,
             "Use this task before changing code.",
             Some("## Workflow Coordinator Handoff\n\nSend the report."),
@@ -1264,9 +1264,9 @@ mod tests {
         );
 
         let mut agent = config.agent.unwrap();
-        let prompts = agent.prompt.remove("new").unwrap();
+        let prompts = agent.prompt.remove("branch").unwrap();
         assert_eq!(prompts.len(), 2);
-        assert!(prompts[1].contains("New branch prompt"));
+        assert!(prompts[1].contains("Branch prompt"));
         assert!(
             !prompts
                 .iter()
@@ -1291,7 +1291,7 @@ mod tests {
                 send_after: 3,
                 prompt: std::collections::HashMap::from([
                     ("issue".into(), vec!["Issue prompt".into()]),
-                    ("new".into(), vec!["New branch prompt".into()]),
+                    ("branch".into(), vec!["Branch prompt".into()]),
                 ]),
             }),
             ..Config::default()
@@ -1305,7 +1305,7 @@ mod tests {
         let config = profile_config_with_issue_snapshot(
             &config,
             &snapshot,
-            "new",
+            "branch",
             None,
             "Use this task before changing code.",
             None,
@@ -1313,13 +1313,13 @@ mod tests {
         );
 
         let mut agent = config.agent.unwrap();
-        let new_prompts = agent.prompt.remove("new").unwrap();
-        assert_eq!(new_prompts.len(), 1);
-        assert!(new_prompts[0].contains("Use this task before changing code."));
-        assert!(new_prompts[0].contains("Task path: `.local/tasks/add-schema.toml`"));
-        assert!(new_prompts[0].contains("# Add schema"));
-        assert!(new_prompts[0].contains("Changed files"));
-        assert!(new_prompts[0].contains("New branch prompt"));
+        let branch_prompts = agent.prompt.remove("branch").unwrap();
+        assert_eq!(branch_prompts.len(), 1);
+        assert!(branch_prompts[0].contains("Use this task before changing code."));
+        assert!(branch_prompts[0].contains("Task path: `.local/tasks/add-schema.toml`"));
+        assert!(branch_prompts[0].contains("# Add schema"));
+        assert!(branch_prompts[0].contains("Changed files"));
+        assert!(branch_prompts[0].contains("Branch prompt"));
         assert_eq!(agent.prompt.remove("issue").unwrap(), vec!["Issue prompt"]);
     }
 

@@ -28,7 +28,7 @@ pub(crate) use site::apply_site_template_vars;
 
 use crate::config::{Config, SiteProvider};
 pub(crate) use crate::config::{
-    WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_NEW, WORKSPACE_COLOR_KIND_PR,
+    WORKSPACE_COLOR_KIND_BRANCH, WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_PR,
     WORKSPACE_COLOR_KIND_TASK,
 };
 use crate::context::Ctx;
@@ -990,7 +990,16 @@ mod tests {
             .join(wt.file_name().unwrap());
         let expected_user_data_dir_text = expected_user_data_dir.to_string_lossy().into_owned();
 
-        run_setup(&ctx, &wt, &names, Some("GitHub Issue"), "new", None, None).unwrap();
+        run_setup(
+            &ctx,
+            &wt,
+            &names,
+            Some("GitHub Issue"),
+            "branch",
+            None,
+            None,
+        )
+        .unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let send_call = calls
@@ -1070,7 +1079,7 @@ mod tests {
             site: None,
         };
 
-        run_setup(&ctx, &wt, &names, None, "new", None, None).unwrap();
+        run_setup(&ctx, &wt, &names, None, "branch", None, None).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let expected_site = format!("{}-my-feature", repo.file_name().unwrap().to_string_lossy());
@@ -1594,7 +1603,7 @@ mod tests {
             site: None,
         };
 
-        run_setup(&ctx, &wt, &names, None, "new", None, None).unwrap();
+        run_setup(&ctx, &wt, &names, None, "branch", None, None).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let workspace_call = calls

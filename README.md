@@ -137,13 +137,13 @@ wt doctor --profile codex
 Start work:
 
 ```bash
-wt issue
-wt issue PROJ-123 --base .
-wt pr
-wt pr 42 43
-wt new add profile docs
-wt task run
-wt task run add-profile-docs
+wt run issue
+wt run issue PROJ-123 --base .
+wt run pr
+wt run pr 42 43
+wt run branch add profile docs
+wt run task
+wt run task add-profile-docs
 ```
 
 Prepare local TaskDocuments without starting work:
@@ -163,7 +163,7 @@ wt workflow task --mode batch add-schema wire-api --base main --title "Ship sear
 wt workflow task --mode matrix --profiles devtools-port,mcp-owned add-profile-docs --base main
 wt workflow issue --mode stack 123 456 789 --base main --pr draft
 wt workflow list
-wt workflow run
+wt run workflow
 wt workflow repair 2026-05-16-001
 wt workflow complete 2026-05-16-001 add-schema --run-next
 ```
@@ -202,9 +202,15 @@ merge.
 
 ## Core Model
 
-- `wt new <words...>` starts an ad hoc branch worktree from branch-name text.
-- `wt issue` starts a worktree from an existing provider issue.
-- `wt pr` opens existing pull request branches as worktrees.
+- `wt run branch <words...>` starts an ad hoc branch worktree from branch-name text.
+- `wt run issue` starts a worktree from an existing provider issue.
+- `wt run pr` opens existing pull request branches as worktrees.
+- `wt run` only starts workspace execution. Cleanup stays under `wt done`,
+  inspection under `wt inspect`, agent observation under `wt agent`, existing
+  branch/worktree opening under `wt open`, and saved workflow lifecycle actions
+  under `wt workflow`.
+- `wt run workflow` starts runnable tasks from saved Workflow files. It does
+  not list, edit, repair, or complete Workflow files.
 - `TaskDocument` files in `.local/tasks/<task>.toml` define prepared local work.
 - `wt task list` is the canonical TaskDocument inventory. It lists all valid
   local TaskDocument files, reports invalid task TOML files, and does not start
@@ -213,7 +219,7 @@ merge.
   records title, branch, body, and `[origin]`, and may materialize the provider
   issue branch first; it does not start worktrees, local branches, TaskRuns,
   Workflows, or pull requests.
-- `wt task run [<task>...]` starts one worktree per selected TaskDocument.
+- `wt run task [<task>...]` starts one worktree per selected TaskDocument.
 - `wt task publish [<task>...]` creates provider issues from TaskDocuments and
   records `[origin]`; it does not start worktrees.
 - `Workflow` files in `.local/workflows/<id>.toml` save coordinated execution.
@@ -242,14 +248,14 @@ merge.
   `--heartbeat <seconds>` opts into unchanged running reports. Agent state is
   separate from `TaskRun.status`.
 
-`wt workflow` is the canonical prepared-work surface. `single`, `batch`, and
-`stack` are workflow mode values, not separate command surfaces. Use
+`wt workflow` is the canonical prepared-work surface. `single`, `batch`,
+`stack`, and `matrix` are workflow mode values, not separate command surfaces. Use
 `wt inspect` for read-only dossiers and `wt agent status` / `wt agent watch`
 for runtime observation.
 
 ## Coordinator Handoff
 
-Task prompts started by `wt task run` and `wt workflow run` include coordinator
+Task prompts started by `wt run task` and `wt run workflow` include coordinator
 handoff instructions when cmux coordinates are available. The prompt gives the
 agent a `cmux send --workspace ... --surface ...` report command and a matching
 `cmux send-key ... enter` command.
@@ -261,7 +267,7 @@ for their task:
 Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>
 ```
 
-Immediate `wt task run` work reports `PR=none`. Workflow tasks follow the
+Immediate `wt run task` work reports `PR=none`. Workflow tasks follow the
 prepared workflow policy. Omit `--pr` to use the effective `[workflow]`
 configuration, pass `--pr none` to report `PR=none`, pass `--pr draft` to create
 a draft PR and leave it draft, or pass `--pr ready` to create a review-ready PR
@@ -376,14 +382,14 @@ args = ["--model", "gpt-5.5"]
 tabs = ["lazygit", "nvim"]
 # Workspace colors have built-in defaults; set this only to override.
 # Use "" to disable a color kind.
-# colors = { task = "blue", issue = "blue", new = "green", pr = "magenta" }
+# colors = { task = "blue", issue = "blue", branch = "green", pr = "magenta" }
 ```
 
 Agent prompt scopes stay under `[agent.prompt]`. `common` is prepended to
-`issue`, `new`, and `pr` prompts. `workflow` is a separate workflow-started
-task scope: `wt workflow run` sends it after the built-in workflow handoff and
-TaskDocument snapshot, before the existing `issue` or `new` setup-mode prompts.
-It does not apply to direct `wt task run`, `wt issue`, `wt new`, or `wt pr`.
+`issue`, `branch`, and `pr` prompts. `workflow` is a separate workflow-started
+task scope: `wt run workflow` sends it after the built-in workflow handoff and
+TaskDocument snapshot, before the existing `issue` or `branch` setup-mode prompts.
+It does not apply to direct `wt run task`, `wt run issue`, `wt run branch`, or `wt run pr`.
 
 ```toml
 [agent.prompt]
@@ -431,14 +437,14 @@ mode:
 
 ```bash
 wt workflow task --mode matrix --profiles devtools-port,mcp-owned chrome-devtools-isolation
-wt workflow run
+wt run workflow
 ```
 
 Workflow matrix mode stores `profiles = [...]` in the Workflow TOML and supports
 exactly one local TaskDocument across the named profiles. Profile order is the
 user-provided order. Duplicate names, missing profiles, and reserved `default`
 fail before Workflow files, TaskRuns, or worktrees are created. Direct
-`wt task run` remains the immediate single-worktree path; use `--profile <name>`
+`wt run task` remains the immediate single-worktree path; use `--profile <name>`
 there for one named profile.
 
 ## Command Map
@@ -447,14 +453,15 @@ there for one named profile.
 | --- | --- |
 | `wt init` | Create or preview repository config |
 | `wt doctor` | Check configured providers and local tools |
-| `wt issue` | Start work from a provider issue |
-| `wt pr` | Start worktrees from pull requests |
-| `wt new` | Start work from branch-name text |
+| `wt run issue` | Start work from a provider issue |
+| `wt run pr` | Start worktrees from pull requests |
+| `wt run branch` | Start work from branch-name text |
 | `wt task list` | List saved local TaskDocuments |
 | `wt task import` | Import provider issues as local TaskDocuments |
-| `wt task run` | Start work from local TaskDocuments |
+| `wt run task` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
-| `wt workflow` | Prepare, inspect, run, and repair saved workflows; complete stack tasks |
+| `wt workflow` | Prepare, inspect, repair, and complete saved workflows |
+| `wt run workflow` | Start runnable tasks from saved workflows |
 | `wt ui` | Start the read-only local state web UI |
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
 | `wt agent status` | Observe the matching task agent surface once |

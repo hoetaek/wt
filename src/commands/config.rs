@@ -743,7 +743,7 @@ fn analyze_profile_config(
         let profile_dir = path
             .parent()
             .ok_or_else(|| anyhow!("Profile source has no parent directory: {display}"))?;
-        for mode in ["issue", "new", "pr", AGENT_PROMPT_WORKFLOW_SCOPE] {
+        for mode in ["issue", "branch", "pr", AGENT_PROMPT_WORKFLOW_SCOPE] {
             let Some(value) = prompt.get(mode) else {
                 continue;
             };
@@ -798,6 +798,14 @@ fn analyze_inline_source(ctx: &Ctx, path: &Path) -> Result<InlineSummary> {
 
     if same_existing_path(&path, &ctx.repo_root.join(".local/.wt.toml")) {
         return analyze_inline_local_config(ctx, path, display);
+    }
+
+    if let Some(file_name) = path.file_name().and_then(|name| name.to_str())
+        && matches!(file_name, "new.md" | "new.append.md")
+    {
+        bail!(
+            "{display} is no longer supported; use prompts/branch.md or prompts/branch.append.md"
+        );
     }
 
     if let Some(profile_name) = profile_name_for_source(ctx, &path) {
@@ -1304,21 +1312,27 @@ fn prompt_source_for_path(ctx: &Ctx, path: &Path) -> Option<PromptSource> {
 }
 
 fn prompt_file_specs() -> Vec<PromptFileSpec> {
-    ["common", "issue", "new", "pr", AGENT_PROMPT_WORKFLOW_SCOPE]
-        .into_iter()
-        .flat_map(|mode| {
-            [
-                PromptFileSpec {
-                    mode: mode.to_string(),
-                    append: false,
-                },
-                PromptFileSpec {
-                    mode: mode.to_string(),
-                    append: true,
-                },
-            ]
-        })
-        .collect()
+    [
+        "common",
+        "issue",
+        "branch",
+        "pr",
+        AGENT_PROMPT_WORKFLOW_SCOPE,
+    ]
+    .into_iter()
+    .flat_map(|mode| {
+        [
+            PromptFileSpec {
+                mode: mode.to_string(),
+                append: false,
+            },
+            PromptFileSpec {
+                mode: mode.to_string(),
+                append: true,
+            },
+        ]
+    })
+    .collect()
 }
 
 fn prompt_file_spec(file_name: &str) -> Option<PromptFileSpec> {
@@ -1863,14 +1877,14 @@ issue = ["Handle issue\n"]
 cli = "codex"
 
 [agent.prompt]
-issue = ["Handle issue\n"]
-new = ["First\n", "Second\n"]
+issue = ["First\n", "Second\n"]
+branch = ["Handle branch\n"]
 "#,
         )
         .unwrap();
 
         let mut ui = MockUi::new();
-        ui.add_multi_select(vec![0]);
+        ui.add_multi_select(vec![1]);
         ui.add_confirm(true);
         let ctx = ctx_with_ui(dir.path(), ui);
 
@@ -1882,12 +1896,12 @@ new = ["First\n", "Second\n"]
         .unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(profile_dir.join("prompts/issue.md")).unwrap(),
-            "Handle issue\n"
+            std::fs::read_to_string(profile_dir.join("prompts/branch.md")).unwrap(),
+            "Handle branch\n"
         );
         let updated = std::fs::read_to_string(profile_dir.join("profile.toml")).unwrap();
-        assert!(!updated.contains("issue ="));
-        assert!(updated.contains("new = ["));
+        assert!(!updated.contains("branch ="));
+        assert!(updated.contains("issue = ["));
         assert!(updated.contains("First"));
         assert!(updated.contains("Second"));
 
@@ -1897,11 +1911,11 @@ new = ["First\n", "Second\n"]
         let agent = profile.agent.unwrap();
         assert_eq!(
             agent.prompt.get("issue").unwrap(),
-            &vec!["Handle issue\n".to_string()]
+            &vec!["First\n".to_string(), "Second\n".to_string()]
         );
         assert_eq!(
-            agent.prompt.get("new").unwrap(),
-            &vec!["First\n".to_string(), "Second\n".to_string()]
+            agent.prompt.get("branch").unwrap(),
+            &vec!["Handle branch\n".to_string()]
         );
     }
 
@@ -1927,6 +1941,8 @@ tabs = ["pnpm dev"]
         std::fs::write(prompts_dir.join("common.append.md"), "Common append\n").unwrap();
         std::fs::write(prompts_dir.join("issue.md"), "Issue\n").unwrap();
         std::fs::write(prompts_dir.join("issue.append.md"), "Issue append\n").unwrap();
+        std::fs::write(prompts_dir.join("branch.md"), "Branch\n").unwrap();
+        std::fs::write(prompts_dir.join("branch.append.md"), "Branch append\n").unwrap();
         std::fs::write(prompts_dir.join("pr.append.md"), "PR append\n").unwrap();
 
         let before = Config::load_profile(dir.path(), "codex", &Config::default())
@@ -1934,7 +1950,7 @@ tabs = ["pnpm dev"]
             .unwrap();
 
         let mut ui = MockUi::new();
-        ui.add_multi_select(vec![0, 1, 2, 3, 4]);
+        ui.add_multi_select(vec![0, 1, 2, 3, 4, 5, 6]);
         ui.add_confirm(true);
         let ctx = ctx_with_ui(dir.path(), ui);
 
@@ -1952,6 +1968,8 @@ tabs = ["pnpm dev"]
         assert!(updated.contains("Common"));
         assert!(updated.contains("issue"));
         assert!(updated.contains("Issue"));
+        assert!(updated.contains("branch"));
+        assert!(updated.contains("Branch"));
         assert!(updated.contains("[agent.prompt.append]"));
         assert!(updated.contains("pr"));
         assert!(updated.contains("PR append"));

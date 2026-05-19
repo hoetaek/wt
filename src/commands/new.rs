@@ -19,7 +19,7 @@ pub fn run(
 ) -> Result<()> {
     if name_words.is_empty() {
         bail!(
-            "wt new starts one ad hoc worktree from branch-name text. Pass branch-name text, or use `wt task run [<task>...]` for prepared local tasks."
+            "wt run branch starts one ad hoc worktree from branch-name text. Pass branch-name text, or use `wt run task [<task>...]` for prepared local tasks."
         );
     }
 
@@ -84,7 +84,7 @@ pub fn run(
         &names.path,
         &names,
         None,
-        setup::WORKSPACE_COLOR_KIND_NEW,
+        setup::WORKSPACE_COLOR_KIND_BRANCH,
         None,
         None,
     )?;
@@ -163,7 +163,7 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
                     &path,
                     &names,
                     None,
-                    setup::WORKSPACE_COLOR_KIND_NEW,
+                    setup::WORKSPACE_COLOR_KIND_BRANCH,
                     None,
                     Some(profile_config),
                 )?;
@@ -180,7 +180,7 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
             &names.path,
             &names,
             None,
-            setup::WORKSPACE_COLOR_KIND_NEW,
+            setup::WORKSPACE_COLOR_KIND_BRANCH,
             None,
             Some(profile_config),
         )?;
@@ -294,7 +294,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("wt new starts one ad hoc worktree from branch-name text")
+                .contains("wt run branch starts one ad hoc worktree from branch-name text")
         );
     }
 

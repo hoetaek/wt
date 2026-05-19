@@ -8,15 +8,15 @@ pub const RESERVED_PROFILE_NAME: &str = "default";
 pub const AGENT_PROMPT_WORKFLOW_SCOPE: &str = "workflow";
 const PROMPT_APPEND_PREFIX: &str = "\u{0}append:";
 pub(super) const PROMPT_COMMON_SCOPE: &str = "common";
-pub(super) const PROMPT_RUNTIME_MODES: [&str; 3] = ["issue", "new", "pr"];
+pub(super) const PROMPT_RUNTIME_MODES: [&str; 3] = ["issue", "branch", "pr"];
 pub const WORKSPACE_COLOR_KIND_ISSUE: &str = "issue";
-pub const WORKSPACE_COLOR_KIND_NEW: &str = "new";
+pub const WORKSPACE_COLOR_KIND_BRANCH: &str = "branch";
 pub const WORKSPACE_COLOR_KIND_PR: &str = "pr";
 pub const WORKSPACE_COLOR_KIND_TASK: &str = "task";
 pub const WORKSPACE_DEFAULT_COLORS: [(&str, &str); 4] = [
     (WORKSPACE_COLOR_KIND_TASK, "blue"),
     (WORKSPACE_COLOR_KIND_ISSUE, "blue"),
-    (WORKSPACE_COLOR_KIND_NEW, "green"),
+    (WORKSPACE_COLOR_KIND_BRANCH, "green"),
     (WORKSPACE_COLOR_KIND_PR, "magenta"),
 ];
 const DEFAULT_SITE_NAME_TEMPLATE: &str = "{{repo}}-{{branch_slug}}";
@@ -316,14 +316,45 @@ pub enum SiteProvider {
     Traefik,
 }
 
-#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorkspaceConfig {
     pub tabs: Vec<String>,
     pub post_deps_tabs: Vec<String>,
     pub colors: HashMap<String, String>,
     pub browser: Option<WorkspaceBrowserConfig>,
     pub chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+struct WorkspaceConfigRaw {
+    tabs: Vec<String>,
+    post_deps_tabs: Vec<String>,
+    colors: HashMap<String, String>,
+    browser: Option<WorkspaceBrowserConfig>,
+    chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
+}
+
+impl<'de> Deserialize<'de> for WorkspaceConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = WorkspaceConfigRaw::deserialize(deserializer)?;
+        if raw.colors.contains_key("new") {
+            return Err(D::Error::custom(
+                "[workspace].colors.new is no longer supported; use [workspace].colors.branch for wt run branch",
+            ));
+        }
+
+        Ok(Self {
+            tabs: raw.tabs,
+            post_deps_tabs: raw.post_deps_tabs,
+            colors: raw.colors,
+            browser: raw.browser,
+            chrome_devtools: raw.chrome_devtools,
+        })
+    }
 }
 
 impl WorkspaceConfig {
@@ -544,6 +575,7 @@ where
                 D::Error::custom("[agent.prompt.append] must be a table of mode prompt arrays")
             })?;
             for (append_mode, append_value) in append {
+                reject_legacy_agent_prompt_mode::<D::Error>(append_mode, true)?;
                 let prompts_to_append = parse_prompt_values::<D::Error>(
                     append_value.clone(),
                     &format!("agent.prompt.append.{append_mode}"),
@@ -553,11 +585,30 @@ where
             continue;
         }
 
+        reject_legacy_agent_prompt_mode::<D::Error>(&mode, false)?;
         let mode_prompts = parse_prompt_values::<D::Error>(value, &format!("agent.prompt.{mode}"))?;
         prompts.insert(mode, mode_prompts);
     }
 
     Ok(prompts)
+}
+
+fn reject_legacy_agent_prompt_mode<E>(mode: &str, append: bool) -> std::result::Result<(), E>
+where
+    E: DeError,
+{
+    if mode != "new" {
+        return Ok(());
+    }
+
+    let key = if append {
+        "[agent.prompt.append].new"
+    } else {
+        "[agent.prompt].new"
+    };
+    Err(E::custom(format!(
+        "{key} is no longer supported; use [agent.prompt].branch or [agent.prompt.append].branch for wt run branch"
+    )))
 }
 
 fn parse_prompt_values<E>(value: toml::Value, key: &str) -> std::result::Result<Vec<String>, E>

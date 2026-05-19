@@ -1,4 +1,4 @@
 interface:
   display_name: "WT Work"
   short_description: "Run the full wt work loop"
-  default_prompt: "Use $wt-work to run $wt-ready -> $wt-start -> $wt-coordinate -> $wt-land for the full wt loop."
+  default_prompt: "Use $wt-work to run $wt-ready -> $wt-start -> $wt-coordinate -> $wt-land -> $wt-retrospect for the full wt loop."

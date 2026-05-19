@@ -247,7 +247,7 @@ fn open_worktree(ctx: &Ctx, opened: &OpenedWorktree) -> Result<()> {
             &entry.path,
             &names,
             title.as_deref(),
-            "new",
+            setup::WORKSPACE_COLOR_KIND_BRANCH,
             None,
             profile_config.as_ref(),
         );

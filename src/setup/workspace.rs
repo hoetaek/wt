@@ -305,7 +305,7 @@ mod tests {
     use super::workspace_color;
     use crate::config::{Config, WorkspaceConfig};
     use crate::setup::{
-        WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_NEW, WORKSPACE_COLOR_KIND_PR,
+        WORKSPACE_COLOR_KIND_BRANCH, WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_PR,
         WORKSPACE_COLOR_KIND_TASK,
     };
     use std::collections::HashMap;
@@ -319,7 +319,10 @@ mod tests {
 
         assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_TASK), "blue");
         assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_ISSUE), "blue");
-        assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_NEW), "green");
+        assert_eq!(
+            workspace_color(&config, WORKSPACE_COLOR_KIND_BRANCH),
+            "green"
+        );
         assert_eq!(workspace_color(&config, WORKSPACE_COLOR_KIND_PR), "magenta");
     }
 

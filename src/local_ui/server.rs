@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn config_tab_passes_source_paths_to_card_renderer() {
         assert!(APP_JS.contains("function renderConfig(snapshot)"));
-        assert!(APP_JS.contains("], config.paths,"));
+        assert!(APP_JS.contains("paths: config.paths,"));
         assert!(!APP_JS.contains("], paths(config.paths)),"));
     }
 
@@ -125,6 +125,13 @@ mod tests {
         assert!(APP_CSS.contains(".top-actions .language-switch"));
         assert!(APP_CSS.contains(".language-switch[data-current=\"en\"]"));
         assert!(APP_CSS.contains(".metrics[data-view]:not([data-view=\"overview\"])"));
+        assert!(APP_CSS.contains(".focus-panel"));
+        assert!(APP_CSS.contains(".focus-inspector"));
+        assert!(APP_CSS.contains(".source-panel"));
+        assert!(APP_CSS.contains(".status-strip-inline"));
+        assert!(APP_CSS.contains(".scan-list"));
+        assert!(APP_CSS.contains(".scan-row"));
+        assert!(APP_CSS.contains(".scan-meta"));
         assert!(APP_CSS.contains(".record-list"));
         assert!(APP_CSS.contains(".record-card.tone-green::before"));
         assert!(APP_CSS.contains(".read-more.is-open"));
@@ -134,8 +141,14 @@ mod tests {
         assert!(APP_CSS.contains(".full-text pre"));
         assert!(APP_CSS.contains(".markdown-body h1"));
         assert!(APP_JS.contains("metric invalid"));
+        assert!(APP_JS.contains("Focus inspector"));
+        assert!(APP_JS.contains("overviewFocusModel"));
+        assert!(APP_JS.contains("Config cockpit"));
+        assert!(APP_JS.contains("workflowScanRow"));
+        assert!(APP_JS.contains("taskRunScanRow"));
         assert!(APP_JS.contains("data-read-toggle"));
         assert!(APP_JS.contains("summary-full full-text"));
+        assert!(APP_JS.contains("source-panel full-text"));
         assert!(!APP_JS.contains("</summary><div class=\"full-text\""));
         assert!(APP_JS.contains("전문 보기"));
         assert!(APP_JS.contains("확인 필요"));

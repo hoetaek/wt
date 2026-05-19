@@ -185,7 +185,7 @@ fn multiple_runnable_workflows_message(
         .take(10)
         .map(|candidate| {
             format!(
-                "  wt workflow run {}  # {}",
+                "  wt run workflow {}  # {}",
                 shell_arg(&candidate.id),
                 workflow_relative_path(ctx, &candidate.path)
             )
