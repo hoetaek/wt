@@ -10,6 +10,7 @@ pub mod inspect;
 pub mod issue;
 pub mod issue_selection;
 pub mod list;
+pub mod msg;
 pub mod new;
 pub mod open;
 pub mod pr;

@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use assert_fs::TempDir;
 use predicates::prelude::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 
 const GIT_LOCAL_ENV_KEYS: &[&str] = &[
@@ -35,6 +35,7 @@ fn wt_command() -> Command {
     for key in GIT_LOCAL_ENV_KEYS {
         command.env_remove(key);
     }
+    command.env_remove("WT_AGENT_ID");
     command
 }
 
@@ -210,6 +211,16 @@ fn write_personal_config(root: &Path, content: &str) {
     let dir = root.join(".git/wt");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("config.toml"), content).unwrap();
+}
+
+fn toml_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("toml"))
+        .collect::<Vec<_>>();
+    files.sort();
+    files
 }
 
 #[test]
@@ -599,6 +610,297 @@ fn task_publish_help_explains_behavior() {
             "already have [origin] are excluded",
         ))
         .stdout(predicate::str::contains("already has origin"));
+}
+
+#[test]
+fn msg_help_explains_agent_inbox_contract() {
+    wt_command()
+        .args(["msg", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("file-based agent inbox"))
+        .stdout(predicate::str::contains(
+            "<git-common-dir>/wt/messages/agents/<agent>/inbox",
+        ))
+        .stdout(predicate::str::contains("wt msg send --to <agent>"))
+        .stdout(predicate::str::contains(
+            "wt msg check-inbox --agent <agent>",
+        ))
+        .stdout(predicate::str::contains("inbox/read"));
+
+    wt_command()
+        .args(["msg", "send", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Target agent id as NAME or agents/NAME",
+        ))
+        .stdout(predicate::str::contains("Message text"));
+
+    wt_command()
+        .args(["msg", "check-inbox", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hook JSON"))
+        .stdout(predicate::str::contains("Agent id as NAME or agents/NAME"));
+}
+
+#[test]
+fn msg_send_writes_to_agent_inbox_and_normalizes_agent_id() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "codex",
+            "hello",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "<git-common-dir>/wt/messages/agents/codex/inbox/",
+        ));
+
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let files = toml_files(&inbox);
+    assert_eq!(files.len(), 1);
+
+    let content = std::fs::read_to_string(&files[0]).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(message["meta"]["to"].as_str(), Some("agents/codex"));
+    assert_eq!(message["meta"]["from"].as_str(), Some("agents/user"));
+    assert_eq!(message["envelope"]["kind"].as_str(), Some("request"));
+    assert_eq!(
+        message["envelope"]["expects_response"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(message["body"]["summary"].as_str(), Some("hello"));
+    assert_eq!(
+        message["body"]["parts"][0]["content"].as_str(),
+        Some("hello")
+    );
+}
+
+#[test]
+fn msg_check_inbox_emits_hook_json_and_moves_messages_to_read() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "hello",
+            "from",
+            "claude",
+        ])
+        .assert()
+        .success();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/codex",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["hookSpecificOutput"]["hookEventName"].as_str(),
+        Some("UserPromptSubmit")
+    );
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/codex: 1 unread message"));
+    assert!(context.contains("hello from claude"));
+    assert!(context.contains("wt msg send --to <agent> <message>"));
+
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    assert!(toml_files(&inbox).is_empty());
+    assert_eq!(toml_files(&inbox.join("read")).len(), 1);
+}
+
+#[test]
+fn msg_check_inbox_accepts_global_json_flag() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "codex",
+            "json",
+            "hook",
+        ])
+        .assert()
+        .success();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "msg",
+            "check-inbox",
+            "--agent",
+            "codex",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("json hook")
+    );
+}
+
+#[test]
+fn msg_check_empty_inbox_exits_quietly() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/codex",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn msg_rejects_invalid_or_ambiguous_agent_ids() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex/worker",
+            "hello",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid target agent id"))
+        .stderr(predicate::str::contains(
+            "Agent ids must be NAME or agents/NAME",
+        ));
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "humans/user",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path-like ids are ambiguous"));
+}
+
+#[test]
+fn msg_uses_git_common_messages_from_linked_worktree() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    let linked = temp.path().join("linked");
+    std::fs::create_dir(&repo).unwrap();
+    git_init(&repo);
+    git_commit(&repo);
+    let status = git_command()
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            linked.to_str().unwrap(),
+            "HEAD",
+        ])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    wt_command()
+        .args([
+            "-C",
+            linked.to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "codex",
+            "from",
+            "linked",
+        ])
+        .assert()
+        .success();
+
+    let common_inbox = repo.join(".git/wt/messages/agents/codex/inbox");
+    assert_eq!(toml_files(&common_inbox).len(), 1);
+    assert!(!linked.join(".git/wt/messages").exists());
+
+    let output = wt_command()
+        .args([
+            "-C",
+            linked.to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "codex",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("from linked")
+    );
+    assert!(toml_files(&common_inbox).is_empty());
+    assert_eq!(toml_files(&common_inbox.join("read")).len(), 1);
 }
 
 #[test]

@@ -6,6 +6,7 @@ pub mod config_render;
 pub mod context;
 pub mod error;
 pub mod local_ui;
+pub mod messages;
 pub mod names;
 pub mod runner;
 pub mod services;
@@ -19,7 +20,9 @@ pub mod workflow;
 pub mod worktree_naming;
 
 use anyhow::Result;
-use cli::{AgentCommand, Commands, ConfigCommand, RunCommand, TaskCommand, WorkflowCommand};
+use cli::{
+    AgentCommand, Commands, ConfigCommand, MsgCommand, RunCommand, TaskCommand, WorkflowCommand,
+};
 use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
@@ -155,6 +158,10 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             } => commands::agent::watch(ctx, target.as_deref(), *interval, *timeout, *heartbeat),
         },
         Commands::Ui { port } => commands::ui::run(ctx, *port),
+        Commands::Msg { command } => match command {
+            MsgCommand::Send { to, message } => commands::msg::send(ctx, to, message),
+            MsgCommand::CheckInbox { agent } => commands::msg::check_inbox(ctx, agent),
+        },
         Commands::Send {
             target,
             message,

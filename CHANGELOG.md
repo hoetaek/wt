@@ -8,6 +8,12 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added `wt msg send --to <agent> <message>` and
+  `wt msg check-inbox --agent <agent>` as the file-based agent inbox MVP. Messages
+  are stored under `<git-common-dir>/wt/messages/agents/<agent>/inbox`, use a
+  TOML model with meta/envelope/body text parts, and `check-inbox` emits hook
+  JSON before moving consumed messages to `inbox/read`.
+
 - Moved all workspace execution-start surfaces under `wt run`: `wt run issue`,
   `wt run pr`, `wt run branch`, `wt run task`, and `wt run workflow` are the
   canonical commands, while legacy start forms fail with migration guidance

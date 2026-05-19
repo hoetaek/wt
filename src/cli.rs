@@ -136,6 +136,14 @@ pub enum Commands {
         #[arg(long, default_value_t = 0, value_name = "PORT")]
         port: u16,
     },
+    /// Send and deliver file-based agent inbox messages
+    #[command(
+        long_about = "Send and deliver file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox.\n\nUse `wt msg send --to <agent> <message>` for scriptable sends. Use `wt msg check-inbox --agent <agent>` from agent hooks; unread messages are emitted as hook-compatible JSON and moved to inbox/read."
+    )]
+    Msg {
+        #[command(subcommand)]
+        command: MsgCommand,
+    },
     /// Send a message to a task agent's cmux surface
     Send {
         /// Branch, worktree path/name, or TaskRun id to contact
@@ -291,6 +299,31 @@ pub enum AgentCommand {
         /// Print unchanged running observations at this positive-second interval
         #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
         heartbeat: Option<u64>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum MsgCommand {
+    /// Write one message to an agent inbox
+    Send {
+        /// Target agent id as NAME or agents/NAME
+        #[arg(long)]
+        to: String,
+        /// Message text
+        #[arg(
+            value_name = "MESSAGE",
+            required = true,
+            num_args = 1..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        message: Vec<String>,
+    },
+    /// Emit unread inbox messages as hook JSON and move them to inbox/read
+    CheckInbox {
+        /// Agent id as NAME or agents/NAME
+        #[arg(long)]
+        agent: String,
     },
 }
 

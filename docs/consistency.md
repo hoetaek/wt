@@ -109,13 +109,52 @@ Activity, Inbox, Status는 다른 개념이다.
 | Channel | Writer | Reader | Data | Location |
 | --- | --- | --- | --- | --- |
 | Activity log | hook 자동 | UI와 debug | append-only JSONL | `worktrees/<id>/activity.jsonl` |
-| Inbox | 의도된 sender | target participant | TOML file queue | `messages/<id>/inbox/` |
+| Inbox | 의도된 sender | target agent | TOML file queue | `messages/agents/<agent>/inbox/` |
 | Status | hook 자동 | 누구나 | single TOML snapshot | `worktrees/<id>/status.toml` |
 
 Activity는 communication이 아니다. Hook은 activity와 status를 자동으로 채울 수 있지만,
 Inbox는 의도된 메시지 또는 정의된 lifecycle event만 받는다. Message bus와 hook delivery의
 세부 ack/read/claim semantics는 구현 진행 중인 영역이며, strict CLI contract는 해당 구현
 PR에서 이 문서에 추가한다.
+
+### Message Bus MVP
+
+Message bus MVP는 agent inbox만 canonical surface로 둔다. Target id는 `agents/<agent>`이며
+CLI 입력에서는 `<agent>`를 `agents/<agent>`로 정규화한다. `<agent>`는 path segment 하나여야
+하고, `agents/<agent>/<role>`처럼 여러 segment가 필요한 주소는 이 MVP에서 모호하므로 실패한다.
+
+Message files are stored at:
+
+```text
+<git-common-dir>/wt/messages/agents/<agent>/inbox/<message-id>.toml
+```
+
+Consumed messages move to:
+
+```text
+<git-common-dir>/wt/messages/agents/<agent>/inbox/read/<message-id>.toml
+```
+
+Canonical scriptable send:
+
+```bash
+wt msg send --to agents/codex "hello"
+wt msg send --to codex "hello"
+```
+
+`wt msg send` writes `meta.from = "agents/user"` unless `WT_AGENT_ID` is set to `agents/<agent>` or
+`<agent>`.
+
+Canonical hook delivery:
+
+```bash
+wt msg check-inbox --agent agents/codex
+```
+
+`check-inbox` exits successfully with no output when the inbox has no unread messages. When unread
+messages exist, it prints JSON containing `hookSpecificOutput.additionalContext` and moves every
+successfully consumed message into `inbox/read/`. The MVP does not add ack, claim, `PostToolUse`
+polling, or `wt://` artifact semantics.
 
 ## Agent Adapter Policy
 
