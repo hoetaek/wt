@@ -6,7 +6,7 @@ use std::path::Path;
 
 pub(super) fn copy_files(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
     for file in &config.worktree.copy {
-        let src = ctx.repo_root.join(file);
+        let src = source_path(ctx, file);
         if src.exists() {
             let real_src = fs::canonicalize(&src).unwrap_or(src.clone());
             let dest = wt_path.join(file);
@@ -21,7 +21,7 @@ pub(super) fn copy_files(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<(
         }
     }
     for entry in &config.worktree.copy_as {
-        let src = ctx.repo_root.join(&entry.from);
+        let src = source_path(ctx, &entry.from);
         if src.exists() {
             let real_src = fs::canonicalize(&src).unwrap_or(src.clone());
             let dest = wt_path.join(&entry.to);
@@ -40,7 +40,7 @@ pub(super) fn copy_files(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<(
 
 pub(super) fn link_files(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<()> {
     for file in &config.worktree.link {
-        let src = ctx.repo_root.join(file);
+        let src = source_path(ctx, file);
         if src.exists() {
             let real_src = fs::canonicalize(&src).unwrap_or(src);
             let dest = wt_path.join(file);
@@ -52,6 +52,15 @@ pub(super) fn link_files(ctx: &Ctx, config: &Config, wt_path: &Path) -> Result<(
         }
     }
     Ok(())
+}
+
+fn source_path(ctx: &Ctx, value: &str) -> std::path::PathBuf {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        ctx.repo_root.join(path)
+    }
 }
 
 fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {

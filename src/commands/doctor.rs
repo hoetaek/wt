@@ -83,8 +83,13 @@ fn resolve_config<'a>(ctx: &'a Ctx, profile: Option<&str>) -> Result<ResolvedCon
     let Some(profile) = profile else {
         return Ok(ResolvedConfig::Base(&ctx.config));
     };
-    let config = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
-        .ok_or_else(|| anyhow!("Profile '{profile}' not found"))?;
+    let config = Config::load_profile_from_storage(
+        &ctx.repo_root,
+        &ctx.storage_root,
+        profile,
+        &ctx.base_config,
+    )?
+    .ok_or_else(|| anyhow!("Profile '{profile}' not found"))?;
     Ok(ResolvedConfig::Profile(Box::new(config)))
 }
 
@@ -1415,7 +1420,7 @@ mod tests {
     }
 
     fn write_profile_toml(repo_root: &Path, name: &str, body: &str) {
-        let profile_dir = repo_root.join(".local/profiles").join(name);
+        let profile_dir = repo_root.join(".git/wt/profiles").join(name);
         fs::create_dir_all(&profile_dir).unwrap();
         fs::write(profile_dir.join("profile.toml"), body).unwrap();
     }
@@ -1512,9 +1517,14 @@ provider = "linear"
             RecordingUi::new(),
         );
 
-        let config = Config::load_profile(&ctx.repo_root, "codex", &ctx.base_config)
-            .unwrap()
-            .unwrap();
+        let config = Config::load_profile_from_storage(
+            &ctx.repo_root,
+            &ctx.storage_root,
+            "codex",
+            &ctx.base_config,
+        )
+        .unwrap()
+        .unwrap();
         let report = build_report(&ctx, &config, Some("codex"));
 
         let value = serde_json::to_value(&report).unwrap();

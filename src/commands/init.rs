@@ -240,7 +240,7 @@ fn validate_options(options: &InitOptions) -> Result<()> {
 fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     if options.local {
         return Ok(InitTarget {
-            path: ctx.repo_root.join(".local/.wt.toml"),
+            path: ctx.storage_root.config_toml(),
             kind: InitTargetKind::Local,
         });
     }
@@ -252,18 +252,18 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     }
     if options.yes {
         return Ok(InitTarget {
-            path: ctx.repo_root.join(".local/.wt.toml"),
+            path: ctx.storage_root.config_toml(),
             kind: InitTargetKind::Local,
         });
     }
 
     let items = vec![
-        "Private repo config (.local/.wt.toml)".into(),
+        "Private repo config (<git-common-dir>/wt/config.toml)".into(),
         "Shared project config (.wt.toml)".into(),
     ];
     match ctx.ui.select("Repository config file", &items)? {
         0 => Ok(InitTarget {
-            path: ctx.repo_root.join(".local/.wt.toml"),
+            path: ctx.storage_root.config_toml(),
             kind: InitTargetKind::Local,
         }),
         _ => Ok(InitTarget {
@@ -1620,7 +1620,7 @@ mod tests {
 
     fn local_target(dir: &tempfile::TempDir) -> InitTarget {
         InitTarget {
-            path: dir.path().join(".local/.wt.toml"),
+            path: dir.path().join(".git/wt/config.toml"),
             kind: InitTargetKind::Local,
         }
     }
@@ -1651,7 +1651,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.target_path, dir.path().join(".local/.wt.toml"));
+        assert_eq!(plan.target_path, dir.path().join(".git/wt/config.toml"));
         assert_eq!(plan.target_kind, InitTargetKind::Local);
         assert!(!plan.target_exists);
         assert_eq!(plan.preset, InitPreset::Minimal);
@@ -2150,7 +2150,7 @@ mod tests {
             ]
         );
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].run, "npm install");
@@ -2227,7 +2227,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert!(content.contains("# path = \"$HOME/worktrees/{{default_name}}\""));
         assert!(content.contains("# copy_as = ["));
@@ -2257,7 +2257,7 @@ mod tests {
         assert!(!content.contains("args ="));
         assert!(
             !dir.path()
-                .join(".local/profiles/codex/profile.toml")
+                .join(".git/wt/profiles/codex/profile.toml")
                 .exists()
         );
         assert!(!content.contains("현재 GitHub 이슈"));
@@ -2306,10 +2306,10 @@ mod tests {
         assert_eq!(issues.provider, IssueProviderType::Github);
         assert_eq!(issues.gh_user.as_deref(), Some("alice"));
 
-        assert!(!dir.path().join(".local/.wt.toml").exists());
+        assert!(!dir.path().join(".git/wt/config.toml").exists());
         assert!(
             !dir.path()
-                .join(".local/profiles/gemini/profile.toml")
+                .join(".git/wt/profiles/gemini/profile.toml")
                 .exists()
         );
     }
@@ -2344,7 +2344,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let issues = config.issues.unwrap();
         assert_eq!(issues.provider, IssueProviderType::Github);
@@ -2386,7 +2386,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let site = config.site.unwrap();
         assert_eq!(site.provider, SiteProvider::Valet);
@@ -2429,7 +2429,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let site = config.site.unwrap();
         assert_eq!(site.provider, SiteProvider::Traefik);
@@ -2484,7 +2484,7 @@ mod tests {
         assert!(config.agent.is_none());
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
-        assert!(!dir.path().join(".local/.wt.toml").exists());
+        assert!(!dir.path().join(".git/wt/config.toml").exists());
         assert!(config.issues.is_none());
     }
 
@@ -2568,7 +2568,7 @@ mod tests {
     fn init_interactive_flow_accepts_manual_agent_args() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .local/.wt.toml
+        ui.add_select(0); // .git/wt/config.toml
         ui.add_select(1); // agent preset
         ui.add_select(0); // codex
         ui.add_select(1); // enter agent args
@@ -2602,7 +2602,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
@@ -2657,7 +2657,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(
             config.worktree.path.as_deref(),
@@ -2747,7 +2747,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 3);
         assert_eq!(config.setup.deps[0].run, "npm install");
@@ -2811,7 +2811,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].working_dir.as_deref(), Some("api"));
@@ -2907,7 +2907,7 @@ mod tests {
     fn init_interactive_codex_none_agent_args_omits_args() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .local/.wt.toml
+        ui.add_select(0); // .git/wt/config.toml
         ui.add_select(1); // agent preset
         ui.add_select(0); // codex
         ui.add_select(0); // no agent args
@@ -2940,7 +2940,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
@@ -2977,7 +2977,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
@@ -3056,7 +3056,7 @@ mod tests {
         let content = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.profile.unwrap().agent.unwrap().cli, AgentCli::Codex);
-        assert!(!dir.path().join(".local/.wt.toml").exists());
+        assert!(!dir.path().join(".git/wt/config.toml").exists());
     }
 
     #[test]
@@ -3100,7 +3100,7 @@ mod tests {
     fn init_interactive_flow_respects_create_confirmation() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .local/.wt.toml
+        ui.add_select(0); // .git/wt/config.toml
         ui.add_select(0); // minimal preset
         ui.add_select(0); // minimal additional settings
         ui.add_confirm(false); // do not create config
@@ -3131,15 +3131,15 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(!dir.path().join(".local/.wt.toml").exists());
+        assert!(!dir.path().join(".git/wt/config.toml").exists());
     }
 
     #[test]
     fn init_refuses_existing_file_without_force_and_overwrites_with_force() {
         let dir = tempfile::tempdir().unwrap();
-        let local = dir.path().join(".local");
+        let local = dir.path().join(".git/wt");
         std::fs::create_dir_all(&local).unwrap();
-        std::fs::write(local.join(".wt.toml"), "[workspace]\ntabs = []\n").unwrap();
+        std::fs::write(local.join("config.toml"), "[workspace]\ntabs = []\n").unwrap();
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -3185,12 +3185,12 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(local.join(".wt.toml")).unwrap();
+        let content = std::fs::read_to_string(local.join("config.toml")).unwrap();
         let config = toml::from_str::<Config>(&content).unwrap();
         assert_eq!(config.profile.unwrap().agent.unwrap().cli, AgentCli::Claude);
         assert!(
             !dir.path()
-                .join(".local/profiles/claude/profile.toml")
+                .join(".git/wt/profiles/claude/profile.toml")
                 .exists()
         );
     }

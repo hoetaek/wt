@@ -615,7 +615,14 @@ fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     };
 
     validate_profile_name(profile)?;
-    if Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?.is_none() {
+    if Config::load_profile_from_storage(
+        &ctx.repo_root,
+        &ctx.storage_root,
+        profile,
+        &ctx.base_config,
+    )?
+    .is_none()
+    {
         bail!("Profile '{profile}' not found");
     }
 
@@ -627,7 +634,13 @@ fn workflow_default_policy(ctx: &Ctx, profile: Option<&str>) -> Result<WorkflowD
         return Ok(ctx.config.workflow_default_policy());
     };
 
-    let Some(config) = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)? else {
+    let Some(config) = Config::load_profile_from_storage(
+        &ctx.repo_root,
+        &ctx.storage_root,
+        profile,
+        &ctx.base_config,
+    )?
+    else {
         bail!("Profile '{profile}' not found");
     };
     Ok(config.workflow_default_policy())

@@ -758,7 +758,7 @@ mod tests {
         }
 
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex");
         fs::create_dir_all(&profile_dir).unwrap();
         fs::write(
             profile_dir.join("profile.toml"),
@@ -867,7 +867,7 @@ args = ["--model", "gpt-5.5"]
         }
 
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex-yolo");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex-yolo");
         fs::create_dir_all(&profile_dir).unwrap();
         fs::write(
             profile_dir.join("profile.toml"),

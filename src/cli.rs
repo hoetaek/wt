@@ -155,13 +155,16 @@ pub enum Commands {
     },
     /// Check configured providers and required local tools
     Doctor {
-        /// Run checks against the effective config for .local/profiles/<name>
+        /// Run checks against the effective config for <git-common-dir>/wt/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
     },
     /// Print, edit, or refactor wt config files
+    #[command(
+        long_about = "Print, edit, or refactor wt config files. Shared repo config is .wt.toml; private repo config is <git-common-dir>/wt/config.toml; named profile config is <git-common-dir>/wt/profiles/<name>/profile.toml."
+    )]
     Config {
-        /// Show effective config using .local/profiles/<name>
+        /// Show effective config using <git-common-dir>/wt/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         #[command(subcommand)]
@@ -169,7 +172,7 @@ pub enum Commands {
     },
     /// List or manage named profile configs
     #[command(
-        long_about = "List or manage named profile configs stored under .local/profiles/<name>/profile.toml. Bare `wt profile` is an omission-default that runs `wt profile list`; the canonical inventory surface is the explicit `wt profile list` subcommand. Use `wt profile create <name>` to scaffold a new profile."
+        long_about = "List or manage named profile configs stored under <git-common-dir>/wt/profiles/<name>/profile.toml. Bare `wt profile` is an omission-default that runs `wt profile list`; the canonical inventory surface is the explicit `wt profile list` subcommand. Use `wt profile create <name>` to scaffold a new profile."
     )]
     Profile {
         #[command(subcommand)]
@@ -177,7 +180,7 @@ pub enum Commands {
     },
     /// Start the workspace config wizard
     Init {
-        /// Write private config to .local/.wt.toml
+        /// Write private config to <git-common-dir>/wt/config.toml
         #[arg(long, conflicts_with = "shared")]
         local: bool,
         /// Write shared project config to .wt.toml
@@ -247,7 +250,7 @@ pub enum ConfigCommand {
 pub enum ProfileCommand {
     /// List named profile configs
     #[command(
-        long_about = "List named profile configs discovered under .local/profiles/<name>/profile.toml. Profiles are listed in deterministic name order with their copy, link, and agent summary. Invalid profile records are surfaced as warnings in text output and as `invalid_profiles` entries in JSON output rather than being silently hidden. The reserved `default` name is never shown as a valid named profile."
+        long_about = "List named profile configs discovered under <git-common-dir>/wt/profiles/<name>/profile.toml. Profiles are listed in deterministic name order with their copy, link, and agent summary. Invalid profile records are surfaced as warnings in text output and as `invalid_profiles` entries in JSON output rather than being silently hidden. The reserved `default` name is never shown as a valid named profile."
     )]
     List,
     /// Create a named profile scaffold
@@ -307,7 +310,7 @@ pub enum RunCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Create a profiled issue worktree from .local/profiles/<name>
+        /// Create a profiled issue worktree from <git-common-dir>/wt/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         /// Start one workspace for each named profile
@@ -319,7 +322,7 @@ pub enum RunCommand {
         /// Pull request numbers (omit to select multiple open PRs)
         #[arg(value_name = "PR")]
         numbers: Vec<u32>,
-        /// Apply config from .local/profiles/<name> to the PR worktree
+        /// Apply config from <git-common-dir>/wt/profiles/<name> to the PR worktree
         #[arg(long)]
         profile: Option<String>,
     },
@@ -334,7 +337,7 @@ pub enum RunCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Create a profiled branch worktree from .local/profiles/<name>
+        /// Create a profiled branch worktree from <git-common-dir>/wt/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         /// Start one workspace for each named profile
@@ -352,7 +355,7 @@ pub enum RunCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Create a profiled task worktree from .local/profiles/<name>
+        /// Create a profiled task worktree from <git-common-dir>/wt/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
     },
@@ -456,7 +459,7 @@ pub enum WorkflowCommand {
         /// Workflow execution shape
         #[arg(long, value_enum)]
         mode: WorkflowModeArg,
-        /// Named profile from .local/profiles/<name> for all tasks
+        /// Named profile from <git-common-dir>/wt/profiles/<name> for all tasks
         #[arg(long, conflicts_with = "profiles")]
         profile: Option<String>,
         /// With --mode matrix, selected named profiles to run in order
@@ -494,7 +497,7 @@ pub enum WorkflowCommand {
         /// Workflow execution shape
         #[arg(long, value_enum)]
         mode: WorkflowModeArg,
-        /// Named profile from .local/profiles/<name> for all tasks
+        /// Named profile from <git-common-dir>/wt/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
         /// Short workflow title for list, select, and show surfaces
@@ -1872,25 +1875,25 @@ mod tests {
 
     #[test]
     fn config_edit_accepts_optional_source() {
-        let cli = parse(&["wt", "config", "edit", ".local/.wt.toml"]);
+        let cli = parse(&["wt", "config", "edit", ".git/wt/config.toml"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
                 profile: None,
                 command: Some(ConfigCommand::Edit { ref source }),
-            }) if source.as_deref() == Some(std::path::Path::new(".local/.wt.toml"))
+            }) if source.as_deref() == Some(std::path::Path::new(".git/wt/config.toml"))
         ));
     }
 
     #[test]
     fn config_extract_accepts_optional_source() {
-        let cli = parse(&["wt", "config", "extract", ".local/.wt.toml"]);
+        let cli = parse(&["wt", "config", "extract", ".git/wt/config.toml"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
                 profile: None,
                 command: Some(ConfigCommand::Extract { ref source }),
-            }) if source.as_deref() == Some(std::path::Path::new(".local/.wt.toml"))
+            }) if source.as_deref() == Some(std::path::Path::new(".git/wt/config.toml"))
         ));
     }
 
@@ -1900,14 +1903,14 @@ mod tests {
             "wt",
             "config",
             "inline",
-            ".local/profiles/codex/profile.toml",
+            ".git/wt/profiles/codex/profile.toml",
         ]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
                 profile: None,
                 command: Some(ConfigCommand::Inline { ref source }),
-            }) if source.as_deref() == Some(std::path::Path::new(".local/profiles/codex/profile.toml"))
+            }) if source.as_deref() == Some(std::path::Path::new(".git/wt/profiles/codex/profile.toml"))
         ));
     }
 
@@ -2155,6 +2158,20 @@ mod tests {
         assert!(help.contains("wt profile list"));
         assert!(help.contains("list"));
         assert!(help.contains("create"));
+    }
+
+    #[test]
+    fn config_help_describes_canonical_config_locations() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("config")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains(".wt.toml"));
+        assert!(help.contains("<git-common-dir>/wt/config.toml"));
+        assert!(help.contains("<git-common-dir>/wt/profiles/<name>/profile.toml"));
     }
 
     #[test]

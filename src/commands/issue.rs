@@ -1017,7 +1017,7 @@ mod tests {
     }
 
     fn write_empty_profile(root: &Path, name: &str) {
-        let profile_dir = root.join(".local/profiles").join(name);
+        let profile_dir = root.join(".git/wt/profiles").join(name);
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
     }
@@ -1333,7 +1333,7 @@ mod tests {
     #[test]
     fn issue_profile_existing_branch_without_worktree_reuses_branch() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
 
@@ -1412,7 +1412,7 @@ mod tests {
     #[test]
     fn issue_profile_existing_branch_non_interactive_fails_without_prompt_or_delete() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
 

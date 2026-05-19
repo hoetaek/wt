@@ -1048,7 +1048,7 @@ updated_at = "2026-05-18T00:00:00Z"
     fn clean_uses_matching_profile_config_for_site_unlink() {
         let repo = tempfile::tempdir().unwrap();
         let worktree = repo.path().with_file_name("repo-cms-codex");
-        let profile_dir = repo.path().join(".local/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),

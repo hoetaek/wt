@@ -5,8 +5,6 @@ use super::schema::{AGENT_PROMPT_WORKFLOW_SCOPE, PROMPT_COMMON_SCOPE};
 use super::{Config, CopyAsEntry};
 
 pub(super) fn apply_profile_conventions(
-    repo_root: &Path,
-    name: &str,
     profile_dir: &Path,
     config: &mut Config,
 ) -> anyhow::Result<()> {
@@ -37,11 +35,9 @@ pub(super) fn apply_profile_conventions(
         }
     }
 
-    let profile_root = format!(".local/profiles/{name}");
     push_copy_as_if_exists(
-        repo_root,
         &mut config.worktree.copy_as,
-        &format!("{profile_root}/scaffold"),
+        &profile_dir.join("scaffold"),
         ".",
     );
 
@@ -61,15 +57,15 @@ fn reject_legacy_branch_prompt_files(profile_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn push_copy_as_if_exists(repo_root: &Path, copy_as: &mut Vec<CopyAsEntry>, from: &str, to: &str) {
-    if !repo_root.join(from).exists() {
+fn push_copy_as_if_exists(copy_as: &mut Vec<CopyAsEntry>, from: &Path, to: &str) {
+    if !from.exists() {
         return;
     }
     if copy_as.iter().any(|entry| entry.to == to) {
         return;
     }
     copy_as.push(CopyAsEntry {
-        from: from.into(),
+        from: from.display().to_string(),
         to: to.into(),
     });
 }

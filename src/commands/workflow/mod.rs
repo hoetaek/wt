@@ -296,7 +296,7 @@ mod tests {
     }
 
     fn write_profile(root: &Path, name: &str) {
-        let profile_dir = root.join(".local/profiles").join(name);
+        let profile_dir = root.join(".git/wt/profiles").join(name);
         fs::create_dir_all(&profile_dir).unwrap();
         fs::write(
             profile_dir.join("profile.toml"),
@@ -1214,7 +1214,7 @@ cli = "none"
     #[test]
     fn task_snapshots_selected_profile_workflow_policy() {
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".local/profiles/codex");
+        let profile_dir = dir.path().join(".git/wt/profiles/codex");
         fs::create_dir_all(&profile_dir).unwrap();
         fs::write(
             profile_dir.join("profile.toml"),
@@ -1293,7 +1293,7 @@ landing = "auto"
     #[test]
     fn explicit_pr_none_overrides_selected_profile_default() {
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".local/profiles/codex");
+        let profile_dir = dir.path().join(".git/wt/profiles/codex");
         fs::create_dir_all(&profile_dir).unwrap();
         fs::write(
             profile_dir.join("profile.toml"),

@@ -206,6 +206,12 @@ landing = "manual"
     .unwrap();
 }
 
+fn write_personal_config(root: &Path, content: &str) {
+    let dir = root.join(".git/wt");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.toml"), content).unwrap();
+}
+
 #[test]
 fn version_flag_prints_package_version() {
     wt_command()
@@ -1063,7 +1069,7 @@ fn init_yes_uses_minimal_preset_without_agent() {
         .success()
         .stdout(predicate::str::contains("Created config:"));
 
-    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
     assert!(content.contains("[workspace]"));
     assert!(!content.contains("[profile.agent]"));
     assert!(!content.contains("[issues]"));
@@ -1086,7 +1092,7 @@ fn init_preset_agent_yes_writes_agent() {
         .assert()
         .success();
 
-    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
     assert!(content.contains("[profile.agent]"));
     assert!(content.contains("cli = \"codex\""));
 }
@@ -1107,7 +1113,7 @@ fn init_minimal_shortcut_writes_minimal_config() {
         .assert()
         .success();
 
-    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
     assert!(content.contains("[workspace]"));
     assert!(!content.contains("[profile.agent]"));
 }
@@ -1153,7 +1159,7 @@ fn init_dry_run_previews_plan_without_writing_config() {
         .stdout(predicate::str::contains("\n    [workflow]\n").not());
 
     assert!(!temp.path().join(".wt.toml").exists());
-    assert!(!temp.path().join(".local/.wt.toml").exists());
+    assert!(!temp.path().join(".git/wt/config.toml").exists());
 }
 
 #[test]
@@ -1196,7 +1202,7 @@ fn init_quiet_suppresses_status_output_but_still_writes_config() {
         .success()
         .stdout("");
 
-    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
     assert!(content.contains("[workspace]"));
 }
 
@@ -1269,12 +1275,7 @@ fn agent_status_without_target_noninteractive_requires_guidance() {
 fn init_existing_config_requires_force_for_yes_and_force_overwrites() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
-    std::fs::write(
-        temp.path().join(".local/.wt.toml"),
-        "[workspace]\ntabs = []\n",
-    )
-    .unwrap();
+    write_personal_config(temp.path(), "[workspace]\ntabs = []\n");
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
@@ -1298,7 +1299,7 @@ fn init_existing_config_requires_force_for_yes_and_force_overwrites() {
         .stderr(predicate::str::contains("WARNING:"))
         .stdout(predicate::str::contains("Updated config:"));
 
-    let content = std::fs::read_to_string(temp.path().join(".local/.wt.toml")).unwrap();
+    let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
     assert!(content.contains("[profile.agent]"));
 }
 
@@ -1511,14 +1512,14 @@ args = ["--model", "gpt-5.5"]
     )
     .unwrap();
 
-    std::fs::create_dir_all(temp.path().join(".local/profiles/codex/prompts")).unwrap();
+    std::fs::create_dir_all(temp.path().join(".git/wt/profiles/codex/prompts")).unwrap();
     std::fs::create_dir_all(
         temp.path()
-            .join(".local/profiles/codex/scaffold/.codex/skills"),
+            .join(".git/wt/profiles/codex/scaffold/.codex/skills"),
     )
     .unwrap();
-    std::fs::write(
-        temp.path().join(".local/.wt.toml"),
+    write_personal_config(
+        temp.path(),
         r#"
 [worktree]
 copy = [".env"]
@@ -1530,10 +1531,9 @@ PRIVATE_TOKEN = "secret"
 [profile]
 name = "codex"
 "#,
-    )
-    .unwrap();
+    );
     std::fs::write(
-        temp.path().join(".local/profiles/codex/profile.toml"),
+        temp.path().join(".git/wt/profiles/codex/profile.toml"),
         r#"
 [agent]
 cli = "codex"
@@ -1557,30 +1557,30 @@ CODEX_MODE = "1"
     )
     .unwrap();
     std::fs::write(
-        temp.path().join(".local/profiles/codex/prompts/common.md"),
+        temp.path().join(".git/wt/profiles/codex/prompts/common.md"),
         "from common prompt file\n",
     )
     .unwrap();
     std::fs::write(
         temp.path()
-            .join(".local/profiles/codex/prompts/common.append.md"),
+            .join(".git/wt/profiles/codex/prompts/common.append.md"),
         "from common append file\n",
     )
     .unwrap();
     std::fs::write(
-        temp.path().join(".local/profiles/codex/prompts/issue.md"),
+        temp.path().join(".git/wt/profiles/codex/prompts/issue.md"),
         "from prompt file\n",
     )
     .unwrap();
     std::fs::write(
         temp.path()
-            .join(".local/profiles/codex/prompts/issue.append.md"),
+            .join(".git/wt/profiles/codex/prompts/issue.append.md"),
         "from prompt append file\n",
     )
     .unwrap();
     std::fs::write(
         temp.path()
-            .join(".local/profiles/codex/scaffold/AGENTS.override.md"),
+            .join(".git/wt/profiles/codex/scaffold/AGENTS.override.md"),
         "codex override\n",
     )
     .unwrap();
@@ -1660,11 +1660,9 @@ CODEX_MODE = "1"
     assert_eq!(workspace.colors.get("pr").unwrap(), "magenta");
 
     let copy_as = config.worktree.copy_as;
-    assert!(
-        copy_as
-            .iter()
-            .any(|entry| { entry.from == ".local/profiles/codex/scaffold" && entry.to == "." })
-    );
+    assert!(copy_as.iter().any(|entry| {
+        Path::new(&entry.from).ends_with(".git/wt/profiles/codex/scaffold") && entry.to == "."
+    }));
 }
 
 #[test]
@@ -1685,12 +1683,7 @@ fn config_renders_builtin_workflow_defaults() {
 fn config_renders_builtin_workspace_color_defaults() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
-    std::fs::write(
-        temp.path().join(".local/.wt.toml"),
-        "[workspace]\ntabs = [\"lazygit\"]\n",
-    )
-    .unwrap();
+    write_personal_config(temp.path(), "[workspace]\ntabs = [\"lazygit\"]\n");
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "config"])
@@ -1706,12 +1699,7 @@ fn config_renders_builtin_workspace_color_defaults() {
 fn config_rejects_legacy_new_workspace_color_key() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
-    std::fs::write(
-        temp.path().join(".local/.wt.toml"),
-        "[workspace]\ncolors = { new = \"green\" }\n",
-    )
-    .unwrap();
+    write_personal_config(temp.path(), "[workspace]\ncolors = { new = \"green\" }\n");
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "config"])
@@ -1725,12 +1713,10 @@ fn config_rejects_legacy_new_workspace_color_key() {
 fn config_renders_workspace_chrome_devtools_browser_policy_defaults() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
-    std::fs::write(
-        temp.path().join(".local/.wt.toml"),
+    write_personal_config(
+        temp.path(),
         "[workspace.browser]\nmode = \"chrome_devtools\"\nurl = \"{{site_url}}/dashboard\"\n",
-    )
-    .unwrap();
+    );
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "config"])
@@ -1751,12 +1737,10 @@ fn config_renders_workspace_chrome_devtools_browser_policy_defaults() {
 fn config_preserves_empty_workspace_color_overrides() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
-    std::fs::write(
-        temp.path().join(".local/.wt.toml"),
+    write_personal_config(
+        temp.path(),
         "[workspace]\ncolors = { task = \"\", issue = \"\", branch = \"\", pr = \"\" }\n",
-    )
-    .unwrap();
+    );
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "config"])
@@ -1771,12 +1755,10 @@ fn config_preserves_empty_workspace_color_overrides() {
 fn config_renders_active_site_runtime_defaults() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
-    std::fs::write(
-        temp.path().join(".local/.wt.toml"),
+    write_personal_config(
+        temp.path(),
         "[site]\nprovider = \"traefik\"\nsecure = false\n",
-    )
-    .unwrap();
+    );
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "config"])
@@ -1800,12 +1782,7 @@ fn config_renders_active_site_runtime_defaults() {
 fn config_omits_inactive_site_section() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
-    std::fs::write(
-        temp.path().join(".local/.wt.toml"),
-        "[site]\nprovider = \"none\"\n",
-    )
-    .unwrap();
+    write_personal_config(temp.path(), "[site]\nprovider = \"none\"\n");
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "config"])
@@ -1818,12 +1795,7 @@ fn config_omits_inactive_site_section() {
 fn config_renders_editor_placement_default_when_editor_is_active() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
-    std::fs::write(
-        temp.path().join(".local/.wt.toml"),
-        "[editor]\ncommand = \"code {{path}}\"\n",
-    )
-    .unwrap();
+    write_personal_config(temp.path(), "[editor]\ncommand = \"code {{path}}\"\n");
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "config"])

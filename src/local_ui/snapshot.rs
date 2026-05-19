@@ -393,7 +393,9 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
             task_runs: ctx
                 .storage_root
                 .display_path(&ctx.storage_root.task_runs_dir()),
-            profiles: ".local/profiles".into(),
+            profiles: ctx
+                .storage_root
+                .display_path(&ctx.storage_root.profiles_dir()),
             retrospecs: ".local/retrospectives".into(),
             config_paths: config_source_paths(&ctx),
         },
@@ -907,7 +909,11 @@ fn task_run_context_summary(ctx: &Ctx, record: &TaskRunRecord) -> TaskRunContext
 }
 
 fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
-    let inventory = Config::load_profile_inventory(&ctx.repo_root, &ctx.base_config)?;
+    let inventory = Config::load_profile_inventory_from_storage(
+        &ctx.repo_root,
+        &ctx.storage_root,
+        &ctx.base_config,
+    )?;
     let items = inventory
         .profiles
         .into_iter()
@@ -1324,7 +1330,7 @@ fn read_known_source_text(ctx: &Ctx, path: &Path) -> Option<String> {
 
 fn is_known_state_or_config_path(relative: &str) -> bool {
     relative == ".wt.toml"
-        || relative == ".local/.wt.toml"
+        || relative == "<git-common-dir>/wt/config.toml"
         || (relative.starts_with(".local/ideas/")
             && matches!(
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
@@ -1338,7 +1344,8 @@ fn is_known_state_or_config_path(relative: &str) -> bool {
         || (relative.starts_with("<git-common-dir>/wt/tasks/") && relative.ends_with(".toml"))
         || (relative.starts_with("<git-common-dir>/wt/workflows/") && relative.ends_with(".toml"))
         || (relative.starts_with("<git-common-dir>/wt/task-runs/") && relative.ends_with(".toml"))
-        || (relative.starts_with(".local/profiles/") && relative.ends_with("/profile.toml"))
+        || (relative.starts_with("<git-common-dir>/wt/profiles/")
+            && relative.ends_with("/profile.toml"))
 }
 
 fn body_summary(value: &str) -> Option<String> {
@@ -1478,7 +1485,7 @@ mod tests {
         .unwrap();
         fs::create_dir_all(dir.path().join(".local")).unwrap();
         fs::write(
-            dir.path().join(".local/.wt.toml"),
+            dir.path().join(".git/wt/config.toml"),
             "[workflow]\nlanding = \"auto\"\n",
         )
         .unwrap();
@@ -1505,7 +1512,7 @@ mod tests {
             Config::default(),
             ConfigSource::Files(vec![
                 dir.path().join(".wt.toml"),
-                dir.path().join(".local/.wt.toml"),
+                dir.path().join(".git/wt/config.toml"),
             ]),
         );
 
@@ -1527,7 +1534,7 @@ mod tests {
         assert_eq!(snapshot.config.agent.as_deref(), Some("codex"));
         assert_eq!(
             snapshot.sources.config_paths,
-            vec![".wt.toml", ".local/.wt.toml"]
+            vec![".wt.toml", "<git-common-dir>/wt/config.toml"]
         );
         assert_eq!(
             snapshot.tasks.items[0].path,
@@ -1622,7 +1629,7 @@ mod tests {
     }
 
     fn write_profile(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/profiles").join(name);
+        let dir = root.join(".git/wt/profiles").join(name);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("profile.toml"), content).unwrap();
     }

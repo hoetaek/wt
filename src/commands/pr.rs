@@ -189,7 +189,7 @@ fn load_profile_config(ctx: &Ctx, profile: Option<&str>) -> Result<Option<Config
     let Some(profile) = profile else {
         return Ok(None);
     };
-    Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
+    Config::load_profile_from_storage(&ctx.repo_root, &ctx.storage_root, profile, &ctx.base_config)?
         .map(Some)
         .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))
 }
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn pr_with_profile_uses_profile_config_for_setup() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex-yolo");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex-yolo");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),

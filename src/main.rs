@@ -79,11 +79,12 @@ fn try_main() -> Result<()> {
         (Config::default(), Config::default(), ConfigSource::Default)
     } else if let Some(path) = cli.config.as_deref() {
         let path = resolve_path(config_base, path);
-        let (base_config, config) = Config::load_file_for_repo(&path, &repo_root)
-            .with_context(|| format!("failed to load config: {}", path.display()))?;
+        let (base_config, config) =
+            Config::load_file_for_repo_with_storage_root(&path, &repo_root, &storage_root)
+                .with_context(|| format!("failed to load config: {}", path.display()))?;
         (base_config, config, ConfigSource::File(path))
     } else {
-        Config::load_base_and_effective_with_source(&repo_root)?
+        Config::load_base_and_effective_with_source_and_storage_root(&repo_root, &storage_root)?
     };
 
     let output_mode = if cli.json {

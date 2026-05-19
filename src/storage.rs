@@ -107,6 +107,25 @@ impl StorageRoot {
         }
     }
 
+    pub fn detect_legacy_config(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
+        let path = repo_root.as_ref().join(".local/.wt.toml");
+        if path.is_file() {
+            Some(LegacyLocalStorage {
+                path,
+                canonical_root: self.config_toml(),
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn detect_legacy_profiles(
+        &self,
+        repo_root: impl AsRef<Path>,
+    ) -> Option<LegacyLocalStorage> {
+        self.detect_legacy_child(repo_root, "profiles")
+    }
+
     pub fn detect_legacy_tasks(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
         self.detect_legacy_child(repo_root, "tasks")
     }
@@ -167,6 +186,14 @@ impl LegacyLocalStorage {
     pub fn error_message(&self) -> String {
         format!(
             "Found legacy repo-root .local storage at {}. Canonical wt personal storage is {}. wt does not silently fall back to .local; import or repair legacy state explicitly before using this command.",
+            self.path.display(),
+            self.canonical_root.display()
+        )
+    }
+
+    pub fn error_message_for(&self, state_name: &str) -> String {
+        format!(
+            "Found legacy repo-root {state_name} at {}. Canonical wt personal {state_name} is {}. wt does not silently fall back to .local; import or repair legacy state explicitly before using this command.",
             self.path.display(),
             self.canonical_root.display()
         )
