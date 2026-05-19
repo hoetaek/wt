@@ -867,8 +867,7 @@ fn print_pull_request_review_section(ctx: &Ctx, evidence: &PullRequestReviewEvid
         .count();
     let stale_reviews = evidence.reviews.len().saturating_sub(current_reviews);
     ctx.ui.print_dim(&format!(
-        "  Reviews: {} current-head, {} stale/unsynchronized",
-        current_reviews, stale_reviews
+        "  Reviews: {current_reviews} current-head, {stale_reviews} stale/unsynchronized"
     ));
     let unresolved_threads = evidence
         .threads
@@ -881,8 +880,7 @@ fn print_pull_request_review_section(ctx: &Ctx, evidence: &PullRequestReviewEvid
         .filter(|thread| thread.is_outdated)
         .count();
     ctx.ui.print_dim(&format!(
-        "  Threads: {} unresolved, {} outdated",
-        unresolved_threads, outdated_threads
+        "  Threads: {unresolved_threads} unresolved, {outdated_threads} outdated"
     ));
     if !evidence.review_requests.is_empty() {
         let reviewers = evidence
