@@ -8,6 +8,14 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added the `coordinator` message target for task and workflow handoffs. Task
+  agents now receive `WT_COORDINATOR_AGENT_ID=agents/coordinator` when wt
+  launches their agent command, and generated handoff prompts include
+  `wt msg send --to coordinator ...` as the file-inbox fallback alongside the
+  existing cmux send coordinates.
+- Bumped the package version to `0.36.2` because coordinator inbox routing
+  changes the user-facing task/workflow handoff contract.
+
 - Bound wt-launched agent workspace commands to the file-inbox runtime identity
   by injecting `WT_AGENT_ID=agents/<branch_slug>` into the cmux
   `new-workspace --command` string. Codex uses this for the user-level dispatcher

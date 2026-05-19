@@ -597,6 +597,9 @@ fn run_task_help_explains_task_execution() {
         .stdout(predicate::str::contains("one worktree per selected"))
         .stdout(predicate::str::contains("direct TaskRun"))
         .stdout(predicate::str::contains("Task Run Coordinator Handoff"))
+        .stdout(predicate::str::contains(
+            "coordinator inbox target `coordinator`",
+        ))
         .stdout(predicate::str::contains("Task-run agents report PR=none"))
         .stdout(predicate::str::contains("wt workflow task --mode batch"))
         .stdout(predicate::str::contains("wt workflow task --mode single"));
@@ -812,6 +815,8 @@ fn msg_help_explains_agent_inbox_contract() {
             "<git-common-dir>/wt/messages/agents/<agent>/inbox",
         ))
         .stdout(predicate::str::contains("wt msg send --to <agent>"))
+        .stdout(predicate::str::contains("coordinator"))
+        .stdout(predicate::str::contains("agents/coordinator"))
         .stdout(predicate::str::contains(
             "wt msg check-inbox --agent <agent>",
         ))
@@ -823,6 +828,9 @@ fn msg_help_explains_agent_inbox_contract() {
         .success()
         .stdout(predicate::str::contains(
             "Target agent id as NAME or agents/NAME",
+        ))
+        .stdout(predicate::str::contains(
+            "coordinator targets agents/coordinator",
         ))
         .stdout(predicate::str::contains("Message text"));
 
@@ -869,6 +877,43 @@ fn msg_send_writes_to_agent_inbox_and_normalizes_agent_id() {
         Some(true)
     );
     assert_eq!(message["body"]["summary"].as_str(), Some("hello"));
+    assert_eq!(
+        message["body"]["parts"][0]["content"].as_str(),
+        Some("hello")
+    );
+}
+
+#[test]
+fn msg_send_to_coordinator_alias_writes_to_coordinator_inbox() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "coordinator",
+            "hello",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "<git-common-dir>/wt/messages/agents/coordinator/inbox/",
+        ));
+
+    let inbox = temp
+        .path()
+        .join(".git/wt/messages/agents/coordinator/inbox");
+    let files = toml_files(&inbox);
+    assert_eq!(files.len(), 1);
+
+    let content = std::fs::read_to_string(&files[0]).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(message["meta"]["to"].as_str(), Some("agents/coordinator"));
+    assert_eq!(message["meta"]["from"].as_str(), Some("agents/user"));
     assert_eq!(
         message["body"]["parts"][0]["content"].as_str(),
         Some("hello")

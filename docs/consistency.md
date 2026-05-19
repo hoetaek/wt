@@ -238,8 +238,9 @@ identity는 event key `user_prompt_submit`, normalized command handler, default 
 `--agent <agent>`가 남아 있다면 manual/test override다. 이 override는 user-level hook을
 특정 agent에 묶으므로 normal run UX의 일부가 아니다. `wt run issue`, `wt run task`,
 `wt run workflow`는 사용자가 매번 hook을 다시 설치하게 하지 않고, Codex launch 시 cmux
-`new-workspace --command`에 `WT_AGENT_ID=agents/<branch_slug>`를 주입해 dispatcher에
-agent binding을 제공해야 한다. `<branch_slug>`는 message MVP의 `agents/<agent>` 한 segment
+`new-workspace --command`에 `WT_AGENT_ID=agents/<branch_slug>`와
+`WT_COORDINATOR_AGENT_ID=agents/coordinator`를 주입해 dispatcher에 agent binding과
+coordinator target을 제공해야 한다. `<branch_slug>`는 message MVP의 `agents/<agent>` 한 segment
 제약과 맞도록 path separator가 없는 값이어야 하고, `wt msg send --to <branch_slug>`와
 `wt msg check-inbox --agent "$WT_AGENT_ID"`가 같은 inbox를 보아야 한다.
 Claude와 future agent CLI도 wt가 process launch를 소유하는 경로에서는 같은
@@ -832,22 +833,27 @@ contract에 포함하지 않는다.
 `wt run task` coordinator handoff는 즉시 TaskDocument 실행 handoff다. `wt run task`가
 시작하는 prompt에는 `Task Run Coordinator Handoff` section이 포함되고, 현재 coordinator
 cmux workspace/surface 좌표로 렌더링되는 `cmux send`와 `cmux send-key ... enter` 명령이
-들어간다. 이것은 Workflow orchestration이나 completion command가 아니다. Task-run agent는
+들어간다. 같은 section은 file inbox fallback으로 `wt msg send --to coordinator ...`도
+포함한다. `coordinator`는 `agents/coordinator`로 normalize되는 예약된 local target이다.
+이것은 Workflow orchestration이나 completion command가 아니다. Task-run agent는
 `PR=none`인 `Agent Completion Report`를 coordinator에게 보내고, coordinator가 review,
 landing, cleanup을 명시적으로 처리할 때까지 기다린다. 좌표는 현재 transport 정보일 뿐이므로
-TaskDocument나 TaskRun에 저장하지 않는다. 좌표가 unavailable 또는 stale이면 agent는 같은
-보고를 task session에 남기고 기다린다. Handoff section과 그 안의 `cmux send`/enter 명령은
-긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서 terminal prompt가 축약되어도
-coordinator 좌표가 앞쪽에 남게 한다.
+TaskDocument나 TaskRun에 저장하지 않는다. cmux 좌표가 unavailable 또는 stale이면 agent는
+coordinator inbox로 같은 보고를 보내고, 둘 다 unavailable이면 task session에 남기고
+기다린다. Handoff section과 그 안의 cmux/inbox report 명령은 긴 TaskDocument 본문과
+분리된 첫 prompt로 먼저 보내서 terminal prompt가 축약되어도 coordinator route가 앞쪽에
+남게 한다.
 
 Workflow coordinator handoff는 `stack` 전용 개념이 아니라 `wt run workflow`가 시작하는
 모든 task prompt의 계약이다. Prompt에는 `Workflow Coordinator Handoff` section이 포함되고,
 현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
-`cmux send-key ... enter` 명령이 들어간다. 이 좌표는 현재 transport 정보일 뿐이므로
-Workflow file, TaskRun, TaskDocument에 저장하지 않는다. 좌표가 unavailable 또는 stale이면
-agent는 같은 `Agent Completion Report`를 task session에 남기고 기다린다. Handoff section과
-그 안의 `cmux send`/enter 명령은 긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서
-terminal prompt가 축약되어도 coordinator 좌표가 앞쪽에 남게 한다.
+`cmux send-key ... enter` 명령이 들어간다. 같은 section은 file inbox fallback으로
+`wt msg send --to coordinator ...`도 포함한다. 이 좌표와 inbox target은 현재 transport
+정보일 뿐이므로 Workflow file, TaskRun, TaskDocument에 저장하지 않는다. cmux 좌표가
+unavailable 또는 stale이면 agent는 coordinator inbox로 같은 `Agent Completion Report`를
+보내고, 둘 다 unavailable이면 task session에 남기고 기다린다. Handoff section과 그 안의
+cmux/inbox report 명령은 긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서 terminal
+prompt가 축약되어도 coordinator route가 앞쪽에 남게 한다.
 사용자 정의 `[agent.prompt.workflow]` prompt가 있으면 이 built-in handoff와 TaskDocument
 snapshot 뒤, 기존 `issue`/`branch` setup-mode prompt 앞에 보낸다.
 

@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::context::Ctx;
+use crate::messages::{COORDINATOR_AGENT_ALIAS, COORDINATOR_AGENT_ID};
 use crate::names::WorktreeNames;
 use crate::template;
 use anyhow::Result;
@@ -47,6 +48,14 @@ pub(crate) fn build_template_vars(
     let branch_slug = WorktreeNames::build_branch_slug(&names.branch);
     vars.insert("branch_slug".into(), branch_slug.clone());
     vars.insert("wt_agent_id".into(), format!("agents/{branch_slug}"));
+    vars.insert(
+        "wt_coordinator_agent_id".into(),
+        COORDINATOR_AGENT_ID.into(),
+    );
+    vars.insert(
+        "coordinator_msg_target".into(),
+        COORDINATOR_AGENT_ALIAS.into(),
+    );
     if let Some(t) = title {
         vars.insert("issue_title".into(), t.into());
     }

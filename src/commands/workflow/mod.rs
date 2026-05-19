@@ -420,7 +420,10 @@ cli = "none"
         assert!(content.contains("PR=none"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
-        assert!(content.contains("coordinator cmux target is unavailable or stale"));
+        assert!(content.contains("file inbox target `coordinator`"));
+        assert!(content.contains("normalizes to `agents/coordinator`"));
+        assert!(content.contains("wt msg send --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("If neither coordinator route is available"));
         assert!(content.contains("wt workflow complete"));
         assert!(!content.contains("--run-next"));
     }
@@ -1832,6 +1835,7 @@ landing = "auto"
         assert!(content.contains("update the pull request body if it became stale"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
+        assert!(content.contains("wt msg send --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(content.contains(
             "wt workflow complete /repo/.git/wt/workflows/2026-05-16-001.toml PROJ-2 --run-next"
         ));

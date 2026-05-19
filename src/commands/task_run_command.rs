@@ -16,11 +16,17 @@ cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmu
 {{coordinator_enter_command}}
 ```
 
+The coordinator also owns the file inbox target `coordinator`, which `wt msg send` normalizes to `agents/coordinator`. If the cmux target is unavailable or stale, send the same report through the coordinator inbox:
+
+```bash
+wt msg send --to coordinator "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
+```
+
 This immediate TaskDocument run has no Workflow orchestration or pull-request handoff intent. When this task is complete and committed, do not open a pull request from the task agent; report `PR=none`.
 
 After sending the report, wait for the coordinator to review, land, and clean up the task run explicitly.
 
-If the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait."#;
+If neither coordinator route is available, leave the same report in this task session and wait."#;
 
 pub fn run(
     ctx: &Ctx,
@@ -637,7 +643,9 @@ id = "PROJ-123"
             handoff_prompt
                 .contains("cmux send-key --workspace workspace:34 --surface surface:103 enter")
         );
-        assert!(handoff_prompt.contains("If the coordinator cmux target is unavailable or stale"));
+        assert!(handoff_prompt.contains("wt msg send --to coordinator \"Agent Completion Report"));
+        assert!(handoff_prompt.contains("normalizes to `agents/coordinator`"));
+        assert!(handoff_prompt.contains("If neither coordinator route is available"));
         assert!(!handoff_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
         assert!(!handoff_prompt.contains("Create the schema first."));
         assert!(!handoff_prompt.contains("wt workflow complete"));

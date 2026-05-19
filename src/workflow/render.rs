@@ -1,4 +1,5 @@
 use crate::context::Ctx;
+use crate::messages::COORDINATOR_AGENT_ALIAS;
 use crate::task as task_store;
 use crate::task_run::{
     STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
@@ -555,12 +556,15 @@ fn workflow_task_prompt_content(content: &str, handoff: &str) -> String {
 
 fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>) -> String {
     let (pull_request_instructions, pr_report_value, after_send) = workflow_handoff_policy(handoff);
-    let send_command = format!(
+    let cmux_send_command = format!(
         "cmux send --workspace {{{{coordinator_cmux_workspace}}}} --surface {{{{coordinator_cmux_surface}}}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\"\n{{{{coordinator_enter_command}}}}"
+    );
+    let inbox_send_command = format!(
+        "wt msg send --to {COORDINATOR_AGENT_ALIAS} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\""
     );
 
     format!(
-        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator cmux surface that started this workflow:\n\n```bash\n{send_command}\n```\n\n{pull_request_instructions}\n\n{after_send}\n\nIf the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait."
+        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator cmux surface that started this workflow:\n\n```bash\n{cmux_send_command}\n```\n\nThe coordinator also owns the file inbox target `{COORDINATOR_AGENT_ALIAS}`, which `wt msg send` normalizes to `agents/coordinator`. If the cmux target is unavailable or stale, send the same report through the coordinator inbox:\n\n```bash\n{inbox_send_command}\n```\n\n{pull_request_instructions}\n\n{after_send}\n\nIf neither coordinator route is available, leave the same report in this task session and wait."
     )
 }
 

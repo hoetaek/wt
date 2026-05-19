@@ -9,6 +9,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static MESSAGE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+pub(crate) const COORDINATOR_AGENT_ALIAS: &str = "coordinator";
+pub(crate) const COORDINATOR_AGENT_ID: &str = "agents/coordinator";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentId(String);
 
@@ -520,6 +523,10 @@ mod tests {
         assert_eq!(
             AgentId::parse("agents/codex").unwrap().as_str(),
             "agents/codex"
+        );
+        assert_eq!(
+            AgentId::parse(COORDINATOR_AGENT_ALIAS).unwrap().as_str(),
+            COORDINATOR_AGENT_ID
         );
     }
 

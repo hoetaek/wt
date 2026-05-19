@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 const WT_AGENT_ID_TEMPLATE_KEY: &str = "wt_agent_id";
+const WT_COORDINATOR_AGENT_ID_TEMPLATE_KEY: &str = "wt_coordinator_agent_id";
 
 pub(crate) fn agent_launch_command(
     agent: Option<&AgentConfig>,
@@ -30,15 +31,30 @@ fn inject_agent_identity_env(
         return command;
     }
 
-    let Some(agent_id) = vars
+    let mut exports = Vec::new();
+    if let Some(agent_id) = vars
         .get(WT_AGENT_ID_TEMPLATE_KEY)
         .map(String::as_str)
         .filter(|agent_id| !agent_id.trim().is_empty())
-    else {
-        return command;
-    };
+    {
+        exports.push(format!("WT_AGENT_ID={}", shell_arg(agent_id)));
+    }
+    if let Some(coordinator_agent_id) = vars
+        .get(WT_COORDINATOR_AGENT_ID_TEMPLATE_KEY)
+        .map(String::as_str)
+        .filter(|agent_id| !agent_id.trim().is_empty())
+    {
+        exports.push(format!(
+            "WT_COORDINATOR_AGENT_ID={}",
+            shell_arg(coordinator_agent_id)
+        ));
+    }
 
-    format!("export WT_AGENT_ID={}; {command}", shell_arg(agent_id))
+    if exports.is_empty() {
+        return command;
+    }
+
+    format!("export {}; {command}", exports.join(" "))
 }
 
 pub(super) fn bootstrap_agent(

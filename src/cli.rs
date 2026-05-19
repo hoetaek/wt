@@ -138,7 +138,7 @@ pub enum Commands {
     },
     /// Send and deliver file-based agent inbox messages
     #[command(
-        long_about = "Send and deliver file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox.\n\nUse `wt msg send --to <agent> <message>` for scriptable sends. Use `wt msg check-inbox --agent <agent>` from agent hooks; unread messages are emitted as hook-compatible JSON and moved to inbox/read."
+        long_about = "Send and deliver file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox.\n\nUse `wt msg send --to <agent> <message>` for scriptable sends. The short target `coordinator` normalizes to the local coordinator inbox `agents/coordinator`. Use `wt msg check-inbox --agent <agent>` from agent hooks; unread messages are emitted as hook-compatible JSON and moved to inbox/read."
     )]
     Msg {
         #[command(subcommand)]
@@ -337,7 +337,7 @@ pub enum AgentHookInstallCommand {
     },
     /// Install Codex UserPromptSubmit inbox polling
     #[command(
-        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes a user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit hook that reads WT_AGENT_ID at runtime and runs `wt msg check-inbox --agent \"$WT_AGENT_ID\"`; when WT_AGENT_ID is unset, the hook exits successfully without output. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> when they launch Codex."
+        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes a user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit hook that reads WT_AGENT_ID at runtime and runs `wt msg check-inbox --agent \"$WT_AGENT_ID\"`; when WT_AGENT_ID is unset, the hook exits successfully without output. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and WT_COORDINATOR_AGENT_ID=agents/coordinator when they launch Codex."
     )]
     Codex {
         /// Manual/test override: bind this user-level hook to one agent instead of WT_AGENT_ID
@@ -372,7 +372,7 @@ pub enum AgentHookUninstallCommand {
 pub enum MsgCommand {
     /// Write one message to an agent inbox
     Send {
-        /// Target agent id as NAME or agents/NAME
+        /// Target agent id as NAME or agents/NAME; coordinator targets agents/coordinator
         #[arg(long)]
         to: String,
         /// Message text
@@ -445,7 +445,7 @@ pub enum RunCommand {
     },
     /// Start one worktree per selected local TaskDocument
     #[command(
-        long_about = "Start one worktree per selected <git-common-dir>/wt/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun in <git-common-dir>/wt/task-runs.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
+        long_about = "Start one worktree per selected <git-common-dir>/wt/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun in <git-common-dir>/wt/task-runs.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates and the coordinator inbox target `coordinator`. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
     )]
     Task {
         /// Local task keys from <git-common-dir>/wt/tasks/<task>.toml
@@ -460,7 +460,7 @@ pub enum RunCommand {
     },
     /// Start runnable tasks from a saved workflow
     #[command(
-        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
+        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates and the coordinator inbox target `coordinator`. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
     )]
     Workflow {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -1646,6 +1646,7 @@ mod tests {
         assert!(help.contains("does not list, edit, repair, or complete workflow files"));
         assert!(help.contains("Workflow Coordinator Handoff"));
         assert!(help.contains("coordinator cmux send coordinates"));
+        assert!(help.contains("coordinator inbox target `coordinator`"));
         assert!(help.contains("prepared [policy].pull_request"));
         assert!(help.contains("wt workflow complete"));
     }
