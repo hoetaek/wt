@@ -784,7 +784,7 @@ cli = "codex"
     #[test]
     fn create_scaffolds_profile_structure() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".repo-private")).unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "shared instructions\n").unwrap();
 
         let ctx = Ctx::new(

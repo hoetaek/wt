@@ -18,8 +18,8 @@ minor version instead of moving to `x.0.0`.
   branch.
 
 - Added an explicit `wt profile list` subcommand that reads the
-  `.local/profiles/<name>/profile.toml` inventory through the config/profile
-  loader, lists valid profiles in deterministic name order, and surfaces
+  `<git-common-dir>/wt/profiles/<name>/profile.toml` inventory through the
+  config/profile loader, lists valid profiles in deterministic name order, and surfaces
   invalid profile records as text warnings or JSON `invalid_profiles` entries
   instead of failing the whole list. Bare `wt profile` remains as the
   omission default for `wt profile list`, and the `default` profile name stays
@@ -27,8 +27,8 @@ minor version instead of moving to `x.0.0`.
 
 - Added `wt doctor --profile <NAME>`, which runs the existing provider and
   tool readiness checks against the effective config produced by
-  `.local/profiles/<name>` instead of the base effective config. The selected
-  profile is surfaced near the top of the text report and in a stable
+  `<git-common-dir>/wt/profiles/<name>` instead of the base effective config.
+  The selected profile is surfaced near the top of the text report and in a stable
   `profile` field on the JSON report; bare `wt doctor` keeps its previous
   behavior and omits the field. Missing, invalid, or reserved profile names
   fail before any checks run with the same error style as other
@@ -77,8 +77,8 @@ minor version instead of moving to `x.0.0`.
   guidance, while canonical behavior remains under `wt workflow`, `wt inspect`,
   and `wt agent status` / `wt agent watch`.
 - Added `wt task import [<issue>...]` as the non-executing inverse of
-  `wt task publish`. It imports existing provider issues into `.local/tasks`
-  TaskDocuments, records `[origin]`, supports explicit issue ids and a bare
+  `wt task publish`. It imports existing provider issues into
+  `<git-common-dir>/wt/tasks` TaskDocuments, records `[origin]`, supports explicit issue ids and a bare
   provider issue selector, and refuses duplicate ids or existing local
   TaskDocument collisions.
 - Changed workflow policy config to direct `[workflow]` fields
@@ -132,7 +132,7 @@ minor version instead of moving to `x.0.0`.
 ## 0.23.0 - 2026-05-17
 
 - Changed bare `wt workflow run` to select runnable workflows from
-  `.local/workflows`, auto-run the only runnable workflow, and fail
+  `<git-common-dir>/wt/workflows`, auto-run the only runnable workflow, and fail
   non-interactive multiple-candidate runs with explicit rerun commands before
   mutating Workflow or TaskRun state.
 - Fixed sequential `wt workflow run <workflow> --jobs 1` cancellation so later
@@ -260,8 +260,8 @@ minor version instead of moving to `x.0.0`.
   cleanup, and local TaskDocument cleanup now stay separate in the README and
   consistency notes.
 - Documented the canonical TaskDocument/TaskRun state model across README and
-  consistency notes: TaskDocuments define reusable work under `.local/tasks`,
-  TaskRuns record execution state under `.local/task-runs`, batch and stack
+  consistency notes: TaskDocuments define reusable work under `<git-common-dir>/wt/tasks`,
+  TaskRuns record execution state under `<git-common-dir>/wt/task-runs`, batch and stack
   rows link to TaskRuns instead of owning task status, `wt done` completes
   `new` and `batch` TaskRuns, and stack completion stays under
   `wt stack complete`.
@@ -274,14 +274,14 @@ minor version instead of moving to `x.0.0`.
   those TaskRuns.
 - Bumped the package version to `0.9.0` because the persisted stack state model
   changed while `wt` is still pre-1.0.
-- Added TaskRun execution records under `.local/task-runs/<id>.toml` for
+- Added TaskRun execution records under `<git-common-dir>/wt/task-runs/<id>.toml` for
   prepared local tasks started by `wt new --task`, `wt batch run`, and
   `wt stack run`.
   Batch and stack files now keep their orchestration rows while each started
   task points at a readable run record with source, group, status, error, and
   timestamps.
 - Bumped the package version to `0.6.0` because `wt new --task` and TaskRun add
-  new user-facing CLI and persisted local state-file contracts while `wt` is
+  new user-facing CLI and persisted personal state-file contracts while `wt` is
   still pre-1.0.
 - Added `--jobs <N>` for bounded concurrent batch execution while keeping batch
   metadata writes coordinated through one writer.
@@ -295,14 +295,14 @@ minor version instead of moving to `x.0.0`.
   explicit single-PR path, and `wt pr 42 43 44` starts multiple explicit PR
   worktrees in order.
 - Added `wt new --task [<task-key>]` support for selecting one prepared local
-  task from `.local/tasks/*.toml` and starting it with the same TaskDocument
+  task from `<git-common-dir>/wt/tasks/*.toml` and starting it with the same TaskDocument
   context used by batch and stack runs. Bare `wt new` is rejected so branch-name
   workspaces and prepared-task execution stay explicit.
 - Renamed `wt issue --parallel` and `wt new --parallel` to `--matrix`, without a
   compatibility alias, to describe profile-matrix workspace creation instead of
   generic parallel execution.
 - Changed `wt init` to create only the selected config file. After choosing
-  `.wt.toml` or `.local/.wt.toml`, issue provider, site provider, agent runtime,
+  `.wt.toml` or `<git-common-dir>/wt/config.toml`, issue provider, site provider, agent runtime,
   and additional setup prompts all write to that selected file only. Named
   profile/prompt scaffold creation is left to `wt config extract` and
   `wt profile create`.
@@ -335,18 +335,18 @@ minor version instead of moving to `x.0.0`.
   refactors, including inline profile extraction and profile prompt file
   extraction.
 - Added `wt config inline [SOURCE]` support for moving selected named profile
-  settings back into `.local/.wt.toml`, alongside prompt convention file
+  settings back into `<git-common-dir>/wt/config.toml`, alongside prompt convention file
   inlining.
 - Added `[editor]` config for opening wt-managed files with a configurable
   command and placement.
 - Added `wt config edit [SOURCE]`, `wt batch edit [BATCH]`, and
   `wt stack edit [STACK]` for opening config, batch, and stack TOML files.
-- Removed `wt profile promote`; use `wt config extract .local/.wt.toml`
+- Removed `wt profile promote`; use `wt config extract <git-common-dir>/wt/config.toml`
   instead.
 - Added `wt config` to print the merged effective config, with
   `wt config --profile <name>` support for inspecting named profile layers.
 - Changed named profile scaffold files to live under
-  `.local/profiles/<name>/scaffold/`, copied onto the worktree root.
+  `<git-common-dir>/wt/profiles/<name>/scaffold/`, copied onto the worktree root.
 - Renamed batch issue preparation to `wt batch issue`.
 - Added interactive multi-select for `wt batch issue` when no issue
   identifiers are provided.
@@ -356,7 +356,7 @@ minor version instead of moving to `x.0.0`.
   marking any task `running`, so base selection cannot strand a task in a
   stale running state.
 - Changed issues prepared by batch and stack workflows to persist as
-  `.local/tasks/*.toml` task documents, including the `worktree.naming` branch
+  `<git-common-dir>/wt/tasks/*.toml` task documents, including the `worktree.naming` branch
   when branch naming is configured.
 - Changed cmux workspace creation to target the caller's cmux window explicitly
   when caller context is available.
@@ -391,7 +391,7 @@ minor version instead of moving to `x.0.0`.
 - Added `wt stack show [STACK]` for inspecting stored stack base, profile,
   status, tasks, and parent chain without opening the TOML file.
 - Generalized batch and stack state to canonical `[[tasks]]` entries that
-  reference `.local/tasks/*.toml` task documents.
+  reference `<git-common-dir>/wt/tasks/*.toml` task documents.
 
 ## Historical Notes
 
@@ -401,7 +401,7 @@ kept as internal development history, not package release ordering.
 ### Former Pre-Reset 0.4.0
 
 - Changed config loading to merge `.wt.toml` as the shared base with
-  `.local/.wt.toml` as the private override.
+  `<git-common-dir>/wt/config.toml` as the private override.
 - Added early agent-oriented init scaffolding that was later replaced by the
   selected-config-only `wt init` model documented above.
 

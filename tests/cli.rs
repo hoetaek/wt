@@ -634,7 +634,49 @@ fn workflow_list_help_explains_canonical_inventory() {
             "derived action labels such as runnable, waiting, and done",
         ))
         .stdout(predicate::str::contains("<git-common-dir>/wt/workflows"))
-        .stdout(predicate::str::contains(".local/workflows").not());
+        .stdout(predicate::str::contains(legacy_local_path("workflows")).not());
+}
+
+#[test]
+fn primary_help_surfaces_do_not_teach_legacy_local_storage_paths() {
+    let help_surfaces: &[&[&str]] = &[
+        &["--help"],
+        &["task", "--help"],
+        &["run", "task", "--help"],
+        &["workflow", "--help"],
+        &["config", "--help"],
+        &["profile", "--help"],
+        &["ui", "--help"],
+    ];
+    let stale_paths = [
+        legacy_local_path("tasks"),
+        legacy_local_path("task-runs"),
+        legacy_local_path("workflows"),
+        legacy_local_path("profiles"),
+        legacy_local_path(".wt.toml"),
+    ];
+
+    for args in help_surfaces {
+        let output = wt_command()
+            .args(*args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let help = String::from_utf8(output).unwrap();
+        for stale_path in &stale_paths {
+            assert!(
+                !help.contains(stale_path),
+                "wt {} help still contains stale storage path {stale_path}",
+                args.join(" ")
+            );
+        }
+    }
+}
+
+fn legacy_local_path(child: &str) -> String {
+    [".local", child].join("/")
 }
 
 #[test]
@@ -811,7 +853,7 @@ fn workflow_state_is_visible_from_linked_worktree() {
             "Prepared workflow: <git-common-dir>/wt/workflows/",
         ));
 
-    assert!(!repo.join(".local/workflows").exists());
+    assert!(!repo.join(legacy_local_path("workflows")).exists());
     let workflows = std::fs::read_dir(repo.join(".git/wt/workflows"))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
@@ -875,7 +917,9 @@ fn ui_help_explains_read_only_local_server_contract() {
         .args(["ui", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("read-only local web UI"))
+        .stdout(predicate::str::contains(
+            "read-only personal wt state web UI",
+        ))
         .stdout(predicate::str::contains("127.0.0.1"))
         .stdout(predicate::str::contains("--port <PORT>"))
         .stdout(predicate::str::contains("0 selects an available port"))

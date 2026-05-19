@@ -1091,7 +1091,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Snapshot path",
-            path: ".local/issues/PROJ-123.md",
+            path: "<git-common-dir>/wt/issues/PROJ-123.md",
             content: "# PROJ-123: Fix editor\n\nBody",
         };
 
@@ -1108,7 +1108,7 @@ mod tests {
         let mut agent = config.agent.unwrap();
         let prompts = agent.prompt.remove("issue").unwrap();
         assert_eq!(prompts.len(), 2);
-        assert!(prompts[0].contains(".local/issues/PROJ-123.md"));
+        assert!(prompts[0].contains("<git-common-dir>/wt/issues/PROJ-123.md"));
         assert!(prompts[0].contains("# PROJ-123: Fix editor"));
         assert!(prompts[0].contains("Agent Completion Report"));
         assert!(prompts[0].contains("Start from the profile instructions."));

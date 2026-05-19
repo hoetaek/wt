@@ -658,9 +658,9 @@ fn append_optional_scaffold(s: &mut String) {
     s.push_str("# path = \"$HOME/worktrees/{{default_name}}\"\n");
     s.push_str("# copy = [\".env\"]\n");
     s.push_str("# copy_as = [\n");
-    s.push_str("#     { from = \".local/templates/.env\", to = \".env\" },\n");
+    s.push_str("#     { from = \".env.example\", to = \".env\" },\n");
     s.push_str("# ]\n");
-    s.push_str("# link = [\".local\"]\n");
+    s.push_str("# link = [\"tmp/shared-cache\"]\n");
     s.push_str("# inject_local_context = \"\"\"\n");
     s.push_str("# ## Local context\n");
     s.push_str("# - site: {{site_url}}\n");

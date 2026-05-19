@@ -189,7 +189,7 @@ wt workflow repair 2026-05-16-001
 wt workflow complete 2026-05-16-001 add-schema --run-next
 ```
 
-Open a read-only local state UI:
+Open a read-only personal state UI:
 
 ```bash
 wt ui --port 8424
@@ -487,7 +487,7 @@ there for one named profile.
 | `wt task publish` | Publish local TaskDocuments as provider issues |
 | `wt workflow` | Prepare, inspect, repair, and complete saved workflows |
 | `wt run workflow` | Start runnable tasks from saved workflows |
-| `wt ui` | Start the read-only local state web UI |
+| `wt ui` | Start the read-only personal state web UI |
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
 | `wt agent status` | Observe the matching task agent surface once |
 | `wt agent watch` | Poll the matching task agent surface, with optional timeout and heartbeat |

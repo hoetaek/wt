@@ -8,7 +8,7 @@ fn parses_full_config() {
 [worktree]
 path = "$HOME/worktrees/{{default_name}}"
 copy = [".env", "CLAUDE.local.md", ".claude/settings.local.json"]
-link = [".local"]
+link = ["tmp/shared-cache"]
 inject_local_context = "\n## env\n- parent: `{{parent_branch}}`\n"
 
 [setup]
@@ -79,7 +79,7 @@ commands = [
         config.worktree.path.as_deref(),
         Some("$HOME/worktrees/{{default_name}}")
     );
-    assert_eq!(config.worktree.link, vec![".local"]);
+    assert_eq!(config.worktree.link, vec!["tmp/shared-cache"]);
     assert!(config.worktree.inject_local_context.is_some());
     assert!(
         config
@@ -353,14 +353,14 @@ fn parses_explicit_claude_paths_in_copy() {
     let toml_str = r#"
 [worktree]
 copy = [".env", ".claude/settings.local.json", ".claude/hooks"]
-link = [".local"]
+link = ["tmp/shared-cache"]
 "#;
     let config: Config = toml::from_str(toml_str).unwrap();
     assert_eq!(
         config.worktree.copy,
         vec![".env", ".claude/settings.local.json", ".claude/hooks"]
     );
-    assert_eq!(config.worktree.link, vec![".local"]);
+    assert_eq!(config.worktree.link, vec!["tmp/shared-cache"]);
 }
 
 #[test]
@@ -1517,7 +1517,7 @@ args = ["--yolo"]
 
     let mut base = Config::default();
     base.worktree.copy = vec![".env".into()];
-    base.worktree.link = vec![".local".into()];
+    base.worktree.link = vec!["tmp/shared-cache".into()];
     base.worktree.path = Some("worktrees/{{default_name}}".into());
 
     let profile = Config::load_profile(dir.path(), "codex-yolo", &base)
@@ -1525,7 +1525,7 @@ args = ["--yolo"]
         .unwrap();
 
     assert_eq!(profile.worktree.copy, vec![".env"]);
-    assert_eq!(profile.worktree.link, vec![".local"]);
+    assert_eq!(profile.worktree.link, vec!["tmp/shared-cache"]);
     assert_eq!(
         profile.worktree.path.as_deref(),
         Some("worktrees/{{default_name}}")
@@ -1554,7 +1554,7 @@ path = "profiles/{{default_name}}"
 
     let mut base = Config::default();
     base.worktree.copy = vec![".env".into()];
-    base.worktree.link = vec![".local".into()];
+    base.worktree.link = vec!["tmp/shared-cache".into()];
 
     let profile = Config::load_profile(dir.path(), "alternate-path", &base)
         .unwrap()
@@ -1565,7 +1565,7 @@ path = "profiles/{{default_name}}"
         Some("profiles/{{default_name}}")
     );
     assert_eq!(profile.worktree.copy, vec![".env"]);
-    assert_eq!(profile.worktree.link, vec![".local"]);
+    assert_eq!(profile.worktree.link, vec!["tmp/shared-cache"]);
 }
 
 #[test]

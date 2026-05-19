@@ -823,7 +823,7 @@ mod tests {
 
         let repo = std::env::temp_dir().join("wt-test-chrome-devtools-repo");
         let wt = std::env::temp_dir().join("wt-test-chrome-devtools-worktree");
-        fs::create_dir_all(repo.join(".local")).ok();
+        fs::create_dir_all(repo.join(".repo-private")).ok();
         fs::create_dir_all(&wt).ok();
         fs::write(wt.join("CLAUDE.local.md"), "# Existing content\n").unwrap();
 
@@ -896,7 +896,7 @@ mod tests {
         assert!(context.contains(&expected_user_data_dir_text));
         assert!(!context.contains("{{chrome_"));
         assert!(!context.contains("{{worktree_"));
-        assert!(!context.contains(&repo.join(".local").to_string_lossy().to_string()));
+        assert!(!context.contains(&repo.join(".repo-private").to_string_lossy().to_string()));
 
         fs::remove_dir_all(&expected_user_data_dir).ok();
         if let Some(parent) = expected_user_data_dir.parent() {

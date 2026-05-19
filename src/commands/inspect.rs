@@ -1561,7 +1561,7 @@ run = "run-unrelated"
     fn inspect_clean_check_ignores_configured_worktree_links() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
-        config.worktree.link = vec![".local".into()];
+        config.worktree.link = vec!["tmp/shared-cache".into()];
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
@@ -1571,11 +1571,11 @@ run = "run-unrelated"
         );
 
         assert_eq!(
-            relevant_status_lines(&ctx, "?? .local\n?? .local/cache/a.toml"),
+            relevant_status_lines(&ctx, "?? tmp/shared-cache\n?? tmp/shared-cache/a.toml"),
             Vec::<&str>::new()
         );
         assert_eq!(
-            relevant_status_lines(&ctx, "?? .local\n M src/lib.rs"),
+            relevant_status_lines(&ctx, "?? tmp/shared-cache\n M src/lib.rs"),
             vec!["M src/lib.rs"]
         );
     }

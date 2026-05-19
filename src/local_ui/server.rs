@@ -36,7 +36,7 @@ pub async fn serve(ctx: &Ctx, options: ServerOptions) -> Result<()> {
     } else {
         ctx.ui.print_step(&format!("Local wt UI: {url}"));
         ctx.ui
-            .print_dim("Serving read-only wt local state. Press Ctrl-C to stop.");
+            .print_dim("Serving read-only wt personal state. Press Ctrl-C to stop.");
     }
 
     axum::serve(listener, app(state))
@@ -197,7 +197,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("wt local state"));
+        assert!(String::from_utf8_lossy(&body).contains("wt personal state"));
 
         let response = app
             .clone()

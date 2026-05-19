@@ -1133,7 +1133,7 @@ mod tests {
         let config = Config {
             agent: Some(AgentConfig {
                 cli: AgentCli::Claude,
-                args: vec!["--plugin-dir .local".into()],
+                args: vec!["--plugin-dir .plugin-cache".into()],
                 command: None,
                 ready: ReadyMode::Auto,
                 submit: SubmitMode::Auto,
@@ -1152,8 +1152,8 @@ mod tests {
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("claude CLI: missing"));
-        assert!(warnings.contains("--plugin-dir .local"));
-        assert!(warnings.contains("args = [\"--plugin-dir\", \".local\"]"));
+        assert!(warnings.contains("--plugin-dir .plugin-cache"));
+        assert!(warnings.contains("args = [\"--plugin-dir\", \".plugin-cache\"]"));
     }
 
     #[test]
@@ -1161,7 +1161,7 @@ mod tests {
         let config = Config {
             agent: Some(AgentConfig {
                 cli: AgentCli::Claude,
-                args: vec!["--plugin-dir".into(), ".local".into()],
+                args: vec!["--plugin-dir".into(), ".plugin-cache".into()],
                 command: None,
                 ready: ReadyMode::Auto,
                 submit: SubmitMode::Auto,
