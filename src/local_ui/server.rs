@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn config_tab_passes_source_paths_to_card_renderer() {
         assert!(APP_JS.contains("function renderConfig(snapshot)"));
-        assert!(APP_JS.contains("], config.paths,"));
+        assert!(APP_JS.contains("paths: config.paths,"));
         assert!(!APP_JS.contains("], paths(config.paths)),"));
     }
 
