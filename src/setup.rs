@@ -12,6 +12,7 @@ mod site;
 mod summary;
 mod workspace;
 
+pub(crate) use agent::agent_launch_command;
 use agent::bootstrap_agent;
 use background_tests::run_background_tests;
 use deps::install_deps;
@@ -492,6 +493,10 @@ mod tests {
         );
         assert_eq!(vars.get("site_name").unwrap(), "sample-app-proj-680");
         assert_eq!(vars.get("branch_slug").unwrap(), "proj-680-document-editor");
+        assert_eq!(
+            vars.get("wt_agent_id").unwrap(),
+            "agents/proj-680-document-editor"
+        );
         assert_eq!(vars.get("issue_title").unwrap(), "Document editor");
         assert!(vars.contains_key("vite_port"));
         assert!(vars.contains_key("api_port"));
@@ -1629,11 +1634,109 @@ mod tests {
         assert_eq!(
             command_arg,
             &format!(
-                "codex --model wt-test-agent-command-repo-issue-1-test --cd {}",
+                "export WT_AGENT_ID=agents/issue-1-test; codex --model wt-test-agent-command-repo-issue-1-test --cd {}",
                 wt.display()
             )
         );
         assert_eq!(focus_arg, "false");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
+    fn run_setup_opens_workspace_with_claude_agent_identity_env() {
+        use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode, WorkspaceConfig};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let repo = std::env::temp_dir().join("wt-test-claude-agent-env-repo");
+        let wt = std::env::temp_dir().join("wt-test-claude-agent-env-worktree");
+        fs::create_dir_all(&repo).ok();
+        fs::create_dir_all(&wt).ok();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:0"}}"#,
+            true,
+        );
+        runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response("ready ❯", true);
+        runner.add_response("", true);
+        runner.add_response("pane:0", true);
+        let runner = Arc::new(runner);
+
+        let config = Config {
+            workspace: Some(WorkspaceConfig::default()),
+            agent: Some(AgentConfig {
+                cli: AgentCli::Claude,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: HashMap::new(),
+                ..AgentConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: repo.with_file_name("wt-test-claude-agent-env-computed-path"),
+            branch: "alice/issue-1-test".into(),
+            workspace: "test".into(),
+            site: None,
+        };
+
+        run_setup(&ctx, &wt, &names, None, "branch", None, None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let workspace_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "cmux" && args.first().is_some_and(|a| a == "new-workspace")
+            })
+            .expect("expected new-workspace call");
+        let command_arg = workspace_call
+            .1
+            .iter()
+            .position(|arg| arg == "--command")
+            .and_then(|idx| workspace_call.1.get(idx + 1))
+            .unwrap();
+        assert_eq!(
+            command_arg,
+            "export WT_AGENT_ID=agents/issue-1-test; claude"
+        );
 
         fs::remove_dir_all(&repo).ok();
         fs::remove_dir_all(&wt).ok();

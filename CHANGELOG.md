@@ -8,6 +8,14 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Bound wt-launched agent workspace commands to the file-inbox runtime identity
+  by injecting `WT_AGENT_ID=agents/<branch_slug>` into the cmux
+  `new-workspace --command` string. Codex uses this for the user-level dispatcher
+  hook, and Claude/future agent CLIs receive the same launch-time environment
+  shape wherever wt controls process launch.
+- Bumped the package version to `0.36.1` because the launch-time agent identity
+  binding fixes the runtime behavior promised by the Codex dispatcher adapter.
+
 - Added `wt agent hook install codex` and `wt agent hook uninstall codex` for
   Codex inbox delivery through a user-level `hooks.json` `UserPromptSubmit`
   dispatcher hook. The installed hook reads `WT_AGENT_ID` at runtime and no-ops

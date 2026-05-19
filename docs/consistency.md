@@ -237,8 +237,14 @@ identity는 event key `user_prompt_submit`, normalized command handler, default 
 
 `--agent <agent>`가 남아 있다면 manual/test override다. 이 override는 user-level hook을
 특정 agent에 묶으므로 normal run UX의 일부가 아니다. `wt run issue`, `wt run task`,
-`wt run workflow`는 사용자가 매번 hook을 다시 설치하게 하지 않고, Codex launch 시 per-run
-`WT_AGENT_ID`를 설정해 dispatcher에 agent binding을 제공해야 한다.
+`wt run workflow`는 사용자가 매번 hook을 다시 설치하게 하지 않고, Codex launch 시 cmux
+`new-workspace --command`에 `WT_AGENT_ID=agents/<branch_slug>`를 주입해 dispatcher에
+agent binding을 제공해야 한다. `<branch_slug>`는 message MVP의 `agents/<agent>` 한 segment
+제약과 맞도록 path separator가 없는 값이어야 하고, `wt msg send --to <branch_slug>`와
+`wt msg check-inbox --agent "$WT_AGENT_ID"`가 같은 inbox를 보아야 한다.
+Claude와 future agent CLI도 wt가 process launch를 소유하는 경로에서는 같은
+launch-time `WT_AGENT_ID` shape를 받아야 한다. Hook adapter install은 capability setup이고,
+agent identity는 run/session launch의 책임이다.
 
 수동으로 agent id를 지정해 agent command를 실행하는 wrapper가 필요하면 canonical 후보는
 다음 짧은 형태다.

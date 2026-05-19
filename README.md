@@ -282,9 +282,12 @@ merge.
   exits successfully without output. It also writes the matching trusted hook
   state to Codex `config.toml`, preserving existing cmux and non-wt hooks/trust
   entries. `--agent <agent>` is only a manual/test override; normal
-  `wt run issue`, `wt run task`, and `wt run workflow` sessions should bind the
-  per-run agent by setting `WT_AGENT_ID` when launching Codex. `wt agent hook
-  uninstall codex` removes only wt-managed Codex hook and trust entries.
+  `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the
+  per-run agent by setting `WT_AGENT_ID=agents/<branch_slug>` in the cmux
+  `new-workspace --command` string when launching Codex. wt-launched Claude and
+  future agent CLI commands receive the same launch-time environment binding;
+  Claude hook dispatch remains owned by the Claude adapter surface. `wt agent
+  hook uninstall codex` removes only wt-managed Codex hook and trust entries.
 
 `wt workflow` is the canonical prepared-work surface. `single`, `batch`,
 `stack`, and `matrix` are workflow mode values, not separate command surfaces. Use

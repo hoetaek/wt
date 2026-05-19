@@ -337,7 +337,7 @@ pub enum AgentHookInstallCommand {
     },
     /// Install Codex UserPromptSubmit inbox polling
     #[command(
-        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes a user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit hook that reads WT_AGENT_ID at runtime and runs `wt msg check-inbox --agent \"$WT_AGENT_ID\"`; when WT_AGENT_ID is unset, the hook exits successfully without output. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions should bind the per-run agent by setting WT_AGENT_ID when they launch Codex."
+        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes a user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit hook that reads WT_AGENT_ID at runtime and runs `wt msg check-inbox --agent \"$WT_AGENT_ID\"`; when WT_AGENT_ID is unset, the hook exits successfully without output. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> when they launch Codex."
     )]
     Codex {
         /// Manual/test override: bind this user-level hook to one agent instead of WT_AGENT_ID

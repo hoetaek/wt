@@ -269,12 +269,7 @@ fn open_worktree(ctx: &Ctx, opened: &OpenedWorktree) -> Result<()> {
     if let Some(ref ws_config) = config.workspace {
         ctx.ui
             .print_step(&format!("Opening cmux workspace: {}", names.workspace));
-        let command = match &config.agent {
-            Some(agent) => agent
-                .command_line_with_vars(Some(&template_vars))?
-                .unwrap_or_default(),
-            None => String::new(),
-        };
+        let command = setup::agent_launch_command(config.agent.as_ref(), &template_vars)?;
         let ws_handle = cmux.new_workspace(&entry.path, &names.workspace, &command)?;
 
         let panes = cmux.list_panes(&ws_handle)?;
@@ -706,7 +701,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             command_arg,
-            "codex --model repo-feature --cd /tmp/repo-feature"
+            "export WT_AGENT_ID=agents/feature; codex --model repo-feature --cd /tmp/repo-feature"
         );
 
         assert!(!calls.iter().any(|(cmd, args, _)| {
@@ -837,7 +832,10 @@ args = ["--model", "gpt-5.5"]
             .position(|arg| arg == "--command")
             .and_then(|idx| workspace_call.1.get(idx + 1))
             .unwrap();
-        assert_eq!(command_arg, "codex --model gpt-5.5");
+        assert_eq!(
+            command_arg,
+            "export WT_AGENT_ID=agents/feature-codex; codex --model gpt-5.5"
+        );
     }
 
     #[test]
@@ -946,7 +944,10 @@ args = ["--yolo"]
             .position(|arg| arg == "--command")
             .and_then(|idx| workspace_call.1.get(idx + 1))
             .unwrap();
-        assert_eq!(command_arg, "codex --yolo");
+        assert_eq!(
+            command_arg,
+            "export WT_AGENT_ID=agents/feature-codex-yolo; codex --yolo"
+        );
     }
 
     #[test]
@@ -1039,7 +1040,10 @@ args = ["--yolo"]
             .position(|arg| arg == "--command")
             .and_then(|idx| workspace_call.1.get(idx + 1))
             .unwrap();
-        assert_eq!(command_arg, "claude");
+        assert_eq!(
+            command_arg,
+            "export WT_AGENT_ID=agents/feature-codex; claude"
+        );
     }
 
     #[test]

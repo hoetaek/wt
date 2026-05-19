@@ -876,6 +876,69 @@ fn msg_send_writes_to_agent_inbox_and_normalizes_agent_id() {
 }
 
 #[test]
+fn msg_send_to_derived_agent_id_targets_runtime_identity_inbox() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "issue-1-test",
+            "runtime",
+            "identity",
+        ])
+        .env("WT_AGENT_ID", "agents/issue-1-test")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "<git-common-dir>/wt/messages/agents/issue-1-test/inbox/",
+        ));
+
+    let inbox = temp
+        .path()
+        .join(".git/wt/messages/agents/issue-1-test/inbox");
+    let files = toml_files(&inbox);
+    assert_eq!(files.len(), 1);
+
+    let content = std::fs::read_to_string(&files[0]).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(message["meta"]["to"].as_str(), Some("agents/issue-1-test"));
+    assert_eq!(
+        message["meta"]["from"].as_str(),
+        Some("agents/issue-1-test")
+    );
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/issue-1-test",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("runtime identity")
+    );
+    assert!(toml_files(&inbox).is_empty());
+    assert_eq!(toml_files(&inbox.join("read")).len(), 1);
+}
+
+#[test]
 fn msg_check_inbox_emits_hook_json_and_moves_messages_to_read() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -1456,6 +1519,7 @@ fn agent_hook_help_explains_claude_file_inbox_adapter() {
         .stdout(predicate::str::contains("trusted hook state"))
         .stdout(predicate::str::contains("non-wt and cmux hooks"))
         .stdout(predicate::str::contains("WT_AGENT_ID"))
+        .stdout(predicate::str::contains("agents/<branch_slug>"))
         .stdout(predicate::str::contains("manual or test override"));
 
     wt_command()

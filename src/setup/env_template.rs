@@ -44,10 +44,9 @@ pub(crate) fn build_template_vars(
     if let Some(site) = &names.site {
         vars.insert("site_name".into(), site.clone());
     }
-    vars.insert(
-        "branch_slug".into(),
-        WorktreeNames::build_branch_slug(&names.branch),
-    );
+    let branch_slug = WorktreeNames::build_branch_slug(&names.branch);
+    vars.insert("branch_slug".into(), branch_slug.clone());
+    vars.insert("wt_agent_id".into(), format!("agents/{branch_slug}"));
     if let Some(t) = title {
         vars.insert("issue_title".into(), t.into());
     }

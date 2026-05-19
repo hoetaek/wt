@@ -5,6 +5,42 @@ use crate::template;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 
+const WT_AGENT_ID_TEMPLATE_KEY: &str = "wt_agent_id";
+
+pub(crate) fn agent_launch_command(
+    agent: Option<&AgentConfig>,
+    vars: &HashMap<String, String>,
+) -> Result<String> {
+    let Some(agent) = agent else {
+        return Ok(String::new());
+    };
+    let Some(command) = agent.command_line_with_vars(Some(vars))? else {
+        return Ok(String::new());
+    };
+
+    Ok(inject_agent_identity_env(agent, command, vars))
+}
+
+fn inject_agent_identity_env(
+    agent: &AgentConfig,
+    command: String,
+    vars: &HashMap<String, String>,
+) -> String {
+    if agent.cli == AgentCli::None || command.trim().is_empty() {
+        return command;
+    }
+
+    let Some(agent_id) = vars
+        .get(WT_AGENT_ID_TEMPLATE_KEY)
+        .map(String::as_str)
+        .filter(|agent_id| !agent_id.trim().is_empty())
+    else {
+        return command;
+    };
+
+    format!("export WT_AGENT_ID={}; {command}", shell_arg(agent_id))
+}
+
 pub(super) fn bootstrap_agent(
     ctx: &Ctx,
     ws_handle: &str,
@@ -144,4 +180,15 @@ fn should_submit_with_enter_key(agent: &AgentConfig) -> bool {
             AgentCli::Codex | AgentCli::Claude | AgentCli::Gemini,
         ) | (SubmitMode::CarriageReturn, _)
     )
+}
+
+fn shell_arg(value: &str) -> String {
+    let safe = value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | ':' | '='));
+    if safe && !value.is_empty() {
+        return value.to_string();
+    }
+
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
