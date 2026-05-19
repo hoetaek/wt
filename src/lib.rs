@@ -10,6 +10,7 @@ pub mod names;
 pub mod runner;
 pub mod services;
 pub mod setup;
+pub mod storage;
 pub mod task;
 pub mod task_run;
 pub mod template;
