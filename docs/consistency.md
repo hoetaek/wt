@@ -619,18 +619,29 @@ Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work
 
 `wt inspect [<target>]`는 branch, worktree, TaskRun을 읽어서 parent, dirty 상태,
 commit/diff 정보, Agent Completion Report 기대치, 현재 cmux contact를 보여주는 canonical
-read-only dossier다. Agent observation snapshot을 같이 보여줄 수 있지만, `inspect`의 exit
-code는 command 자체의 성공/실패만 뜻한다. 관찰된 agent가 `needs_input`이거나 `failed`여도
-그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. 실제 완료 기록은 direct 또는
-workflow-linked context별 명령이 맡는다. 직접 `wt task run`이 만든 TaskRun은 review/landing
-확인 뒤 `wt done` cleanup이 정리할 수 있고, Workflow file의 `[[tasks]].run`과 matching
-`group`으로 연결된 TaskRun은 workflow completion command가 전이한다.
+read-only dossier다. `--pr`을 명시하면 같은 inspect report 안에 Pull Request Review evidence
+section을 추가로 가져와서 PR metadata, submitted review/head synchronization, review
+threads, PR comments/reactions, check rollup, warning을 보여준다. 이 PR evidence는 read-only
+inspection surface이며 thread resolve, reply, review request, PR body edit, merge, TaskRun/
+Workflow state mutation을 하지 않는다. `--pr`을 생략한 `wt inspect <target>`은 GitHub auth나
+network fetch 없이 local dossier만 출력해야 한다. Agent observation snapshot을 같이 보여줄 수
+있지만, `inspect`의 exit code는 command 자체의 성공/실패만 뜻한다. 관찰된 agent가
+`needs_input`이거나 `failed`여도 그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. PR
+review verdict도 human output과 nested JSON evidence에만 두고 exit-code 의미를 바꾸지 않는다.
+실제 완료 기록은 direct 또는 workflow-linked context별 명령이 맡는다. 직접 `wt task run`이
+만든 TaskRun은 review/landing 확인 뒤 `wt done` cleanup이 정리할 수 있고, Workflow file의
+`[[tasks]].run`과 matching `group`으로 연결된 TaskRun은 workflow completion command가 전이한다.
 
 `wt inspect`에서 `<target>` 생략은 interactive TTY human mode에서 inspectable work target
 selector를 여는 기본 동작이다. `--json`, `--quiet`, 또는 non-TTY automation에서는 selector를
 열지 않고 explicit `<target>`을 요구해야 한다. 실패 메시지는 branch, worktree path/name,
 TaskRun id 중 하나를 넘기거나 interactive TTY에서 selector를 열라는 guidance를 정확히
 보여줘야 한다.
+
+`wt inspect <target> --pr --json`은 PR evidence를 `pull_request_review` nested field 아래에
+둔다. Top-level `status`는 만들지 않는다. Durable execution lifecycle은 `task_runs[].status`,
+agent observation은 `agent.state`, PR review result는 `pull_request_review.verdict`처럼 각
+concept owner 아래에 남아야 한다.
 
 `wt send`도 상태 전이 명령이 아니다. `wt inspect`와 같은 target 해석으로 현재 cmux
 surface를 찾아 메시지를 보내는 transport 명령이다. 메시지를 보냈다는 사실을 TaskRun

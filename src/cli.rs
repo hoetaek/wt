@@ -108,11 +108,14 @@ pub enum Commands {
     },
     /// Read a work dossier for a branch, worktree, or TaskRun
     #[command(
-        long_about = "Read a concise, read-only work dossier for a branch, worktree path/name, or TaskRun id. Omit TARGET in an interactive terminal to choose an inspectable work target; pass TARGET explicitly for scripts and non-interactive use."
+        long_about = "Read a concise, read-only work dossier for a branch, worktree path/name, or TaskRun id. Omit TARGET in an interactive terminal to choose an inspectable work target; pass TARGET explicitly for scripts and non-interactive use. Pass --pr to fetch and render read-only pull request review evidence for the inspected branch."
     )]
     Inspect {
         /// Branch, worktree path/name, or TaskRun id to inspect
         target: Option<String>,
+        /// Fetch and render read-only pull request review evidence for the inspected branch
+        #[arg(long)]
+        pr: bool,
     },
     /// Observe and watch task agent runtime state
     Agent {
@@ -788,13 +791,28 @@ mod tests {
         let cli = parse(&["wt", "inspect"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Inspect { target: None })
+            Some(Commands::Inspect {
+                target: None,
+                pr: false
+            })
         ));
 
         let cli = parse(&["wt", "inspect", "feature"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Inspect { ref target }) if target.as_deref() == Some("feature")
+            Some(Commands::Inspect {
+                ref target,
+                pr: false
+            }) if target.as_deref() == Some("feature")
+        ));
+
+        let cli = parse(&["wt", "inspect", "feature", "--pr"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Inspect {
+                ref target,
+                pr: true
+            }) if target.as_deref() == Some("feature")
         ));
     }
 
@@ -811,6 +829,8 @@ mod tests {
         assert!(help.contains("read-only work dossier"));
         assert!(help.contains("Branch, worktree path/name, or TaskRun id"));
         assert!(help.contains("Omit TARGET in an interactive terminal"));
+        assert!(help.contains("--pr"));
+        assert!(help.contains("pull request review evidence"));
     }
 
     #[test]

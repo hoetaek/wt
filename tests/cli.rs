@@ -81,6 +81,74 @@ fn current_branch(path: &Path) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
+fn path_with_fake_bin(fake_bin: &Path) -> std::ffi::OsString {
+    let mut paths = vec![fake_bin.to_path_buf()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    std::env::join_paths(paths).unwrap()
+}
+
+#[cfg(unix)]
+fn write_fake_gh(path: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = path.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(
+        &gh,
+        r#"#!/bin/sh
+set -eu
+if [ "${WT_FAKE_GH_MARK:-}" != "" ]; then
+  echo "$*" >> "$WT_FAKE_GH_MARK"
+fi
+
+if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  printf '%s\n' '[{"number":42,"state":"OPEN","updatedAt":"2026-05-19T00:00:00Z"}]'
+  exit 0
+fi
+
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  cat <<'JSON'
+{"number":42,"title":"Add PR evidence","url":"https://github.com/acme/widgets/pull/42","state":"OPEN","isDraft":false,"headRefName":"feature","headRefOid":"abc123","baseRefName":"main","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","latestReviews":[{"author":{"login":"coderabbitai"},"state":"COMMENTED","commitId":"abc123","submittedAt":"2026-05-19T00:00:00Z","url":"https://github.com/acme/widgets/pull/42#pullrequestreview-1"}],"reviewRequests":[],"reactionGroups":[{"content":"THUMBS_UP","users":{"totalCount":1,"nodes":[{"login":"chatgpt-codex-connector"}]}}],"comments":[],"statusCheckRollup":[{"name":"CI","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://github.com/acme/widgets/actions/runs/1"}]}
+JSON
+  exit 0
+fi
+
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '%s\n' '{"owner":{"login":"acme"},"name":"widgets"}'
+  exit 0
+fi
+
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/widgets/pulls/42/reviews?per_page=100" ]; then
+  cat <<'JSON'
+[{"user":{"login":"coderabbitai"},"state":"COMMENTED","commit_id":"abc123","submitted_at":"2026-05-19T00:00:00Z","html_url":"https://github.com/acme/widgets/pull/42#pullrequestreview-1"}]
+JSON
+  exit 0
+fi
+
+if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
+  printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]}}}}}'
+  exit 0
+fi
+
+echo "unexpected fake gh invocation: $*" >&2
+exit 1
+"#,
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&gh).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&gh, permissions).unwrap();
+    bin
+}
+
+#[cfg(not(unix))]
+fn write_fake_gh(_path: &Path) -> std::path::PathBuf {
+    panic!("fake gh test helper is only implemented for Unix test environments")
+}
+
 fn write_task_document(root: &Path, key: &str, branch: &str) {
     let dir = root.join(".local/tasks");
     std::fs::create_dir_all(&dir).unwrap();
@@ -652,7 +720,9 @@ fn inspect_help_explains_optional_target_selection() {
         ))
         .stdout(predicate::str::contains(
             "Omit TARGET in an interactive terminal",
-        ));
+        ))
+        .stdout(predicate::str::contains("--pr"))
+        .stdout(predicate::str::contains("pull request review evidence"));
 }
 
 #[test]
@@ -701,6 +771,115 @@ fn inspect_explicit_branch_prints_dossier_without_cmux_contact() {
         .stdout(predicate::str::contains("Expected report"))
         .stdout(predicate::str::contains("PR=<pr>"))
         .stderr(predicate::str::contains("Cmux:"));
+}
+
+#[test]
+fn inspect_pr_renders_pull_request_review_section() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let branch = current_branch(temp.path());
+    let fake_bin = write_fake_gh(temp.path());
+
+    wt_command()
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "inspect",
+            &branch,
+            "--pr",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Pull Request Review"))
+        .stdout(predicate::str::contains("PR: #42 Add PR evidence"))
+        .stdout(predicate::str::contains("Verdict: passed"));
+}
+
+#[test]
+fn inspect_dot_pr_works_from_task_worktree() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    let worktree = temp.path().join("repo-feature");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_init(&repo);
+    git_commit(&repo);
+    let status = git_command()
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "feature",
+            worktree.to_str().unwrap(),
+            "HEAD",
+        ])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let fake_bin = write_fake_gh(temp.path());
+
+    wt_command()
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", worktree.to_str().unwrap(), "inspect", ".", "--pr"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Inspect: ."))
+        .stdout(predicate::str::contains("Branch: feature"))
+        .stdout(predicate::str::contains("Pull Request Review"))
+        .stdout(predicate::str::contains("Verdict: passed"));
+}
+
+#[test]
+fn inspect_without_pr_does_not_fetch_pull_request_review() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let branch = current_branch(temp.path());
+    let fake_bin = write_fake_gh(temp.path());
+    let marker = temp.path().join("gh-called");
+
+    wt_command()
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .env("WT_FAKE_GH_MARK", &marker)
+        .args(["-C", temp.path().to_str().unwrap(), "inspect", &branch])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Pull Request Review").not());
+
+    assert!(!marker.exists(), "plain inspect should not call gh");
+}
+
+#[test]
+fn inspect_pr_json_nests_pull_request_review_without_top_level_status() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let branch = current_branch(temp.path());
+    let fake_bin = write_fake_gh(temp.path());
+
+    let output = wt_command()
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "inspect",
+            &branch,
+            "--pr",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("==>").not())
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(value.get("status").is_none());
+    assert_eq!(value["pull_request_review"]["pr"]["number"], 42);
+    assert_eq!(value["pull_request_review"]["verdict"], "passed");
 }
 
 #[test]

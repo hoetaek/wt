@@ -124,7 +124,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::List { wide } => commands::list::run(ctx, *wide),
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),
-        Commands::Inspect { target } => commands::inspect::run(ctx, target.as_deref()),
+        Commands::Inspect { target, pr } => commands::inspect::run(
+            ctx,
+            target.as_deref(),
+            commands::inspect::InspectOptions { pr: *pr },
+        ),
         Commands::Agent { command } => match command {
             AgentCommand::Status { target } => commands::agent::status(ctx, target.as_deref()),
             AgentCommand::Watch {

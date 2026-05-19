@@ -1,19 +1,28 @@
 use crate::commands::agent_report;
 use crate::context::Ctx;
 use crate::services::git::GitService;
+use crate::services::github_review::{
+    GithubReviewService, PullRequestReviewEvidence, PullRequestReviewVerdict,
+};
 use crate::services::work;
 use crate::task;
 use crate::task_run;
 use crate::workflow::render::{workflow_body_summary, workflow_origin_label, workflow_title_label};
 use crate::workflow::{self, WorkflowPullRequestMode, WorkflowRecord};
 use anyhow::{Context, Result};
+use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub(crate) type InspectTarget = work::WorkTarget;
 pub(crate) type CmuxContact = work::CmuxContact;
 
-pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InspectOptions {
+    pub pr: bool,
+}
+
+pub fn run(ctx: &Ctx, target: Option<&str>, options: InspectOptions) -> Result<()> {
     let selected_target = resolve_inspect_target(ctx, target)?;
     let work = work::observe_target(ctx, selected_target)?;
     let target = &work.target;
@@ -25,6 +34,27 @@ pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     };
     let task_runs = task_runs_for_target(ctx, target)?;
     let workflows = workflows_for_task_runs(ctx, &task_runs)?;
+    let pull_request_review = if options.pr {
+        Some(
+            GithubReviewService::new(ctx.runner.as_ref(), Some(&ctx.repo_root))
+                .review_for_branch(&target.branch)?,
+        )
+    } else {
+        None
+    };
+
+    if ctx.is_json() {
+        write_json(&inspect_report(
+            ctx,
+            &work,
+            status.as_deref(),
+            parent.as_deref(),
+            &task_runs,
+            &workflows,
+            pull_request_review,
+        )?)?;
+        return Ok(());
+    }
 
     ctx.ui.print_step(&format!("Inspect: {}", target.label));
     print_work_section(ctx, target, &task_runs, &workflows)?;
@@ -32,6 +62,9 @@ pub fn run(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     print_agent_section(ctx, &work);
     print_cmux_section(ctx, &work);
     print_agent_report_expectation(ctx);
+    if let Some(evidence) = pull_request_review.as_ref() {
+        print_pull_request_review_section(ctx, evidence);
+    }
     print_next_section(ctx, target, &workflows);
 
     Ok(())
@@ -157,6 +190,9 @@ fn add_workflow_matches(
 }
 
 fn warn_skipped_workflow(ctx: &Ctx, path: &Path, err: &anyhow::Error) {
+    if ctx.is_json() {
+        return;
+    }
     ctx.ui.print_warning(&format!(
         "Skipping workflow {}: {}",
         workflow_relative_path(ctx, path),
@@ -174,6 +210,245 @@ fn inspect_error_summary(err: &anyhow::Error) -> String {
         .next()
         .unwrap_or("workflow could not be read")
         .to_string()
+}
+
+#[derive(Debug, Serialize)]
+struct InspectReport {
+    target: InspectTargetReport,
+    git: InspectGitReport,
+    task_runs: Vec<InspectTaskRunReport>,
+    workflows: Vec<InspectWorkflowReport>,
+    agent: InspectAgentReport,
+    cmux: InspectCmuxReport,
+    expected_report: InspectExpectedReport,
+    pull_request_review: Option<PullRequestReviewEvidence>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectTargetReport {
+    label: String,
+    branch: String,
+    worktree: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectGitReport {
+    parent: Option<String>,
+    dirty: String,
+    dirty_paths: Vec<String>,
+    ignored_configured_links: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectTaskRunReport {
+    id: String,
+    task: String,
+    branch: String,
+    status: String,
+    context: String,
+    group: Option<String>,
+    error: Option<String>,
+    task_path: String,
+    task_title: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectWorkflowReport {
+    id: String,
+    path: String,
+    mode: String,
+    title: String,
+    body_summary: Option<String>,
+    origin: Option<String>,
+    task: String,
+    parent: Option<String>,
+    pull_request: String,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectAgentReport {
+    kind: String,
+    state: String,
+    session_id: Option<String>,
+    last_tool: Option<String>,
+    last_event_at: Option<String>,
+    needs_input_since: Option<String>,
+    warning: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectCmuxReport {
+    state: String,
+    contact: Option<InspectCmuxContactReport>,
+    candidates: Vec<InspectCmuxContactReport>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectCmuxContactReport {
+    workspace: String,
+    surface: String,
+    pane: String,
+    title: String,
+    selected: bool,
+    readable: bool,
+    agent_kind: String,
+    agent_state: String,
+    validation_warning: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectExpectedReport {
+    heading: &'static str,
+    shape: &'static str,
+    items: Vec<&'static str>,
+}
+
+fn inspect_report(
+    ctx: &Ctx,
+    work: &work::Work,
+    status: Option<&str>,
+    parent: Option<&str>,
+    records: &[task_run::TaskRunRecord],
+    workflows: &[WorkflowMatch],
+    pull_request_review: Option<PullRequestReviewEvidence>,
+) -> Result<InspectReport> {
+    Ok(InspectReport {
+        target: InspectTargetReport {
+            label: work.target.label.clone(),
+            branch: work.target.branch.clone(),
+            worktree: work
+                .target
+                .worktree
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        },
+        git: inspect_git_report(ctx, status, parent),
+        task_runs: records
+            .iter()
+            .map(|record| inspect_task_run_report(ctx, record))
+            .collect::<Result<Vec<_>>>()?,
+        workflows: workflows
+            .iter()
+            .map(|workflow| InspectWorkflowReport {
+                id: workflow.id.clone(),
+                path: workflow_relative_path(ctx, &workflow.path),
+                mode: workflow.mode.clone(),
+                title: workflow.title.clone(),
+                body_summary: workflow.body_summary.clone(),
+                origin: workflow.origin.clone(),
+                task: workflow.task.clone(),
+                parent: workflow.parent.clone(),
+                pull_request: workflow.pull_request.as_str().into(),
+            })
+            .collect(),
+        agent: InspectAgentReport {
+            kind: work.state.agent_kind.as_str().into(),
+            state: work.state.status.as_str().into(),
+            session_id: work.state.session_id.clone(),
+            last_tool: work.state.last_tool.clone(),
+            last_event_at: work.state.last_event_at.clone(),
+            needs_input_since: work.state.needs_input_since.clone(),
+            warning: work.state.warning.clone(),
+        },
+        cmux: inspect_cmux_report(work),
+        expected_report: InspectExpectedReport {
+            heading: agent_report::REPORT_HEADING,
+            shape: "Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>",
+            items: agent_report::REPORT_ITEMS.to_vec(),
+        },
+        pull_request_review,
+    })
+}
+
+fn inspect_git_report(ctx: &Ctx, status: Option<&str>, parent: Option<&str>) -> InspectGitReport {
+    let dirty_paths = status
+        .map(|status| {
+            relevant_status_lines(ctx, status)
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let ignored_configured_links = status
+        .map(|status| {
+            ignored_configured_link_lines(ctx, status)
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let dirty = match status {
+        None => "unavailable",
+        Some(_) if dirty_paths.is_empty() => "clean",
+        Some(_) => "dirty",
+    };
+    InspectGitReport {
+        parent: parent.map(str::to_string),
+        dirty: dirty.into(),
+        dirty_paths,
+        ignored_configured_links,
+    }
+}
+
+fn inspect_task_run_report(
+    ctx: &Ctx,
+    record: &task_run::TaskRunRecord,
+) -> Result<InspectTaskRunReport> {
+    let context = task_run::resolve_context(ctx, record)
+        .map(|context| context.label())
+        .unwrap_or_else(|err| format!("unavailable ({})", inspect_error_summary(&err)));
+    let task_path = task::task_relative_path(&record.run.task);
+    let task_title = task::read_task_document(ctx, &record.run.task)
+        .ok()
+        .map(|document| document.title_or_key(&record.run.task).to_string());
+    Ok(InspectTaskRunReport {
+        id: record.id.clone(),
+        task: record.run.task.clone(),
+        branch: record.run.branch.clone(),
+        status: record.run.status.as_str().into(),
+        context,
+        group: record.run.group.clone(),
+        error: record.run.error.clone(),
+        task_path,
+        task_title,
+    })
+}
+
+fn inspect_cmux_report(work: &work::Work) -> InspectCmuxReport {
+    InspectCmuxReport {
+        state: work.session_state.as_str().into(),
+        contact: selected_work_contact(work)
+            .or_else(|| work.cmux_contacts.iter().find(|contact| contact.selected))
+            .map(inspect_cmux_contact_report),
+        candidates: work
+            .cmux_contacts
+            .iter()
+            .map(inspect_cmux_contact_report)
+            .collect(),
+        message: work.message.clone(),
+    }
+}
+
+fn inspect_cmux_contact_report(contact: &CmuxContact) -> InspectCmuxContactReport {
+    InspectCmuxContactReport {
+        workspace: contact.workspace.clone(),
+        surface: contact.surface.clone(),
+        pane: contact.pane.clone(),
+        title: contact.title.clone(),
+        selected: contact.selected,
+        readable: contact.readable,
+        agent_kind: contact.state.agent_kind.as_str().into(),
+        agent_state: contact.state.status.as_str().into(),
+        validation_warning: contact.validation_warning.clone(),
+    }
+}
+
+fn write_json(report: &InspectReport) -> Result<()> {
+    let mut handle = std::io::stdout().lock();
+    serde_json::to_writer_pretty(&mut handle, report)?;
+    println!();
+    Ok(())
 }
 
 fn workflow_task_label(task: &str) -> String {
@@ -557,6 +832,89 @@ fn print_agent_report_expectation(ctx: &Ctx) {
     }
 }
 
+fn print_pull_request_review_section(ctx: &Ctx, evidence: &PullRequestReviewEvidence) {
+    ctx.ui.print_step("Pull Request Review");
+    let Some(pr) = evidence.pr.as_ref() else {
+        ctx.ui.print_warning("Pull request review: none detected");
+        for warning in &evidence.warnings {
+            ctx.ui.print_warning(&format!("  {warning}"));
+        }
+        return;
+    };
+
+    ctx.ui.print_dim(&format!(
+        "  PR: #{} {} ({}, {} -> {})",
+        pr.number, pr.title, pr.state, pr.head_ref_name, pr.base_ref_name
+    ));
+    if let Some(url) = pr.url.as_deref() {
+        ctx.ui.print_dim(&format!("  URL: {url}"));
+    }
+    ctx.ui
+        .print_dim(&format!("  Verdict: {}", evidence.verdict.as_str()));
+    ctx.ui.print_dim(&format!("  Head: {}", pr.head_ref_oid));
+    ctx.ui.print_dim(&format!(
+        "  Checks: {} passed, {} pending, {} blocked, {} warnings",
+        count_verdict(&evidence.checks, PullRequestReviewVerdict::Passed),
+        count_verdict(&evidence.checks, PullRequestReviewVerdict::Pending),
+        count_verdict(&evidence.checks, PullRequestReviewVerdict::Blocked),
+        count_verdict(&evidence.checks, PullRequestReviewVerdict::Warning)
+            + count_verdict(&evidence.checks, PullRequestReviewVerdict::Unavailable),
+    ));
+    let current_reviews = evidence
+        .reviews
+        .iter()
+        .filter(|review| review.covers_head)
+        .count();
+    let stale_reviews = evidence.reviews.len().saturating_sub(current_reviews);
+    ctx.ui.print_dim(&format!(
+        "  Reviews: {} current-head, {} stale/unsynchronized",
+        current_reviews, stale_reviews
+    ));
+    let unresolved_threads = evidence
+        .threads
+        .iter()
+        .filter(|thread| !thread.is_resolved)
+        .count();
+    let outdated_threads = evidence
+        .threads
+        .iter()
+        .filter(|thread| thread.is_outdated)
+        .count();
+    ctx.ui.print_dim(&format!(
+        "  Threads: {} unresolved, {} outdated",
+        unresolved_threads, outdated_threads
+    ));
+    if !evidence.review_requests.is_empty() {
+        let reviewers = evidence
+            .review_requests
+            .iter()
+            .map(|request| request.reviewer.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        ctx.ui.print_dim(&format!("  Review requests: {reviewers}"));
+    }
+    if !evidence.suggested_triggers.is_empty() {
+        ctx.ui.print_dim(&format!(
+            "  Suggested re-review: {}",
+            evidence.suggested_triggers.join("; ")
+        ));
+    }
+    for warning in &evidence.warnings {
+        ctx.ui
+            .print_warning(&format!("Pull request review: {warning}"));
+    }
+}
+
+fn count_verdict(
+    checks: &[crate::services::github_review::PullRequestReviewCheck],
+    verdict: PullRequestReviewVerdict,
+) -> usize {
+    checks
+        .iter()
+        .filter(|check| check.verdict == verdict)
+        .count()
+}
+
 fn print_next_section(ctx: &Ctx, target: &InspectTarget, workflows: &[WorkflowMatch]) {
     ctx.ui.print_step("Next");
     ctx.ui.print_dim(
@@ -742,7 +1100,7 @@ run = "run-unrelated"
             Box::new(ui.clone()),
         );
 
-        run(&ctx, Some("feature")).unwrap();
+        run(&ctx, Some("feature"), InspectOptions::default()).unwrap();
 
         let steps = ui.steps.lock().unwrap().join("\n");
         let dims = ui.dims.lock().unwrap().join("\n");
@@ -898,7 +1256,7 @@ run = "run-unrelated"
             Box::new(ui.clone()),
         );
 
-        run(&ctx, Some("team-run")).unwrap();
+        run(&ctx, Some("team-run"), InspectOptions::default()).unwrap();
 
         let dims = ui.dims.lock().unwrap().join("\n");
         assert!(dims.contains("TaskRuns: 2"));
@@ -947,7 +1305,7 @@ run = "run-unrelated"
             Box::new(ui.clone()),
         );
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, InspectOptions::default()).unwrap();
 
         let prompts = ui.prompts.lock().unwrap().join("\n");
         let items = ui.select_items.lock().unwrap();
@@ -971,7 +1329,9 @@ run = "run-unrelated"
             Box::new(ui),
         );
 
-        let err = run(&ctx, None).unwrap_err().to_string();
+        let err = run(&ctx, None, InspectOptions::default())
+            .unwrap_err()
+            .to_string();
 
         assert!(err.contains("wt inspect requires TARGET"));
         assert!(err.contains("branch, worktree path/name, or TaskRun id"));
@@ -1021,7 +1381,7 @@ run = "run-unrelated"
             Box::new(ui.clone()),
         );
 
-        run(&ctx, Some("run-feature")).unwrap();
+        run(&ctx, Some("run-feature"), InspectOptions::default()).unwrap();
 
         let steps = ui.steps.lock().unwrap().join("\n");
         let dims = ui.dims.lock().unwrap().join("\n");
@@ -1056,7 +1416,7 @@ run = "run-unrelated"
             Box::new(ui.clone()),
         );
 
-        run(&ctx, Some("feature")).unwrap();
+        run(&ctx, Some("feature"), InspectOptions::default()).unwrap();
 
         let dims = ui.dims.lock().unwrap().join("\n");
         let warnings = ui.warnings.lock().unwrap().join("\n");
@@ -1123,7 +1483,7 @@ run = "run-unrelated"
             Box::new(ui.clone()),
         );
 
-        run(&ctx, Some("feature")).unwrap();
+        run(&ctx, Some("feature"), InspectOptions::default()).unwrap();
 
         let dims = ui.dims.lock().unwrap().join("\n");
         assert!(dims.contains("cmux workspace: workspace:1 \"feature\" (window window:1)"));
@@ -1187,7 +1547,7 @@ run = "run-unrelated"
             Box::new(ui.clone()),
         );
 
-        run(&ctx, Some("feature")).unwrap();
+        run(&ctx, Some("feature"), InspectOptions::default()).unwrap();
 
         let dims = ui.dims.lock().unwrap().join("\n");
         assert!(dims.contains("cmux workspace: workspace:1 \"feature\" (window window:1)"));

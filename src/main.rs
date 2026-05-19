@@ -38,7 +38,7 @@ fn try_main() -> Result<()> {
 
     if cli.json && !supports_json(command) {
         bail!(
-            "JSON output is supported for: wt version, wt list, wt task list, wt workflow list, wt agent status, wt agent watch, wt doctor, wt profile"
+            "JSON output is supported for: wt version, wt list, wt inspect, wt task list, wt workflow list, wt agent status, wt agent watch, wt doctor, wt profile"
         );
     }
 
@@ -157,6 +157,7 @@ fn supports_json(command: &Commands) -> bool {
         command,
         Commands::Version
             | Commands::List { .. }
+            | Commands::Inspect { .. }
             | Commands::Workflow {
                 command: WorkflowCommand::List,
             }

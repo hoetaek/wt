@@ -179,6 +179,7 @@ Inspect, observe, message, and clean worktrees:
 ```bash
 wt list
 wt inspect
+wt inspect <branch|worktree|task-run-id> --pr
 wt agent status <branch|worktree|task-run-id>
 wt agent watch <branch|worktree|task-run-id>
 wt agent watch <branch|worktree|task-run-id> --timeout 300 --heartbeat 30
@@ -193,6 +194,11 @@ path/name, or direct TaskRun id.
 `wt done` removes worktrees and local branches. It does not merge the branch.
 Land reviewed work with Git or pull requests first. Workflow-linked TaskRuns are
 completed with `wt workflow complete`, not `wt done`.
+
+Pass `--pr` to `wt inspect <target>` when the dossier should include read-only
+pull request review evidence. The PR section is opt-in and does not resolve
+threads, post review comments, request review, edit PRs, mutate wt state, or
+merge.
 
 ## Core Model
 
@@ -228,7 +234,8 @@ completed with `wt workflow complete`, not `wt done`.
   `GET /api/snapshot`, reports invalid TOML records, and does not write state
   or serve arbitrary repo files.
 - `wt inspect [<target>]` is the read-only work dossier for a branch, worktree,
-  or TaskRun.
+  or TaskRun. `wt inspect <target> --pr` adds nested pull request review
+  evidence without changing lifecycle state or exit-code semantics.
 - `wt agent status [<target>]` observes the current agent/cmux state, and
   `wt agent watch [<target>]` polls it. `wt agent watch` prints state
   transitions by default; `--timeout <seconds>` bounds the wait, and
