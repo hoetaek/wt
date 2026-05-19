@@ -24,6 +24,11 @@ use context::Ctx;
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
     match command {
         Commands::Version | Commands::Completion { .. } => Ok(()),
+        Commands::DeprecatedIssue { .. } => {
+            deprecated_start_command_error("wt issue", "wt run issue")
+        }
+        Commands::DeprecatedPr { .. } => deprecated_start_command_error("wt pr", "wt run pr"),
+        Commands::DeprecatedNew { .. } => deprecated_start_command_error("wt new", "wt run branch"),
         Commands::Run { command } => match command {
             RunCommand::Issue {
                 target,
@@ -52,6 +57,9 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Task { command } => match command {
             TaskCommand::List => commands::task_list::run(ctx),
             TaskCommand::Import { issues } => commands::task::import(ctx, issues),
+            TaskCommand::DeprecatedRun { .. } => {
+                deprecated_start_command_error("wt task run", "wt run task")
+            }
             TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
         },
         Commands::Workflow { command } => match command {
@@ -110,6 +118,9 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     pr: *pr,
                 },
             ),
+            WorkflowCommand::DeprecatedRun { .. } => {
+                deprecated_start_command_error("wt workflow run", "wt run workflow")
+            }
             WorkflowCommand::Show { workflow } => {
                 commands::workflow::show(ctx, workflow.as_deref())
             }
@@ -192,4 +203,39 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             },
         ),
     }
+}
+
+pub fn deprecated_start_replacement(command: &Commands) -> Option<(&'static str, &'static str)> {
+    match command {
+        Commands::DeprecatedIssue { .. } => Some(("wt issue", "wt run issue")),
+        Commands::DeprecatedPr { .. } => Some(("wt pr", "wt run pr")),
+        Commands::DeprecatedNew { .. } => Some(("wt new", "wt run branch")),
+        Commands::Task { command } => deprecated_task_start_replacement(command),
+        Commands::Workflow { command } => deprecated_workflow_start_replacement(command),
+        _ => None,
+    }
+}
+
+fn deprecated_task_start_replacement(
+    command: &TaskCommand,
+) -> Option<(&'static str, &'static str)> {
+    match command {
+        TaskCommand::DeprecatedRun { .. } => Some(("wt task run", "wt run task")),
+        _ => None,
+    }
+}
+
+fn deprecated_workflow_start_replacement(
+    command: &WorkflowCommand,
+) -> Option<(&'static str, &'static str)> {
+    match command {
+        WorkflowCommand::DeprecatedRun { .. } => Some(("wt workflow run", "wt run workflow")),
+        _ => None,
+    }
+}
+
+fn deprecated_start_command_error(old: &str, new: &str) -> Result<()> {
+    anyhow::bail!(
+        "`{old}` has moved. Use `{new}` to start workspace execution. The old command is not an alias."
+    )
 }

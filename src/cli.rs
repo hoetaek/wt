@@ -47,6 +47,36 @@ pub enum Commands {
         #[command(subcommand)]
         command: RunCommand,
     },
+    #[command(name = "issue", hide = true, disable_help_flag = true)]
+    DeprecatedIssue {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
+    },
+    #[command(name = "pr", hide = true, disable_help_flag = true)]
+    DeprecatedPr {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
+    },
+    #[command(name = "new", hide = true, disable_help_flag = true)]
+    DeprecatedNew {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
+    },
     /// Manage local TaskDocuments
     Task {
         #[command(subcommand)]
@@ -377,6 +407,16 @@ pub enum TaskCommand {
         #[arg(value_name = "ISSUE")]
         issues: Vec<String>,
     },
+    #[command(name = "run", hide = true, disable_help_flag = true)]
+    DeprecatedRun {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
+    },
     /// Publish local TaskDocuments as provider issues
     #[command(
         long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
@@ -467,6 +507,16 @@ pub enum WorkflowCommand {
         /// Override [workflow].pull_request for this prepared workflow
         #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
         pr: Option<WorkflowPrModeArg>,
+    },
+    #[command(name = "run", hide = true, disable_help_flag = true)]
+    DeprecatedRun {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
     },
     /// Show workflow metadata and task statuses
     Show {
@@ -1679,19 +1729,34 @@ mod tests {
     }
 
     #[test]
-    fn old_execution_start_subcommands_are_removed() {
-        for args in [
-            &["wt", "issue"][..],
-            &["wt", "pr"][..],
-            &["wt", "new"][..],
-            &["wt", "task", "run"][..],
-            &["wt", "workflow", "run"][..],
-        ] {
-            assert!(
-                Cli::try_parse_from(args).is_err(),
-                "expected parse failure for {args:?}"
-            );
-        }
+    fn old_execution_start_subcommands_parse_as_hidden_deprecated_traps() {
+        let cli = parse(&["wt", "issue"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::DeprecatedIssue { .. })
+        ));
+
+        let cli = parse(&["wt", "pr"]);
+        assert!(matches!(cli.command, Some(Commands::DeprecatedPr { .. })));
+
+        let cli = parse(&["wt", "new"]);
+        assert!(matches!(cli.command, Some(Commands::DeprecatedNew { .. })));
+
+        let cli = parse(&["wt", "task", "run"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::DeprecatedRun { .. }
+            })
+        ));
+
+        let cli = parse(&["wt", "workflow", "run"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::DeprecatedRun { .. }
+            })
+        ));
     }
 
     #[test]

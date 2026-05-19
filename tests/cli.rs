@@ -266,35 +266,47 @@ fn run_pr_help_explains_multiple_targets() {
 
 #[test]
 fn old_execution_start_commands_are_removed() {
-    for args in [
-        &["issue"][..],
-        &["pr"][..],
-        &["new"][..],
-        &["task", "run"][..],
-        &["workflow", "run"][..],
+    for (args, old, new) in [
+        (&["issue"][..], "wt issue", "wt run issue"),
+        (&["pr"][..], "wt pr", "wt run pr"),
+        (&["new"][..], "wt new", "wt run branch"),
+        (&["task", "run"][..], "wt task run", "wt run task"),
+        (
+            &["workflow", "run"][..],
+            "wt workflow run",
+            "wt run workflow",
+        ),
     ] {
         wt_command()
             .args(args)
             .assert()
             .failure()
-            .stderr(predicate::str::contains("unrecognized subcommand"));
+            .stderr(predicate::str::contains(format!("`{old}` has moved")))
+            .stderr(predicate::str::contains(format!("Use `{new}`")))
+            .stderr(predicate::str::contains("not an alias"));
     }
 }
 
 #[test]
 fn old_execution_start_help_surfaces_are_removed() {
-    for args in [
-        &["issue", "--help"][..],
-        &["pr", "--help"][..],
-        &["new", "--help"][..],
-        &["task", "run", "--help"][..],
-        &["workflow", "run", "--help"][..],
+    for (args, old, new) in [
+        (&["issue", "--help"][..], "wt issue", "wt run issue"),
+        (&["pr", "--help"][..], "wt pr", "wt run pr"),
+        (&["new", "--help"][..], "wt new", "wt run branch"),
+        (&["task", "run", "--help"][..], "wt task run", "wt run task"),
+        (
+            &["workflow", "run", "--help"][..],
+            "wt workflow run",
+            "wt run workflow",
+        ),
     ] {
         wt_command()
             .args(args)
             .assert()
             .failure()
-            .stderr(predicate::str::contains("unrecognized subcommand"));
+            .stderr(predicate::str::contains(format!("`{old}` has moved")))
+            .stderr(predicate::str::contains(format!("Use `{new}`")))
+            .stderr(predicate::str::contains("not an alias"));
     }
 }
 

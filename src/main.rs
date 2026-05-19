@@ -56,6 +56,12 @@ fn try_main() -> Result<()> {
         _ => {}
     }
 
+    if let Some((old, new)) = wt::deprecated_start_replacement(command) {
+        bail!(
+            "`{old}` has moved. Use `{new}` to start workspace execution. The old command is not an alias."
+        );
+    }
+
     let runner = RealRunner;
     let current_dir = std::env::current_dir()?;
     let working_dir = resolve_directory(&current_dir, cli.directory.as_deref())?;
@@ -153,25 +159,26 @@ fn use_decorative_output(cli: &Cli) -> bool {
 }
 
 fn supports_json(command: &Commands) -> bool {
-    matches!(
-        command,
-        Commands::Version
-            | Commands::List { .. }
-            | Commands::Workflow {
-                command: WorkflowCommand::List,
-            }
-            | Commands::Task {
-                command: TaskCommand::List,
-            }
-            | Commands::Agent {
-                command: AgentCommand::Status { .. },
-            }
-            | Commands::Agent {
-                command: AgentCommand::Watch { .. },
-            }
-            | Commands::Doctor { .. }
-            | Commands::Profile { .. }
-    )
+    wt::deprecated_start_replacement(command).is_some()
+        || matches!(
+            command,
+            Commands::Version
+                | Commands::List { .. }
+                | Commands::Workflow {
+                    command: WorkflowCommand::List,
+                }
+                | Commands::Task {
+                    command: TaskCommand::List,
+                }
+                | Commands::Agent {
+                    command: AgentCommand::Status { .. },
+                }
+                | Commands::Agent {
+                    command: AgentCommand::Watch { .. },
+                }
+                | Commands::Doctor { .. }
+                | Commands::Profile { .. }
+        )
 }
 
 fn print_version(json: bool) {
