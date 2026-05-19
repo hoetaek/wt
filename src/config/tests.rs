@@ -40,8 +40,6 @@ provider = "valet"
 name = "{{repo}}-{{branch_slug}}"
 root = "public"
 secure = true
-open_browser = true
-browser = "Safari"
 url = "https://{{site_name}}.test"
 target = "http://127.0.0.1:{{vite_port}}"
 
@@ -53,15 +51,15 @@ placement = "cmux_surface"
 tabs = ["lazygit"]
 post_deps_tabs = ["npm run dev"]
 colors = { task = "Blue", issue = "Red", pr = "Green" }
-open_url = "{{site_url}}"
-open_browser = true
-browser = "Google Chrome"
+
+[workspace.browser]
+mode = "system"
+url = "{{site_url}}"
+app = "Google Chrome"
 
 [workspace.chrome_devtools]
-enabled = true
 port = 9222
 user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
-url = "{{site_url}}"
 
 [agent]
 cli = "claude"
@@ -143,8 +141,6 @@ commands = [
     assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
     assert_eq!(site.root.as_deref(), Some("public"));
     assert_eq!(site.secure, Some(true));
-    assert_eq!(site.open_browser, Some(true));
-    assert_eq!(site.browser.as_deref(), Some("Safari"));
     assert_eq!(site.url.as_deref(), Some("https://{{site_name}}.test"));
     assert_eq!(
         site.target.as_deref(),
@@ -161,17 +157,16 @@ commands = [
     assert_eq!(ws.post_deps_tabs, vec!["npm run dev"]);
     assert_eq!(ws.colors.get("task").unwrap(), "Blue");
     assert_eq!(ws.colors.get("issue").unwrap(), "Red");
-    assert_eq!(ws.open_url.as_deref(), Some("{{site_url}}"));
-    assert_eq!(ws.open_browser, Some(true));
-    assert_eq!(ws.browser.as_deref(), Some("Google Chrome"));
+    let browser = ws.browser.unwrap();
+    assert_eq!(browser.mode, WorkspaceBrowserMode::System);
+    assert_eq!(browser.url.as_deref(), Some("{{site_url}}"));
+    assert_eq!(browser.app.as_deref(), Some("Google Chrome"));
     let chrome_devtools = ws.chrome_devtools.unwrap();
-    assert!(chrome_devtools.enabled);
     assert_eq!(chrome_devtools.port, Some(9222));
     assert_eq!(
         chrome_devtools.user_data_dir.as_deref(),
         Some("{{worktree_parent}}/.chrome-devtools/{{worktree_name}}")
     );
-    assert_eq!(chrome_devtools.url.as_deref(), Some("{{site_url}}"));
 
     let agent = config.agent.unwrap();
     assert_eq!(agent.cli, AgentCli::Claude);
@@ -216,13 +211,133 @@ fn rejects_unknown_workspace_chrome_devtools_field() {
     let err = toml::from_str::<Config>(
         r#"
 [workspace.chrome_devtools]
-enabled = true
 debug_port = 9222
 "#,
     )
     .unwrap_err();
 
     assert!(err.to_string().contains("unknown field `debug_port`"));
+}
+
+#[test]
+fn parses_workspace_browser_system_policy() {
+    let config: Config = toml::from_str(
+        r#"
+[workspace.browser]
+mode = "system"
+url = "{{site_url}}"
+app = "Google Chrome"
+"#,
+    )
+    .unwrap();
+
+    let browser = config.workspace.unwrap().browser.unwrap();
+    assert_eq!(browser.mode, WorkspaceBrowserMode::System);
+    assert_eq!(browser.effective_url().unwrap().as_ref(), "{{site_url}}");
+    assert_eq!(browser.app.as_deref(), Some("Google Chrome"));
+}
+
+#[test]
+fn parses_workspace_browser_chrome_devtools_policy() {
+    let config: Config = toml::from_str(
+        r#"
+[workspace.browser]
+mode = "chrome_devtools"
+"#,
+    )
+    .unwrap();
+
+    let browser = config.workspace.unwrap().browser.unwrap();
+    assert_eq!(browser.mode, WorkspaceBrowserMode::ChromeDevtools);
+    assert_eq!(browser.effective_url().unwrap().as_ref(), "{{site_url}}");
+}
+
+#[test]
+fn workspace_browser_none_rejects_unused_fields() {
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.browser]
+mode = "none"
+url = "{{site_url}}"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("[workspace.browser].url"));
+
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.browser]
+mode = "none"
+app = "Google Chrome"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("[workspace.browser].app"));
+}
+
+#[test]
+fn workspace_browser_chrome_devtools_rejects_app() {
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.browser]
+mode = "chrome_devtools"
+app = "Google Chrome"
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("[workspace.browser].app"));
+}
+
+#[test]
+fn rejects_legacy_workspace_browser_keys() {
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace]
+open_url = "{{site_url}}"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("open_url"));
+
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace]
+open_browser = true
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("open_browser"));
+
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace]
+browser = "Google Chrome"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("invalid type"));
+}
+
+#[test]
+fn rejects_legacy_workspace_chrome_devtools_launch_fields() {
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.chrome_devtools]
+enabled = true
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("enabled"));
+
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.chrome_devtools]
+url = "{{site_url}}"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("url"));
 }
 
 #[test]
@@ -476,7 +591,6 @@ fn profile_workspace_chrome_devtools_replaces_base_section() {
     let base: Config = toml::from_str(
         r#"
 [workspace.chrome_devtools]
-enabled = true
 port = 9222
 "#,
     )
@@ -484,15 +598,44 @@ port = 9222
     let profile: Config = toml::from_str(
         r#"
 [workspace.chrome_devtools]
-enabled = false
+user_data_dir = ".chrome-alt"
 "#,
     )
     .unwrap();
 
     let merged = merge_config(&base, profile);
     let chrome_devtools = merged.workspace.unwrap().chrome_devtools.unwrap();
-    assert!(!chrome_devtools.enabled);
     assert_eq!(chrome_devtools.port, None);
+    assert_eq!(
+        chrome_devtools.user_data_dir.as_deref(),
+        Some(".chrome-alt")
+    );
+}
+
+#[test]
+fn profile_workspace_browser_replaces_base_section() {
+    let base: Config = toml::from_str(
+        r#"
+[workspace.browser]
+mode = "system"
+url = "{{site_url}}"
+app = "Google Chrome"
+"#,
+    )
+    .unwrap();
+    let profile: Config = toml::from_str(
+        r#"
+[workspace.browser]
+mode = "chrome_devtools"
+"#,
+    )
+    .unwrap();
+
+    let merged = merge_config(&base, profile);
+    let browser = merged.workspace.unwrap().browser.unwrap();
+    assert_eq!(browser.mode, WorkspaceBrowserMode::ChromeDevtools);
+    assert_eq!(browser.url, None);
+    assert_eq!(browser.app, None);
 }
 
 #[test]
@@ -1254,16 +1397,27 @@ claude_local_context = "old"
 }
 
 #[test]
-fn parses_site_open_browser_config() {
+fn rejects_legacy_site_open_browser_config() {
     let toml_str = r#"
 [site]
 provider = "herd"
 name = "test"
 open_browser = true
 "#;
-    let config: Config = toml::from_str(toml_str).unwrap();
-    let site = config.site.unwrap();
-    assert_eq!(site.open_browser, Some(true));
+    let err = toml::from_str::<Config>(toml_str).unwrap_err();
+    assert!(err.to_string().contains("open_browser"));
+}
+
+#[test]
+fn rejects_legacy_site_browser_config() {
+    let toml_str = r#"
+[site]
+provider = "herd"
+name = "test"
+browser = "Google Chrome"
+"#;
+    let err = toml::from_str::<Config>(toml_str).unwrap_err();
+    assert!(err.to_string().contains("browser"));
 }
 
 #[test]
@@ -1305,16 +1459,12 @@ fn effective_site_uses_site_provider_herd() {
 provider = "herd"
 name = "{{repo}}-{{branch_slug}}"
 secure = true
-open_browser = true
-browser = "Google Chrome"
 "#;
     let config: Config = toml::from_str(toml_str).unwrap();
     let site = config.effective_site().unwrap();
     assert_eq!(site.provider, SiteProvider::Herd);
     assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
     assert_eq!(site.secure, Some(true));
-    assert_eq!(site.open_browser, Some(true));
-    assert_eq!(site.browser.as_deref(), Some("Google Chrome"));
 }
 
 #[test]
@@ -1329,7 +1479,6 @@ provider = "herd"
     assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
     assert_eq!(site.root.as_deref(), Some("."));
     assert_eq!(site.secure, Some(true));
-    assert_eq!(site.open_browser, Some(false));
     assert_eq!(site.url.as_deref(), Some("https://{{site_name}}.test"));
     assert_eq!(site.target, None);
 }
