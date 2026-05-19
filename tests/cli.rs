@@ -178,8 +178,11 @@ fn no_args_prints_help_successfully() {
         .success()
         .stdout(predicate::str::contains("Usage: wt [OPTIONS] [COMMAND]"))
         .stdout(predicate::str::contains("run"))
-        .stdout(predicate::str::contains("issue"))
-        .stdout(predicate::str::contains("pr"))
+        .stdout(predicate::str::contains("wt run issue"))
+        .stdout(predicate::str::contains("wt run pr"))
+        .stdout(predicate::str::contains("wt run branch"))
+        .stdout(predicate::str::contains("wt run task"))
+        .stdout(predicate::str::contains("wt run workflow"))
         .stdout(predicate::str::contains("new").not())
         .stdout(predicate::str::contains("agent"))
         .stdout(predicate::str::contains("ui"));
@@ -224,6 +227,7 @@ fn run_branch_help_explains_branch_text_only() {
         .assert()
         .success()
         .stdout(predicate::str::contains("branch-name text"))
+        .stdout(predicate::str::contains("wt open"))
         .stdout(predicate::str::contains("--task").not());
 }
 
@@ -528,6 +532,9 @@ fn run_workflow_help_explains_omitted_target_selection() {
         .success()
         .stdout(predicate::str::contains("Omit WORKFLOW"))
         .stdout(predicate::str::contains("choose from runnable workflows"))
+        .stdout(predicate::str::contains(
+            "does not list, edit, repair, or complete",
+        ))
         .stdout(predicate::str::contains(
             "omit to select a runnable workflow",
         ));
@@ -1060,7 +1067,19 @@ fn completion_generates_script() {
         .args(["completion", "bash"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("_wt"));
+        .stdout(predicate::str::contains("_wt"))
+        .stdout(predicate::str::contains("run"))
+        .stdout(predicate::str::contains("issue"))
+        .stdout(predicate::str::contains("pr"))
+        .stdout(predicate::str::contains("branch"))
+        .stdout(predicate::str::contains("task"))
+        .stdout(predicate::str::contains("workflow"))
+        .stdout(predicate::str::contains("__wt_removed_").not())
+        .stdout(predicate::str::contains("wt,new)").not())
+        .stdout(predicate::str::contains("wt,issue)").not())
+        .stdout(predicate::str::contains("wt,pr)").not())
+        .stdout(predicate::str::contains("wt__subcmd__task,run").not())
+        .stdout(predicate::str::contains("wt__subcmd__workflow,run").not());
 }
 
 #[test]

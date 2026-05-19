@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
-use clap::{CommandFactory, Parser};
-use std::io::{self, IsTerminal};
+use clap::{Command as ClapCommand, CommandFactory, Parser};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -48,9 +48,12 @@ fn try_main() -> Result<()> {
             return Ok(());
         }
         Commands::Completion { shell } => {
-            let mut command = Cli::command();
+            let mut command = completion_command();
             let bin_name = command.get_name().to_string();
-            clap_complete::generate(*shell, &mut command, bin_name, &mut io::stdout());
+            let mut buffer = Vec::new();
+            clap_complete::generate(*shell, &mut command, bin_name, &mut buffer);
+            let script = String::from_utf8(buffer)?;
+            io::stdout().write_all(strip_removed_completion_entries(&script).as_bytes())?;
             return Ok(());
         }
         _ => {}
@@ -126,6 +129,97 @@ fn try_main() -> Result<()> {
     }
 
     wt::dispatch(&ctx, command)
+}
+
+const HIDDEN_COMPLETION_NAMES: [&str; 16] = [
+    "__wt_removed_0",
+    "__wt_removed_1",
+    "__wt_removed_2",
+    "__wt_removed_3",
+    "__wt_removed_4",
+    "__wt_removed_5",
+    "__wt_removed_6",
+    "__wt_removed_7",
+    "__wt_removed_8",
+    "__wt_removed_9",
+    "__wt_removed_10",
+    "__wt_removed_11",
+    "__wt_removed_12",
+    "__wt_removed_13",
+    "__wt_removed_14",
+    "__wt_removed_15",
+];
+
+fn completion_command() -> ClapCommand {
+    let mut hidden_index = 0;
+    rename_hidden_subcommands(Cli::command(), &mut hidden_index)
+}
+
+fn rename_hidden_subcommands(command: ClapCommand, hidden_index: &mut usize) -> ClapCommand {
+    command.mut_subcommands(|subcommand| {
+        let is_hidden = subcommand.is_hide_set();
+        let subcommand = rename_hidden_subcommands(subcommand, hidden_index);
+        if is_hidden {
+            // AOT completion scripts still walk hidden parser traps; keep them
+            // unreachable without teaching removed command names to shells.
+            let hidden_name = HIDDEN_COMPLETION_NAMES
+                .get(*hidden_index)
+                .copied()
+                .unwrap_or("__wt_removed_extra");
+            *hidden_index += 1;
+            subcommand.name(hidden_name)
+        } else {
+            subcommand
+        }
+    })
+}
+
+fn strip_removed_completion_entries(script: &str) -> String {
+    let mut output = String::new();
+    let mut skipping_removed_block = false;
+
+    for line in script.lines() {
+        let trimmed = line.trim_start();
+        if !skipping_removed_block
+            && HIDDEN_COMPLETION_NAMES
+                .iter()
+                .any(|name| trimmed.contains(name))
+            && trimmed.ends_with(')')
+        {
+            skipping_removed_block = true;
+            continue;
+        }
+
+        if skipping_removed_block {
+            if trimmed == ";;" {
+                skipping_removed_block = false;
+            }
+            continue;
+        }
+
+        let cleaned = strip_removed_completion_tokens(line);
+        if cleaned.trim().is_empty()
+            && HIDDEN_COMPLETION_NAMES
+                .iter()
+                .any(|name| line.contains(name))
+        {
+            continue;
+        }
+        output.push_str(&cleaned);
+        output.push('\n');
+    }
+
+    output
+}
+
+fn strip_removed_completion_tokens(line: &str) -> String {
+    let mut cleaned = line.to_string();
+    for name in HIDDEN_COMPLETION_NAMES {
+        cleaned = cleaned.replace(&format!(" {name}"), "");
+        cleaned = cleaned.replace(&format!("{name} "), "");
+        cleaned = cleaned.replace(name, "");
+    }
+    cleaned
 }
 
 fn effective_color(cli: &Cli) -> ColorMode {

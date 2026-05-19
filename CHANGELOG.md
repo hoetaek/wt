@@ -8,6 +8,15 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Moved all workspace execution-start surfaces under `wt run`: `wt run issue`,
+  `wt run pr`, `wt run branch`, `wt run task`, and `wt run workflow` are the
+  canonical commands, while legacy start forms fail with migration guidance
+  instead of acting as aliases. Help, completions, docs, generated messages,
+  config examples, and repo-local agent guidance now describe `run` narrowly as
+  starting workspace execution. This breaking pre-1.0 CLI/config/agent-guidance
+  cutover should be released with a `0.x.0` minor version bump on the release
+  branch.
+
 - Added an explicit `wt profile list` subcommand that reads the
   `.local/profiles/<name>/profile.toml` inventory through the config/profile
   loader, lists valid profiles in deterministic name order, and surfaces

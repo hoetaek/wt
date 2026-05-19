@@ -2,7 +2,12 @@ use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "wt", version, about = "Git worktree workspace manager")]
+#[command(
+    name = "wt",
+    version,
+    about = "Git worktree workspace manager",
+    after_help = "Start workspace execution with: wt run issue, wt run pr, wt run branch, wt run task, wt run workflow.\nUse wt open for existing branches or worktrees; use wt workflow for saved workflow files and lifecycle actions."
+)]
 pub struct Cli {
     /// Run wt from DIR
     #[arg(short = 'C', long = "directory", global = true, value_name = "DIR")]
@@ -39,9 +44,9 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
-    /// Start issue, PR, branch, task, or workflow execution
+    /// Start workspace execution from issue, PR, branch text, task, or workflow
     #[command(
-        long_about = "Start workspace execution from issues, pull requests, branch-name text, local TaskDocuments, or saved Workflows.\n\nCanonical start surfaces are `wt run issue`, `wt run pr`, `wt run branch`, `wt run task`, and `wt run workflow`."
+        long_about = "Start workspace execution from issues, pull requests, branch-name text, local TaskDocuments, or saved Workflows.\n\nCanonical start surfaces are `wt run issue`, `wt run pr`, `wt run branch`, `wt run task`, and `wt run workflow`.\n\n`wt run` only starts workspace execution. Cleanup stays under `wt done`, inspection under `wt inspect`, agent observation under `wt agent`, and saved workflow lifecycle actions under `wt workflow`."
     )]
     Run {
         #[command(subcommand)]
@@ -316,6 +321,9 @@ pub enum RunCommand {
         profile: Option<String>,
     },
     /// Start a workspace from branch-name text
+    #[command(
+        long_about = "Start one ad hoc workspace from branch-name text by creating a new local branch and worktree.\n\nThis does not open an existing branch or worktree. Use `wt open <branch|worktree>` for existing work."
+    )]
     Branch {
         /// Branch name words
         #[arg(num_args = 0..)]
@@ -345,9 +353,9 @@ pub enum RunCommand {
         #[arg(long)]
         profile: Option<String>,
     },
-    /// Start runnable tasks from a workflow
+    /// Start runnable tasks from a saved workflow
     #[command(
-        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
+        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
     )]
     Workflow {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -1512,6 +1520,8 @@ mod tests {
         let run = command.find_subcommand_mut("run").unwrap();
         let workflow = run.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_long_help().to_string();
+        assert!(help.contains("saved workflow"));
+        assert!(help.contains("does not list, edit, repair, or complete workflow files"));
         assert!(help.contains("Workflow Coordinator Handoff"));
         assert!(help.contains("coordinator cmux send coordinates"));
         assert!(help.contains("prepared [policy].pull_request"));
@@ -1699,10 +1709,24 @@ mod tests {
             .unwrap()
             .find_subcommand_mut("branch")
             .unwrap();
-        let help = branch.render_help().to_string();
-        assert!(help.contains("Start a workspace from branch-name text"));
+        let help = branch.render_long_help().to_string();
+        assert!(help.contains("branch-name text"));
+        assert!(help.contains("new local branch and worktree"));
+        assert!(help.contains("wt open"));
         assert!(!help.contains("--task"));
         assert!(!help.contains("prepared local task"));
+    }
+
+    #[test]
+    fn root_help_lists_canonical_start_surfaces() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("wt run issue"));
+        assert!(help.contains("wt run pr"));
+        assert!(help.contains("wt run branch"));
+        assert!(help.contains("wt run task"));
+        assert!(help.contains("wt run workflow"));
+        assert!(help.contains("Use wt open"));
+        assert!(!help.contains("wt new"));
     }
 
     #[test]
@@ -1720,6 +1744,8 @@ mod tests {
         assert!(help.contains("branch"));
         assert!(help.contains("task"));
         assert!(help.contains("workflow"));
+        assert!(help.contains("only starts workspace execution"));
+        assert!(help.contains("Cleanup stays under `wt done`"));
     }
 
     #[test]
