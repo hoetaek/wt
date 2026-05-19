@@ -2,6 +2,7 @@ use crate::context::CommandRunner;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 const PR_LIST_FIELDS: &str = "number,state,updatedAt";
@@ -14,6 +15,8 @@ query($owner: String!, $name: String!, $number: Int!) {
         totalCount
         nodes {
           id
+          path
+          line
           isResolved
           isOutdated
           comments(first: 50) {
@@ -107,6 +110,8 @@ pub struct PullRequestSubmittedReview {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PullRequestReviewThread {
     pub id: String,
+    pub path: Option<String>,
+    pub line: Option<u32>,
     pub is_resolved: bool,
     pub is_outdated: bool,
     pub comments: Vec<PullRequestThreadComment>,
@@ -431,7 +436,7 @@ pub fn classify_pull_request_review(evidence: &mut PullRequestReviewEvidence) {
         }
     }
 
-    for review in &evidence.reviews {
+    for review in latest_reviews_by_author(&evidence.reviews) {
         if review.state.eq_ignore_ascii_case("CHANGES_REQUESTED") {
             blocked = true;
         }
@@ -750,6 +755,11 @@ fn thread_from_graphql_node(value: &Value, warnings: &mut Vec<String>) -> PullRe
     }
     PullRequestReviewThread {
         id,
+        path: optional_string_field(value, "path"),
+        line: value
+            .get("line")
+            .and_then(Value::as_u64)
+            .and_then(|line| u32::try_from(line).ok()),
         is_resolved: value
             .get("isResolved")
             .and_then(Value::as_bool)
@@ -782,6 +792,20 @@ fn thread_is_actionable(thread: &PullRequestReviewThread) -> bool {
         .comments
         .iter()
         .any(|comment| text_is_actionable(&comment.body))
+}
+
+fn latest_reviews_by_author(
+    reviews: &[PullRequestSubmittedReview],
+) -> Vec<&PullRequestSubmittedReview> {
+    let mut latest = BTreeMap::new();
+    for review in reviews {
+        let author = review.author.trim().to_ascii_lowercase();
+        if author.is_empty() {
+            continue;
+        }
+        latest.insert(author, review);
+    }
+    latest.into_values().collect()
 }
 
 fn text_says_issue_remains(body: &str) -> bool {
@@ -945,6 +969,56 @@ mod tests {
     }
 
     #[test]
+    fn older_changes_requested_does_not_block_after_same_reviewer_current_head_review() {
+        let mut evidence = base_evidence();
+        evidence.reviews = vec![
+            PullRequestSubmittedReview {
+                author: "coderabbitai".into(),
+                state: "CHANGES_REQUESTED".into(),
+                commit_id: Some("old".into()),
+                submitted_at: Some("2026-05-19T00:00:00Z".into()),
+                url: None,
+                covers_head: false,
+            },
+            PullRequestSubmittedReview {
+                author: "coderabbitai".into(),
+                state: "COMMENTED".into(),
+                commit_id: Some("head".into()),
+                submitted_at: Some("2026-05-19T00:05:00Z".into()),
+                url: None,
+                covers_head: true,
+            },
+        ];
+        classify_pull_request_review(&mut evidence);
+        assert_eq!(evidence.verdict, PullRequestReviewVerdict::Passed);
+    }
+
+    #[test]
+    fn latest_changes_requested_review_blocks() {
+        let mut evidence = base_evidence();
+        evidence.reviews = vec![
+            PullRequestSubmittedReview {
+                author: "coderabbitai".into(),
+                state: "COMMENTED".into(),
+                commit_id: Some("old".into()),
+                submitted_at: Some("2026-05-19T00:00:00Z".into()),
+                url: None,
+                covers_head: false,
+            },
+            PullRequestSubmittedReview {
+                author: "coderabbitai".into(),
+                state: "CHANGES_REQUESTED".into(),
+                commit_id: Some("head".into()),
+                submitted_at: Some("2026-05-19T00:05:00Z".into()),
+                url: None,
+                covers_head: true,
+            },
+        ];
+        classify_pull_request_review(&mut evidence);
+        assert_eq!(evidence.verdict, PullRequestReviewVerdict::Blocked);
+    }
+
+    #[test]
     fn classify_warning_for_unknown_non_actionable_bot_signal() {
         let mut evidence = base_evidence();
         evidence.comments.push(PullRequestCommentSignal {
@@ -978,6 +1052,8 @@ mod tests {
         let mut evidence = base_evidence();
         evidence.threads.push(PullRequestReviewThread {
             id: "thread-1".into(),
+            path: Some("src/lib.rs".into()),
+            line: Some(42),
             is_resolved: false,
             is_outdated: true,
             comments: vec![PullRequestThreadComment {
@@ -993,6 +1069,47 @@ mod tests {
         evidence.threads[0].comments[0].body = "The issue remains and is not fixed.".into();
         classify_pull_request_review(&mut evidence);
         assert_eq!(evidence.verdict, PullRequestReviewVerdict::Blocked);
+    }
+
+    #[test]
+    fn graphql_threads_include_inline_path_and_line() {
+        let value = serde_json::json!({
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "totalCount": 1,
+                            "nodes": [
+                                {
+                                    "id": "thread-1",
+                                    "path": "src/lib.rs",
+                                    "line": 42,
+                                    "isResolved": false,
+                                    "isOutdated": false,
+                                    "comments": {
+                                        "totalCount": 1,
+                                        "nodes": [
+                                            {
+                                                "author": { "login": "coderabbitai" },
+                                                "body": "Please handle this case.",
+                                                "url": "https://github.com/acme/widgets/pull/42#discussion_r1",
+                                                "createdAt": "2026-05-19T00:00:00Z"
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        });
+
+        let (threads, warnings) = threads_from_graphql(&value);
+        assert!(warnings.is_empty());
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].path.as_deref(), Some("src/lib.rs"));
+        assert_eq!(threads[0].line, Some(42));
     }
 
     #[test]

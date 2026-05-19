@@ -621,11 +621,11 @@ Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work
 commit/diff 정보, Agent Completion Report 기대치, 현재 cmux contact를 보여주는 canonical
 read-only dossier다. `--pr`을 명시하면 같은 inspect report 안에 Pull Request Review evidence
 section을 추가로 가져와서 PR metadata, submitted review/head synchronization, review
-threads, PR comments/reactions, check rollup, warning을 보여준다. 이 PR evidence는 read-only
-inspection surface이며 thread resolve, reply, review request, PR body edit, merge, TaskRun/
-Workflow state mutation을 하지 않는다. `--pr`을 생략한 `wt inspect <target>`은 GitHub auth나
-network fetch 없이 local dossier만 출력해야 한다. Agent observation snapshot을 같이 보여줄 수
-있지만, `inspect`의 exit code는 command 자체의 성공/실패만 뜻한다. 관찰된 agent가
+threads의 file/line evidence, PR comments/reactions, check rollup, warning을 보여준다. 이 PR
+evidence는 read-only inspection surface이며 thread resolve, reply, review request, PR body edit,
+merge, TaskRun/Workflow state mutation을 하지 않는다. `--pr`을 생략한 `wt inspect <target>`은
+GitHub auth나 network fetch 없이 local dossier만 출력해야 한다. Agent observation snapshot을 같이
+보여줄 수 있지만, `inspect`의 exit code는 command 자체의 성공/실패만 뜻한다. 관찰된 agent가
 `needs_input`이거나 `failed`여도 그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. PR
 review verdict도 human output과 nested JSON evidence에만 두고 exit-code 의미를 바꾸지 않는다.
 실제 완료 기록은 direct 또는 workflow-linked context별 명령이 맡는다. 직접 `wt task run`이
