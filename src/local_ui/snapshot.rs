@@ -387,7 +387,9 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
         sources: SourceSummary {
             ideas: ".local/ideas".into(),
             tasks: ctx.storage_root.display_path(&ctx.storage_root.tasks_dir()),
-            workflows: ".local/workflows".into(),
+            workflows: ctx
+                .storage_root
+                .display_path(&ctx.storage_root.workflows_dir()),
             task_runs: ctx
                 .storage_root
                 .display_path(&ctx.storage_root.task_runs_dir()),
@@ -1334,7 +1336,7 @@ fn is_known_state_or_config_path(relative: &str) -> bool {
                 Some("toml" | "md" | "markdown")
             ))
         || (relative.starts_with("<git-common-dir>/wt/tasks/") && relative.ends_with(".toml"))
-        || (relative.starts_with(".local/workflows/") && relative.ends_with(".toml"))
+        || (relative.starts_with("<git-common-dir>/wt/workflows/") && relative.ends_with(".toml"))
         || (relative.starts_with("<git-common-dir>/wt/task-runs/") && relative.ends_with(".toml"))
         || (relative.starts_with(".local/profiles/") && relative.ends_with("/profile.toml"))
 }
@@ -1608,7 +1610,7 @@ mod tests {
     }
 
     fn write_workflow(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/workflows");
+        let dir = root.join(".git/wt/workflows");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }

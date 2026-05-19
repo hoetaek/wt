@@ -953,7 +953,7 @@ updated_at = "2026-05-16T00:00:00Z"
     fn running_cleanup_matches_skips_unreadable_workflow_contexts() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        std::fs::create_dir_all(dir.path().join(".local/workflows")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/wt/workflows")).unwrap();
 
         let direct = create(&ctx, "direct-task", "feature", None, STATUS_RUNNING).unwrap();
         create(
@@ -965,7 +965,7 @@ updated_at = "2026-05-16T00:00:00Z"
         )
         .unwrap();
         std::fs::write(
-            dir.path().join(".local/workflows/broken-workflow.toml"),
+            dir.path().join(".git/wt/workflows/broken-workflow.toml"),
             "mode = [",
         )
         .unwrap();

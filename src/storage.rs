@@ -118,6 +118,13 @@ impl StorageRoot {
         self.detect_legacy_child(repo_root, "task-runs")
     }
 
+    pub fn detect_legacy_workflows(
+        &self,
+        repo_root: impl AsRef<Path>,
+    ) -> Option<LegacyLocalStorage> {
+        self.detect_legacy_child(repo_root, "workflows")
+    }
+
     fn detect_legacy_child(
         &self,
         repo_root: impl AsRef<Path>,

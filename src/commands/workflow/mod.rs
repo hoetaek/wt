@@ -1806,7 +1806,7 @@ landing = "auto"
             parent: Some("PROJ-1".into()),
             runs: Vec::new(),
         };
-        let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
+        let workflow_path = PathBuf::from("/repo/.git/wt/workflows/2026-05-16-001.toml");
         let policy = test_workflow_policy(WorkflowPullRequestMode::Draft);
 
         let content = workflow_task_prompt_content_with_policy(
@@ -1833,7 +1833,7 @@ landing = "auto"
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains(
-            "wt workflow complete /repo/.local/workflows/2026-05-16-001.toml PROJ-2 --run-next"
+            "wt workflow complete /repo/.git/wt/workflows/2026-05-16-001.toml PROJ-2 --run-next"
         ));
     }
 
@@ -1845,7 +1845,7 @@ landing = "auto"
             parent: Some("PROJ-1".into()),
             runs: Vec::new(),
         };
-        let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
+        let workflow_path = PathBuf::from("/repo/.git/wt/workflows/2026-05-16-001.toml");
         let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
 
         let content = workflow_task_prompt_content_with_policy(
@@ -1870,7 +1870,7 @@ landing = "auto"
             parent: Some("stored-parent".into()),
             runs: Vec::new(),
         };
-        let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
+        let workflow_path = PathBuf::from("/repo/.git/wt/workflows/2026-05-16-001.toml");
         let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
 
         let content = workflow_task_prompt_content_with_policy_and_parent(
@@ -1897,9 +1897,9 @@ landing = "auto"
             parent: Some("PROJ-1".into()),
             runs: Vec::new(),
         };
-        let workflow_path = PathBuf::from("/repo/.local/workflows/work flow.toml");
+        let workflow_path = PathBuf::from("/repo/.git/wt/workflows/work flow.toml");
         let expected_command =
-            "wt workflow complete '/repo/.local/workflows/work flow.toml' 'PROJ weird'\\''s task'";
+            "wt workflow complete '/repo/.git/wt/workflows/work flow.toml' 'PROJ weird'\\''s task'";
 
         let already_running = stack_task_already_running_message(&workflow_path, &row);
         let started = started_stack_task_message(&workflow_path, &row);
@@ -1916,7 +1916,7 @@ landing = "auto"
             parent: Some("PROJ-1".into()),
             runs: Vec::new(),
         };
-        let workflow_path = PathBuf::from("/repo/.local/workflows/2026-05-16-001.toml");
+        let workflow_path = PathBuf::from("/repo/.git/wt/workflows/2026-05-16-001.toml");
 
         let content = workflow_stack_task_prompt_content("title = \"API\"\n", &workflow_path, &row);
 
@@ -1927,7 +1927,7 @@ landing = "auto"
         assert!(content.contains("PR=none"));
         assert!(!content.contains("gh pr create"));
         assert!(content.contains(
-            "wt workflow complete /repo/.local/workflows/2026-05-16-001.toml PROJ-2 --run-next"
+            "wt workflow complete /repo/.git/wt/workflows/2026-05-16-001.toml PROJ-2 --run-next"
         ));
     }
 
@@ -2280,7 +2280,7 @@ landing = "auto"
         let ui = Arc::new(MockUi::new());
         let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
         let valid = prepare_workflow(&ctx, WorkflowModeArg::Single, &["valid workflow"]);
-        let workflows_dir = dir.path().join(".local/workflows");
+        let workflows_dir = dir.path().join(".git/wt/workflows");
         fs::write(workflows_dir.join("bad.toml"), "mode = [").unwrap();
 
         assert_eq!(candidate_ids(&ctx), vec![valid.id]);
@@ -2373,7 +2373,7 @@ landing = "auto"
         assert!(message.contains("Multiple runnable workflows found"));
         assert!(message.contains(&format!("wt run workflow {}", first.id)));
         assert!(message.contains(&format!("wt run workflow {}", second.id)));
-        assert!(message.contains(".local/workflows/"));
+        assert!(message.contains("<git-common-dir>/wt/workflows/"));
         assert!(ui.prompts.lock().unwrap().is_empty());
         assert_eq!(fs::read_to_string(first_run_path).unwrap(), first_before);
         assert_eq!(fs::read_to_string(second_run_path).unwrap(), second_before);

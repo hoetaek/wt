@@ -149,7 +149,7 @@ pub(crate) fn prepare_workflow(
     }
 
     ctx.ui
-        .print_step(&prepared_workflow_message(&workflow_path));
+        .print_step(&prepared_workflow_message(ctx, &workflow_path));
     Ok(())
 }
 

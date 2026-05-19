@@ -170,10 +170,7 @@ pub(crate) fn workflow_selection_status_counts(items: &[WorkflowTaskState]) -> S
 }
 
 pub(crate) fn workflow_relative_path(ctx: &Ctx, path: &Path) -> String {
-    path.strip_prefix(&ctx.repo_root)
-        .unwrap_or(path)
-        .display()
-        .to_string()
+    ctx.storage_root.display_path(path)
 }
 
 pub(crate) fn workflow_title_label(
@@ -304,8 +301,11 @@ pub(crate) fn no_tasks_selected_message() -> &'static str {
     "No tasks selected"
 }
 
-pub(crate) fn prepared_workflow_message(workflow_path: &Path) -> String {
-    format!("Prepared workflow: {}", workflow_path.display())
+pub(crate) fn prepared_workflow_message(ctx: &Ctx, workflow_path: &Path) -> String {
+    format!(
+        "Prepared workflow: {}",
+        ctx.storage_root.display_path(workflow_path)
+    )
 }
 
 pub(crate) fn no_runnable_workflow_tasks_message() -> &'static str {
@@ -372,7 +372,7 @@ pub(crate) fn workflow_single_task_prompt_content(content: &str) -> String {
     workflow_task_prompt_content(
         content,
         &workflow_single_task_handoff_section(
-            Path::new("/repo/.local/workflows/test.toml"),
+            Path::new("/repo/.git/wt/workflows/test.toml"),
             Some(&WorkflowTask::new("task", "run-task")),
             &default_workflow_policy(),
             TEST_WORKFLOW_BASE,
@@ -389,7 +389,7 @@ pub(crate) fn workflow_single_task_prompt_content_for_policy(
     workflow_task_prompt_content(
         content,
         &workflow_single_task_handoff_section(
-            Path::new("/repo/.local/workflows/test.toml"),
+            Path::new("/repo/.git/wt/workflows/test.toml"),
             Some(&WorkflowTask::new("task", "run-task")),
             policy,
             TEST_WORKFLOW_BASE,
@@ -407,7 +407,7 @@ pub(crate) fn workflow_single_task_prompt_content_for_policy_and_closing_refs(
     workflow_task_prompt_content(
         content,
         &workflow_single_task_handoff_section(
-            Path::new("/repo/.local/workflows/test.toml"),
+            Path::new("/repo/.git/wt/workflows/test.toml"),
             Some(&WorkflowTask::new("task", "run-task")),
             policy,
             TEST_WORKFLOW_BASE,
@@ -422,7 +422,7 @@ pub(crate) fn workflow_batch_task_prompt_content(content: &str) -> String {
     workflow_task_prompt_content(
         content,
         &workflow_batch_task_handoff_section(
-            Path::new("/repo/.local/workflows/test.toml"),
+            Path::new("/repo/.git/wt/workflows/test.toml"),
             &row,
             &default_workflow_policy(),
             TEST_WORKFLOW_BASE,
@@ -440,7 +440,7 @@ pub(crate) fn workflow_batch_task_prompt_content_for_policy(
     workflow_task_prompt_content(
         content,
         &workflow_batch_task_handoff_section(
-            Path::new("/repo/.local/workflows/test.toml"),
+            Path::new("/repo/.git/wt/workflows/test.toml"),
             &row,
             policy,
             TEST_WORKFLOW_BASE,

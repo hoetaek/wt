@@ -303,7 +303,11 @@ fn one_line(value: &str) -> String {
 
 fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
     if report.workflows.is_empty() && report.invalid_workflows.is_empty() {
-        ctx.ui.print_step("No workflows found in .local/workflows");
+        ctx.ui.print_step(&format!(
+            "No workflows found in {}",
+            ctx.storage_root
+                .display_path(&ctx.storage_root.workflows_dir())
+        ));
         return;
     }
 
@@ -604,7 +608,7 @@ run = "run-2026-05-18-001-schema"
 "#,
         );
         fs::write(
-            dir.path().join(".local/workflows/bad.toml"),
+            dir.path().join(".git/wt/workflows/bad.toml"),
             "mode = \"batch\"\n",
         )
         .unwrap();
@@ -716,7 +720,7 @@ run = "run-2026-05-18-003-done"
         );
         assert!(
             dims.iter().any(|line| {
-                line == "    body Keep search work coordinated. · base main · file .local/workflows/2026-05-18-001.toml"
+                line == "    body Keep search work coordinated. · base main · file <git-common-dir>/wt/workflows/2026-05-18-001.toml"
             })
         );
         assert!(
@@ -724,7 +728,7 @@ run = "run-2026-05-18-003-done"
                 .any(|line| line == "  waiting-task  id 2026-05-18-002 | mode stack | runs 1 running | policy none/manual")
         );
         assert!(dims.iter().any(|line| {
-            line == "    reason waiting for running task · base main · file .local/workflows/2026-05-18-002.toml"
+            line == "    reason waiting for running task · base main · file <git-common-dir>/wt/workflows/2026-05-18-002.toml"
         }));
         assert!(dims.iter().any(|line| {
             line == "  done-task  id 2026-05-18-003 | mode single | runs 1 done | profile codex | policy none/manual"
@@ -811,7 +815,7 @@ run = "run-{workflow_id}-2"
 
         let detail = dims
             .iter()
-            .find(|line| line.contains(".local/workflows/2026-05-18-002.toml"))
+            .find(|line| line.contains("<git-common-dir>/wt/workflows/2026-05-18-002.toml"))
             .expect("matrix detail should include workflow path");
         assert!(detail.contains("base main"));
     }
@@ -870,7 +874,7 @@ run = "run-2026-05-18-099-schema"
         print_text(&ctx, &report);
         let warnings = ui.warnings.lock().unwrap();
         assert!(warnings.iter().any(|warning| {
-            warning == "2026-05-18-099  file .local/workflows/2026-05-18-099.toml  uses removed `objective`; edit the workflow file to use top-level `title`, `body`, and optional `[origin]`"
+            warning == "2026-05-18-099  file <git-common-dir>/wt/workflows/2026-05-18-099.toml  uses removed `objective`; edit the workflow file to use top-level `title`, `body`, and optional `[origin]`"
         }));
     }
 
@@ -909,7 +913,7 @@ updated_at = "2026-05-18T00:00:00.000000000Z"
     }
 
     fn write_workflow(root: &Path, id: &str, mode: &str, extra: &str, tasks: &str) {
-        let dir = root.join(".local/workflows");
+        let dir = root.join(".git/wt/workflows");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join(format!("{id}.toml")),

@@ -184,7 +184,7 @@ updated_at = "2026-05-18T00:00:00.000000000Z"
 }
 
 fn write_workflow_file(root: &Path, id: &str, mode: &str, extra: &str, tasks: &str) {
-    let dir = root.join(".local/workflows");
+    let dir = root.join(".git/wt/workflows");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join(format!("{id}.toml")),
@@ -626,7 +626,9 @@ fn workflow_list_help_explains_canonical_inventory() {
         ))
         .stdout(predicate::str::contains(
             "derived action labels such as runnable, waiting, and done",
-        ));
+        ))
+        .stdout(predicate::str::contains("<git-common-dir>/wt/workflows"))
+        .stdout(predicate::str::contains(".local/workflows").not());
 }
 
 #[test]
@@ -655,7 +657,7 @@ run = "run-2026-05-18-001-schema"
 "#,
     );
     std::fs::write(
-        temp.path().join(".local/workflows/bad.toml"),
+        temp.path().join(".git/wt/workflows/bad.toml"),
         "mode = \"batch\"\n",
     )
     .unwrap();
@@ -682,7 +684,10 @@ run = "run-2026-05-18-001-schema"
 
     let row = &workflows[0];
     assert_eq!(row["id"], "2026-05-18-001");
-    assert_eq!(row["path"], ".local/workflows/2026-05-18-001.toml");
+    assert_eq!(
+        row["path"],
+        "<git-common-dir>/wt/workflows/2026-05-18-001.toml"
+    );
     assert_eq!(row["mode"], "batch");
     assert_eq!(row["title"], "Ship search");
     assert_eq!(row["task_count"], 1);
@@ -696,7 +701,7 @@ run = "run-2026-05-18-001-schema"
     assert_eq!(row["policy"]["landing"], "manual");
     assert!(row["state_error"].is_null());
     assert_eq!(invalid[0]["id"], "bad");
-    assert_eq!(invalid[0]["path"], ".local/workflows/bad.toml");
+    assert_eq!(invalid[0]["path"], "<git-common-dir>/wt/workflows/bad.toml");
     assert!(
         invalid[0]["error"]
             .as_str()
@@ -749,13 +754,78 @@ fn workflow_prepare_accepts_pr_on_non_stack_modes() {
         .success()
         .stdout(predicate::str::contains("Prepared workflow:"));
 
-    let workflows = std::fs::read_dir(temp.path().join(".local/workflows"))
+    let workflows = std::fs::read_dir(temp.path().join(".git/wt/workflows"))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(workflows.len(), 1);
     let content = std::fs::read_to_string(workflows[0].path()).unwrap();
     assert!(content.contains("pull_request = \"draft\""));
+}
+
+#[test]
+fn workflow_state_is_visible_from_linked_worktree() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    let linked = temp.path().join("linked");
+    std::fs::create_dir(&repo).unwrap();
+    git_init(&repo);
+    git_commit(&repo);
+    let base = current_branch(&repo);
+
+    let status = git_command()
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "linked-workflow-state",
+            linked.to_str().unwrap(),
+            "HEAD",
+        ])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    wt_command()
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "workflow",
+            "task",
+            "--mode",
+            "batch",
+            "linked-workflow-task",
+            "--base",
+            &base,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Prepared workflow: <git-common-dir>/wt/workflows/",
+        ));
+
+    assert!(!repo.join(".local/workflows").exists());
+    let workflows = std::fs::read_dir(repo.join(".git/wt/workflows"))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(workflows.len(), 1);
+
+    let output = wt_command()
+        .args(["-C", linked.to_str().unwrap(), "--json", "workflow", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let workflows = value["workflows"].as_array().unwrap();
+    assert_eq!(workflows.len(), 1);
+    let path = workflows[0]["path"].as_str().unwrap();
+    assert!(path.starts_with("<git-common-dir>/wt/workflows/"));
+    assert!(path.ends_with(".toml"));
 }
 
 #[test]

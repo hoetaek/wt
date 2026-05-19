@@ -950,10 +950,7 @@ fn workflow_complete_command(workflow: &WorkflowMatch) -> String {
 }
 
 fn workflow_relative_path(ctx: &Ctx, path: &Path) -> String {
-    path.strip_prefix(&ctx.repo_root)
-        .unwrap_or(path)
-        .display()
-        .to_string()
+    ctx.storage_root.display_path(path)
 }
 
 fn shell_arg(value: &str) -> String {
@@ -1014,7 +1011,7 @@ mod tests {
         let worktree = dir.path().join("sample-feature");
         std::fs::create_dir_all(repo.join(".git/wt/tasks")).unwrap();
         std::fs::create_dir_all(repo.join(".git/wt/task-runs")).unwrap();
-        std::fs::create_dir_all(repo.join(".local/workflows")).unwrap();
+        std::fs::create_dir_all(repo.join(".git/wt/workflows")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
             repo.join(".git/wt/tasks/feature.toml"),
@@ -1027,7 +1024,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(
-            repo.join(".local/workflows/2026-05-17-001.toml"),
+            repo.join(".git/wt/workflows/2026-05-17-001.toml"),
             r#"title = "Ship feature workflow"
 body = """Coordinate inspect rendering without letting this deliberately verbose workflow body dominate the inspect dossier output or hide useful metadata. Hidden tail should not render."""
 mode = "stack"
@@ -1052,7 +1049,7 @@ parent = "main"
         )
         .unwrap();
         std::fs::write(
-            repo.join(".local/workflows/2026-05-17-099.toml"),
+            repo.join(".git/wt/workflows/2026-05-17-099.toml"),
             r#"objective = "Old workflow"
 mode = "batch"
 base_mode = "explicit"
@@ -1126,7 +1123,10 @@ run = "run-unrelated"
         assert!(dims.contains("--run-next"));
         let warnings = ui.warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Cmux: cmux command not found"));
-        assert!(warnings.contains("Skipping workflow .local/workflows/2026-05-17-099.toml"));
+        assert!(
+            warnings
+                .contains("Skipping workflow <git-common-dir>/wt/workflows/2026-05-17-099.toml")
+        );
         assert!(warnings.contains("uses removed `objective`"));
     }
 
@@ -1186,7 +1186,7 @@ run = "run-unrelated"
         };
         let workflow = WorkflowMatch {
             id: "2026-05-17-001".into(),
-            path: repo.join(".local/workflows/2026-05-17-001.toml"),
+            path: repo.join(".git/wt/workflows/2026-05-17-001.toml"),
             mode: mode.into(),
             title: "Feature workflow".into(),
             body_summary: None,

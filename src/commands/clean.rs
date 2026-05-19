@@ -682,7 +682,7 @@ updated_at = "2026-05-18T00:00:00Z"
             task_run::STATUS_RUNNING,
         )
         .unwrap();
-        let workflow_path = repo.path().join(".local/workflows/2026-05-16-001.toml");
+        let workflow_path = repo.path().join(".git/wt/workflows/2026-05-16-001.toml");
         let mut workflow = crate::workflow::WorkflowMetadata::new(
             crate::workflow::WorkflowMode::Batch,
             "branch",
