@@ -308,6 +308,15 @@ open_browser = true
     )
     .unwrap_err();
     assert!(err.to_string().contains("open_browser"));
+
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace]
+browser = "Google Chrome"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("invalid type"));
 }
 
 #[test]
@@ -1397,6 +1406,18 @@ open_browser = true
 "#;
     let err = toml::from_str::<Config>(toml_str).unwrap_err();
     assert!(err.to_string().contains("open_browser"));
+}
+
+#[test]
+fn rejects_legacy_site_browser_config() {
+    let toml_str = r#"
+[site]
+provider = "herd"
+name = "test"
+browser = "Google Chrome"
+"#;
+    let err = toml::from_str::<Config>(toml_str).unwrap_err();
+    assert!(err.to_string().contains("browser"));
 }
 
 #[test]
