@@ -100,20 +100,30 @@ mod tests {
     use tower::ServiceExt;
 
     #[test]
-    fn config_tab_passes_source_paths_to_card_renderer() {
+    fn config_tab_keeps_source_paths_out_of_repeated_list_rows() {
         assert!(APP_JS.contains("function renderConfig(snapshot)"));
-        assert!(APP_JS.contains("paths: config.paths,"));
+        assert!(APP_JS.contains("relationships: config.paths.slice().sort"));
+        assert!(APP_JS.contains("function configSourceLayerPills(config)"));
+        assert!(!APP_JS.contains("function settingsFileMasterDetailRecord(row"));
+        assert!(APP_JS.contains("function sourceLayerLabel(path"));
+        assert!(APP_JS.contains("function settingsFileOrder(path)"));
+        assert!(!APP_JS.contains("paths: config.paths,"));
         assert!(!APP_JS.contains("], paths(config.paths)),"));
     }
 
     #[test]
     fn embedded_frontend_includes_operational_dashboard_shell() {
         assert!(!INDEX_HTML.contains("class=\"state-strip\""));
+        assert!(INDEX_HTML.contains("id=\"workspace-label\""));
         assert!(INDEX_HTML.contains("role=\"tablist\""));
         assert!(INDEX_HTML.contains("aria-selected=\"true\""));
         assert!(INDEX_HTML.contains("id=\"tab-overview\""));
         assert!(INDEX_HTML.contains("data-view=\"config\""));
         assert!(INDEX_HTML.contains("data-view=\"retrospecs\""));
+        assert!(
+            INDEX_HTML.find("class=\"tabs\"").unwrap()
+                < INDEX_HTML.find("class=\"top-actions\"").unwrap()
+        );
         assert!(!INDEX_HTML.contains("data-view=\"profiles\""));
         assert!(!INDEX_HTML.contains("data-view=\"tasks\""));
         assert!(INDEX_HTML.contains("role=\"tabpanel\""));
@@ -124,6 +134,50 @@ mod tests {
         assert!(APP_CSS.contains(".jump-nav"));
         assert!(APP_CSS.contains(".top-actions .language-switch"));
         assert!(APP_CSS.contains(".language-switch[data-current=\"en\"]"));
+        assert!(APP_JS.contains("function compactPath(path)"));
+        assert!(APP_JS.contains("function repoContextLabel(repo)"));
+        assert!(APP_JS.contains("function attentionStat(count)"));
+        assert!(APP_JS.contains("sourceSectionTitle"));
+        assert!(APP_JS.contains("설정 목록"));
+        assert!(APP_JS.contains("로컬 설정"));
+        assert!(APP_JS.contains("공유 설정"));
+        assert!(APP_JS.contains("function settingsLayerTone(path)"));
+        assert!(APP_JS.contains("function profileEffectiveCards(row)"));
+        assert!(APP_JS.contains("function profileTomlCard(card)"));
+        assert!(APP_JS.contains("profileOnlyBadge: \"profile.toml\""));
+        assert!(APP_JS.contains("listMarker"));
+        assert!(APP_CSS.contains(".master-dot"));
+        assert!(APP_CSS.contains(".pill.layer-local"));
+        assert!(APP_CSS.contains(".detail-card.is-profile-only"));
+        assert!(APP_JS.contains("hideSummarySectionTitle"));
+        assert!(!APP_JS.contains("Review values"));
+        assert!(!APP_JS.contains("승인 기준"));
+        assert!(!APP_JS.contains("프로필 영향"));
+        assert!(!APP_JS.contains("Applied from"));
+        assert!(!APP_JS.contains("Audit source"));
+        assert!(!APP_JS.contains("적용 근거"));
+        assert!(!APP_JS.contains("검증용 원문"));
+        assert!(APP_JS.contains("로컬 TOML 경로"));
+        assert!(APP_JS.contains("프로필 TOML 경로"));
+        assert!(APP_JS.contains("namingLabel: \"naming\""));
+        assert!(APP_JS.contains("depsLabel: \"deps\""));
+        assert!(APP_JS.contains("envLabel: \"env\""));
+        assert!(APP_JS.contains("chromeDevtoolsLabel: \"chrome_devtools\""));
+        assert!(APP_JS.contains("promptModesLabel: \"prompt\""));
+        assert!(APP_JS.contains("function agentPromptSummary(agent)"));
+        assert!(APP_JS.contains("collapseSources: true"));
+        assert!(APP_JS.contains("class=\"detail-source\"><summary>"));
+        assert!(APP_JS.contains("detailCards(record.cards"));
+        assert!(APP_JS.contains("landingHelp"));
+        assert!(APP_JS.contains("postDepsTabsLabel: \"post_deps_tabs\""));
+        assert!(!APP_JS.contains("이름 생성"));
+        assert!(!APP_JS.contains("의존성 명령"));
+        assert!(!APP_JS.contains("프롬프트 범위"));
+        assert!(!APP_JS.contains("setup 후 탭"));
+        assert!(!APP_JS.contains("의존성 후 탭"));
+        assert!(!APP_JS.contains("landingLabel: \"랜딩\""));
+        assert!(!APP_JS.contains("동작 요약"));
+        assert!(!APP_JS.contains("설정 색인"));
         assert!(!APP_CSS.contains(".state-strip"));
         assert!(APP_CSS.contains(".metrics[data-view]:not([data-view=\"overview\"])"));
         assert!(APP_CSS.contains(".focus-panel"));
@@ -134,7 +188,9 @@ mod tests {
         assert!(APP_CSS.contains(".scan-row"));
         assert!(APP_CSS.contains(".scan-meta"));
         assert!(APP_CSS.contains(".master-detail-shell"));
+        assert!(APP_CSS.contains(".master-list-group"));
         assert!(APP_CSS.contains(".master-list-row"));
+        assert!(APP_CSS.contains(".detail-cards"));
         assert!(APP_CSS.contains(".detail-pane"));
         assert!(APP_CSS.contains(".record-list"));
         assert!(APP_CSS.contains(".record-card.tone-green::before"));
@@ -163,7 +219,7 @@ mod tests {
         assert!(APP_JS.contains("tabTaskRuns: \"작업 실행\""));
         assert!(APP_JS.contains("workflowUiGroup"));
         assert!(APP_JS.contains("taskRunNeedsAttention"));
-        assert!(APP_JS.contains("config.source_files || []"));
+        assert!(APP_JS.contains("configSourceLayerPills(config)"));
         assert!(APP_JS.contains("effective_text"));
         assert!(APP_JS.contains("localStorage.setItem(LOCALE_KEY"));
         assert!(!APP_JS.contains("data-collapse"));
@@ -204,7 +260,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("wt local state"));
+        assert!(String::from_utf8_lossy(&body).contains("wt ui"));
 
         let response = app
             .clone()

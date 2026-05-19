@@ -1,6 +1,7 @@
 use crate::config::{
-    AgentCli, Config, ConfigSource, IssueProviderType, SiteProvider, WorkflowDefaultLandingPolicy,
-    WorkflowDefaultPullRequestMode,
+    AgentCli, AgentConfig, Config, ConfigSource, EditorPlacement, IssueProviderType, ReadyMode,
+    SetupConfig, SiteProvider, SubmitMode, TestConfig, WorkflowDefaultLandingPolicy,
+    WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
 };
 use crate::config_render::render_effective_config;
 use crate::context::{
@@ -116,11 +117,15 @@ struct ConfigSummary {
     effective_text: String,
     source_files: Vec<SourceFileSummary>,
     selected_profile: Option<String>,
+    worktree: Option<WorktreeSummary>,
+    setup: Option<SetupSummary>,
     workflow: WorkflowDefaultSummary,
-    agent: Option<String>,
-    issues: Option<String>,
+    issues: Option<IssuesSummary>,
     site: Option<SiteSummary>,
+    editor: Option<EditorSummary>,
     workspace: Option<WorkspaceSummary>,
+    agent: Option<AgentSummary>,
+    test: Option<TestSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,17 +141,89 @@ struct WorkflowDefaultSummary {
 }
 
 #[derive(Debug, Serialize)]
+struct IssuesSummary {
+    provider: String,
+    gh_user: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorktreeSummary {
+    path: Option<String>,
+    copy: Vec<String>,
+    copy_as: Vec<CopyAsSummary>,
+    link: Vec<String>,
+    inject_local_context: bool,
+    naming: Option<WorktreeNamingSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct CopyAsSummary {
+    from: String,
+    to: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorktreeNamingSummary {
+    command: String,
+    branch: Option<String>,
+    workspace: Option<String>,
+    prompt_configured: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupSummary {
+    deps: Vec<CommandSummary>,
+    env: Vec<KeyValueSummary>,
+    env_files: Vec<EnvFileSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct CommandSummary {
+    run: String,
+    working_dir: Option<String>,
+    if_exists: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct KeyValueSummary {
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+struct EnvFileSummary {
+    path: String,
+    values: Vec<KeyValueSummary>,
+}
+
+#[derive(Debug, Serialize)]
 struct SiteSummary {
     provider: String,
     active: bool,
+    name: String,
+    root: String,
+    secure: bool,
+    url: String,
+    target: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct EditorSummary {
+    command: Option<String>,
+    placement: String,
 }
 
 #[derive(Debug, Serialize)]
 struct WorkspaceSummary {
     tab_count: usize,
+    tabs: Vec<String>,
     post_deps_tab_count: usize,
+    post_deps_tabs: Vec<String>,
     browser: Option<WorkspaceBrowserSummary>,
+    chrome_devtools: Option<WorkspaceChromeDevtoolsSummary>,
     color_count: usize,
+    colors: Vec<WorkspaceColorSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -154,6 +231,42 @@ struct WorkspaceBrowserSummary {
     mode: String,
     url: Option<String>,
     app: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkspaceChromeDevtoolsSummary {
+    port: Option<u16>,
+    user_data_dir: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkspaceColorSummary {
+    kind: String,
+    color: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentSummary {
+    cli: String,
+    args: Vec<String>,
+    command: Option<String>,
+    ready: String,
+    submit: String,
+    timeout: u64,
+    send_after: u64,
+    prompt_modes: Vec<String>,
+    prompt_counts: Vec<PromptModeSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct PromptModeSummary {
+    mode: String,
+    count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct TestSummary {
+    commands: Vec<CommandSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -324,11 +437,18 @@ struct ProfileCollection {
 struct ProfileSummary {
     name: String,
     path: String,
-    copy_count: usize,
-    link_count: usize,
+    copy: Vec<String>,
+    copy_as: Vec<CopyAsSummary>,
+    link: Vec<String>,
     agent: String,
     has_site: bool,
     test_count: usize,
+    worktree: Option<WorktreeSummary>,
+    setup: Option<SetupSummary>,
+    site: Option<SiteSummary>,
+    workspace: Option<WorkspaceSummary>,
+    agent_settings: Option<AgentSummary>,
+    test: Option<TestSummary>,
     source_text: Option<String>,
 }
 
@@ -901,25 +1021,51 @@ fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
     let items = inventory
         .profiles
         .into_iter()
-        .map(|profile| ProfileSummary {
-            name: profile.name,
-            path: relative_path(ctx, &profile.path),
-            copy_count: profile.config.worktree.copy.len() + profile.config.worktree.copy_as.len(),
-            link_count: profile.config.worktree.link.len(),
-            agent: profile
-                .config
-                .agent
+        .map(|profile| {
+            let worktree = worktree_summary(&profile.config.worktree);
+            let setup = setup_summary(&profile.config.setup);
+            let site = site_summary(&profile.config);
+            let workspace = workspace_summary(profile.config.workspace.as_ref());
+            let agent_settings = agent_summary(profile.config.agent.as_ref());
+            let test = test_summary(profile.config.test.as_ref());
+            let agent = agent_settings
                 .as_ref()
-                .map(|agent| agent_cli_name(&agent.cli))
-                .unwrap_or("none")
-                .into(),
-            has_site: profile.config.has_site(),
-            test_count: profile
+                .map(|agent| agent.cli.clone())
+                .unwrap_or_else(|| "none".into());
+            let has_site = profile.config.has_site();
+            let test_count = profile
                 .config
                 .test
+                .as_ref()
                 .map(|test| test.commands.len())
-                .unwrap_or(0),
-            source_text: read_known_source_text(ctx, &profile.path),
+                .unwrap_or(0);
+
+            ProfileSummary {
+                name: profile.name,
+                path: relative_path(ctx, &profile.path),
+                copy: profile.config.worktree.copy.clone(),
+                copy_as: profile
+                    .config
+                    .worktree
+                    .copy_as
+                    .iter()
+                    .map(|entry| CopyAsSummary {
+                        from: entry.from.clone(),
+                        to: entry.to.clone(),
+                    })
+                    .collect(),
+                link: profile.config.worktree.link.clone(),
+                agent,
+                has_site,
+                test_count,
+                worktree,
+                setup,
+                site,
+                workspace,
+                agent_settings,
+                test,
+                source_text: read_known_source_text(ctx, &profile.path),
+            }
         })
         .collect();
     let invalid = inventory
@@ -1139,44 +1285,211 @@ fn config_summary(ctx: &Ctx) -> ConfigSummary {
             .profile
             .as_ref()
             .and_then(|profile| profile.name.clone()),
+        worktree: worktree_summary(&ctx.config.worktree),
+        setup: setup_summary(&ctx.config.setup),
         workflow: WorkflowDefaultSummary {
             pull_request: workflow_default_pull_request(policy.pull_request).into(),
             landing: workflow_default_landing(policy.landing).into(),
         },
-        agent: ctx
-            .config
-            .agent
-            .as_ref()
-            .map(|agent| agent_cli_name(&agent.cli).into()),
-        issues: ctx
-            .config
-            .issues
-            .as_ref()
-            .map(|issues| match issues.provider {
+        issues: ctx.config.issues.as_ref().map(|issues| IssuesSummary {
+            provider: match issues.provider {
                 IssueProviderType::Linear => "linear".into(),
                 IssueProviderType::Github => "github".into(),
-            }),
-        site: ctx.config.site.as_ref().map(|site| SiteSummary {
-            provider: site_provider_name(&site.provider).into(),
-            active: ctx.config.has_site(),
+            },
+            gh_user: issues.gh_user.clone(),
         }),
-        workspace: ctx
-            .config
-            .workspace
+        site: site_summary(&ctx.config),
+        editor: ctx.config.effective_editor().map(|editor| EditorSummary {
+            command: editor.command,
+            placement: editor_placement_name(editor.placement.as_ref()).into(),
+        }),
+        workspace: workspace_summary(ctx.config.workspace.as_ref()),
+        agent: agent_summary(ctx.config.agent.as_ref()),
+        test: test_summary(ctx.config.test.as_ref()),
+    }
+}
+
+fn site_summary(config: &Config) -> Option<SiteSummary> {
+    config.site.as_ref().map(|site| {
+        let site = site.with_effective_defaults();
+        SiteSummary {
+            provider: site_provider_name(&site.provider).into(),
+            active: config.has_site(),
+            name: site.effective_name().into(),
+            root: site.effective_root().into(),
+            secure: site.effective_secure(),
+            url: site.effective_url().into_owned(),
+            target: site.effective_target().map(str::to_string),
+        }
+    })
+}
+
+fn workspace_summary(workspace: Option<&WorkspaceConfig>) -> Option<WorkspaceSummary> {
+    workspace.map(|workspace| WorkspaceSummary {
+        tab_count: workspace.tabs.len(),
+        tabs: workspace.tabs.clone(),
+        post_deps_tab_count: workspace.post_deps_tabs.len(),
+        post_deps_tabs: workspace.post_deps_tabs.clone(),
+        browser: workspace
+            .browser
             .as_ref()
-            .map(|workspace| WorkspaceSummary {
-                tab_count: workspace.tabs.len(),
-                post_deps_tab_count: workspace.post_deps_tabs.len(),
-                browser: workspace
-                    .browser
-                    .as_ref()
-                    .map(|browser| WorkspaceBrowserSummary {
-                        mode: workspace_browser_mode_name(browser.mode).into(),
-                        url: browser.url.clone(),
-                        app: browser.app.clone(),
-                    }),
-                color_count: workspace.effective_colors().len(),
+            .map(|browser| WorkspaceBrowserSummary {
+                mode: workspace_browser_mode_name(browser.mode).into(),
+                url: browser.effective_url().map(|url| url.into_owned()),
+                app: browser.app.clone(),
             }),
+        chrome_devtools: workspace.chrome_devtools.as_ref().map(|chrome| {
+            WorkspaceChromeDevtoolsSummary {
+                port: chrome.port,
+                user_data_dir: chrome.effective_user_data_dir().into(),
+            }
+        }),
+        color_count: workspace.effective_colors().len(),
+        colors: workspace
+            .effective_colors()
+            .into_iter()
+            .map(|(kind, color)| WorkspaceColorSummary {
+                kind: kind.into(),
+                color: color.into(),
+            })
+            .collect(),
+    })
+}
+
+fn agent_summary(agent: Option<&AgentConfig>) -> Option<AgentSummary> {
+    agent.map(|agent| {
+        let mut prompt_modes = agent
+            .prompt
+            .keys()
+            .filter_map(|key| {
+                prompt_append_mode_name(key)
+                    .map(|mode| format!("{mode} append"))
+                    .or_else(|| Some(key.clone()))
+            })
+            .collect::<Vec<_>>();
+        prompt_modes.sort();
+        let mut prompt_counts = agent
+            .prompt
+            .iter()
+            .map(|(mode, prompts)| PromptModeSummary {
+                mode: prompt_append_mode_name(mode)
+                    .map(|mode| format!("{mode} append"))
+                    .unwrap_or_else(|| mode.clone()),
+                count: prompts.len(),
+            })
+            .collect::<Vec<_>>();
+        prompt_counts.sort_by(|a, b| a.mode.cmp(&b.mode));
+        AgentSummary {
+            cli: agent_cli_name(&agent.cli).into(),
+            args: agent.args.clone(),
+            command: agent.command.clone(),
+            ready: ready_mode_name(&agent.ready),
+            submit: submit_mode_name(&agent.submit).into(),
+            timeout: agent.timeout,
+            send_after: agent.send_after,
+            prompt_modes,
+            prompt_counts,
+        }
+    })
+}
+
+fn worktree_summary(worktree: &WorktreeConfig) -> Option<WorktreeSummary> {
+    if *worktree == WorktreeConfig::default() {
+        return None;
+    }
+    Some(WorktreeSummary {
+        path: worktree.path.clone(),
+        copy: worktree.copy.clone(),
+        copy_as: worktree
+            .copy_as
+            .iter()
+            .map(|entry| CopyAsSummary {
+                from: entry.from.clone(),
+                to: entry.to.clone(),
+            })
+            .collect(),
+        link: worktree.link.clone(),
+        inject_local_context: worktree.inject_local_context.is_some(),
+        naming: worktree
+            .naming
+            .as_ref()
+            .map(|naming| WorktreeNamingSummary {
+                command: naming.command.clone(),
+                branch: naming.branch.clone(),
+                workspace: naming.workspace.clone(),
+                prompt_configured: !naming.prompt.trim().is_empty(),
+            }),
+    })
+}
+
+fn setup_summary(setup: &SetupConfig) -> Option<SetupSummary> {
+    if *setup == SetupConfig::default() {
+        return None;
+    }
+    let mut env_files = setup
+        .env_files
+        .iter()
+        .map(|(path, values)| EnvFileSummary {
+            path: path.clone(),
+            values: sorted_key_values(values),
+        })
+        .collect::<Vec<_>>();
+    env_files.sort_by(|a, b| a.path.cmp(&b.path));
+    Some(SetupSummary {
+        deps: setup
+            .deps
+            .iter()
+            .map(|dep| CommandSummary {
+                run: dep.run.clone(),
+                working_dir: dep.working_dir.clone(),
+                if_exists: dep.if_exists.clone(),
+                label: None,
+            })
+            .collect(),
+        env: sorted_key_values(&setup.env),
+        env_files,
+    })
+}
+
+fn test_summary(test: Option<&TestConfig>) -> Option<TestSummary> {
+    let test = test?;
+    if *test == TestConfig::default() {
+        return None;
+    }
+    Some(TestSummary {
+        commands: test
+            .commands
+            .iter()
+            .map(|command| CommandSummary {
+                run: command.run.clone(),
+                working_dir: command.working_dir.clone(),
+                if_exists: command.if_exists.clone(),
+                label: command.label.clone(),
+            })
+            .collect(),
+    })
+}
+
+fn sorted_key_values(values: &std::collections::HashMap<String, String>) -> Vec<KeyValueSummary> {
+    let mut values = values
+        .iter()
+        .map(|(key, value)| KeyValueSummary {
+            key: key.clone(),
+            value: value.clone(),
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|a, b| a.key.cmp(&b.key));
+    values
+}
+
+fn prompt_append_mode_name(key: &str) -> Option<&str> {
+    key.strip_prefix("\0append:")
+}
+
+fn editor_placement_name(placement: Option<&EditorPlacement>) -> &'static str {
+    match placement {
+        Some(EditorPlacement::Process) => "process",
+        Some(EditorPlacement::CmuxSurface) | None => "cmux_surface",
     }
 }
 
@@ -1245,6 +1558,22 @@ fn agent_cli_name(cli: &AgentCli) -> &'static str {
         AgentCli::Claude => "claude",
         AgentCli::Gemini => "gemini",
         AgentCli::None => "none",
+    }
+}
+
+fn ready_mode_name(mode: &ReadyMode) -> String {
+    match mode {
+        ReadyMode::Auto => "auto".into(),
+        ReadyMode::Marker(marker) => marker.clone(),
+    }
+}
+
+fn submit_mode_name(mode: &SubmitMode) -> &'static str {
+    match mode {
+        SubmitMode::Auto => "auto",
+        SubmitMode::Newline => "newline",
+        SubmitMode::CarriageReturn => "carriage_return",
+        SubmitMode::None => "none",
     }
 }
 
@@ -1412,9 +1741,12 @@ impl CommandRunner for NoopRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::IssuesConfig;
     use crate::config::{
-        AgentCli, AgentConfig, ReadyMode, SubmitMode, WorkflowDefaultLandingPolicy,
-        WorkflowDefaultPullRequestMode,
+        AgentCli, AgentConfig, DepCommand, EditorConfig, EditorPlacement, ReadyMode, SiteConfig,
+        SiteProvider, SubmitMode, TestCommand, TestConfig, WorkflowDefaultLandingPolicy,
+        WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig, WorkspaceBrowserMode,
+        WorkspaceChromeDevtoolsConfig, WorkspaceConfig, WorktreeNamingConfig,
     };
     use std::collections::HashMap;
 
@@ -1449,7 +1781,11 @@ mod tests {
             "title = \"Idea\"\nstatus = \"ready\"\ntags = [\"ui\"]\nbody = \"Idea body\"\n",
         );
         write_idea(dir.path(), "bad", "title = [\n");
-        write_profile(dir.path(), "codex", "[agent]\ncli = \"codex\"\n");
+        write_profile(
+            dir.path(),
+            "codex",
+            "[worktree]\ncopy = [\".env\", \".linear.toml\"]\ncopy_as = [{ from = \".local/profiles/codex/scaffold\", to = \".\" }]\nlink = [\".local\"]\n\n[agent]\ncli = \"codex\"\n",
+        );
         write_profile(dir.path(), "bad name", "[agent]\ncli = \"codex\"\n");
         write_retrospec(
             dir.path(),
@@ -1470,17 +1806,79 @@ mod tests {
         .unwrap();
 
         let mut config = Config::default();
+        config.worktree.copy = vec!["AGENTS.override.md".into()];
+        config.worktree.link = vec![".local".into()];
+        config.worktree.inject_local_context = Some("## Local context\n".into());
+        config.worktree.naming = Some(WorktreeNamingConfig {
+            command: "claude -p".into(),
+            prompt: "Generate a branch slug".into(),
+            branch: Some("{{branch_prefix}}{{english_slug}}".into()),
+            workspace: Some("{{english_slug}}".into()),
+        });
+        config.setup.deps = vec![DepCommand {
+            working_dir: None,
+            run: "npm install".into(),
+            if_exists: Some("package.json".into()),
+        }];
+        config
+            .setup
+            .env
+            .insert("APP_URL".into(), "https://{{site_name}}.test".into());
         config.workflow.pull_request = Some(WorkflowDefaultPullRequestMode::Ready);
         config.workflow.landing = Some(WorkflowDefaultLandingPolicy::Auto);
+        config.issues = Some(IssuesConfig {
+            provider: IssueProviderType::Github,
+            gh_user: Some("alice".into()),
+        });
+        config.site = Some(SiteConfig {
+            provider: SiteProvider::Herd,
+            name: Some("{{repo}}-{{branch_slug}}".into()),
+            root: Some(".".into()),
+            secure: Some(true),
+            url: Some("https://{{site_name}}.test".into()),
+            target: None,
+        });
+        config.editor = EditorConfig {
+            command: Some("nvim {{path}}".into()),
+            placement: Some(EditorPlacement::CmuxSurface),
+        };
+        config.workspace = Some(WorkspaceConfig {
+            tabs: vec!["lazygit".into(), "nvim".into()],
+            post_deps_tabs: vec!["npm run dev".into()],
+            colors: HashMap::from([("task".into(), "blue".into())]),
+            browser: Some(WorkspaceBrowserConfig {
+                mode: WorkspaceBrowserMode::ChromeDevtools,
+                url: Some("{{site_url}}".into()),
+                app: None,
+            }),
+            chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                port: Some(9222),
+                user_data_dir: Some("{{worktree_parent}}/.chrome-devtools".into()),
+            }),
+        });
         config.agent = Some(AgentConfig {
             cli: AgentCli::Codex,
-            args: Vec::new(),
+            args: vec!["--yolo".into()],
             command: None,
             ready: ReadyMode::Auto,
             submit: SubmitMode::Auto,
-            timeout: 15,
-            send_after: 3,
-            prompt: HashMap::new(),
+            timeout: 30,
+            send_after: 2,
+            prompt: HashMap::from([
+                ("branch".into(), vec!["branch prompt".into()]),
+                (
+                    "issue".into(),
+                    vec!["context prompt".into(), "start prompt".into()],
+                ),
+            ]),
+        });
+        config.test = Some(TestConfig {
+            commands: vec![TestCommand {
+                working_dir: None,
+                run: "cargo test".into(),
+                if_exists: Some("Cargo.toml".into()),
+                label: Some("Rust tests".into()),
+            }],
         });
         let state = SnapshotState::new(
             dir.path().to_path_buf(),
@@ -1509,7 +1907,55 @@ mod tests {
         assert_eq!(snapshot.retrospecs.invalid.len(), 1);
         assert_eq!(snapshot.config.workflow.pull_request, "ready");
         assert_eq!(snapshot.config.workflow.landing, "auto");
-        assert_eq!(snapshot.config.agent.as_deref(), Some("codex"));
+        let issues = snapshot.config.issues.as_ref().unwrap();
+        assert_eq!(issues.provider, "github");
+        assert_eq!(issues.gh_user.as_deref(), Some("alice"));
+        let worktree = snapshot.config.worktree.as_ref().unwrap();
+        assert_eq!(worktree.copy, vec!["AGENTS.override.md".to_string()]);
+        assert_eq!(worktree.link, vec![".local".to_string()]);
+        assert!(worktree.inject_local_context);
+        let naming = worktree.naming.as_ref().unwrap();
+        assert_eq!(naming.command, "claude -p");
+        assert!(naming.prompt_configured);
+        let setup = snapshot.config.setup.as_ref().unwrap();
+        assert_eq!(setup.deps[0].run, "npm install");
+        assert_eq!(setup.env[0].key, "APP_URL");
+        let site = snapshot.config.site.as_ref().unwrap();
+        assert_eq!(site.provider, "herd");
+        assert_eq!(site.url, "https://{{site_name}}.test");
+        let editor = snapshot.config.editor.as_ref().unwrap();
+        assert_eq!(editor.command.as_deref(), Some("nvim {{path}}"));
+        assert_eq!(editor.placement, "cmux_surface");
+        let workspace = snapshot.config.workspace.as_ref().unwrap();
+        assert_eq!(workspace.tabs, vec!["lazygit", "nvim"]);
+        assert_eq!(workspace.browser.as_ref().unwrap().mode, "chrome_devtools");
+        assert_eq!(
+            workspace.chrome_devtools.as_ref().unwrap().user_data_dir,
+            "{{worktree_parent}}/.chrome-devtools"
+        );
+        let agent = snapshot.config.agent.as_ref().unwrap();
+        assert_eq!(agent.cli, "codex");
+        assert_eq!(agent.args, vec!["--yolo".to_string()]);
+        assert_eq!(agent.ready, "auto");
+        assert_eq!(agent.submit, "auto");
+        assert_eq!(agent.timeout, 30);
+        assert_eq!(agent.send_after, 2);
+        assert_eq!(agent.prompt_counts[0].mode, "branch");
+        assert_eq!(agent.prompt_counts[0].count, 1);
+        assert_eq!(agent.prompt_counts[1].mode, "issue");
+        assert_eq!(agent.prompt_counts[1].count, 2);
+        assert_eq!(
+            snapshot.config.test.as_ref().unwrap().commands[0].run,
+            "cargo test"
+        );
+        let profile = snapshot.profiles.items.first().unwrap();
+        assert_eq!(
+            profile.copy,
+            vec![".env".to_string(), ".linear.toml".to_string()]
+        );
+        assert_eq!(profile.copy_as[0].from, ".local/profiles/codex/scaffold");
+        assert_eq!(profile.copy_as[0].to, ".");
+        assert_eq!(profile.link, vec![".local".to_string()]);
         assert_eq!(
             snapshot.sources.config_paths,
             vec![".wt.toml", ".local/.wt.toml"]

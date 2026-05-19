@@ -10,6 +10,7 @@ const state = {
 const tabs = Array.from(document.querySelectorAll(".tabs button"));
 const content = document.querySelector("#content");
 const metrics = document.querySelector("#metrics");
+const workspaceLabel = document.querySelector("#workspace-label");
 const repoLabel = document.querySelector("#repo-label");
 const languageButton = document.querySelector("#language-toggle");
 const statusRegion = document.querySelector("#status");
@@ -23,32 +24,78 @@ const STRINGS = {
     body: "Body",
     source: "Source",
     sourceToml: "Source TOML",
-    effectiveConfig: "Effective config",
-    sourceConfig: "Source config files",
-    runtime: "Runtime",
+    effectiveConfig: "Final values",
     workspace: "Workspace",
+    sourceConfig: "Config source file",
+    localSettings: "Local settings",
+    sharedSettings: "Shared settings",
+    otherSettings: "Other settings",
     detailSummary: "Summary",
-    detailRelationships: "Relationships and source paths",
+    settingCards: "Setting cards",
+    detailRelationships: "Related info",
+    localTomlPath: "Local TOML path",
+    profileTomlPath: "Profile TOML path",
+    appliedSettingsLayers: "Applied settings",
+    settingsPath: "File location",
+    settingsToml: "Settings TOML",
+    settingsRole: "What this controls",
+    profileToml: "Profile TOML",
+    profileOnlyBadge: "profile.toml",
+    profileLocation: "path",
     sourceContent: "Source content",
+    renderedContent: "Rendered content",
     sourcePaths: "Source paths",
     sourceHome: "Source home",
     profileName: "Profile name",
-    agentLabel: "Agent",
+    agentLabel: "cli",
     issuesLabel: "Issues",
-    siteLabel: "Site",
-    activeLabel: "Active",
-    pullRequestLabel: "Pull request",
-    landingLabel: "Landing",
-    tabsLabel: "Tabs",
-    postDepsTabsLabel: "Post-deps tabs",
-    colorsLabel: "Colors",
-    browserLabel: "Browser",
-    copyLabel: "Copy",
-    linkLabel: "Link",
-    testsLabel: "Tests",
+    siteLabel: "provider",
+    pullRequestLabel: "pull_request",
+    landingLabel: "landing",
+    worktreePathLabel: "path",
+    namingLabel: "naming",
+    namingCommandLabel: "command",
+    namingBranchLabel: "branch",
+    namingWorkspaceLabel: "workspace",
+    namingPromptLabel: "prompt",
+    copyAsLabel: "copy_as",
+    localContextLabel: "inject_local_context",
+    setupLabel: "Setup",
+    depsLabel: "deps",
+    envLabel: "env",
+    envFilesLabel: "env_files",
+    ifExistsLabel: "if_exists",
+    workingDirLabel: "working_dir",
+    siteNameLabel: "name",
+    rootLabel: "root",
+    secureLabel: "secure",
+    urlLabel: "url",
+    targetLabel: "target",
+    tabsLabel: "tabs",
+    postDepsTabsLabel: "post_deps_tabs",
+    colorsLabel: "colors",
+    browserLabel: "browser",
+    chromeDevtoolsLabel: "chrome_devtools",
+    userDataDirLabel: "user_data_dir",
+    portLabel: "port",
+    commandLabel: "command",
+    placementLabel: "placement",
+    argsLabel: "args",
+    readyLabel: "ready",
+    submitLabel: "submit",
+    timeoutLabel: "timeout",
+    sendAfterLabel: "send_after",
+    promptModesLabel: "prompt",
+    testLabel: "test",
+    copyLabel: "copy",
+    githubUserLabel: "gh_user",
+    issuesProviderLabel: "provider",
+    linkLabel: "link",
+    testsLabel: "commands",
     errorLabel: "Error",
     configuredLabel: "Configured",
     omittedLabel: "Omitted",
+    notConfiguredLabel: "Not configured",
     yes: "yes",
     no: "no",
     valid: "valid",
@@ -72,10 +119,10 @@ const STRINGS = {
     noteRetrospecs: "Retrospecs are completed-work reflections from .local/retrospectives.",
     noteWorkflows: "Workflows are grouped by derived state and show linked TaskRuns inside each plan.",
     noteTaskRuns: "TaskRuns are execution records from .local/task-runs with linked TaskDocument content. Failed or broken links are grouped under Needs attention.",
-    noteProfiles: "Profiles are effective agent/config overlays from .local/profiles.",
-    noteConfig: "Config shows effective config, source .wt.toml layers, and profiles.",
+    noteProfiles: "Profiles are agent/config value sets from .local/profiles.",
+    noteConfig: "Config shows final settings, settings layers, and profiles.",
     cockpitConfigTitle: "Config cockpit",
-    cockpitConfigSubtitle: "Effective config, workflow policy, profile overlays, and source layers.",
+    cockpitConfigSubtitle: "Review final settings, settings layers, and profiles.",
     cockpitWorkflowTitle: "Workflow cockpit",
     cockpitWorkflowSubtitle: "Derived Workflow state, runnable work, linked TaskRuns, and source paths.",
     cockpitTaskRunTitle: "TaskRun cockpit",
@@ -88,13 +135,79 @@ const STRINGS = {
     taskRunIndex: "TaskRun index",
     ideaIndex: "Idea index",
     retrospecIndex: "Retrospec index",
-    configIndex: "Config index",
+    configIndex: "Config list",
+    configGroupAttention: "Needs attention",
+    configGroupCurrentSettings: "Current settings",
+    configAppliedSummary: "Final settings wt will use after applying the colored settings layers below.",
+    worktreeHelp: "Files and local context prepared inside each new worktree.",
+    worktreePathHelp: "Template for where new worktrees are created.",
+    worktreeCopyHelp: "Files copied into the new worktree.",
+    worktreeCopyAsHelp: "Files copied to a different destination in the new worktree.",
+    worktreeLinkHelp: "Paths linked instead of copied.",
+    localContextHelp: "Injects rendered site/worktree/parent context into the agent context file.",
+    namingHelp: "How wt asks for stable branch/workspace names.",
+    namingCommandHelp: "Command used to generate naming variables.",
+    namingBranchHelp: "Template used for generated branch names.",
+    namingWorkspaceHelp: "Template used for workspace titles when configured.",
+    namingPromptHelp: "Prompt template is configured; full text stays in the TOML source.",
+    setupHelp: "Commands and environment variables prepared before agent work.",
+    depsHelp: "Dependency/setup commands wt runs when their condition matches.",
+    envHelp: "Environment variables rendered for setup and workspace commands.",
+    envFilesHelp: "Values written into configured environment files.",
+    ifExistsHelp: "Runs only when this path exists.",
+    workingDirHelp: "Runs from this directory.",
+    workflowCardHelp: "Default review and landing behavior for workflow tasks.",
+    pullRequestHelp: "ready means create a PR that is immediately ready for review.",
+    landingHelp: "landing means the post-review step that merges accepted work and cleans up the worktree.",
+    agentHelp: "CLI used for new agent work.",
+    agentRuntimeHelp: "Agent launch and prompt delivery behavior.",
+    issuesHelp: "Issue provider wt uses for issue-backed work.",
+    githubUserHelp: "GitHub issue lists are filtered to this user when configured.",
+    localSiteHelp: "Local web site integration for new worktrees.",
+    siteNameHelp: "Template for the local site name.",
+    siteRootHelp: "Directory served as the local site root.",
+    siteSecureHelp: "Whether wt uses HTTPS for the local site.",
+    siteUrlHelp: "URL template exposed to setup, browser, and injected context.",
+    siteTargetHelp: "Target backend for proxy-style site providers.",
+    editorHelp: "How wt opens config, task, workflow, and other local files for editing.",
+    editorCommandHelp: "Editor command template used when opening a file.",
+    editorPlacementHelp: "Where wt opens the editor.",
+    workspaceHelp: "Workspace surfaces wt prepares for a new worktree.",
+    workspaceTabsHelp: "Tabs opened with each new workspace.",
+    postDepsTabsHelp: "Tabs opened after setup/dependency commands finish.",
+    colorsHelp: "Color labels used when wt opens workspace tabs.",
+    browserHelp: "Browser behavior for opening the workspace URL.",
+    chromeDevtoolsHelp: "Chrome DevTools profile used when browser mode is chrome_devtools.",
+    userDataDirHelp: "Chrome profile directory template.",
+    portHelp: "Fixed debugging port when configured.",
+    agentArgsHelp: "Extra CLI arguments passed to the agent process.",
+    agentCommandHelp: "Overrides the generated agent launch command.",
+    agentReadyHelp: "How wt decides the agent is ready to receive a prompt.",
+    agentSubmitHelp: "How wt submits the prompt after sending it.",
+    agentTimeoutHelp: "Maximum wait for the agent ready signal.",
+    agentSendAfterHelp: "Delay before submitting after the prompt is sent.",
+    agentPromptHelp: "Prompt scopes configured for agent startup.",
+    testHelp: "Commands reviewers or agents can run for validation.",
+    localSettingsSummary: "Private settings for this workspace from .local/.wt.toml.",
+    sharedSettingsSummary: "Shared repository defaults from .wt.toml.",
+    otherSettingsSummary: "Additional settings loaded for this workspace.",
+    selectedProfileSummary: "This profile is currently applied to the effective settings.",
+    availableProfileSummary: "This profile is not currently selected.",
+    configProfileSummary: "Profile values that can change agent, files, links, local site, or tests.",
+    profileSiteLabel: "site",
+    configInvalidProfileSummary: "This profile cannot be read and needs attention.",
+    renderedEffectiveConfig: "Final TOML",
     workflowPolicy: "Workflow policy",
+    configSourceMode: "Applied settings",
+    configSourceDefault: "Built-in defaults",
+    configSourceLocal: "Local settings only",
+    configSourceShared: "Shared settings only",
+    configSourceSharedLocal: "Shared + local settings",
+    configSourceMultiple: "Multiple config sources",
     sourceLayers: "Source layers",
     selectedProfile: "Selected profile",
     noSelectedProfile: "No selected profile",
     validProfiles: "valid profiles",
-    sourceFiles: "source files",
     statusGroups: "status groups",
     outcomeGroups: "outcome groups",
     taggedRecords: "tagged records",
@@ -179,32 +292,78 @@ const STRINGS = {
     body: "본문",
     source: "원본",
     sourceToml: "원본 TOML",
-    effectiveConfig: "적용 설정 (Effective config)",
-    sourceConfig: "설정 원본 파일",
-    runtime: "실행 환경",
+    effectiveConfig: "최종 적용값",
     workspace: "워크스페이스",
+    sourceConfig: "설정 원본 파일",
+    localSettings: "로컬 설정",
+    sharedSettings: "공유 설정",
+    otherSettings: "기타 설정",
     detailSummary: "요약",
-    detailRelationships: "관계와 원본 경로",
+    settingCards: "설정 카드",
+    detailRelationships: "관련 정보",
+    localTomlPath: "로컬 TOML 경로",
+    profileTomlPath: "프로필 TOML 경로",
+    appliedSettingsLayers: "적용된 설정층",
+    settingsPath: "파일 위치",
+    settingsToml: "설정 TOML",
+    settingsRole: "이 설정의 역할",
+    profileToml: "프로필 TOML",
+    profileOnlyBadge: "profile.toml",
+    profileLocation: "경로",
     sourceContent: "원본 내용",
+    renderedContent: "렌더링된 내용",
     sourcePaths: "원본 경로",
     sourceHome: "원본 위치",
     profileName: "프로필 이름",
-    agentLabel: "에이전트",
+    agentLabel: "cli",
     issuesLabel: "이슈",
-    siteLabel: "사이트",
-    activeLabel: "활성",
-    pullRequestLabel: "PR",
-    landingLabel: "랜딩",
-    tabsLabel: "탭",
-    postDepsTabsLabel: "의존성 후 탭",
-    colorsLabel: "색상",
-    browserLabel: "브라우저",
-    copyLabel: "복사",
-    linkLabel: "링크",
-    testsLabel: "테스트",
+    siteLabel: "provider",
+    pullRequestLabel: "pull_request",
+    landingLabel: "landing",
+    worktreePathLabel: "path",
+    namingLabel: "naming",
+    namingCommandLabel: "command",
+    namingBranchLabel: "branch",
+    namingWorkspaceLabel: "workspace",
+    namingPromptLabel: "prompt",
+    copyAsLabel: "copy_as",
+    localContextLabel: "inject_local_context",
+    setupLabel: "setup",
+    depsLabel: "deps",
+    envLabel: "env",
+    envFilesLabel: "env_files",
+    ifExistsLabel: "if_exists",
+    workingDirLabel: "working_dir",
+    siteNameLabel: "name",
+    rootLabel: "root",
+    secureLabel: "secure",
+    urlLabel: "url",
+    targetLabel: "target",
+    tabsLabel: "tabs",
+    postDepsTabsLabel: "post_deps_tabs",
+    colorsLabel: "colors",
+    browserLabel: "browser",
+    chromeDevtoolsLabel: "chrome_devtools",
+    userDataDirLabel: "user_data_dir",
+    portLabel: "port",
+    commandLabel: "command",
+    placementLabel: "placement",
+    argsLabel: "args",
+    readyLabel: "ready",
+    submitLabel: "submit",
+    timeoutLabel: "timeout",
+    sendAfterLabel: "send_after",
+    promptModesLabel: "prompt",
+    testLabel: "test",
+    copyLabel: "copy",
+    githubUserLabel: "gh_user",
+    issuesProviderLabel: "provider",
+    linkLabel: "link",
+    testsLabel: "commands",
     errorLabel: "오류",
     configuredLabel: "설정됨",
     omittedLabel: "생략됨",
+    notConfiguredLabel: "설정 없음",
     yes: "예",
     no: "아니오",
     valid: "정상",
@@ -228,10 +387,10 @@ const STRINGS = {
     noteRetrospecs: "회고는 .local/retrospectives에 저장된 완료 작업 기록입니다.",
     noteWorkflows: "워크플로우는 파생 상태별로 정렬하고 각 계획 안에 연결된 작업 실행을 묶어 보여줍니다.",
     noteTaskRuns: "작업 실행은 .local/task-runs 실행 기록입니다. 실패했거나 연결이 깨진 항목은 확인 필요로 묶습니다.",
-    noteProfiles: "프로필은 .local/profiles의 agent/config overlay입니다.",
-    noteConfig: "설정은 effective config, source .wt.toml 계층, 프로필을 함께 보여줍니다.",
+    noteProfiles: "프로필은 .local/profiles의 agent/config 적용값 묶음입니다.",
+    noteConfig: "설정은 최종 적용값, 설정층, 프로필을 보여줍니다.",
     cockpitConfigTitle: "설정 현황",
-    cockpitConfigSubtitle: "effective config, 워크플로우 정책, 프로필 overlay, 설정 원본을 먼저 보여줍니다.",
+    cockpitConfigSubtitle: "최종 적용값, 설정층, 프로필을 확인합니다.",
     cockpitWorkflowTitle: "워크플로우 현황",
     cockpitWorkflowSubtitle: "파생 Workflow 상태, 실행 가능한 작업, 연결된 TaskRun, 원본 경로를 비교합니다.",
     cockpitTaskRunTitle: "TaskRun 현황",
@@ -244,13 +403,79 @@ const STRINGS = {
     taskRunIndex: "TaskRun 색인",
     ideaIndex: "아이디어 색인",
     retrospecIndex: "회고 색인",
-    configIndex: "설정 색인",
+    configIndex: "설정 목록",
+    configGroupAttention: "확인 필요",
+    configGroupCurrentSettings: "현재 설정",
+    configAppliedSummary: "아래 색상으로 구분한 설정층을 합쳐 wt가 실제로 사용할 값입니다.",
+    worktreeHelp: "새 worktree 안에 준비할 파일과 로컬 컨텍스트입니다.",
+    worktreePathHelp: "새 worktree를 만들 위치 템플릿입니다.",
+    worktreeCopyHelp: "새 worktree에 복사할 파일입니다.",
+    worktreeCopyAsHelp: "새 worktree에서 다른 위치나 이름으로 복사할 파일입니다.",
+    worktreeLinkHelp: "복사하지 않고 링크로 연결할 경로입니다.",
+    localContextHelp: "site, worktree, parent 정보를 렌더링해 agent 컨텍스트 파일에 주입합니다.",
+    namingHelp: "wt가 안정적인 branch/workspace 이름을 만드는 방식입니다.",
+    namingCommandHelp: "이름 변수를 생성할 때 실행하는 명령입니다.",
+    namingBranchHelp: "생성된 branch 이름에 쓰는 템플릿입니다.",
+    namingWorkspaceHelp: "설정되어 있으면 workspace 제목에 쓰는 템플릿입니다.",
+    namingPromptHelp: "prompt 템플릿이 설정되어 있습니다. 전문은 TOML 원문에 둡니다.",
+    setupHelp: "agent 작업 전에 준비하는 명령과 환경 변수입니다.",
+    depsHelp: "조건이 맞을 때 wt가 실행하는 의존성/setup 명령입니다.",
+    envHelp: "setup과 workspace 명령에 렌더링되는 환경 변수입니다.",
+    envFilesHelp: "설정된 환경 파일에 쓸 값입니다.",
+    ifExistsHelp: "이 경로가 있을 때만 실행합니다.",
+    workingDirHelp: "이 디렉터리에서 명령을 실행합니다.",
+    workflowCardHelp: "워크플로우 작업의 기본 PR 생성과 landing 동작입니다.",
+    pullRequestHelp: "ready는 PR을 만들 때 바로 리뷰 가능한 상태로 만든다는 뜻입니다.",
+    landingHelp: "landing은 리뷰가 끝난 작업을 parent branch에 합치고 worktree를 정리하는 단계입니다.",
+    agentHelp: "새 agent 작업을 시작할 때 사용할 CLI입니다.",
+    agentRuntimeHelp: "agent 실행과 prompt 전달 방식입니다.",
+    issuesHelp: "이슈 기반 작업에서 wt가 사용할 이슈 제공자입니다.",
+    githubUserHelp: "설정하면 GitHub 이슈 목록을 이 사용자 기준으로 가져옵니다.",
+    localSiteHelp: "새 worktree에서 사용할 로컬 웹사이트 연동입니다.",
+    siteNameHelp: "로컬 사이트 이름 템플릿입니다.",
+    siteRootHelp: "로컬 사이트 루트로 제공할 디렉터리입니다.",
+    siteSecureHelp: "로컬 사이트에 HTTPS를 쓸지 정합니다.",
+    siteUrlHelp: "setup, browser, local context에 전달되는 URL 템플릿입니다.",
+    siteTargetHelp: "proxy 계열 site provider가 바라볼 대상입니다.",
+    editorHelp: "설정, 작업문서, 워크플로우 같은 로컬 파일을 열 때 쓰는 편집 방식입니다.",
+    editorCommandHelp: "파일을 열 때 사용할 editor 명령 템플릿입니다.",
+    editorPlacementHelp: "editor를 어디에 띄울지 정합니다.",
+    workspaceHelp: "새 worktree를 열 때 wt가 준비하는 workspace 화면입니다.",
+    workspaceTabsHelp: "새 workspace를 열 때 함께 여는 탭입니다.",
+    postDepsTabsHelp: "setup/dependency 명령이 끝난 뒤 여는 탭입니다.",
+    colorsHelp: "wt가 workspace 탭을 열 때 쓰는 색상 라벨입니다.",
+    browserHelp: "workspace URL을 열 때의 브라우저 동작입니다.",
+    chromeDevtoolsHelp: "browser mode가 chrome_devtools일 때 쓰는 Chrome 프로필입니다.",
+    userDataDirHelp: "Chrome 프로필 디렉터리 템플릿입니다.",
+    portHelp: "설정되어 있으면 고정 디버깅 포트로 씁니다.",
+    agentArgsHelp: "agent 프로세스에 추가로 전달할 CLI 인자입니다.",
+    agentCommandHelp: "자동 생성되는 agent 실행 명령을 대체합니다.",
+    agentReadyHelp: "wt가 prompt를 보내도 된다고 판단하는 기준입니다.",
+    agentSubmitHelp: "prompt를 보낸 뒤 어떤 키 입력으로 제출할지 정합니다.",
+    agentTimeoutHelp: "agent 준비 신호를 기다리는 최대 시간입니다.",
+    agentSendAfterHelp: "prompt를 보낸 뒤 제출하기 전 대기 시간입니다.",
+    agentPromptHelp: "agent 시작 prompt가 적용되는 작업 범위입니다.",
+    testHelp: "리뷰어나 agent가 검증에 사용할 수 있는 명령입니다.",
+    localSettingsSummary: ".local/.wt.toml에서 현재 worktree에만 적용되는 설정입니다.",
+    sharedSettingsSummary: ".wt.toml에서 저장소와 함께 공유되는 기본 설정입니다.",
+    otherSettingsSummary: "현재 worktree에 추가로 적용된 설정입니다.",
+    selectedProfileSummary: "현재 적용된 프로필입니다.",
+    availableProfileSummary: "현재 적용되지는 않은 프로필입니다.",
+    configProfileSummary: "이 프로필이 에이전트, 복사/링크 파일, 로컬 사이트, 테스트를 어떻게 바꾸는지 보여줍니다.",
+    profileSiteLabel: "site",
+    configInvalidProfileSummary: "읽을 수 없는 프로필입니다. 이 항목은 확인이 필요합니다.",
+    renderedEffectiveConfig: "최종 TOML",
     workflowPolicy: "워크플로우 정책",
+    configSourceMode: "적용 설정",
+    configSourceDefault: "내장 기본값",
+    configSourceLocal: "로컬 설정만",
+    configSourceShared: "공유 설정만",
+    configSourceSharedLocal: "공유 + 로컬 설정",
+    configSourceMultiple: "여러 설정 원본",
     sourceLayers: "설정 원본",
     selectedProfile: "선택된 프로필",
     noSelectedProfile: "선택된 프로필 없음",
     validProfiles: "정상 프로필",
-    sourceFiles: "원본 파일",
     statusGroups: "상태 그룹",
     outcomeGroups: "결과 그룹",
     taggedRecords: "태그 있는 기록",
@@ -365,6 +590,11 @@ function tr(key, values) {
     (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
     t(key)
   );
+}
+
+function compactPath(path) {
+  if (!path) return "";
+  return path.replace(/^\/Users\/[^/]+/, "~");
 }
 
 function applyLocale() {
@@ -533,7 +763,10 @@ function render() {
     return;
   }
   const snapshot = state.snapshot;
-  repoLabel.textContent = `${snapshot.repo.name} - ${snapshot.repo.root}`;
+  workspaceLabel.textContent = "wt ui";
+  document.title = "wt ui";
+  repoLabel.textContent = repoContextLabel(snapshot.repo);
+  repoLabel.title = snapshot.repo.root || "";
   renderMetrics(snapshot);
   metrics.dataset.view = state.view;
 
@@ -545,6 +778,35 @@ function render() {
   if (view === "ideas") renderIdeas(snapshot);
   if (view === "retrospecs") renderRetrospecs(snapshot);
   setStatus(tr("rendered", { view: viewLabel(view) }));
+}
+
+function repoContextLabel(repo) {
+  const parts = [repo.name, compactPath(repo.root)].filter(Boolean);
+  return parts.join(" · ");
+}
+
+function configSourceLabel(config) {
+  if (config.source === "default") return t("configSourceDefault");
+  const kinds = (config.paths || []).map(settingsFileKind);
+  if (kinds.includes("shared") && kinds.includes("local")) return t("configSourceSharedLocal");
+  if (kinds.length === 1 && kinds[0] === "local") return t("configSourceLocal");
+  if (kinds.length === 1 && kinds[0] === "shared") return t("configSourceShared");
+  if (config.source === "files") return t("configSourceMultiple");
+  return config.source;
+}
+
+function localSiteValue(site) {
+  if (!site) {
+    return t("notConfiguredLabel");
+  }
+  if (!site.active) {
+    return `${site.provider} (${t("notConfiguredLabel")})`;
+  }
+  return site.provider;
+}
+
+function configuredValue(value) {
+  return value || t("notConfiguredLabel");
 }
 
 function renderMetrics(snapshot) {
@@ -677,11 +939,12 @@ function retrospecCard(row) {
 
 function profileCard(row) {
   return card(row.name, [
-    pill(`agent ${row.agent}`, "blue"),
-    pill(`${row.copy_count} copy`),
-    pill(`${row.link_count} link`),
-    row.has_site ? pill("site", "green") : "",
-    row.test_count ? pill(`${row.test_count} tests`, "amber") : "",
+    pill(`${t("agentLabel")} ${row.agent}`, "blue"),
+    valuesPill(t("copyLabel"), profileCopyValues(row)),
+    valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
+    valuesPill(t("linkLabel"), profileLinkValues(row)),
+    row.has_site ? pill(t("profileSiteLabel"), "green") : "",
+    row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
   ], [row.path], bodyPreview(row.source_text), "violet", [
     detail(t("sourceToml"), row.source_text, "source"),
   ]);
@@ -703,16 +966,8 @@ function sourceFileCard(row) {
 }
 
 function configCockpit(snapshot) {
-  const config = snapshot.config;
-  const profileCount = snapshot.profiles.items.length;
   const invalidProfileCount = snapshot.profiles.invalid.length;
-  const sourceFileCount = (config.source_files || []).length;
-  const stats = [
-    { label: t("needsAttention"), value: invalidProfileCount, tone: invalidProfileCount ? "red" : "" },
-    { label: t("effectiveConfig"), value: config.source },
-    { label: t("workflowPolicy"), value: `${config.workflow.pull_request}/${config.workflow.landing}` },
-    { label: t("profiles"), value: profileCount },
-  ];
+  const stats = [attentionStat(invalidProfileCount)];
   return masterDetailPanel({
     id: "config-cockpit",
     tabKey: "config",
@@ -722,208 +977,538 @@ function configCockpit(snapshot) {
     listTitle: t("configIndex"),
     records: configMasterDetailRecords(snapshot),
     emptyText: t("noConfigSummary"),
+    showCount: false,
   });
 }
 
 function configMasterDetailRecords(snapshot) {
   const config = snapshot.config;
-  const records = [
-    configEffectiveRecord(config),
-    configRuntimeRecord(config),
-    configWorkspaceRecord(config),
-    configProfilesSummaryRecord(snapshot),
-  ];
-  return records
-    .concat((config.source_files || []).map(sourceFileMasterDetailRecord))
-    .concat(snapshot.profiles.items.map(profileMasterDetailRecord))
-    .concat(snapshot.profiles.invalid.map(invalidProfileMasterDetailRecord))
+  const selectedProfileName = config.selected_profile || "";
+  const profileRecords = snapshot.profiles.items
+    .slice()
+    .sort((a, b) => {
+      const selectedDiff = Number(b.name === selectedProfileName) - Number(a.name === selectedProfileName);
+      return selectedDiff || String(a.name).localeCompare(String(b.name));
+    })
+    .map((row) => profileMasterDetailRecord(row, row.name === selectedProfileName));
+  return snapshot.profiles.invalid
+    .map(invalidProfileMasterDetailRecord)
+    .concat(configEffectiveRecord(config))
+    .concat(profileRecords)
     .filter(Boolean);
 }
 
 function configEffectiveRecord(config) {
   return {
     id: "config-effective",
-    kicker: t("effectiveConfig"),
-    title: `${t("effectiveConfig")} - ${config.source}`,
-    summary: "",
-    pills: [
-      pill(config.source, "blue"),
+    group: t("configGroupCurrentSettings"),
+    kicker: "",
+    title: t("effectiveConfig"),
+    listPills: [
       pill(`${t("pullRequestLabel")} ${config.workflow.pull_request}`, "green"),
       pill(`${t("landingLabel")} ${config.workflow.landing}`, "amber"),
-      config.selected_profile ? pill(`${t("selectedProfile")}: ${config.selected_profile}`, "violet") : pill(t("noSelectedProfile")),
+      ...configSourceLayerPills(config),
     ],
-    paths: config.paths,
-    fields: [
-      { label: t("source"), value: config.source },
-      { label: t("pullRequestLabel"), value: config.workflow.pull_request },
-      { label: t("landingLabel"), value: config.workflow.landing },
-      { label: t("selectedProfile"), value: config.selected_profile || t("noSelectedProfile") },
-      { label: t("sourceLayers"), value: config.paths.length },
-    ],
-    relationships: config.paths.map((path, index) => ({
-      label: `${t("sourceLayers")} ${index + 1}`,
-      value: path,
-    })),
-    sources: [{ label: t("effectiveConfig"), text: config.effective_text, kind: "source" }],
-  };
-}
-
-function configRuntimeRecord(config) {
-  const site = config.site ? `${config.site.provider} (${config.site.active ? t("activeLabel") : t("omittedLabel")})` : "none";
-  return {
-    id: "config-runtime",
-    kicker: t("runtime"),
-    title: `${t("agentLabel")} ${config.agent || "none"}`,
-    summary: [`${t("issuesLabel")} ${config.issues || "none"}`, `${t("siteLabel")} ${site}`].join(" - "),
+    summary: t("configAppliedSummary"),
     pills: [
-      pill(`${t("agentLabel")} ${config.agent || "none"}`, "blue"),
-      pill(`${t("issuesLabel")} ${config.issues || "none"}`),
-      config.site ? pill(`${t("siteLabel")} ${config.site.provider}`, config.site.active ? "green" : "amber") : pill(`${t("siteLabel")} none`),
+      pill(`${t("pullRequestLabel")} ${config.workflow.pull_request}`, "green"),
+      pill(`${t("landingLabel")} ${config.workflow.landing}`, "amber"),
+      ...configSourceLayerPills(config),
+      config.selected_profile ? pill(`${t("selectedProfile")}: ${config.selected_profile}`, "violet") : "",
     ],
-    paths: config.paths,
-    fields: [
-      { label: t("agentLabel"), value: config.agent || "none" },
-      { label: t("issuesLabel"), value: config.issues || "none" },
-      { label: t("siteLabel"), value: config.site ? config.site.provider : "none" },
-      { label: t("activeLabel"), value: config.site ? yesNo(config.site.active) : t("no") },
-    ],
-    relationships: [
-      { label: t("source"), value: config.source },
-      { label: t("workflowPolicy"), value: `${config.workflow.pull_request}/${config.workflow.landing}` },
-    ],
-    sources: [{ label: t("effectiveConfig"), text: config.effective_text, kind: "source" }],
+    paths: [],
+    hideSummarySectionTitle: true,
+    cards: configEffectiveCards(config),
+    fields: [],
+    relationshipsSectionTitle: t("localTomlPath"),
+    relationships: config.paths.slice().sort((a, b) => settingsFileOrder(a) - settingsFileOrder(b)).map(sourceLayerField),
+    hideSourceSectionTitle: true,
+    collapseSources: true,
+    sources: [{ label: t("renderedEffectiveConfig"), text: config.effective_text, kind: "source" }],
   };
 }
 
-function configWorkspaceRecord(config) {
+function configEffectiveCards(config, options = {}) {
+  const includeWorkflow = options.includeWorkflow !== false;
+  const includeIssues = options.includeIssues !== false;
+  const includeEditor = options.includeEditor !== false;
+  const worktree = config.worktree;
+  const setup = config.setup;
   const workspace = config.workspace;
-  const browser = workspace?.browser;
+  const agent = config.agent;
+  const cards = [];
+  if (worktree) {
+    const worktreeItems = [];
+    if (worktree.path) {
+      worktreeItems.push({
+        label: t("worktreePathLabel"),
+        value: worktree.path,
+        description: t("worktreePathHelp"),
+      });
+    }
+    if (worktree.copy?.length) {
+      worktreeItems.push({
+        label: t("copyLabel"),
+        value: joinValues(worktree.copy),
+        description: t("worktreeCopyHelp"),
+      });
+    }
+    if (worktree.copy_as?.length) {
+      worktreeItems.push({
+        label: t("copyAsLabel"),
+        value: joinValues(worktree.copy_as.map(copyAsValue)),
+        description: t("worktreeCopyAsHelp"),
+      });
+    }
+    if (worktree.link?.length) {
+      worktreeItems.push({
+        label: t("linkLabel"),
+        value: joinValues(worktree.link),
+        description: t("worktreeLinkHelp"),
+      });
+    }
+    if (worktree.inject_local_context) {
+      worktreeItems.push({
+        label: t("localContextLabel"),
+        value: t("configuredLabel"),
+        description: t("localContextHelp"),
+      });
+    }
+    if (worktree.naming) {
+      worktreeItems.push({
+        label: t("namingLabel"),
+        value: worktreeNamingValue(worktree.naming),
+        description: t("namingHelp"),
+      });
+      worktreeItems.push(...worktreeNamingItems(worktree.naming));
+    }
+    if (worktreeItems.length) {
+      cards.push({
+        kicker: "[worktree]",
+        value: "",
+        description: t("worktreeHelp"),
+        tone: "blue",
+        items: worktreeItems,
+      });
+    }
+  }
+  if (setup) {
+    const setupItems = [];
+    if (setup.deps?.length) {
+      setupItems.push({
+        label: t("depsLabel"),
+        value: setup.deps.map(commandSummaryValue).join(", "),
+        description: t("depsHelp"),
+      });
+    }
+    if (setup.env?.length) {
+      setupItems.push({
+        label: t("envLabel"),
+        value: setup.env.map(keyValueSummary).join(", "),
+        description: t("envHelp"),
+      });
+    }
+    if (setup.env_files?.length) {
+      setupItems.push({
+        label: t("envFilesLabel"),
+        value: setup.env_files.map(envFileSummaryValue).join(", "),
+        description: t("envFilesHelp"),
+      });
+    }
+    if (setupItems.length) {
+      cards.push({
+        kicker: "[setup]",
+        value: "",
+        description: t("setupHelp"),
+        tone: "amber",
+        items: setupItems,
+      });
+    }
+  }
+  if (includeWorkflow && config.workflow) {
+    cards.push({
+      kicker: "[workflow]",
+      value: "",
+      description: t("workflowCardHelp"),
+      tone: "green",
+      items: [
+        { label: t("pullRequestLabel"), value: config.workflow.pull_request, description: t("pullRequestHelp") },
+        { label: t("landingLabel"), value: config.workflow.landing, description: t("landingHelp") },
+      ],
+    });
+  }
+  const issues = typeof config.issues === "string" ? { provider: config.issues } : config.issues;
+  if (includeIssues && issues) {
+    const issueItems = [
+      { label: t("issuesProviderLabel"), value: issues.provider, description: t("issuesHelp") },
+      issues.gh_user
+        ? { label: t("githubUserLabel"), value: issues.gh_user, description: t("githubUserHelp") }
+        : null,
+    ].filter(Boolean);
+    cards.push({
+      kicker: "[issues]",
+      value: "",
+      description: t("issuesHelp"),
+      tone: "blue",
+      items: issueItems,
+    });
+  }
+  if (config.site) {
+    const siteItems = [
+      { label: t("siteLabel"), value: config.site.provider, description: t("localSiteHelp") },
+      { label: t("siteNameLabel"), value: config.site.name, description: t("siteNameHelp") },
+      { label: t("rootLabel"), value: config.site.root, description: t("siteRootHelp") },
+      { label: t("secureLabel"), value: yesNo(config.site.secure), description: t("siteSecureHelp") },
+      { label: t("urlLabel"), value: config.site.url, description: t("siteUrlHelp") },
+      config.site.target ? { label: t("targetLabel"), value: config.site.target, description: t("siteTargetHelp") } : null,
+    ].filter(Boolean);
+    cards.push({
+      kicker: "[site]",
+      value: "",
+      description: t("localSiteHelp"),
+      tone: config.site.active ? "green" : "amber",
+      items: siteItems,
+    });
+  }
+  if (includeEditor && config.editor) {
+    const editorItems = [];
+    if (config.editor.command) {
+      editorItems.push({
+        label: t("commandLabel"),
+        value: config.editor.command,
+        description: t("editorCommandHelp"),
+      });
+    }
+    if (config.editor.placement) {
+      editorItems.push({
+        label: t("placementLabel"),
+        value: config.editor.placement,
+        description: t("editorPlacementHelp"),
+      });
+    }
+    cards.push({
+      kicker: "[editor]",
+      value: "",
+      description: t("editorHelp"),
+      tone: "amber",
+      items: editorItems,
+    });
+  }
+  if (workspace) {
+    const workspaceItems = [];
+    if (workspace.tabs?.length) {
+      workspaceItems.push({
+        label: t("tabsLabel"),
+        value: workspace.tabs.join(", "),
+        description: t("workspaceTabsHelp"),
+      });
+    }
+    if (workspace.post_deps_tabs?.length) {
+      workspaceItems.push({
+        label: t("postDepsTabsLabel"),
+        value: workspace.post_deps_tabs.join(", "),
+        description: t("postDepsTabsHelp"),
+      });
+    }
+    if (workspace.colors?.length) {
+      workspaceItems.push({
+        label: t("colorsLabel"),
+        value: workspace.colors.map((row) => `${row.kind}: ${row.color}`).join(", "),
+        description: t("colorsHelp"),
+        swatches: workspace.colors,
+      });
+    }
+    if (workspace.browser) {
+      workspaceItems.push({
+        label: t("browserLabel"),
+        value: browserSummaryValue(workspace.browser),
+        description: t("browserHelp"),
+      });
+    }
+    if (workspace.chrome_devtools) {
+      workspaceItems.push({
+        label: t("chromeDevtoolsLabel"),
+        value: chromeDevtoolsValue(workspace.chrome_devtools),
+        description: t("chromeDevtoolsHelp"),
+      });
+    }
+    if (workspaceItems.length) {
+      cards.push({
+        kicker: "[workspace]",
+        value: "",
+        description: t("workspaceHelp"),
+        tone: "amber",
+        items: workspaceItems,
+      });
+    }
+  }
+  if (agent) {
+    const agentItems = [
+      { label: t("agentLabel"), value: agent.cli, description: t("agentHelp") },
+    ];
+    if (agent.args?.length) {
+      agentItems.push({
+        label: t("argsLabel"),
+        value: joinValues(agent.args),
+        description: t("agentArgsHelp"),
+      });
+    }
+    if (agent.command) {
+      agentItems.push({
+        label: t("commandLabel"),
+        value: agent.command,
+        description: t("agentCommandHelp"),
+      });
+    }
+    agentItems.push(
+      { label: t("readyLabel"), value: agent.ready, description: t("agentReadyHelp") },
+      { label: t("submitLabel"), value: agent.submit, description: t("agentSubmitHelp") },
+      { label: t("timeoutLabel"), value: `${agent.timeout}s`, description: t("agentTimeoutHelp") },
+      { label: t("sendAfterLabel"), value: `${agent.send_after}s`, description: t("agentSendAfterHelp") },
+    );
+    if (agent.prompt_modes?.length) {
+      agentItems.push({
+        label: t("promptModesLabel"),
+        value: agentPromptSummary(agent),
+        description: t("agentPromptHelp"),
+      });
+    }
+    cards.push({
+      kicker: "[agent]",
+      value: "",
+      description: t("agentRuntimeHelp"),
+      tone: "blue",
+      items: agentItems,
+    });
+  }
+  if (config.test?.commands?.length) {
+    cards.push({
+      kicker: "[test]",
+      value: "",
+      description: t("testHelp"),
+      tone: "green",
+      items: config.test.commands.map((command) => ({
+        label: "run",
+        value: commandSummaryValue(command),
+        description: commandConditionText(command) || t("testHelp"),
+      })),
+    });
+  }
+  return cards;
+}
+
+function profileEffectiveCards(row) {
+  return configEffectiveCards({
+    worktree: row.worktree,
+    setup: row.setup,
+    site: row.site,
+    workspace: row.workspace,
+    agent: row.agent_settings,
+    test: row.test,
+  }, { includeWorkflow: false, includeIssues: false, includeEditor: false })
+    .map(profileTomlCard);
+}
+
+function profileTomlCard(card) {
   return {
-    id: "config-workspace",
-    kicker: t("workspace"),
-    title: t("workspace"),
-    summary: workspace
-      ? `${t("tabsLabel")} ${workspace.tab_count} - ${t("postDepsTabsLabel")} ${workspace.post_deps_tab_count}`
-      : t("omittedLabel"),
-    pills: workspace
-      ? [
-          pill(`${t("tabsLabel")} ${workspace.tab_count}`, "violet"),
-          pill(`${t("postDepsTabsLabel")} ${workspace.post_deps_tab_count}`, "violet"),
-          pill(`${t("colorsLabel")} ${workspace.color_count}`, "amber"),
-          browser ? pill(`${t("browserLabel")} ${browser.mode}`, "blue") : "",
-        ]
-      : [pill(t("omittedLabel"), "amber")],
-    paths: config.paths,
-    fields: workspace
-      ? [
-          { label: t("tabsLabel"), value: workspace.tab_count },
-          { label: t("postDepsTabsLabel"), value: workspace.post_deps_tab_count },
-          { label: t("colorsLabel"), value: workspace.color_count },
-          { label: t("browserLabel"), value: browser ? browser.mode : "none" },
-          { label: "URL", value: browser?.url },
-          { label: "App", value: browser?.app },
-        ]
-      : [{ label: t("configuredLabel"), value: t("no") }],
-    relationships: [{ label: t("source"), value: config.source }],
-    sources: [{ label: t("effectiveConfig"), text: config.effective_text, kind: "source" }],
+    ...card,
+    emphasis: "profile-only",
   };
 }
 
-function configProfilesSummaryRecord(snapshot) {
-  const config = snapshot.config;
-  const valid = snapshot.profiles.items.length;
-  const invalid = snapshot.profiles.invalid.length;
-  const sourceFileCount = (config.source_files || []).length;
-  const profilePaths = snapshot.profiles.items
-    .map((row) => row.path)
-    .concat(snapshot.profiles.invalid.map((row) => row.path));
-  const inventory = snapshot.profiles.items
-    .map((row) => `${row.name}: ${row.path}`)
-    .concat(snapshot.profiles.invalid.map((row) => `${row.key}: ${row.error}`))
-    .join("\n");
+function joinValues(values) {
+  return values.filter(Boolean).join(", ");
+}
+
+function copyAsValue(entry) {
+  return `${entry.from} -> ${entry.to}`;
+}
+
+function shortValues(values, maxItems = 2) {
+  const clean = values.filter(Boolean);
+  if (clean.length <= maxItems) {
+    return clean.join(", ");
+  }
+  return `${clean.slice(0, maxItems).join(", ")} +${clean.length - maxItems}`;
+}
+
+function profileCopyValues(row) {
+  return row.copy || [];
+}
+
+function profileCopyAsValues(row) {
+  return (row.copy_as || []).map(copyAsValue);
+}
+
+function profileLinkValues(row) {
+  return row.link || [];
+}
+
+function valuesPill(label, values, tone = "") {
+  const value = shortValues(values);
+  return value ? pill(`${label} ${value}`, tone) : "";
+}
+
+function configSourceLayerPills(config) {
+  return config.paths
+    .slice()
+    .sort((a, b) => settingsFileOrder(a) - settingsFileOrder(b))
+    .map((path, index) => pill(sourceLayerLabel(path, index), settingsLayerTone(path)));
+}
+
+function worktreeNamingValue(naming) {
+  return [
+    naming.command ? `${t("commandLabel")} ${naming.command}` : "",
+    naming.branch ? `${t("namingBranchLabel")} ${naming.branch}` : "",
+  ].filter(Boolean).join(", ");
+}
+
+function worktreeNamingItems(naming) {
+  return [
+    naming.command ? { label: t("namingCommandLabel"), value: naming.command, description: t("namingCommandHelp") } : null,
+    naming.branch ? { label: t("namingBranchLabel"), value: naming.branch, description: t("namingBranchHelp") } : null,
+    naming.workspace ? { label: t("namingWorkspaceLabel"), value: naming.workspace, description: t("namingWorkspaceHelp") } : null,
+    naming.prompt_configured ? { label: t("namingPromptLabel"), value: t("configuredLabel"), description: t("namingPromptHelp") } : null,
+  ].filter(Boolean);
+}
+
+function keyValueSummary(row) {
+  return `${row.key}=${row.value}`;
+}
+
+function envFileSummaryValue(row) {
+  return `${row.path}: ${row.values.map(keyValueSummary).join(", ")}`;
+}
+
+function commandSummaryValue(command) {
+  return [command.run, commandConditionText(command)].filter(Boolean).join(" · ");
+}
+
+function commandConditionText(command) {
+  return [
+    command.working_dir ? `${t("workingDirLabel")} ${command.working_dir}` : "",
+    command.if_exists ? `${t("ifExistsLabel")} ${command.if_exists}` : "",
+  ].filter(Boolean).join(", ");
+}
+
+function browserSummaryValue(browser) {
+  return [
+    browser.mode ? `mode ${browser.mode}` : "",
+    browser.url ? `url ${browser.url}` : "",
+    browser.app ? `app ${browser.app}` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function chromeDevtoolsValue(chrome) {
+  return [
+    chrome.user_data_dir ? `${t("userDataDirLabel")} ${chrome.user_data_dir}` : "",
+    chrome.port ? `${t("portLabel")} ${chrome.port}` : "",
+  ].filter(Boolean).join(", ");
+}
+
+function agentPromptSummary(agent) {
+  if (agent.prompt_counts?.length) {
+    return agent.prompt_counts.map((row) => `${row.mode} ${row.count}`).join(", ");
+  }
+  return joinValues(agent.prompt_modes || []);
+}
+
+function settingsFileKind(path) {
+  if (path === ".local/.wt.toml") return "local";
+  if (path === ".wt.toml") return "shared";
+  return "other";
+}
+
+function settingsFileOrder(path) {
+  const kind = settingsFileKind(path);
+  if (kind === "local") return 0;
+  if (kind === "shared") return 1;
+  return 2;
+}
+
+function sourceLayerLabel(path, index) {
+  const kind = settingsFileKind(path);
+  if (kind === "local") return t("localSettings");
+  if (kind === "shared") return t("sharedSettings");
+  return `${t("sourceLayers")} ${index + 1}`;
+}
+
+function settingsLayerTone(path) {
+  const kind = settingsFileKind(path);
+  if (kind === "local") return "layer-local";
+  if (kind === "shared") return "layer-shared";
+  return "layer-other";
+}
+
+function sourceLayerField(path, index) {
   return {
-    id: "config-profiles",
-    tone: invalid ? "red" : "",
-    kicker: t("profiles"),
-    title: `${valid} ${t("validProfiles")}`,
-    summary: invalid ? `${invalid} ${t("invalidRecords")}` : t("noInvalidProfiles"),
-    pills: [
-      pill(`${valid} ${t("validProfiles")}`, "violet"),
-      invalid ? pill(`${invalid} ${t("invalid")}`, "red") : pill(t("valid"), "green"),
-      pill(`${sourceFileCount} ${t("sourceFiles")}`, "blue"),
-    ],
-    paths: profilePaths,
-    fields: [
-      { label: t("validProfiles"), value: valid },
-      { label: t("invalidProfiles"), value: invalid },
-      { label: t("sourceHome"), value: snapshot.sources.profiles },
-      { label: t("sourceFiles"), value: sourceFileCount },
-    ],
-    relationships: profilePaths.map((path) => ({ label: t("profiles"), value: path })),
-    sources: [{ label: t("profiles"), text: inventory, kind: "source" }],
+    label: sourceLayerLabel(path, index),
+    value: path,
+    tone: settingsLayerTone(path),
   };
 }
 
-function sourceFileMasterDetailRecord(row) {
-  return {
-    id: `config-source-${row.path}`,
-    kicker: t("sourceConfig"),
-    title: row.path,
-    summary: "",
-    pills: [pill(t("source"), "blue")],
-    paths: [row.path],
-    fields: [
-      { label: t("source"), value: t("sourceConfig") },
-      { label: t("sourcePaths"), value: row.path },
-    ],
-    relationships: [{ label: t("effectiveConfig"), value: t("sourceLayers") }],
-    sources: [{ label: t("sourceToml"), text: row.text, kind: "source" }],
-  };
-}
-
-function profileMasterDetailRecord(row) {
+function profileMasterDetailRecord(row, selected) {
   return {
     id: `profile-${row.name}`,
-    kicker: t("profiles"),
+    group: t("profiles"),
+    kicker: selected ? t("selectedProfile") : t("profiles"),
     title: row.name,
-    summary: "",
-    pills: [
+    listMarker: selected ? t("selectedProfile") : "",
+    listKicker: "",
+    listPills: [
       pill(`${t("agentLabel")} ${row.agent}`, "blue"),
-      pill(`${row.copy_count} ${t("copyLabel")}`),
-      pill(`${row.link_count} ${t("linkLabel")}`),
-      row.has_site ? pill(t("siteLabel"), "green") : "",
+      valuesPill(t("copyLabel"), profileCopyValues(row)),
+      valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
+      valuesPill(t("linkLabel"), profileLinkValues(row)),
+      row.has_site ? pill(t("profileSiteLabel"), "green") : "",
       row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
     ],
-    paths: [row.path],
-    fields: [
-      { label: t("profileName"), value: row.name },
-      { label: t("agentLabel"), value: row.agent },
-      { label: t("copyLabel"), value: row.copy_count },
-      { label: t("linkLabel"), value: row.link_count },
-      { label: t("siteLabel"), value: yesNo(row.has_site) },
-      { label: t("testsLabel"), value: row.test_count },
+    summary: selected ? t("selectedProfileSummary") : t("availableProfileSummary"),
+    pills: [
+      selected ? pill(t("selectedProfile"), "violet") : "",
+      pill(t("profileOnlyBadge"), "green"),
+      pill(`${t("agentLabel")} ${row.agent}`, "blue"),
+      valuesPill(t("copyLabel"), profileCopyValues(row)),
+      valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
+      valuesPill(t("linkLabel"), profileLinkValues(row)),
+      row.has_site ? pill(t("profileSiteLabel"), "green") : "",
+      row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
     ],
-    relationships: [{ label: t("sourceHome"), value: ".local/profiles" }],
-    sources: [{ label: t("sourceToml"), text: row.source_text, kind: "source" }],
+    paths: [],
+    hideSummarySectionTitle: true,
+    cards: profileEffectiveCards(row),
+    fields: [],
+    relationshipsSectionTitle: t("profileTomlPath"),
+    relationships: [{ label: t("profileLocation"), value: row.path }],
+    hideSourceSectionTitle: true,
+    collapseSources: true,
+    sources: [{ label: t("profileToml"), text: row.source_text, kind: "source" }],
   };
 }
 
 function invalidProfileMasterDetailRecord(row) {
   return {
     id: `invalid-profile-${row.key}`,
+    group: t("configGroupAttention"),
     tone: "red",
     needsAttention: true,
     kicker: t("invalidProfiles"),
+    listKicker: "",
     title: row.key,
-    summary: row.error,
+    summary: t("configInvalidProfileSummary"),
     pills: [pill(t("invalid"), "red")],
-    paths: [row.path],
+    paths: [],
+    summarySectionTitle: t("needsAttention"),
     fields: [
       { label: t("profileName"), value: row.key },
       { label: t("errorLabel"), value: row.error },
     ],
-    relationships: [{ label: t("sourceHome"), value: ".local/profiles" }],
-    sources: [{ label: t("sourceToml"), text: [row.error, row.source_text].filter(Boolean).join("\n\n"), kind: "source" }],
+    relationshipsSectionTitle: t("profileTomlPath"),
+    relationships: [{ label: t("profileLocation"), value: row.path }],
+    hideSourceSectionTitle: true,
+    collapseSources: true,
+    sources: [{ label: t("profileToml"), text: [row.error, row.source_text].filter(Boolean).join("\n\n"), kind: "source" }],
   };
 }
 
@@ -934,7 +1519,7 @@ function workflowsCockpit(snapshot) {
   const rows = workflows.map(workflowScanRow).concat(invalid);
   const attentionCount = (groups.needs_attention || 0) + snapshot.workflows.invalid.length;
   const stats = [
-    { label: t("needsAttention"), value: attentionCount, tone: attentionCount ? "red" : "" },
+    attentionStat(attentionCount),
     { label: t("runningTaskRuns"), value: groups.running || 0 },
     { label: t("preparedWorkflows"), value: groups.prepared || 0 },
     { label: t("metricWorkflows"), value: workflows.length },
@@ -951,7 +1536,7 @@ function taskRunsCockpit(snapshot) {
     .concat(unlinkedTaskDocuments(snapshot).map(taskDocumentScanRow));
   const attentionCount = (groups.needs_attention || 0) + snapshot.task_runs.invalid.length;
   const stats = [
-    { label: t("needsAttention"), value: attentionCount, tone: attentionCount ? "red" : "" },
+    attentionStat(attentionCount),
     { label: t("stateRunning"), value: groups.running || 0 },
     { label: t("statePrepared"), value: groups.prepared || 0 },
     { label: t("metricTaskRuns"), value: runs.length },
@@ -965,7 +1550,7 @@ function ideasCockpit(snapshot) {
   const tagged = ideas.filter((row) => row.tags.length).length;
   const rows = ideas.map(ideaScanRow).concat(snapshot.ideas.invalid.map((row) => invalidScanRow(row, t("invalidIdeas"))));
   const stats = [
-    { label: t("needsAttention"), value: snapshot.ideas.invalid.length, tone: snapshot.ideas.invalid.length ? "red" : "" },
+    attentionStat(snapshot.ideas.invalid.length),
     { label: t("ideas"), value: ideas.length },
     { label: t("statusGroups"), value: statusGroups },
     { label: t("taggedRecords"), value: tagged },
@@ -979,7 +1564,7 @@ function retrospecsCockpit(snapshot) {
   const tagged = retrospecs.filter((row) => row.tags.length).length;
   const rows = retrospecs.map(retrospecScanRow).concat(snapshot.retrospecs.invalid.map((row) => invalidScanRow(row, t("invalidRetrospecs"))));
   const stats = [
-    { label: t("needsAttention"), value: snapshot.retrospecs.invalid.length, tone: snapshot.retrospecs.invalid.length ? "red" : "" },
+    attentionStat(snapshot.retrospecs.invalid.length),
     { label: t("retrospecs"), value: retrospecs.length },
     { label: t("outcomeGroups"), value: outcomeGroups },
     { label: t("taggedRecords"), value: tagged },
@@ -997,15 +1582,17 @@ function overviewFocusModel(snapshot) {
 
 function focusPanel(focus) {
   const groups = [
-    {
-      key: "attention",
-      title: t("needsAttention"),
-      count: focus.attention.length,
-      tone: focus.attention.length ? "red" : "",
-      sectionId: "overview-attention",
-      emptyText: t("noNeedsAttention"),
-      items: focus.attention,
-    },
+    focus.attention.length
+      ? {
+          key: "attention",
+          title: t("needsAttention"),
+          count: focus.attention.length,
+          tone: "red",
+          sectionId: "overview-attention",
+          emptyText: t("noNeedsAttention"),
+          items: focus.attention,
+        }
+      : null,
     {
       key: "running",
       title: t("runningTaskRuns"),
@@ -1024,7 +1611,7 @@ function focusPanel(focus) {
       emptyText: t("noPreparedWorkflows"),
       items: focus.prepared.map(preparedWorkflowFocusItem),
     },
-  ];
+  ].filter(Boolean);
   const stats = groups.map((group) => ({ label: group.title, value: group.count, tone: group.tone }));
   return `<section class="focus-panel" aria-labelledby="focus-heading"><div class="focus-heading"><div><h2 id="focus-heading" class="section-title">${escapeHtml(t("focusTitle"))}</h2><p class="section-note">${escapeHtml(t("focusSubtitle"))}</p></div>${statusStrip(stats)}</div>${priorityFlow(groups)}</section>`;
 }
@@ -1035,15 +1622,30 @@ function cockpitPanel(title, subtitle, stats, listTitle, rows, emptyText, id) {
   return `<section class="focus-panel view-cockpit" id="${escapeHtml(id)}" aria-labelledby="${escapeHtml(id)}-heading"><div class="focus-heading"><div><h2 id="${escapeHtml(id)}-heading" class="section-title">${escapeHtml(title)}</h2><p class="section-note">${escapeHtml(subtitle)}</p></div>${statusStrip(stats)}</div><div class="scan-heading"><h3>${escapeHtml(listTitle)}</h3><span>${escapeHtml(count)}</span></div>${body}</section>`;
 }
 
-function masterDetailPanel({ id, tabKey, title, subtitle, stats, listTitle, records, emptyText }) {
+function masterDetailPanel({ id, tabKey, title, subtitle, stats, listTitle, records, emptyText, showCount = true }) {
   const visibleRecords = records.filter(Boolean);
   const count = visibleRecords.length === 1 ? `1 ${t("record")}` : `${visibleRecords.length} ${t("records")}`;
+  const countHtml = showCount ? `<span>${escapeHtml(count)}</span>` : "";
   const selectedId = selectedMasterDetailId(tabKey, visibleRecords);
   const selected = visibleRecords.find((record) => record.id === selectedId);
   const body = visibleRecords.length
-    ? `<div class="master-detail-shell" data-md-shell="${escapeHtml(tabKey)}"><div class="master-list" data-md-list="${escapeHtml(tabKey)}" aria-label="${escapeHtml(listTitle)}">${visibleRecords.map((record) => masterDetailListRow(tabKey, record, record.id === selectedId)).join("")}</div>${selected ? masterDetailPane(selected) : ""}</div>`
+    ? `<div class="master-detail-shell" data-md-shell="${escapeHtml(tabKey)}"><div class="master-list" data-md-list="${escapeHtml(tabKey)}" aria-label="${escapeHtml(listTitle)}">${masterDetailList(tabKey, visibleRecords, selectedId)}</div>${selected ? masterDetailPane(selected) : ""}</div>`
     : `<div class="focus-empty">${escapeHtml(emptyText)}</div>`;
-  return `<section class="focus-panel view-cockpit master-detail-panel" id="${escapeHtml(id)}" aria-labelledby="${escapeHtml(id)}-heading"><div class="focus-heading"><div><h2 id="${escapeHtml(id)}-heading" class="section-title">${escapeHtml(title)}</h2><p class="section-note">${escapeHtml(subtitle)}</p></div>${statusStrip(stats)}</div><div class="scan-heading"><h3>${escapeHtml(listTitle)}</h3><span>${escapeHtml(count)}</span></div>${body}</section>`;
+  return `<section class="focus-panel view-cockpit master-detail-panel" id="${escapeHtml(id)}" aria-labelledby="${escapeHtml(id)}-heading"><div class="focus-heading"><div><h2 id="${escapeHtml(id)}-heading" class="section-title">${escapeHtml(title)}</h2><p class="section-note">${escapeHtml(subtitle)}</p></div>${statusStrip(stats)}</div><div class="scan-heading"><h3>${escapeHtml(listTitle)}</h3>${countHtml}</div>${body}</section>`;
+}
+
+function masterDetailList(tabKey, records, selectedId) {
+  let currentGroup = "";
+  return records
+    .map((record) => {
+      const group = record.group || "";
+      const heading = group && group !== currentGroup
+        ? `<div class="master-list-group" role="presentation">${escapeHtml(group)}</div>`
+        : "";
+      currentGroup = group;
+      return `${heading}${masterDetailListRow(tabKey, record, record.id === selectedId)}`;
+    })
+    .join("");
 }
 
 function selectedMasterDetailId(tabKey, records) {
@@ -1062,57 +1664,125 @@ function selectedMasterDetailId(tabKey, records) {
 }
 
 function masterDetailListRow(tabKey, record, selected) {
-  const meta = (record.pills || []).filter(Boolean).join("");
+  const meta = (record.listPills || record.pills || []).filter(Boolean).join("");
   const pathsHtml = record.paths && record.paths.length
     ? `<span class="master-paths">${record.paths.slice(0, 3).map((path) => `<span class="focus-path">${escapeHtml(path)}</span>`).join("")}</span>`
     : "";
   const summary = record.summary ? `<span class="focus-summary">${escapeHtml(record.summary)}</span>` : "";
+  const kickerText = record.listKicker === undefined ? record.kicker : record.listKicker;
+  const kicker = kickerText ? `<span class="focus-kicker">${escapeHtml(kickerText)}</span>` : "";
+  const marker = record.listMarker
+    ? `<span class="master-dot" aria-hidden="true"></span><span class="sr-only">${escapeHtml(record.listMarker)}</span>`
+    : "";
   const selectedAttr = selected ? ` aria-pressed="true" aria-current="true"` : ` aria-pressed="false"`;
-  return `<button class="master-list-row tone-${record.tone || "neutral"}${selected ? " is-selected" : ""}" type="button" data-md-tab="${escapeHtml(tabKey)}" data-md-record="${escapeHtml(record.id)}"${selectedAttr}><span class="master-main"><span class="focus-kicker">${escapeHtml(record.kicker)}</span><span class="master-title">${escapeHtml(record.title)}</span>${summary}</span><span class="master-meta meta">${meta}</span>${pathsHtml}</button>`;
+  return `<button class="master-list-row tone-${record.tone || "neutral"}${selected ? " is-selected" : ""}${record.listMarker ? " has-marker" : ""}" type="button" data-md-tab="${escapeHtml(tabKey)}" data-md-record="${escapeHtml(record.id)}"${selectedAttr}><span class="master-main">${kicker}<span class="master-title-line">${marker}<span class="master-title">${escapeHtml(record.title)}</span></span>${summary}</span><span class="master-meta meta">${meta}</span>${pathsHtml}</button>`;
 }
 
 function masterDetailPane(record) {
   const titleId = `detail-${domId(record.id)}-title`;
   const meta = (record.pills || []).filter(Boolean).join("");
   const summary = record.summary ? `<p class="focus-summary">${escapeHtml(record.summary)}</p>` : "";
+  const kicker = record.kicker ? `<span class="focus-kicker">${escapeHtml(record.kicker)}</span>` : "";
   const pathsHtml = record.paths && record.paths.length
-    ? `<div class="detail-path-block"><span class="detail-label">${escapeHtml(t("sourcePaths"))}</span>${paths(record.paths)}</div>`
+    ? `<div class="detail-path-block"><span class="detail-label">${escapeHtml(record.pathLabel || t("sourcePaths"))}</span>${paths(record.paths)}</div>`
     : "";
   const relationshipsHtml = detailFields(record.relationships || []);
   const relationshipBody = [pathsHtml, relationshipsHtml].filter(Boolean).join("");
-  const sourceBody = detailSourceBlocks(record.sources || []);
-  return `<article class="detail-pane tone-${record.tone || "neutral"}" aria-labelledby="${escapeHtml(titleId)}"><header class="detail-header"><span class="focus-kicker">${escapeHtml(record.kicker)}</span><h3 id="${escapeHtml(titleId)}">${escapeHtml(record.title)}</h3>${summary}<div class="meta">${meta}</div></header>${detailSection(t("detailSummary"), detailFields(record.fields || []))}${detailSection(t("detailRelationships"), relationshipBody)}${detailSection(t("sourceContent"), sourceBody)}</article>`;
+  const sourceBody = detailSourceBlocks(record.sources || [], { collapsed: record.collapseSources });
+  const summaryBody = [detailCards(record.cards || []), detailFields(record.fields || [])].filter(Boolean).join("");
+  const summarySectionTitle = record.hideSummarySectionTitle ? "" : (record.summarySectionTitle || t("detailSummary"));
+  const sourceSectionTitle = record.hideSourceSectionTitle ? "" : (record.sourceSectionTitle || t("sourceContent"));
+  return `<article class="detail-pane tone-${record.tone || "neutral"}" aria-labelledby="${escapeHtml(titleId)}"><header class="detail-header">${kicker}<h3 id="${escapeHtml(titleId)}">${escapeHtml(record.title)}</h3>${summary}<div class="meta">${meta}</div></header>${detailSection(summarySectionTitle, summaryBody)}${detailSection(record.relationshipsSectionTitle || t("detailRelationships"), relationshipBody)}${detailSection(sourceSectionTitle, sourceBody)}</article>`;
 }
 
 function detailSection(title, body) {
   if (!body) {
     return "";
   }
-  return `<section class="detail-section"><h4>${escapeHtml(title)}</h4>${body}</section>`;
+  const heading = title ? `<h4>${escapeHtml(title)}</h4>` : "";
+  return `<section class="detail-section">${heading}${body}</section>`;
 }
 
 function detailFields(fields) {
-  const visible = fields.filter((field) => field && field.value !== null && field.value !== undefined && field.value !== "");
+  const visible = fields.filter((field) => {
+    if (!field || field.value === null || field.value === undefined || field.value === "") {
+      return false;
+    }
+    return !(field.omitIfZero && Number(field.value) === 0);
+  });
   if (!visible.length) {
     return "";
   }
-  return `<dl class="detail-fields">${visible.map((field) => `<div><dt>${escapeHtml(field.label)}</dt><dd>${escapeHtml(field.value)}</dd></div>`).join("")}</dl>`;
+  return `<dl class="detail-fields">${visible.map((field) => {
+    const classAttr = field.tone ? ` class="${escapeHtml(field.tone)}"` : "";
+    return `<div${classAttr}><dt>${escapeHtml(field.label)}</dt><dd>${escapeHtml(field.value)}</dd></div>`;
+  }).join("")}</dl>`;
 }
 
-function detailSourceBlocks(sources) {
+function detailCards(cards) {
+  const visible = cards.filter(Boolean);
+  if (!visible.length) {
+    return "";
+  }
+  return `<div class="detail-cards">${visible.map(detailCard).join("")}</div>`;
+}
+
+function detailCard(card) {
+  const value = card.value ? `<strong>${escapeHtml(card.value)}</strong>` : "";
+  const items = card.items?.length
+    ? `<div class="detail-card-items">${card.items.map(detailCardItem).join("")}</div>`
+    : "";
+  const heading = card.title || card.kicker || "";
+  const emphasis = card.emphasis ? ` is-${escapeHtml(card.emphasis)}` : "";
+  return `<article class="detail-card tone-${card.tone || "neutral"}${emphasis}"><div class="detail-card-head"><h5>${escapeHtml(heading)}</h5>${value}</div><p>${escapeHtml(card.description || "")}</p>${items}</article>`;
+}
+
+function detailCardItem(item) {
+  const swatches = item.swatches?.length
+    ? `<div class="detail-swatches">${item.swatches.map((swatch) => `<span><i style="background:${safeCssColor(swatch.color)}"></i>${escapeHtml(swatch.kind)}</span>`).join("")}</div>`
+    : "";
+  return `<div class="detail-card-item"><div><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></div><p>${escapeHtml(item.description || "")}</p>${swatches}</div>`;
+}
+
+function safeCssColor(value) {
+  const color = String(value || "").trim();
+  return /^[#a-zA-Z0-9(),.%\s-]+$/.test(color) ? color : "transparent";
+}
+
+function detailSourceBlocks(sources, options = {}) {
   const visible = sources.filter((source) => source && source.text);
   if (!visible.length) {
     return "";
   }
   return visible
-    .map((source) => `<div class="detail-source"><span class="detail-label">${escapeHtml(source.label)}</span><div class="source-panel full-text">${formatFullText(source.text, source.kind || "source")}</div></div>`)
+    .map((source) => {
+      const labelText = source.label || t("sourceContent");
+      if (options.collapsed) {
+        return `<details class="detail-source"><summary>${escapeHtml(labelText)}</summary><div class="source-panel full-text">${formatFullText(source.text, source.kind || "source")}</div></details>`;
+      }
+      const label = visible.length > 1 && source.label
+        ? `<span class="detail-label">${escapeHtml(source.label)}</span>`
+        : "";
+      return `<div class="detail-source">${label}<div class="source-panel full-text">${formatFullText(source.text, source.kind || "source")}</div></div>`;
+    })
     .join("");
+}
+
+function attentionStat(count) {
+  if (!count) {
+    return null;
+  }
+  return { label: t("needsAttention"), value: count, tone: "red" };
 }
 
 function statusStrip(stats) {
   const items = stats
+    .filter(Boolean)
     .map((stat) => `<div class="status-counter tone-${stat.tone || "neutral"}"><span>${escapeHtml(stat.label)}</span><strong>${escapeHtml(stat.value)}</strong></div>`)
     .join("");
+  if (!items) {
+    return "";
+  }
   return `<div class="status-strip-inline">${items}</div>`;
 }
 
@@ -1274,15 +1944,16 @@ function sourceFileScanRow(row) {
 function profileScanRow(row) {
   return scanRow({
     tone: "",
-    kicker: "profile",
+    kicker: t("profiles"),
     title: row.name,
     summary: bodyPreview(row.source_text),
     pills: [
-      pill(`agent ${row.agent}`, "blue"),
-      pill(`${row.copy_count} copy`),
-      pill(`${row.link_count} link`),
-      row.has_site ? pill("site", "green") : "",
-      row.test_count ? pill(`${row.test_count} tests`, "amber") : "",
+      pill(`${t("agentLabel")} ${row.agent}`, "blue"),
+      valuesPill(t("copyLabel"), profileCopyValues(row)),
+      valuesPill(t("copyAsLabel"), profileCopyAsValues(row)),
+      valuesPill(t("linkLabel"), profileLinkValues(row)),
+      row.has_site ? pill(t("profileSiteLabel"), "green") : "",
+      row.test_count ? pill(`${row.test_count} ${t("testsLabel")}`, "amber") : "",
     ],
     paths: [row.path],
     detail: row.source_text,
