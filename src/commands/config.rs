@@ -1807,6 +1807,7 @@ mod tests {
             CtxOptions {
                 base_config: Config::default(),
                 config_source: crate::config::ConfigSource::Default,
+                storage_root: None,
                 output_mode: OutputMode::Text,
                 verbosity: 0,
                 quiet: false,

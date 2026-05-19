@@ -1139,7 +1139,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: ".local/tasks/add-schema.toml",
+            path: "<git-common-dir>/wt/tasks/add-schema.toml",
             content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
         };
 
@@ -1170,7 +1170,7 @@ mod tests {
         assert!(
             prompts[1].find("Workflow origin").unwrap()
                 < prompts[1]
-                    .find("Task path: `.local/tasks/add-schema.toml`")
+                    .find("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
                     .unwrap()
         );
         assert!(
@@ -1203,7 +1203,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: ".local/tasks/add-schema.toml",
+            path: "<git-common-dir>/wt/tasks/add-schema.toml",
             content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
         };
 
@@ -1222,7 +1222,7 @@ mod tests {
         assert_eq!(prompts.len(), 5);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
         assert!(prompts[1].contains("Workflow body"));
-        assert!(prompts[1].contains("Task path: `.local/tasks/add-schema.toml`"));
+        assert!(prompts[1].contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
         assert_eq!(prompts[2], "Workflow prompt");
         assert_eq!(prompts[3], "Workflow follow-up");
         assert_eq!(prompts[4], "Branch prompt");
@@ -1253,7 +1253,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: ".local/tasks/add-schema.toml",
+            path: "<git-common-dir>/wt/tasks/add-schema.toml",
             content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
         };
 
@@ -1303,7 +1303,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: ".local/tasks/add-schema.toml",
+            path: "<git-common-dir>/wt/tasks/add-schema.toml",
             content: "# Add schema\n\nbranch = \"add-schema\"",
         };
 
@@ -1321,7 +1321,9 @@ mod tests {
         let branch_prompts = agent.prompt.remove("branch").unwrap();
         assert_eq!(branch_prompts.len(), 1);
         assert!(branch_prompts[0].contains("Use this task before changing code."));
-        assert!(branch_prompts[0].contains("Task path: `.local/tasks/add-schema.toml`"));
+        assert!(
+            branch_prompts[0].contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
+        );
         assert!(branch_prompts[0].contains("# Add schema"));
         assert!(branch_prompts[0].contains("Changed files"));
         assert!(branch_prompts[0].contains("Branch prompt"));
@@ -1379,7 +1381,7 @@ mod tests {
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",
-                    path: ".local/tasks/add-schema.toml",
+                    path: "<git-common-dir>/wt/tasks/add-schema.toml",
                     content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
                 },
             },
@@ -1448,7 +1450,7 @@ mod tests {
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",
-                    path: ".local/tasks/add-schema.toml",
+                    path: "<git-common-dir>/wt/tasks/add-schema.toml",
                     content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
                 },
             },

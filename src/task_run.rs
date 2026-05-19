@@ -221,15 +221,19 @@ pub(crate) fn list(ctx: &Ctx) -> Result<Vec<TaskRunRecord>> {
 }
 
 pub(crate) fn task_run_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
-    let task_runs_dir = ctx.repo_root.join(".local/task-runs");
+    ensure_no_legacy_task_runs(ctx)?;
+    let task_runs_dir = ctx.storage_root.task_runs_dir();
     if !task_runs_dir.exists() {
         return Ok(Vec::new());
     }
 
     let mut paths = Vec::new();
-    for entry in fs::read_dir(&task_runs_dir)
-        .with_context(|| "Failed to read task run directory: .local/task-runs")?
-    {
+    for entry in fs::read_dir(&task_runs_dir).with_context(|| {
+        format!(
+            "Failed to read task run directory: {}",
+            ctx.storage_root.display_path(&task_runs_dir)
+        )
+    })? {
         let path = entry?.path();
         if path.extension().is_some_and(|ext| ext == "toml") {
             paths.push(path);
@@ -243,12 +247,19 @@ pub(crate) fn id_from_path(path: &Path) -> Result<String> {
     task_run_id(path)
 }
 
+pub(crate) fn path_for_id(ctx: &Ctx, id: &str) -> Result<PathBuf> {
+    ensure_no_legacy_task_runs(ctx)?;
+    Ok(ctx.storage_root.task_run_path(id))
+}
+
 pub(crate) fn resolve(ctx: &Ctx, target: &str) -> Result<PathBuf> {
+    ensure_no_legacy_task_runs(ctx)?;
+
     if target == "latest" {
         return latest_path(ctx);
     }
 
-    let path = PathBuf::from(target);
+    let path = storage_display_target(ctx, target).unwrap_or_else(|| PathBuf::from(target));
     if path.is_absolute() && path.exists() {
         return Ok(path);
     }
@@ -268,12 +279,18 @@ pub(crate) fn resolve(ctx: &Ctx, target: &str) -> Result<PathBuf> {
     } else {
         format!("{target}.toml")
     };
-    let shorthand = ctx.repo_root.join(".local/task-runs").join(file_name);
+    let shorthand = ctx.storage_root.task_runs_dir().join(file_name);
     if shorthand.exists() {
         return Ok(shorthand);
     }
 
     bail!("Task run not found: {target}");
+}
+
+fn storage_display_target(ctx: &Ctx, target: &str) -> Option<PathBuf> {
+    target
+        .strip_prefix("<git-common-dir>/")
+        .map(|relative| ctx.storage_root.git_common_dir().join(relative))
 }
 
 pub(crate) fn update(
@@ -377,7 +394,8 @@ pub(crate) fn group_from_path(path: &Path) -> Result<String> {
 }
 
 fn write_new(ctx: &Ctx, run: &TaskRun) -> Result<TaskRunRecord> {
-    let task_runs_dir = ctx.repo_root.join(".local/task-runs");
+    ensure_no_legacy_task_runs(ctx)?;
+    let task_runs_dir = ctx.storage_root.task_runs_dir();
     fs::create_dir_all(&task_runs_dir)?;
 
     let id_base = task_run_id_base(run);
@@ -429,7 +447,7 @@ fn latest_path(ctx: &Ctx) -> Result<PathBuf> {
     records
         .pop()
         .map(|record| record.path)
-        .ok_or_else(|| anyhow::anyhow!("No task run files found in .local/task-runs"))
+        .ok_or_else(|| anyhow::anyhow!("No task run files found in <git-common-dir>/wt/task-runs"))
 }
 
 pub(crate) fn compare_task_run_records(left: &TaskRunRecord, right: &TaskRunRecord) -> Ordering {
@@ -450,15 +468,19 @@ fn compare_task_run_record_fallbacks(left: &TaskRunRecord, right: &TaskRunRecord
 }
 
 fn next_creation_order(ctx: &Ctx) -> Result<u64> {
-    let task_runs_dir = ctx.repo_root.join(".local/task-runs");
+    ensure_no_legacy_task_runs(ctx)?;
+    let task_runs_dir = ctx.storage_root.task_runs_dir();
     if !task_runs_dir.exists() {
         return Ok(1);
     }
 
     let mut max_order = 0_u64;
-    for entry in fs::read_dir(&task_runs_dir)
-        .with_context(|| "Failed to read task run directory: .local/task-runs")?
-    {
+    for entry in fs::read_dir(&task_runs_dir).with_context(|| {
+        format!(
+            "Failed to read task run directory: {}",
+            ctx.storage_root.display_path(&task_runs_dir)
+        )
+    })? {
         let path = entry?.path();
         if path.extension().is_none_or(|ext| ext != "toml") {
             continue;
@@ -475,6 +497,22 @@ fn next_creation_order(ctx: &Ctx) -> Result<u64> {
     max_order
         .checked_add(1)
         .ok_or_else(|| anyhow::anyhow!("Task run creation_order overflow"))
+}
+
+#[cfg(test)]
+pub(crate) fn task_run_display_path(ctx: &Ctx, path: &Path) -> String {
+    ctx.storage_root.display_path(path)
+}
+
+fn ensure_no_legacy_task_runs(ctx: &Ctx) -> Result<()> {
+    if let Some(legacy) = ctx.storage_root.detect_legacy_task_runs(&ctx.repo_root) {
+        bail!(
+            "Found legacy TaskRun storage at {}. Canonical TaskRun storage is {}. wt does not silently read .local/task-runs; import or repair legacy state explicitly before using this command.",
+            legacy.path().display(),
+            ctx.storage_root.display_path(legacy.canonical_root())
+        );
+    }
+    Ok(())
 }
 
 fn next_available_task_run_path(dir: &Path, id_base: &str) -> (String, PathBuf) {
@@ -608,6 +646,55 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::{CmdOutput, CommandRunner, CtxOptions};
+    use crate::storage::StorageRoot;
+    use crate::task::{self, TaskDocument};
+    use std::fs;
+    use std::process::Command;
+
+    const GIT_LOCAL_ENV_KEYS: &[&str] = &[
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_PREFIX",
+        "GIT_SHALLOW_FILE",
+        "GIT_COMMON_DIR",
+    ];
+
+    struct CleanGitRunner;
+
+    impl CommandRunner for CleanGitRunner {
+        fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+            let mut command = clean_command(cmd);
+            command.args(args);
+            if let Some(cwd) = cwd {
+                command.current_dir(cwd);
+            }
+            let output = command.output()?;
+            Ok(CmdOutput {
+                stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                success: output.status.success(),
+            })
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            clean_command(cmd)
+                .arg("--version")
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false)
+        }
+    }
 
     fn ctx(root: &Path) -> Ctx {
         Ctx::new(
@@ -616,6 +703,20 @@ mod tests {
             Config::default(),
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
+        )
+    }
+
+    fn ctx_with_storage(repo: &Path, invocation: &Path, storage_root: StorageRoot) -> Ctx {
+        Ctx::new_with_options(
+            repo.to_path_buf(),
+            invocation.to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+            CtxOptions {
+                storage_root: Some(storage_root),
+                ..CtxOptions::default()
+            },
         )
     }
 
@@ -634,6 +735,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(record.id, "run-2026-05-16-001-add-schema");
+        assert_eq!(
+            task_run_display_path(&ctx, &record.path),
+            "<git-common-dir>/wt/task-runs/run-2026-05-16-001-add-schema.toml"
+        );
         let parsed = read(&record.path).unwrap();
         assert_eq!(parsed.task, "add-schema");
         assert_eq!(parsed.branch, "add-schema");
@@ -667,6 +772,69 @@ mod tests {
         assert!(!content.contains("cmux"));
         assert!(!content.contains("workspace"));
         assert!(!content.contains("surface"));
+    }
+
+    #[test]
+    fn linked_worktree_reads_common_dir_task_and_task_run_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        let linked = temp.path().join("linked");
+        fs::create_dir(&repo).unwrap();
+        init_repo(&repo);
+        run_git(
+            &repo,
+            &["worktree", "add", "-b", "linked", path_str(&linked), "HEAD"],
+        );
+
+        let storage_root = StorageRoot::resolve(&CleanGitRunner, Some(&linked)).unwrap();
+        let main_ctx = ctx_with_storage(&repo, &repo, storage_root.clone());
+        let linked_ctx = ctx_with_storage(&repo, &linked, storage_root);
+        let document = TaskDocument {
+            title: "Shared task".into(),
+            branch: "linked".into(),
+            body: "Common dir task body".into(),
+            origin: None,
+        };
+
+        task::write_task_document(&main_ctx, "shared", &document).unwrap();
+        let run = create(&main_ctx, "shared", "linked", None, STATUS_RUNNING).unwrap();
+
+        let selected = task::select_local_task_by_key(&linked_ctx, "shared").unwrap();
+        let records = list(&linked_ctx).unwrap();
+
+        assert_eq!(selected.path, "<git-common-dir>/wt/tasks/shared.toml");
+        assert_eq!(selected.document.title, "Shared task");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, run.id);
+        assert_eq!(records[0].path, run.path);
+        assert_eq!(
+            task_run_display_path(&linked_ctx, &records[0].path),
+            "<git-common-dir>/wt/task-runs/run-shared.toml"
+        );
+    }
+
+    #[test]
+    fn task_run_store_rejects_legacy_local_task_runs_without_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_runs_dir = dir.path().join(".local/task-runs");
+        std::fs::create_dir_all(&legacy_runs_dir).unwrap();
+        std::fs::write(
+            legacy_runs_dir.join("run-legacy.toml"),
+            r#"task = "legacy"
+branch = "legacy"
+status = "running"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+        let ctx = ctx(dir.path());
+
+        let err = list(&ctx).unwrap_err().to_string();
+
+        assert!(err.contains("Found legacy TaskRun storage"));
+        assert!(err.contains(".local/task-runs"));
+        assert!(err.contains("<git-common-dir>/wt/task-runs"));
     }
 
     #[test]
@@ -812,7 +980,7 @@ updated_at = "2026-05-16T00:00:00Z"
     fn latest_for_task_uses_creation_order_when_created_at_ties() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let task_runs_dir = dir.path().join(".local/task-runs");
+        let task_runs_dir = dir.path().join(".git/wt/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
 
         write(
@@ -836,7 +1004,7 @@ updated_at = "2026-05-16T00:00:00Z"
     fn latest_for_task_sorts_fractional_timestamps_after_previous_seconds() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let task_runs_dir = dir.path().join(".local/task-runs");
+        let task_runs_dir = dir.path().join(".git/wt/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
 
         write(
@@ -865,7 +1033,7 @@ updated_at = "2026-05-16T00:00:00Z"
     fn latest_for_task_orders_mixed_previous_and_ordered_records_totally() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let task_runs_dir = dir.path().join(".local/task-runs");
+        let task_runs_dir = dir.path().join(".git/wt/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
 
         write(
@@ -935,5 +1103,50 @@ updated_at = "2026-05-16T00:00:00Z"
             created_at: created_at.into(),
             updated_at: created_at.into(),
         }
+    }
+
+    fn init_repo(repo: &Path) {
+        run_git(repo, &["init"]);
+        fs::write(repo.join("README.md"), "sample\n").unwrap();
+        run_git(repo, &["add", "README.md"]);
+        run_git(
+            repo,
+            &[
+                "-c",
+                "user.name=wt test",
+                "-c",
+                "user.email=wt@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+    }
+
+    fn run_git(cwd: &Path, args: &[&str]) {
+        let output = clean_command("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed\nstdout: {}\nstderr: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn clean_command(cmd: &str) -> Command {
+        let mut command = Command::new(cmd);
+        for key in GIT_LOCAL_ENV_KEYS {
+            command.env_remove(key);
+        }
+        command
+    }
+
+    fn path_str(path: &Path) -> &str {
+        path.to_str().unwrap()
     }
 }

@@ -937,9 +937,9 @@ mod tests {
     #[test]
     fn task_run_target_adds_task_run_metadata() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -967,9 +967,9 @@ mod tests {
     #[test]
     fn status_without_target_selects_interactive_work_target() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1092,9 +1092,9 @@ mod tests {
     #[test]
     fn watch_heartbeat_prints_unchanged_running_observation() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1196,6 +1196,7 @@ mod tests {
                 CtxOptions {
                     base_config: Config::default(),
                     config_source: crate::config::ConfigSource::Default,
+                    storage_root: None,
                     output_mode,
                     verbosity: 0,
                     quiet: false,

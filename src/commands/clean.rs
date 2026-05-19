@@ -377,10 +377,7 @@ fn task_run_record_for_id(ctx: &Ctx, target: &str) -> Result<Option<TaskRunRecor
         return Ok(None);
     }
 
-    let path = ctx
-        .repo_root
-        .join(".local/task-runs")
-        .join(format!("{target}.toml"));
+    let path = task_run::path_for_id(ctx, target)?;
     if !path.is_file() {
         return Ok(None);
     }
@@ -603,7 +600,7 @@ mod tests {
     fn clean_branch_target_ignores_unrelated_malformed_task_run_during_resolution() {
         let repo = tempfile::tempdir().unwrap();
         let worktree = repo.path().with_file_name("test-repo-add-schema");
-        let task_runs_dir = repo.path().join(".local/task-runs");
+        let task_runs_dir = repo.path().join(".git/wt/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
         std::fs::write(
             task_runs_dir.join("unrelated-broken.toml"),

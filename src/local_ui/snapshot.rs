@@ -6,6 +6,7 @@ use crate::config_render::render_effective_config;
 use crate::context::{
     CmdOutput, CommandRunner, Ctx, CtxOptions, OutputMode, PromptItem, UserInterface,
 };
+use crate::storage::StorageRoot;
 use crate::task::{self, TaskDocument, TaskOrigin};
 use crate::task_run::{self, TaskRunContext, TaskRunRecord, TaskRunStatus};
 use crate::workflow::planner::runnable_workflow_info;
@@ -29,6 +30,7 @@ pub struct SnapshotState {
     config: Config,
     base_config: Config,
     config_source: ConfigSource,
+    storage_root: StorageRoot,
 }
 
 impl SnapshotState {
@@ -40,6 +42,7 @@ impl SnapshotState {
             config: ctx.config.clone(),
             base_config: ctx.base_config.clone(),
             config_source: ctx.config_source.clone(),
+            storage_root: ctx.storage_root.clone(),
         }
     }
 
@@ -51,6 +54,7 @@ impl SnapshotState {
         base_config: Config,
         config_source: ConfigSource,
     ) -> Self {
+        let storage_root = StorageRoot::from_git_common_dir(repo_root.join(".git"));
         Self {
             repo_root,
             invocation_root,
@@ -58,6 +62,7 @@ impl SnapshotState {
             config,
             base_config,
             config_source,
+            storage_root,
         }
     }
 
@@ -71,6 +76,7 @@ impl SnapshotState {
             CtxOptions {
                 base_config: self.base_config.clone(),
                 config_source: self.config_source.clone(),
+                storage_root: Some(self.storage_root.clone()),
                 output_mode: OutputMode::Text,
                 verbosity: 0,
                 quiet: true,
@@ -380,9 +386,11 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
         },
         sources: SourceSummary {
             ideas: ".local/ideas".into(),
-            tasks: ".local/tasks".into(),
+            tasks: ctx.storage_root.display_path(&ctx.storage_root.tasks_dir()),
             workflows: ".local/workflows".into(),
-            task_runs: ".local/task-runs".into(),
+            task_runs: ctx
+                .storage_root
+                .display_path(&ctx.storage_root.task_runs_dir()),
             profiles: ".local/profiles".into(),
             retrospecs: ".local/retrospectives".into(),
             config_paths: config_source_paths(&ctx),
@@ -1259,6 +1267,10 @@ fn site_provider_name(provider: &SiteProvider) -> &'static str {
 }
 
 fn relative_path(ctx: &Ctx, path: &Path) -> String {
+    if path.starts_with(ctx.storage_root.personal_root()) {
+        return ctx.storage_root.display_path(path);
+    }
+
     path.strip_prefix(&ctx.repo_root)
         .unwrap_or(path)
         .to_string_lossy()
@@ -1321,9 +1333,9 @@ fn is_known_state_or_config_path(relative: &str) -> bool {
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
             ))
-        || (relative.starts_with(".local/tasks/") && relative.ends_with(".toml"))
+        || (relative.starts_with("<git-common-dir>/wt/tasks/") && relative.ends_with(".toml"))
         || (relative.starts_with(".local/workflows/") && relative.ends_with(".toml"))
-        || (relative.starts_with(".local/task-runs/") && relative.ends_with(".toml"))
+        || (relative.starts_with("<git-common-dir>/wt/task-runs/") && relative.ends_with(".toml"))
         || (relative.starts_with(".local/profiles/") && relative.ends_with("/profile.toml"))
 }
 
@@ -1515,7 +1527,10 @@ mod tests {
             snapshot.sources.config_paths,
             vec![".wt.toml", ".local/.wt.toml"]
         );
-        assert_eq!(snapshot.tasks.items[0].path, ".local/tasks/demo.toml");
+        assert_eq!(
+            snapshot.tasks.items[0].path,
+            "<git-common-dir>/wt/tasks/demo.toml"
+        );
         assert_eq!(snapshot.tasks.items[0].body.as_deref(), Some("Demo body"));
         assert!(
             snapshot.tasks.items[0]
@@ -1581,13 +1596,13 @@ mod tests {
     }
 
     fn write_task(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/tasks");
+        let dir = root.join(".git/wt/tasks");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_task_run(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/task-runs");
+        let dir = root.join(".git/wt/task-runs");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::config::{Config, ConfigSource};
+use crate::storage::StorageRoot;
 
 /// Output from running an external command.
 #[derive(Debug, Clone)]
@@ -131,6 +132,7 @@ pub enum OutputMode {
 pub struct CtxOptions {
     pub base_config: Config,
     pub config_source: ConfigSource,
+    pub storage_root: Option<StorageRoot>,
     pub output_mode: OutputMode,
     pub verbosity: u8,
     pub quiet: bool,
@@ -141,6 +143,7 @@ impl Default for CtxOptions {
         Self {
             base_config: Config::default(),
             config_source: ConfigSource::Default,
+            storage_root: None,
             output_mode: OutputMode::Text,
             verbosity: 0,
             quiet: false,
@@ -157,6 +160,7 @@ pub struct Ctx {
     pub config: Config,
     pub base_config: Config,
     pub config_source: ConfigSource,
+    pub storage_root: StorageRoot,
     pub runner: Box<dyn CommandRunner>,
     pub ui: Box<dyn UserInterface>,
     pub output_mode: OutputMode,
@@ -175,6 +179,7 @@ impl Ctx {
         let options = CtxOptions {
             base_config: config.clone(),
             config_source: ConfigSource::Default,
+            storage_root: None,
             output_mode: OutputMode::Text,
             verbosity: 0,
             quiet: false,
@@ -196,6 +201,9 @@ impl Ctx {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
+        let storage_root = options
+            .storage_root
+            .unwrap_or_else(|| StorageRoot::from_git_common_dir(repo_root.join(".git")));
         Self {
             repo_root,
             invocation_root,
@@ -204,6 +212,7 @@ impl Ctx {
             config,
             base_config: options.base_config,
             config_source: options.config_source,
+            storage_root,
             runner,
             ui,
             output_mode: options.output_mode,

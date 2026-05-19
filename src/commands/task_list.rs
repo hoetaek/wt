@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub(crate) fn run(ctx: &Ctx) -> Result<()> {
     let report = collect(ctx)?;
@@ -53,7 +53,7 @@ fn collect(ctx: &Ctx) -> Result<TaskListReport> {
     let mut tasks = Vec::new();
     let mut invalid_tasks = Vec::new();
 
-    for path in task_paths(ctx)? {
+    for path in task::task_document_paths(ctx)? {
         let key = task_key_from_path(&path).unwrap_or_default();
         let relative_path = task_relative_path(ctx, &path);
         match read_task_row(ctx, &path) {
@@ -70,25 +70,6 @@ fn collect(ctx: &Ctx) -> Result<TaskListReport> {
         tasks,
         invalid_tasks,
     })
-}
-
-fn task_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
-    let tasks_dir = ctx.repo_root.join(".local/tasks");
-    if !tasks_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut paths = Vec::new();
-    for entry in
-        fs::read_dir(&tasks_dir).with_context(|| "Failed to read task directory: .local/tasks")?
-    {
-        let path = entry?.path();
-        if path.extension().is_some_and(|ext| ext == "toml") {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-    Ok(paths)
 }
 
 fn read_task_row(ctx: &Ctx, path: &Path) -> Result<TaskListRow> {
@@ -141,10 +122,7 @@ fn task_key_from_path(path: &Path) -> Result<String> {
 }
 
 fn task_relative_path(ctx: &Ctx, path: &Path) -> String {
-    path.strip_prefix(&ctx.repo_root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .into_owned()
+    ctx.storage_root.display_path(path)
 }
 
 fn body_summary(body: &str) -> Option<String> {
@@ -172,7 +150,8 @@ fn one_line(value: &str) -> String {
 
 fn print_text(ctx: &Ctx, report: &TaskListReport) {
     if report.tasks.is_empty() && report.invalid_tasks.is_empty() {
-        ctx.ui.print_step("No tasks found in .local/tasks");
+        ctx.ui
+            .print_step("No tasks found in <git-common-dir>/wt/tasks");
         return;
     }
 
@@ -241,7 +220,7 @@ mod tests {
     fn collect_lists_valid_tasks_and_reports_invalid_files() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
-        let tasks_dir = dir.path().join(".local/tasks");
+        let tasks_dir = dir.path().join(".git/wt/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
         fs::write(
             tasks_dir.join("local.toml"),
@@ -270,7 +249,10 @@ id = "PROJ-123"
         assert_eq!(report.tasks.len(), 2);
         assert_eq!(report.invalid_tasks.len(), 1);
         assert_eq!(report.tasks[0].key, "PROJ-123");
-        assert_eq!(report.tasks[0].path, ".local/tasks/PROJ-123.toml");
+        assert_eq!(
+            report.tasks[0].path,
+            "<git-common-dir>/wt/tasks/PROJ-123.toml"
+        );
         assert_eq!(report.tasks[0].publish_state, "published");
         assert_eq!(report.tasks[0].source, "provider-origin");
         assert_eq!(report.tasks[0].origin.as_ref().unwrap().provider, "linear");
@@ -284,7 +266,7 @@ id = "PROJ-123"
     fn collect_does_not_apply_selector_visible_cap() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
-        let tasks_dir = dir.path().join(".local/tasks");
+        let tasks_dir = dir.path().join(".git/wt/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
 
         for idx in 1..=11 {

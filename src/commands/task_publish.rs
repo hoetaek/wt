@@ -92,24 +92,8 @@ fn select_publish_task_keys(ctx: &Ctx) -> Result<Vec<String>> {
 }
 
 fn list_publish_candidates(ctx: &Ctx) -> Result<Vec<PublishCandidate>> {
-    let tasks_dir = ctx.repo_root.join(".local/tasks");
-    if !tasks_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut paths = Vec::new();
-    for entry in
-        fs::read_dir(&tasks_dir).with_context(|| "Failed to read task directory: .local/tasks")?
-    {
-        let path = entry?.path();
-        if path.extension().is_some_and(|ext| ext == "toml") {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-
     let mut candidates = Vec::new();
-    for path in paths {
+    for path in task::task_document_paths(ctx)? {
         let (key, document) = read_publish_candidate(ctx, &path)?;
         if document.origin.is_some() {
             continue;
@@ -142,10 +126,7 @@ fn task_key_from_path(ctx: &Ctx, path: &Path) -> Result<String> {
 }
 
 fn publish_task_relative_path(ctx: &Ctx, path: &Path) -> String {
-    path.strip_prefix(&ctx.repo_root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .into_owned()
+    ctx.storage_root.display_path(path)
 }
 
 #[cfg(test)]
@@ -434,7 +415,7 @@ mod tests {
     }
 
     fn write_task(root: &std::path::Path, key: &str, content: &str) {
-        let tasks_dir = root.join(".local/tasks");
+        let tasks_dir = root.join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
     }
@@ -483,7 +464,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("Failed to read task: .local/tasks/missing.toml")
+                .contains("Failed to read task: <git-common-dir>/wt/tasks/missing.toml")
         );
     }
 
@@ -539,7 +520,7 @@ mod tests {
                 .id,
             "PROJ-124"
         );
-        assert!(!dir.path().join(".local/task-runs").exists());
+        assert!(!dir.path().join(".git/wt/task-runs").exists());
 
         let dims = ui.dims.lock().unwrap().clone();
         assert!(dims.contains(
@@ -693,7 +674,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("Failed to read task: .local/tasks/missing-task.toml")
+                .contains("Failed to read task: <git-common-dir>/wt/tasks/missing-task.toml")
         );
         assert!(provider.created_requests().is_empty());
         assert!(
@@ -933,7 +914,7 @@ mod tests {
 
         let err = format!("{err:#}");
         assert!(err.contains("Provider issue linear:PROJ-123 was created"));
-        assert!(err.contains(".local/tasks/add-publish.toml"));
+        assert!(err.contains("<git-common-dir>/wt/tasks/add-publish.toml"));
         assert!(err.contains("disk is read-only"));
     }
 }

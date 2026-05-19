@@ -150,7 +150,7 @@ fn write_fake_gh(_path: &Path) -> std::path::PathBuf {
 }
 
 fn write_task_document(root: &Path, key: &str, branch: &str) {
-    let dir = root.join(".local/tasks");
+    let dir = root.join(".git/wt/tasks");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join(format!("{key}.toml")),
@@ -165,7 +165,7 @@ body = "Task body"
 }
 
 fn write_task_run_file(root: &Path, id: &str, task: &str, branch: &str, status: &str, group: &str) {
-    let dir = root.join(".local/task-runs");
+    let dir = root.join(".git/wt/task-runs");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join(format!("{id}.toml")),
@@ -441,7 +441,7 @@ fn task_list_supports_json_and_reports_invalid_tasks() {
     );
     write_task_document(temp.path(), "local", "feature/local");
     std::fs::write(
-        temp.path().join(".local/tasks/provider.toml"),
+        temp.path().join(".git/wt/tasks/provider.toml"),
         r#"title = "Provider task"
 branch = "alice/provider-task"
 body = "Imported provider task body"
@@ -453,7 +453,7 @@ id = "PROJ-123"
     )
     .unwrap();
     std::fs::write(
-        temp.path().join(".local/tasks/bad.toml"),
+        temp.path().join(".git/wt/tasks/bad.toml"),
         "unknown = true\n",
     )
     .unwrap();
@@ -482,7 +482,10 @@ id = "PROJ-123"
         .iter()
         .find(|row| row["key"] == "completed")
         .expect("completed task should be listed even after a done TaskRun");
-    assert_eq!(completed["path"], ".local/tasks/completed.toml");
+    assert_eq!(
+        completed["path"],
+        "<git-common-dir>/wt/tasks/completed.toml"
+    );
     assert_eq!(completed["branch"], "feature/completed");
     assert_eq!(completed["publish_state"], "local");
     assert_eq!(completed["source"], "local");
@@ -501,7 +504,7 @@ id = "PROJ-123"
     assert_eq!(provider["body_summary"], "Imported provider task body");
 
     assert_eq!(invalid[0]["key"], "bad");
-    assert_eq!(invalid[0]["path"], ".local/tasks/bad.toml");
+    assert_eq!(invalid[0]["path"], "<git-common-dir>/wt/tasks/bad.toml");
     assert!(
         invalid[0]["error"]
             .as_str()
@@ -516,7 +519,7 @@ fn task_list_text_includes_stable_task_fields_and_invalid_warning() {
     git_init(temp.path());
     write_task_document(temp.path(), "local", "feature/local");
     std::fs::write(
-        temp.path().join(".local/tasks/provider.toml"),
+        temp.path().join(".git/wt/tasks/provider.toml"),
         r#"title = "Provider task"
 branch = "alice/provider-task"
 body = "Provider task body"
@@ -528,7 +531,7 @@ id = "PROJ-123"
     )
     .unwrap();
     std::fs::write(
-        temp.path().join(".local/tasks/bad.toml"),
+        temp.path().join(".git/wt/tasks/bad.toml"),
         "unknown = true\n",
     )
     .unwrap();
@@ -543,13 +546,13 @@ id = "PROJ-123"
         .stdout(predicate::str::contains(
             "Provider task  Linear PROJ-123 | task provider | branch alice/provider-task | source provider-origin",
         ))
-        .stdout(predicate::str::contains("Path: .local/tasks/local.toml"))
+        .stdout(predicate::str::contains("Path: <git-common-dir>/wt/tasks/local.toml"))
         .stdout(predicate::str::contains("Origin: none"))
         .stdout(predicate::str::contains("Origin: linear:PROJ-123"))
         .stdout(predicate::str::contains("Summary: Task body"))
         .stdout(predicate::str::contains("Summary: Provider task body"))
         .stderr(predicate::str::contains(
-            "Invalid task .local/tasks/bad.toml",
+            "Invalid task <git-common-dir>/wt/tasks/bad.toml",
         ));
 }
 
@@ -561,7 +564,7 @@ fn task_import_help_explains_behavior() {
         .success()
         .stdout(predicate::str::contains("Import existing provider issues"))
         .stdout(predicate::str::contains(
-            ".local/tasks/<safe-issue-id>.toml",
+            "<git-common-dir>/wt/tasks/<safe-issue-id>.toml",
         ))
         .stdout(predicate::str::contains(
             "write title, branch, body, and [origin]",

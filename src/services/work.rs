@@ -466,10 +466,10 @@ fn explicit_task_run_path_candidate(
         return Ok(None);
     }
 
-    let Some(path) = task_run_path(ctx, raw) else {
+    let Some(path) = task_run_path(ctx, raw)? else {
         return Ok(None);
     };
-    if is_task_run_file_path(&path) {
+    if is_task_run_file_path(ctx, &path) {
         return task_run_candidate_from_path(worktrees, path).map(Some);
     }
 
@@ -494,16 +494,18 @@ fn task_run_candidate(
     worktrees: &[WorktreeEntry],
     raw: &str,
 ) -> Result<Option<WorkTargetCandidate>> {
-    let Some(path) = task_run_path(ctx, raw) else {
+    let Some(path) = task_run_path(ctx, raw)? else {
         return Ok(None);
     };
     task_run_candidate_from_path(worktrees, path).map(Some)
 }
 
-fn task_run_path(ctx: &Ctx, raw: &str) -> Option<PathBuf> {
+fn task_run_path(ctx: &Ctx, raw: &str) -> Result<Option<PathBuf>> {
     match task_run::resolve(ctx, raw) {
-        Ok(path) if path.is_file() => Some(path),
-        _ => None,
+        Ok(path) if path.is_file() => Ok(Some(path)),
+        Ok(_) => Ok(None),
+        Err(err) if err.to_string().starts_with("Task run not found:") => Ok(None),
+        Err(err) => Err(err),
     }
 }
 
@@ -529,19 +531,9 @@ fn task_run_candidate_from_path(
     })
 }
 
-fn is_task_run_file_path(path: &Path) -> bool {
+fn is_task_run_file_path(ctx: &Ctx, path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == "toml")
-        && path
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == "task-runs")
-        && path
-            .parent()
-            .and_then(|parent| parent.parent())
-            .and_then(|parent| parent.file_name())
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == ".local")
+        && path.starts_with(ctx.storage_root.task_runs_dir())
 }
 
 fn add_checked_out_branch_candidate(
@@ -1135,9 +1127,9 @@ mod tests {
     #[test]
     fn resolve_target_accepts_task_run_id_target() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1199,9 +1191,9 @@ mod tests {
     #[test]
     fn resolve_target_rejects_task_run_id_branch_collision() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1223,9 +1215,9 @@ mod tests {
     #[test]
     fn resolve_target_accepts_explicit_task_run_path_collision() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1234,7 +1226,8 @@ mod tests {
         add_worktree_list(&mut runner, &fixture);
         let ctx = fixture.ctx(runner);
 
-        let target = resolve_target(&ctx, Some(".local/task-runs/run-feature.toml")).unwrap();
+        let target =
+            resolve_target(&ctx, Some("<git-common-dir>/wt/task-runs/run-feature.toml")).unwrap();
 
         assert_eq!(target.label, "run-feature");
         assert_eq!(target.branch, "feature");

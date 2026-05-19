@@ -173,9 +173,9 @@ mod tests {
     #[tokio::test]
     async fn app_serves_static_assets_and_snapshot_route() {
         let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join(".local/tasks")).unwrap();
+        fs::create_dir_all(dir.path().join(".git/wt/tasks")).unwrap();
         fs::write(
-            dir.path().join(".local/tasks/demo.toml"),
+            dir.path().join(".git/wt/tasks/demo.toml"),
             "title = \"Demo\"\nbranch = \"feature/demo\"\nbody = \"Demo body\"\n",
         )
         .unwrap();
@@ -213,7 +213,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["tasks"]["items"][0]["path"], ".local/tasks/demo.toml");
+        assert_eq!(
+            value["tasks"]["items"][0]["path"],
+            "<git-common-dir>/wt/tasks/demo.toml"
+        );
     }
 
     #[tokio::test]

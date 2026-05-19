@@ -73,6 +73,16 @@ impl StorageRoot {
         self.personal_root.join("task-runs")
     }
 
+    pub fn task_run_path(&self, id: impl AsRef<str>) -> PathBuf {
+        let id = id.as_ref();
+        let file_name = if id.ends_with(".toml") {
+            id.to_string()
+        } else {
+            format!("{id}.toml")
+        };
+        self.task_runs_dir().join(file_name)
+    }
+
     pub fn messages_dir(&self) -> PathBuf {
         self.personal_root.join("messages")
     }
@@ -94,6 +104,46 @@ impl StorageRoot {
             })
         } else {
             None
+        }
+    }
+
+    pub fn detect_legacy_tasks(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
+        self.detect_legacy_child(repo_root, "tasks")
+    }
+
+    pub fn detect_legacy_task_runs(
+        &self,
+        repo_root: impl AsRef<Path>,
+    ) -> Option<LegacyLocalStorage> {
+        self.detect_legacy_child(repo_root, "task-runs")
+    }
+
+    fn detect_legacy_child(
+        &self,
+        repo_root: impl AsRef<Path>,
+        child: &str,
+    ) -> Option<LegacyLocalStorage> {
+        let path = repo_root.as_ref().join(".local").join(child);
+        if path.is_dir() {
+            Some(LegacyLocalStorage {
+                path,
+                canonical_root: self.personal_root.join(child),
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn display_path(&self, path: &Path) -> String {
+        if let Ok(relative) = path.strip_prefix(&self.git_common_dir) {
+            let relative = relative.to_string_lossy();
+            if relative.is_empty() {
+                "<git-common-dir>".into()
+            } else {
+                format!("<git-common-dir>/{relative}")
+            }
+        } else {
+            path.display().to_string()
         }
     }
 }

@@ -309,7 +309,7 @@ cli = "none"
     }
 
     fn write_task(root: &Path, key: &str, content: &str) {
-        let tasks_dir = root.join(".local/tasks");
+        let tasks_dir = root.join(".git/wt/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
         fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
     }
@@ -603,7 +603,7 @@ cli = "none"
     #[test]
     fn task_without_args_multi_selects_existing_tasks() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".local/tasks");
+        let tasks_dir = dir.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -654,7 +654,7 @@ cli = "none"
     #[test]
     fn task_without_args_can_select_completed_task_documents() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".local/tasks");
+        let tasks_dir = dir.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -1150,7 +1150,7 @@ cli = "none"
     #[test]
     fn workflow_show_displays_prepared_policy() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".local/tasks");
+        let tasks_dir = dir.path().join(".git/wt/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
         fs::write(
             tasks_dir.join("api.toml"),
@@ -2035,7 +2035,7 @@ landing = "auto"
                     body: String::new(),
                     origin: None,
                 },
-                path: ".local/tasks/api.toml".into(),
+                path: "<git-common-dir>/wt/tasks/api.toml".into(),
                 content: "title = \"API\"\nbranch = \"shared\"\n".into(),
                 run: task_run::TaskRun {
                     task: "api".into(),
@@ -2064,7 +2064,7 @@ landing = "auto"
                     body: String::new(),
                     origin: None,
                 },
-                path: ".local/tasks/docs.toml".into(),
+                path: "<git-common-dir>/wt/tasks/docs.toml".into(),
                 content: "title = \"Docs\"\nbranch = \"shared\"\n".into(),
                 run: task_run::TaskRun {
                     task: "docs".into(),

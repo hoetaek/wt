@@ -875,7 +875,7 @@ run = "run-2026-05-18-099-schema"
     }
 
     fn write_task(root: &Path, key: &str, branch: &str) {
-        let dir = root.join(".local/tasks");
+        let dir = root.join(".git/wt/tasks");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join(format!("{key}.toml")),
@@ -890,7 +890,7 @@ body = "Task body"
     }
 
     fn write_task_run(root: &Path, id: &str, task: &str, branch: &str, status: &str, group: &str) {
-        let dir = root.join(".local/task-runs");
+        let dir = root.join(".git/wt/task-runs");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join(format!("{id}.toml")),

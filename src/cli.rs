@@ -129,7 +129,7 @@ pub enum Commands {
     },
     /// Start a read-only local state web UI
     #[command(
-        long_about = "Start a read-only local web UI for wt state. The server binds to 127.0.0.1, serves embedded no-build assets, and exposes only allowlisted routes including GET /api/snapshot for .local ideas, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
+        long_about = "Start a read-only local web UI for wt state. The server binds to 127.0.0.1, serves embedded no-build assets, and exposes only allowlisted routes including GET /api/snapshot for .local ideas, <git-common-dir>/wt TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
     )]
     Ui {
         /// Port to bind on 127.0.0.1; 0 selects an available port
@@ -343,10 +343,10 @@ pub enum RunCommand {
     },
     /// Start one worktree per selected local TaskDocument
     #[command(
-        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
+        long_about = "Start one worktree per selected <git-common-dir>/wt/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun in <git-common-dir>/wt/task-runs.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
     )]
     Task {
-        /// Local task keys from .local/tasks/<task>.toml
+        /// Local task keys from <git-common-dir>/wt/tasks/<task>.toml
         #[arg(value_name = "TASK")]
         tasks: Vec<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
@@ -406,12 +406,12 @@ pub enum InitSiteProvider {
 pub enum TaskCommand {
     /// List saved local TaskDocument files
     #[command(
-        long_about = "List all saved .local/tasks/<task>.toml TaskDocument files.\n\nThis is the canonical read-only inventory for local TaskDocuments. It lists valid TaskDocument files whether or not they are selectable by wt run task, reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
+        long_about = "List all saved <git-common-dir>/wt/tasks/<task>.toml TaskDocument files.\n\nThis is the canonical read-only inventory for local TaskDocuments. It lists valid TaskDocument files whether or not they are selectable by wt run task, reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
     )]
     List,
     /// Import provider issues as local TaskDocuments
     #[command(
-        long_about = "Import existing provider issues into .local/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
+        long_about = "Import existing provider issues into <git-common-dir>/wt/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
     )]
     Import {
         /// Provider issue ids to import
@@ -430,10 +430,10 @@ pub enum TaskCommand {
     },
     /// Publish local TaskDocuments as provider issues
     #[command(
-        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+        long_about = "Create provider issues from selected <git-common-dir>/wt/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
     )]
     Publish {
-        /// Local task keys from .local/tasks/<task>.toml
+        /// Local task keys from <git-common-dir>/wt/tasks/<task>.toml
         #[arg(value_name = "TASK")]
         tasks: Vec<String>,
     },
@@ -1134,7 +1134,7 @@ mod tests {
             .to_string();
 
         assert!(help.contains("Import existing provider issues"));
-        assert!(help.contains(".local/tasks/<safe-issue-id>.toml"));
+        assert!(help.contains("<git-common-dir>/wt/tasks/<safe-issue-id>.toml"));
         assert!(help.contains("write title, branch, body, and [origin]"));
         assert!(help.contains("does not start workspaces"));
         assert!(help.contains("create local branches"));
