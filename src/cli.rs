@@ -1891,4 +1891,55 @@ mod tests {
             BaseMode::Explicit("develop".into())
         );
     }
+
+    #[test]
+    fn profile_list_subcommand_parses() {
+        let cli = parse(&["wt", "profile", "list"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Profile {
+                command: Some(ProfileCommand::List)
+            })
+        ));
+    }
+
+    #[test]
+    fn profile_without_subcommand_parses_as_omission_default() {
+        let cli = parse(&["wt", "profile"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Profile { command: None })
+        ));
+    }
+
+    #[test]
+    fn profile_help_describes_omission_default_and_list_subcommand() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("profile")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("omission-default"));
+        assert!(help.contains("wt profile list"));
+        assert!(help.contains("list"));
+        assert!(help.contains("create"));
+    }
+
+    #[test]
+    fn profile_list_help_describes_invalid_profile_reporting() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("profile")
+            .unwrap()
+            .find_subcommand_mut("list")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("List named profile configs"));
+        assert!(help.contains("invalid_profiles"));
+        assert!(help.contains("deterministic"));
+    }
 }

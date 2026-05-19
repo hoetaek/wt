@@ -48,17 +48,10 @@ fn list(ctx: &Ctx) -> Result<()> {
     }
 
     for record in &inventory.profiles {
-        let copy_count = record.config.worktree.copy.len() + record.config.worktree.copy_as.len();
-        let link_count = record.config.worktree.link.len();
-        let agent = record
-            .config
-            .agent
-            .as_ref()
-            .map(|agent| agent_cli_name(&agent.cli))
-            .unwrap_or("none");
-        let name = &record.name;
+        let summary = ProfileSummary::from_config(&record.name, &record.config);
         ctx.ui.print_step(&format!(
-            "  {name}  (copy: {copy_count}, link: {link_count}, agent: {agent})"
+            "  {}  (copy: {}, link: {}, agent: {})",
+            summary.name, summary.copy_count, summary.link_count, summary.agent
         ));
     }
 
@@ -618,27 +611,90 @@ cli = "codex"
 
     #[test]
     fn list_subcommand_dispatches_to_inventory() {
+        struct SharedUi {
+            steps: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl UserInterface for SharedUi {
+            fn select(&self, _prompt: &str, _items: &[String]) -> Result<usize> {
+                unreachable!()
+            }
+
+            fn multi_select(&self, _prompt: &str, _items: &[String]) -> Result<Vec<usize>> {
+                unreachable!()
+            }
+
+            fn confirm(&self, _prompt: &str, _default: bool) -> Result<bool> {
+                unreachable!()
+            }
+
+            fn input(&self, _prompt: &str, _default: Option<&str>) -> Result<String> {
+                unreachable!()
+            }
+
+            fn print_step(&self, msg: &str) {
+                self.steps.lock().unwrap().push(msg.into());
+            }
+
+            fn print_dim(&self, _msg: &str) {}
+
+            fn print_warning(&self, _msg: &str) {}
+
+            fn print_error(&self, _msg: &str) {}
+        }
+
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".local/profiles/codex");
-        std::fs::create_dir_all(&profile_dir).unwrap();
+        let claude_dir = dir.path().join(".local/profiles/claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
         std::fs::write(
-            profile_dir.join("profile.toml"),
-            r#"
-[agent]
-cli = "codex"
-"#,
+            claude_dir.join("profile.toml"),
+            "[agent]\ncli = \"claude\"\n",
         )
         .unwrap();
 
+        let codex_dir = dir.path().join(".local/profiles/codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        std::fs::write(codex_dir.join("profile.toml"), "[agent]\ncli = \"codex\"\n").unwrap();
+
+        let steps = Arc::new(Mutex::new(Vec::new()));
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
             Config::default(),
             Box::new(MockRunner::new()),
-            Box::new(MockUi::new()),
+            Box::new(SharedUi {
+                steps: Arc::clone(&steps),
+            }),
         );
 
         run(&ctx, Some(&ProfileCommand::List)).unwrap();
+
+        let recorded = steps.lock().unwrap().clone();
+        assert!(
+            recorded
+                .iter()
+                .any(|line| line.contains("claude  (copy: 0, link: 0, agent: claude)")),
+            "expected claude profile row, got: {recorded:?}"
+        );
+        assert!(
+            recorded
+                .iter()
+                .any(|line| line.contains("codex  (copy: 0, link: 0, agent: codex)")),
+            "expected codex profile row, got: {recorded:?}"
+        );
+
+        let claude_idx = recorded
+            .iter()
+            .position(|line| line.contains("claude  ("))
+            .expect("claude row missing");
+        let codex_idx = recorded
+            .iter()
+            .position(|line| line.contains("codex  ("))
+            .expect("codex row missing");
+        assert!(
+            claude_idx < codex_idx,
+            "expected deterministic alphabetical order (claude before codex), got: {recorded:?}"
+        );
     }
 
     #[test]
