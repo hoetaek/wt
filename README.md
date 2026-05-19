@@ -291,6 +291,14 @@ merge.
   future agent CLI commands receive the same launch-time environment binding.
   `wt agent hook uninstall codex` removes only wt-managed Codex hook and trust
   entries.
+- `wt codex` and `wt claude` launch those agent CLIs with
+  `WT_AGENT_ID=agents/<branch_slug>` and
+  `WT_COORDINATOR_AGENT_ID=agents/coordinator`. In the same worktree, pass a
+  leading role such as `wt codex @planner` or `wt claude @reviewer` to use a
+  separate inbox like `agents/<branch_slug>-planner`; role launches never
+  consume the default worktree inbox.
+- `wt as <agent-id> -- <command...>` is the low-level escape hatch for unusual
+  agent commands or scripts that need an explicit inbox identity.
 
 `wt workflow` is the canonical prepared-work surface. `single`, `batch`,
 `stack`, and `matrix` are workflow mode values, not separate command surfaces. Use
@@ -520,6 +528,9 @@ there for one named profile.
 | `wt agent hook uninstall claude` | Remove wt-managed Claude Code inbox hook entries |
 | `wt agent hook install codex` | Install Codex file inbox delivery through a user-level trusted dispatcher hook |
 | `wt agent hook uninstall codex` | Remove wt-managed Codex inbox hook and trust entries |
+| `wt codex [@role]` | Launch Codex with a derived worktree agent identity |
+| `wt claude [@role]` | Launch Claude with a derived worktree agent identity |
+| `wt as <agent-id> -- <command...>` | Run any command with an explicit wt agent identity |
 | `wt send` | Send a message to the matching task agent surface |
 | `wt done` | Remove completed or disposable worktrees and branches |
 | `wt config` | Print, edit, extract, or inline config |

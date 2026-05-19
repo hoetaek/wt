@@ -8,6 +8,14 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added short agent runtime wrappers: `wt codex`, `wt claude`, and
+  `wt as <agent-id> -- <command...>`. The known-agent wrappers derive
+  `WT_AGENT_ID=agents/<branch_slug>` from the current worktree and support
+  same-worktree role identities such as `wt codex @planner`, which uses
+  `agents/<branch_slug>-planner` instead of consuming the default inbox.
+- Bumped the package version to `0.37.0` because the new root-level agent
+  launch commands extend the user-facing CLI surface.
+
 - Refactored `wt agent hook install claude` to install a worktree-local
   `WT_AGENT_ID` dispatcher hook by default, matching the Codex runtime identity
   model while preserving `--agent <agent>` as a manual/test override.

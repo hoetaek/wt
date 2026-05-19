@@ -173,6 +173,34 @@ fn write_fake_gh(_path: &Path) -> std::path::PathBuf {
     panic!("fake gh test helper is only implemented for Unix test environments")
 }
 
+#[cfg(unix)]
+fn write_fake_agent(path: &Path, name: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = path.join("fake-agent-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let agent = bin.join(name);
+    std::fs::write(
+        &agent,
+        r#"#!/bin/sh
+printf 'WT_AGENT_ID=%s\n' "${WT_AGENT_ID:-}"
+printf 'WT_COORDINATOR_AGENT_ID=%s\n' "${WT_COORDINATOR_AGENT_ID:-}"
+printf 'ARGS=%s\n' "$*"
+printf 'PWD=%s\n' "$PWD"
+"#,
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&agent).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&agent, permissions).unwrap();
+    bin
+}
+
+#[cfg(not(unix))]
+fn write_fake_agent(_path: &Path, _name: &str) -> std::path::PathBuf {
+    panic!("fake agent test helper is only implemented for Unix test environments")
+}
+
 fn write_task_document(root: &Path, key: &str, branch: &str) {
     let dir = root.join(".git/wt/tasks");
     std::fs::create_dir_all(&dir).unwrap();
@@ -2327,6 +2355,146 @@ fn agent_hook_claude_dispatcher_noops_without_runtime_identity() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_wrapper_sets_default_agent_id_from_current_worktree_branch() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let status = git_command()
+        .args(["checkout", "-b", "alice/feat-add-schema"])
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let fake_bin = write_fake_agent(temp.path(), "codex");
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "codex"])
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "WT_AGENT_ID=agents/feat-add-schema\n",
+        ))
+        .stdout(predicate::str::contains(
+            "WT_COORDINATOR_AGENT_ID=agents/coordinator\n",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_wrapper_role_uses_distinct_same_worktree_agent_id() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let status = git_command()
+        .args(["checkout", "-b", "alice/feat-add-schema"])
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let fake_bin = write_fake_agent(temp.path(), "codex");
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "codex", "@planner"])
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "WT_AGENT_ID=agents/feat-add-schema-planner\n",
+        ))
+        .stdout(predicate::str::contains(
+            "WT_COORDINATOR_AGENT_ID=agents/coordinator\n",
+        ))
+        .stdout(predicate::str::contains("WT_AGENT_ID=agents/feat-add-schema\n").not());
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_wrapper_role_uses_distinct_same_worktree_agent_id() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let status = git_command()
+        .args(["checkout", "-b", "alice/feat-add-schema"])
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "claude", "@reviewer"])
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "WT_AGENT_ID=agents/feat-add-schema-reviewer\n",
+        ))
+        .stdout(predicate::str::contains(
+            "WT_COORDINATOR_AGENT_ID=agents/coordinator\n",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
+fn as_wrapper_uses_explicit_agent_id_for_arbitrary_command() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let fake_bin = write_fake_agent(temp.path(), "probe-agent");
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "as",
+            "agents/manual-reviewer",
+            "--",
+            "probe-agent",
+            "hello",
+            "there",
+        ])
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "WT_AGENT_ID=agents/manual-reviewer\n",
+        ))
+        .stdout(predicate::str::contains("ARGS=hello there\n"));
+}
+
+#[test]
+fn agent_runtime_wrapper_help_explains_role_separation() {
+    wt_command()
+        .args(["codex", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("WT_AGENT_ID"))
+        .stdout(predicate::str::contains("wt codex @planner"))
+        .stdout(predicate::str::contains(
+            "multiple agents do not consume each other's messages",
+        ));
+
+    wt_command()
+        .args(["claude", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("WT_AGENT_ID"))
+        .stdout(predicate::str::contains("wt claude @coordinator"))
+        .stdout(predicate::str::contains(
+            "multiple agents do not consume each other's messages",
+        ));
+
+    wt_command()
+        .args(["as", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("explicit WT_AGENT_ID"))
+        .stdout(predicate::str::contains("wt as <AGENT> -- <COMMAND>"));
 }
 
 #[test]

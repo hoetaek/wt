@@ -127,6 +127,51 @@ pub enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Launch Codex with the current worktree's wt agent identity
+    #[command(
+        long_about = "Launch Codex with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID=agents/coordinator.\n\nUse `wt codex` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt codex @planner` or `wt codex @reviewer` to launch a separate inbox like `agents/<branch_slug>-planner`, so multiple agents do not consume each other's messages. Extra Codex arguments are passed through after the optional role."
+    )]
+    Codex {
+        /// Optional @role followed by arguments passed to codex
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
+    },
+    /// Launch Claude with the current worktree's wt agent identity
+    #[command(
+        long_about = "Launch Claude with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID=agents/coordinator.\n\nUse `wt claude` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt claude @coordinator` or `wt claude @reviewer` to launch a separate inbox like `agents/<branch_slug>-coordinator`, so multiple agents do not consume each other's messages. Extra Claude arguments are passed through after the optional role."
+    )]
+    Claude {
+        /// Optional @role followed by arguments passed to claude
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
+    },
+    /// Run any command with an explicit wt agent identity
+    #[command(
+        long_about = "Run any command with an explicit WT_AGENT_ID and WT_COORDINATOR_AGENT_ID=agents/coordinator.\n\nUse `wt as <AGENT> -- <COMMAND>` as the low-level escape hatch for scripts, unusual agent CLIs, or identities that should not be derived from the current branch. For daily Codex and Claude launches, prefer `wt codex`, `wt codex @planner`, `wt claude`, or `wt claude @reviewer`."
+    )]
+    As {
+        /// Agent id as NAME or agents/NAME
+        agent: String,
+        /// Command to run with WT_AGENT_ID set
+        #[arg(
+            value_name = "COMMAND",
+            required = true,
+            num_args = 1..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        command: Vec<String>,
+    },
     /// Start a read-only personal state web UI
     #[command(
         long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, serves embedded no-build assets, and exposes only allowlisted routes including GET /api/snapshot for legacy repo-root ideas and retrospecs, plus <git-common-dir>/wt TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."

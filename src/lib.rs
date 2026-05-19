@@ -24,6 +24,7 @@ use cli::{
     AgentCommand, AgentHookCommand, AgentHookInstallCommand, AgentHookUninstallCommand, Commands,
     ConfigCommand, MsgCommand, RunCommand, TaskCommand, WorkflowCommand,
 };
+use commands::agent_runtime::KnownAgentCli;
 use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
@@ -176,6 +177,13 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 },
             },
         },
+        Commands::Codex { args } => {
+            commands::agent_runtime::run_known(ctx, KnownAgentCli::Codex, args)
+        }
+        Commands::Claude { args } => {
+            commands::agent_runtime::run_known(ctx, KnownAgentCli::Claude, args)
+        }
+        Commands::As { agent, command } => commands::agent_runtime::run_as(ctx, agent, command),
         Commands::Ui { port } => commands::ui::run(ctx, *port),
         Commands::Msg { command } => match command {
             MsgCommand::Send { to, message } => commands::msg::send(ctx, to, message),

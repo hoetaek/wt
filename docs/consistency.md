@@ -247,18 +247,44 @@ coordinator target을 제공해야 한다. `<branch_slug>`는 message MVP의 `ag
 제약과 맞도록 path separator가 없는 값이어야 하고, `wt msg send --to <branch_slug>`와
 `wt msg check-inbox --agent "$WT_AGENT_ID"`가 같은 inbox를 보아야 한다.
 Claude와 future agent CLI도 wt가 process launch를 소유하는 경로에서는 같은
-launch-time `WT_AGENT_ID` shape를 받아야 한다. Hook adapter install은 capability setup이고,
-agent identity는 run/session launch의 책임이다.
+launch-time `WT_AGENT_ID` shape를 받아야 한다.
 
-수동으로 agent id를 지정해 agent command를 실행하는 wrapper가 필요하면 canonical 후보는
-다음 짧은 형태다.
+### Agent Runtime Wrapper
+
+Hook adapter install은 capability setup이고, agent identity는 run/session launch의 책임이다.
+Normal daily launch의 canonical surface는 agent CLI 이름을 그대로 쓰는 짧은 wrapper다.
+
+```bash
+wt codex
+wt claude
+```
+
+이 두 명령은 현재 git branch에서 `<branch_slug>`를 계산해 `WT_AGENT_ID=agents/<branch_slug>`와
+`WT_COORDINATOR_AGENT_ID=agents/coordinator`를 agent process에 주입한다. 사용자가 직접
+`codex` 또는 `claude`를 실행하면 wt는 환경변수를 주입하지 않으며, hook dispatcher는
+`WT_AGENT_ID`가 없을 때 조용히 no-op 한다.
+
+같은 worktree에서 여러 agent를 띄울 때는 첫 positional argument로 role을 명시한다.
+
+```bash
+wt codex @planner
+wt claude @reviewer
+```
+
+Role launch는 `agents/<branch_slug>-<role>`을 사용한다. 예를 들어 branch
+`alice/feat-add-schema`에서 `wt codex`는 `agents/feat-add-schema`, `wt codex @planner`는
+`agents/feat-add-schema-planner`를 사용한다. Role launch는 같은 worktree의 default inbox를
+소비하면 안 된다. 이 분리가 same-worktree multi-agent 충돌 방지 contract다.
+
+수동으로 agent id를 지정해 agent command를 실행하는 low-level escape hatch는 다음 형태다.
 
 ```bash
 wt as <agent-id> -- <command...>
-wt as main/coordinator -- codex
+wt as agents/coordinator -- codex
 ```
 
-긴 `wt agent shell --agent <agent> ...` 형태를 최종 UX로 문서화하지 않는다.
+`wt as`는 explicit `WT_AGENT_ID`를 그대로 쓰고, `WT_COORDINATOR_AGENT_ID=agents/coordinator`를
+함께 주입한다. 긴 `wt agent shell --agent <agent> ...` 형태를 최종 UX로 문서화하지 않는다.
 
 Reinstall은 wt-managed Codex dispatcher hook을 하나만 남기는 idempotent operation이다.
 Uninstall은 wt-managed Codex `UserPromptSubmit` dispatcher entry와 matching trust state만
