@@ -140,7 +140,7 @@ Use a matrix workflow with exactly one task and the selected profile list:
   --profiles <profile-a>,<profile-b>,<profile-c> \
   --base <base> \
   --pr draft \
-  --objective "<comparison objective>" \
+  --title "<comparison objective>" \
   <task-key>
 ```
 

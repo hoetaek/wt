@@ -1063,23 +1063,98 @@ fn init_rejects_conflicting_preset_and_minimal() {
 
 #[test]
 fn completion_generates_script() {
-    wt_command()
+    let output = wt_command()
         .args(["completion", "bash"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("_wt"))
-        .stdout(predicate::str::contains("run"))
-        .stdout(predicate::str::contains("issue"))
-        .stdout(predicate::str::contains("pr"))
-        .stdout(predicate::str::contains("branch"))
-        .stdout(predicate::str::contains("task"))
-        .stdout(predicate::str::contains("workflow"))
-        .stdout(predicate::str::contains("__wt_removed_").not())
-        .stdout(predicate::str::contains("wt,new)").not())
-        .stdout(predicate::str::contains("wt,issue)").not())
-        .stdout(predicate::str::contains("wt,pr)").not())
-        .stdout(predicate::str::contains("wt__subcmd__task,run").not())
-        .stdout(predicate::str::contains("wt__subcmd__workflow,run").not());
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("_wt"));
+    assert_canonical_completion_surface("bash", &output);
+    assert_bash_completion_syntax(&output);
+}
+
+#[test]
+fn all_completion_shells_hide_removed_start_commands() {
+    for shell in ["bash", "zsh", "fish", "elvish", "powershell"] {
+        let output = wt_command()
+            .args(["completion", shell])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let output = String::from_utf8(output).unwrap();
+        assert_canonical_completion_surface(shell, &output);
+    }
+}
+
+fn assert_canonical_completion_surface(shell: &str, output: &str) {
+    for required in ["run", "issue", "pr", "branch", "task", "workflow"] {
+        assert!(
+            output.contains(required),
+            "{shell} completion should contain {required}"
+        );
+    }
+
+    for stale in [
+        "__wt_removed_",
+        "wt issue",
+        "wt pr ",
+        "wt new",
+        "wt task run",
+        "wt workflow run",
+        "wt,issue)",
+        "wt,pr)",
+        "wt,new)",
+        "wt__subcmd__issue",
+        "wt__subcmd__pr)",
+        "wt__subcmd__pr,",
+        "wt__subcmd__new",
+        "wt__subcmd__task,run",
+        "wt__subcmd__workflow,run",
+        "_wt__subcmd__issue",
+        "_wt__subcmd__pr_commands",
+        "_wt__subcmd__new",
+        "_wt__subcmd__task__subcmd__run",
+        "_wt__subcmd__workflow__subcmd__run",
+        "__fish_wt_using_subcommand issue\"",
+        "__fish_wt_using_subcommand pr\"",
+        "__fish_wt_using_subcommand new\"",
+        "__fish_seen_subcommand_from new",
+        "__fish_seen_subcommand_from task run",
+        "__fish_seen_subcommand_from workflow run",
+        "cand ''",
+        "[CompletionResult]::new('',",
+        "'wt;issue'",
+        "'wt;pr'",
+        "'wt;new'",
+        "'wt;task;run'",
+        "'wt;workflow;run'",
+        "&'wt;issue'",
+        "&'wt;pr'",
+        "&'wt;new'",
+        "&'wt;task;run'",
+        "&'wt;workflow;run'",
+    ] {
+        assert!(
+            !output.contains(stale),
+            "{shell} completion should not contain stale surface {stale:?}"
+        );
+    }
+}
+
+fn assert_bash_completion_syntax(output: &str) {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("wt-completion.bash");
+    std::fs::write(&path, output).unwrap();
+    let Ok(status) = StdCommand::new("bash").arg("-n").arg(&path).status() else {
+        return;
+    };
+    assert!(status.success());
 }
 
 #[test]

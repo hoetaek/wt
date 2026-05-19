@@ -53,7 +53,7 @@ fn try_main() -> Result<()> {
             let mut buffer = Vec::new();
             clap_complete::generate(*shell, &mut command, bin_name, &mut buffer);
             let script = String::from_utf8(buffer)?;
-            io::stdout().write_all(strip_removed_completion_entries(&script).as_bytes())?;
+            io::stdout().write_all(strip_removed_completion_entries(*shell, &script).as_bytes())?;
             return Ok(());
         }
         _ => {}
@@ -131,24 +131,7 @@ fn try_main() -> Result<()> {
     wt::dispatch(&ctx, command)
 }
 
-const HIDDEN_COMPLETION_NAMES: [&str; 16] = [
-    "__wt_removed_0",
-    "__wt_removed_1",
-    "__wt_removed_2",
-    "__wt_removed_3",
-    "__wt_removed_4",
-    "__wt_removed_5",
-    "__wt_removed_6",
-    "__wt_removed_7",
-    "__wt_removed_8",
-    "__wt_removed_9",
-    "__wt_removed_10",
-    "__wt_removed_11",
-    "__wt_removed_12",
-    "__wt_removed_13",
-    "__wt_removed_14",
-    "__wt_removed_15",
-];
+const HIDDEN_COMPLETION_PREFIX: &str = "__wt_removed_";
 
 fn completion_command() -> ClapCommand {
     let mut hidden_index = 0;
@@ -162,10 +145,8 @@ fn rename_hidden_subcommands(command: ClapCommand, hidden_index: &mut usize) -> 
         if is_hidden {
             // AOT completion scripts still walk hidden parser traps; keep them
             // unreachable without teaching removed command names to shells.
-            let hidden_name = HIDDEN_COMPLETION_NAMES
-                .get(*hidden_index)
-                .copied()
-                .unwrap_or("__wt_removed_extra");
+            let hidden_name: &'static str =
+                Box::leak(format!("{HIDDEN_COMPLETION_PREFIX}{hidden_index}").into_boxed_str());
             *hidden_index += 1;
             subcommand.name(hidden_name)
         } else {
@@ -174,35 +155,65 @@ fn rename_hidden_subcommands(command: ClapCommand, hidden_index: &mut usize) -> 
     })
 }
 
-fn strip_removed_completion_entries(script: &str) -> String {
+fn strip_removed_completion_entries(shell: clap_complete::Shell, script: &str) -> String {
     let mut output = String::new();
-    let mut skipping_removed_block = false;
+    let mut skipping_removed_case_arm_depth: Option<usize> = None;
 
     for line in script.lines() {
         let trimmed = line.trim_start();
-        if !skipping_removed_block
-            && HIDDEN_COMPLETION_NAMES
-                .iter()
-                .any(|name| trimmed.contains(name))
-            && trimmed.ends_with(')')
-        {
-            skipping_removed_block = true;
-            continue;
-        }
-
-        if skipping_removed_block {
-            if trimmed == ";;" {
-                skipping_removed_block = false;
+        if let Some(case_depth) = skipping_removed_case_arm_depth.as_mut() {
+            if trimmed.starts_with("case ") {
+                *case_depth += 1;
+            } else if trimmed == "esac" {
+                *case_depth = case_depth.saturating_sub(1);
+            } else if *case_depth == 0 && trimmed == ";;" {
+                skipping_removed_case_arm_depth = None;
             }
             continue;
         }
 
-        let cleaned = strip_removed_completion_tokens(line);
-        if cleaned.trim().is_empty()
-            && HIDDEN_COMPLETION_NAMES
-                .iter()
-                .any(|name| line.contains(name))
+        if matches!(
+            shell,
+            clap_complete::Shell::Fish
+                | clap_complete::Shell::Elvish
+                | clap_complete::Shell::PowerShell
+        ) && contains_hidden_completion_name(trimmed)
         {
+            continue;
+        }
+
+        if matches!(shell, clap_complete::Shell::Zsh)
+            && contains_hidden_completion_name(trimmed)
+            && (trimmed.starts_with('\'') || trimmed.starts_with('"'))
+        {
+            continue;
+        }
+
+        if contains_hidden_completion_name(trimmed)
+            && (trimmed.starts_with(HIDDEN_COMPLETION_PREFIX)
+                || trimmed
+                    .strip_prefix("case ")
+                    .is_some_and(|rest| rest.starts_with(HIDDEN_COMPLETION_PREFIX)))
+        {
+            continue;
+        }
+
+        if matches!(
+            shell,
+            clap_complete::Shell::Bash | clap_complete::Shell::Zsh
+        ) && contains_hidden_completion_name(trimmed)
+            && trimmed.ends_with(')')
+        {
+            skipping_removed_case_arm_depth = Some(0);
+            continue;
+        }
+
+        if !trimmed.contains(' ') && contains_hidden_completion_name(trimmed) {
+            continue;
+        }
+
+        let cleaned = strip_removed_completion_tokens(line);
+        if cleaned.trim().is_empty() && contains_hidden_completion_name(line) {
             continue;
         }
         output.push_str(&cleaned);
@@ -212,14 +223,50 @@ fn strip_removed_completion_entries(script: &str) -> String {
     output
 }
 
+fn contains_hidden_completion_name(line: &str) -> bool {
+    line.contains(HIDDEN_COMPLETION_PREFIX)
+}
+
 fn strip_removed_completion_tokens(line: &str) -> String {
     let mut cleaned = line.to_string();
-    for name in HIDDEN_COMPLETION_NAMES {
-        cleaned = cleaned.replace(&format!(" {name}"), "");
-        cleaned = cleaned.replace(&format!("{name} "), "");
-        cleaned = cleaned.replace(name, "");
+
+    while let Some(start) = cleaned.find(HIDDEN_COMPLETION_PREFIX) {
+        let end = hidden_completion_name_end(&cleaned, start);
+        let (start, end) = expand_hidden_completion_token_range(&cleaned, start, end);
+        cleaned.replace_range(start..end, "");
     }
+
     cleaned
+}
+
+fn hidden_completion_name_end(line: &str, start: usize) -> usize {
+    let mut end = start + HIDDEN_COMPLETION_PREFIX.len();
+    for (offset, ch) in line[end..].char_indices() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            end = start + HIDDEN_COMPLETION_PREFIX.len() + offset + ch.len_utf8();
+        } else {
+            return end;
+        }
+    }
+    line.len()
+}
+
+fn expand_hidden_completion_token_range(line: &str, start: usize, end: usize) -> (usize, usize) {
+    if start > 0 {
+        let previous = line[..start].chars().next_back().unwrap();
+        if previous.is_whitespace() {
+            return (start - previous.len_utf8(), end);
+        }
+    }
+
+    if end < line.len() {
+        let next = line[end..].chars().next().unwrap();
+        if next.is_whitespace() {
+            return (start, end + next.len_utf8());
+        }
+    }
+
+    (start, end)
 }
 
 fn effective_color(cli: &Cli) -> ColorMode {
