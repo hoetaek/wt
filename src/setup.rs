@@ -1633,6 +1633,190 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_agent_waits_for_claude_ready_and_submits_with_enter_key() {
+        use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let mut runner = MockRunner::new();
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response("ready ❯", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        let agent = AgentConfig {
+            cli: AgentCli::Claude,
+            args: Vec::new(),
+            command: None,
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 1,
+            send_after: 0,
+            prompt: HashMap::from([(
+                "issue".into(),
+                vec!["claude start {{api_url}} on {{task_agent_cmux_surface}}\n".into()],
+            )]),
+        };
+        let vars = HashMap::from([("api_url".into(), "http://127.0.0.1:15002".into())]);
+
+        bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &vars).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let cmux_calls: Vec<&(String, Vec<String>, Option<PathBuf>)> =
+            calls.iter().filter(|(cmd, _, _)| cmd == "cmux").collect();
+        let send_idx = cmux_calls
+            .iter()
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "send"))
+            .expect("expected cmux send call");
+        let send_key_idx = cmux_calls
+            .iter()
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "send-key"))
+            .expect("expected cmux send-key call");
+        assert!(
+            send_idx < send_key_idx,
+            "send must precede send-key for claude auto submit"
+        );
+        let send_call = cmux_calls[send_idx];
+        assert_eq!(
+            send_call.1.last().unwrap(),
+            "claude start http://127.0.0.1:15002 on surface:0"
+        );
+        let send_key_call = cmux_calls[send_key_idx];
+        assert_eq!(
+            send_key_call.1,
+            vec![
+                "send-key",
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1",
+                "enter"
+            ]
+        );
+    }
+
+    #[test]
+    fn bootstrap_agent_waits_for_gemini_ready_and_submits_with_enter_key() {
+        use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let mut runner = MockRunner::new();
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response("gemini ready", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        let agent = AgentConfig {
+            cli: AgentCli::Gemini,
+            args: Vec::new(),
+            command: None,
+            ready: ReadyMode::Marker("gemini ready".into()),
+            submit: SubmitMode::Auto,
+            timeout: 1,
+            send_after: 0,
+            prompt: HashMap::from([(
+                "issue".into(),
+                vec!["gemini start {{api_url}} on {{task_agent_cmux_surface}}\n".into()],
+            )]),
+        };
+        let vars = HashMap::from([("api_url".into(), "http://127.0.0.1:15003".into())]);
+
+        bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &vars).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let cmux_calls: Vec<&(String, Vec<String>, Option<PathBuf>)> =
+            calls.iter().filter(|(cmd, _, _)| cmd == "cmux").collect();
+        let send_idx = cmux_calls
+            .iter()
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "send"))
+            .expect("expected cmux send call");
+        let send_key_idx = cmux_calls
+            .iter()
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "send-key"))
+            .expect("expected cmux send-key call");
+        assert!(
+            send_idx < send_key_idx,
+            "send must precede send-key for gemini auto submit"
+        );
+        let send_call = cmux_calls[send_idx];
+        assert_eq!(
+            send_call.1.last().unwrap(),
+            "gemini start http://127.0.0.1:15003 on surface:0"
+        );
+        let send_key_call = cmux_calls[send_key_idx];
+        assert_eq!(
+            send_key_call.1,
+            vec![
+                "send-key",
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1",
+                "enter"
+            ]
+        );
+    }
+
+    #[test]
     fn bootstrap_agent_no_configured_prompts_is_noop() {
         let runner = Arc::new(MockRunner::new());
         let ctx = bootstrap_test_ctx(Arc::clone(&runner));
