@@ -8,6 +8,13 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added `wt install` and `wt uninstall` as the short setup surface for wt-managed
+  agent inbox hooks. `wt install` detects supported agent CLIs on PATH and
+  installs the matching Claude/Codex `WT_AGENT_ID` dispatcher hooks, while
+  `wt uninstall` removes only wt-managed hook entries.
+- Bumped the package version to `0.38.0` because the unified install/uninstall
+  commands extend the user-facing CLI surface.
+
 - Added short agent runtime wrappers: `wt codex`, `wt claude`, and
   `wt as <agent-id> -- <command...>`. The known-agent wrappers derive
   `WT_AGENT_ID=agents/<branch_slug>` from the current worktree and support

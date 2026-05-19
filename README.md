@@ -268,6 +268,10 @@ merge.
   transitions by default; `--timeout <seconds>` bounds the wait, and
   `--heartbeat <seconds>` opts into unchanged running reports. Agent state is
   separate from `TaskRun.status`.
+- `wt install` scans PATH for supported agent CLIs and installs the matching
+  wt-managed inbox hooks. Today that means Claude Code and Codex dispatcher
+  hooks. `wt uninstall` removes those wt-managed hooks while preserving
+  user-managed hooks, cmux hooks, and unrelated trust state.
 - `wt agent hook install claude` installs a Claude-specific Claude Code
   `UserPromptSubmit` hook dispatcher in worktree-local
   `.claude/settings.local.json`. The hook reads `WT_AGENT_ID` at runtime, runs
@@ -524,6 +528,8 @@ there for one named profile.
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
 | `wt agent status` | Observe the matching task agent surface once |
 | `wt agent watch` | Poll the matching task agent surface, with optional timeout and heartbeat |
+| `wt install` | Install wt-managed hooks for detected agent CLIs |
+| `wt uninstall` | Remove wt-managed agent hooks |
 | `wt agent hook install claude` | Install Claude Code file inbox delivery through local hooks |
 | `wt agent hook uninstall claude` | Remove wt-managed Claude Code inbox hook entries |
 | `wt agent hook install codex` | Install Codex file inbox delivery through a user-level trusted dispatcher hook |

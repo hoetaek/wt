@@ -127,6 +127,16 @@ pub enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Install hooks for detected agent CLIs
+    #[command(
+        long_about = "Install wt-managed inbox hooks for detected agent CLIs.\n\n`wt install` scans PATH for supported agent commands such as `claude` and `codex`, then installs the matching WT_AGENT_ID dispatcher hooks. Hook installation is capability setup only; per-session identity still comes from `wt codex`, `wt claude`, `wt as`, or wt-launched run/workflow sessions."
+    )]
+    Install,
+    /// Uninstall wt-managed agent hooks
+    #[command(
+        long_about = "Uninstall wt-managed inbox hooks for supported agent CLIs.\n\n`wt uninstall` removes wt-managed Claude and Codex hook entries while preserving user-managed hooks, cmux hooks, and unrelated trust state."
+    )]
+    Uninstall,
     /// Launch Codex with the current worktree's wt agent identity
     #[command(
         long_about = "Launch Codex with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID=agents/coordinator.\n\nUse `wt codex` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt codex @planner` or `wt codex @reviewer` to launch a separate inbox like `agents/<branch_slug>-planner`, so multiple agents do not consume each other's messages. Extra Codex arguments are passed through after the optional role."

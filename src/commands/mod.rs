@@ -9,6 +9,7 @@ pub mod done;
 pub mod editor;
 pub mod init;
 pub mod inspect;
+pub mod install;
 pub mod issue;
 pub mod issue_selection;
 pub mod list;

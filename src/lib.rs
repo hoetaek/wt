@@ -177,6 +177,8 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 },
             },
         },
+        Commands::Install => commands::install::install(ctx),
+        Commands::Uninstall => commands::install::uninstall(ctx),
         Commands::Codex { args } => {
             commands::agent_runtime::run_known(ctx, KnownAgentCli::Codex, args)
         }

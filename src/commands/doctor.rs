@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 const CODEX_HOOK_INSTALL_HINT: &str =
     "Run cmux hooks codex install --yes to enable reliable Codex status events.";
-const CODEX_WT_HOOK_INSTALL_HINT: &str = "Run wt agent hook install codex to enable wt inbox delivery through the Codex WT_AGENT_ID dispatcher hook.";
+const CODEX_WT_HOOK_INSTALL_HINT: &str =
+    "Run wt install to enable wt inbox delivery through detected agent hook dispatchers.";
 const CODEX_CMUX_HOOK_EVENTS: [(&str, &str); 5] = [
     ("PermissionRequest", "permission_request"),
     ("PreToolUse", "pre_tool_use"),

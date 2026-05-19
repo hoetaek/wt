@@ -177,6 +177,33 @@ Tracked agent instruction file이 이미 있으면 agent가 지원하는 local o
 명시적 opt-in 명령을 요구하거나, clear guidance와 함께 실패한다. Tracked file을 silent patch
 하지 않는다.
 
+### Unified Agent Hook Setup
+
+One-shot hook setup의 canonical surface는 다음 두 명령이다.
+
+```bash
+wt install
+wt uninstall
+```
+
+`wt install`은 PATH에서 지원되는 agent CLI를 감지한 뒤 해당 adapter의 dispatcher hook을
+설치한다. 현재 지원 대상은 `claude`와 `codex`다. 이 명령은 hook capability setup만 수행하며,
+특정 `WT_AGENT_ID`를 영구로 hook에 묶지 않는다. Agent identity는 `wt codex`, `wt claude`,
+`wt as`, 또는 `wt run ...`이 agent process를 시작할 때 주입한다.
+
+`wt uninstall`은 감지 여부와 무관하게 wt-managed Claude/Codex hook을 제거한다. 사용자가 작성한
+hook, cmux hook, unrelated trust state는 보존한다. Provider나 agent runtime이 없어도 uninstall은
+가능한 정리만 수행해야 한다.
+
+고급/테스트용 adapter별 escape hatch는 계속 유지한다.
+
+```bash
+wt agent hook install claude
+wt agent hook install codex
+wt agent hook uninstall claude
+wt agent hook uninstall codex
+```
+
 ### Claude Hook Adapter
 
 Claude Code inbox polling의 canonical install surface는 다음 두 명령이다.
