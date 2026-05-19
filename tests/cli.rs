@@ -1470,13 +1470,13 @@ fn config_rejects_legacy_new_workspace_color_key() {
 }
 
 #[test]
-fn config_renders_enabled_workspace_chrome_devtools_defaults() {
+fn config_renders_workspace_chrome_devtools_browser_policy_defaults() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     std::fs::create_dir_all(temp.path().join(".local")).unwrap();
     std::fs::write(
         temp.path().join(".local/.wt.toml"),
-        "[workspace]\nopen_url = \"{{site_url}}/dashboard\"\n\n[workspace.chrome_devtools]\nenabled = true\n",
+        "[workspace.browser]\nmode = \"chrome_devtools\"\nurl = \"{{site_url}}/dashboard\"\n",
     )
     .unwrap();
 
@@ -1484,12 +1484,14 @@ fn config_renders_enabled_workspace_chrome_devtools_defaults() {
         .args(["-C", temp.path().to_str().unwrap(), "config"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("[workspace.browser]"))
+        .stdout(predicate::str::contains("mode = \"chrome_devtools\""))
+        .stdout(predicate::str::contains("url = \"{{site_url}}/dashboard\""))
         .stdout(predicate::str::contains("[workspace.chrome_devtools]"))
-        .stdout(predicate::str::contains("enabled = true"))
         .stdout(predicate::str::contains(
             "user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"",
         ))
-        .stdout(predicate::str::contains("url = \"{{site_url}}/dashboard\""))
+        .stdout(predicate::str::contains("enabled =").not())
         .stdout(predicate::str::contains("port =").not());
 }
 
@@ -1533,7 +1535,7 @@ fn config_renders_active_site_runtime_defaults() {
             "name = \"{{repo}}-{{branch_slug}}\"",
         ))
         .stdout(predicate::str::contains("root = \".\""))
-        .stdout(predicate::str::contains("open_browser = false"))
+        .stdout(predicate::str::contains("open_browser =").not())
         .stdout(predicate::str::contains(
             "url = \"http://{{site_name}}.test\"",
         ))

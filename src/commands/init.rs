@@ -757,19 +757,21 @@ fn append_active_common_config(
     } else {
         s.push_str("# post_deps_tabs = [\"npm run dev\"]\n");
     }
-    s.push_str("# open_url = \"{{site_url}}\"\n");
-    s.push_str("# open_browser = true\n");
-    s.push_str("# browser = \"Google Chrome\"\n");
-    s.push_str("#\n");
-    s.push_str("# [workspace.chrome_devtools]\n");
-    s.push_str("# enabled = true\n");
-    s.push_str("# user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"\n");
-    s.push_str("# url = \"{{site_url}}\"\n");
     s.push_str("# Workspace colors have built-in defaults; uncomment only to override.\n");
     s.push_str("# Use \"\" to disable a color kind.\n");
     s.push_str(
         "# colors = { task = \"blue\", issue = \"blue\", branch = \"green\", pr = \"magenta\" }\n\n",
     );
+    s.push_str("# [workspace.browser]\n");
+    s.push_str("# mode = \"system\" # none | system | chrome_devtools\n");
+    s.push_str("# url = \"{{site_url}}\"\n");
+    s.push_str("# app = \"Google Chrome\"\n");
+    s.push_str("#\n");
+    s.push_str("# For an isolated Chrome DevTools session, set mode = \"chrome_devtools\"\n");
+    s.push_str("# and leave app unset.\n");
+    s.push_str("# [workspace.chrome_devtools]\n");
+    s.push_str("# user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"\n");
+    s.push('\n');
 }
 
 fn append_command_entry(s: &mut String, command: &InitCommand) {

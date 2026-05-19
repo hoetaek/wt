@@ -145,9 +145,15 @@ struct SiteSummary {
 struct WorkspaceSummary {
     tab_count: usize,
     post_deps_tab_count: usize,
-    open_url: Option<String>,
-    open_browser: Option<bool>,
+    browser: Option<WorkspaceBrowserSummary>,
     color_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkspaceBrowserSummary {
+    mode: String,
+    url: Option<String>,
+    app: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1161,10 +1167,24 @@ fn config_summary(ctx: &Ctx) -> ConfigSummary {
             .map(|workspace| WorkspaceSummary {
                 tab_count: workspace.tabs.len(),
                 post_deps_tab_count: workspace.post_deps_tabs.len(),
-                open_url: workspace.open_url.clone(),
-                open_browser: workspace.open_browser,
+                browser: workspace
+                    .browser
+                    .as_ref()
+                    .map(|browser| WorkspaceBrowserSummary {
+                        mode: workspace_browser_mode_name(browser.mode).into(),
+                        url: browser.url.clone(),
+                        app: browser.app.clone(),
+                    }),
                 color_count: workspace.effective_colors().len(),
             }),
+    }
+}
+
+fn workspace_browser_mode_name(mode: crate::config::WorkspaceBrowserMode) -> &'static str {
+    match mode {
+        crate::config::WorkspaceBrowserMode::None => "none",
+        crate::config::WorkspaceBrowserMode::System => "system",
+        crate::config::WorkspaceBrowserMode::ChromeDevtools => "chrome_devtools",
     }
 }
 

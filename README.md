@@ -332,14 +332,17 @@ creation or automatic landing by default.
 When `[workspace]` is configured, `wt config` also prints effective workspace
 colors, including built-in defaults. To change or disable a color, copy that
 line into the owning config file and override the value there.
-When `[workspace.chrome_devtools]` is enabled, `wt config` prints the effective
-Chrome user data directory and URL templates. The port is shown only when it is
-configured; otherwise setup reserves an available localhost port at runtime.
+When `[workspace.browser]` is configured with `mode = "system"` or
+`mode = "chrome_devtools"`, `wt config` prints the effective browser launch URL.
+For Chrome DevTools mode, `wt config` also prints the effective Chrome user data
+directory. The port is shown only when it is configured; otherwise setup
+reserves an available localhost port at runtime.
 
 When an active `[site]` provider is configured, `wt config` prints the site
 defaults runtime setup uses, such as the generated name template, root,
-security, browser-opening behavior, URL template, and Traefik target. A
-disabled `provider = "none"` site section is omitted from effective output.
+security, URL template, and Traefik target. A disabled `provider = "none"` site
+section is omitted from effective output. Browser launch behavior belongs to
+`[workspace.browser]`, not `[site]`.
 When `[editor]` is configured, `wt config` prints the effective editor
 placement default, `cmux_surface`, unless it is overridden.
 
@@ -392,21 +395,23 @@ workflow = ["Mention the PR state and any remaining review risk in the report."]
 Workspaces can opt into an isolated debuggable Chrome instance during setup:
 
 ```toml
+[workspace.browser]
+mode = "chrome_devtools"
+# url = "{{site_url}}"
+
 [workspace.chrome_devtools]
-enabled = true
 # port = 9222
 # user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
-# url = "{{site_url}}"
 ```
 
-When enabled, `wt` reserves a localhost port, launches Chrome with
-`--remote-debugging-address=127.0.0.1`, and uses a non-default per-worktree user
-data directory under the worktree parent, outside the repository checkout.
+In Chrome DevTools browser mode, `wt` reserves a localhost port, launches Chrome
+with `--remote-debugging-address=127.0.0.1`, and uses a non-default per-worktree
+user data directory under the worktree parent, outside the repository checkout.
 Setup templates, post-deps tabs, local context, and agent bootstrap can use
 `{{chrome_debug_port}}`, `{{chrome_debug_url}}`, and
 `{{chrome_user_data_dir}}`. A localhost Chrome remote debugging endpoint lets
-local processes control that browser instance, so enable it only for workspaces
-where that local access is acceptable.
+local processes control that browser instance, so use this mode only for
+workspaces where that local access is acceptable.
 
 Use named profiles only when prompt files, scaffold files, or reusable runtime
 bundles are needed:

@@ -75,6 +75,7 @@ fn is_codex_status_token(token: &str) -> bool {
             | "exploring"
             | "ready"
             | "idle"
+            | "waiting"
             | "failed"
             | "failure"
             | "fatal"
@@ -104,6 +105,27 @@ mod tests {
         let screen = "remove-task-run-source . gpt-5.5 xhigh . Context 94% left . 5h 91%";
 
         assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn codex_model_status_line_with_waiting_is_ui_marker() {
+        let screen = "gpt-5.5 xhigh Waiting for user input";
+
+        assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn codex_literal_marker_with_waiting_is_ui_marker() {
+        let screen = "codex Waiting on tool response";
+
+        assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn waiting_prose_without_codex_anchor_is_not_ui_marker() {
+        let screen = "Task description: waiting on the build to finish";
+
+        assert!(!screen_has_codex_ui_marker(Some(screen)));
     }
 
     #[test]

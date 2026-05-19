@@ -2,7 +2,7 @@ use crate::config::{
     AgentCli, AgentConfig, Config, EditorConfig, EditorPlacement, IssueProviderType, IssuesConfig,
     ReadyMode, SetupConfig, SiteConfig, SiteProvider, SubmitMode, TestConfig,
     WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
-    WorkspaceConfig, WorktreeConfig,
+    WorkspaceBrowserMode, WorkspaceConfig, WorktreeConfig,
 };
 
 pub fn render_effective_config(config: &Config) -> String {
@@ -162,12 +162,6 @@ fn append_site_section(s: &mut String, site: &SiteConfig) {
     if let Some(secure) = site.secure {
         s.push_str(&format!("secure = {secure}\n"));
     }
-    if let Some(open_browser) = site.open_browser {
-        s.push_str(&format!("open_browser = {open_browser}\n"));
-    }
-    if let Some(browser) = site.browser.as_deref() {
-        s.push_str(&format!("browser = {}\n", toml_quote(browser)));
-    }
     if let Some(url) = site.url.as_deref() {
         s.push_str(&format!("url = {}\n", toml_quote(url)));
     }
@@ -208,31 +202,50 @@ fn append_workspace_section(s: &mut String, workspace: &WorkspaceConfig) {
         "colors = {}\n",
         toml_inline_string_entries(&workspace.effective_colors())
     ));
-    if let Some(open_url) = workspace.open_url.as_deref() {
-        s.push_str(&format!("open_url = {}\n", toml_quote(open_url)));
-    }
-    if let Some(open_browser) = workspace.open_browser {
-        s.push_str(&format!("open_browser = {open_browser}\n"));
-    }
-    if let Some(browser) = workspace.browser.as_deref() {
-        s.push_str(&format!("browser = {}\n", toml_quote(browser)));
-    }
-    if let Some(chrome_devtools) = workspace.chrome_devtools.as_ref() {
-        s.push_str("\n[workspace.chrome_devtools]\n");
-        s.push_str(&format!("enabled = {}\n", chrome_devtools.enabled));
-        if let Some(port) = chrome_devtools.port {
-            s.push_str(&format!("port = {port}\n"));
+    if let Some(browser) = workspace
+        .browser
+        .as_ref()
+        .filter(|browser| browser.mode != WorkspaceBrowserMode::None)
+    {
+        s.push_str("\n[workspace.browser]\n");
+        s.push_str(&format!(
+            "mode = {}\n",
+            toml_quote(workspace_browser_mode_name(browser.mode))
+        ));
+        if let Some(url) = browser.effective_url() {
+            s.push_str(&format!("url = {}\n", toml_quote(url.as_ref())));
         }
-        if chrome_devtools.enabled || chrome_devtools.user_data_dir.is_some() {
+        if let Some(app) = browser.app.as_deref() {
+            s.push_str(&format!("app = {}\n", toml_quote(app)));
+        }
+    }
+    let chrome_devtools_active = workspace
+        .browser
+        .as_ref()
+        .is_some_and(|browser| browser.mode == WorkspaceBrowserMode::ChromeDevtools);
+    if chrome_devtools_active || workspace.chrome_devtools.is_some() {
+        if let Some(chrome_devtools) = workspace.chrome_devtools.as_ref() {
+            if chrome_devtools_active
+                || chrome_devtools.port.is_some()
+                || chrome_devtools.user_data_dir.is_some()
+            {
+                s.push_str("\n[workspace.chrome_devtools]\n");
+                if let Some(port) = chrome_devtools.port {
+                    s.push_str(&format!("port = {port}\n"));
+                }
+                if chrome_devtools_active || chrome_devtools.user_data_dir.is_some() {
+                    s.push_str(&format!(
+                        "user_data_dir = {}\n",
+                        toml_quote(chrome_devtools.effective_user_data_dir())
+                    ));
+                }
+            }
+        } else if chrome_devtools_active {
+            let chrome_devtools = crate::config::WorkspaceChromeDevtoolsConfig::default();
+            s.push_str("\n[workspace.chrome_devtools]\n");
             s.push_str(&format!(
                 "user_data_dir = {}\n",
                 toml_quote(chrome_devtools.effective_user_data_dir())
-            ));
-        }
-        if chrome_devtools.enabled || chrome_devtools.url.is_some() {
-            s.push_str(&format!(
-                "url = {}\n",
-                toml_quote(chrome_devtools.effective_url(workspace).as_ref())
             ));
         }
     }
@@ -342,6 +355,14 @@ fn editor_placement_name(placement: &EditorPlacement) -> &'static str {
     }
 }
 
+fn workspace_browser_mode_name(mode: WorkspaceBrowserMode) -> &'static str {
+    match mode {
+        WorkspaceBrowserMode::None => "none",
+        WorkspaceBrowserMode::System => "system",
+        WorkspaceBrowserMode::ChromeDevtools => "chrome_devtools",
+    }
+}
+
 fn ready_mode_value(ready: &ReadyMode) -> String {
     match ready {
         ReadyMode::Auto => "auto".into(),
@@ -412,7 +433,8 @@ mod tests {
     use super::render_effective_config;
     use crate::config::{
         Config, EditorConfig, EditorPlacement, SiteConfig, SiteProvider, WorkflowConfig,
-        WorkflowDefaultPullRequestMode,
+        WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig, WorkspaceBrowserMode,
+        WorkspaceChromeDevtoolsConfig, WorkspaceConfig,
     };
 
     #[test]
@@ -445,7 +467,6 @@ mod tests {
         assert!(rendered.contains("name = \"{{repo}}-{{branch_slug}}\"\n"));
         assert!(rendered.contains("root = \".\"\n"));
         assert!(rendered.contains("secure = true\n"));
-        assert!(rendered.contains("open_browser = false\n"));
         assert!(rendered.contains("url = \"https://{{site_name}}.test\"\n"));
         assert!(!rendered.contains("target = "));
     }
@@ -465,6 +486,74 @@ mod tests {
         assert!(rendered.contains("secure = false\n"));
         assert!(rendered.contains("url = \"http://{{site_name}}.test\"\n"));
         assert!(rendered.contains("target = \"http://127.0.0.1:{{vite_port}}\"\n"));
+    }
+
+    #[test]
+    fn workspace_browser_section_materializes_active_defaults() {
+        let rendered = render_effective_config(&Config {
+            workspace: Some(WorkspaceConfig {
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::System,
+                    url: None,
+                    app: Some("Google Chrome".into()),
+                }),
+                ..WorkspaceConfig::default()
+            }),
+            ..Config::default()
+        });
+
+        assert!(rendered.contains("[workspace.browser]\n"));
+        assert!(rendered.contains("mode = \"system\"\n"));
+        assert!(rendered.contains("url = \"{{site_url}}\"\n"));
+        assert!(rendered.contains("app = \"Google Chrome\"\n"));
+        assert!(!rendered.contains("open_url = "));
+        assert!(!rendered.contains("open_browser = "));
+    }
+
+    #[test]
+    fn chrome_devtools_browser_policy_materializes_chrome_details() {
+        let rendered = render_effective_config(&Config {
+            workspace: Some(WorkspaceConfig {
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::ChromeDevtools,
+                    url: None,
+                    app: None,
+                }),
+                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                    port: Some(9222),
+                    ..WorkspaceChromeDevtoolsConfig::default()
+                }),
+                ..WorkspaceConfig::default()
+            }),
+            ..Config::default()
+        });
+
+        assert!(rendered.contains("[workspace.browser]\n"));
+        assert!(rendered.contains("mode = \"chrome_devtools\"\n"));
+        assert!(rendered.contains("url = \"{{site_url}}\"\n"));
+        assert!(rendered.contains("[workspace.chrome_devtools]\n"));
+        assert!(rendered.contains("port = 9222\n"));
+        assert!(rendered.contains(
+            "user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"\n"
+        ));
+        assert!(!rendered.contains("enabled = "));
+    }
+
+    #[test]
+    fn inactive_workspace_browser_policy_is_omitted() {
+        let rendered = render_effective_config(&Config {
+            workspace: Some(WorkspaceConfig {
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::None,
+                    url: None,
+                    app: None,
+                }),
+                ..WorkspaceConfig::default()
+            }),
+            ..Config::default()
+        });
+
+        assert!(!rendered.contains("[workspace.browser]\n"));
     }
 
     #[test]
