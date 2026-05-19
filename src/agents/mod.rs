@@ -305,6 +305,7 @@ pub(super) fn screen_status(screen: &str) -> Option<AgentStatus> {
     let lower = trimmed.to_ascii_lowercase();
     if lower.contains("needs input")
         || lower.contains("waiting for input")
+        || lower.contains("waiting for user")
         || (lower.contains("permission") && lower.contains("request"))
         || (lower.contains("approval") && lower.contains("required"))
     {
@@ -317,6 +318,8 @@ pub(super) fn screen_status(screen: &str) -> Option<AgentStatus> {
         || lower.contains("running")
         || lower.contains("thinking")
         || lower.contains("exploring")
+        || lower.contains("starting")
+        || lower.contains("waiting")
     {
         return Some(AgentStatus::Running);
     }
@@ -643,5 +646,22 @@ mod tests {
             surface_id: None,
             payload,
         }
+    }
+
+    #[test]
+    fn screen_status_classifies_codex_waiting_variants() {
+        assert_eq!(
+            screen_status("Waiting for user input"),
+            Some(AgentStatus::NeedsInput)
+        );
+        assert_eq!(
+            screen_status("Waiting on tool response"),
+            Some(AgentStatus::Running)
+        );
+        assert_eq!(screen_status("Starting up"), Some(AgentStatus::Running));
+        assert_eq!(
+            screen_status("waiting for the build"),
+            Some(AgentStatus::Running)
+        );
     }
 }
