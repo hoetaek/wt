@@ -19,7 +19,7 @@ pub fn run(
 ) -> Result<()> {
     if name_words.is_empty() {
         bail!(
-            "wt new starts one ad hoc worktree from branch-name text. Pass branch-name text, or use `wt task run [<task>...]` for prepared local tasks."
+            "wt run branch starts one ad hoc worktree from branch-name text. Pass branch-name text, or use `wt run task [<task>...]` for prepared local tasks."
         );
     }
 
@@ -294,7 +294,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("wt new starts one ad hoc worktree from branch-name text")
+                .contains("wt run branch starts one ad hoc worktree from branch-name text")
         );
     }
 

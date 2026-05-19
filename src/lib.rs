@@ -18,33 +18,40 @@ pub mod workflow;
 pub mod worktree_naming;
 
 use anyhow::Result;
-use cli::{AgentCommand, Commands, ConfigCommand, TaskCommand, WorkflowCommand};
+use cli::{AgentCommand, Commands, ConfigCommand, RunCommand, TaskCommand, WorkflowCommand};
 use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
     match command {
         Commands::Version | Commands::Completion { .. } => Ok(()),
-        Commands::Issue {
-            target,
-            base,
-            profile,
-            matrix,
-        } => commands::issue::run(ctx, target.as_deref(), base, profile.as_deref(), *matrix),
-        Commands::Pr { numbers, profile } => commands::pr::run(ctx, numbers, profile.as_deref()),
-        Commands::New {
-            name,
-            base,
-            profile,
-            matrix,
-        } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
-        Commands::Task { command } => match command {
-            TaskCommand::List => commands::task_list::run(ctx),
-            TaskCommand::Import { issues } => commands::task::import(ctx, issues),
-            TaskCommand::Run {
+        Commands::Run { command } => match command {
+            RunCommand::Issue {
+                target,
+                base,
+                profile,
+                matrix,
+            } => commands::issue::run(ctx, target.as_deref(), base, profile.as_deref(), *matrix),
+            RunCommand::Pr { numbers, profile } => {
+                commands::pr::run(ctx, numbers, profile.as_deref())
+            }
+            RunCommand::Branch {
+                name,
+                base,
+                profile,
+                matrix,
+            } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
+            RunCommand::Task {
                 tasks,
                 base,
                 profile,
             } => commands::task_run_command::run(ctx, tasks, base, profile.as_deref()),
+            RunCommand::Workflow { workflow, jobs } => {
+                commands::workflow::run(ctx, workflow.as_deref(), *jobs)
+            }
+        },
+        Commands::Task { command } => match command {
+            TaskCommand::List => commands::task_list::run(ctx),
+            TaskCommand::Import { issues } => commands::task::import(ctx, issues),
             TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
         },
         Commands::Workflow { command } => match command {
@@ -103,9 +110,6 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     pr: *pr,
                 },
             ),
-            WorkflowCommand::Run { workflow, jobs } => {
-                commands::workflow::run(ctx, workflow.as_deref(), *jobs)
-            }
             WorkflowCommand::Show { workflow } => {
                 commands::workflow::show(ctx, workflow.as_deref())
             }

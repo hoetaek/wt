@@ -177,43 +177,50 @@ fn no_args_prints_help_successfully() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Usage: wt [OPTIONS] [COMMAND]"))
+        .stdout(predicate::str::contains("run"))
         .stdout(predicate::str::contains("issue"))
         .stdout(predicate::str::contains("pr"))
-        .stdout(predicate::str::contains("new"))
+        .stdout(predicate::str::contains("new").not())
         .stdout(predicate::str::contains("agent"))
         .stdout(predicate::str::contains("ui"));
 }
 
 #[test]
-fn new_without_args_requires_branch_text() {
+fn run_branch_without_args_requires_branch_text() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "new"])
+        .args(["-C", temp.path().to_str().unwrap(), "run", "branch"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "wt new starts one ad hoc worktree from branch-name text",
+            "wt run branch starts one ad hoc worktree from branch-name text",
         ));
 }
 
 #[test]
-fn new_task_option_is_unknown() {
+fn run_branch_task_option_is_unknown() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "new", "--task"])
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "branch",
+            "--task",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("unexpected argument '--task'"));
 }
 
 #[test]
-fn new_help_explains_branch_text_only() {
+fn run_branch_help_explains_branch_text_only() {
     wt_command()
-        .args(["new", "--help"])
+        .args(["run", "branch", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("branch-name text"))
@@ -221,9 +228,80 @@ fn new_help_explains_branch_text_only() {
 }
 
 #[test]
-fn task_run_help_explains_task_execution() {
+fn run_help_lists_execution_start_surfaces() {
     wt_command()
-        .args(["task", "run", "--help"])
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wt run issue"))
+        .stdout(predicate::str::contains("wt run pr"))
+        .stdout(predicate::str::contains("wt run branch"))
+        .stdout(predicate::str::contains("wt run task"))
+        .stdout(predicate::str::contains("wt run workflow"));
+}
+
+#[test]
+fn run_issue_help_explains_issue_target() {
+    wt_command()
+        .args(["run", "issue", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Issue number or provider-specific key",
+        ))
+        .stdout(predicate::str::contains("--matrix"))
+        .stdout(predicate::str::contains("--profile"));
+}
+
+#[test]
+fn run_pr_help_explains_multiple_targets() {
+    wt_command()
+        .args(["run", "pr", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Pull request numbers"))
+        .stdout(predicate::str::contains("[PR]..."))
+        .stdout(predicate::str::contains("select multiple open PRs"));
+}
+
+#[test]
+fn old_execution_start_commands_are_removed() {
+    for args in [
+        &["issue"][..],
+        &["pr"][..],
+        &["new"][..],
+        &["task", "run"][..],
+        &["workflow", "run"][..],
+    ] {
+        wt_command()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unrecognized subcommand"));
+    }
+}
+
+#[test]
+fn old_execution_start_help_surfaces_are_removed() {
+    for args in [
+        &["issue", "--help"][..],
+        &["pr", "--help"][..],
+        &["new", "--help"][..],
+        &["task", "run", "--help"][..],
+        &["workflow", "run", "--help"][..],
+    ] {
+        wt_command()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unrecognized subcommand"));
+    }
+}
+
+#[test]
+fn run_task_help_explains_task_execution() {
+    wt_command()
+        .args(["run", "task", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("one worktree per selected"))
@@ -235,14 +313,14 @@ fn task_run_help_explains_task_execution() {
 }
 
 #[test]
-fn task_help_lists_list_import_run_and_publish() {
+fn task_help_lists_list_import_and_publish() {
     wt_command()
         .args(["task", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("list"))
         .stdout(predicate::str::contains("import"))
-        .stdout(predicate::str::contains("run"))
+        .stdout(predicate::str::contains("run").not())
         .stdout(predicate::str::contains("publish"));
 }
 
@@ -254,7 +332,7 @@ fn task_list_help_explains_canonical_inventory() {
         .success()
         .stdout(predicate::str::contains("canonical read-only inventory"))
         .stdout(predicate::str::contains(
-            "whether or not they are selectable by wt task run",
+            "whether or not they are selectable by wt run task",
         ))
         .stdout(predicate::str::contains(
             "reports invalid TaskDocument TOML files",
@@ -422,7 +500,7 @@ fn task_publish_help_explains_behavior() {
         .stdout(predicate::str::contains("provider issue"))
         .stdout(predicate::str::contains("write [origin]"))
         .stdout(predicate::str::contains("does not start workspaces"))
-        .stdout(predicate::str::contains("wt task run and wt workflow run"))
+        .stdout(predicate::str::contains("wt run task and wt run workflow"))
         .stdout(predicate::str::contains("Omit task keys"))
         .stdout(predicate::str::contains(
             "already have [origin] are excluded",
@@ -431,9 +509,9 @@ fn task_publish_help_explains_behavior() {
 }
 
 #[test]
-fn workflow_run_help_explains_omitted_target_selection() {
+fn run_workflow_help_explains_omitted_target_selection() {
     wt_command()
-        .args(["workflow", "run", "--help"])
+        .args(["run", "workflow", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Omit WORKFLOW"))
