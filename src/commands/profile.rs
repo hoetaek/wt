@@ -181,8 +181,8 @@ pub(crate) fn create_profile(
             generate_issue_prompt(name),
         )?;
         fs::write(
-            profile_dir.join("prompts/new.md"),
-            generate_new_prompt(name),
+            profile_dir.join("prompts/branch.md"),
+            generate_branch_prompt(name),
         )?;
         fs::write(profile_dir.join("prompts/pr.md"), generate_pr_prompt(name))?;
     }
@@ -386,7 +386,7 @@ Review the current issue context, inspect the codebase, make the required change
     )
 }
 
-fn generate_new_prompt(name: &str) -> String {
+fn generate_branch_prompt(name: &str) -> String {
     format!(
         r#"Use the `{name}` profile.
 
@@ -794,7 +794,7 @@ cli = "codex"
         let profile_dir = dir.path().join(".local/profiles/baseline");
         assert!(profile_dir.join("profile.toml").exists());
         assert!(profile_dir.join("prompts/issue.md").exists());
-        assert!(profile_dir.join("prompts/new.md").exists());
+        assert!(profile_dir.join("prompts/branch.md").exists());
         assert!(profile_dir.join("prompts/pr.md").exists());
         assert_eq!(
             std::fs::read_to_string(profile_dir.join("scaffold/AGENTS.override.md")).unwrap(),

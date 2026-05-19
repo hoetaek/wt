@@ -652,7 +652,7 @@ issue = ["local issue append\n"]
         ]
     );
     assert_eq!(
-        agent.prompt.get("new").unwrap(),
+        agent.prompt.get("branch").unwrap(),
         &vec!["shared common\n\nshared common append\n\nlocal common append\n".to_string()]
     );
     assert_eq!(
@@ -693,6 +693,12 @@ issue = ["root issue\n"]
         "file issue append\n",
     )
     .unwrap();
+    std::fs::write(profile_dir.join("prompts/branch.md"), "file branch\n").unwrap();
+    std::fs::write(
+        profile_dir.join("prompts/branch.append.md"),
+        "file branch append\n",
+    )
+    .unwrap();
     std::fs::write(profile_dir.join("prompts/workflow.md"), "file workflow\n").unwrap();
     std::fs::write(
         profile_dir.join("prompts/workflow.append.md"),
@@ -714,8 +720,11 @@ issue = ["root issue\n"]
         ]
     );
     assert_eq!(
-        agent.prompt.get("new").unwrap(),
-        &vec!["file common\n\nfile common append\n".to_string()]
+        agent.prompt.get("branch").unwrap(),
+        &vec![
+            "file common\n\nfile common append\n".to_string(),
+            "file branch\n\nfile branch append\n".to_string(),
+        ]
     );
     assert_eq!(
         agent.prompt.get("pr").unwrap(),
@@ -725,6 +734,66 @@ issue = ["root issue\n"]
         agent.prompt.get("workflow").unwrap(),
         &vec!["file workflow\n\nfile workflow append\n".to_string()]
     );
+}
+
+#[test]
+fn rejects_legacy_new_prompt_scope() {
+    let err = toml::from_str::<Config>(
+        r#"
+[agent]
+cli = "codex"
+
+[agent.prompt]
+new = ["legacy branch prompt\n"]
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("[agent.prompt].new"));
+    assert!(err.to_string().contains("[agent.prompt].branch"));
+}
+
+#[test]
+fn rejects_legacy_new_prompt_append_scope() {
+    let err = toml::from_str::<Config>(
+        r#"
+[agent]
+cli = "codex"
+
+[agent.prompt.append]
+new = ["legacy branch append\n"]
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("[agent.prompt.append].new"));
+    assert!(err.to_string().contains("[agent.prompt.append].branch"));
+}
+
+#[test]
+fn rejects_legacy_new_profile_prompt_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile_dir = dir.path().join(".local/profiles/codex");
+    std::fs::create_dir_all(profile_dir.join("prompts")).unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
+[agent]
+cli = "codex"
+"#,
+    )
+    .unwrap();
+    std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+    std::fs::write(profile_dir.join("prompts/new.md"), "legacy prompt\n").unwrap();
+
+    let (base, _, _) = Config::load_base_and_effective_with_source(dir.path()).unwrap();
+    let err = Config::load_profile(dir.path(), "codex", &base)
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("prompts/new.md"));
+    assert!(err.contains("prompts/branch.md"));
 }
 
 #[test]

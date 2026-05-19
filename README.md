@@ -141,7 +141,7 @@ wt issue
 wt issue PROJ-123 --base .
 wt pr
 wt pr 42 43
-wt new add profile docs
+wt run branch add profile docs
 wt task run
 wt task run add-profile-docs
 ```
@@ -196,7 +196,7 @@ completed with `wt workflow complete`, not `wt done`.
 
 ## Core Model
 
-- `wt new <words...>` starts an ad hoc branch worktree from branch-name text.
+- `wt run branch <words...>` starts an ad hoc branch worktree from branch-name text.
 - `wt issue` starts a worktree from an existing provider issue.
 - `wt pr` opens existing pull request branches as worktrees.
 - `TaskDocument` files in `.local/tasks/<task>.toml` define prepared local work.
@@ -366,14 +366,14 @@ args = ["--model", "gpt-5.5"]
 tabs = ["lazygit", "nvim"]
 # Workspace colors have built-in defaults; set this only to override.
 # Use "" to disable a color kind.
-# colors = { task = "blue", issue = "blue", new = "green", pr = "magenta" }
+# colors = { task = "blue", issue = "blue", branch = "green", pr = "magenta" }
 ```
 
 Agent prompt scopes stay under `[agent.prompt]`. `common` is prepended to
-`issue`, `new`, and `pr` prompts. `workflow` is a separate workflow-started
+`issue`, `branch`, and `pr` prompts. `workflow` is a separate workflow-started
 task scope: `wt workflow run` sends it after the built-in workflow handoff and
-TaskDocument snapshot, before the existing `issue` or `new` setup-mode prompts.
-It does not apply to direct `wt task run`, `wt issue`, `wt new`, or `wt pr`.
+TaskDocument snapshot, before the existing `issue` or `branch` setup-mode prompts.
+It does not apply to direct `wt task run`, `wt issue`, `wt run branch`, or `wt pr`.
 
 ```toml
 [agent.prompt]
@@ -437,7 +437,7 @@ there for one named profile.
 | `wt doctor` | Check configured providers and local tools |
 | `wt issue` | Start work from a provider issue |
 | `wt pr` | Start worktrees from pull requests |
-| `wt new` | Start work from branch-name text |
+| `wt run branch` | Start work from branch-name text |
 | `wt task list` | List saved local TaskDocuments |
 | `wt task import` | Import provider issues as local TaskDocuments |
 | `wt task run` | Start work from local TaskDocuments |

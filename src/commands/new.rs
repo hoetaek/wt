@@ -84,7 +84,7 @@ pub fn run(
         &names.path,
         &names,
         None,
-        setup::WORKSPACE_COLOR_KIND_NEW,
+        setup::WORKSPACE_COLOR_KIND_BRANCH,
         None,
         None,
     )?;
@@ -163,7 +163,7 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
                     &path,
                     &names,
                     None,
-                    setup::WORKSPACE_COLOR_KIND_NEW,
+                    setup::WORKSPACE_COLOR_KIND_BRANCH,
                     None,
                     Some(profile_config),
                 )?;
@@ -180,7 +180,7 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
             &names.path,
             &names,
             None,
-            setup::WORKSPACE_COLOR_KIND_NEW,
+            setup::WORKSPACE_COLOR_KIND_BRANCH,
             None,
             Some(profile_config),
         )?;

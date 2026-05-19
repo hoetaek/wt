@@ -768,7 +768,7 @@ fn append_active_common_config(
     s.push_str("# Workspace colors have built-in defaults; uncomment only to override.\n");
     s.push_str("# Use \"\" to disable a color kind.\n");
     s.push_str(
-        "# colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }\n\n",
+        "# colors = { task = \"blue\", issue = \"blue\", branch = \"green\", pr = \"magenta\" }\n\n",
     );
 }
 
@@ -2241,7 +2241,7 @@ mod tests {
         assert!(content.contains("# [test]"));
         assert!(content.contains("# post_deps_tabs = [\"npm run dev\"]"));
         assert!(content.contains(
-            "# colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }"
+            "# colors = { task = \"blue\", issue = \"blue\", branch = \"green\", pr = \"magenta\" }"
         ));
         assert!(config.worktree.path.is_none());
         assert!(config.worktree.naming.is_none());

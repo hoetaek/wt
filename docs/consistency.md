@@ -84,15 +84,15 @@ active `[editor]` 설정은 생략된 placement의 `cmux_surface` default를 보
 내보내지 않는다.
 
 `[workspace].colors`는 workspace를 시작하는 command surface의 기본 cmux 색상이다.
-Canonical 색상 key는 `task`, `issue`, `new`, `pr`이다. `task`는 TaskDocument에
+Canonical 색상 key는 `task`, `issue`, `branch`, `pr`이다. `task`는 TaskDocument에
 `[origin]`이 있는지와 무관하게 즉시 실행 표면인 `wt task run`에 대응한다. `issue`는
-직접 provider issue에서 시작하는 `wt issue`, `new`는 branch-name text에서 시작하는
-`wt new`, `pr`은 pull request branch를 여는 `wt pr`에만 대응한다. 이 key들은 prompt
+직접 provider issue에서 시작하는 `wt issue`, `branch`는 branch-name text에서 시작하는
+`wt run branch`, `pr`은 pull request branch를 여는 `wt pr`에만 대응한다. 이 key들은 prompt
 setup mode, profile 이름, workflow `mode = "single" | "batch" | "stack" | "matrix"`
 값이 아니다.
 Workflow run은 필요한 경우 TaskDocument setup을 거치더라도 최종 visible grouping color는
 저장된 `workflow.color`를 적용한다. `[workspace].colors` key를 생략하면 내장 기본값
-`task = "blue"`, `issue = "blue"`, `new = "green"`, `pr = "magenta"`를 쓴다.
+`task = "blue"`, `issue = "blue"`, `branch = "green"`, `pr = "magenta"`를 쓴다.
 `wt config`는 이 effective 색상값을 출력하므로 사용자가 수정할 기준은 `wt config` 출력이다.
 `wt init`은 이 기본값을 active config로 쓰지 않고 commented override 예시로만 보여준다.
 Active `colors = { ... }`는 사용자가 기본값과 다른 색을 고정하려는 의도일 때만 둔다. 색을
@@ -112,14 +112,14 @@ TaskRun, Workflow 파일을 만들기 전에 실패해야 한다. 수동 Workflo
 
 Direct `wt task run`은 immediate single-worktree path다. `wt task run <task>`와
 `wt task run <task> --profile <name>`만 소유하고, profile fan-out을 소유하지 않는다.
-Direct `wt issue --matrix`와 `wt new --matrix`의 legacy all-named-profiles behavior는
+Direct `wt run issue --matrix`와 `wt run branch --matrix`의 all-named-profiles behavior는
 보존하되 selected profile subset은 Workflow matrix로 표현한다.
 
-`wt new <words...>`는 branch-name text에서 바로 ad hoc worktree를 시작한다. 즉시
+`wt run branch <words...>`는 branch-name text에서 바로 ad hoc worktree를 시작한다. 즉시
 준비된 TaskDocument를 실행하는 표면은 `wt task run [<task>...]`이다. 여러
 TaskDocument를 하나의 저장된 실행 계획으로 묶어 batch coordination을 해야 하면
 `wt workflow task --mode batch`와 `wt workflow run`을 쓰고, 하나의 shared workspace에서
-실행해야 하면 `wt workflow task --mode single`과 `wt workflow run`을 쓴다. `wt new`에
+실행해야 하면 `wt workflow task --mode single`과 `wt workflow run`을 쓴다. `wt run branch`에
 prepared-task 실행 의미를 계속 넓히면 ad hoc branch worktree, immediate task run,
 saved workflow가 한 명령에서 섞인다.
 
@@ -229,16 +229,16 @@ file 선택을 설명해야 한다. Help text는 named profile directory나 prom
 Prompt도 같은 원칙을 따른다. `common`은 별도 실행 mode가 아니라 기존
 `[agent.prompt]` / `[agent.prompt.append]` 모델 안의 공통 scope다. Config layer와
 profile convention file merge를 모두 끝낸 뒤 최종 effective config에서 한 번만
-`issue`, `new`, `pr` prompt 앞에 펼친다. `common`을 각 layer마다 mode별 prompt로
+`issue`, `branch`, `pr` prompt 앞에 펼친다. `common`을 각 layer마다 mode별 prompt로
 복사하지 않는다.
 
 `workflow`도 Workflow `mode = "single" | "batch" | "stack"`나 setup mode가 아니라
 `[agent.prompt]` / `[agent.prompt.append]` 안의 workflow-started task 전용 scope다.
 `wt workflow run`으로 시작한 task에만 적용하고, direct `wt task run`, `wt issue`,
-`wt new`, `wt pr`에는 적용하지 않는다. Workflow task의 setup mode는 계속
-TaskDocument origin에 따라 `issue` 또는 `new`를 사용하므로 기존 setup-mode prompt도
+`wt run branch`, `wt pr`에는 적용하지 않는다. Workflow task의 setup mode는 계속
+TaskDocument origin에 따라 `issue` 또는 `branch`를 사용하므로 기존 setup-mode prompt도
 함께 적용된다. `common`은 `workflow`로 펼치지 않는다. Workflow task는 이미 `issue` 또는
-`new` prompt를 받기 때문에 `common`을 `workflow`에도 펼치면 같은 공통 지시가 중복된다.
+`branch` prompt를 받기 때문에 `common`을 `workflow`에도 펼치면 같은 공통 지시가 중복된다.
 Profile convention file은 `.local/profiles/<name>/prompts/workflow.md`와
 `.local/profiles/<name>/prompts/workflow.append.md`를 같은 scope로 읽는다.
 
@@ -566,7 +566,7 @@ agent는 같은 `Agent Completion Report`를 task session에 남기고 기다린
 그 안의 `cmux send`/enter 명령은 긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서
 terminal prompt가 축약되어도 coordinator 좌표가 앞쪽에 남게 한다.
 사용자 정의 `[agent.prompt.workflow]` prompt가 있으면 이 built-in handoff와 TaskDocument
-snapshot 뒤, 기존 `issue`/`new` setup-mode prompt 앞에 보낸다.
+snapshot 뒤, 기존 `issue`/`branch` setup-mode prompt 앞에 보낸다.
 
 보고 형식은 workflow mode와 무관하게
 `Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>`
@@ -729,8 +729,8 @@ action을 대신 실행하지 않는다.
 `wt`는 아직 1.0에 도달하지 않았으므로 CLI, config, 상태 파일 모델이 안정화될 때까지
 breaking change를 `x.0.0` major로 표현하지 않는다. 새 기능과 breaking user-facing
 정리는 `0.x.0` minor로 올리고, 버그 수정이나 내부 로직 변경은 `0.x.y` patch로 올린다.
-예를 들어 prepared-task 실행 표면을 `wt new --task`에서 `wt task run`으로 옮기거나,
-saved orchestration을 `wt workflow`와 `.local/workflows`로 수렴시키는 변경은 CLI와 상태
+예를 들어 prepared-task 실행 표면을 `wt task run`으로 수렴시키거나, saved orchestration을
+`wt workflow`와 `.local/workflows`로 수렴시키는 변경은 CLI와 상태
 파일 계약을 바꾸므로 patch가 아니라 pre-1.0 minor 변경이다.
 
 다만 version bump는 일반 개발 커밋마다 하지 않는다. `develop`은 기본 개발 브랜치이고,

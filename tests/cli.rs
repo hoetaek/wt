@@ -1196,11 +1196,11 @@ args = ["--yolo"]
 [agent.prompt]
 common = ["profile common\n"]
 issue = ["from profile.toml\n"]
-new = ["new branch prompt\n"]
+branch = ["branch prompt\n"]
 
 [agent.prompt.append]
 common = ["profile common append\n"]
-new = ["new branch append\n"]
+branch = ["branch append\n"]
 
 [workspace]
 tabs = ["pnpm dev"]
@@ -1295,10 +1295,10 @@ CODEX_MODE = "1"
         ]
     );
     assert_eq!(
-        agent.prompt.get("new").unwrap(),
+        agent.prompt.get("branch").unwrap(),
         &vec![
             "from common prompt file\n\nfrom common append file\n".to_string(),
-            "new branch prompt\n\nnew branch append\n".to_string(),
+            "branch prompt\n\nbranch append\n".to_string(),
         ]
     );
     assert_eq!(
@@ -1310,7 +1310,7 @@ CODEX_MODE = "1"
     assert_eq!(workspace.tabs, vec!["pnpm dev"]);
     assert_eq!(workspace.colors.get("task").unwrap(), "blue");
     assert_eq!(workspace.colors.get("issue").unwrap(), "blue");
-    assert_eq!(workspace.colors.get("new").unwrap(), "green");
+    assert_eq!(workspace.colors.get("branch").unwrap(), "green");
     assert_eq!(workspace.colors.get("pr").unwrap(), "magenta");
 
     let copy_as = config.worktree.copy_as;
@@ -1352,8 +1352,27 @@ fn config_renders_builtin_workspace_color_defaults() {
         .success()
         .stdout(predicate::str::contains("[workspace]"))
         .stdout(predicate::str::contains(
-            "colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }",
+            "colors = { task = \"blue\", issue = \"blue\", branch = \"green\", pr = \"magenta\" }",
         ));
+}
+
+#[test]
+fn config_rejects_legacy_new_workspace_color_key() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[workspace]\ncolors = { new = \"green\" }\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "config"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("[workspace].colors.new"))
+        .stderr(predicate::str::contains("[workspace].colors.branch"));
 }
 
 #[test]
@@ -1387,7 +1406,7 @@ fn config_preserves_empty_workspace_color_overrides() {
     std::fs::create_dir_all(temp.path().join(".local")).unwrap();
     std::fs::write(
         temp.path().join(".local/.wt.toml"),
-        "[workspace]\ncolors = { task = \"\", issue = \"\", new = \"\", pr = \"\" }\n",
+        "[workspace]\ncolors = { task = \"\", issue = \"\", branch = \"\", pr = \"\" }\n",
     )
     .unwrap();
 
@@ -1396,7 +1415,7 @@ fn config_preserves_empty_workspace_color_overrides() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "colors = { task = \"\", issue = \"\", new = \"\", pr = \"\" }",
+            "colors = { task = \"\", issue = \"\", branch = \"\", pr = \"\" }",
         ));
 }
 

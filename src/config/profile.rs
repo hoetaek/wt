@@ -10,11 +10,12 @@ pub(super) fn apply_profile_conventions(
     profile_dir: &Path,
     config: &mut Config,
 ) -> anyhow::Result<()> {
+    reject_legacy_branch_prompt_files(profile_dir)?;
     if let Some(agent) = config.agent.as_mut() {
         for mode in [
             PROMPT_COMMON_SCOPE,
             "issue",
-            "new",
+            "branch",
             "pr",
             AGENT_PROMPT_WORKFLOW_SCOPE,
         ] {
@@ -44,6 +45,19 @@ pub(super) fn apply_profile_conventions(
         ".",
     );
 
+    Ok(())
+}
+
+fn reject_legacy_branch_prompt_files(profile_dir: &Path) -> anyhow::Result<()> {
+    for file_name in ["new.md", "new.append.md"] {
+        let path = profile_dir.join("prompts").join(file_name);
+        if path.exists() {
+            anyhow::bail!(
+                "{} is no longer supported; use prompts/branch.md or prompts/branch.append.md",
+                path.display()
+            );
+        }
+    }
     Ok(())
 }
 
