@@ -804,8 +804,7 @@ fn analyze_inline_source(ctx: &Ctx, path: &Path) -> Result<InlineSummary> {
         && matches!(file_name, "new.md" | "new.append.md")
     {
         bail!(
-            "{} is no longer supported; use prompts/branch.md or prompts/branch.append.md",
-            display
+            "{display} is no longer supported; use prompts/branch.md or prompts/branch.append.md"
         );
     }
 
