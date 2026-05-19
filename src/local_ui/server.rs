@@ -133,7 +133,9 @@ mod tests {
         assert!(APP_CSS.contains(".mobile-meta"));
         assert!(APP_CSS.contains(".full-text pre"));
         assert!(APP_CSS.contains(".markdown-body h1"));
-        assert!(APP_JS.contains("metric invalid"));
+        assert!(APP_JS.contains("priority-metric"));
+        assert!(APP_JS.contains("overviewPrioritySummary"));
+        assert!(APP_JS.contains("Invalid records"));
         assert!(APP_JS.contains("data-read-toggle"));
         assert!(APP_JS.contains("summary-full full-text"));
         assert!(!APP_JS.contains("</summary><div class=\"full-text\""));

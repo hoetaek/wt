@@ -37,6 +37,7 @@ const STRINGS = {
     metricTaskRuns: "TaskRuns",
     metricProfiles: "Profiles",
     metricRetrospecs: "Retrospecs",
+    invalidRecords: "Invalid records",
     tabOverview: "Overview",
     tabConfig: "Config",
     tabWorkflows: "Workflows",
@@ -53,11 +54,7 @@ const STRINGS = {
     preparedWorkflows: "Prepared Workflows",
     runningTaskRuns: "Running TaskRuns",
     needsAttention: "Needs attention",
-    localState: "Local state",
-    currentWork: "Current work",
     inventory: "Inventory",
-    preparedWorkflowCount: "prepared Workflows",
-    runningRunCount: "running TaskRuns",
     attentionCount: "need attention",
     ideas: "Ideas",
     invalidIdeas: "Invalid ideas",
@@ -146,11 +143,7 @@ const STRINGS = {
     preparedWorkflows: "준비된 워크플로우",
     runningTaskRuns: "실행 중인 작업",
     needsAttention: "확인 필요",
-    localState: "로컬 상태",
-    currentWork: "현재 작업",
     inventory: "인벤토리",
-    preparedWorkflowCount: "준비된 워크플로우",
-    runningRunCount: "실행 중인 작업",
     attentionCount: "확인 필요",
     invalidRecords: "오류 기록",
     ideas: "아이디어",
@@ -358,18 +351,36 @@ function render() {
 }
 
 function renderMetrics(snapshot) {
+  const priority = overviewPrioritySummary(snapshot);
   const rows = [
-    [t("metricIdeas"), snapshot.ideas.items.length, snapshot.ideas.invalid.length],
-    [t("metricTaskDocuments"), snapshot.tasks.items.length, snapshot.tasks.invalid.length],
-    [t("metricWorkflows"), snapshot.workflows.items.length, snapshot.workflows.invalid.length],
-    [t("metricTaskRuns"), snapshot.task_runs.items.length, snapshot.task_runs.invalid.length],
-    [t("metricProfiles"), snapshot.profiles.items.length, snapshot.profiles.invalid.length],
-    [t("metricRetrospecs"), snapshot.retrospecs.items.length, snapshot.retrospecs.invalid.length],
+    {
+      label: t("needsAttention"),
+      count: priority.attention,
+      stateText: priority.attention ? `${priority.attention} ${t("attentionCount")}` : t("noNeedsAttention"),
+      tone: priority.attention ? "red" : "green",
+    },
+    {
+      label: t("runningTaskRuns"),
+      count: priority.running,
+      stateText: priority.running ? t("stateRunning") : t("noRunningTaskRuns"),
+      tone: priority.running ? "green" : "",
+    },
+    {
+      label: t("preparedWorkflows"),
+      count: priority.prepared,
+      stateText: priority.prepared ? t("statePrepared") : t("noPreparedWorkflows"),
+      tone: priority.prepared ? "green" : "",
+    },
+    {
+      label: t("invalidRecords"),
+      count: priority.invalid,
+      stateText: priority.invalid ? `${priority.invalid} ${t("invalid")}` : t("noInvalidRecords"),
+      tone: priority.invalid ? "red" : "green",
+    },
   ];
   metrics.innerHTML = rows
-    .map(([label, count, invalid]) => {
-      const stateText = invalid ? `${invalid} ${t("invalid")}` : t("valid");
-      const className = invalid ? "metric invalid" : "metric";
+    .map(({ label, count, stateText, tone }) => {
+      const className = ["metric", "priority-metric", tone ? `priority-${tone}` : ""].filter(Boolean).join(" ");
       return `<div class="${className}"><span class="metric-kicker">${escapeHtml(label)}</span><strong>${count}</strong><span class="metric-state">${escapeHtml(stateText)}</span></div>`;
     })
     .join("");
@@ -380,15 +391,15 @@ function renderOverview(snapshot) {
   const running = sortedTaskRuns(snapshot.task_runs.items).filter((row) => row.status === "running" && !taskRunNeedsAttention(row));
   const attention = overviewAttentionRows(snapshot);
   content.innerHTML = [
-    section(t("localState"), overviewCards(snapshot), t("noLocalState"), t("noteOverview"), "overview-state"),
+    optionalSection(t("runningTaskRuns"), running.map(taskRunCard), "", "overview-task-runs"),
     optionalSection(
       t("preparedWorkflows"),
       prepared.map(workflowCard),
       "",
       "overview-workflows"
     ),
-    optionalSection(t("runningTaskRuns"), running.map(taskRunCard), "", "overview-task-runs"),
     optionalSection(t("needsAttention"), attention, "", "overview-attention"),
+    section(t("inventory"), overviewCards(snapshot), t("noLocalState"), t("noteOverview"), "overview-state"),
   ].join("");
 }
 
@@ -409,15 +420,7 @@ function overviewCards(snapshot) {
     `${t("metricProfiles")} ${snapshot.profiles.items.length}`,
     `${t("metricRetrospecs")} ${snapshot.retrospecs.items.length}`,
   ];
-  const preparedCount = snapshot.workflows.items.filter((row) => workflowUiGroup(row) === "prepared").length;
-  const runningCount = snapshot.task_runs.items.filter((row) => row.status === "running" && !taskRunNeedsAttention(row)).length;
-  const attentionCount = overviewAttentionRows(snapshot).length;
   return [
-    card(t("currentWork"), [
-      pill(`${preparedCount} ${t("preparedWorkflowCount")}`, preparedCount ? "green" : ""),
-      pill(`${runningCount} ${t("runningRunCount")}`, runningCount ? "green" : ""),
-      attentionCount ? pill(`${attentionCount} ${t("attentionCount")}`, "red") : pill(t("valid"), "green"),
-    ], [snapshot.sources.workflows, snapshot.sources.task_runs], snapshot.repo.root, runningCount || preparedCount ? "green" : "blue"),
     card(t("config"), [
       pill(snapshot.config.source, "blue"),
       pill(`PR ${snapshot.config.workflow.pull_request}`, "green"),
@@ -428,6 +431,26 @@ function overviewCards(snapshot) {
     ]),
     card(t("inventory"), counts.map((count) => pill(count)), sourcePaths, t("noteOverview"), "violet"),
   ];
+}
+
+function overviewPrioritySummary(snapshot) {
+  return {
+    prepared: snapshot.workflows.items.filter((row) => workflowUiGroup(row) === "prepared").length,
+    running: snapshot.task_runs.items.filter((row) => row.status === "running" && !taskRunNeedsAttention(row)).length,
+    attention: overviewAttentionRows(snapshot).length,
+    invalid: invalidRecordCount(snapshot),
+  };
+}
+
+function invalidRecordCount(snapshot) {
+  return (
+    snapshot.ideas.invalid.length +
+    snapshot.tasks.invalid.length +
+    snapshot.workflows.invalid.length +
+    snapshot.task_runs.invalid.length +
+    snapshot.profiles.invalid.length +
+    snapshot.retrospecs.invalid.length
+  );
 }
 
 function renderIdeas(snapshot) {

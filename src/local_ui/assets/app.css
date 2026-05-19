@@ -291,7 +291,7 @@ main {
 .metrics {
   position: static;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -309,8 +309,8 @@ main {
 
 .metric {
   position: relative;
-  min-height: 74px;
-  padding: 12px 13px;
+  min-height: 88px;
+  padding: 13px 14px;
   overflow: hidden;
 }
 
@@ -318,14 +318,33 @@ main {
   position: absolute;
   right: 14px;
   bottom: 13px;
-  width: 42px;
+  width: 46px;
   height: 3px;
   content: "";
-  background: linear-gradient(90deg, var(--green), var(--blue), var(--rust));
+  background: var(--line-strong);
 }
 
+.priority-metric {
+  border-color: var(--line-strong);
+}
+
+.priority-metric.priority-green {
+  border-color: #b8d8cb;
+  background: #fbfffc;
+}
+
+.priority-metric.priority-red {
+  border-color: #e1abab;
+  background: #fffafa;
+}
+
+.priority-metric.priority-green::after {
+  background: var(--green);
+}
+
+.priority-metric.priority-red::after,
 .metric.invalid::after {
-  background: linear-gradient(90deg, var(--red), var(--amber));
+  background: var(--red);
 }
 
 .metric-kicker,
@@ -344,9 +363,9 @@ main {
 .metric strong {
   display: block;
   margin-top: 7px;
-  font-size: 26px;
+  font-size: 30px;
   font-weight: 620;
-  line-height: 0.9;
+  line-height: 1;
 }
 
 .metric-state {
@@ -793,7 +812,7 @@ main {
 
   .metrics {
     position: static;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -862,7 +881,7 @@ main {
   }
 
   .metric {
-    min-height: 108px;
+    min-height: 112px;
   }
 
   .record-card {
@@ -892,7 +911,7 @@ main {
 
 @media (max-width: 420px) {
   .metrics {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .section-heading {
