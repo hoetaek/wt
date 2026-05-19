@@ -456,10 +456,10 @@ function renderMetrics(snapshot) {
 
 function renderOverview(snapshot) {
   const focus = overviewFocusModel(snapshot);
-  const attention = overviewAttentionRows(snapshot);
+  const attentionRows = overviewAttentionRows(snapshot);
   content.innerHTML = [
     focusPanel(focus),
-    section(t("localState"), overviewCards(snapshot, focus), t("noLocalState"), t("noteOverview"), "overview-state"),
+    section(t("localState"), overviewCards(snapshot, focus, attentionRows.length), t("noLocalState"), t("noteOverview"), "overview-state"),
     optionalSection(
       t("preparedWorkflows"),
       focus.prepared.map(workflowCard),
@@ -467,11 +467,11 @@ function renderOverview(snapshot) {
       "overview-workflows"
     ),
     optionalSection(t("runningTaskRuns"), focus.running.map(taskRunCard), "", "overview-task-runs"),
-    optionalSection(t("needsAttention"), attention, "", "overview-attention"),
+    optionalSection(t("needsAttention"), attentionRows, "", "overview-attention"),
   ].join("");
 }
 
-function overviewCards(snapshot, focus) {
+function overviewCards(snapshot, focus, attentionCount) {
   const sourcePaths = [
     snapshot.sources.tasks,
     snapshot.sources.task_runs,
@@ -490,7 +490,6 @@ function overviewCards(snapshot, focus) {
   ];
   const preparedCount = focus.prepared.length;
   const runningCount = focus.running.length;
-  const attentionCount = overviewAttentionRows(snapshot).length;
   return [
     card(t("currentWork"), [
       pill(`${preparedCount} ${t("preparedWorkflowCount")}`, preparedCount ? "green" : ""),
