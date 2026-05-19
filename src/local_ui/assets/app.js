@@ -805,7 +805,7 @@ function scanRow(row) {
   const summary = row.summary ? `<p class="focus-summary">${escapeHtml(row.summary)}</p>` : "";
   const detailText = scanDetailText(row);
   const details = detailText
-    ? `<details class="focus-inspector scan-inspector"><summary>${escapeHtml(t("focusSource"))}</summary>${formatFullText(detailText, row.detailKind || "source")}</details>`
+    ? `<details class="focus-inspector scan-inspector"><summary>${escapeHtml(t("focusSource"))}</summary><div class="source-panel full-text">${formatFullText(detailText, row.detailKind || "source")}</div></details>`
     : "";
   return `<article class="scan-row tone-${row.tone || "neutral"}"><div class="scan-main"><span class="focus-kicker">${escapeHtml(row.kicker)}</span><h4>${escapeHtml(row.title)}</h4>${summary}</div><div class="scan-meta meta">${meta}</div><div class="scan-side">${pathsHtml}${details}</div></article>`;
 }
@@ -977,7 +977,7 @@ function focusItem(item) {
   const summary = item.summary ? `<p class="focus-summary">${escapeHtml(item.summary)}</p>` : "";
   const detailText = focusDetailText(item);
   const details = detailText
-    ? `<details class="focus-inspector"><summary>${escapeHtml(t("focusSource"))}</summary>${formatFullText(detailText, item.detailKind || "source")}</details>`
+    ? `<details class="focus-inspector"><summary>${escapeHtml(t("focusSource"))}</summary><div class="source-panel full-text">${formatFullText(detailText, item.detailKind || "source")}</div></details>`
     : "";
   return `<li class="focus-item tone-${item.tone || "neutral"}"><div class="focus-item-main"><span class="focus-kicker">${escapeHtml(item.kicker)}</span><h4>${escapeHtml(item.title)}</h4>${summary}<div class="meta">${meta}</div>${pathHtml}</div>${details}</li>`;
 }

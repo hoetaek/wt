@@ -127,6 +127,7 @@ mod tests {
         assert!(APP_CSS.contains(".metrics[data-view]:not([data-view=\"overview\"])"));
         assert!(APP_CSS.contains(".focus-panel"));
         assert!(APP_CSS.contains(".focus-inspector"));
+        assert!(APP_CSS.contains(".source-panel"));
         assert!(APP_CSS.contains(".status-strip-inline"));
         assert!(APP_CSS.contains(".scan-list"));
         assert!(APP_CSS.contains(".scan-row"));
@@ -147,6 +148,7 @@ mod tests {
         assert!(APP_JS.contains("taskRunScanRow"));
         assert!(APP_JS.contains("data-read-toggle"));
         assert!(APP_JS.contains("summary-full full-text"));
+        assert!(APP_JS.contains("source-panel full-text"));
         assert!(!APP_JS.contains("</summary><div class=\"full-text\""));
         assert!(APP_JS.contains("전문 보기"));
         assert!(APP_JS.contains("확인 필요"));

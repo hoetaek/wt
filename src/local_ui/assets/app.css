@@ -679,26 +679,26 @@ main {
 
 .focus-inspector {
   min-width: 0;
+  max-width: 100%;
+  display: grid;
   padding-top: 6px;
   border-top: 1px solid var(--line);
+  overflow: hidden;
 }
 
 .focus-inspector summary {
-  width: max-content;
+  width: fit-content;
   max-width: 100%;
   color: var(--green);
   cursor: pointer;
   font-size: 12px;
   font-weight: 800;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .focus-inspector .full-text {
-  margin-top: 8px;
-  padding: 9px;
-  border-radius: 8px;
-  background: #f7f9f5;
-  max-height: 260px;
+  max-height: min(44vh, 360px);
 }
 
 .focus-more {
@@ -810,6 +810,7 @@ main {
 .scan-side {
   display: grid;
   gap: 7px;
+  overflow: hidden;
 }
 
 .scan-meta {
@@ -838,8 +839,8 @@ main {
   border-top: 0;
 }
 
-.scan-inspector .full-text {
-  max-height: 220px;
+.scan-inspector .source-panel {
+  max-height: min(42vh, 320px);
 }
 
 .jump-nav {
@@ -1111,8 +1112,10 @@ main {
 
 .summary-text {
   min-width: 0;
+  max-width: 100%;
   display: grid;
   gap: 8px;
+  overflow: hidden;
 }
 
 .summary-full {
@@ -1167,25 +1170,40 @@ main {
 }
 
 .full-text {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
   margin: 0;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--ink-soft);
-  max-width: none;
   max-height: min(64vh, 760px);
   overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.source-panel {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7f9f5;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 .markdown-body {
+  min-width: 0;
   display: grid;
   gap: 8px;
-  max-width: 78ch;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body p {
   margin: 0;
   white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body h1,
@@ -1218,27 +1236,35 @@ main {
 }
 
 .markdown-body code {
+  max-width: 100%;
   padding: 1px 4px;
   border-radius: 5px;
   background: #eef3ee;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.92em;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body pre {
+  max-width: 100%;
   margin: 0;
   padding: 10px;
   border-radius: 8px;
   background: #eef3ee;
   overflow: auto;
+  white-space: pre;
 }
 
 .full-text pre {
+  min-width: 0;
+  max-width: 100%;
   margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .invalid-card {
