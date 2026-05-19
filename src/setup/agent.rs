@@ -139,6 +139,9 @@ fn send_agent_prompt(
 fn should_submit_with_enter_key(agent: &AgentConfig) -> bool {
     matches!(
         (&agent.submit, &agent.cli),
-        (SubmitMode::Auto, AgentCli::Codex) | (SubmitMode::CarriageReturn, _)
+        (
+            SubmitMode::Auto,
+            AgentCli::Codex | AgentCli::Claude | AgentCli::Gemini,
+        ) | (SubmitMode::CarriageReturn, _)
     )
 }
