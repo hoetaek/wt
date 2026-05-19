@@ -893,12 +893,13 @@ fn process_matches_codex(process: &CmuxProcessInfo) -> bool {
 }
 
 fn process_matches_claude(process: &CmuxProcessInfo) -> bool {
-    process_name_is(&process.name, &["claude", "claude-code", "claude_code"])
-        || process_path_basename_is(
-            process.path.as_deref(),
-            &["claude", "claude-code", "claude_code"],
-        )
-        || process_path_has_vendor_package(process.path.as_deref(), "@anthropic-ai", "claude-code")
+    process_name_is(
+        &process.name,
+        &["claude", "claude.exe", "claude-code", "claude_code"],
+    ) || process_path_basename_is(
+        process.path.as_deref(),
+        &["claude", "claude-code", "claude_code"],
+    ) || process_path_has_vendor_package(process.path.as_deref(), "@anthropic-ai", "claude-code")
 }
 
 fn process_name_is(name: &str, expected: &[&str]) -> bool {
@@ -1520,6 +1521,32 @@ mod tests {
         assert!(!process_matches_claude(&node_under_claude_home));
         assert!(process_matches_codex(&codex_binary));
         assert!(process_matches_claude(&claude_binary));
+    }
+
+    #[test]
+    fn process_matches_claude_when_cmux_reports_claude_exe_without_path() {
+        let claude_exe_no_path = CmuxProcessInfo {
+            name: "claude.exe".into(),
+            path: None,
+        };
+        let codex_no_path = CmuxProcessInfo {
+            name: "codex".into(),
+            path: None,
+        };
+
+        assert!(
+            process_matches_claude(&claude_exe_no_path),
+            "cmux reports the Claude Code wrapper as \"claude.exe\" with no path on macOS; \
+             the matcher must accept that exact shape so process identity overrides the \
+             weaker screen-marker fallback"
+        );
+        assert!(
+            process_matches_codex(&codex_no_path),
+            "codex is reported with name \"codex\" and was already covered; this asserts \
+             the two matchers stay symmetric"
+        );
+        assert!(!process_matches_codex(&claude_exe_no_path));
+        assert!(!process_matches_claude(&codex_no_path));
     }
 
     #[test]
