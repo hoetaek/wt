@@ -318,8 +318,6 @@ pub(super) fn screen_status(screen: &str) -> Option<AgentStatus> {
         || lower.contains("running")
         || lower.contains("thinking")
         || lower.contains("exploring")
-        || lower.contains("starting")
-        || lower.contains("waiting")
     {
         return Some(AgentStatus::Running);
     }
@@ -332,7 +330,9 @@ pub(super) fn screen_status(screen: &str) -> Option<AgentStatus> {
 
 fn normalize_status(value: &str) -> Option<AgentStatus> {
     match normalize_token(value).as_str() {
-        "running" | "working" | "busy" | "thinking" => Some(AgentStatus::Running),
+        "running" | "working" | "busy" | "thinking" | "starting" | "waiting" => {
+            Some(AgentStatus::Running)
+        }
         "idle" | "ready" => Some(AgentStatus::Idle),
         "needs_input" | "needsinput" | "waiting_for_input" | "permissionrequest" => {
             Some(AgentStatus::NeedsInput)
@@ -650,18 +650,33 @@ mod tests {
 
     #[test]
     fn screen_status_classifies_codex_waiting_variants() {
+        // user-input waiting → NeedsInput (precedence: NeedsInput checked first)
         assert_eq!(
             screen_status("Waiting for user input"),
             Some(AgentStatus::NeedsInput)
         );
         assert_eq!(
-            screen_status("Waiting on tool response"),
-            Some(AgentStatus::Running)
+            screen_status("Waiting for input"),
+            Some(AgentStatus::NeedsInput)
         );
-        assert_eq!(screen_status("Starting up"), Some(AgentStatus::Running));
+        // standalone `waiting`/`starting` should NOT win over a more recent
+        // `Ready`/`Idle` footer when both appear in the captured screen
+        // (e.g. stale scrollback). Structured statuses are normalized via
+        // normalize_status instead.
         assert_eq!(
-            screen_status("waiting for the build"),
-            Some(AgentStatus::Running)
+            screen_status("Waiting on tool response\nReady"),
+            Some(AgentStatus::Idle)
         );
+        // Without any anchored running/idle keyword, hookless waiting/starting
+        // text yields Unknown so callers fall back to other signals rather
+        // than trusting an ambiguous substring.
+        assert_eq!(screen_status("Waiting on tool response"), None);
+        assert_eq!(screen_status("Starting up"), None);
+    }
+
+    #[test]
+    fn normalize_status_accepts_waiting_and_starting() {
+        assert_eq!(normalize_status("Waiting"), Some(AgentStatus::Running));
+        assert_eq!(normalize_status("Starting"), Some(AgentStatus::Running));
     }
 }
