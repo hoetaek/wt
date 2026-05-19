@@ -1,0 +1,4 @@
+interface:
+  display_name: "WT Retrospect"
+  short_description: "Capture keep/problem/try lessons as a retrospective"
+  default_prompt: "Use $wt-retrospect after $wt-land (or explicit discard) to write keep/problem/try lessons and action candidates as a TOML retrospective under .local/retrospectives/."
