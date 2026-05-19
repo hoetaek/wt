@@ -182,16 +182,17 @@ Tracked agent instruction file이 이미 있으면 agent가 지원하는 local o
 Claude Code inbox polling의 canonical install surface는 다음 두 명령이다.
 
 ```bash
-wt agent hook install claude --agent <agent>
-wt agent hook uninstall claude --agent <agent>
+wt agent hook install claude
+wt agent hook uninstall claude
 ```
 
 이 adapter는 Claude 전용이다. Install은 worktree-local
-`.claude/settings.local.json`에만 `UserPromptSubmit` hook을 추가하고, hook command는
-다음 canonical delivery command를 실행한다.
+`.claude/settings.local.json`에만 `UserPromptSubmit` hook dispatcher를 추가한다. Hook
+command는 runtime env `WT_AGENT_ID`를 읽어 다음 delivery command를 실행하고,
+`WT_AGENT_ID`가 없으면 성공으로 조용히 종료한다.
 
 ```bash
-wt msg check-inbox --agent <agent>
+wt msg check-inbox --agent "$WT_AGENT_ID"
 ```
 
 Generated command string은 wt-managed entry를 구분하기 위한 marker를 `#` 뒤에 둔다.
@@ -201,9 +202,11 @@ Claude Code가 shell command로 실행할 때 `#` 뒤 marker는 shell comment로
 
 Install은 먼저 per-worktree Git exclude file에 local settings path를 추가한다.
 `.claude`가 `.agents` 같은 repo-local directory로 향하는 symlink라면 symlink path와
-실제 target path를 모두 exclude한다. Reinstall은 같은 agent의 wt-managed hook을 하나만
-남기는 idempotent operation이다. Uninstall은 선택한 agent의 wt-managed Claude hook entry만
-제거하고, 사용자가 작성한 다른 Claude hook이나 settings key는 보존한다.
+실제 target path를 모두 exclude한다. Reinstall은 wt-managed dispatcher hook을 하나만
+남기는 idempotent operation이다. `--agent <agent>`가 남아 있다면 manual/test override다.
+이 override는 hook을 특정 agent에 묶으므로 normal run UX의 일부가 아니다. Uninstall은
+wt-managed Claude hook entry만 제거하고, 사용자가 작성한 다른 Claude hook이나 settings key는
+보존한다. `--agent <agent>` uninstall은 manual/test override entry만 대상으로 한다.
 
 Tracked `.claude/settings.local.json` 또는 symlink target local settings file이 있으면
 install/uninstall은 실패한다. Tracked `CLAUDE.md`, `AGENTS.md`, `.gitignore`,

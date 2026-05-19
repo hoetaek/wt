@@ -8,6 +8,12 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Refactored `wt agent hook install claude` to install a worktree-local
+  `WT_AGENT_ID` dispatcher hook by default, matching the Codex runtime identity
+  model while preserving `--agent <agent>` as a manual/test override.
+- Bumped the package version to `0.36.3` because the Claude hook adapter CLI now
+  separates hook installation from per-run agent identity binding.
+
 - Added the `coordinator` message target for task and workflow handoffs. Task
   agents now receive `WT_COORDINATOR_AGENT_ID=agents/coordinator` when wt
   launches their agent command, and generated handoff prompts include

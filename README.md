@@ -268,13 +268,16 @@ merge.
   transitions by default; `--timeout <seconds>` bounds the wait, and
   `--heartbeat <seconds>` opts into unchanged running reports. Agent state is
   separate from `TaskRun.status`.
-- `wt agent hook install claude --agent <agent>` installs a Claude-specific
-  Claude Code `UserPromptSubmit` hook in worktree-local
-  `.claude/settings.local.json`. The hook delivers the file inbox by running
-  `wt msg check-inbox --agent <agent>`, and `wt agent hook uninstall claude
-  --agent <agent>` removes only wt-managed hook entries. The generated command
-  stores its wt marker after `#`, so shell execution treats the marker as a
-  comment rather than as an argument.
+- `wt agent hook install claude` installs a Claude-specific Claude Code
+  `UserPromptSubmit` hook dispatcher in worktree-local
+  `.claude/settings.local.json`. The hook reads `WT_AGENT_ID` at runtime, runs
+  `wt msg check-inbox --agent "$WT_AGENT_ID"` when it is set, and otherwise
+  exits successfully without output. The generated command stores its wt marker
+  after `#`, so shell execution treats the marker as a comment rather than as
+  an argument. `--agent <agent>` is only a manual/test override; normal
+  `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the
+  per-run agent by setting `WT_AGENT_ID=agents/<branch_slug>` in the cmux
+  `new-workspace --command` string when launching Claude.
 - `wt agent hook install codex` installs a Codex-specific user-level
   `UserPromptSubmit` hook dispatcher in `$CODEX_HOME/hooks.json` or
   `~/.codex/hooks.json`. The hook reads `WT_AGENT_ID` at runtime, runs
@@ -285,9 +288,9 @@ merge.
   `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the
   per-run agent by setting `WT_AGENT_ID=agents/<branch_slug>` in the cmux
   `new-workspace --command` string when launching Codex. wt-launched Claude and
-  future agent CLI commands receive the same launch-time environment binding;
-  Claude hook dispatch remains owned by the Claude adapter surface. `wt agent
-  hook uninstall codex` removes only wt-managed Codex hook and trust entries.
+  future agent CLI commands receive the same launch-time environment binding.
+  `wt agent hook uninstall codex` removes only wt-managed Codex hook and trust
+  entries.
 
 `wt workflow` is the canonical prepared-work surface. `single`, `batch`,
 `stack`, and `matrix` are workflow mode values, not separate command surfaces. Use

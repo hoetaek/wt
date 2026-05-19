@@ -17,26 +17,24 @@ const CODEX_HOOK_EVENT_KEY: &str = "user_prompt_submit";
 const CODEX_DEFAULT_HOOK_TIMEOUT_SEC: u64 = 600;
 const WT_CODEX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 
-pub(crate) fn install_claude(ctx: &Ctx, agent: &str) -> Result<()> {
-    let agent = AgentId::parse(agent).context("Invalid agent id")?;
+pub(crate) fn install_claude(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
+    let target = ClaudeHookTarget::parse(agent)?;
     let paths = claude_hook_paths(ctx, true)?;
     ensure_settings_path_is_untracked(ctx, &paths)?;
     ensure_git_excludes(ctx, &paths.exclude_patterns)?;
 
     let mut settings = read_settings(&paths.settings_path)?;
-    remove_managed_claude_hook(&mut settings, agent.as_str())?;
-    install_managed_claude_hook(&mut settings, agent.as_str())?;
+    remove_managed_claude_hook(&mut settings, ClaudeRemoveTarget::AllWtManaged)?;
+    let command = target.command();
+    install_managed_claude_hook(&mut settings, &command)?;
     write_settings(&paths.settings_path, &settings)?;
 
     if !ctx.quiet {
         ctx.ui
-            .print_step(&format!("Claude hook installed for {}", agent.as_str()));
+            .print_step(&format!("Claude hook installed for {}", target.label()));
         ctx.ui
             .print_dim(&format!("  Settings: {}", paths.display_settings));
-        ctx.ui.print_dim(&format!(
-            "  Command: wt msg check-inbox --agent {}",
-            agent.as_str()
-        ));
+        ctx.ui.print_dim(&format!("  Command: {command}"));
         ctx.ui
             .print_dim(&format!("  Git exclude: {}", paths.exclude_path.display()));
     }
@@ -44,13 +42,13 @@ pub(crate) fn install_claude(ctx: &Ctx, agent: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn uninstall_claude(ctx: &Ctx, agent: &str) -> Result<()> {
-    let agent = AgentId::parse(agent).context("Invalid agent id")?;
+pub(crate) fn uninstall_claude(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
+    let target = ClaudeHookTarget::parse(agent)?;
     let paths = claude_hook_paths(ctx, false)?;
     if !paths.settings_path.exists() {
         if !ctx.quiet {
             ctx.ui
-                .print_step(&format!("Claude hook not installed for {}", agent.as_str()));
+                .print_step(&format!("Claude hook not installed for {}", target.label()));
             ctx.ui
                 .print_dim(&format!("  Settings: {}", paths.display_settings));
         }
@@ -59,7 +57,13 @@ pub(crate) fn uninstall_claude(ctx: &Ctx, agent: &str) -> Result<()> {
 
     ensure_settings_path_is_untracked(ctx, &paths)?;
     let mut settings = read_settings(&paths.settings_path)?;
-    let removed = remove_managed_claude_hook(&mut settings, agent.as_str())?;
+    let remove_target = match &target {
+        ClaudeHookTarget::Dispatcher => ClaudeRemoveTarget::AllWtManaged,
+        ClaudeHookTarget::Agent(agent) => {
+            ClaudeRemoveTarget::Command(managed_claude_hook_command(agent.as_str()))
+        }
+    };
+    let removed = remove_managed_claude_hook(&mut settings, remove_target)?;
     if removed > 0 {
         if settings_is_empty(&settings) {
             fs::remove_file(&paths.settings_path).with_context(|| {
@@ -80,7 +84,7 @@ pub(crate) fn uninstall_claude(ctx: &Ctx, agent: &str) -> Result<()> {
             "uninstalled"
         };
         ctx.ui
-            .print_step(&format!("Claude hook {status} for {}", agent.as_str()));
+            .print_step(&format!("Claude hook {status} for {}", target.label()));
         ctx.ui
             .print_dim(&format!("  Settings: {}", paths.display_settings));
     }
@@ -208,6 +212,35 @@ enum CodexHookTarget {
     Agent(AgentId),
 }
 
+enum ClaudeHookTarget {
+    Dispatcher,
+    Agent(AgentId),
+}
+
+impl ClaudeHookTarget {
+    fn parse(agent: Option<&str>) -> Result<Self> {
+        agent
+            .map(|agent| AgentId::parse(agent).map(Self::Agent))
+            .transpose()
+            .context("Invalid agent id")
+            .map(|target| target.unwrap_or(Self::Dispatcher))
+    }
+
+    fn command(&self) -> String {
+        match self {
+            Self::Dispatcher => managed_claude_dispatcher_command(),
+            Self::Agent(agent) => managed_claude_hook_command(agent.as_str()),
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Self::Dispatcher => "WT_AGENT_ID dispatcher".into(),
+            Self::Agent(agent) => format!("manual override {}", agent.as_str()),
+        }
+    }
+}
+
 impl CodexHookTarget {
     fn parse(agent: Option<&str>) -> Result<Self> {
         agent
@@ -233,6 +266,11 @@ impl CodexHookTarget {
 }
 
 enum CodexRemoveTarget {
+    AllWtManaged,
+    Command(String),
+}
+
+enum ClaudeRemoveTarget {
     AllWtManaged,
     Command(String),
 }
@@ -763,7 +801,7 @@ fn set_codex_trust_key(document: &mut DocumentMut, key: &str, trusted_hash: &str
     Ok(())
 }
 
-fn install_managed_claude_hook(settings: &mut Value, agent: &str) -> Result<()> {
+fn install_managed_claude_hook(settings: &mut Value, command: &str) -> Result<()> {
     let root = settings_object(settings)?;
     let hooks = object_entry(root, "hooks")?;
     let event = array_entry(hooks, CLAUDE_HOOK_EVENT)?;
@@ -771,14 +809,14 @@ fn install_managed_claude_hook(settings: &mut Value, agent: &str) -> Result<()> 
         "hooks": [
             {
                 "type": "command",
-                "command": managed_hook_command(agent)
+                "command": command
             }
         ]
     }));
     Ok(())
 }
 
-fn remove_managed_claude_hook(settings: &mut Value, agent: &str) -> Result<usize> {
+fn remove_managed_claude_hook(settings: &mut Value, target: ClaudeRemoveTarget) -> Result<usize> {
     let root = settings_object(settings)?;
     let Some(hooks_value) = root.get_mut("hooks") else {
         return Ok(0);
@@ -793,11 +831,10 @@ fn remove_managed_claude_hook(settings: &mut Value, agent: &str) -> Result<usize
         bail!("Cannot update Claude local settings: `hooks.{CLAUDE_HOOK_EVENT}` must be an array.");
     };
 
-    let command = managed_hook_command(agent);
     let mut removed = 0;
     let mut kept = Vec::with_capacity(event_entries.len());
     for mut entry in std::mem::take(event_entries) {
-        let removed_from_entry = remove_command_from_event_entry(&mut entry, &command)?;
+        let removed_from_entry = remove_claude_command_from_event_entry(&mut entry, &target)?;
         removed += removed_from_entry;
         if !(removed_from_entry > 0 && event_entry_has_no_hooks(&entry)) {
             kept.push(entry);
@@ -815,7 +852,10 @@ fn remove_managed_claude_hook(settings: &mut Value, agent: &str) -> Result<usize
     Ok(removed)
 }
 
-fn remove_command_from_event_entry(entry: &mut Value, command: &str) -> Result<usize> {
+fn remove_claude_command_from_event_entry(
+    entry: &mut Value,
+    target: &ClaudeRemoveTarget,
+) -> Result<usize> {
     let Some(entry) = entry.as_object_mut() else {
         bail!("Cannot update Claude local settings: hook event entries must be JSON objects.");
     };
@@ -826,8 +866,18 @@ fn remove_command_from_event_entry(entry: &mut Value, command: &str) -> Result<u
         bail!("Cannot update Claude local settings: hook event `hooks` must be an array.");
     };
     let before = hooks.len();
-    hooks.retain(|hook| !is_managed_command(hook, command));
+    hooks.retain(|hook| !claude_remove_target_matches(target, hook));
     Ok(before - hooks.len())
+}
+
+fn claude_remove_target_matches(target: &ClaudeRemoveTarget, hook: &Value) -> bool {
+    match target {
+        ClaudeRemoveTarget::AllWtManaged => hook
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(is_wt_managed_claude_command),
+        ClaudeRemoveTarget::Command(command) => is_managed_command(hook, command),
+    }
 }
 
 fn is_managed_command(hook: &Value, command: &str) -> bool {
@@ -867,8 +917,14 @@ fn array_entry<'a>(object: &'a mut Map<String, Value>, key: &str) -> Result<&'a 
     })
 }
 
-fn managed_hook_command(agent: &str) -> String {
+fn managed_claude_hook_command(agent: &str) -> String {
     format!("wt msg check-inbox --agent {agent} {WT_CLAUDE_HOOK_MARKER}")
+}
+
+fn managed_claude_dispatcher_command() -> String {
+    format!(
+        "if [ -n \"${{WT_AGENT_ID:-}}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi {WT_CLAUDE_HOOK_MARKER}"
+    )
 }
 
 fn managed_codex_hook_command(agent: &str) -> String {
@@ -898,6 +954,10 @@ pub(crate) fn codex_user_prompt_trust_key(
 
 pub(crate) fn is_wt_managed_codex_command(command: &str) -> bool {
     command.contains(WT_CODEX_HOOK_MARKER) && command.contains("wt msg check-inbox --agent ")
+}
+
+fn is_wt_managed_claude_command(command: &str) -> bool {
+    command.contains(WT_CLAUDE_HOOK_MARKER) && command.contains("wt msg check-inbox --agent ")
 }
 
 pub(crate) fn codex_command_hook_hash(command: &str) -> String {

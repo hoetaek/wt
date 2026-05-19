@@ -160,7 +160,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             AgentCommand::Hook { command } => match command {
                 AgentHookCommand::Install { command } => match command {
                     AgentHookInstallCommand::Claude { agent } => {
-                        commands::agent_hook::install_claude(ctx, agent)
+                        commands::agent_hook::install_claude(ctx, agent.as_deref())
                     }
                     AgentHookInstallCommand::Codex { agent } => {
                         commands::agent_hook::install_codex(ctx, agent.as_deref())
@@ -168,7 +168,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 },
                 AgentHookCommand::Uninstall { command } => match command {
                     AgentHookUninstallCommand::Claude { agent } => {
-                        commands::agent_hook::uninstall_claude(ctx, agent)
+                        commands::agent_hook::uninstall_claude(ctx, agent.as_deref())
                     }
                     AgentHookUninstallCommand::Codex { agent } => {
                         commands::agent_hook::uninstall_codex(ctx, agent.as_deref())
