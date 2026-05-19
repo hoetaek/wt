@@ -1,5 +1,6 @@
 mod agent;
 mod background_tests;
+mod browser;
 mod chrome_devtools;
 mod command;
 mod deps;
@@ -13,7 +14,6 @@ mod workspace;
 
 use agent::bootstrap_agent;
 use background_tests::run_background_tests;
-use chrome_devtools::{apply_chrome_devtools_template_vars, launch_chrome_devtools};
 use deps::install_deps;
 use env_template::substitute_env;
 use files::{copy_files, link_files};
@@ -22,9 +22,9 @@ use post_deps::open_post_deps_tabs;
 use summary::print_summary;
 use workspace::{insert_cmux_template_vars, open_workspace, workspace_color};
 
+pub(crate) use browser::{launch_browser, prepare_browser_launch};
 pub(crate) use env_template::build_template_vars;
-pub(crate) use site::{apply_site_template_vars, open_site_url};
-pub(crate) use workspace::open_workspace_url;
+pub(crate) use site::apply_site_template_vars;
 
 use crate::config::{Config, SiteProvider};
 pub(crate) use crate::config::{
@@ -88,8 +88,6 @@ pub(crate) struct SiteDescriptor {
     pub(crate) root: String,
     pub(crate) secure: bool,
     pub(crate) target: Option<String>,
-    pub(crate) open_browser: Option<bool>,
-    pub(crate) browser: Option<String>,
 }
 
 /// Run the full setup sequence on a newly created worktree.
@@ -133,7 +131,7 @@ pub(crate) fn run_setup_with_workspace_color_kind(
         template_vars.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
     let site = apply_site_template_vars(config, &mut template_vars);
-    let chrome_devtools = apply_chrome_devtools_template_vars(config, wt_path, &mut template_vars)?;
+    let browser_launch = prepare_browser_launch(config, wt_path, &mut template_vars)?;
 
     if let Some(ref site) = site {
         site::register_site(ctx, wt_path, site);
@@ -164,16 +162,8 @@ pub(crate) fn run_setup_with_workspace_color_kind(
         open_post_deps_tabs(ctx, config, handle, &template_vars)?;
     }
 
-    if let Some(chrome_devtools) = chrome_devtools {
-        launch_chrome_devtools(ctx, chrome_devtools)?;
-    }
-
-    // Open browser after deps (site may need built assets)
-    if let Some(ref site) = site {
-        open_site_url(ctx, site, None)?;
-    }
-
-    open_workspace_url(ctx, config, &template_vars)?;
+    // Launch browser after deps (site may need built assets).
+    launch_browser(ctx, browser_launch)?;
 
     if let (Some(handle), Some(agent)) = (ws_handle, &config.agent) {
         bootstrap_agent(ctx, handle, agent, modes.setup_mode, &template_vars)?;
@@ -653,7 +643,9 @@ mod tests {
 
     #[test]
     fn run_setup_opens_workspace_url_without_site() {
-        use crate::config::{Config, WorkspaceConfig};
+        use crate::config::{
+            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceConfig,
+        };
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
         use anyhow::Result;
@@ -689,9 +681,11 @@ mod tests {
 
         let config = Config {
             workspace: Some(WorkspaceConfig {
-                open_url: Some("{{site_url}}".into()),
-                open_browser: Some(true),
-                browser: Some("Google Chrome".into()),
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::System,
+                    url: Some("{{site_url}}".into()),
+                    app: Some("Google Chrome".into()),
+                }),
                 ..WorkspaceConfig::default()
             }),
             ..Config::default()
@@ -729,8 +723,83 @@ mod tests {
     }
 
     #[test]
+    fn run_setup_browser_mode_none_suppresses_browser_and_chrome_launch() {
+        use crate::config::{
+            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
+            WorkspaceConfig,
+        };
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner};
+        use anyhow::Result;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let repo = std::env::temp_dir().join("wt-test-browser-none-repo");
+        let wt = std::env::temp_dir().join("wt-test-browser-none-worktree");
+        fs::create_dir_all(&repo).ok();
+        fs::create_dir_all(&wt).ok();
+
+        let config = Config {
+            workspace: Some(WorkspaceConfig {
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::None,
+                    url: None,
+                    app: None,
+                }),
+                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                    port: Some(9222),
+                    ..WorkspaceChromeDevtoolsConfig::default()
+                }),
+                ..WorkspaceConfig::default()
+            }),
+            ..Config::default()
+        };
+        let runner = Arc::new(MockRunner::new());
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: wt.clone(),
+            branch: "alice/issue-1-test".into(),
+            workspace: "test".into(),
+            site: None,
+        };
+
+        run_setup(&ctx, &wt, &names, Some("GitHub Issue"), "issue", None, None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(!calls.iter().any(|(cmd, _, _)| cmd == "open" || cmd == "sh"));
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
     fn run_setup_launches_chrome_devtools_and_renders_local_context_vars() {
-        use crate::config::{Config, WorkspaceChromeDevtoolsConfig, WorkspaceConfig};
+        use crate::config::{
+            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
+            WorkspaceConfig,
+        };
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
         use anyhow::Result;
@@ -767,8 +836,12 @@ mod tests {
 
         let mut config = Config {
             workspace: Some(WorkspaceConfig {
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::ChromeDevtools,
+                    url: None,
+                    app: None,
+                }),
                 chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    enabled: true,
                     ..WorkspaceChromeDevtoolsConfig::default()
                 }),
                 ..WorkspaceConfig::default()
@@ -834,7 +907,10 @@ mod tests {
 
     #[test]
     fn run_setup_renders_chrome_devtools_vars_for_post_deps_tabs() {
-        use crate::config::{Config, WorkspaceChromeDevtoolsConfig, WorkspaceConfig};
+        use crate::config::{
+            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
+            WorkspaceConfig,
+        };
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
         use anyhow::Result;
@@ -879,8 +955,12 @@ mod tests {
                     "echo {{chrome_debug_url}} {{chrome_debug_port}} {{chrome_user_data_dir}}"
                         .into(),
                 ],
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::ChromeDevtools,
+                    url: None,
+                    app: None,
+                }),
                 chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    enabled: true,
                     ..WorkspaceChromeDevtoolsConfig::default()
                 }),
                 ..WorkspaceConfig::default()

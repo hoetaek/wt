@@ -24,7 +24,7 @@ const DEFAULT_SITE_ROOT: &str = ".";
 const DEFAULT_TRAEFIK_SITE_TARGET_TEMPLATE: &str = "http://127.0.0.1:{{vite_port}}";
 const DEFAULT_CHROME_DEVTOOLS_USER_DATA_DIR: &str =
     "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}";
-const DEFAULT_CHROME_DEVTOOLS_URL: &str = "{{site_url}}";
+const DEFAULT_WORKSPACE_BROWSER_URL: &str = "{{site_url}}";
 
 pub fn default_workspace_color(kind: &str) -> Option<&'static str> {
     WORKSPACE_DEFAULT_COLORS
@@ -219,8 +219,6 @@ pub struct SiteConfig {
     pub name: Option<String>,
     pub root: Option<String>,
     pub secure: Option<bool>,
-    pub open_browser: Option<bool>,
-    pub browser: Option<String>,
     pub url: Option<String>,
     pub target: Option<String>,
 }
@@ -254,8 +252,6 @@ impl Default for SiteConfig {
             name: None,
             root: None,
             secure: None,
-            open_browser: None,
-            browser: None,
             url: None,
             target: None,
         }
@@ -269,7 +265,6 @@ impl SiteConfig {
             .get_or_insert_with(|| DEFAULT_SITE_NAME_TEMPLATE.into());
         site.root.get_or_insert_with(|| DEFAULT_SITE_ROOT.into());
         site.secure.get_or_insert(true);
-        site.open_browser.get_or_insert(false);
         if site.url.is_none() {
             site.url = Some(default_site_url(site.secure.unwrap_or(true)));
         }
@@ -289,10 +284,6 @@ impl SiteConfig {
 
     pub fn effective_secure(&self) -> bool {
         self.secure.unwrap_or(true)
-    }
-
-    pub fn effective_open_browser(&self) -> bool {
-        self.open_browser.unwrap_or(false)
     }
 
     pub fn effective_url(&self) -> Cow<'_, str> {
@@ -331,9 +322,7 @@ pub struct WorkspaceConfig {
     pub tabs: Vec<String>,
     pub post_deps_tabs: Vec<String>,
     pub colors: HashMap<String, String>,
-    pub open_url: Option<String>,
-    pub open_browser: Option<bool>,
-    pub browser: Option<String>,
+    pub browser: Option<WorkspaceBrowserConfig>,
     pub chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
 }
 
@@ -375,13 +364,86 @@ impl WorkspaceConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkspaceBrowserConfig {
+    pub mode: WorkspaceBrowserMode,
+    pub url: Option<String>,
+    pub app: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceBrowserMode {
+    None,
+    System,
+    ChromeDevtools,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceBrowserConfigRaw {
+    mode: WorkspaceBrowserMode,
+    url: Option<String>,
+    app: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for WorkspaceBrowserConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = WorkspaceBrowserConfigRaw::deserialize(deserializer)?;
+
+        match raw.mode {
+            WorkspaceBrowserMode::None => {
+                if raw.url.is_some() {
+                    return Err(D::Error::custom(
+                        "[workspace.browser].url is not valid when mode = \"none\"",
+                    ));
+                }
+                if raw.app.is_some() {
+                    return Err(D::Error::custom(
+                        "[workspace.browser].app is not valid when mode = \"none\"",
+                    ));
+                }
+            }
+            WorkspaceBrowserMode::System => {}
+            WorkspaceBrowserMode::ChromeDevtools => {
+                if raw.app.is_some() {
+                    return Err(D::Error::custom(
+                        "[workspace.browser].app is only valid when mode = \"system\"",
+                    ));
+                }
+            }
+        }
+
+        Ok(Self {
+            mode: raw.mode,
+            url: raw.url,
+            app: raw.app,
+        })
+    }
+}
+
+impl WorkspaceBrowserConfig {
+    pub fn effective_url(&self) -> Option<Cow<'_, str>> {
+        match self.mode {
+            WorkspaceBrowserMode::None => None,
+            WorkspaceBrowserMode::System | WorkspaceBrowserMode::ChromeDevtools => {
+                Some(match self.url.as_deref() {
+                    Some(url) => Cow::Borrowed(url),
+                    None => Cow::Borrowed(DEFAULT_WORKSPACE_BROWSER_URL),
+                })
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkspaceChromeDevtoolsConfig {
-    pub enabled: bool,
     pub port: Option<u16>,
     pub user_data_dir: Option<String>,
-    pub url: Option<String>,
 }
 
 impl WorkspaceChromeDevtoolsConfig {
@@ -389,17 +451,6 @@ impl WorkspaceChromeDevtoolsConfig {
         self.user_data_dir
             .as_deref()
             .unwrap_or(DEFAULT_CHROME_DEVTOOLS_USER_DATA_DIR)
-    }
-
-    pub fn effective_url<'a>(&'a self, workspace: &'a WorkspaceConfig) -> Cow<'a, str> {
-        if let Some(url) = self.url.as_deref() {
-            return Cow::Borrowed(url);
-        }
-
-        match workspace.open_url.as_deref().filter(|url| !url.is_empty()) {
-            Some(url) => Cow::Borrowed(url),
-            None => Cow::Borrowed(DEFAULT_CHROME_DEVTOOLS_URL),
-        }
     }
 }
 

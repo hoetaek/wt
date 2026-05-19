@@ -255,15 +255,14 @@ fn open_worktree(ctx: &Ctx, opened: &OpenedWorktree) -> Result<()> {
 
     let template_vars = setup::build_template_vars(ctx, &entry.path, &names, title.as_deref());
     let mut template_vars = template_vars;
-    let site = setup::apply_site_template_vars(config, &mut template_vars);
+    let _site = setup::apply_site_template_vars(config, &mut template_vars);
+    let browser_launch = setup::prepare_browser_launch(config, &entry.path, &mut template_vars)?;
 
     // Open workspace
     if !cmux.is_available() {
         ctx.ui
             .print_step(&format!("Worktree path: {}", entry.path.display()));
-        if let Some(site) = site.as_ref() {
-            setup::open_site_url(ctx, site, None)?;
-        }
+        setup::launch_browser(ctx, browser_launch)?;
         return Ok(());
     }
 
@@ -291,16 +290,11 @@ fn open_worktree(ctx: &Ctx, opened: &OpenedWorktree) -> Result<()> {
             }
         }
 
-        let opened_url = setup::open_workspace_url(ctx, config, &template_vars)?;
-        if let Some(site) = site.as_ref() {
-            setup::open_site_url(ctx, site, opened_url.as_deref())?;
-        }
+        setup::launch_browser(ctx, browser_launch)?;
     } else {
         ctx.ui
             .print_step(&format!("Worktree path: {}", entry.path.display()));
-        if let Some(site) = site.as_ref() {
-            setup::open_site_url(ctx, site, None)?;
-        }
+        setup::launch_browser(ctx, browser_launch)?;
     }
 
     Ok(())
@@ -613,7 +607,8 @@ mod tests {
     #[test]
     fn open_starts_post_deps_tabs_and_opens_workspace_url() {
         use crate::config::{
-            AgentCli, AgentConfig, Config, ReadyMode, SubmitMode, WorkspaceConfig,
+            AgentCli, AgentConfig, Config, ReadyMode, SubmitMode, WorkspaceBrowserConfig,
+            WorkspaceBrowserMode, WorkspaceConfig,
         };
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
@@ -658,8 +653,11 @@ mod tests {
         let config = Config {
             workspace: Some(WorkspaceConfig {
                 post_deps_tabs: vec!["echo {{site_url}} {{api_url}}".into()],
-                open_url: Some("{{site_url}}".into()),
-                open_browser: Some(true),
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::System,
+                    url: Some("{{site_url}}".into()),
+                    app: None,
+                }),
                 ..WorkspaceConfig::default()
             }),
             agent: Some(AgentConfig {

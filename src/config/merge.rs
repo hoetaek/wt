@@ -206,12 +206,6 @@ fn merge_workspace_config(base: &mut WorkspaceConfig, profile: WorkspaceConfig) 
     extend_unique(&mut base.tabs, profile.tabs);
     extend_unique(&mut base.post_deps_tabs, profile.post_deps_tabs);
     base.colors.extend(profile.colors);
-    if profile.open_url.is_some() {
-        base.open_url = profile.open_url;
-    }
-    if profile.open_browser.is_some() {
-        base.open_browser = profile.open_browser;
-    }
     if profile.browser.is_some() {
         base.browser = profile.browser;
     }
