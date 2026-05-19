@@ -45,12 +45,13 @@ setup/site/test/workspace 기본값까지 잡을지를 고르는 선택이다.
 사용자는 어떤 task들을 어떤 실행 shape로 시작하고 이어갈지를 workflow로 다룬다.
 Canonical command surface는 `wt workflow`다.
 
-Workflow는 정확히 하나의 `mode = "single" | "batch" | "stack"` 값을 가진다.
+Workflow는 정확히 하나의 `mode = "single" | "batch" | "stack" | "matrix"` 값을 가진다.
 `mode`는 실행 shape만 고른다. `single`은 하나의 branch workspace에서 하나 이상의
 TaskDocument를 실행하고, `batch`는 같은 base에서 여러 독립 branch를 실행하며,
-`stack`은 task branch들을 정해진 parent chain으로 순서대로 실행한다.
+`stack`은 task branch들을 정해진 parent chain으로 순서대로 실행하고, `matrix`는 하나의
+TaskDocument를 named profile 목록으로 확장한다.
 
-`batch`와 `stack`은 workflow mode 값으로 남지만 top-level 상태 파일 noun이나 command
+`batch`, `stack`, `matrix`는 workflow mode 값으로 남지만 top-level 상태 파일 noun이나 command
 namespace가 아니다. 새 상태 파일은 `.local/workflows` 아래에만 만들고, batch/stack
 전용 상태 디렉터리는 새 코드가 읽거나 쓰는 상태 위치가 아니다. 별도 top-level command
 surface를 `wt workflow` 옆에 남기면 두 command surface가 모두 canonical처럼 보이므로
@@ -245,7 +246,7 @@ profile convention file merge를 모두 끝낸 뒤 최종 effective config에서
 `issue`, `branch`, `pr` prompt 앞에 펼친다. `common`을 각 layer마다 mode별 prompt로
 복사하지 않는다.
 
-`workflow`도 Workflow `mode = "single" | "batch" | "stack"`나 setup mode가 아니라
+`workflow`도 Workflow `mode = "single" | "batch" | "stack" | "matrix"`나 setup mode가 아니라
 `[agent.prompt]` / `[agent.prompt.append]` 안의 workflow-started task 전용 scope다.
 `wt run workflow`로 시작한 task에만 적용하고, direct `wt run task`, `wt run issue`,
 `wt run branch`, `wt run pr`에는 적용하지 않는다. Workflow task의 setup mode는 계속

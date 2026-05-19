@@ -241,8 +241,8 @@ completed with `wt workflow complete`, not `wt done`.
   `--heartbeat <seconds>` opts into unchanged running reports. Agent state is
   separate from `TaskRun.status`.
 
-`wt workflow` is the canonical prepared-work surface. `single`, `batch`, and
-`stack` are workflow mode values, not separate command surfaces. Use
+`wt workflow` is the canonical prepared-work surface. `single`, `batch`,
+`stack`, and `matrix` are workflow mode values, not separate command surfaces. Use
 `wt inspect` for read-only dossiers and `wt agent status` / `wt agent watch`
 for runtime observation.
 
