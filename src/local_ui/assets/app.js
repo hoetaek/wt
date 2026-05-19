@@ -379,55 +379,47 @@ function renderOverview(snapshot) {
   const prepared = sortedWorkflows(snapshot.workflows.items).filter((row) => workflowUiGroup(row) === "prepared");
   const running = sortedTaskRuns(snapshot.task_runs.items).filter((row) => row.status === "running" && !taskRunNeedsAttention(row));
   const attention = overviewAttentionRows(snapshot);
+  const preparedCount = prepared.length;
+  const runningCount = running.length;
+  const attentionCount = attention.length;
   content.innerHTML = [
-    section(t("localState"), overviewCards(snapshot), t("noLocalState"), t("noteOverview"), "overview-state"),
-    optionalSection(
+    currentWorkPanel(snapshot, { prepared: preparedCount, running: runningCount, attention: attentionCount }),
+    overviewNote(t("noteOverview")),
+    optionalDenseSection(
       t("preparedWorkflows"),
-      prepared.map(workflowCard),
-      "",
+      prepared.map(workflowRow),
       "overview-workflows"
     ),
-    optionalSection(t("runningTaskRuns"), running.map(taskRunCard), "", "overview-task-runs"),
+    optionalDenseSection(t("runningTaskRuns"), running.map(taskRunRow), "overview-task-runs"),
     optionalSection(t("needsAttention"), attention, "", "overview-attention"),
   ].join("");
 }
 
-function overviewCards(snapshot) {
-  const sourcePaths = [
-    snapshot.sources.tasks,
-    snapshot.sources.task_runs,
-    snapshot.sources.workflows,
-    snapshot.sources.ideas,
-    snapshot.sources.profiles,
-    snapshot.sources.retrospecs,
-  ];
-  const counts = [
-    `${t("metricTaskDocuments")} ${snapshot.tasks.items.length}`,
-    `${t("metricTaskRuns")} ${snapshot.task_runs.items.length}`,
-    `${t("metricWorkflows")} ${snapshot.workflows.items.length}`,
-    `${t("metricIdeas")} ${snapshot.ideas.items.length}`,
-    `${t("metricProfiles")} ${snapshot.profiles.items.length}`,
-    `${t("metricRetrospecs")} ${snapshot.retrospecs.items.length}`,
-  ];
-  const preparedCount = snapshot.workflows.items.filter((row) => workflowUiGroup(row) === "prepared").length;
-  const runningCount = snapshot.task_runs.items.filter((row) => row.status === "running" && !taskRunNeedsAttention(row)).length;
-  const attentionCount = overviewAttentionRows(snapshot).length;
-  return [
-    card(t("currentWork"), [
-      pill(`${preparedCount} ${t("preparedWorkflowCount")}`, preparedCount ? "green" : ""),
-      pill(`${runningCount} ${t("runningRunCount")}`, runningCount ? "green" : ""),
-      attentionCount ? pill(`${attentionCount} ${t("attentionCount")}`, "red") : pill(t("valid"), "green"),
-    ], [snapshot.sources.workflows, snapshot.sources.task_runs], snapshot.repo.root, runningCount || preparedCount ? "green" : "blue"),
-    card(t("config"), [
-      pill(snapshot.config.source, "blue"),
-      pill(`PR ${snapshot.config.workflow.pull_request}`, "green"),
-      pill(`Landing ${snapshot.config.workflow.landing}`, "amber"),
-      snapshot.config.selected_profile ? pill(`Profile ${snapshot.config.selected_profile}`, "violet") : "",
-    ], snapshot.config.paths, bodyPreview(snapshot.config.effective_text), "blue", [
-      detail(t("effectiveConfig"), snapshot.config.effective_text, "source"),
-    ]),
-    card(t("inventory"), counts.map((count) => pill(count)), sourcePaths, t("noteOverview"), "violet"),
-  ];
+function currentWorkPanel(snapshot, counts) {
+  const config = snapshot.config;
+  const cells = [
+    statCell(t("runningTaskRuns"), counts.running, counts.running ? "green" : "blue", snapshot.sources.task_runs),
+    statCell(t("preparedWorkflows"), counts.prepared, counts.prepared ? "green" : "blue", snapshot.sources.workflows),
+    statCell(t("needsAttention"), counts.attention, counts.attention ? "red" : "green", counts.attention ? "" : t("noNeedsAttention")),
+    statCell(t("config"), config.source, "blue", `PR ${config.workflow.pull_request} / Landing ${config.workflow.landing}`),
+    config.selected_profile
+      ? statCell("Profile", config.selected_profile, "violet", "")
+      : statCell(t("inventory"), `${snapshot.tasks.items.length}/${snapshot.task_runs.items.length}/${snapshot.workflows.items.length}`, "violet", `${t("metricTaskDocuments")} / ${t("metricTaskRuns")} / ${t("metricWorkflows")}`),
+  ].filter(Boolean);
+  return `<section class="overview-strip" aria-label="${escapeHtml(t("currentWork"))}">${cells.join("")}</section>`;
+}
+
+function statCell(label, value, tone, hint) {
+  const toneClass = tone ? ` tone-${tone}` : "";
+  const hintHtml = hint ? `<span class="stat-hint">${escapeHtml(String(hint))}</span>` : "";
+  return `<div class="stat-cell${toneClass}"><span class="stat-label">${escapeHtml(String(label))}</span><strong class="stat-value">${escapeHtml(String(value))}</strong>${hintHtml}</div>`;
+}
+
+function overviewNote(note) {
+  if (!note) {
+    return "";
+  }
+  return `<p class="section-note">${escapeHtml(note)}</p>`;
 }
 
 function renderIdeas(snapshot) {
@@ -448,7 +440,7 @@ function renderWorkflows(snapshot) {
   const groups = ["prepared", "running", "waiting", "done", "needs_attention"];
   const grouped = groups.map((group) => {
     const rows = sortedWorkflows(snapshot.workflows.items).filter((row) => workflowUiGroup(row) === group);
-    const cards = rows.map(workflowCard);
+    const cards = rows.map(workflowRow);
     if (group === "needs_attention") {
       cards.unshift(...snapshot.workflows.invalid.map(invalidCard));
     }
@@ -456,17 +448,17 @@ function renderWorkflows(snapshot) {
   });
   const sections = grouped
     .filter((entry) => entry.rows.length)
-    .map((entry) => section(stateLabel(entry.group), entry.rows, t("noWorkflows"), entry.group === "prepared" ? t("noteWorkflows") : "", `workflow-${entry.group}`));
+    .map((entry) => denseSection(stateLabel(entry.group), entry.rows, t("noWorkflows"), entry.group === "prepared" ? t("noteWorkflows") : "", `workflow-${entry.group}`));
   content.innerHTML = jumpNav(grouped
     .filter((entry) => entry.rows.length)
-    .map((entry) => [`workflow-${entry.group}`, `${stateLabel(entry.group)} ${entry.rows.length}`])) + (sections.join("") || section(t("workflows"), [], t("noWorkflows"), t("noteWorkflows"), "workflow-empty"));
+    .map((entry) => [`workflow-${entry.group}`, `${stateLabel(entry.group)} ${entry.rows.length}`])) + (sections.join("") || denseSection(t("workflows"), [], t("noWorkflows"), t("noteWorkflows"), "workflow-empty"));
 }
 
 function renderTaskRuns(snapshot) {
   const statuses = ["prepared", "running", "done", "skipped"];
   const grouped = statuses.map((status) => {
     const rows = sortedTaskRuns(snapshot.task_runs.items).filter((row) => row.status === status && !taskRunNeedsAttention(row));
-    return { status, rows: rows.map(taskRunCard) };
+    return { status, rows: rows.map(taskRunRow) };
   });
   const attention = taskRunAttentionRows(snapshot);
   if (attention.length) {
@@ -474,10 +466,10 @@ function renderTaskRuns(snapshot) {
   }
   const sections = grouped
     .filter((entry) => entry.rows.length)
-    .map((entry) => section(stateLabel(entry.status), entry.rows, t("noTaskRuns"), entry.status === "prepared" ? t("noteTaskRuns") : "", `task-runs-${entry.status}`));
+    .map((entry) => denseSection(stateLabel(entry.status), entry.rows, t("noTaskRuns"), entry.status === "prepared" ? t("noteTaskRuns") : "", `task-runs-${entry.status}`));
   content.innerHTML = jumpNav(grouped
     .filter((entry) => entry.rows.length)
-    .map((entry) => [`task-runs-${entry.status}`, `${stateLabel(entry.status)} ${entry.rows.length}`])) + (sections.join("") || section(t("taskRuns"), [], t("noTaskRuns"), t("noteTaskRuns"), "task-runs-empty"));
+    .map((entry) => [`task-runs-${entry.status}`, `${stateLabel(entry.status)} ${entry.rows.length}`])) + (sections.join("") || denseSection(t("taskRuns"), [], t("noTaskRuns"), t("noteTaskRuns"), "task-runs-empty"));
 }
 
 function renderConfig(snapshot) {
@@ -535,43 +527,123 @@ function taskCard(row) {
   ]);
 }
 
-function workflowCard(row) {
-  return card(row.title, [
-    pill(`workflow ${row.id}`, "blue"),
+function workflowRow(row) {
+  const group = workflowUiGroup(row);
+  const tone = groupColor(group);
+  const counts = workflowCountChips(row);
+  const profile = row.profile
+    ? `profile ${row.profile}`
+    : row.profiles.length
+      ? `${row.profiles.length} profiles`
+      : "";
+  const origin = row.origin ? `${row.origin.provider} ${row.origin.id}` : "";
+  const policy = `${row.policy.pull_request} / ${row.policy.landing}`;
+  const tagPills = [
     pill(row.mode, "blue"),
-    pill(stateLabel(workflowUiGroup(row)), groupColor(workflowUiGroup(row))),
-    pill(row.task_runs.total ? `${row.task_runs.total} runs` : "0 runs"),
-    row.runnable.runnable_count ? pill(`${row.runnable.runnable_count} runnable`, "green") : "",
-    row.task_runs.running ? pill(`${row.task_runs.running} ${stateLabel("running").toLowerCase()}`, "green") : "",
-    row.task_runs.failed ? pill(`${row.task_runs.failed} ${stateLabel("failed").toLowerCase()}`, "red") : "",
-    row.task_runs.missing ? pill(`${row.task_runs.missing} missing`, "red") : "",
-    row.profile ? pill(`profile ${row.profile}`, "violet") : "",
-    row.profiles.length ? pill(`${row.profiles.length} profiles`, "violet") : "",
-    row.origin ? pill(`${row.origin.provider} ${row.origin.id}`, "violet") : "",
-    pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
-  ], [row.path], row.body_summary || row.state_error, groupColor(workflowUiGroup(row)), [
+    profile ? pill(profile, "violet") : "",
+    origin ? pill(origin, "violet") : "",
+  ]
+    .filter(Boolean)
+    .join("");
+  const detailsHtml = rowDetails([
     detail(t("body"), row.body || row.state_error, "prose", row.body_summary || row.state_error),
     detail(t("workflowTaskRuns"), formatWorkflowTaskRuns(row.task_run_groups || []), "source"),
     detail(t("sourceToml"), row.source_text, "source"),
-  ]);
+  ], row.title);
+  const errorHtml = row.state_error
+    ? `<p class="row-error error">${escapeHtml(row.state_error)}</p>`
+    : "";
+  return `<article class="record-row tone-${tone}">
+    <div class="row-line">
+      <span class="row-state">${pill(stateLabel(group), tone)}</span>
+      <code class="row-id" title="workflow ${escapeHtml(row.id)}">${escapeHtml(row.id)}</code>
+      <span class="row-title">${escapeHtml(row.title)}</span>
+      <span class="row-counts">${counts}</span>
+      <span class="row-tags">${tagPills}</span>
+      <span class="row-policy">${pill(policy, "amber")}</span>
+    </div>
+    ${errorHtml}
+    <div class="row-foot"><code class="row-path">${escapeHtml(row.path)}</code></div>
+    ${detailsHtml ? `<div class="row-detail">${detailsHtml}</div>` : ""}
+  </article>`;
 }
 
-function taskRunCard(row) {
+function workflowCountChips(row) {
+  const counts = row.task_runs;
+  const chips = [];
+  chips.push(pill(`${counts.total} runs`, counts.total ? "blue" : ""));
+  if (row.runnable.runnable_count) {
+    chips.push(pill(`${row.runnable.runnable_count} runnable`, "green"));
+  }
+  if (counts.running) {
+    chips.push(pill(`${counts.running} ${stateLabel("running").toLowerCase()}`, "green"));
+  }
+  if (counts.failed) {
+    chips.push(pill(`${counts.failed} ${stateLabel("failed").toLowerCase()}`, "red"));
+  }
+  if (counts.missing) {
+    chips.push(pill(`${counts.missing} missing`, "red"));
+  }
+  return chips.join("");
+}
+
+function taskRunRow(row) {
+  const group = taskRunUiGroup(row);
+  const tone = statusColor(group);
   const taskDocument = row.task_document;
-  const taskTitle = taskDocument ? taskDocument.title : row.task;
-  return card(row.id, [
-    pill(stateLabel(taskRunUiGroup(row)), statusColor(taskRunUiGroup(row))),
-    pill(`task ${row.task}`, "blue"),
-    taskDocument ? pill(`document ${taskTitle}`, "blue") : pill("document missing", "red"),
+  const title = taskDocument ? taskDocument.title : row.task;
+  const warning = !taskDocument
+    ? ` <span class="row-title-warn">${escapeHtml(t("invalidTaskDocuments"))}</span>`
+    : "";
+  const contextLabel = row.context.workflow_id
+    ? `${t("workflows")} ${row.context.workflow_id}`
+    : row.context.label
+      ? row.context.label
+      : "direct";
+  const tagPills = [
     pill(`branch ${row.branch}`),
-    row.context.workflow_id ? pill(`workflow ${row.context.workflow_id}`, "violet") : "",
+    contextLabel ? pill(contextLabel, "violet") : "",
     row.context.mode ? pill(`mode ${row.context.mode}`, "violet") : "",
-    row.group ? pill(`group ${row.group}`, "violet") : pill(row.context.label || "direct"),
-    row.context.error ? pill("context error", "red") : "",
-  ], [row.path, row.context.workflow_path, taskDocument && taskDocument.path].filter(Boolean), row.error || row.context.error || row.task_document_error || taskDocument?.body_summary || row.branch, statusColor(taskRunUiGroup(row)), [
+  ]
+    .filter(Boolean)
+    .join("");
+  const countPills = [
+    pill(`task ${row.task}`, "blue"),
+    row.group ? pill(`group ${row.group}`, "violet") : "",
+  ].join("");
+  const errorText = row.error || row.context.error || row.task_document_error || "";
+  const policyHtml = errorText ? pill(t("stateError"), "red") : "";
+  const paths = [row.path, row.context.workflow_path, taskDocument && taskDocument.path]
+    .filter(Boolean)
+    .map((path) => `<code class="row-path">${escapeHtml(path)}</code>`)
+    .join("");
+  const detailsHtml = rowDetails([
     detail(t("taskRunState"), formatTaskRunState(row), "source", taskRunStatePreview(row)),
-    detail(t("taskDocumentToml"), taskDocument?.source_text, "source"),
-  ]);
+    detail(t("taskDocumentToml"), taskDocument && taskDocument.source_text, "source"),
+  ], row.id);
+  const errorHtml = errorText
+    ? `<p class="row-error error">${escapeHtml(errorText)}</p>`
+    : "";
+  return `<article class="record-row tone-${tone}">
+    <div class="row-line">
+      <span class="row-state">${pill(stateLabel(group), tone)}</span>
+      <code class="row-id" title="taskrun ${escapeHtml(row.id)}">${escapeHtml(row.id)}</code>
+      <span class="row-title">${escapeHtml(title)}${warning}</span>
+      <span class="row-counts">${countPills}</span>
+      <span class="row-tags">${tagPills}</span>
+      <span class="row-policy">${policyHtml}</span>
+    </div>
+    ${errorHtml}
+    <div class="row-foot">${paths}</div>
+    ${detailsHtml ? `<div class="row-detail">${detailsHtml}</div>` : ""}
+  </article>`;
+}
+
+function rowDetails(details, contextLabel) {
+  return details
+    .filter(Boolean)
+    .map((row) => readableText(row.text, row.summary, `${contextLabel} ${row.label}`, row.kind, row.label))
+    .join("");
 }
 
 function retrospecCard(row) {
@@ -616,7 +688,7 @@ function sourceFileCard(row) {
 
 function overviewAttentionRows(snapshot) {
   return [
-    ...snapshot.task_runs.items.filter(taskRunNeedsAttention).map(taskRunCard),
+    ...snapshot.task_runs.items.filter(taskRunNeedsAttention).map(taskRunRow),
     ...unlinkedTaskDocuments(snapshot).map(taskCard),
     ...snapshot.ideas.invalid.map(invalidCard),
     ...snapshot.tasks.invalid.map(invalidCard),
@@ -629,7 +701,7 @@ function overviewAttentionRows(snapshot) {
 
 function taskRunAttentionRows(snapshot) {
   return [
-    ...sortedTaskRuns(snapshot.task_runs.items).filter(taskRunNeedsAttention).map(taskRunCard),
+    ...sortedTaskRuns(snapshot.task_runs.items).filter(taskRunNeedsAttention).map(taskRunRow),
     ...snapshot.task_runs.invalid.map(invalidCard),
     ...unlinkedTaskDocuments(snapshot).map(taskCard),
     ...snapshot.tasks.invalid.map(invalidCard),
@@ -732,6 +804,23 @@ function section(title, rows, emptyText, note = "", id = "") {
   const noteHtml = note ? `<p class="section-note">${escapeHtml(note)}</p>` : "";
   const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
   return `<section class="section-block"${idAttr}><div class="section-heading"><div><h2 class="section-title">${escapeHtml(title)}</h2>${noteHtml}</div><span class="section-count">${count}</span></div>${body}</section>`;
+}
+
+function denseSection(title, rows, emptyText, note = "", id = "") {
+  const body = rows.length
+    ? `<div class="record-list dense">${rows.join("")}</div>`
+    : `<div class="empty">${escapeHtml(emptyText)}</div>`;
+  const count = rows.length === 1 ? `1 ${t("record")}` : `${rows.length} ${t("records")}`;
+  const noteHtml = note ? `<p class="section-note">${escapeHtml(note)}</p>` : "";
+  const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
+  return `<section class="section-block"${idAttr}><div class="section-heading"><div><h2 class="section-title">${escapeHtml(title)}</h2>${noteHtml}</div><span class="section-count">${count}</span></div>${body}</section>`;
+}
+
+function optionalDenseSection(title, rows, id = "") {
+  if (!rows.length) {
+    return "";
+  }
+  return denseSection(title, rows, "", "", id);
 }
 
 function optionalSection(title, rows, note = "", id = "") {
