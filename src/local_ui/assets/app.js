@@ -1905,7 +1905,7 @@ function workflowRelationshipPreview(row) {
   if (!rows.length) {
     return "";
   }
-  const taskCount = row.mode === "matrix" ? 1 : rows.length;
+  const taskCount = row.mode === "matrix" ? new Set(rows.map((item) => item.task)).size : rows.length;
   const runCount = rows.length;
   return tr("workflowRelationshipPreview", {
     workflow: t("workflowEntityLabel"),
@@ -2172,7 +2172,7 @@ function workflowSingleCanvasGraph(row, relationships) {
   });
 
   return workflowCanvasResolveGraph(nodes, edges, {
-    width: 760,
+    width: Math.max(720, taskStartX + c.taskW + c.gapX + c.agentW + c.margin),
     height,
   });
 }
