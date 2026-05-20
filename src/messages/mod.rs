@@ -384,17 +384,21 @@ impl MessageStore {
 
         let mut messages = Vec::new();
         for (path, mut message) in pending {
-            message.mark_delivered();
             let delivered_path = next_state_path(&delivered_dir, &path)?;
-            let content = toml::to_string_pretty(&message)
-                .context("Failed to serialize delivered message TOML")?;
-            fs::write(&path, content).with_context(|| {
-                format!("Failed to update delivered message: {}", path.display())
-            })?;
             fs::rename(&path, &delivered_path).with_context(|| {
                 format!(
                     "Failed to move message to delivered inbox: {} -> {}",
                     path.display(),
+                    delivered_path.display()
+                )
+            })?;
+
+            message.mark_delivered();
+            let content = toml::to_string_pretty(&message)
+                .context("Failed to serialize delivered message TOML")?;
+            fs::write(&delivered_path, content).with_context(|| {
+                format!(
+                    "Failed to update delivered message: {}",
                     delivered_path.display()
                 )
             })?;
@@ -476,7 +480,7 @@ fn reject_pre_redesign_message_paths(inbox: &Path) -> Result<()> {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| inbox.display().to_string());
     bail!(
-        "Found pre-redesign message file {first}. Canonical scoped delivery stores messages under inbox/new, inbox/claimed, inbox/delivered, inbox/retry, or inbox/failed; wt does not silently consume root inbox files."
+        "Found pre-redesign message file {first}. Canonical scoped delivery stores messages under inbox/new, inbox/claimed, inbox/delivered, inbox/retry, or inbox/failed; wt does not silently consume legacy inbox files."
     );
 }
 
@@ -852,7 +856,7 @@ mod tests {
 
         assert!(err.contains("pre-redesign message file"));
         assert!(err.contains("inbox/new"));
-        assert!(err.contains("does not silently consume root inbox files"));
+        assert!(err.contains("does not silently consume legacy inbox files"));
     }
 
     #[test]
@@ -867,7 +871,7 @@ mod tests {
 
         assert!(err.contains("pre-redesign message file"));
         assert!(err.contains("inbox/read/old.toml"));
-        assert!(err.contains("does not silently consume root inbox files"));
+        assert!(err.contains("does not silently consume legacy inbox files"));
     }
 
     #[test]

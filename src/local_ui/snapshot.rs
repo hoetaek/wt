@@ -7,7 +7,7 @@ use crate::config_render::render_effective_config;
 use crate::context::{
     CmdOutput, CommandRunner, Ctx, CtxOptions, OutputMode, PromptItem, UserInterface,
 };
-use crate::storage::StorageRoot;
+use crate::storage::{LegacyLocalStorage, StorageRoot};
 use crate::task::{self, TaskDocument, TaskOrigin};
 use crate::task_run::{self, TaskRunContext, TaskRunRecord, TaskRunStatus};
 use crate::workflow::planner::runnable_workflow_info;
@@ -534,6 +534,15 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
 fn collect_ideas(ctx: &Ctx) -> Result<IdeaCollection> {
     let mut items = Vec::new();
     let mut invalid = Vec::new();
+
+    if let Some(legacy) = ctx.storage_root.detect_legacy_ideas(&ctx.repo_root) {
+        invalid.push(legacy_state_invalid_record(
+            ctx,
+            legacy,
+            "legacy-ideas",
+            "ideas",
+        ));
+    }
 
     for path in idea_paths(ctx)? {
         let key = file_stem(&path).unwrap_or_else(|| "idea".into());
@@ -1105,6 +1114,18 @@ fn collect_retrospecs(ctx: &Ctx) -> Result<RetrospecCollection> {
     let mut items = Vec::new();
     let mut invalid = Vec::new();
 
+    if let Some(legacy) = ctx
+        .storage_root
+        .detect_legacy_retrospectives(&ctx.repo_root)
+    {
+        invalid.push(legacy_state_invalid_record(
+            ctx,
+            legacy,
+            "legacy-retrospectives",
+            "retrospectives",
+        ));
+    }
+
     for path in retrospec_paths(ctx)? {
         let key = file_stem(&path).unwrap_or_else(|| "retrospec".into());
         let relative_path = relative_path(ctx, &path);
@@ -1618,6 +1639,20 @@ fn relative_path(ctx: &Ctx, path: &Path) -> String {
         .into_owned()
 }
 
+fn legacy_state_invalid_record(
+    ctx: &Ctx,
+    legacy: LegacyLocalStorage,
+    key: &str,
+    state_name: &str,
+) -> InvalidRecord {
+    InvalidRecord {
+        key: key.into(),
+        path: relative_path(ctx, legacy.path()),
+        error: legacy.error_message_for(state_name),
+        source_text: None,
+    }
+}
+
 fn file_stem(path: &Path) -> Option<String> {
     path.file_stem()
         .and_then(|stem| stem.to_str())
@@ -2052,6 +2087,64 @@ mod tests {
             snapshot.workflows.items[0].presentation_group,
             "state_error"
         );
+    }
+
+    #[test]
+    fn snapshot_reports_legacy_repo_root_ideas_as_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_dir = dir.path().join(".local/ideas");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        fs::write(legacy_dir.join("old.toml"), "title = \"Old idea\"\n").unwrap();
+        let state = SnapshotState::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            "repo".into(),
+            Config::default(),
+            Config::default(),
+            ConfigSource::Default,
+        );
+
+        let snapshot = build(&state).unwrap();
+
+        assert!(snapshot.ideas.items.is_empty());
+        assert_eq!(snapshot.ideas.invalid.len(), 1);
+        let invalid = &snapshot.ideas.invalid[0];
+        assert_eq!(invalid.key, "legacy-ideas");
+        assert_eq!(invalid.path, ".local/ideas");
+        assert!(invalid.error.contains("Found legacy repo-root ideas"));
+        assert!(invalid.error.contains("wt does not silently fall back"));
+        assert_eq!(invalid.source_text, None);
+    }
+
+    #[test]
+    fn snapshot_reports_legacy_repo_root_retrospectives_as_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_dir = dir.path().join(".local/retrospectives");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        fs::write(legacy_dir.join("old.toml"), "title = \"Old retro\"\n").unwrap();
+        let state = SnapshotState::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            "repo".into(),
+            Config::default(),
+            Config::default(),
+            ConfigSource::Default,
+        );
+
+        let snapshot = build(&state).unwrap();
+
+        assert!(snapshot.retrospecs.items.is_empty());
+        assert_eq!(snapshot.retrospecs.invalid.len(), 1);
+        let invalid = &snapshot.retrospecs.invalid[0];
+        assert_eq!(invalid.key, "legacy-retrospectives");
+        assert_eq!(invalid.path, ".local/retrospectives");
+        assert!(
+            invalid
+                .error
+                .contains("Found legacy repo-root retrospectives")
+        );
+        assert!(invalid.error.contains("wt does not silently fall back"));
+        assert_eq!(invalid.source_text, None);
     }
 
     fn write_task(root: &Path, name: &str, content: &str) {
