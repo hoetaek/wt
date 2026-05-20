@@ -326,11 +326,11 @@ for runtime observation.
 ## Coordinator Handoff
 
 Task prompts started by `wt run task` and `wt run workflow` include coordinator
-handoff instructions when cmux coordinates are available. The prompt gives the
-agent a `cmux send --workspace ... --surface ...` report command and a matching
-`cmux send-key ... enter` command. It also gives the coordinator file inbox
+handoff instructions. The prompt gives the agent the coordinator file inbox
 target, `wt msg send --to coordinator ...`, where `coordinator` normalizes to
-`agents/coordinator`.
+`agents/coordinator`. It also includes fallback cmux coordinates with a
+`cmux send --workspace ... --surface ...` report command and a matching
+`cmux send-key ... enter` command.
 
 Agents report back in this shape and then keep ownership of review follow-up
 for their task:

@@ -21,6 +21,10 @@ minor version instead of moving to `x.0.0`.
   `inbox/delivered` without stealing active claims.
 - Bumped the package version to `0.39.0` because the file inbox persisted state
   and hook delivery contract changed while `wt` is still pre-1.0.
+- Changed generated task and workflow coordinator handoff prompts to present
+  `wt msg send --to coordinator ...` as the default report route, with cmux
+  send coordinates retained as the fallback route when the file inbox is
+  unavailable.
 
 - Added automated cmux-free cross-agent hook roundtrip coverage. The smoke uses
   linked worktrees, `wt install`, `wt as`, `wt msg send`, and the installed
@@ -50,9 +54,9 @@ minor version instead of moving to `x.0.0`.
 
 - Added the `coordinator` message target for task and workflow handoffs. Task
   agents now receive `WT_COORDINATOR_AGENT_ID=agents/coordinator` when wt
-  launches their agent command, and generated handoff prompts include
-  `wt msg send --to coordinator ...` as the file-inbox fallback alongside the
-  existing cmux send coordinates.
+  launches their agent command, and generated handoff prompts include the
+  `wt msg send --to coordinator ...` route alongside the existing cmux send
+  coordinates.
 - Bumped the package version to `0.36.2` because coordinator inbox routing
   changes the user-facing task/workflow handoff contract.
 
@@ -194,14 +198,16 @@ minor version instead of moving to `x.0.0`.
   `wt workflow task` and `wt workflow issue` snapshot landing policy into
   `[policy]`, and stack-mode PR handoff defaults into task rows unless `--pr`
   explicitly overrides them.
-- Added a task-run coordinator handoff to `wt task run` prompts. Task-run
-  agents now receive coordinator cmux send coordinates and report `PR=none`
-  before waiting for review, landing, and cleanup.
-- Added a workflow-level coordinator handoff to every `wt workflow run` task
+- Added a task-run coordinator handoff to `wt run task` prompts. Task-run
+  agents now receive the coordinator report route plus fallback cmux send
+  coordinates and report `PR=none` before waiting for review, landing, and
+  cleanup.
+- Added a workflow-level coordinator handoff to every `wt run workflow` task
   prompt. Single, batch, grouped single, and stack prompts now all include the
-  coordinator cmux send coordinates and the shared Agent Completion Report
-  format; single and batch prompts report `PR=none`, while stack prompts keep
-  their pull-request and `wt workflow complete ... --run-next` instructions.
+  coordinator report route, fallback cmux send coordinates, and the shared
+  Agent Completion Report format; single and batch prompts report `PR=none`,
+  while stack prompts keep their pull-request and
+  `wt workflow complete ... --run-next` instructions.
 - Fixed `wt send` so an interactively selected cmux surface is used instead of
   falling back to the first matching surface.
 - Fixed runtime binding so Codex cmux `list-status` signals can identify a
