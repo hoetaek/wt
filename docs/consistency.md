@@ -533,7 +533,7 @@ Active `colors = { ... }`는 사용자가 기본값과 다른 색을 고정하�
 아예 쓰지 않을 kind는 `task = ""`처럼 빈 문자열로 override한다.
 
 `matrix`는 하나의 local TaskDocument를 명시한 named profile 목록으로 확장하는 saved
-Workflow mode다. 첫 버전의 `mode = "matrix"`는 exactly one task x many named profiles만
+Workflow mode다. Current `mode = "matrix"` contract는 exactly one task x many named profiles만
 허용한다. `batch`나 `stack`처럼 여러 task 자체를 뜻하지 않고, profile 축으로 여러
 profile-specific TaskRun/worktree를 만드는 실행 형태다. `wt workflow task --mode matrix
 --profiles <name>[,<name>...] <task>`가 canonical creation surface이고, profile list는
@@ -997,11 +997,27 @@ graph node, canvas position, agent contact, live agent state를 Workflow/TaskDoc
 저장하지 않는다. Agent 칸은 durable/현재 관찰 가능한 정보가 없으면 중립적인 not-observed
 상태로 남기고, `TaskRun.status`와 `agent.state`/`agent.status`를 합치지 않는다.
 
-MVP `wt ui`는 write API, drag/drop mutation, 별도 DB, frontend build pipeline, Tauri/Electron,
-arbitrary repo file serving, `.env` 읽기를 추가하지 않는다. `/api/snapshot`은 state-owner
-reader와 config/profile loader를 거쳐 요약 DTO만 만들고, CLI text output을 scrape하지 않는다.
-이후 write action을 추가하려면 먼저 canonical command preview나 명시 mutation contract를
-정의하고, path allowlist와 same-origin/token policy를 별도 설계해야 한다.
+`wt ui` read-only contract는 write API, drag/drop mutation, 별도 DB, frontend build pipeline,
+Tauri/Electron, arbitrary repo file serving, `.env` 읽기를 추가하지 않는다. `/api/snapshot`은
+state-owner reader와 config/profile loader를 거쳐 요약 DTO만 만들고, CLI text output을
+scrape하지 않는다. Editing controls must not be hidden inside `wt ui`; a view that changes
+TaskDocuments, Workflows, profiles, or config is a different surface.
+
+Write-capable web editing belongs to a separate `wt studio` surface. `wt studio` is the canonical
+place for canvas/form editing such as creating a Workflow, adding or removing TaskDocument nodes,
+editing TaskDocument fields, changing Workflow task order/edges, and preparing execution from that
+edited plan. Studio writes still use the same source-of-truth files: TaskDocuments in
+`<git-common-dir>/wt/tasks`, Workflows in `<git-common-dir>/wt/workflows`, personal config in
+`<git-common-dir>/wt/config.toml`, and profiles in `<git-common-dir>/wt/profiles`. TaskRun remains an
+execution record and is read-only in Studio except through explicit lifecycle commands that already
+own TaskRun mutation.
+
+`wt studio` mutations must have a visible draft state, validation errors, and a preview of the exact
+state-file changes before apply. Applying a studio edit requires an explicit mutation contract with
+path allowlist, same-origin/token policy, and operation-specific validation; it must not scrape CLI
+text output or write arbitrary repo files. Canvas position, temporary selection, inspector dirty
+state, and UI layout preferences are editor presentation state unless a later canonical state model
+defines them as durable data.
 
 Workspace label은 저장 상태가 아니라 현재 실행을 찾기 위한 표시다. 좁은 탭에서 잘려도
 의미가 남도록 `2/5 PROJ-123 Title`처럼 짧은 order 라벨을 앞에 붙이고, branch/path/site
