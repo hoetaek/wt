@@ -1954,6 +1954,24 @@ fn workflow_list_help_explains_canonical_inventory() {
 }
 
 #[test]
+fn workflow_archive_help_explains_visibility_retention_model() {
+    wt_command()
+        .args(["workflow", "archive", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "<git-common-dir>/wt/archive/workflows",
+        ))
+        .stdout(predicate::str::contains(
+            "Archive is a visibility and retention action",
+        ))
+        .stdout(predicate::str::contains("not a substitute for landing"))
+        .stdout(predicate::str::contains("wt workflow complete"))
+        .stdout(predicate::str::contains("wt done"))
+        .stdout(predicate::str::contains("--discard").not());
+}
+
+#[test]
 fn primary_help_surfaces_do_not_teach_legacy_local_storage_paths() {
     let help_surfaces: &[&[&str]] = &[
         &["--help"],
@@ -2072,6 +2090,118 @@ run = "run-2026-05-18-001-schema"
             .unwrap()
             .contains("Failed to parse workflow")
     );
+}
+
+#[test]
+fn workflow_archive_moves_completed_workflow_out_of_active_inventory() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "archive-unique", "archive-unique");
+    write_task_run_file(
+        temp.path(),
+        "run-archive-unique",
+        "archive-unique",
+        "archive-unique",
+        "done",
+        "2026-05-20-009",
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-20-009",
+        "batch",
+        r#"title = "Archive me"
+"#,
+        r#"[[tasks]]
+task = "archive-unique"
+run = "run-archive-unique"
+"#,
+    );
+
+    let output = wt_command()
+        .current_dir(temp.path())
+        .args(["--json", "workflow", "archive", "2026-05-20-009"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let archive_report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(archive_report["workflow_id"], "2026-05-20-009");
+    assert_eq!(
+        archive_report["workflow_source_path"],
+        "workflows/2026-05-20-009.toml"
+    );
+
+    let archive = temp.path().join(".git/wt/archive/workflows/2026-05-20-009");
+    assert!(archive.join("workflow.toml").exists());
+    assert!(archive.join("task-runs/run-archive-unique.toml").exists());
+    assert!(archive.join("tasks/archive-unique.toml").exists());
+    assert!(
+        !temp
+            .path()
+            .join(".git/wt/workflows/2026-05-20-009.toml")
+            .exists()
+    );
+    assert!(
+        !temp
+            .path()
+            .join(".git/wt/task-runs/run-archive-unique.toml")
+            .exists()
+    );
+    assert!(
+        !temp
+            .path()
+            .join(".git/wt/tasks/archive-unique.toml")
+            .exists()
+    );
+
+    let manifest: toml::Value =
+        toml::from_str(&std::fs::read_to_string(archive.join("manifest.toml")).unwrap()).unwrap();
+    assert_eq!(manifest["workflow_id"].as_str(), Some("2026-05-20-009"));
+    assert_eq!(
+        manifest["workflow_archive_path"].as_str(),
+        Some("archive/workflows/2026-05-20-009/workflow.toml")
+    );
+    let task_runs = manifest["task_runs"].as_array().unwrap();
+    assert_eq!(
+        task_runs[0]["source_path"].as_str(),
+        Some("task-runs/run-archive-unique.toml")
+    );
+    assert_eq!(
+        task_runs[0]["archive_path"].as_str(),
+        Some("archive/workflows/2026-05-20-009/task-runs/run-archive-unique.toml")
+    );
+    let tasks = manifest["tasks"].as_array().unwrap();
+    assert_eq!(
+        tasks[0]["source_path"].as_str(),
+        Some("tasks/archive-unique.toml")
+    );
+    assert_eq!(
+        tasks[0]["archive_path"].as_str(),
+        Some("archive/workflows/2026-05-20-009/tasks/archive-unique.toml")
+    );
+
+    let output = wt_command()
+        .current_dir(temp.path())
+        .args(["--json", "workflow", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let workflows: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(workflows["workflows"].as_array().unwrap().is_empty());
+
+    let output = wt_command()
+        .current_dir(temp.path())
+        .args(["--json", "task", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let tasks: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(tasks["tasks"].as_array().unwrap().is_empty());
 }
 
 #[test]

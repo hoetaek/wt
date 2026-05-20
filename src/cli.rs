@@ -87,7 +87,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Prepare, inspect, edit, repair, or complete workflow tasks
+    /// Prepare, inspect, edit, repair, archive, or complete workflow tasks
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
@@ -631,6 +631,14 @@ pub enum WorkflowCommand {
         long_about = "List all saved <git-common-dir>/wt/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and done, with indented rows and secondary detail lines."
     )]
     List,
+    /// Move completed workflow state into the frozen archive
+    #[command(
+        long_about = "Move a completed Workflow out of the active surface into <git-common-dir>/wt/archive/workflows/<workflow-id>/.\n\nArchive is a visibility and retention action: wt workflow list, wt task list, and wt ui stop showing the archived workflow because active inventory reads only typed active directories. It is not a substitute for landing, merge checks, wt workflow complete, or wt done. Only workflows whose linked TaskRuns are done or skipped can be archived."
+    )]
+    Archive {
+        /// Workflow key under <git-common-dir>/wt/workflows/<workflow>.toml
+        workflow: String,
+    },
     /// Prepare local tasks as a workflow file without starting workspaces
     #[command(
         long_about = "Prepare local TaskDocuments as a saved Workflow without starting workspaces.\n\nUse --title, --body/--body-file, and --origin-provider with --origin-id for Workflow-level context when one larger issue-like unit is split into runnable child TaskDocuments. Workflow-level [origin] is stored only on the Workflow; it is not copied into child TaskDocuments and does not add issue-closing keywords to child PR bodies.\n\nTaskDocument [origin] still belongs only to a runnable slice that is itself a provider issue."
@@ -1830,8 +1838,11 @@ mod tests {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, edit, repair, or complete workflow tasks"));
+        assert!(
+            help.contains("Prepare, inspect, edit, repair, archive, or complete workflow tasks")
+        );
         assert!(!help.contains("Start runnable tasks from a workflow"));
+        assert!(help.contains("archive"));
         assert!(help.contains("repair"));
         assert!(help.contains("task"));
         assert!(help.contains("issue"));

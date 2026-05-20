@@ -73,6 +73,18 @@ impl StorageRoot {
         self.personal_root.join("task-runs")
     }
 
+    pub fn archive_dir(&self) -> PathBuf {
+        self.personal_root.join("archive")
+    }
+
+    pub fn archive_workflows_dir(&self) -> PathBuf {
+        self.archive_dir().join("workflows")
+    }
+
+    pub fn workflow_archive_dir(&self, id: impl AsRef<str>) -> PathBuf {
+        self.archive_workflows_dir().join(id.as_ref())
+    }
+
     pub fn ideas_dir(&self) -> PathBuf {
         self.personal_root.join("ideas")
     }

@@ -187,6 +187,7 @@ wt workflow list
 wt run workflow
 wt workflow repair 2026-05-16-001
 wt workflow complete 2026-05-16-001 add-schema --run-next
+wt workflow archive 2026-05-16-001
 ```
 
 Open a read-only personal state UI:
@@ -256,6 +257,11 @@ merge.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid
   Workflow files whether or not they are runnable and reports invalid workflow
   TOML files instead of hiding parse failures.
+- `wt workflow archive <workflow>` moves a completed Workflow plus linked
+  done/skipped TaskRuns and uniquely-owned TaskDocuments into
+  `<git-common-dir>/wt/archive/workflows/<workflow-id>/`. Archive is
+  visibility and retention only; it is not a substitute for landing,
+  `wt workflow complete`, or `wt done`.
 - `TaskRun` files in `<git-common-dir>/wt/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
 - `wt ui [--port <port>]` starts a read-only loopback web UI for personal `wt`
@@ -549,7 +555,7 @@ there for one named profile.
 | `wt task import` | Import provider issues as local TaskDocuments |
 | `wt run task` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
-| `wt workflow` | Prepare, inspect, repair, and complete saved workflows |
+| `wt workflow` | Prepare, inspect, repair, archive, and complete saved workflows |
 | `wt run workflow` | Start runnable tasks from saved workflows |
 | `wt ui` | Start the read-only personal state web UI |
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
