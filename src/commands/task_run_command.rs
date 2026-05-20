@@ -9,17 +9,17 @@ use std::collections::HashSet;
 
 const TASK_RUN_COORDINATOR_HANDOFF_SECTION: &str = r#"## Task Run Coordinator Handoff
 
-Send the Agent Completion Report back to the coordinator cmux surface that started this task run:
+Send the Agent Completion Report back to the coordinator inbox:
+
+```bash
+wt msg send --to coordinator "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
+```
+
+The coordinator inbox target `coordinator` normalizes to `agents/coordinator`. If the file inbox route is unavailable, send the same report to the fallback cmux surface that started this task run:
 
 ```bash
 cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
 {{coordinator_enter_command}}
-```
-
-The coordinator also owns the file inbox target `coordinator`, which `wt msg send` normalizes to `agents/coordinator`. If the cmux target is unavailable or stale, send the same report through the coordinator inbox:
-
-```bash
-wt msg send --to coordinator "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
 ```
 
 This immediate TaskDocument run has no Workflow orchestration or pull-request handoff intent. When this task is complete and committed, do not open a pull request from the task agent; report `PR=none`.
@@ -633,6 +633,10 @@ id = "PROJ-123"
         let handoff_prompt = send_calls[0].1.last().unwrap();
         assert!(handoff_prompt.contains("## Task Run Coordinator Handoff"));
         assert!(
+            handoff_prompt.find("wt msg send --to coordinator").unwrap()
+                < handoff_prompt.find("fallback cmux surface").unwrap()
+        );
+        assert!(
             handoff_prompt.find("cmux send --workspace").unwrap()
                 < handoff_prompt
                     .find("This immediate TaskDocument run")
@@ -645,6 +649,7 @@ id = "PROJ-123"
         );
         assert!(handoff_prompt.contains("wt msg send --to coordinator \"Agent Completion Report"));
         assert!(handoff_prompt.contains("normalizes to `agents/coordinator`"));
+        assert!(handoff_prompt.contains("If the file inbox route is unavailable"));
         assert!(handoff_prompt.contains("If neither coordinator route is available"));
         assert!(!handoff_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
         assert!(!handoff_prompt.contains("Create the schema first."));

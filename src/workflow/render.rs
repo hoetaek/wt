@@ -564,7 +564,7 @@ fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>)
     );
 
     format!(
-        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator cmux surface that started this workflow:\n\n```bash\n{cmux_send_command}\n```\n\nThe coordinator also owns the file inbox target `{COORDINATOR_AGENT_ALIAS}`, which `wt msg send` normalizes to `agents/coordinator`. If the cmux target is unavailable or stale, send the same report through the coordinator inbox:\n\n```bash\n{inbox_send_command}\n```\n\n{pull_request_instructions}\n\n{after_send}\n\nIf neither coordinator route is available, leave the same report in this task session and wait."
+        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator inbox:\n\n```bash\n{inbox_send_command}\n```\n\nThe coordinator inbox target `{COORDINATOR_AGENT_ALIAS}` normalizes to `agents/coordinator`. If the file inbox route is unavailable, send the same report to the fallback cmux surface that started this workflow:\n\n```bash\n{cmux_send_command}\n```\n\n{pull_request_instructions}\n\n{after_send}\n\nIf neither coordinator route is available, leave the same report in this task session and wait."
     )
 }
 

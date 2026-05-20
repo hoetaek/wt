@@ -73,19 +73,25 @@ For each slice, record:
   when a decision/review is required
 - blocked by
 - execution shape: direct, batch, stack, separate workflow, or direct local edit
+- expected duration before first coordinator review, such as `20m`, `45m`, or
+  `2h`; use a conservative estimate or range when uncertain
 - acceptance checks
 - notes for experiments or tradeoffs that shaped the slice
 
 When you prepare new TaskDocuments, preserve this planning context inside the
 TaskDocument `body` as a text section, not as top-level TOML fields. Current
 TaskDocument TOML accepts only the canonical task fields; planning metadata is
-for the task agent to read in the prompt.
+for the task agent to read in the prompt. Every prepared TaskDocument or
+workflow task must include an expected duration in its `Planning:` body section
+before `wt-start`; if an existing TaskDocument lacks one, update the body or
+stop with that as the remaining preparation work.
 
 Example body section:
 
 ```text
 Planning:
 - type: AFK
+- expected duration: 45m
 - blocked by: workflow-policy-contract-simplified
 - execution shape: stack child
 - acceptance checks: update docs, run cargo fmt --all --check
@@ -152,15 +158,18 @@ End with one of these concrete outputs:
 Use existing repo patterns for TaskDocument bodies. Avoid stale implementation
 file paths unless they are necessary for the task. For new TaskDocuments,
 include a concise `Planning:` section in `body` when HITL/AFK classification,
-dependencies, execution shape, or acceptance checks would help the task agent.
-Do not add fields such as `type`, `blocked_by`, or `[planning]` to the
-TaskDocument TOML unless the repo schema explicitly supports them.
+expected duration, dependencies, execution shape, or acceptance checks would
+help the task agent. Do not add fields such as `type`, `blocked_by`,
+`expected_duration`, or `[planning]` to the TaskDocument TOML unless the repo
+schema explicitly supports them.
 
 Report:
 
 - evidence checked
 - selected approach and rejected alternatives
 - slice list with dependencies and chosen execution shape
+- expected duration for each slice and whether it is a firm estimate or a
+  conservative planning guess
 - PR/landing policy source: `[workflow]` config, CLI/workflow override, or
   explicit user answer
 - exact next command or target for `wt-start`

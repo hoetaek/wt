@@ -500,7 +500,7 @@ pub enum RunCommand {
     },
     /// Start one worktree per selected local TaskDocument
     #[command(
-        long_about = "Start one worktree per selected <git-common-dir>/wt/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun in <git-common-dir>/wt/task-runs.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates and the coordinator inbox target `coordinator`. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
+        long_about = "Start one worktree per selected <git-common-dir>/wt/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun in <git-common-dir>/wt/task-runs.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator inbox target `coordinator` and fallback cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
     )]
     Task {
         /// Local task keys from <git-common-dir>/wt/tasks/<task>.toml
@@ -515,7 +515,7 @@ pub enum RunCommand {
     },
     /// Start runnable tasks from a saved workflow
     #[command(
-        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates and the coordinator inbox target `coordinator`. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
+        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator inbox target `coordinator` and fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
     )]
     Workflow {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -1455,6 +1455,8 @@ mod tests {
         assert!(help.contains("direct TaskRun"));
         assert!(help.contains("Omit task keys"));
         assert!(help.contains("Task Run Coordinator Handoff"));
+        assert!(help.contains("coordinator inbox target `coordinator`"));
+        assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("Task-run agents report PR=none"));
         assert!(help.contains("wt workflow task --mode batch"));
         assert!(help.contains("wt workflow task --mode single"));
@@ -1700,8 +1702,8 @@ mod tests {
         assert!(help.contains("saved workflow"));
         assert!(help.contains("does not list, edit, repair, or complete workflow files"));
         assert!(help.contains("Workflow Coordinator Handoff"));
-        assert!(help.contains("coordinator cmux send coordinates"));
         assert!(help.contains("coordinator inbox target `coordinator`"));
+        assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("prepared [policy].pull_request"));
         assert!(help.contains("wt workflow complete"));
     }
