@@ -8,6 +8,13 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Migrated `wt msg check-inbox` onto the scoped message delivery lifecycle. Hook
+  delivery now reclaims expired leases, claims deliverable direct-scope messages,
+  emits hook JSON on stdout, and acknowledges successful output into
+  `inbox/delivered` without stealing active claims.
+- Bumped the package version to `0.39.0` because the file inbox persisted state
+  and hook delivery contract changed while `wt` is still pre-1.0.
+
 - Added automated cmux-free cross-agent hook roundtrip coverage. The smoke uses
   linked worktrees, `wt install`, `wt as`, `wt msg send`, and the installed
   Claude/Codex dispatcher hooks to prove `CLAUDE_SENT` and
@@ -73,9 +80,9 @@ minor version instead of moving to `x.0.0`.
 
 - Added `wt msg send --to <agent> <message>` and
   `wt msg check-inbox --agent <agent>` as the file-based agent inbox MVP. Messages
-  are stored under `<git-common-dir>/wt/messages/agents/<agent>/inbox`, use a
-  TOML model with meta/envelope/body text parts, and `check-inbox` emits hook
-  JSON before moving consumed messages to `inbox/read`.
+  are stored under `<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>`,
+  use a TOML model with meta/scope/envelope/delivery/body fields, and
+  `check-inbox` emits hook JSON through the canonical delivery lifecycle.
 
 - Moved all workspace execution-start surfaces under `wt run`: `wt run issue`,
   `wt run pr`, `wt run branch`, `wt run task`, and `wt run workflow` are the

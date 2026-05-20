@@ -193,7 +193,7 @@ pub enum Commands {
     },
     /// Send and deliver file-based agent inbox messages
     #[command(
-        long_about = "Send and deliver file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable sends. The short target `coordinator` normalizes to the local coordinator inbox `agents/coordinator`. Use `wt msg check-inbox --agent <agent>` from agent hooks; new direct-scope messages are emitted as hook-compatible JSON and moved from inbox/new to inbox/delivered."
+        long_about = "Send and deliver file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable sends. The short target `coordinator` normalizes to the local coordinator inbox `agents/coordinator`. Use `wt msg check-inbox --agent <agent>` from agent hooks; deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -440,7 +440,7 @@ pub enum MsgCommand {
         )]
         message: Vec<String>,
     },
-    /// Emit new inbox messages as hook JSON and move them to inbox/delivered
+    /// Claim deliverable inbox messages, emit hook JSON, and acknowledge delivery
     CheckInbox {
         /// Agent id as NAME or agents/NAME
         #[arg(long)]

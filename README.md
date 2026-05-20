@@ -308,8 +308,9 @@ merge.
   send scope is `direct`; workflow and TaskRun ownership belong in explicit
   message scope metadata, not in `correlates_with`.
 - `wt msg check-inbox --agent <agent>` is the hook-compatible consumer. It
-  emits deliverable `inbox/new` messages as hook JSON and moves them to
-  `inbox/delivered`; it is not a separate unread/read lifecycle.
+  claims deliverable direct-scope messages from `inbox/new` or eligible
+  `inbox/retry`, emits hook JSON, and acknowledges them into `inbox/delivered`
+  after stdout is written; it is not a separate unread/read lifecycle.
 
 `wt workflow` is the canonical prepared-work surface. `single`, `batch`,
 `stack`, and `matrix` are workflow mode values, not separate command surfaces. Use

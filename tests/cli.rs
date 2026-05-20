@@ -282,6 +282,56 @@ fn toml_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+fn claim_message_file(new_path: &Path, claimed_by: &str, lease_expires_at: &str) -> PathBuf {
+    let mut message: toml::Value =
+        toml::from_str(&std::fs::read_to_string(new_path).unwrap()).unwrap();
+    if let Some(delivery) = message
+        .get_mut("delivery")
+        .and_then(toml::Value::as_table_mut)
+    {
+        delivery.insert("state".into(), toml::Value::String("claimed".into()));
+        delivery.insert("claimed_by".into(), toml::Value::String(claimed_by.into()));
+        delivery.insert(
+            "lease_expires_at".into(),
+            toml::Value::String(lease_expires_at.into()),
+        );
+        delivery.remove("last_error");
+    }
+
+    let inbox = new_path.parent().unwrap().parent().unwrap();
+    let claimed_dir = inbox.join("claimed");
+    std::fs::create_dir_all(&claimed_dir).unwrap();
+    let claimed_path = claimed_dir.join(new_path.file_name().unwrap());
+    std::fs::write(&claimed_path, toml::to_string_pretty(&message).unwrap()).unwrap();
+    std::fs::remove_file(new_path).unwrap();
+    claimed_path
+}
+
+fn write_conflicting_delivered_message(new_path: &Path) -> PathBuf {
+    let mut message: toml::Value =
+        toml::from_str(&std::fs::read_to_string(new_path).unwrap()).unwrap();
+    message["body"]["summary"] = toml::Value::String("conflicting delivered payload".into());
+    message["body"]["parts"][0]["content"] =
+        toml::Value::String("conflicting delivered payload".into());
+    if let Some(delivery) = message
+        .get_mut("delivery")
+        .and_then(toml::Value::as_table_mut)
+    {
+        delivery.insert("state".into(), toml::Value::String("delivered".into()));
+        delivery.insert("attempts".into(), toml::Value::Integer(1));
+        delivery.remove("claimed_by");
+        delivery.remove("lease_expires_at");
+        delivery.remove("last_error");
+    }
+
+    let inbox = new_path.parent().unwrap().parent().unwrap();
+    let delivered_dir = inbox.join("delivered");
+    std::fs::create_dir_all(&delivered_dir).unwrap();
+    let delivered_path = delivered_dir.join(new_path.file_name().unwrap());
+    std::fs::write(&delivered_path, toml::to_string_pretty(&message).unwrap()).unwrap();
+    delivered_path
+}
+
 fn json_file(path: &Path) -> serde_json::Value {
     let content = std::fs::read_to_string(path).unwrap();
     serde_json::from_str(&content).unwrap()
@@ -1023,11 +1073,12 @@ fn msg_send_to_derived_agent_id_targets_runtime_identity_inbox() {
             .contains("runtime identity")
     );
     assert!(toml_files(&inbox.join("new")).is_empty());
+    assert!(toml_files(&inbox.join("claimed")).is_empty());
     assert_eq!(toml_files(&inbox.join("delivered")).len(), 1);
 }
 
 #[test]
-fn msg_check_inbox_emits_hook_json_and_moves_messages_to_delivered() {
+fn msg_check_inbox_emits_hook_json_and_acknowledges_claimed_messages() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -1075,12 +1126,165 @@ fn msg_check_inbox_emits_hook_json_and_moves_messages_to_delivered() {
 
     let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
     assert!(toml_files(&inbox.join("new")).is_empty());
+    assert!(toml_files(&inbox.join("claimed")).is_empty());
     let delivered = toml_files(&inbox.join("delivered"));
     assert_eq!(delivered.len(), 1);
     let content = std::fs::read_to_string(&delivered[0]).unwrap();
     let message: toml::Value = toml::from_str(&content).unwrap();
     assert_eq!(message["delivery"]["state"].as_str(), Some("delivered"));
     assert_eq!(message["delivery"]["attempts"].as_integer(), Some(1));
+}
+
+#[test]
+fn msg_check_inbox_does_not_steal_active_claims() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "claimed",
+            "elsewhere",
+        ])
+        .assert()
+        .success();
+
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let new = toml_files(&inbox.join("new"));
+    let claimed_path = claim_message_file(&new[0], "agents/supervisor", "2099-01-01T00:00:00Z");
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/codex",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    assert!(claimed_path.exists());
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert!(!inbox.join("delivered").exists());
+    let content = std::fs::read_to_string(&claimed_path).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(
+        message["delivery"]["claimed_by"].as_str(),
+        Some("agents/supervisor")
+    );
+}
+
+#[test]
+fn msg_check_inbox_reclaims_expired_claims_and_delivers_them() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "expired",
+            "claim",
+        ])
+        .assert()
+        .success();
+
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let new = toml_files(&inbox.join("new"));
+    claim_message_file(&new[0], "agents/supervisor", "1970-01-01T00:00:01Z");
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/codex",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("expired claim")
+    );
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert!(toml_files(&inbox.join("claimed")).is_empty());
+    assert!(toml_files(&inbox.join("retry")).is_empty());
+    let delivered = toml_files(&inbox.join("delivered"));
+    assert_eq!(delivered.len(), 1);
+    let content = std::fs::read_to_string(&delivered[0]).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(message["delivery"]["state"].as_str(), Some("delivered"));
+    assert_eq!(message["delivery"]["attempts"].as_integer(), Some(2));
+    assert!(message["delivery"].get("claimed_by").is_none());
+    assert!(message["delivery"].get("lease_expires_at").is_none());
+}
+
+#[test]
+fn msg_check_inbox_keeps_hook_stdout_json_when_acknowledge_fails() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "stdout",
+            "json",
+        ])
+        .assert()
+        .success();
+
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let new = toml_files(&inbox.join("new"));
+    let delivered_conflict = write_conflicting_delivered_message(&new[0]);
+
+    let assert = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/codex",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "already exists with different content",
+        ));
+
+    let output = assert.get_output();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["hookSpecificOutput"]["hookEventName"].as_str(),
+        Some("UserPromptSubmit")
+    );
+    assert!(delivered_conflict.exists());
 }
 
 #[test]

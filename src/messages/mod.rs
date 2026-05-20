@@ -366,7 +366,8 @@ impl MessageLease {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InboxDelivery {
     pub agent: AgentId,
-    pub messages: Vec<DeliveredMessage>,
+    pub claimed_by: AgentId,
+    pub messages: Vec<ClaimedMessage>,
 }
 
 impl InboxDelivery {
@@ -808,75 +809,40 @@ impl MessageStore {
         let agent = AgentId::parse(agent)?;
         let inbox = agent.inbox_dir(&self.root);
         reject_pre_redesign_message_paths(&inbox)?;
+        self.reclaim_expired_leases(agent.as_str(), SystemTime::now())?;
 
-        let new_dir = agent.inbox_state_dir(&self.root, MessageDeliveryState::New);
-        let paths = message_paths(&new_dir)?;
-        if paths.is_empty() {
-            return Ok(InboxDelivery {
-                agent,
-                messages: Vec::new(),
-            });
-        }
-
-        let mut pending = Vec::new();
-        for path in paths {
-            let message = match read_inbox_candidate_for_agent(&agent, &path) {
-                Ok(Some(message)) => message,
-                Ok(None) => continue,
-                Err(err) => {
-                    self.poison_message(&agent, &path, &format!("{err:#}"))?;
-                    continue;
-                }
-            };
-            if message.delivery.state != MessageDeliveryState::New {
-                self.poison_message(
-                    &agent,
-                    &path,
-                    &format!(
-                        "Message {} is in inbox/new but delivery.state is `{}`",
-                        path.display(),
-                        message.delivery.state
-                    ),
-                )?;
-                continue;
-            }
-            if message.scope.kind != MessageScopeKind::Direct {
-                continue;
-            }
-            pending.push((path, message));
-        }
-        if pending.is_empty() {
-            return Ok(InboxDelivery {
-                agent,
-                messages: Vec::new(),
-            });
-        }
-
-        let delivered_dir = agent.inbox_state_dir(&self.root, MessageDeliveryState::Delivered);
-        fs::create_dir_all(&delivered_dir).with_context(|| {
-            format!(
-                "Failed to create delivered inbox: {}",
-                delivered_dir.display()
-            )
-        })?;
-
+        let claimed_by = agent.clone();
+        let lease = MessageLease::new(Duration::from_secs(60))?;
         let mut messages = Vec::new();
-        for (path, mut message) in pending {
-            let delivered_path = next_state_path(&delivered_dir, &path)?;
-            message.mark_delivered();
-            match transition_message_atomically(&path, &delivered_path, &message, "delivered")? {
-                MessageTransitionOutcome::Completed
-                | MessageTransitionOutcome::DestinationAlreadyExists => {}
-                MessageTransitionOutcome::SourceMissing => continue,
-            }
-            messages.push(DeliveredMessage {
-                original_path: path,
-                delivered_path,
-                message,
-            });
+        while let Some(claimed) = self.claim_next(
+            agent.as_str(),
+            &MessageScope::direct(),
+            claimed_by.as_str(),
+            lease,
+        )? {
+            messages.push(claimed);
         }
 
-        Ok(InboxDelivery { agent, messages })
+        Ok(InboxDelivery {
+            agent,
+            claimed_by,
+            messages,
+        })
+    }
+
+    pub fn acknowledge_inbox_delivery(
+        &self,
+        delivery: &InboxDelivery,
+    ) -> Result<Vec<DeliveredMessage>> {
+        let mut delivered = Vec::new();
+        for claimed in &delivery.messages {
+            delivered.push(self.acknowledge_delivery(
+                delivery.agent.as_str(),
+                delivery.claimed_by.as_str(),
+                &claimed.message.meta.id,
+            )?);
+        }
+        Ok(delivered)
     }
 }
 
@@ -1476,8 +1442,8 @@ fn render_additional_context(delivery: &InboxDelivery) -> String {
         "When a message asks for a response, use `wt msg send --to <agent> <message>`.".into(),
     ];
 
-    for delivered in &delivery.messages {
-        let message = &delivered.message;
+    for claimed in &delivery.messages {
+        let message = &claimed.message;
         lines.push(String::new());
         lines.push(format!("- id: {}", message.meta.id));
         lines.push(format!("  from: {}", message.meta.from));
@@ -1765,7 +1731,7 @@ mod tests {
     }
 
     #[test]
-    fn check_inbox_moves_messages_to_delivered_and_renders_context() {
+    fn check_inbox_claims_messages_and_renders_context_then_acknowledges_delivery() {
         let temp = TempDir::new().unwrap();
         let store = MessageStore::new(temp.path().join("messages"));
         let sent = store
@@ -1776,24 +1742,30 @@ mod tests {
 
         assert_eq!(delivery.messages.len(), 1);
         assert!(!sent.path.exists());
-        assert!(delivery.messages[0].delivered_path.exists());
+        assert!(delivery.messages[0].claimed_path.exists());
         assert!(
             delivery.messages[0]
-                .delivered_path
+                .claimed_path
                 .ends_with(format!("{}.toml", sent.id))
         );
         assert_eq!(
             delivery.messages[0].message.delivery.state,
-            MessageDeliveryState::Delivered
+            MessageDeliveryState::Claimed
         );
-        let content = fs::read_to_string(&delivery.messages[0].delivered_path).unwrap();
-        let parsed: Message = toml::from_str(&content).unwrap();
-        assert_eq!(parsed.delivery.state, MessageDeliveryState::Delivered);
-        assert_eq!(parsed.delivery.attempts, 1);
         let context = delivery.additional_context();
         assert!(context.contains("WT INBOX for agents/codex: 1 new message"));
         assert!(context.contains("from: agents/claude"));
         assert!(context.contains("please respond"));
+
+        let delivered = store.acknowledge_inbox_delivery(&delivery).unwrap();
+
+        assert!(!delivery.messages[0].claimed_path.exists());
+        assert_eq!(delivered.len(), 1);
+        assert!(delivered[0].delivered_path.exists());
+        let content = fs::read_to_string(&delivered[0].delivered_path).unwrap();
+        let parsed: Message = toml::from_str(&content).unwrap();
+        assert_eq!(parsed.delivery.state, MessageDeliveryState::Delivered);
+        assert_eq!(parsed.delivery.attempts, 1);
     }
 
     #[test]
@@ -2132,6 +2104,77 @@ mod tests {
     }
 
     #[test]
+    fn check_inbox_respects_active_claims() {
+        let temp = TempDir::new().unwrap();
+        let store = MessageStore::new(temp.path().join("messages"));
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "supervisor owned")
+            .unwrap();
+        let claimed = store
+            .claim_next(
+                "agents/codex",
+                &MessageScope::direct(),
+                "agents/supervisor",
+                MessageLease::new(Duration::from_secs(60)).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+
+        let delivery = store.check_inbox("agents/codex").unwrap();
+
+        assert!(delivery.is_empty());
+        assert!(claimed.claimed_path.exists());
+        assert_eq!(
+            read_message(&claimed.claimed_path)
+                .delivery
+                .claimed_by
+                .as_deref(),
+            Some("agents/supervisor")
+        );
+        assert!(!sent.path.exists());
+    }
+
+    #[test]
+    fn check_inbox_reclaims_expired_claims_before_claiming_direct_delivery() {
+        let temp = TempDir::new().unwrap();
+        let store = MessageStore::new(temp.path().join("messages"));
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "expired supervisor claim")
+            .unwrap();
+        let claimed = store
+            .claim_next(
+                "agents/codex",
+                &MessageScope::direct(),
+                "agents/supervisor",
+                MessageLease::new(Duration::from_secs(60)).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        let mut claimed_message = read_message(&claimed.claimed_path);
+        claimed_message.delivery.lease_expires_at = Some("1970-01-01T00:00:01Z".into());
+        fs::write(
+            &claimed.claimed_path,
+            toml::to_string_pretty(&claimed_message).unwrap(),
+        )
+        .unwrap();
+
+        let delivery = store.check_inbox("agents/codex").unwrap();
+
+        assert_eq!(delivery.messages.len(), 1);
+        assert_eq!(delivery.messages[0].message.meta.id, sent.id);
+        assert_eq!(
+            delivery.messages[0].message.delivery.state,
+            MessageDeliveryState::Claimed
+        );
+        assert_eq!(
+            delivery.messages[0].message.delivery.claimed_by.as_deref(),
+            Some("agents/codex")
+        );
+        assert_eq!(delivery.messages[0].message.delivery.attempts, 1);
+        assert!(delivery.messages[0].claimed_path.exists());
+    }
+
+    #[test]
     fn concurrent_claim_allows_only_one_consumer_to_deliver() {
         let temp = TempDir::new().unwrap();
         let store = Arc::new(MessageStore::new(temp.path().join("messages")));
@@ -2205,7 +2248,7 @@ mod tests {
     }
 
     #[test]
-    fn check_inbox_skips_scoped_messages_and_delivers_direct_messages() {
+    fn check_inbox_skips_scoped_messages_and_claims_direct_messages() {
         let temp = TempDir::new().unwrap();
         let store = MessageStore::new(temp.path().join("messages"));
         let scoped = store
@@ -2226,6 +2269,7 @@ mod tests {
         assert_eq!(delivery.messages[0].message.meta.id, direct.id);
         assert!(scoped.path.exists());
         assert!(!direct.path.exists());
+        assert!(delivery.messages[0].claimed_path.exists());
     }
 
     #[test]
@@ -2271,10 +2315,10 @@ mod tests {
         assert!(!new_dir.join("a-valid.toml").exists());
         assert!(!new_dir.join("z-invalid.toml").exists());
         assert_eq!(
-            read_message(&root.join("agents/codex/inbox/delivered/a-valid.toml"))
+            read_message(&root.join("agents/codex/inbox/claimed/a-valid.toml"))
                 .delivery
                 .state,
-            MessageDeliveryState::Delivered
+            MessageDeliveryState::Claimed
         );
         let failed = read_message(&root.join("agents/codex/inbox/failed/z-invalid.toml"));
         assert_eq!(failed.delivery.state, MessageDeliveryState::Failed);

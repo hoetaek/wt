@@ -186,8 +186,6 @@ Directory state is the visible source of truth for inspection and atomic transit
 - `claim`: move `inbox/new` or eligible `inbox/retry` to `inbox/claimed`, set `delivery.state =
   "claimed"`, `delivery.claimed_by`, and `delivery.lease_expires_at`.
 - `deliver`: move `inbox/claimed` to `inbox/delivered` after successful transport delivery.
-  The hook compatibility path may still deliver direct-scope `inbox/new` messages directly to
-  `inbox/delivered`; scoped consumers use the claim lifecycle.
 - `retry`: move failed delivery attempts to `inbox/retry`, increment `delivery.attempts`, and set
   `delivery.last_error`.
 - `fail`: move poison or exhausted messages to `inbox/failed` with `delivery.last_error`.
@@ -213,10 +211,13 @@ Canonical hook compatibility delivery:
 wt msg check-inbox --agent agents/codex
 ```
 
-`check-inbox` exits successfully with no output when `inbox/new` has no deliverable messages. When
-messages exist, it prints JSON containing `hookSpecificOutput.additionalContext` and moves every
-successfully rendered direct-scope message into `inbox/delivered/`. This command is a compatibility
-consumer for agent hooks, not a separate unread/read lifecycle.
+`check-inbox` exits successfully with no output when there are no deliverable direct-scope
+messages. Before rendering hook output it reclaims expired leases according to the delivery
+lifecycle policy, claims deliverable direct-scope messages from `inbox/new` or eligible
+`inbox/retry`, prints JSON containing `hookSpecificOutput.additionalContext`, and acknowledges the
+claims into `inbox/delivered/` only after stdout is written successfully. Active non-expired claims
+remain owned by their current claimant. This command is a compatibility consumer for agent hooks,
+not a separate unread/read lifecycle.
 
 Workflow supervisors must scope-match before claiming. In particular, `agents/coordinator` is a
 shared local coordinator address; a workflow supervisor must not claim shared `agents/coordinator`

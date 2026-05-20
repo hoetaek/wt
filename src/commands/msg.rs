@@ -31,5 +31,7 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: &str) -> Result<()> {
     let mut handle = stdout.lock();
     serde_json::to_writer(&mut handle, &output)?;
     writeln!(handle)?;
+    handle.flush()?;
+    store.acknowledge_inbox_delivery(&delivery)?;
     Ok(())
 }
