@@ -1,13 +1,14 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static MESSAGE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+static MESSAGE_TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) const COORDINATOR_AGENT_ALIAS: &str = "coordinator";
 pub(crate) const COORDINATOR_AGENT_ID: &str = "agents/coordinator";
@@ -347,8 +348,8 @@ pub struct MessageLease {
 
 impl MessageLease {
     pub fn new(duration: Duration) -> Result<Self> {
-        if duration.is_zero() {
-            bail!("Message claim lease duration must be greater than zero");
+        if duration < Duration::from_secs(1) {
+            bail!("Message claim lease duration must be at least 1 second");
         }
         Ok(Self { duration })
     }
@@ -543,34 +544,13 @@ impl MessageStore {
             format!("Failed to create claimed inbox: {}", claimed_dir.display())
         })?;
         let claimed_path = exact_state_path(&claimed_dir, path)?;
-        if claimed_path.exists() {
-            self.poison_message(
-                agent,
-                path,
-                &format!(
-                    "Message {} already exists in inbox/claimed",
-                    claimed_path.display()
-                ),
-            )?;
-            return Ok(None);
-        }
-
-        match fs::rename(path, &claimed_path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(err) => {
-                return Err(err).with_context(|| {
-                    format!(
-                        "Failed to claim message: {} -> {}",
-                        path.display(),
-                        claimed_path.display()
-                    )
-                });
-            }
-        }
 
         message.mark_claimed(claimed_by, lease.expires_at(SystemTime::now()));
-        write_message(&claimed_path, &message, "claimed")?;
+        match transition_message_atomically(path, &claimed_path, &message, "claimed")? {
+            MessageTransitionOutcome::Completed => {}
+            MessageTransitionOutcome::DestinationAlreadyExists => return Ok(None),
+            MessageTransitionOutcome::SourceMissing => return Ok(None),
+        }
         Ok(Some(ClaimedMessage {
             original_path: path.to_path_buf(),
             claimed_path,
@@ -594,10 +574,9 @@ impl MessageStore {
             )
         })?;
         let delivered_path = exact_state_path(&delivered_dir, &claimed_path)?;
-        move_message_exact(&claimed_path, &delivered_path, "deliver message")?;
 
         message.mark_delivered();
-        write_message(&delivered_path, &message, "delivered")?;
+        transition_message_atomically(&claimed_path, &delivered_path, &message, "delivered")?;
         Ok(DeliveredMessage {
             original_path: claimed_path,
             delivered_path,
@@ -619,10 +598,9 @@ impl MessageStore {
         fs::create_dir_all(&retry_dir)
             .with_context(|| format!("Failed to create retry inbox: {}", retry_dir.display()))?;
         let retry_path = exact_state_path(&retry_dir, &claimed_path)?;
-        move_message_exact(&claimed_path, &retry_path, "retry message")?;
 
         message.mark_retry(&error);
-        write_message(&retry_path, &message, "retry")?;
+        transition_message_atomically(&claimed_path, &retry_path, &message, "retry")?;
         Ok(RetriedMessage {
             original_path: claimed_path,
             retry_path,
@@ -644,10 +622,9 @@ impl MessageStore {
         fs::create_dir_all(&failed_dir)
             .with_context(|| format!("Failed to create failed inbox: {}", failed_dir.display()))?;
         let failed_path = exact_state_path(&failed_dir, &claimed_path)?;
-        move_message_exact(&claimed_path, &failed_path, "fail message")?;
 
         message.mark_failed(&error, true);
-        write_message(&failed_path, &message, "failed")?;
+        transition_message_atomically(&claimed_path, &failed_path, &message, "failed")?;
         Ok(FailedMessage {
             original_path: claimed_path,
             failed_path,
@@ -713,9 +690,8 @@ impl MessageStore {
                 format!("Failed to create retry inbox: {}", retry_dir.display())
             })?;
             let retry_path = exact_state_path(&retry_dir, &path)?;
-            move_message_exact(&path, &retry_path, "reclaim expired message lease")?;
             message.mark_retry(&format!("lease expired at {lease_expires_at}"));
-            write_message(&retry_path, &message, "retry")?;
+            transition_message_atomically(&path, &retry_path, &message, "retry")?;
             reclaimed.push(ReclaimedMessage {
                 original_path: path,
                 retry_path,
@@ -777,24 +753,12 @@ impl MessageStore {
             .ok()
             .and_then(|content| toml::from_str::<Message>(&content).ok());
 
-        match fs::rename(path, &failed_path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(err) => {
-                return Err(err).with_context(|| {
-                    format!(
-                        "Failed to move poison message to failed inbox: {} -> {}",
-                        path.display(),
-                        failed_path.display()
-                    )
-                });
-            }
-        }
-
         let mut message = parsed;
         if let Some(message) = message.as_mut() {
             message.mark_failed(&error, false);
-            write_message(&failed_path, message, "failed poison")?;
+            transition_message_atomically(path, &failed_path, message, "failed poison")?;
+        } else {
+            transition_raw_message_atomically(path, &failed_path, "failed poison")?;
         }
 
         Ok(Some(FailedMessage {
@@ -862,23 +826,8 @@ impl MessageStore {
         let mut messages = Vec::new();
         for (path, mut message) in pending {
             let delivered_path = next_state_path(&delivered_dir, &path)?;
-            fs::rename(&path, &delivered_path).with_context(|| {
-                format!(
-                    "Failed to move message to delivered inbox: {} -> {}",
-                    path.display(),
-                    delivered_path.display()
-                )
-            })?;
-
             message.mark_delivered();
-            let content = toml::to_string_pretty(&message)
-                .context("Failed to serialize delivered message TOML")?;
-            fs::write(&delivered_path, content).with_context(|| {
-                format!(
-                    "Failed to update delivered message: {}",
-                    delivered_path.display()
-                )
-            })?;
+            transition_message_atomically(&path, &delivered_path, &message, "delivered")?;
             messages.push(DeliveredMessage {
                 original_path: path,
                 delivered_path,
@@ -1148,22 +1097,229 @@ fn exact_state_path(state_dir: &Path, original_path: &Path) -> Result<PathBuf> {
     Ok(state_dir.join(file_name))
 }
 
-fn move_message_exact(from: &Path, to: &Path, action: &str) -> Result<()> {
-    if to.exists() {
-        bail!(
-            "Cannot {action}: target message already exists at {}",
-            to.display()
-        );
-    }
-    fs::rename(from, to)
-        .with_context(|| format!("Failed to {action}: {} -> {}", from.display(), to.display()))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MessageTransitionOutcome {
+    Completed,
+    DestinationAlreadyExists,
+    SourceMissing,
 }
 
-fn write_message(path: &Path, message: &Message, state_name: &str) -> Result<()> {
+fn transition_message_atomically(
+    source_path: &Path,
+    destination_path: &Path,
+    message: &Message,
+    state_name: &str,
+) -> Result<MessageTransitionOutcome> {
     let content = toml::to_string_pretty(message)
         .with_context(|| format!("Failed to serialize {state_name} message TOML"))?;
-    fs::write(path, content)
-        .with_context(|| format!("Failed to update {state_name} message: {}", path.display()))
+    transition_bytes_atomically(
+        source_path,
+        destination_path,
+        content.as_bytes(),
+        state_name,
+        Some(message),
+    )
+}
+
+fn transition_raw_message_atomically(
+    source_path: &Path,
+    destination_path: &Path,
+    state_name: &str,
+) -> Result<MessageTransitionOutcome> {
+    if !source_path.exists() {
+        return Ok(MessageTransitionOutcome::SourceMissing);
+    }
+    let content = fs::read(source_path)
+        .with_context(|| format!("Failed to read message: {}", source_path.display()))?;
+    transition_bytes_atomically(source_path, destination_path, &content, state_name, None)
+}
+
+fn transition_bytes_atomically(
+    source_path: &Path,
+    destination_path: &Path,
+    content: &[u8],
+    state_name: &str,
+    expected_message: Option<&Message>,
+) -> Result<MessageTransitionOutcome> {
+    if !source_path.exists() {
+        return Ok(MessageTransitionOutcome::SourceMissing);
+    }
+    let destination_dir = destination_path.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Message destination has no parent directory: {}",
+            destination_path.display()
+        )
+    })?;
+    fs::create_dir_all(destination_dir).with_context(|| {
+        format!(
+            "Failed to create {state_name} inbox: {}",
+            destination_dir.display()
+        )
+    })?;
+    if destination_path.exists() {
+        remove_source_if_destination_completed(
+            source_path,
+            destination_path,
+            expected_message,
+            content,
+        )?;
+        return Ok(MessageTransitionOutcome::DestinationAlreadyExists);
+    }
+
+    let temp_path = unique_temp_path(destination_path)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .with_context(|| {
+            format!(
+                "Failed to create temporary {state_name} message: {}",
+                temp_path.display()
+            )
+        })?;
+    file.write_all(content).with_context(|| {
+        format!(
+            "Failed to write temporary {state_name} message: {}",
+            temp_path.display()
+        )
+    })?;
+    file.sync_all().with_context(|| {
+        format!(
+            "Failed to fsync temporary {state_name} message: {}",
+            temp_path.display()
+        )
+    })?;
+    drop(file);
+
+    match fs::hard_link(&temp_path, destination_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+            let _ = fs::remove_file(&temp_path);
+            remove_source_if_destination_completed(
+                source_path,
+                destination_path,
+                expected_message,
+                content,
+            )?;
+            return Ok(MessageTransitionOutcome::DestinationAlreadyExists);
+        }
+        Err(err) => {
+            let _ = fs::remove_file(&temp_path);
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to publish {state_name} message: {} -> {}",
+                    temp_path.display(),
+                    destination_path.display()
+                )
+            });
+        }
+    }
+    let _ = fs::remove_file(&temp_path);
+    sync_parent_dir(destination_path)?;
+    remove_transition_source(source_path)?;
+    Ok(MessageTransitionOutcome::Completed)
+}
+
+fn remove_source_if_destination_completed(
+    source_path: &Path,
+    destination_path: &Path,
+    expected_message: Option<&Message>,
+    expected_content: &[u8],
+) -> Result<()> {
+    if let Some(message) = expected_message {
+        let content = fs::read_to_string(destination_path).with_context(|| {
+            format!(
+                "Failed to read existing destination message: {}",
+                destination_path.display()
+            )
+        })?;
+        let existing: Message = toml::from_str(&content).with_context(|| {
+            format!(
+                "Failed to parse existing destination message: {}",
+                destination_path.display()
+            )
+        })?;
+        if existing.meta.id != message.meta.id || existing.delivery.state != message.delivery.state
+        {
+            bail!(
+                "Cannot complete message transition: target {} already exists for a different message state",
+                destination_path.display()
+            );
+        }
+    } else {
+        let existing = fs::read(destination_path).with_context(|| {
+            format!(
+                "Failed to read existing destination message: {}",
+                destination_path.display()
+            )
+        })?;
+        if existing != expected_content {
+            bail!(
+                "Cannot complete raw message transition: target {} already exists with different content",
+                destination_path.display()
+            );
+        }
+    }
+    remove_transition_source(source_path)
+}
+
+fn remove_transition_source(source_path: &Path) -> Result<()> {
+    match fs::remove_file(source_path) {
+        Ok(()) => {
+            sync_parent_dir(source_path)?;
+            Ok(())
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "Failed to remove source message after transition: {}",
+                source_path.display()
+            )
+        }),
+    }
+}
+
+fn unique_temp_path(destination_path: &Path) -> Result<PathBuf> {
+    let destination_dir = destination_path.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Message destination has no parent directory: {}",
+            destination_path.display()
+        )
+    })?;
+    let file_name = destination_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Message destination has no file name: {}",
+                destination_path.display()
+            )
+        })?;
+    for _ in 0..16 {
+        let sequence = MESSAGE_TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let candidate = destination_dir.join(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            sequence
+        ));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    bail!(
+        "Failed to choose a temporary message path for {}",
+        destination_path.display()
+    )
+}
+
+fn sync_parent_dir(path: &Path) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        anyhow::anyhow!("Message path has no parent directory: {}", path.display())
+    })?;
+    File::open(parent)
+        .with_context(|| format!("Failed to open message directory: {}", parent.display()))?
+        .sync_all()
+        .with_context(|| format!("Failed to fsync message directory: {}", parent.display()))
 }
 
 fn next_state_path(state_dir: &Path, original_path: &Path) -> Result<PathBuf> {
@@ -1409,6 +1565,16 @@ mod tests {
     }
 
     #[test]
+    fn message_lease_rejects_sub_second_durations() {
+        let err = MessageLease::new(Duration::from_millis(999))
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("at least 1 second"));
+        assert!(MessageLease::new(Duration::from_secs(1)).is_ok());
+    }
+
+    #[test]
     fn send_writes_a_toml_message_to_the_agent_inbox_new_state() {
         let temp = TempDir::new().unwrap();
         let store = MessageStore::new(temp.path().join("messages"));
@@ -1511,6 +1677,51 @@ mod tests {
     }
 
     #[test]
+    fn claim_recovers_when_claimed_payload_exists_and_source_remains() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("messages");
+        let store = MessageStore::new(&root);
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "recover claim crash")
+            .unwrap();
+        let claimed_dir = root.join("agents/codex/inbox/claimed");
+        fs::create_dir_all(&claimed_dir).unwrap();
+        let claimed_path = claimed_dir.join(format!("{}.toml", sent.id));
+        let mut claimed_message = sent.message.clone();
+        claimed_message.mark_claimed(
+            &AgentId::parse("agents/first-consumer").unwrap(),
+            "2099-01-01T00:00:00Z".into(),
+        );
+        fs::write(
+            &claimed_path,
+            toml::to_string_pretty(&claimed_message).unwrap(),
+        )
+        .unwrap();
+
+        let claimed = store
+            .claim_next(
+                "agents/codex",
+                &MessageScope::direct(),
+                "agents/second-consumer",
+                MessageLease::new(Duration::from_secs(60)).unwrap(),
+            )
+            .unwrap();
+
+        assert!(claimed.is_none());
+        assert!(!sent.path.exists());
+        assert!(claimed_path.exists());
+        assert_eq!(
+            read_message(&claimed_path).delivery.claimed_by.as_deref(),
+            Some("agents/first-consumer")
+        );
+        assert!(
+            message_paths(&root.join("agents/codex/inbox/failed"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn acknowledge_delivery_moves_claim_to_delivered() {
         let temp = TempDir::new().unwrap();
         let store = MessageStore::new(temp.path().join("messages"));
@@ -1541,6 +1752,50 @@ mod tests {
         assert_eq!(delivered.message.delivery.claimed_by, None);
         assert_eq!(delivered.message.delivery.lease_expires_at, None);
         assert_eq!(delivered.message.text_content(), "delivered content");
+    }
+
+    #[test]
+    fn acknowledge_recovers_when_delivered_payload_exists_and_claim_source_remains() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("messages");
+        let store = MessageStore::new(&root);
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "recover ack crash")
+            .unwrap();
+        let claimed = store
+            .claim_next(
+                "agents/codex",
+                &MessageScope::direct(),
+                "agents/supervisor",
+                MessageLease::new(Duration::from_secs(60)).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        let delivered_dir = root.join("agents/codex/inbox/delivered");
+        fs::create_dir_all(&delivered_dir).unwrap();
+        let delivered_path = delivered_dir.join(format!("{}.toml", sent.id));
+        let mut delivered_message = claimed.message.clone();
+        delivered_message.mark_delivered();
+        fs::write(
+            &delivered_path,
+            toml::to_string_pretty(&delivered_message).unwrap(),
+        )
+        .unwrap();
+
+        let delivered = store
+            .acknowledge_delivery("agents/codex", "agents/supervisor", &sent.id)
+            .unwrap();
+
+        assert!(!claimed.claimed_path.exists());
+        assert!(delivered_path.exists());
+        assert_eq!(
+            delivered.message.delivery.state,
+            MessageDeliveryState::Delivered
+        );
+        assert_eq!(
+            read_message(&delivered_path).delivery.state,
+            MessageDeliveryState::Delivered
+        );
     }
 
     #[test]
