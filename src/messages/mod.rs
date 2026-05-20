@@ -450,19 +450,13 @@ impl MessageStore {
             );
             message.scope = scope.clone();
             let path = inbox.join(format!("{id}.toml"));
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(mut file) => {
-                    let content = toml::to_string_pretty(&message)
-                        .context("Failed to serialize message TOML")?;
-                    file.write_all(content.as_bytes())
-                        .with_context(|| format!("Failed to write message: {}", path.display()))?;
+            let content =
+                toml::to_string_pretty(&message).context("Failed to serialize message TOML")?;
+            match publish_bytes_atomically(&path, content.as_bytes(), "message")? {
+                MessagePublishOutcome::Completed => {
                     return Ok(SentMessage { id, path, message });
                 }
-                Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
-                Err(err) => {
-                    return Err(err)
-                        .with_context(|| format!("Failed to create message: {}", path.display()));
-                }
+                MessagePublishOutcome::DestinationAlreadyExists => continue,
             }
         }
 
@@ -1203,6 +1197,12 @@ enum MessageTransitionOutcome {
     SourceMissing,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MessagePublishOutcome {
+    Completed,
+    DestinationAlreadyExists,
+}
+
 fn transition_message_atomically(
     source_path: &Path,
     destination_path: &Path,
@@ -1243,6 +1243,29 @@ fn transition_bytes_atomically(
     if !source_path.exists() {
         return Ok(MessageTransitionOutcome::SourceMissing);
     }
+
+    match publish_bytes_atomically(destination_path, content, state_name)? {
+        MessagePublishOutcome::Completed => {
+            remove_transition_source(source_path)?;
+            Ok(MessageTransitionOutcome::Completed)
+        }
+        MessagePublishOutcome::DestinationAlreadyExists => {
+            remove_source_if_destination_completed(
+                source_path,
+                destination_path,
+                expected_message,
+                content,
+            )?;
+            Ok(MessageTransitionOutcome::DestinationAlreadyExists)
+        }
+    }
+}
+
+fn publish_bytes_atomically(
+    destination_path: &Path,
+    content: &[u8],
+    state_name: &str,
+) -> Result<MessagePublishOutcome> {
     let destination_dir = destination_path.parent().ok_or_else(|| {
         anyhow::anyhow!(
             "Message destination has no parent directory: {}",
@@ -1256,15 +1279,8 @@ fn transition_bytes_atomically(
         )
     })?;
     if destination_path.exists() {
-        remove_source_if_destination_completed(
-            source_path,
-            destination_path,
-            expected_message,
-            content,
-        )?;
-        return Ok(MessageTransitionOutcome::DestinationAlreadyExists);
+        return Ok(MessagePublishOutcome::DestinationAlreadyExists);
     }
-
     let temp_path = unique_temp_path(destination_path)?;
     let mut file = OpenOptions::new()
         .write(true)
@@ -1294,13 +1310,7 @@ fn transition_bytes_atomically(
         Ok(()) => {}
         Err(err) if err.kind() == ErrorKind::AlreadyExists => {
             let _ = fs::remove_file(&temp_path);
-            remove_source_if_destination_completed(
-                source_path,
-                destination_path,
-                expected_message,
-                content,
-            )?;
-            return Ok(MessageTransitionOutcome::DestinationAlreadyExists);
+            return Ok(MessagePublishOutcome::DestinationAlreadyExists);
         }
         Err(err) => {
             let _ = fs::remove_file(&temp_path);
@@ -1315,8 +1325,7 @@ fn transition_bytes_atomically(
     }
     let _ = fs::remove_file(&temp_path);
     sync_parent_dir(destination_path)?;
-    remove_transition_source(source_path)?;
-    Ok(MessageTransitionOutcome::Completed)
+    Ok(MessagePublishOutcome::Completed)
 }
 
 fn remove_source_if_destination_completed(
@@ -1707,6 +1716,47 @@ mod tests {
         assert_eq!(parsed.delivery.attempts, 0);
         assert_eq!(parsed.body.summary, "hello from unit test");
         assert_eq!(parsed.body.parts[0].content, "hello from unit test");
+    }
+
+    #[test]
+    fn atomic_publish_exposes_only_final_message_path() {
+        let temp = TempDir::new().unwrap();
+        let new_dir = temp.path().join("messages/agents/codex/inbox/new");
+        let final_path = new_dir.join("msg_atomic.toml");
+
+        let outcome = publish_bytes_atomically(&final_path, b"ready", "message").unwrap();
+
+        assert_eq!(outcome, MessagePublishOutcome::Completed);
+        assert_eq!(fs::read_to_string(&final_path).unwrap(), "ready");
+        assert_eq!(message_paths(&new_dir).unwrap(), vec![final_path]);
+        assert!(fs::read_dir(&new_dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+    }
+
+    #[test]
+    fn atomic_publish_reports_existing_final_path_without_overwriting() {
+        let temp = TempDir::new().unwrap();
+        let new_dir = temp.path().join("messages/agents/codex/inbox/new");
+        fs::create_dir_all(&new_dir).unwrap();
+        let final_path = new_dir.join("msg_existing.toml");
+        fs::write(&final_path, "existing").unwrap();
+
+        let outcome = publish_bytes_atomically(&final_path, b"replacement", "message").unwrap();
+
+        assert_eq!(outcome, MessagePublishOutcome::DestinationAlreadyExists);
+        assert_eq!(fs::read_to_string(&final_path).unwrap(), "existing");
+        assert!(fs::read_dir(&new_dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
     }
 
     #[test]
