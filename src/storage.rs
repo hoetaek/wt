@@ -317,6 +317,11 @@ mod tests {
             storage.messages_dir(),
             PathBuf::from("/repo/.git/wt/messages")
         );
+        assert_eq!(storage.ideas_dir(), PathBuf::from("/repo/.git/wt/ideas"));
+        assert_eq!(
+            storage.retrospectives_dir(),
+            PathBuf::from("/repo/.git/wt/retrospectives")
+        );
         assert_eq!(
             storage.agent_state_dir(),
             PathBuf::from("/repo/.git/wt/agent.state")

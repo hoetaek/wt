@@ -8,6 +8,27 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added explicit scoped sends for `wt msg send` with `--scope workflow:<id>`,
+  `--scope task_run:<id>`, `--scope repo`, and `--scope direct`. Workflow
+  coordinator handoff prompts now use workflow-scoped coordinator inbox fallback
+  commands so shared `agents/coordinator` messages can be attributed to the
+  owning workflow.
+- Bumped the package version to `0.41.0` because scoped message sending extends
+  the user-facing CLI and workflow handoff contract while `wt` is still pre-1.0.
+
+- Added read-only message lifecycle inspection with `wt msg list --agent <agent>`
+  and `wt msg read --agent <agent> <message-id>`. The commands report retained
+  `new`, `claimed`, `delivered`, `retry`, and `failed` messages without claiming
+  or acknowledging them, including JSON output for coordinator diagnostics.
+- Bumped the package version to `0.40.0` because message lifecycle inspection
+  adds user-facing CLI subcommands while `wt` is still pre-1.0.
+
+- Migrated `wt msg check-inbox` onto the scoped message delivery lifecycle. Hook
+  delivery now reclaims expired leases, claims deliverable direct-scope messages,
+  emits hook JSON on stdout, and acknowledges successful output into
+  `inbox/delivered` without stealing active claims.
+- Bumped the package version to `0.39.0` because the file inbox persisted state
+  and hook delivery contract changed while `wt` is still pre-1.0.
 - Changed generated task and workflow coordinator handoff prompts to present
   `wt msg send --to coordinator ...` as the default report route, with cmux
   send coordinates retained as the fallback route when the file inbox is
@@ -78,9 +99,9 @@ minor version instead of moving to `x.0.0`.
 
 - Added `wt msg send --to <agent> <message>` and
   `wt msg check-inbox --agent <agent>` as the file-based agent inbox MVP. Messages
-  are stored under `<git-common-dir>/wt/messages/agents/<agent>/inbox`, use a
-  TOML model with meta/envelope/body text parts, and `check-inbox` emits hook
-  JSON before moving consumed messages to `inbox/read`.
+  are stored under `<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>`,
+  use a TOML model with meta/scope/envelope/delivery/body fields, and
+  `check-inbox` emits hook JSON through the canonical delivery lifecycle.
 
 - Moved all workspace execution-start surfaces under `wt run`: `wt run issue`,
   `wt run pr`, `wt run branch`, `wt run task`, and `wt run workflow` are the

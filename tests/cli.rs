@@ -288,6 +288,126 @@ fn toml_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+fn message_path_with_summary(dir: &Path, summary: &str) -> PathBuf {
+    toml_files(dir)
+        .into_iter()
+        .find(|path| {
+            let content = std::fs::read_to_string(path).unwrap();
+            let message: toml::Value = toml::from_str(&content).unwrap();
+            message["body"]["summary"].as_str() == Some(summary)
+        })
+        .unwrap()
+}
+
+fn claim_message_file(new_path: &Path, claimed_by: &str, lease_expires_at: &str) -> PathBuf {
+    let mut message: toml::Value =
+        toml::from_str(&std::fs::read_to_string(new_path).unwrap()).unwrap();
+    if let Some(delivery) = message
+        .get_mut("delivery")
+        .and_then(toml::Value::as_table_mut)
+    {
+        delivery.insert("state".into(), toml::Value::String("claimed".into()));
+        delivery.insert("claimed_by".into(), toml::Value::String(claimed_by.into()));
+        delivery.insert(
+            "lease_expires_at".into(),
+            toml::Value::String(lease_expires_at.into()),
+        );
+        delivery.remove("last_error");
+    }
+
+    let inbox = new_path.parent().unwrap().parent().unwrap();
+    let claimed_dir = inbox.join("claimed");
+    std::fs::create_dir_all(&claimed_dir).unwrap();
+    let claimed_path = claimed_dir.join(new_path.file_name().unwrap());
+    std::fs::write(&claimed_path, toml::to_string_pretty(&message).unwrap()).unwrap();
+    std::fs::remove_file(new_path).unwrap();
+    claimed_path
+}
+
+fn retry_message_file(new_path: &Path, attempts: i64, last_error: &str) -> PathBuf {
+    move_message_file_to_state(new_path, "retry", attempts, None, None, Some(last_error))
+}
+
+fn fail_message_file(new_path: &Path, attempts: i64, last_error: &str) -> PathBuf {
+    move_message_file_to_state(new_path, "failed", attempts, None, None, Some(last_error))
+}
+
+fn move_message_file_to_state(
+    new_path: &Path,
+    state: &str,
+    attempts: i64,
+    claimed_by: Option<&str>,
+    lease_expires_at: Option<&str>,
+    last_error: Option<&str>,
+) -> PathBuf {
+    let mut message: toml::Value =
+        toml::from_str(&std::fs::read_to_string(new_path).unwrap()).unwrap();
+    if let Some(delivery) = message
+        .get_mut("delivery")
+        .and_then(toml::Value::as_table_mut)
+    {
+        delivery.insert("state".into(), toml::Value::String(state.into()));
+        delivery.insert("attempts".into(), toml::Value::Integer(attempts));
+        match claimed_by {
+            Some(value) => {
+                delivery.insert("claimed_by".into(), toml::Value::String(value.into()));
+            }
+            None => {
+                delivery.remove("claimed_by");
+            }
+        }
+        match lease_expires_at {
+            Some(value) => {
+                delivery.insert("lease_expires_at".into(), toml::Value::String(value.into()));
+            }
+            None => {
+                delivery.remove("lease_expires_at");
+            }
+        }
+        match last_error {
+            Some(value) => {
+                delivery.insert("last_error".into(), toml::Value::String(value.into()));
+            }
+            None => {
+                delivery.remove("last_error");
+            }
+        }
+    }
+
+    let inbox = new_path.parent().unwrap().parent().unwrap();
+    let state_dir = inbox.join(state);
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let state_path = state_dir.join(new_path.file_name().unwrap());
+    std::fs::write(&state_path, toml::to_string_pretty(&message).unwrap()).unwrap();
+    std::fs::remove_file(new_path).unwrap();
+    state_path
+}
+
+fn write_conflicting_delivered_message(new_path: &Path) -> PathBuf {
+    let mut message: toml::Value =
+        toml::from_str(&std::fs::read_to_string(new_path).unwrap()).unwrap();
+    message["body"]["summary"] = toml::Value::String("conflicting delivered payload".into());
+    message["body"]["parts"][0]["content"] =
+        toml::Value::String("conflicting delivered payload".into());
+    if let Some(delivery) = message
+        .get_mut("delivery")
+        .and_then(toml::Value::as_table_mut)
+    {
+        delivery.insert("state".into(), toml::Value::String("delivered".into()));
+        delivery.insert("attempts".into(), toml::Value::Integer(1));
+        delivery.remove("claimed_by");
+        delivery.remove("lease_expires_at");
+        delivery.remove("last_error");
+    }
+
+    let inbox = new_path.parent().unwrap().parent().unwrap();
+    let delivered_dir = inbox.join("delivered");
+    std::fs::create_dir_all(&delivered_dir).unwrap();
+    let delivered_path = delivered_dir.join(new_path.file_name().unwrap());
+    std::fs::write(&delivered_path, toml::to_string_pretty(&message).unwrap()).unwrap();
+    delivered_path
+}
+
 fn json_file(path: &Path) -> serde_json::Value {
     let content = std::fs::read_to_string(path).unwrap();
     serde_json::from_str(&content).unwrap()
@@ -855,15 +975,21 @@ fn msg_help_explains_agent_inbox_contract() {
         .success()
         .stdout(predicate::str::contains("file-based agent inbox"))
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/<agent>/inbox",
+            "<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>",
         ))
         .stdout(predicate::str::contains("wt msg send --to <agent>"))
+        .stdout(predicate::str::contains("--scope workflow:<id>"))
         .stdout(predicate::str::contains("coordinator"))
         .stdout(predicate::str::contains("agents/coordinator"))
+        .stdout(predicate::str::contains("wt msg list --agent <agent>"))
+        .stdout(predicate::str::contains(
+            "wt msg read --agent <agent> <message-id>",
+        ))
         .stdout(predicate::str::contains(
             "wt msg check-inbox --agent <agent>",
         ))
-        .stdout(predicate::str::contains("inbox/read"));
+        .stdout(predicate::str::contains("inbox/new"))
+        .stdout(predicate::str::contains("inbox/delivered"));
 
     wt_command()
         .args(["msg", "send", "--help"])
@@ -875,6 +1001,12 @@ fn msg_help_explains_agent_inbox_contract() {
         .stdout(predicate::str::contains(
             "coordinator targets agents/coordinator",
         ))
+        .stdout(predicate::str::contains(
+            "Message ownership scope: direct, repo, workflow:<id>, or task_run:<id>",
+        ))
+        .stdout(predicate::str::contains(
+            "Unscoped sends use the direct/default scope",
+        ))
         .stdout(predicate::str::contains("Message text"));
 
     wt_command()
@@ -883,6 +1015,22 @@ fn msg_help_explains_agent_inbox_contract() {
         .success()
         .stdout(predicate::str::contains("hook JSON"))
         .stdout(predicate::str::contains("Agent id as NAME or agents/NAME"));
+
+    wt_command()
+        .args(["msg", "list", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("without claiming them"))
+        .stdout(predicate::str::contains("Agent id as NAME or agents/NAME"));
+
+    wt_command()
+        .args(["msg", "read", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("without changing delivery state"))
+        .stdout(predicate::str::contains(
+            "Message id without the .toml extension",
+        ));
 }
 
 #[test]
@@ -903,22 +1051,25 @@ fn msg_send_writes_to_agent_inbox_and_normalizes_agent_id() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/codex/inbox/",
+            "<git-common-dir>/wt/messages/agents/codex/inbox/new/",
         ));
 
     let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
-    let files = toml_files(&inbox);
+    let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
     let content = std::fs::read_to_string(&files[0]).unwrap();
     let message: toml::Value = toml::from_str(&content).unwrap();
     assert_eq!(message["meta"]["to"].as_str(), Some("agents/codex"));
     assert_eq!(message["meta"]["from"].as_str(), Some("agents/user"));
+    assert_eq!(message["scope"]["kind"].as_str(), Some("direct"));
     assert_eq!(message["envelope"]["kind"].as_str(), Some("request"));
     assert_eq!(
         message["envelope"]["expects_response"].as_bool(),
         Some(true)
     );
+    assert_eq!(message["delivery"]["state"].as_str(), Some("new"));
+    assert_eq!(message["delivery"]["attempts"].as_integer(), Some(0));
     assert_eq!(message["body"]["summary"].as_str(), Some("hello"));
     assert_eq!(
         message["body"]["parts"][0]["content"].as_str(),
@@ -944,23 +1095,108 @@ fn msg_send_to_coordinator_alias_writes_to_coordinator_inbox() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/coordinator/inbox/",
+            "<git-common-dir>/wt/messages/agents/coordinator/inbox/new/",
         ));
 
     let inbox = temp
         .path()
         .join(".git/wt/messages/agents/coordinator/inbox");
-    let files = toml_files(&inbox);
+    let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
     let content = std::fs::read_to_string(&files[0]).unwrap();
     let message: toml::Value = toml::from_str(&content).unwrap();
     assert_eq!(message["meta"]["to"].as_str(), Some("agents/coordinator"));
     assert_eq!(message["meta"]["from"].as_str(), Some("agents/user"));
+    assert_eq!(message["scope"]["kind"].as_str(), Some("direct"));
+    assert!(message["scope"].get("id").is_none());
+    assert_eq!(message["delivery"]["state"].as_str(), Some("new"));
     assert_eq!(
         message["body"]["parts"][0]["content"].as_str(),
         Some("hello")
     );
+}
+
+#[test]
+fn msg_send_accepts_explicit_workflow_scope() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--scope",
+            "workflow:2026-05-20-001",
+            "--to",
+            "coordinator",
+            "workflow",
+            "owned",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "<git-common-dir>/wt/messages/agents/coordinator/inbox/new/",
+        ));
+
+    let inbox = temp
+        .path()
+        .join(".git/wt/messages/agents/coordinator/inbox");
+    let files = toml_files(&inbox.join("new"));
+    assert_eq!(files.len(), 1);
+
+    let content = std::fs::read_to_string(&files[0]).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(message["meta"]["to"].as_str(), Some("agents/coordinator"));
+    assert_eq!(message["scope"]["kind"].as_str(), Some("workflow"));
+    assert_eq!(message["scope"]["id"].as_str(), Some("2026-05-20-001"));
+    assert_eq!(message["body"]["summary"].as_str(), Some("workflow owned"));
+}
+
+#[test]
+fn msg_send_rejects_invalid_scope() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--scope",
+            "workflow",
+            "--to",
+            "coordinator",
+            "missing",
+            "id",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Message scope `workflow` requires an id",
+        ));
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--scope",
+            "direct:2026-05-20-001",
+            "--to",
+            "coordinator",
+            "direct",
+            "id",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Message scope `direct` must not include an id",
+        ));
 }
 
 #[test]
@@ -983,13 +1219,13 @@ fn msg_send_to_derived_agent_id_targets_runtime_identity_inbox() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/issue-1-test/inbox/",
+            "<git-common-dir>/wt/messages/agents/issue-1-test/inbox/new/",
         ));
 
     let inbox = temp
         .path()
         .join(".git/wt/messages/agents/issue-1-test/inbox");
-    let files = toml_files(&inbox);
+    let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
     let content = std::fs::read_to_string(&files[0]).unwrap();
@@ -1022,12 +1258,292 @@ fn msg_send_to_derived_agent_id_targets_runtime_identity_inbox() {
             .unwrap()
             .contains("runtime identity")
     );
-    assert!(toml_files(&inbox).is_empty());
-    assert_eq!(toml_files(&inbox.join("read")).len(), 1);
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert!(toml_files(&inbox.join("claimed")).is_empty());
+    assert_eq!(toml_files(&inbox.join("delivered")).len(), 1);
 }
 
 #[test]
-fn msg_check_inbox_emits_hook_json_and_moves_messages_to_read() {
+fn msg_list_summarizes_lifecycle_states_without_mutating_messages() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    for summary in [
+        "new summary",
+        "claimed summary",
+        "retry summary",
+        "failed summary",
+    ] {
+        wt_command()
+            .args([
+                "-C",
+                temp.path().to_str().unwrap(),
+                "msg",
+                "send",
+                "--to",
+                "coordinator",
+                summary,
+            ])
+            .assert()
+            .success();
+    }
+
+    let inbox = temp
+        .path()
+        .join(".git/wt/messages/agents/coordinator/inbox");
+    let new_dir = inbox.join("new");
+    let claimed_path = claim_message_file(
+        &message_path_with_summary(&new_dir, "claimed summary"),
+        "agents/supervisor",
+        "2099-01-01T00:00:00Z",
+    );
+    let retry_path = retry_message_file(
+        &message_path_with_summary(&new_dir, "retry summary"),
+        2,
+        "transport down",
+    );
+    let failed_path = fail_message_file(
+        &message_path_with_summary(&new_dir, "failed summary"),
+        3,
+        "poison payload",
+    );
+    let failed_dir = inbox.join("failed");
+    std::fs::write(failed_dir.join("z-poison.toml"), "not = [valid\n").unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "list",
+            "--agent",
+            "coordinator",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "agents/coordinator messages: total 5 (new 1, claimed 1, delivered 0, retry 1, failed 2, invalid 1)",
+        ))
+        .stdout(predicate::str::contains(
+            "new msg_",
+        ))
+        .stdout(predicate::str::contains("scope=direct"))
+        .stdout(predicate::str::contains("summary=\"new summary\""))
+        .stdout(predicate::str::contains(
+            "claimed_by=agents/supervisor",
+        ))
+        .stdout(predicate::str::contains(
+            "lease_expires_at=2099-01-01T00:00:00Z",
+        ))
+        .stdout(predicate::str::contains(
+            "last_error=\"transport down\"",
+        ))
+        .stdout(predicate::str::contains(
+            "last_error=\"poison payload\"",
+        ))
+        .stdout(predicate::str::contains("failed z-poison"))
+        .stdout(predicate::str::contains("Failed to parse message"));
+
+    assert!(claimed_path.exists());
+    assert!(retry_path.exists());
+    assert!(failed_path.exists());
+    assert_eq!(toml_files(&new_dir).len(), 1);
+    assert_eq!(toml_files(&inbox.join("claimed")).len(), 1);
+    assert_eq!(toml_files(&inbox.join("retry")).len(), 1);
+    assert_eq!(toml_files(&failed_dir).len(), 2);
+}
+
+#[test]
+fn msg_list_json_uses_stable_lifecycle_inventory_shape() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "json",
+            "new",
+        ])
+        .assert()
+        .success();
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    claim_message_file(
+        &message_path_with_summary(&inbox.join("new"), "json new"),
+        "agents/supervisor",
+        "2099-01-01T00:00:00Z",
+    );
+    std::fs::create_dir_all(inbox.join("failed")).unwrap();
+    std::fs::write(inbox.join("failed/bad.toml"), "not = [valid\n").unwrap();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "msg",
+            "list",
+            "--agent",
+            "codex",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["agent"].as_str(), Some("agents/codex"));
+    assert_eq!(value["counts"]["total"].as_u64(), Some(2));
+    assert_eq!(value["counts"]["claimed"].as_u64(), Some(1));
+    assert_eq!(value["counts"]["failed"].as_u64(), Some(1));
+    assert_eq!(value["counts"]["invalid"].as_u64(), Some(1));
+    assert_eq!(value["messages"][0]["state"].as_str(), Some("claimed"));
+    assert_eq!(
+        value["messages"][0]["claimed_by"].as_str(),
+        Some("agents/supervisor")
+    );
+    assert_eq!(value["messages"][1]["state"].as_str(), Some("failed"));
+    assert_eq!(value["messages"][1]["valid"].as_bool(), Some(false));
+    assert!(
+        value["messages"][1]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Failed to parse message")
+    );
+}
+
+#[test]
+fn msg_read_shows_claim_and_body_without_changing_state() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "codex",
+            "claimed",
+            "body",
+        ])
+        .assert()
+        .success();
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let claimed_path = claim_message_file(
+        &message_path_with_summary(&inbox.join("new"), "claimed body"),
+        "agents/supervisor",
+        "2099-01-01T00:00:00Z",
+    );
+    let message_id = claimed_path.file_stem().unwrap().to_str().unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "read",
+            "--agent",
+            "agents/codex",
+            message_id,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("state: claimed"))
+        .stdout(predicate::str::contains("valid: true"))
+        .stdout(predicate::str::contains("claimed_by: agents/supervisor"))
+        .stdout(predicate::str::contains(
+            "lease_expires_at: 2099-01-01T00:00:00Z",
+        ))
+        .stdout(predicate::str::contains("summary: claimed body"))
+        .stdout(predicate::str::contains("claimed body"));
+
+    assert!(claimed_path.exists());
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert!(!inbox.join("delivered").exists());
+}
+
+#[test]
+fn msg_read_json_includes_full_message_payload() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "codex",
+            "json",
+            "read",
+        ])
+        .assert()
+        .success();
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let path = message_path_with_summary(&inbox.join("new"), "json read");
+    let message_id = path.file_stem().unwrap().to_str().unwrap();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "msg",
+            "read",
+            "--agent",
+            "codex",
+            message_id,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["agent"].as_str(), Some("agents/codex"));
+    assert_eq!(value["record"]["state"].as_str(), Some("new"));
+    assert_eq!(value["record"]["valid"].as_bool(), Some(true));
+    assert_eq!(
+        value["message"]["body"]["summary"].as_str(),
+        Some("json read")
+    );
+    assert_eq!(value["message"]["delivery"]["state"].as_str(), Some("new"));
+    assert!(path.exists());
+}
+
+#[test]
+fn msg_read_rejects_filename_extension_in_message_id() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "read",
+            "--agent",
+            "codex",
+            "msg_example.toml",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Message id must not include the .toml extension",
+        ));
+}
+
+#[test]
+fn msg_check_inbox_emits_hook_json_and_acknowledges_claimed_messages() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -1069,13 +1585,171 @@ fn msg_check_inbox_emits_hook_json_and_moves_messages_to_read() {
     let context = value["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
-    assert!(context.contains("WT INBOX for agents/codex: 1 unread message"));
+    assert!(context.contains("WT INBOX for agents/codex: 1 new message"));
     assert!(context.contains("hello from claude"));
     assert!(context.contains("wt msg send --to <agent> <message>"));
 
     let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
-    assert!(toml_files(&inbox).is_empty());
-    assert_eq!(toml_files(&inbox.join("read")).len(), 1);
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert!(toml_files(&inbox.join("claimed")).is_empty());
+    let delivered = toml_files(&inbox.join("delivered"));
+    assert_eq!(delivered.len(), 1);
+    let content = std::fs::read_to_string(&delivered[0]).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(message["delivery"]["state"].as_str(), Some("delivered"));
+    assert_eq!(message["delivery"]["attempts"].as_integer(), Some(1));
+}
+
+#[test]
+fn msg_check_inbox_does_not_steal_active_claims() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "claimed",
+            "elsewhere",
+        ])
+        .assert()
+        .success();
+
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let new = toml_files(&inbox.join("new"));
+    let claimed_path = claim_message_file(&new[0], "agents/supervisor", "2099-01-01T00:00:00Z");
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/codex",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    assert!(claimed_path.exists());
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert!(!inbox.join("delivered").exists());
+    let content = std::fs::read_to_string(&claimed_path).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(
+        message["delivery"]["claimed_by"].as_str(),
+        Some("agents/supervisor")
+    );
+}
+
+#[test]
+fn msg_check_inbox_reclaims_expired_claims_and_delivers_them() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "expired",
+            "claim",
+        ])
+        .assert()
+        .success();
+
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let new = toml_files(&inbox.join("new"));
+    claim_message_file(&new[0], "agents/supervisor", "1970-01-01T00:00:01Z");
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/codex",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("expired claim")
+    );
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert!(toml_files(&inbox.join("claimed")).is_empty());
+    assert!(toml_files(&inbox.join("retry")).is_empty());
+    let delivered = toml_files(&inbox.join("delivered"));
+    assert_eq!(delivered.len(), 1);
+    let content = std::fs::read_to_string(&delivered[0]).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(message["delivery"]["state"].as_str(), Some("delivered"));
+    assert_eq!(message["delivery"]["attempts"].as_integer(), Some(2));
+    assert!(message["delivery"].get("claimed_by").is_none());
+    assert!(message["delivery"].get("lease_expires_at").is_none());
+}
+
+#[test]
+fn msg_check_inbox_keeps_hook_stdout_json_when_acknowledge_fails() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "stdout",
+            "json",
+        ])
+        .assert()
+        .success();
+
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let new = toml_files(&inbox.join("new"));
+    let delivered_conflict = write_conflicting_delivered_message(&new[0]);
+
+    let assert = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/codex",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "already exists with different content",
+        ));
+
+    let output = assert.get_output();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["hookSpecificOutput"]["hookEventName"].as_str(),
+        Some("UserPromptSubmit")
+    );
+    assert!(delivered_conflict.exists());
 }
 
 #[test]
@@ -1214,7 +1888,7 @@ fn msg_uses_git_common_messages_from_linked_worktree() {
         .success();
 
     let common_inbox = repo.join(".git/wt/messages/agents/codex/inbox");
-    assert_eq!(toml_files(&common_inbox).len(), 1);
+    assert_eq!(toml_files(&common_inbox.join("new")).len(), 1);
     assert!(!linked.join(".git/wt/messages").exists());
 
     let output = wt_command()
@@ -1239,8 +1913,8 @@ fn msg_uses_git_common_messages_from_linked_worktree() {
             .unwrap()
             .contains("from linked")
     );
-    assert!(toml_files(&common_inbox).is_empty());
-    assert_eq!(toml_files(&common_inbox.join("read")).len(), 1);
+    assert!(toml_files(&common_inbox.join("new")).is_empty());
+    assert_eq!(toml_files(&common_inbox.join("delivered")).len(), 1);
 }
 
 #[test]

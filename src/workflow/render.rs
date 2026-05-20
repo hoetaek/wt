@@ -555,17 +555,38 @@ fn workflow_task_prompt_content(content: &str, handoff: &str) -> String {
 }
 
 fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>) -> String {
+    let workflow_path = match &handoff {
+        WorkflowCoordinatorHandoff::Task {
+            completion: Some(completion),
+            ..
+        } => completion.workflow_path,
+        WorkflowCoordinatorHandoff::Task {
+            completion: None, ..
+        } => Path::new("<workflow-path>"),
+    };
+    let workflow_scope = workflow_scope_arg(workflow_path);
     let (pull_request_instructions, pr_report_value, after_send) = workflow_handoff_policy(handoff);
     let cmux_send_command = format!(
         "cmux send --workspace {{{{coordinator_cmux_workspace}}}} --surface {{{{coordinator_cmux_surface}}}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\"\n{{{{coordinator_enter_command}}}}"
     );
     let inbox_send_command = format!(
-        "wt msg send --to {COORDINATOR_AGENT_ALIAS} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\""
+        "wt msg send --scope {} --to {COORDINATOR_AGENT_ALIAS} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\"",
+        shell_arg(&workflow_scope)
     );
 
     format!(
-        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator inbox:\n\n```bash\n{inbox_send_command}\n```\n\nThe coordinator inbox target `{COORDINATOR_AGENT_ALIAS}` normalizes to `agents/coordinator`. If the file inbox route is unavailable, send the same report to the fallback cmux surface that started this workflow:\n\n```bash\n{cmux_send_command}\n```\n\n{pull_request_instructions}\n\n{after_send}\n\nIf neither coordinator route is available, leave the same report in this task session and wait."
+        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator inbox:\n\n```bash\n{inbox_send_command}\n```\n\nThe coordinator inbox target `{COORDINATOR_AGENT_ALIAS}` normalizes to `agents/coordinator`, and this command uses explicit workflow scope `{workflow_scope}`. Workflow supervisors may claim shared `agents/coordinator` inbox messages only when this explicit workflow scope matches. If the file inbox route is unavailable, send the same report to the fallback cmux surface that started this workflow:\n\n```bash\n{cmux_send_command}\n```\n\n{pull_request_instructions}\n\n{after_send}\n\nIf neither coordinator route is available, leave the same report in this task session and wait."
     )
+}
+
+fn workflow_scope_arg(workflow_path: &Path) -> String {
+    let id = workflow_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::trim)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("<workflow-id>");
+    format!("workflow:{id}")
 }
 
 fn workflow_handoff_policy(

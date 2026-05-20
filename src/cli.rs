@@ -184,16 +184,16 @@ pub enum Commands {
     },
     /// Start a read-only personal state web UI
     #[command(
-        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, serves embedded no-build assets, and exposes only allowlisted routes including GET /api/snapshot for legacy repo-root ideas and retrospecs, plus <git-common-dir>/wt TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
+        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, serves embedded no-build assets, and exposes only allowlisted routes including GET /api/snapshot for <git-common-dir>/wt ideas, retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
     )]
     Ui {
         /// Port to bind on 127.0.0.1; 0 selects an available port
         #[arg(long, default_value_t = 0, value_name = "PORT")]
         port: u16,
     },
-    /// Send and deliver file-based agent inbox messages
+    /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send and deliver file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox.\n\nUse `wt msg send --to <agent> <message>` for scriptable sends. The short target `coordinator` normalizes to the local coordinator inbox `agents/coordinator`. Use `wt msg check-inbox --agent <agent>` from agent hooks; unread messages are emitted as hook-compatible JSON and moved to inbox/read."
+        long_about = "Send, deliver, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` normalizes to the local coordinator inbox `agents/coordinator`. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg check-inbox --agent <agent>` from agent hooks; deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -434,10 +434,16 @@ pub enum AgentHookUninstallCommand {
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum MsgCommand {
     /// Write one message to an agent inbox
+    #[command(
+        long_about = "Write one message to an agent inbox.\n\nUnscoped sends use the direct/default scope. Use `--scope workflow:<id>` for workflow-owned coordinator reports, `--scope task_run:<id>` for TaskRun-owned delivery, or `--scope repo` for repo-local singleton delivery."
+    )]
     Send {
         /// Target agent id as NAME or agents/NAME; coordinator targets agents/coordinator
         #[arg(long)]
         to: String,
+        /// Message ownership scope: direct, repo, workflow:<id>, or task_run:<id>
+        #[arg(long)]
+        scope: Option<String>,
         /// Message text
         #[arg(
             value_name = "MESSAGE",
@@ -448,7 +454,21 @@ pub enum MsgCommand {
         )]
         message: Vec<String>,
     },
-    /// Emit unread inbox messages as hook JSON and move them to inbox/read
+    /// List lifecycle messages for one agent inbox without claiming them
+    List {
+        /// Agent id as NAME or agents/NAME
+        #[arg(long)]
+        agent: String,
+    },
+    /// Read one lifecycle message by id without changing delivery state
+    Read {
+        /// Agent id as NAME or agents/NAME
+        #[arg(long)]
+        agent: String,
+        /// Message id without the .toml extension
+        message_id: String,
+    },
+    /// Claim deliverable inbox messages, emit hook JSON, and acknowledge delivery
     CheckInbox {
         /// Agent id as NAME or agents/NAME
         #[arg(long)]
@@ -523,7 +543,7 @@ pub enum RunCommand {
     },
     /// Start runnable tasks from a saved workflow
     #[command(
-        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator inbox target `coordinator` and fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
+        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with a scoped coordinator inbox target using `wt msg send --scope workflow:<id> --to coordinator` and fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
     )]
     Workflow {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -1766,7 +1786,8 @@ mod tests {
         assert!(help.contains("saved workflow"));
         assert!(help.contains("does not list, edit, repair, or complete workflow files"));
         assert!(help.contains("Workflow Coordinator Handoff"));
-        assert!(help.contains("coordinator inbox target `coordinator`"));
+        assert!(help.contains("scoped coordinator inbox target"));
+        assert!(help.contains("wt msg send --scope workflow:<id> --to coordinator"));
         assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("prepared [policy].pull_request"));
         assert!(help.contains("wt workflow complete"));

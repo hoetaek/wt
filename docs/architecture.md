@@ -18,7 +18,7 @@ effects.
 | Task state | `src/task.rs` and `src/task_run.rs` | `TaskDocument` under `<git-common-dir>/wt/tasks` and `TaskRun` under `<git-common-dir>/wt/task-runs` | Workflow mode semantics, cmux coordinates, branch landing state |
 | Workflow state store | `src/workflow.rs` today | `WorkflowMode`, `WorkflowMetadata`, `WorkflowTask`, `<git-common-dir>/wt/workflows` paths, validation, read/write/list/resolve, TOML rendering for workflow files | Starting worktrees, prompting agents, selecting runnable workflows, mutating TaskRun status beyond store validation |
 | Storage root boundary | `src/storage.rs` | Resolving `<git-common-dir>/wt` with `git rev-parse --git-common-dir`, typed personal-state paths, and legacy `.local` detection text | TaskDocument, TaskRun, Workflow, config/profile schema migration, or silent `.local` fallback |
-| Message state | `src/messages/mod.rs` and `src/commands/msg.rs` | `AgentId`, Message TOML schema, `<git-common-dir>/wt/messages` inbox paths, send/check-inbox delivery, hook JSON rendering | Activity/status logs, agent hook installation, runtime surface launch, cmux screen scraping |
+| Message state | `src/messages/mod.rs` and `src/commands/msg.rs` | `AgentId`, scoped Message TOML schema, `<git-common-dir>/wt/messages` inbox state paths, address/scope/delivery lifecycle primitives, send/check-inbox delivery, hook JSON rendering | Activity/status logs, agent hook installation, runtime surface launch, cmux screen scraping |
 | Agent runtime observation state | `src/agent_state.rs` | Runtime observation JSONL under `<git-common-dir>/wt/agent.state`, including non-idle wait observation samples and aggregate readers | TaskRun lifecycle status, Workflow/TaskDocument schema, cmux transport ownership, adaptive watch defaults |
 | Agent adapters and launch wrappers | `src/commands/agent_hook.rs`, `src/commands/install.rs`, `src/commands/agent_runtime.rs`, and setup launch env helpers | Claude/Codex hook files, wt-managed hook markers, Codex trust state, `WT_AGENT_ID`/`WT_COORDINATOR_AGENT_ID` launch env binding, short `wt codex`/`wt claude`/`wt as` wrappers | Message schema, inbox storage paths, TaskDocument/TaskRun/Workflow schemas, cmux as message transport |
 | Workflow execution planner | `src/commands/workflow.rs` today; extract to `src/workflow/planner.rs` when split | Runnable-workflow selection, single/batch/stack next-step rules, preflight plans, parent-chain calculation | UI printing, cmux calls, issue-provider calls, file serialization |
@@ -74,12 +74,14 @@ handoff route, but it must not be required for inbox delivery.
 
 `Message` is the file-based agent inbox record. Its source-of-truth module is
 `src/messages/mod.rs`, and its durable location is
-`<git-common-dir>/wt/messages/agents/<agent>/inbox/<message-id>.toml`. It owns
-message ids, sender and target `AgentId`s, envelope/body TOML shape, send-time
-normalization, unread ordering, move-to-read delivery, and hook JSON rendering.
-It does not own activity logs, status snapshots, agent hook install files, or
-runtime process launch. Hook adapters call into `wt msg check-inbox`; they do
-not define the message schema.
+`<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>/<message-id>.toml`.
+It owns message ids, sender and target `AgentId`s, address/scope/delivery TOML
+shape, send-time normalization, state-directory ordering and transitions, and
+hook JSON rendering. `wt msg list` and `wt msg read` are read-only inspection
+surfaces over the same lifecycle directories. Message state does not own
+activity logs, status snapshots, agent hook install files, runtime process
+launch, cmux transport, or Workflow/TaskRun state. Hook adapters call into
+`wt msg check-inbox`; they do not define the message schema.
 
 `agent.state` is the local runtime observation state owner. Its source-of-truth
 module is `src/agent_state.rs`, and its first durable location is

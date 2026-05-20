@@ -303,6 +303,22 @@ merge.
   consume the default worktree inbox.
 - `wt as <agent-id> -- <command...>` is the low-level escape hatch for unusual
   agent commands or scripts that need an explicit inbox identity.
+- `wt msg send --to <agent> <message>` writes a scoped file inbox message under
+  `<git-common-dir>/wt/messages/agents/<agent>/inbox/new/`. The default CLI
+  send scope is `direct`; use `--scope workflow:<id>` for workflow-owned
+  coordinator reports, `--scope task_run:<id>` for TaskRun-owned delivery, and
+  `--scope repo` for repo-local singleton delivery. Workflow and TaskRun
+  ownership belong in explicit message scope metadata, not in `correlates_with`.
+- `wt msg check-inbox --agent <agent>` is the hook-compatible consumer. It
+  claims deliverable direct-scope messages from `inbox/new` or eligible
+  `inbox/retry`, emits hook JSON, and acknowledges them into `inbox/delivered`
+  after stdout is written; it is not a separate unread/read lifecycle.
+- `wt msg list --agent <agent>` is the read-only lifecycle inventory. It counts
+  and summarizes `new`, `claimed`, `delivered`, `retry`, and `failed` messages,
+  including claim owner, lease, attempts, scope, and error metadata when present.
+- `wt msg read --agent <agent> <message-id>` reads one retained lifecycle
+  message without claiming or acknowledging it. Pass `--json` to either
+  inspection command for stable machine-readable output.
 
 `wt workflow` is the canonical prepared-work surface. `single`, `batch`,
 `stack`, and `matrix` are workflow mode values, not separate command surfaces. Use
@@ -312,11 +328,19 @@ for runtime observation.
 ## Coordinator Handoff
 
 Task prompts started by `wt run task` and `wt run workflow` include coordinator
-handoff instructions. The prompt gives the agent the coordinator file inbox
-target, `wt msg send --to coordinator ...`, where `coordinator` normalizes to
-`agents/coordinator`. It also includes fallback cmux coordinates with a
-`cmux send --workspace ... --surface ...` report command and a matching
-`cmux send-key ... enter` command.
+handoff instructions. Workflow handoffs give the agent the scoped coordinator
+file inbox target, `wt msg send --scope workflow:<id> --to coordinator ...`,
+where `coordinator` normalizes to `agents/coordinator`, so workflow supervisors
+can attribute shared coordinator messages to the owning workflow. The prompt
+also includes fallback cmux coordinates with a `cmux send --workspace ...
+--surface ...` report command and a matching `cmux send-key ... enter` command.
+Direct `wt msg send --to coordinator ...` remains a direct/default-scope
+coordinator message, not workflow-owned delivery.
+
+Workflow supervisors may claim shared `agents/coordinator` inbox messages only
+when the message has explicit matching workflow scope. The recipient address,
+`coordinator` alias normalization, cmux coordinates, or `correlates_with` are
+not enough ownership evidence.
 
 Agents report back in this shape and then keep ownership of review follow-up
 for their task:
