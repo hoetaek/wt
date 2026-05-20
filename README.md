@@ -303,6 +303,13 @@ merge.
   consume the default worktree inbox.
 - `wt as <agent-id> -- <command...>` is the low-level escape hatch for unusual
   agent commands or scripts that need an explicit inbox identity.
+- `wt msg send --to <agent> <message>` writes a scoped file inbox message under
+  `<git-common-dir>/wt/messages/agents/<agent>/inbox/new/`. The default CLI
+  send scope is `direct`; workflow and TaskRun ownership belong in explicit
+  message scope metadata, not in `correlates_with`.
+- `wt msg check-inbox --agent <agent>` is the hook-compatible consumer. It
+  emits deliverable `inbox/new` messages as hook JSON and moves them to
+  `inbox/delivered`; it is not a separate unread/read lifecycle.
 
 `wt workflow` is the canonical prepared-work surface. `single`, `batch`,
 `stack`, and `matrix` are workflow mode values, not separate command surfaces. Use

@@ -132,7 +132,7 @@ These require implementation experience before becoming canonical:
 
 - Exact agent adapter file layout and marker behavior.
 - Share/export mechanisms.
-- Message ack, read, and claim semantics.
+- Message lease duration, reclaim policy, and daemon/push delivery timing.
 - `wt://` URL shape and implementation timing.
 - Runtime trait boundaries and optional capabilities.
 - Global config path details across XDG, macOS, and Windows.
@@ -226,10 +226,13 @@ priority = "normal"
 expects_response = false
 correlates_with = "msg_xyz"
 
-[context]
-workflow = "2026-05-19-001"
-task = "add-schema"
-run = "tr_001"
+[scope]
+kind = "workflow"
+id = "2026-05-19-001"
+
+[delivery]
+state = "new"
+attempts = 0
 
 [body]
 summary = "Schema review needed"
@@ -239,8 +242,11 @@ type = "text"
 content = "..."
 ```
 
-Delivery should begin with polling through agent lifecycle hooks. Daemon or push
-delivery is an open decision, not the default model.
+Delivery state should be visible in state directories such as `inbox/new`,
+`inbox/claimed`, `inbox/delivered`, `inbox/retry`, and `inbox/failed`. Hook
+polling can remain a compatibility consumer, but it should use the same scoped
+delivery lifecycle rather than a separate unread/read model. Daemon or push
+delivery timing remains an open decision, not the default model.
 
 ## Agent Adapter Policy
 

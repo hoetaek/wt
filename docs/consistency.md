@@ -109,31 +109,93 @@ Activity, Inbox, Status는 다른 개념이다.
 | Channel | Writer | Reader | Data | Location |
 | --- | --- | --- | --- | --- |
 | Activity log | hook 자동 | UI와 debug | append-only JSONL | `worktrees/<id>/activity.jsonl` |
-| Inbox | 의도된 sender | target agent | TOML file queue | `messages/agents/<agent>/inbox/` |
+| Inbox | 의도된 sender 또는 delivery owner | target agent와 scope owner | scoped TOML file queue | `messages/agents/<agent>/inbox/<state>/` |
 | Status | hook 자동 | 누구나 | single TOML snapshot | `worktrees/<id>/status.toml` |
 
 Activity는 communication이 아니다. Hook은 activity와 status를 자동으로 채울 수 있지만,
-Inbox는 의도된 메시지 또는 정의된 lifecycle event만 받는다. Message bus MVP의 strict CLI
-contract는 아래 `wt msg` surface와 hook dispatcher delivery다. Ack, claim, `PostToolUse`
-polling, push delivery, and `wt://` artifacts are outside the current MVP.
+Inbox는 의도된 메시지 또는 정의된 lifecycle event만 받는다. Message state는 detached
+supervisor가 생기더라도 cmux transport, hook transport, Workflow/TaskRun 상태와 섞지 않는다.
 
-### Message Bus MVP
+### Scoped Message Delivery
 
-Message bus MVP는 agent inbox만 canonical surface로 둔다. Target id는 `agents/<agent>`이며
-CLI 입력에서는 `<agent>`를 `agents/<agent>`로 정규화한다. `<agent>`는 path segment 하나여야
-하고, `agents/<agent>/<role>`처럼 여러 segment가 필요한 주소는 이 MVP에서 모호하므로 실패한다.
+Canonical Message model은 세 개념을 분리한다.
 
-Message files are stored at:
+- Address/recipient: `meta.from`과 `meta.to`는 누가 보냈고 누가 받아야 하는지를 나타낸다.
+  현재 recipient는 여전히 agent-oriented `agents/<agent>` 주소다. CLI 입력에서는
+  `<agent>`를 `agents/<agent>`로 정규화한다. `<agent>`는 path segment 하나여야 하고,
+  `agents/<agent>/<role>`처럼 여러 segment가 필요한 주소는 모호하므로 실패한다.
+- Scope/ownership: `[scope]`는 어떤 context가 message delivery를 소유하는지를 나타낸다.
+  `scope.kind = "direct" | "workflow" | "task_run" | "repo"`가 canonical 값이다. `direct`와
+  `repo`는 repo-local singleton scope이므로 `scope.id`를 쓰지 않는다. `workflow`와
+  `task_run`은 각각 Workflow id 또는 TaskRun id를 `scope.id`에 저장한다.
+- Delivery lifecycle: `[delivery]`는 delivery responsibility와 recovery state다.
+  `delivery.state = "new" | "claimed" | "delivered" | "retry" | "failed"`가 canonical 값이다.
+  `claimed`는 `delivery.claimed_by`와 `delivery.lease_expires_at`가 있어야 한다.
+  `delivery.attempts`는 delivery attempt count이고, `delivery.last_error`는 retry/fail 원인이다.
 
-```text
-<git-common-dir>/wt/messages/agents/<agent>/inbox/<message-id>.toml
+Canonical message TOML shape:
+
+```toml
+[meta]
+id = "msg_..."
+created_at = "2026-05-20T12:00:00Z"
+from = "agents/worker-a"
+to = "agents/coordinator"
+
+[scope]
+kind = "workflow"
+id = "2026-05-20-001"
+
+[envelope]
+kind = "request"
+priority = "normal"
+expects_response = true
+correlates_with = "msg_previous"
+
+[delivery]
+state = "new"
+attempts = 0
+
+[body]
+summary = "Review complete"
+
+[[body.parts]]
+type = "text"
+content = "Agent Completion Report: ..."
 ```
 
-Consumed messages move to:
+`envelope.correlates_with` is correlation/threading only. It is not Workflow, TaskRun, scope,
+ownership, claim, or routing metadata. Workflow ownership always comes from `[scope]`, not from
+`correlates_with`, message body text, cmux workspace/surface coordinates, or recipient address alone.
+
+Canonical physical layout is state-directory based:
 
 ```text
-<git-common-dir>/wt/messages/agents/<agent>/inbox/read/<message-id>.toml
+<git-common-dir>/wt/messages/agents/<agent>/inbox/new/<message-id>.toml
+<git-common-dir>/wt/messages/agents/<agent>/inbox/claimed/<message-id>.toml
+<git-common-dir>/wt/messages/agents/<agent>/inbox/delivered/<message-id>.toml
+<git-common-dir>/wt/messages/agents/<agent>/inbox/retry/<message-id>.toml
+<git-common-dir>/wt/messages/agents/<agent>/inbox/failed/<message-id>.toml
 ```
+
+Directory state is the visible source of truth for inspection and atomic transitions; TOML
+`delivery.state` mirrors the directory. Exact transition names are:
+
+- `send`: create `inbox/new/<message-id>.toml` with `scope.kind = "direct"` unless an explicit
+  scoped send surface says otherwise.
+- `claim`: move `inbox/new` or eligible `inbox/retry` to `inbox/claimed`, set `delivery.state =
+  "claimed"`, `delivery.claimed_by`, and `delivery.lease_expires_at`.
+- `deliver`: move `inbox/claimed` to `inbox/delivered` after successful transport delivery. The
+  current hook compatibility path may deliver direct-scope `inbox/new` messages directly to
+  `inbox/delivered` until claim primitives are implemented.
+- `retry`: move failed delivery attempts to `inbox/retry`, increment `delivery.attempts`, and set
+  `delivery.last_error`.
+- `fail`: move poison or exhausted messages to `inbox/failed` with `delivery.last_error`.
+
+Pre-redesign files directly under `inbox/<message-id>.toml` or old `inbox/read/<message-id>.toml`
+are legacy state, not an alternate canonical lifecycle. Under the pre-1.0 policy, new code must not
+silently consume or reinterpret those paths as aliases for `new` or `delivered`. Repair/import code,
+if added, must be explicit and should explain that the old unread/read layout has been replaced.
 
 Canonical scriptable send:
 
@@ -143,18 +205,30 @@ wt msg send --to codex "hello"
 ```
 
 `wt msg send` writes `meta.from = "agents/user"` unless `WT_AGENT_ID` is set to `agents/<agent>` or
-`<agent>`.
+`<agent>`. It writes direct-scope messages to `inbox/new`.
 
-Canonical hook delivery:
+Canonical hook compatibility delivery:
 
 ```bash
 wt msg check-inbox --agent agents/codex
 ```
 
-`check-inbox` exits successfully with no output when the inbox has no unread messages. When unread
+`check-inbox` exits successfully with no output when `inbox/new` has no deliverable messages. When
 messages exist, it prints JSON containing `hookSpecificOutput.additionalContext` and moves every
-successfully consumed message into `inbox/read/`. The MVP does not add ack, claim, `PostToolUse`
-polling, or `wt://` artifact semantics.
+successfully rendered direct-scope message into `inbox/delivered/`. This command is a compatibility
+consumer for agent hooks, not a separate unread/read lifecycle.
+
+Workflow supervisors must scope-match before claiming. In particular, `agents/coordinator` is a
+shared local coordinator address; a workflow supervisor must not claim shared `agents/coordinator`
+messages unless the message has explicit `scope.kind = "workflow"` with the matching Workflow id, or
+a future documented policy proves matching TaskRun ownership. Raw recipient address
+`agents/coordinator`, `WT_COORDINATOR_AGENT_ID`, `coordinator` alias normalization, or
+`correlates_with` is insufficient ownership evidence.
+
+`PostToolUse` polling, push delivery, `wt://` artifact semantics, provider-private Claude/Codex
+runtime integration, and detached supervisor commands are outside this contract slice. Future
+delivery implementations must build on the same address/scope/delivery lifecycle instead of adding
+a second hidden inbox model.
 
 ## Agent Adapter Policy
 
@@ -270,7 +344,7 @@ identity는 event key `user_prompt_submit`, normalized command handler, default 
 `wt run workflow`는 사용자가 매번 hook을 다시 설치하게 하지 않고, Codex launch 시 cmux
 `new-workspace --command`에 `WT_AGENT_ID=agents/<branch_slug>`와
 `WT_COORDINATOR_AGENT_ID=agents/coordinator`를 주입해 dispatcher에 agent binding과
-coordinator target을 제공해야 한다. `<branch_slug>`는 message MVP의 `agents/<agent>` 한 segment
+coordinator target을 제공해야 한다. `<branch_slug>`는 scoped message address의 `agents/<agent>` 한 segment
 제약과 맞도록 path separator가 없는 값이어야 하고, `wt msg send --to <branch_slug>`와
 `wt msg check-inbox --agent "$WT_AGENT_ID"`가 같은 inbox를 보아야 한다.
 Claude와 future agent CLI도 wt가 process launch를 소유하는 경로에서는 같은

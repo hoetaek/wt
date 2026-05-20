@@ -849,7 +849,7 @@ fn msg_help_explains_agent_inbox_contract() {
         .success()
         .stdout(predicate::str::contains("file-based agent inbox"))
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/<agent>/inbox",
+            "<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>",
         ))
         .stdout(predicate::str::contains("wt msg send --to <agent>"))
         .stdout(predicate::str::contains("coordinator"))
@@ -857,7 +857,8 @@ fn msg_help_explains_agent_inbox_contract() {
         .stdout(predicate::str::contains(
             "wt msg check-inbox --agent <agent>",
         ))
-        .stdout(predicate::str::contains("inbox/read"));
+        .stdout(predicate::str::contains("inbox/new"))
+        .stdout(predicate::str::contains("inbox/delivered"));
 
     wt_command()
         .args(["msg", "send", "--help"])
@@ -897,22 +898,25 @@ fn msg_send_writes_to_agent_inbox_and_normalizes_agent_id() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/codex/inbox/",
+            "<git-common-dir>/wt/messages/agents/codex/inbox/new/",
         ));
 
     let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
-    let files = toml_files(&inbox);
+    let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
     let content = std::fs::read_to_string(&files[0]).unwrap();
     let message: toml::Value = toml::from_str(&content).unwrap();
     assert_eq!(message["meta"]["to"].as_str(), Some("agents/codex"));
     assert_eq!(message["meta"]["from"].as_str(), Some("agents/user"));
+    assert_eq!(message["scope"]["kind"].as_str(), Some("direct"));
     assert_eq!(message["envelope"]["kind"].as_str(), Some("request"));
     assert_eq!(
         message["envelope"]["expects_response"].as_bool(),
         Some(true)
     );
+    assert_eq!(message["delivery"]["state"].as_str(), Some("new"));
+    assert_eq!(message["delivery"]["attempts"].as_integer(), Some(0));
     assert_eq!(message["body"]["summary"].as_str(), Some("hello"));
     assert_eq!(
         message["body"]["parts"][0]["content"].as_str(),
@@ -938,19 +942,21 @@ fn msg_send_to_coordinator_alias_writes_to_coordinator_inbox() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/coordinator/inbox/",
+            "<git-common-dir>/wt/messages/agents/coordinator/inbox/new/",
         ));
 
     let inbox = temp
         .path()
         .join(".git/wt/messages/agents/coordinator/inbox");
-    let files = toml_files(&inbox);
+    let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
     let content = std::fs::read_to_string(&files[0]).unwrap();
     let message: toml::Value = toml::from_str(&content).unwrap();
     assert_eq!(message["meta"]["to"].as_str(), Some("agents/coordinator"));
     assert_eq!(message["meta"]["from"].as_str(), Some("agents/user"));
+    assert_eq!(message["scope"]["kind"].as_str(), Some("direct"));
+    assert_eq!(message["delivery"]["state"].as_str(), Some("new"));
     assert_eq!(
         message["body"]["parts"][0]["content"].as_str(),
         Some("hello")
@@ -977,13 +983,13 @@ fn msg_send_to_derived_agent_id_targets_runtime_identity_inbox() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/issue-1-test/inbox/",
+            "<git-common-dir>/wt/messages/agents/issue-1-test/inbox/new/",
         ));
 
     let inbox = temp
         .path()
         .join(".git/wt/messages/agents/issue-1-test/inbox");
-    let files = toml_files(&inbox);
+    let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
     let content = std::fs::read_to_string(&files[0]).unwrap();
@@ -1016,12 +1022,12 @@ fn msg_send_to_derived_agent_id_targets_runtime_identity_inbox() {
             .unwrap()
             .contains("runtime identity")
     );
-    assert!(toml_files(&inbox).is_empty());
-    assert_eq!(toml_files(&inbox.join("read")).len(), 1);
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert_eq!(toml_files(&inbox.join("delivered")).len(), 1);
 }
 
 #[test]
-fn msg_check_inbox_emits_hook_json_and_moves_messages_to_read() {
+fn msg_check_inbox_emits_hook_json_and_moves_messages_to_delivered() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -1063,13 +1069,18 @@ fn msg_check_inbox_emits_hook_json_and_moves_messages_to_read() {
     let context = value["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
-    assert!(context.contains("WT INBOX for agents/codex: 1 unread message"));
+    assert!(context.contains("WT INBOX for agents/codex: 1 new message"));
     assert!(context.contains("hello from claude"));
     assert!(context.contains("wt msg send --to <agent> <message>"));
 
     let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
-    assert!(toml_files(&inbox).is_empty());
-    assert_eq!(toml_files(&inbox.join("read")).len(), 1);
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    let delivered = toml_files(&inbox.join("delivered"));
+    assert_eq!(delivered.len(), 1);
+    let content = std::fs::read_to_string(&delivered[0]).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(message["delivery"]["state"].as_str(), Some("delivered"));
+    assert_eq!(message["delivery"]["attempts"].as_integer(), Some(1));
 }
 
 #[test]
@@ -1208,7 +1219,7 @@ fn msg_uses_git_common_messages_from_linked_worktree() {
         .success();
 
     let common_inbox = repo.join(".git/wt/messages/agents/codex/inbox");
-    assert_eq!(toml_files(&common_inbox).len(), 1);
+    assert_eq!(toml_files(&common_inbox.join("new")).len(), 1);
     assert!(!linked.join(".git/wt/messages").exists());
 
     let output = wt_command()
@@ -1233,8 +1244,8 @@ fn msg_uses_git_common_messages_from_linked_worktree() {
             .unwrap()
             .contains("from linked")
     );
-    assert!(toml_files(&common_inbox).is_empty());
-    assert_eq!(toml_files(&common_inbox.join("read")).len(), 1);
+    assert!(toml_files(&common_inbox.join("new")).is_empty());
+    assert_eq!(toml_files(&common_inbox.join("delivered")).len(), 1);
 }
 
 #[test]
