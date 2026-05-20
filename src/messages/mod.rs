@@ -1348,8 +1348,13 @@ fn remove_source_if_destination_completed(
             )
         })?;
         let claimed_contention = message.delivery.state == MessageDeliveryState::Claimed
-            && existing.meta.id == message.meta.id
-            && existing.delivery.state == message.delivery.state;
+            && existing.meta == message.meta
+            && existing.scope == message.scope
+            && existing.envelope == message.envelope
+            && existing.body == message.body
+            && existing.delivery.state == message.delivery.state
+            && existing.delivery.attempts == message.delivery.attempts
+            && existing.delivery.last_error == message.delivery.last_error;
         if !claimed_contention && existing != *message {
             bail!(
                 "Cannot complete message transition: target {} already exists with different content",
@@ -1881,6 +1886,44 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn claim_rejects_existing_claimed_payload_with_different_content() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("messages");
+        let store = MessageStore::new(&root);
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "valid source")
+            .unwrap();
+        let claimed_dir = root.join("agents/codex/inbox/claimed");
+        fs::create_dir_all(&claimed_dir).unwrap();
+        let claimed_path = claimed_dir.join(format!("{}.toml", sent.id));
+        let mut claimed_message = sent.message.clone();
+        claimed_message.body.parts[0].content = "different body".into();
+        claimed_message.mark_claimed(
+            &AgentId::parse("agents/first-consumer").unwrap(),
+            "2099-01-01T00:00:00Z".into(),
+        );
+        fs::write(
+            &claimed_path,
+            toml::to_string_pretty(&claimed_message).unwrap(),
+        )
+        .unwrap();
+
+        let err = store
+            .claim_next(
+                "agents/codex",
+                &MessageScope::direct(),
+                "agents/second-consumer",
+                MessageLease::new(Duration::from_secs(60)).unwrap(),
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("already exists with different content"));
+        assert!(sent.path.exists());
+        assert!(claimed_path.exists());
     }
 
     #[test]
