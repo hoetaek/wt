@@ -18,8 +18,8 @@ use crate::workflow::render::{
     render_single_workflow_snapshot, stack_task_already_running_message,
     started_stack_task_message, test_auto_landing_policy, test_workflow_policy,
     workflow_batch_task_prompt_content, workflow_batch_task_prompt_content_for_policy,
-    workflow_metadata_prompt_context, workflow_single_task_prompt_content,
-    workflow_single_task_prompt_content_for_policy,
+    workflow_matrix_task_handoff_section, workflow_metadata_prompt_context,
+    workflow_single_task_prompt_content, workflow_single_task_prompt_content_for_policy,
     workflow_single_task_prompt_content_for_policy_and_closing_refs,
     workflow_stack_task_prompt_content, workflow_task_prompt_content_with_policy,
     workflow_task_prompt_content_with_policy_and_parent,
@@ -418,12 +418,14 @@ cli = "none"
         assert!(content.contains("## Workflow Coordinator Handoff"));
         assert!(content.contains("Workflow policy sets `pull_request = \"none\"`"));
         assert!(content.contains("PR=none"));
+        assert!(content.contains("coordinator inbox"));
+        assert!(content.contains("wt msg send --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("normalizes to `agents/coordinator`"));
+        assert!(content.contains("If the file inbox route is unavailable"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
-        assert!(content.contains("file inbox target `coordinator`"));
-        assert!(content.contains("normalizes to `agents/coordinator`"));
-        assert!(content.contains("wt msg send --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
         assert!(content.contains("If neither coordinator route is available"));
+        assert_inbox_route_precedes_cmux_fallback(content);
         assert!(content.contains("wt workflow complete"));
         assert!(!content.contains("--run-next"));
     }
@@ -434,9 +436,16 @@ cli = "none"
         );
     }
 
-    fn assert_workflow_send_command_precedes_policy(content: &str) {
+    fn assert_inbox_route_precedes_cmux_fallback(content: &str) {
         assert!(
-            content.find("cmux send --workspace").unwrap()
+            content.find("wt msg send --to coordinator").unwrap()
+                < content.find("fallback cmux surface").unwrap()
+        );
+    }
+
+    fn assert_workflow_inbox_command_precedes_policy(content: &str) {
+        assert!(
+            content.find("wt msg send --to coordinator").unwrap()
                 < content
                     .find("Workflow policy sets")
                     .unwrap_or(content.len())
@@ -1821,7 +1830,8 @@ landing = "auto"
 
         assert!(content.contains("## Workflow Coordinator Handoff"));
         assert_workflow_handoff_precedes_task_body(&content, "title = \"API\"");
-        assert_workflow_send_command_precedes_policy(&content);
+        assert_workflow_inbox_command_precedes_policy(&content);
+        assert_inbox_route_precedes_cmux_fallback(&content);
         assert!(content.contains("Workflow policy sets `pull_request = \"draft\"`"));
         assert!(content.contains("against the workflow parent branch"));
         assert!(content.contains("gh pr create --draft --body-file <pr-body-file> --base PROJ-1"));
@@ -1942,7 +1952,7 @@ landing = "auto"
         assert_report_only_workflow_handoff(&content);
         assert_workflow_handoff_precedes_task_body(&content, "title = \"API\"");
         assert!(
-            content.find("cmux send --workspace").unwrap()
+            content.find("wt msg send --to coordinator").unwrap()
                 < content.find("title = \"API\"").unwrap()
         );
     }
@@ -2094,6 +2104,24 @@ landing = "auto"
         let content = workflow_batch_task_prompt_content("title = \"API\"\n");
 
         assert_report_only_workflow_handoff(&content);
+    }
+
+    #[test]
+    fn workflow_matrix_prompt_includes_report_only_coordinator_handoff() {
+        let row = WorkflowTask::new("task", "run-task");
+        let content = workflow_matrix_task_handoff_section(
+            Path::new("/repo/.git/wt/workflows/test.toml"),
+            &row,
+            "alpha",
+            &test_workflow_policy(WorkflowPullRequestMode::None),
+            "main",
+            &[],
+        );
+
+        assert_report_only_workflow_handoff(&content);
+        assert!(
+            content.contains("wt workflow complete /repo/.git/wt/workflows/test.toml task:alpha")
+        );
     }
 
     #[test]
