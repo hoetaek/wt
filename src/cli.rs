@@ -184,7 +184,7 @@ pub enum Commands {
     },
     /// Start a read-only personal state web UI
     #[command(
-        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, serves embedded no-build assets, and exposes only allowlisted routes including GET /api/snapshot for <git-common-dir>/wt ideas, retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
+        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <git-common-dir>/wt ideas, retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
     )]
     Ui {
         /// Port to bind on 127.0.0.1; 0 selects an available port

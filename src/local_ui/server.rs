@@ -7,6 +7,7 @@ use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use std::fmt::Display;
 use tokio::net::TcpListener;
 
 const INDEX_HTML: &str = include_str!("assets/index.html");
@@ -39,9 +40,26 @@ pub async fn serve(ctx: &Ctx, options: ServerOptions) -> Result<()> {
             .print_dim("Serving read-only wt personal state. Press Ctrl-C to stop.");
     }
 
+    maybe_open_browser(ctx, &url, |url| opener::open_browser(url));
+
     axum::serve(listener, app(state))
         .await
         .context("local UI server failed")
+}
+
+fn maybe_open_browser<F, E>(ctx: &Ctx, url: &str, open: F)
+where
+    F: FnOnce(&str) -> std::result::Result<(), E>,
+    E: Display,
+{
+    if ctx.quiet {
+        return;
+    }
+
+    if let Err(err) = open(url) {
+        ctx.ui
+            .print_warning(&format!("Could not open browser automatically: {err}"));
+    }
 }
 
 pub fn app(state: SnapshotState) -> Router {
@@ -99,9 +117,12 @@ fn static_response(content_type: &'static str, body: &'static str) -> Response {
 mod tests {
     use super::*;
     use crate::config::{Config, ConfigSource};
+    use crate::context::CtxOptions;
+    use crate::context::mock::{MockRunner, MockUi};
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use std::fs;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
     #[test]
@@ -295,6 +316,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn browser_open_is_skipped_in_quiet_mode() {
+        let (ctx, ui) = test_ctx(true);
+        let mut opened = false;
+
+        maybe_open_browser(&ctx, "http://127.0.0.1:8424/", |_| -> Result<()> {
+            opened = true;
+            Ok(())
+        });
+
+        assert!(!opened);
+        assert!(ui.warnings.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn browser_open_failure_warns_without_failing() {
+        let (ctx, ui) = test_ctx(false);
+
+        maybe_open_browser(&ctx, "http://127.0.0.1:8424/", |_| -> Result<()> {
+            Err(anyhow::anyhow!("launcher unavailable"))
+        });
+
+        assert_eq!(
+            ui.warnings.lock().unwrap().as_slice(),
+            ["Could not open browser automatically: launcher unavailable"]
+        );
+    }
+
     #[tokio::test]
     async fn app_does_not_serve_repo_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -313,5 +362,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    fn test_ctx(quiet: bool) -> (Ctx, Arc<MockUi>) {
+        let dir = tempfile::tempdir().unwrap();
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new_with_options(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+            CtxOptions {
+                quiet,
+                ..Default::default()
+            },
+        );
+        (ctx, ui)
     }
 }

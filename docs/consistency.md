@@ -979,7 +979,8 @@ profile 목록과 함께 invalid profile 레코드를 text warning 또는 JSON
 
 `wt ui [--port <PORT>]`는 `<git-common-dir>/wt`와 wt config state를 읽기 쉽게 보는 read-only local web
 UI다. 이 명령은 `127.0.0.1`에만 bind하고, port `0`은 available port 선택을 뜻하며, 시작
-후 URL을 출력한다. Browser opening은 별도 명시 옵션이 생기기 전까지 기본 동작이 아니다.
+후 URL을 출력한 뒤 default browser로 그 URL을 연다. `--quiet`에서는 script-friendly stdout
+contract를 위해 URL만 출력하고 browser를 열지 않는다.
 UI 서버는 binary에 embedded된 no-build HTML/CSS/JS asset과 allowlisted route만 제공한다.
 첫 API surface는 `GET /api/snapshot`이며 ideas, TaskDocuments, Workflows, TaskRuns,
 retrospectives, profile summaries, effective config summary/source paths를 한 snapshot으로

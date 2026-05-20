@@ -195,6 +195,9 @@ Open a read-only personal state UI:
 wt ui --port 8424
 ```
 
+`wt ui` prints the local URL and opens it in the default browser. With `--quiet`,
+it only prints the URL for scripts.
+
 Inspect, observe, message, and clean worktrees:
 
 ```bash
