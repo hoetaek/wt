@@ -335,7 +335,7 @@ pub enum AgentCommand {
     },
     /// Poll a task agent's runtime state until it is no longer running, becomes blocked, or reaches a bound
     #[command(
-        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
+        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. Add --record-wait-observations to append heartbeat/timeout samples to the local <git-common-dir>/wt/agent.state/wait-observations.jsonl file; this opt-in write requires --heartbeat or --timeout. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
     )]
     Watch {
         /// Branch, worktree path/name, or TaskRun id to watch
@@ -354,7 +354,15 @@ pub enum AgentCommand {
         /// Print unchanged running observations at this positive-second interval
         #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
         heartbeat: Option<u64>,
+        /// Append non-idle heartbeat/timeout samples to local agent.state JSONL
+        #[arg(long)]
+        record_wait_observations: bool,
     },
+    /// Summarize recorded non-idle wait observations
+    #[command(
+        long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch --record-wait-observations`. This is read-only: it summarizes <git-common-dir>/wt/agent.state/wait-observations.jsonl and does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
+    )]
+    WaitStats,
     /// Install or uninstall local agent hook adapters
     #[command(
         long_about = "Install or uninstall local agent hook adapters.\n\nThe Claude adapter is Claude-specific: it uses Claude Code worktree-local `.claude/settings.local.json` hooks to deliver the wt file inbox through a WT_AGENT_ID dispatcher, and adds that path to the per-worktree Git exclude file. The Codex adapter is Codex-specific: it uses user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` hooks plus matching trusted hook state in `config.toml`. Adapter installation preserves non-wt hooks and trust state."
@@ -1140,8 +1148,29 @@ mod tests {
         assert!(help.contains("[TARGET]"));
         assert!(help.contains("--timeout"));
         assert!(help.contains("--heartbeat"));
+        assert!(help.contains("--record-wait-observations"));
+        assert!(help.contains("<git-common-dir>/wt/agent.state/wait-observations.jsonl"));
+        assert!(help.contains("opt-in write requires --heartbeat or --timeout"));
         assert!(help.contains("unchanged running observations"));
         assert!(help.contains("Omit TARGET in an interactive terminal"));
+    }
+
+    #[test]
+    fn agent_wait_stats_help_describes_read_only_summary() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("agent")
+            .unwrap()
+            .find_subcommand_mut("wait-stats")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("non-idle wait observations"));
+        assert!(help.contains("read-only"));
+        assert!(help.contains("<git-common-dir>/wt/agent.state/wait-observations.jsonl"));
+        assert!(help.contains("does not observe agents"));
+        assert!(help.contains("mutate TaskRuns"));
     }
 
     #[test]
@@ -1166,6 +1195,29 @@ mod tests {
                     interval: 5,
                     timeout: Some(60),
                     heartbeat: Some(10),
+                    record_wait_observations: false,
+                }
+            }) if target.as_deref() == Some("feature")
+        ));
+
+        let cli = parse(&[
+            "wt",
+            "agent",
+            "watch",
+            "feature",
+            "--heartbeat",
+            "10",
+            "--record-wait-observations",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Agent {
+                command: AgentCommand::Watch {
+                    ref target,
+                    interval: 2,
+                    timeout: None,
+                    heartbeat: Some(10),
+                    record_wait_observations: true,
                 }
             }) if target.as_deref() == Some("feature")
         ));
@@ -1179,6 +1231,7 @@ mod tests {
                     interval: 2,
                     timeout: None,
                     heartbeat: None,
+                    record_wait_observations: false,
                 }
             })
         ));
@@ -1195,6 +1248,17 @@ mod tests {
         let heartbeat =
             Cli::try_parse_from(["wt", "agent", "watch", "feature", "--heartbeat", "0"]);
         assert!(heartbeat.is_err());
+    }
+
+    #[test]
+    fn agent_wait_stats_parses_read_only_subcommand() {
+        let cli = parse(&["wt", "agent", "wait-stats"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Agent {
+                command: AgentCommand::WaitStats
+            })
+        ));
     }
 
     #[test]

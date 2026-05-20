@@ -67,6 +67,8 @@ Canonical personal storage layout:
 ├── workflows/
 ├── task-runs/
 ├── messages/
+├── agent.state/
+│   └── wait-observations.jsonl
 └── worktrees/<id>/
     ├── info.toml
     ├── config.toml
@@ -1037,6 +1039,22 @@ agent kind/state, 마지막 tool/session/event, cmux contact/warning을 compact�
 `--timeout <SECONDS>`는 지정한 bound를 넘어서도 agent가 running이면 timeout 메시지를 출력하고
 현재 observation exit-code contract로 종료한다. 따라서 여전히 running이고 blocked/failed가
 아니라면 observable/not blocked인 0으로 끝난다.
+
+`wt agent watch --record-wait-observations`는 opt-in local telemetry write다. 이 flag는
+`--heartbeat`나 `--timeout`처럼 사용자가 명시한 wait bound가 있을 때만 허용하고, bound에
+도달한 순간의 still-running observation만 `<git-common-dir>/wt/agent.state/wait-observations.jsonl`
+에 append-only JSONL sample로 기록한다. idle, needs_input, failed, no_session observation은
+non-idle wait sample을 만들지 않는다. 이 state owner는 `agent.state`이며 runtime observation
+자료일 뿐이므로 TaskRun status, Workflow file, TaskDocument, cmux transport 좌표에 쓰지 않는다.
+sample 기록 때문에 TaskRun을 failed, blocked, done, skipped로 전이하지 않고, `wt agent watch`를
+delivery loop나 detached supervisor로 넓히지 않는다. 명시 flag가 없으면 wait telemetry는
+저장하지 않는다.
+
+`wt agent wait-stats`는 `<git-common-dir>/wt/agent.state/wait-observations.jsonl`을 읽는
+read-only summary surface다. count, sum, min, max, bucket 같은 aggregate를 보여줄 수 있지만
+agent를 새로 관찰하거나 cmux에 접속하거나 TaskRun/Workflow state를 수정하지 않는다. 이 summary는
+나중에 추천을 설계하기 위한 근거가 될 수 있지만 현재 slice에서는 adaptive default를 자동 추론하거나
+사용자가 준 `--heartbeat`/`--timeout` 값을 덮어쓰지 않는다.
 
 `wt agent status`와 `wt agent watch`의 `<target>` 생략도 interactive TTY human mode에서만
 selector를 연다. `--json`, `--quiet`, 또는 non-TTY automation에서는 explicit `<target>`이

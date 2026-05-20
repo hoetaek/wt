@@ -95,6 +95,15 @@ impl StorageRoot {
         self.personal_root.join("messages")
     }
 
+    pub fn agent_state_dir(&self) -> PathBuf {
+        self.personal_root.join("agent.state")
+    }
+
+    pub fn wait_observations_jsonl(&self) -> PathBuf {
+        self.agent_state_dir()
+            .join(crate::agent_state::WAIT_OBSERVATIONS_FILE)
+    }
+
     pub fn worktrees_dir(&self) -> PathBuf {
         self.personal_root.join("worktrees")
     }
@@ -307,6 +316,14 @@ mod tests {
         assert_eq!(
             storage.messages_dir(),
             PathBuf::from("/repo/.git/wt/messages")
+        );
+        assert_eq!(
+            storage.agent_state_dir(),
+            PathBuf::from("/repo/.git/wt/agent.state")
+        );
+        assert_eq!(
+            storage.wait_observations_jsonl(),
+            PathBuf::from("/repo/.git/wt/agent.state/wait-observations.jsonl")
         );
         assert_eq!(
             storage.worktrees_dir(),

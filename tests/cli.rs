@@ -243,6 +243,12 @@ updated_at = "2026-05-18T00:00:00.000000000Z"
     .unwrap();
 }
 
+fn write_wait_observations(root: &Path, content: &str) {
+    let dir = root.join(".git/wt/agent.state");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("wait-observations.jsonl"), content).unwrap();
+}
+
 fn write_workflow_file(root: &Path, id: &str, mode: &str, extra: &str, tasks: &str) {
     let dir = root.join(".git/wt/workflows");
     std::fs::create_dir_all(&dir).unwrap();
@@ -1541,10 +1547,99 @@ fn agent_watch_help_explains_polling_target() {
         .stdout(predicate::str::contains("--interval"))
         .stdout(predicate::str::contains("--timeout"))
         .stdout(predicate::str::contains("--heartbeat"))
+        .stdout(predicate::str::contains("--record-wait-observations"))
+        .stdout(predicate::str::contains(
+            "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
+        ))
+        .stdout(predicate::str::contains(
+            "opt-in write requires --heartbeat or --timeout",
+        ))
         .stdout(predicate::str::contains("unchanged running observations"))
         .stdout(predicate::str::contains(
             "Omit TARGET in an interactive terminal",
         ));
+}
+
+#[test]
+fn agent_watch_record_wait_observations_requires_bound() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "watch",
+            "feature",
+            "--record-wait-observations",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--record-wait-observations requires --heartbeat or --timeout",
+        ))
+        .stderr(predicate::str::contains("explicit wait bound"));
+}
+
+#[test]
+fn agent_wait_stats_help_explains_read_only_summary() {
+    wt_command()
+        .args(["agent", "wait-stats", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("non-idle wait observations"))
+        .stdout(predicate::str::contains("read-only"))
+        .stdout(predicate::str::contains(
+            "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
+        ))
+        .stdout(predicate::str::contains("does not observe agents"))
+        .stdout(predicate::str::contains("mutate TaskRuns"));
+}
+
+#[test]
+fn agent_wait_stats_reports_sample_jsonl_summary() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_wait_observations(
+        temp.path(),
+        r#"{"recorded_at":"2026-05-20T00:00:00Z","wait_class":"non_idle","wait_reason":"heartbeat","wait_seconds":5,"bound_seconds":5,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"codex","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null,"cmux_workspace":null,"cmux_surface":null}
+{"recorded_at":"2026-05-20T00:01:10Z","wait_class":"non_idle","wait_reason":"heartbeat","wait_seconds":70,"bound_seconds":60,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"codex","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null,"cmux_workspace":null,"cmux_surface":null}
+{"recorded_at":"2026-05-20T00:06:40Z","wait_class":"non_idle","wait_reason":"timeout","wait_seconds":400,"bound_seconds":400,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"codex","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null,"cmux_workspace":null,"cmux_surface":null}
+"#,
+    );
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "agent", "wait-stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Agent wait stats"))
+        .stdout(predicate::str::contains(
+            "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
+        ))
+        .stdout(predicate::str::contains("Count: 3"))
+        .stdout(predicate::str::contains("Sum seconds: 475"))
+        .stdout(predicate::str::contains("Min seconds: 5"))
+        .stdout(predicate::str::contains("Max seconds: 400"))
+        .stdout(predicate::str::contains("0-59s: 1"))
+        .stdout(predicate::str::contains("1-4m: 1"))
+        .stdout(predicate::str::contains("5-14m: 1"));
+}
+
+#[test]
+fn agent_wait_stats_missing_storage_reports_empty_state() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "agent", "wait-stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Count: 0"))
+        .stdout(predicate::str::contains(
+            "Empty state: no non-idle wait observations recorded",
+        ))
+        .stdout(predicate::str::contains("Buckets: none"));
 }
 
 #[test]

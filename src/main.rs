@@ -323,6 +323,9 @@ fn supports_json(command: &Commands) -> bool {
                 | Commands::Agent {
                     command: AgentCommand::Watch { .. },
                 }
+                | Commands::Agent {
+                    command: AgentCommand::WaitStats,
+                }
                 | Commands::Msg {
                     command: MsgCommand::CheckInbox { .. },
                 }

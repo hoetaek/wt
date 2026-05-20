@@ -19,6 +19,7 @@ effects.
 | Workflow state store | `src/workflow.rs` today | `WorkflowMode`, `WorkflowMetadata`, `WorkflowTask`, `<git-common-dir>/wt/workflows` paths, validation, read/write/list/resolve, TOML rendering for workflow files | Starting worktrees, prompting agents, selecting runnable workflows, mutating TaskRun status beyond store validation |
 | Storage root boundary | `src/storage.rs` | Resolving `<git-common-dir>/wt` with `git rev-parse --git-common-dir`, typed personal-state paths, and legacy `.local` detection text | TaskDocument, TaskRun, Workflow, config/profile schema migration, or silent `.local` fallback |
 | Message state | `src/messages/mod.rs` and `src/commands/msg.rs` | `AgentId`, Message TOML schema, `<git-common-dir>/wt/messages` inbox paths, send/check-inbox delivery, hook JSON rendering | Activity/status logs, agent hook installation, runtime surface launch, cmux screen scraping |
+| Agent runtime observation state | `src/agent_state.rs` | Runtime observation JSONL under `<git-common-dir>/wt/agent.state`, including non-idle wait observation samples and aggregate readers | TaskRun lifecycle status, Workflow/TaskDocument schema, cmux transport ownership, adaptive watch defaults |
 | Agent adapters and launch wrappers | `src/commands/agent_hook.rs`, `src/commands/install.rs`, `src/commands/agent_runtime.rs`, and setup launch env helpers | Claude/Codex hook files, wt-managed hook markers, Codex trust state, `WT_AGENT_ID`/`WT_COORDINATOR_AGENT_ID` launch env binding, short `wt codex`/`wt claude`/`wt as` wrappers | Message schema, inbox storage paths, TaskDocument/TaskRun/Workflow schemas, cmux as message transport |
 | Workflow execution planner | `src/commands/workflow.rs` today; extract to `src/workflow/planner.rs` when split | Runnable-workflow selection, single/batch/stack next-step rules, preflight plans, parent-chain calculation | UI printing, cmux calls, issue-provider calls, file serialization |
 | Workflow runner orchestration | `src/commands/workflow.rs` today; extract to `src/workflow/run.rs` when split | Coordinating planner output with `TaskDocument`, `TaskRun`, `issue` start paths, and setup results | Domain schema definitions, config merge policy, provider implementation details |
@@ -79,6 +80,14 @@ normalization, unread ordering, move-to-read delivery, and hook JSON rendering.
 It does not own activity logs, status snapshots, agent hook install files, or
 runtime process launch. Hook adapters call into `wt msg check-inbox`; they do
 not define the message schema.
+
+`agent.state` is the local runtime observation state owner. Its source-of-truth
+module is `src/agent_state.rs`, and its first durable location is
+`<git-common-dir>/wt/agent.state/wait-observations.jsonl`. It owns append-only
+non-idle wait samples recorded by explicit `wt agent watch` flags and read-only
+summary aggregation for `wt agent wait-stats`. It does not own `TaskRun.status`,
+Workflow or TaskDocument lifecycle, cmux workspace/surface transport state,
+agent hook installation, or inferred default policy.
 
 Site providers are external services. `SiteConfig` and provider choice live in
 `src/config/`; service dispatch lives in `src/services/site.rs`; provider
@@ -147,8 +156,8 @@ Before adding a command or expanding an existing one:
 
 - Name the user-facing concept in `docs/consistency.md` first if the UX model
   changes.
-- Identify the state owner: TaskDocument, TaskRun, Workflow, config, or no
-  persisted state.
+- Identify the state owner: TaskDocument, TaskRun, Workflow, Message,
+  agent.state, config, or no persisted state.
 - Put TOML schema and validation in the state owner, not in the command facade.
 - Keep provider and tool calls behind `src/services/*`.
 - Keep setup effects behind `src/setup.rs` and its child modules; pass prepared
