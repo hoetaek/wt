@@ -535,8 +535,10 @@ fn read_codex_file(path: &Path, label: &str) -> Result<String, String> {
 fn value_contains_cmux_codex_hook_command(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::String(value) => {
-            value.contains("cmux hooks")
-                && (value.contains("--source codex") || value.contains("hooks codex"))
+            (value.contains("cmux hooks")
+                && (value.contains("--source codex") || value.contains("hooks codex")))
+                || value.contains(" hooks feed --source codex")
+                || value.contains(" hooks codex ")
         }
         serde_json::Value::Array(values) => {
             values.iter().any(value_contains_cmux_codex_hook_command)
@@ -1139,15 +1141,28 @@ mod tests {
         let hooks = CODEX_CMUX_HOOK_EVENTS
             .iter()
             .map(|(event, _)| {
+                let command = match *event {
+                    "PermissionRequest" | "PreToolUse" => format!(
+                        "cmux_cli=\"${{CMUX_BUNDLED_CLI_PATH:-}}\"; if [ -n \"$CMUX_SURFACE_ID\" ] && [ -n \"$cmux_cli\" ]; then \"$cmux_cli\" hooks feed --source codex --event {event}; else echo '{{}}'; fi"
+                    ),
+                    "SessionStart" => String::from(
+                        "cmux_cli=\"${CMUX_BUNDLED_CLI_PATH:-}\"; if [ -n \"$CMUX_SURFACE_ID\" ] && [ -n \"$cmux_cli\" ]; then \"$cmux_cli\" hooks codex session-start; else echo '{}'; fi",
+                    ),
+                    "Stop" => String::from(
+                        "cmux_cli=\"${CMUX_BUNDLED_CLI_PATH:-}\"; if [ -n \"$CMUX_SURFACE_ID\" ] && [ -n \"$cmux_cli\" ]; then \"$cmux_cli\" hooks codex stop; else echo '{}'; fi",
+                    ),
+                    "UserPromptSubmit" => String::from(
+                        "cmux_cli=\"${CMUX_BUNDLED_CLI_PATH:-}\"; if [ -n \"$CMUX_SURFACE_ID\" ] && [ -n \"$cmux_cli\" ]; then \"$cmux_cli\" hooks codex prompt-submit; else echo '{}'; fi",
+                    ),
+                    _ => unreachable!(),
+                };
                 (
                     event.to_string(),
                     json!([
                         {
                             "hooks": [
                                 {
-                                    "command": format!(
-                                        "cmux hooks feed --source codex --event {event}"
-                                    )
+                                    "command": command
                                 }
                             ]
                         }
