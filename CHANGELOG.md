@@ -8,6 +8,13 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Extended wt-managed Claude and Codex inbox hooks to register `wt msg
+  check-inbox` on both `UserPromptSubmit` and `PostToolUse`, so long
+  tool-running turns can receive pending file inbox messages after tool calls.
+- Bumped the package version to `0.43.0` because the managed agent hook
+  delivery contract now covers an additional provider event while `wt` is still
+  pre-1.0.
+
 - Added explicit scoped sends for `wt msg send` with `--scope workflow:<id>`,
   `--scope task_run:<id>`, `--scope repo`, and `--scope direct`. Workflow
   coordinator handoff prompts now use workflow-scoped coordinator inbox fallback

@@ -439,18 +439,24 @@ fn codex_wt_inbox_hook_checks_for_home(hooks_path: &Path, config_path: &Path) ->
         }
     };
 
-    if hooks.is_empty() {
+    let missing_events = missing_wt_codex_inbox_hook_events(&hooks);
+    if !missing_events.is_empty() {
         checks.push(DoctorCheck::warning(
             "codex_wt_inbox_hook",
-            format!("missing wt-managed Codex UserPromptSubmit hook. {CODEX_WT_HOOK_INSTALL_HINT}"),
+            format!(
+                "missing wt-managed Codex inbox hooks for {}. {CODEX_WT_HOOK_INSTALL_HINT}",
+                missing_events.join(", ")
+            ),
         ));
-        return checks;
+        if hooks.is_empty() {
+            return checks;
+        }
+    } else {
+        checks.push(DoctorCheck::ok(
+            "codex_wt_inbox_hook",
+            Some(format!("{} wt-managed inbox hook entries", hooks.len())),
+        ));
     }
-
-    checks.push(DoctorCheck::ok(
-        "codex_wt_inbox_hook",
-        Some(format!("{} wt-managed inbox hook entries", hooks.len())),
-    ));
 
     match missing_wt_codex_inbox_trust(config_path, &hooks) {
         Ok(missing) if missing.is_empty() => checks.push(DoctorCheck::ok(
@@ -474,6 +480,8 @@ fn codex_wt_inbox_hook_checks_for_home(hooks_path: &Path, config_path: &Path) ->
 struct WtCodexInboxHook {
     key: String,
     command: String,
+    event_name: &'static str,
+    event_key: &'static str,
 }
 
 struct CodexConfigReadiness {
@@ -582,37 +590,52 @@ fn wt_codex_inbox_hooks(hooks_path: &Path) -> Result<Vec<WtCodexInboxHook>, Stri
         .map_err(|message| message.replace(CODEX_HOOK_INSTALL_HINT, CODEX_WT_HOOK_INSTALL_HINT))?;
     let value = serde_json::from_str::<serde_json::Value>(&content)
         .map_err(|err| format!("invalid JSON: {err}. {CODEX_WT_HOOK_INSTALL_HINT}"))?;
-    let Some(user_prompt_submit) = value
-        .get("hooks")
-        .and_then(|hooks| hooks.get("UserPromptSubmit"))
-        .and_then(serde_json::Value::as_array)
-    else {
-        return Ok(Vec::new());
-    };
-
     let mut hooks = Vec::new();
-    for (group_index, group) in user_prompt_submit.iter().enumerate() {
-        let Some(group_hooks) = group.get("hooks").and_then(serde_json::Value::as_array) else {
+    for &(event_name, event_key) in agent_hook::CODEX_HOOK_EVENTS {
+        let Some(event_entries) = value
+            .get("hooks")
+            .and_then(|hooks| hooks.get(event_name))
+            .and_then(serde_json::Value::as_array)
+        else {
             continue;
         };
-        for (handler_index, hook) in group_hooks.iter().enumerate() {
-            let Some(command) = hook.get("command").and_then(serde_json::Value::as_str) else {
+
+        for (group_index, group) in event_entries.iter().enumerate() {
+            let Some(group_hooks) = group.get("hooks").and_then(serde_json::Value::as_array) else {
                 continue;
             };
-            if agent_hook::is_wt_managed_codex_command(command) {
-                hooks.push(WtCodexInboxHook {
-                    key: agent_hook::codex_user_prompt_trust_key(
-                        hooks_path,
-                        group_index,
-                        handler_index,
-                    ),
-                    command: command.to_string(),
-                });
+            for (handler_index, hook) in group_hooks.iter().enumerate() {
+                let Some(command) = hook.get("command").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                if agent_hook::is_wt_managed_codex_command(command) {
+                    hooks.push(WtCodexInboxHook {
+                        key: agent_hook::codex_event_trust_key(
+                            hooks_path,
+                            event_key,
+                            group_index,
+                            handler_index,
+                        ),
+                        command: command.to_string(),
+                        event_name,
+                        event_key,
+                    });
+                }
             }
         }
     }
 
     Ok(hooks)
+}
+
+fn missing_wt_codex_inbox_hook_events(hooks: &[WtCodexInboxHook]) -> Vec<&'static str> {
+    agent_hook::CODEX_HOOK_EVENTS
+        .iter()
+        .filter_map(|(event_name, _)| {
+            let installed = hooks.iter().any(|hook| hook.event_name == *event_name);
+            (!installed).then_some(*event_name)
+        })
+        .collect()
 }
 
 fn missing_wt_codex_inbox_trust(
@@ -635,7 +658,7 @@ fn missing_wt_codex_inbox_trust(
                 .and_then(|state| state.get(&hook.key))
                 .and_then(|entry| entry.get("trusted_hash"))
                 .and_then(toml::Value::as_str);
-            let expected_hash = agent_hook::codex_command_hook_hash(&hook.command);
+            let expected_hash = agent_hook::codex_command_hook_hash(&hook.command, hook.event_key);
             (trusted_hash != Some(expected_hash.as_str())).then_some(hook.key.clone())
         })
         .collect())
@@ -1170,6 +1193,12 @@ mod tests {
                             "command": command,
                         }],
                     }],
+                    "PostToolUse": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": command,
+                        }],
+                    }],
                 },
             }))
             .unwrap(),
@@ -1178,11 +1207,13 @@ mod tests {
 
         let mut content = String::from("[features]\nhooks = true\n");
         if include_trust {
-            content.push_str(&format!(
-                "\n[hooks.state.\"{}:user_prompt_submit:0:0\"]\nenabled = true\ntrusted_hash = \"{}\"\n",
-                hooks_path.display(),
-                crate::commands::agent_hook::codex_command_hook_hash(command)
-            ));
+            for &(_, event_key) in crate::commands::agent_hook::CODEX_HOOK_EVENTS {
+                content.push_str(&format!(
+                    "\n[hooks.state.\"{}:{event_key}:0:0\"]\nenabled = true\ntrusted_hash = \"{}\"\n",
+                    hooks_path.display(),
+                    crate::commands::agent_hook::codex_command_hook_hash(command, event_key)
+                ));
+            }
         }
         fs::write(home.join("config.toml"), content).unwrap();
     }

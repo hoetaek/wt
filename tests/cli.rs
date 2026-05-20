@@ -27,6 +27,10 @@ const CLAUDE_MANUAL_INBOX_HOOK_COMMAND: &str =
     "wt msg check-inbox --agent agents/claude # wt-agent-hook:claude-inbox";
 const CLAUDE_INBOX_HOOK_COMMAND: &str = "if [ -n \"${WT_AGENT_ID:-}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi # wt-agent-hook:claude-inbox";
 const CODEX_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
+const MANAGED_INBOX_HOOK_EVENTS: &[(&str, &str)] = &[
+    ("UserPromptSubmit", "user_prompt_submit"),
+    ("PostToolUse", "post_tool_use"),
+];
 
 fn git_command() -> StdCommand {
     let mut command = StdCommand::new("git");
@@ -413,8 +417,8 @@ fn json_file(path: &Path) -> serde_json::Value {
     serde_json::from_str(&content).unwrap()
 }
 
-fn claude_user_prompt_commands(settings: &serde_json::Value) -> Vec<String> {
-    settings["hooks"]["UserPromptSubmit"]
+fn hook_event_commands(hooks: &serde_json::Value, event_name: &str) -> Vec<String> {
+    hooks[event_name]
         .as_array()
         .into_iter()
         .flatten()
@@ -429,19 +433,27 @@ fn claude_user_prompt_commands(settings: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-fn codex_user_prompt_commands(hooks: &serde_json::Value) -> Vec<String> {
-    hooks["hooks"]["UserPromptSubmit"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|entry| {
-            entry["hooks"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|hook| hook["command"].as_str().map(String::from))
-                .collect::<Vec<_>>()
-        })
+fn claude_event_commands(settings: &serde_json::Value, event_name: &str) -> Vec<String> {
+    hook_event_commands(&settings["hooks"], event_name)
+}
+
+fn codex_event_commands(hooks: &serde_json::Value, event_name: &str) -> Vec<String> {
+    hook_event_commands(&hooks["hooks"], event_name)
+}
+
+fn claude_managed_inbox_commands(settings: &serde_json::Value) -> Vec<String> {
+    MANAGED_INBOX_HOOK_EVENTS
+        .iter()
+        .flat_map(|(event_name, _)| claude_event_commands(settings, event_name))
+        .filter(|command| command.contains("wt-agent-hook:claude-inbox"))
+        .collect()
+}
+
+fn codex_managed_inbox_commands(hooks: &serde_json::Value) -> Vec<String> {
+    MANAGED_INBOX_HOOK_EVENTS
+        .iter()
+        .flat_map(|(event_name, _)| codex_event_commands(hooks, event_name))
+        .filter(|command| command.contains("wt-agent-hook:codex-inbox"))
         .collect()
 }
 
@@ -455,16 +467,21 @@ fn codex_dispatcher_command() -> String {
     )
 }
 
-fn codex_trust_key(codex_home: &Path, group_index: usize, handler_index: usize) -> String {
+fn codex_trust_key(
+    codex_home: &Path,
+    event_key: &str,
+    group_index: usize,
+    handler_index: usize,
+) -> String {
     format!(
-        "{}:user_prompt_submit:{group_index}:{handler_index}",
+        "{}:{event_key}:{group_index}:{handler_index}",
         codex_home.join("hooks.json").display()
     )
 }
 
-fn codex_hook_trusted_hash(command: &str) -> String {
+fn codex_hook_trusted_hash(command: &str, event_key: &str) -> String {
     let identity = serde_json::json!({
-        "event_name": "user_prompt_submit",
+        "event_name": event_key,
         "hooks": [
             {
                 "async": false,
@@ -2374,6 +2391,7 @@ fn agent_hook_help_explains_claude_file_inbox_adapter() {
         .success()
         .stdout(predicate::str::contains("Claude Code"))
         .stdout(predicate::str::contains("UserPromptSubmit"))
+        .stdout(predicate::str::contains("PostToolUse"))
         .stdout(predicate::str::contains("WT_AGENT_ID"))
         .stdout(predicate::str::contains("agents/<branch_slug>"))
         .stdout(predicate::str::contains("manual or test override"))
@@ -2387,8 +2405,9 @@ fn agent_hook_help_explains_claude_file_inbox_adapter() {
         .success()
         .stdout(predicate::str::contains("Claude-specific"))
         .stdout(predicate::str::contains(
-            "wt-managed Claude UserPromptSubmit",
+            "wt-managed Claude inbox hook entries",
         ))
+        .stdout(predicate::str::contains("PostToolUse"))
         .stdout(predicate::str::contains("Other local Claude settings"))
         .stdout(predicate::str::contains("manual/test override"));
 
@@ -2398,6 +2417,7 @@ fn agent_hook_help_explains_claude_file_inbox_adapter() {
         .success()
         .stdout(predicate::str::contains("Codex-specific"))
         .stdout(predicate::str::contains("UserPromptSubmit"))
+        .stdout(predicate::str::contains("PostToolUse"))
         .stdout(predicate::str::contains("hooks.json"))
         .stdout(predicate::str::contains("config.toml"))
         .stdout(predicate::str::contains("trusted hook state"))
@@ -2412,8 +2432,9 @@ fn agent_hook_help_explains_claude_file_inbox_adapter() {
         .success()
         .stdout(predicate::str::contains("Codex-specific"))
         .stdout(predicate::str::contains(
-            "wt-managed Codex UserPromptSubmit",
+            "wt-managed Codex inbox hook entries",
         ))
+        .stdout(predicate::str::contains("PostToolUse"))
         .stdout(predicate::str::contains("trust state"))
         .stdout(predicate::str::contains("Other Codex hooks"))
         .stdout(predicate::str::contains("manual/test override"));
@@ -2440,12 +2461,16 @@ fn agent_hook_install_claude_creates_git_excluded_local_settings() {
 
     let settings_path = temp.path().join(".claude/settings.local.json");
     let settings = json_file(&settings_path);
-    let commands = claude_user_prompt_commands(&settings);
-    assert_eq!(commands, vec![CLAUDE_INBOX_HOOK_COMMAND]);
-    assert_eq!(
-        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["type"].as_str(),
-        Some("command")
-    );
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        assert_eq!(
+            claude_event_commands(&settings, event_name),
+            vec![CLAUDE_INBOX_HOOK_COMMAND]
+        );
+        assert_eq!(
+            settings["hooks"][event_name][0]["hooks"][0]["type"].as_str(),
+            Some("command")
+        );
+    }
 
     let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
     assert!(exclude.contains(".claude/settings.local.json"));
@@ -2472,14 +2497,16 @@ fn agent_hook_install_claude_reinstall_is_idempotent() {
     }
 
     let settings = json_file(&temp.path().join(".claude/settings.local.json"));
-    let commands = claude_user_prompt_commands(&settings);
-    assert_eq!(
-        commands
-            .iter()
-            .filter(|command| command.as_str() == CLAUDE_INBOX_HOOK_COMMAND)
-            .count(),
-        1
-    );
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        let commands = claude_event_commands(&settings, event_name);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.as_str() == CLAUDE_INBOX_HOOK_COMMAND)
+                .count(),
+            1
+        );
+    }
 
     let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
     assert_eq!(exclude.matches(".claude/settings.local.json").count(), 1);
@@ -2506,8 +2533,12 @@ fn agent_hook_install_claude_agent_flag_is_manual_override() {
         .stdout(predicate::str::contains("manual override agents/claude"));
 
     let settings = json_file(&temp.path().join(".claude/settings.local.json"));
-    let commands = claude_user_prompt_commands(&settings);
-    assert_eq!(commands, vec![CLAUDE_MANUAL_INBOX_HOOK_COMMAND]);
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        assert_eq!(
+            claude_event_commands(&settings, event_name),
+            vec![CLAUDE_MANUAL_INBOX_HOOK_COMMAND]
+        );
+    }
 }
 
 #[test]
@@ -2542,8 +2573,12 @@ fn agent_hook_install_claude_dispatcher_replaces_wt_managed_manual_override() {
         .success();
 
     let settings = json_file(&temp.path().join(".claude/settings.local.json"));
-    let commands = claude_user_prompt_commands(&settings);
-    assert_eq!(commands, vec![CLAUDE_INBOX_HOOK_COMMAND]);
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        assert_eq!(
+            claude_event_commands(&settings, event_name),
+            vec![CLAUDE_INBOX_HOOK_COMMAND]
+        );
+    }
 }
 
 #[test]
@@ -2626,9 +2661,13 @@ fn agent_hook_claude_preserves_non_wt_hooks_on_install_and_uninstall() {
         .success();
 
     let settings = json_file(&settings_path);
-    let commands = claude_user_prompt_commands(&settings);
+    let commands = claude_event_commands(&settings, "UserPromptSubmit");
     assert!(commands.contains(&"echo keep-user-prompt".to_string()));
     assert!(commands.contains(&CLAUDE_INBOX_HOOK_COMMAND.to_string()));
+    assert_eq!(
+        claude_event_commands(&settings, "PostToolUse"),
+        vec![CLAUDE_INBOX_HOOK_COMMAND]
+    );
     assert_eq!(
         settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
         Some("echo keep-stop")
@@ -2651,8 +2690,9 @@ fn agent_hook_claude_preserves_non_wt_hooks_on_install_and_uninstall() {
         .success();
 
     let settings = json_file(&settings_path);
-    let commands = claude_user_prompt_commands(&settings);
+    let commands = claude_event_commands(&settings, "UserPromptSubmit");
     assert_eq!(commands, vec!["echo keep-user-prompt".to_string()]);
+    assert!(settings["hooks"].get("PostToolUse").is_none());
     assert_eq!(
         settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
         Some("echo keep-stop")
@@ -2770,9 +2810,13 @@ fn agent_hook_install_codex_preserves_existing_hooks_and_writes_trust_state() {
         ));
 
     let hooks = json_file(&codex_home.join("hooks.json"));
-    let commands = codex_user_prompt_commands(&hooks);
+    let commands = codex_event_commands(&hooks, "UserPromptSubmit");
     assert!(commands.contains(&"cmux hooks codex prompt-submit".to_string()));
     assert!(commands.contains(&codex_dispatcher_command()));
+    assert_eq!(
+        codex_event_commands(&hooks, "PostToolUse"),
+        vec![codex_dispatcher_command()]
+    );
     assert_eq!(
         hooks["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
         Some("cmux hooks codex stop")
@@ -2780,16 +2824,27 @@ fn agent_hook_install_codex_preserves_existing_hooks_and_writes_trust_state() {
 
     let config = toml_file(&codex_home.join("config.toml"));
     assert_eq!(
-        config["hooks"]["state"][&codex_trust_key(&codex_home, 0, 0)]["trusted_hash"].as_str(),
+        config["hooks"]["state"][&codex_trust_key(&codex_home, "user_prompt_submit", 0, 0)]
+            ["trusted_hash"]
+            .as_str(),
         Some("sha256:cmux")
     );
-    let wt_key = codex_trust_key(&codex_home, 1, 0);
+    let wt_key = codex_trust_key(&codex_home, "user_prompt_submit", 1, 0);
     assert_eq!(
         codex_trusted_hash(&config, &wt_key).as_deref(),
-        Some(codex_hook_trusted_hash(&codex_dispatcher_command()).as_str())
+        Some(codex_hook_trusted_hash(&codex_dispatcher_command(), "user_prompt_submit").as_str())
     );
     assert_eq!(
         config["hooks"]["state"][&wt_key]["enabled"].as_bool(),
+        Some(true)
+    );
+    let post_tool_key = codex_trust_key(&codex_home, "post_tool_use", 0, 0);
+    assert_eq!(
+        codex_trusted_hash(&config, &post_tool_key).as_deref(),
+        Some(codex_hook_trusted_hash(&codex_dispatcher_command(), "post_tool_use").as_str())
+    );
+    assert_eq!(
+        config["hooks"]["state"][&post_tool_key]["enabled"].as_bool(),
         Some(true)
     );
     assert_eq!(config["features"]["hooks"].as_bool(), Some(true));
@@ -2817,21 +2872,25 @@ fn agent_hook_install_codex_reinstall_is_idempotent() {
     }
 
     let hooks = json_file(&codex_home.join("hooks.json"));
-    let commands = codex_user_prompt_commands(&hooks);
-    assert_eq!(
-        commands
-            .iter()
-            .filter(|command| command.as_str() == codex_dispatcher_command())
-            .count(),
-        1
-    );
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        let commands = codex_event_commands(&hooks, event_name);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.as_str() == codex_dispatcher_command())
+                .count(),
+            1
+        );
+    }
 
     let config = toml_file(&codex_home.join("config.toml"));
-    let wt_key = codex_trust_key(&codex_home, 0, 0);
-    assert_eq!(
-        codex_trusted_hash(&config, &wt_key).as_deref(),
-        Some(codex_hook_trusted_hash(&codex_dispatcher_command()).as_str())
-    );
+    for &(_, event_key) in MANAGED_INBOX_HOOK_EVENTS {
+        let wt_key = codex_trust_key(&codex_home, event_key, 0, 0);
+        assert_eq!(
+            codex_trusted_hash(&config, &wt_key).as_deref(),
+            Some(codex_hook_trusted_hash(&codex_dispatcher_command(), event_key).as_str())
+        );
+    }
 }
 
 #[test]
@@ -2857,10 +2916,12 @@ fn agent_hook_install_codex_agent_flag_is_manual_override() {
         .stdout(predicate::str::contains("manual override agents/manual"));
 
     let hooks = json_file(&codex_home.join("hooks.json"));
-    assert_eq!(
-        codex_user_prompt_commands(&hooks),
-        vec![codex_hook_command("manual")]
-    );
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        assert_eq!(
+            codex_event_commands(&hooks, event_name),
+            vec![codex_hook_command("manual")]
+        );
+    }
 }
 
 #[test]
@@ -2899,7 +2960,7 @@ fn agent_hook_install_codex_dispatcher_replaces_wt_managed_manual_override() {
         .success();
 
     let hooks = json_file(&codex_home.join("hooks.json"));
-    let commands = codex_user_prompt_commands(&hooks);
+    let commands = codex_event_commands(&hooks, "UserPromptSubmit");
     assert_eq!(
         commands,
         vec![
@@ -2907,13 +2968,22 @@ fn agent_hook_install_codex_dispatcher_replaces_wt_managed_manual_override() {
             codex_dispatcher_command()
         ]
     );
-    assert!(!commands.contains(&codex_hook_command("manual")));
+    assert_eq!(
+        codex_event_commands(&hooks, "PostToolUse"),
+        vec![codex_dispatcher_command()]
+    );
+    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_hook_command("manual")));
 
     let config = toml_file(&codex_home.join("config.toml"));
-    let wt_key = codex_trust_key(&codex_home, 1, 0);
+    let wt_key = codex_trust_key(&codex_home, "user_prompt_submit", 1, 0);
     assert_eq!(
         codex_trusted_hash(&config, &wt_key).as_deref(),
-        Some(codex_hook_trusted_hash(&codex_dispatcher_command()).as_str())
+        Some(codex_hook_trusted_hash(&codex_dispatcher_command(), "user_prompt_submit").as_str())
+    );
+    let post_tool_key = codex_trust_key(&codex_home, "post_tool_use", 0, 0);
+    assert_eq!(
+        codex_trusted_hash(&config, &post_tool_key).as_deref(),
+        Some(codex_hook_trusted_hash(&codex_dispatcher_command(), "post_tool_use").as_str())
     );
 }
 
@@ -2952,8 +3022,9 @@ fn agent_hook_uninstall_codex_removes_only_wt_managed_hook_and_trust() {
         .stdout(predicate::str::contains("Codex hook uninstalled"));
 
     let hooks = json_file(&codex_home.join("hooks.json"));
-    let commands = codex_user_prompt_commands(&hooks);
+    let commands = codex_event_commands(&hooks, "UserPromptSubmit");
     assert_eq!(commands, vec!["cmux hooks codex prompt-submit".to_string()]);
+    assert!(hooks["hooks"].get("PostToolUse").is_none());
     assert_eq!(
         hooks["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
         Some("cmux hooks codex stop")
@@ -2961,12 +3032,26 @@ fn agent_hook_uninstall_codex_removes_only_wt_managed_hook_and_trust() {
 
     let config = toml_file(&codex_home.join("config.toml"));
     assert_eq!(
-        config["hooks"]["state"][&codex_trust_key(&codex_home, 0, 0)]["trusted_hash"].as_str(),
+        config["hooks"]["state"][&codex_trust_key(&codex_home, "user_prompt_submit", 0, 0)]
+            ["trusted_hash"]
+            .as_str(),
         Some("sha256:cmux")
     );
     assert!(
-        codex_trusted_hash(&config, &codex_trust_key(&codex_home, 1, 0)).is_none(),
-        "wt-managed Codex trust state should be removed"
+        codex_trusted_hash(
+            &config,
+            &codex_trust_key(&codex_home, "user_prompt_submit", 1, 0)
+        )
+        .is_none(),
+        "wt-managed Codex UserPromptSubmit trust state should be removed"
+    );
+    assert!(
+        codex_trusted_hash(
+            &config,
+            &codex_trust_key(&codex_home, "post_tool_use", 0, 0)
+        )
+        .is_none(),
+        "wt-managed Codex PostToolUse trust state should be removed"
     );
 }
 
@@ -3096,7 +3181,7 @@ fn agent_hook_claude_marker_is_safe_as_a_shell_comment() {
         .success();
 
     let settings = json_file(&temp.path().join(".claude/settings.local.json"));
-    let command = claude_user_prompt_commands(&settings)
+    let command = claude_managed_inbox_commands(&settings)
         .into_iter()
         .find(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
         .unwrap();
@@ -3149,7 +3234,7 @@ fn agent_hook_claude_dispatcher_noops_without_runtime_identity() {
         .success();
 
     let settings = json_file(&temp.path().join(".claude/settings.local.json"));
-    let command = claude_user_prompt_commands(&settings)
+    let command = claude_managed_inbox_commands(&settings)
         .into_iter()
         .find(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
         .unwrap();
@@ -3332,15 +3417,18 @@ fn install_command_installs_detected_claude_and_codex_hooks() {
         .stdout(predicate::str::contains("Codex hook installed"));
 
     let settings = json_file(&temp.path().join(".claude/settings.local.json"));
-    let claude_commands = claude_user_prompt_commands(&settings);
-    assert!(
-        claude_commands
-            .iter()
-            .any(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
-    );
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        assert!(
+            claude_event_commands(&settings, event_name)
+                .iter()
+                .any(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
+        );
+    }
 
     let hooks = json_file(&codex_home.join("hooks.json"));
-    assert!(codex_user_prompt_commands(&hooks).contains(&codex_dispatcher_command()));
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        assert!(codex_event_commands(&hooks, event_name).contains(&codex_dispatcher_command()));
+    }
 }
 
 #[cfg(unix)]
@@ -3372,7 +3460,7 @@ fn uninstall_command_removes_wt_managed_claude_and_codex_hooks() {
 
     assert!(!temp.path().join(".claude/settings.local.json").exists());
     let hooks = json_file(&codex_home.join("hooks.json"));
-    assert!(!codex_user_prompt_commands(&hooks).contains(&codex_dispatcher_command()));
+    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
 }
 
 #[test]
@@ -3446,12 +3534,12 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
         .success();
 
     let claude_settings = json_file(&claude_wt.join(".claude/settings.local.json"));
-    let claude_hook = claude_user_prompt_commands(&claude_settings)
+    let claude_hook = claude_managed_inbox_commands(&claude_settings)
         .into_iter()
         .find(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
         .unwrap();
     let codex_hooks = json_file(&codex_home.join("hooks.json"));
-    let codex_hook = codex_user_prompt_commands(&codex_hooks)
+    let codex_hook = codex_managed_inbox_commands(&codex_hooks)
         .into_iter()
         .find(|command| command == &codex_dispatcher_command())
         .unwrap();
@@ -3547,7 +3635,7 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
         .success();
     assert!(!claude_wt.join(".claude/settings.local.json").exists());
     let codex_hooks = json_file(&codex_home.join("hooks.json"));
-    assert!(!codex_user_prompt_commands(&codex_hooks).contains(&codex_dispatcher_command()));
+    assert!(!codex_managed_inbox_commands(&codex_hooks).contains(&codex_dispatcher_command()));
 }
 
 #[test]

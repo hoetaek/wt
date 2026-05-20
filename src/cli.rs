@@ -386,18 +386,18 @@ pub enum AgentHookCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum AgentHookInstallCommand {
-    /// Install Claude Code UserPromptSubmit inbox polling
+    /// Install Claude Code inbox polling
     #[command(
-        long_about = "Install the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis writes a worktree-local `.claude/settings.local.json` UserPromptSubmit hook that reads WT_AGENT_ID at runtime and runs `wt msg check-inbox --agent \"$WT_AGENT_ID\"`; when WT_AGENT_ID is unset, the hook exits successfully without output. Install also adds that local settings path to the per-worktree Git exclude file, preserves existing local Claude settings, and fails instead of modifying tracked settings or source files.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and WT_COORDINATOR_AGENT_ID=agents/coordinator when they launch Claude."
+        long_about = "Install the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis writes worktree-local `.claude/settings.local.json` UserPromptSubmit and PostToolUse hooks that read WT_AGENT_ID at runtime and run `wt msg check-inbox --agent \"$WT_AGENT_ID\"`; when WT_AGENT_ID is unset, the hooks exit successfully without output. Install also adds that local settings path to the per-worktree Git exclude file, preserves existing local Claude settings, and fails instead of modifying tracked settings or source files.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and WT_COORDINATOR_AGENT_ID=agents/coordinator when they launch Claude."
     )]
     Claude {
         /// Manual/test override: bind this hook to one agent instead of WT_AGENT_ID
         #[arg(long)]
         agent: Option<String>,
     },
-    /// Install Codex UserPromptSubmit inbox polling
+    /// Install Codex inbox polling
     #[command(
-        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes a user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit hook that reads WT_AGENT_ID at runtime and runs `wt msg check-inbox --agent \"$WT_AGENT_ID\"`; when WT_AGENT_ID is unset, the hook exits successfully without output. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and WT_COORDINATOR_AGENT_ID=agents/coordinator when they launch Codex."
+        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit and PostToolUse hooks that read WT_AGENT_ID at runtime and run `wt msg check-inbox --agent \"$WT_AGENT_ID\"`; when WT_AGENT_ID is unset, the hooks exit successfully without output. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and WT_COORDINATOR_AGENT_ID=agents/coordinator when they launch Codex."
     )]
     Codex {
         /// Manual/test override: bind this user-level hook to one agent instead of WT_AGENT_ID
@@ -408,18 +408,18 @@ pub enum AgentHookInstallCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum AgentHookUninstallCommand {
-    /// Uninstall Claude Code UserPromptSubmit inbox polling
+    /// Uninstall Claude Code inbox polling
     #[command(
-        long_about = "Uninstall the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis removes wt-managed Claude UserPromptSubmit hook entries from worktree-local `.claude/settings.local.json`. Other local Claude settings and user-managed hooks are preserved. Use --agent only to remove a manual/test override for that agent."
+        long_about = "Uninstall the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis removes wt-managed Claude inbox hook entries for UserPromptSubmit and PostToolUse from worktree-local `.claude/settings.local.json`. Other local Claude settings and user-managed hooks are preserved. Use --agent only to remove a manual/test override for that agent."
     )]
     Claude {
         /// Manual/test override: remove only the wt-managed hook bound to this agent
         #[arg(long)]
         agent: Option<String>,
     },
-    /// Uninstall Codex UserPromptSubmit inbox polling
+    /// Uninstall Codex inbox polling
     #[command(
-        long_about = "Uninstall the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis removes wt-managed Codex UserPromptSubmit hook entries from user-level hooks.json and removes the matching wt-managed trust state from config.toml. Other Codex hooks and trust entries are preserved. Use --agent only to remove a manual/test override for that agent."
+        long_about = "Uninstall the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis removes wt-managed Codex inbox hook entries for UserPromptSubmit and PostToolUse from user-level hooks.json and removes the matching wt-managed trust state from config.toml. Other Codex hooks and trust entries are preserved. Use --agent only to remove a manual/test override for that agent."
     )]
     Codex {
         /// Manual/test override: remove only the wt-managed hook bound to this agent

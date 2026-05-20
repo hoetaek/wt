@@ -81,7 +81,8 @@ hook JSON rendering. `wt msg list` and `wt msg read` are read-only inspection
 surfaces over the same lifecycle directories. Message state does not own
 activity logs, status snapshots, agent hook install files, runtime process
 launch, cmux transport, or Workflow/TaskRun state. Hook adapters call into
-`wt msg check-inbox`; they do not define the message schema.
+`wt msg check-inbox` from managed `UserPromptSubmit` and `PostToolUse` events;
+they do not define the message schema.
 
 `agent.state` is the local runtime observation state owner. Its source-of-truth
 module is `src/agent_state.rs`, and its first durable location is
