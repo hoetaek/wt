@@ -786,13 +786,12 @@ fn workflow_relationship_rows(
     if matches!(metadata.mode, WorkflowMode::Matrix) {
         return metadata
             .tasks
-            .first()
-            .into_iter()
-            .flat_map(|task| {
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, task)| {
                 task.runs
                     .iter()
-                    .enumerate()
-                    .map(|(idx, run)| workflow_relationship_row(ctx, idx + 1, task, Some(run)))
+                    .map(move |run| workflow_relationship_row(ctx, idx + 1, task, Some(run)))
             })
             .collect();
     }
@@ -2184,6 +2183,113 @@ mod tests {
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
             "state_error"
+        );
+    }
+
+    #[test]
+    fn matrix_relationship_rows_include_every_task_row() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "matrix-a",
+            "title = \"Matrix A\"\nbranch = \"matrix/a\"\nbody = \"A body\"\n",
+        );
+        write_task(
+            dir.path(),
+            "matrix-b",
+            "title = \"Matrix B\"\nbranch = \"matrix/b\"\nbody = \"B body\"\n",
+        );
+        for (run, task, branch) in [
+            ("run-a-codex", "matrix-a", "matrix/a-codex"),
+            ("run-a-claude", "matrix-a", "matrix/a-claude"),
+            ("run-b-codex", "matrix-b", "matrix/b-codex"),
+            ("run-b-claude", "matrix-b", "matrix/b-claude"),
+        ] {
+            write_task_run(
+                dir.path(),
+                run,
+                &format!(
+                    "task = \"{task}\"\nbranch = \"{branch}\"\nstatus = \"prepared\"\ncreated_at = \"2026-05-18T00:00:00Z\"\nupdated_at = \"2026-05-18T00:00:00Z\"\n"
+                ),
+            );
+        }
+
+        let state = SnapshotState::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            "repo".into(),
+            Config::default(),
+            Config::default(),
+            ConfigSource::Default,
+        );
+        let ctx = state.ctx();
+        let metadata = workflow::WorkflowMetadata {
+            title: Some("Matrix demo".into()),
+            body: None,
+            origin: None,
+            mode: workflow::WorkflowMode::Matrix,
+            profile: None,
+            profiles: vec!["codex".into(), "claude".into()],
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            color: None,
+            created_at: "2026-05-18T00:00:00Z".into(),
+            updated_at: "2026-05-18T00:00:00Z".into(),
+            policy: workflow::WorkflowPolicy {
+                pull_request: workflow::WorkflowPullRequestMode::None,
+                landing: workflow::WorkflowLandingPolicy::Manual,
+            },
+            tasks: vec![
+                workflow::WorkflowTask {
+                    task: "matrix-a".into(),
+                    run: String::new(),
+                    parent: None,
+                    runs: vec![
+                        workflow::WorkflowTaskRun {
+                            profile: "codex".into(),
+                            run: "run-a-codex".into(),
+                        },
+                        workflow::WorkflowTaskRun {
+                            profile: "claude".into(),
+                            run: "run-a-claude".into(),
+                        },
+                    ],
+                },
+                workflow::WorkflowTask {
+                    task: "matrix-b".into(),
+                    run: String::new(),
+                    parent: None,
+                    runs: vec![
+                        workflow::WorkflowTaskRun {
+                            profile: "codex".into(),
+                            run: "run-b-codex".into(),
+                        },
+                        workflow::WorkflowTaskRun {
+                            profile: "claude".into(),
+                            run: "run-b-claude".into(),
+                        },
+                    ],
+                },
+            ],
+        };
+
+        let rows = workflow_relationship_rows(&ctx, &metadata);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (
+                    row.index,
+                    row.task.as_str(),
+                    row.profile.as_deref(),
+                    row.run_id.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, "matrix-a", Some("codex"), "run-a-codex"),
+                (1, "matrix-a", Some("claude"), "run-a-claude"),
+                (2, "matrix-b", Some("codex"), "run-b-codex"),
+                (2, "matrix-b", Some("claude"), "run-b-claude"),
+            ]
         );
     }
 

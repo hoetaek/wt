@@ -245,6 +245,12 @@ const STRINGS = {
     taskDocumentToml: "TaskDocument TOML",
     workflowTaskRuns: "Workflow TaskRuns",
     workflowRelationships: "Workflow relationship summary",
+    workflowRelationshipPreview: "{workflow} {id} - {taskDocuments} - {taskRuns}",
+    workflowEntityLabel: "Workflow",
+    taskDocumentCountOne: "{count} TaskDocument",
+    taskDocumentCountMany: "{count} TaskDocuments",
+    taskRunCountOne: "{count} TaskRun",
+    taskRunCountMany: "{count} TaskRuns",
     workflowModeLabel: "mode",
     workflowBaseLabel: "base",
     workflowPolicyLabel: "policy",
@@ -531,6 +537,12 @@ const STRINGS = {
     taskDocumentToml: "TaskDocument TOML",
     workflowTaskRuns: "워크플로우의 작업 실행",
     workflowRelationships: "Workflow 관계 요약",
+    workflowRelationshipPreview: "{workflow} {id} - {taskDocuments} - {taskRuns}",
+    workflowEntityLabel: "Workflow",
+    taskDocumentCountOne: "TaskDocument {count}개",
+    taskDocumentCountMany: "TaskDocument {count}개",
+    taskRunCountOne: "TaskRun {count}개",
+    taskRunCountMany: "TaskRun {count}개",
     workflowModeLabel: "mode",
     workflowBaseLabel: "base",
     workflowPolicyLabel: "policy",
@@ -1648,7 +1660,16 @@ function workflowRelationshipPreview(row) {
   }
   const taskCount = row.mode === "matrix" ? 1 : rows.length;
   const runCount = rows.length;
-  return `Workflow ${row.id} - ${taskCount} TaskDocument${taskCount === 1 ? "" : "s"} - ${runCount} TaskRun${runCount === 1 ? "" : "s"}`;
+  return tr("workflowRelationshipPreview", {
+    workflow: t("workflowEntityLabel"),
+    id: row.id,
+    taskDocuments: countLabel(taskCount, "taskDocumentCountOne", "taskDocumentCountMany"),
+    taskRuns: countLabel(runCount, "taskRunCountOne", "taskRunCountMany"),
+  });
+}
+
+function countLabel(count, oneKey, manyKey) {
+  return tr(count === 1 ? oneKey : manyKey, { count });
 }
 
 function workflowFactFields(row) {
