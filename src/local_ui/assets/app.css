@@ -1429,7 +1429,7 @@ main {
 
 .workflow-canvas-viewport {
   min-width: 0;
-  min-height: 350px;
+  min-height: 410px;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1571,6 +1571,10 @@ main {
   -webkit-line-clamp: 2;
 }
 
+.workflow-canvas-band strong {
+  font-size: 14px;
+}
+
 .workflow-canvas-node.is-workflow p {
   margin: 0;
   color: var(--muted);
@@ -1592,6 +1596,7 @@ main {
   padding: 9px 10px;
   border-bottom: 1px solid var(--line);
   background: #ffffff;
+  overflow: hidden;
 }
 
 .workflow-canvas-band:last-child,

@@ -16,18 +16,18 @@ const languageButton = document.querySelector("#language-toggle");
 const statusRegion = document.querySelector("#status");
 
 const WORKFLOW_CANVAS = {
-  margin: 28,
+  margin: 44,
   workflowW: 214,
-  workflowH: 104,
-  taskW: 218,
-  taskH: 196,
+  workflowH: 112,
+  taskW: 260,
+  taskH: 184,
   agentW: 144,
-  agentH: 74,
-  matrixRunW: 214,
-  matrixRunH: 112,
-  gapX: 54,
-  gapY: 66,
-  agentGap: 20,
+  agentH: 76,
+  matrixRunW: 238,
+  matrixRunH: 128,
+  gapX: 60,
+  gapY: 70,
+  agentGap: 22,
 };
 
 const STRINGS = {
@@ -1881,7 +1881,7 @@ function workflowCanvasSection(row) {
       return `<button type="button" class="workflow-canvas-control" data-workflow-canvas-control="${action}">${escapeHtml(t(key))}</button>`;
     })
     .join("");
-  return `<div class="workflow-canvas mode-${escapeHtml(domId(row.mode))}" data-workflow-canvas><div class="workflow-canvas-toolbar"><span class="workflow-canvas-badge">${escapeHtml(t("workflowReadOnly"))}</span><div class="workflow-canvas-controls">${controls}</div></div><div class="workflow-canvas-shell"><div class="workflow-canvas-viewport" tabindex="0" aria-label="${escapeHtml(t("workflowCanvasAria"))}"><div class="workflow-canvas-plane" ${planeStyle}>${workflowCanvasEdges(row, graph)}${graph.nodes.map(workflowCanvasNode).join("")}</div></div>${workflowCanvasInspector(row)}</div></div>`;
+  return `<div class="workflow-canvas mode-${escapeHtml(domId(row.mode))}" data-workflow-canvas><div class="workflow-canvas-shell"><div class="workflow-canvas-frame"><div class="workflow-canvas-toolbar"><span class="workflow-canvas-badge">${escapeHtml(t("workflowReadOnly"))}</span><div class="workflow-canvas-controls">${controls}</div></div><div class="workflow-canvas-viewport" tabindex="0" aria-label="${escapeHtml(t("workflowCanvasAria"))}"><div class="workflow-canvas-plane" ${planeStyle}>${workflowCanvasEdges(row, graph)}${graph.nodes.map(workflowCanvasNode).join("")}</div></div></div>${workflowCanvasInspector(row)}</div></div>`;
 }
 
 function workflowCanvasGraph(row) {
@@ -1906,9 +1906,9 @@ function workflowStackCanvasGraph(row, relationships) {
   const nodes = [];
   const edges = [];
   const taskStartX = c.margin + c.workflowW + c.gapX;
-  const taskY = 42;
+  const taskY = 44;
   const agentY = taskY + c.taskH + c.agentGap;
-  const workflowY = taskY + 24;
+  const workflowY = taskY + 36;
   nodes.push(workflowCanvasWorkflowNode(row, c.margin, workflowY));
 
   relationships.forEach((item, index) => {
@@ -1967,7 +1967,7 @@ function workflowMatrixCanvasGraph(row, relationships) {
   const rows = Math.ceil(relationships.length / safeColumns);
   const height = Math.max(360, c.margin * 2 + rows * laneH - c.gapY);
   const docItem = relationships.find((item) => item.task_document) || relationships[0];
-  const docNode = workflowCanvasMatrixDocumentNode(docItem, 0, documentX, Math.round(height / 2 - 59));
+  const docNode = workflowCanvasMatrixDocumentNode(docItem, 0, documentX, Math.round(height / 2 - 64));
   nodes.push(workflowCanvasWorkflowNode(row, c.margin, Math.round(height / 2 - c.workflowH / 2)), docNode);
   edges.push(workflowCanvasEdge("workflow", docNode.id, t("workflowContainsLabel"), "solid"));
 
@@ -2025,7 +2025,7 @@ function workflowCanvasTaskNode(item, index, x, y) {
 
 function workflowCanvasMatrixDocumentNode(item, index, x, y) {
   const attention = Boolean(item.task_document_error || !item.task_document);
-  return { id: `matrix-document-${index}`, kind: "matrix-document", item, x, y, w: WORKFLOW_CANVAS.taskW, h: 118, tone: attention ? "red" : "blue" };
+  return { id: `matrix-document-${index}`, kind: "matrix-document", item, x, y, w: WORKFLOW_CANVAS.taskW, h: 128, tone: attention ? "red" : "blue" };
 }
 
 function workflowCanvasMatrixRunNode(item, index, x, y) {
@@ -2084,20 +2084,42 @@ function workflowCanvasEdges(row, graph) {
   const edgeHtml = graph.edges
     .map((edge) => {
       const className = edge.kind === "dashed" ? "is-dashed" : edge.kind === "parent" ? "is-parent" : "is-solid";
-      const labelX = Math.round((edge.x1 + edge.x2) / 2);
-      const labelY = Math.round((edge.y1 + edge.y2) / 2) - 8;
-      const labelHtml = edge.label ? `<text x="${labelX}" y="${labelY}" class="workflow-canvas-edge-label">${escapeHtml(edge.label)}</text>` : "";
-      return `<path class="workflow-canvas-edge ${className}" d="M ${edge.x1} ${edge.y1} L ${edge.x2} ${edge.y2}" marker-end="url(#${markerId})"></path>${labelHtml}`;
+      return `<path class="workflow-canvas-edge ${className}" d="${workflowCanvasEdgePath(edge)}" marker-end="url(#${markerId})"></path>`;
     })
     .join("");
-  return `<svg class="workflow-canvas-edges" viewBox="0 0 ${graph.width} ${graph.height}" width="${graph.width}" height="${graph.height}" aria-hidden="true"><defs><marker id="${markerId}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker></defs>${edgeHtml}</svg>`;
+  return `<svg class="workflow-canvas-edges" viewBox="0 0 ${graph.width} ${graph.height}" width="${graph.width}" height="${graph.height}" aria-hidden="true"><defs><marker id="${markerId}" viewBox="0 0 12 12" refX="10.5" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 2 2 L 10 6 L 2 10 z"></path></marker></defs>${edgeHtml}</svg>`;
+}
+
+function workflowCanvasEdgePath(edge) {
+  const x1 = Math.round(edge.x1);
+  const y1 = Math.round(edge.y1);
+  const x2 = Math.round(edge.x2);
+  const y2 = Math.round(edge.y2);
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const bend = Math.min(72, Math.max(36, Math.abs(dx) * 0.42));
+    return `M ${x1} ${y1} C ${Math.round(x1 + bend)} ${y1}, ${Math.round(x2 - bend)} ${y2}, ${x2} ${y2}`;
+  }
+  const bend = Math.min(64, Math.max(34, Math.abs(dy) * 0.42));
+  return `M ${x1} ${y1} C ${x1} ${Math.round(y1 + bend)}, ${x2} ${Math.round(y2 - bend)}, ${x2} ${y2}`;
 }
 
 function workflowCanvasNode(node) {
   const style = `style="left:${Math.round(node.x)}px;top:${Math.round(node.y)}px;width:${Math.round(node.w)}px;height:${Math.round(node.h)}px"`;
   const classes = `workflow-canvas-node is-${node.kind} tone-${node.tone || "neutral"}`;
   const labelText = workflowCanvasNodeLabel(node);
-  return `<article class="${classes}" tabindex="0" ${style} aria-label="${escapeHtml(labelText)}">${workflowCanvasNodeBody(node)}</article>`;
+  return `<article class="${classes}" tabindex="0" ${style} aria-label="${escapeHtml(labelText)}">${workflowCanvasNodePorts(node)}${workflowCanvasNodeBody(node)}</article>`;
+}
+
+function workflowCanvasNodePorts(node) {
+  if (node.kind === "workflow") {
+    return `<span class="workflow-canvas-port is-output" aria-hidden="true"></span>`;
+  }
+  if (node.kind === "agent") {
+    return `<span class="workflow-canvas-port is-top-input" aria-hidden="true"></span>`;
+  }
+  return `<span class="workflow-canvas-port is-input" aria-hidden="true"></span><span class="workflow-canvas-port is-output" aria-hidden="true"></span><span class="workflow-canvas-port is-bottom-output" aria-hidden="true"></span>`;
 }
 
 function workflowCanvasNodeLabel(node) {
@@ -2117,7 +2139,6 @@ function workflowCanvasNodeBody(node) {
     const meta = [
       pill(row.mode, "blue"),
       row.base || row.base_mode ? pill(compactText(row.base || row.base_mode, 24)) : "",
-      pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
     ].filter(Boolean).join("");
     return `<div class="workflow-canvas-node-head"><span>${escapeHtml(t("workflowAnchorLabel"))}</span><strong>${escapeHtml(row.title || row.id)}</strong></div><div class="workflow-canvas-meta meta">${meta}</div>`;
   }
@@ -2137,8 +2158,7 @@ function workflowCanvasDocumentBand(item, options = {}) {
   const taskDocument = item.task_document;
   const title = taskDocument ? taskDocument.title : t("missingTaskDocumentLabel");
   const meta = [
-    pill(`task ${compactText(taskDocument?.key || item.task, 26)}`, "blue"),
-    taskDocument?.branch ? pill(`branch ${compactText(taskDocument.branch, 24)}`) : "",
+    pill(`task ${compactText(taskDocument?.key || item.task, 24)}`, "blue"),
     item.profile ? pill(`${t("profileLabel")} ${compactText(item.profile, 18)}`, "violet") : "",
   ].filter(Boolean).join("");
   const error = item.task_document_error ? `<p class="workflow-canvas-error">${escapeHtml(item.task_document_error)}</p>` : "";
@@ -2153,14 +2173,12 @@ function workflowCanvasRunBand(item, options = {}) {
   const runTone = taskRun ? statusColor(taskRun.status) : "red";
   const meta = [
     taskRun ? pill(stateLabel(taskRun.status), statusColor(taskRun.status)) : pill(t("missingTaskRunLabel"), "red"),
-    taskRun?.branch ? pill(`branch ${compactText(taskRun.branch, 24)}`) : "",
-    item.parent ? pill(`${t("parentLabel")} ${compactText(item.parent, 24)}`, "violet") : "",
     item.profile ? pill(`${t("profileLabel")} ${compactText(item.profile, 18)}`, "violet") : "",
   ].filter(Boolean).join("");
   const error = [item.task_run_error, taskRun?.error].filter(Boolean).join("\n");
   const errorHtml = error ? `<p class="workflow-canvas-error">${escapeHtml(error)}</p>` : "";
   const standalone = options.standalone ? " is-standalone" : "";
-  return `<section class="workflow-canvas-band is-run tone-${runTone || "neutral"}${standalone}"><span>${escapeHtml(t("taskRunLabel"))}</span><strong>${escapeHtml(title)}</strong>${meta ? `<div class="workflow-canvas-meta meta">${meta}</div>` : ""}${errorHtml}</section>`;
+  return `<section class="workflow-canvas-band is-run tone-${runTone || "neutral"}${standalone}"><span>${escapeHtml(t("taskRunLabel"))}</span><strong>${escapeHtml(compactText(title, 34))}</strong>${meta ? `<div class="workflow-canvas-meta meta">${meta}</div>` : ""}${errorHtml}</section>`;
 }
 
 function workflowCanvasInspector(row) {
@@ -2345,7 +2363,7 @@ function masterDetailPane(record) {
   const summaryBody = [detailCards(record.cards || []), record.summaryHtml || "", detailFields(record.fields || [])].filter(Boolean).join("");
   const summarySectionTitle = record.hideSummarySectionTitle ? "" : (record.summarySectionTitle || t("detailSummary"));
   const sourceSectionTitle = record.hideSourceSectionTitle ? "" : (record.sourceSectionTitle || t("sourceContent"));
-  return `<article class="detail-pane tone-${record.tone || "neutral"}" aria-labelledby="${escapeHtml(titleId)}"><header class="detail-header">${kicker}<h3 id="${escapeHtml(titleId)}">${escapeHtml(record.title)}</h3>${summary}<div class="meta">${meta}</div></header>${detailSection(summarySectionTitle, summaryBody)}${detailSection(record.canvasSectionTitle || "", record.canvasHtml || "", "workflow-canvas-detail-section")}${detailSection(record.relationshipsSectionTitle || t("detailRelationships"), relationshipBody)}${detailSection(sourceSectionTitle, sourceBody)}</article>`;
+  return `<article class="detail-pane tone-${record.tone || "neutral"}" aria-labelledby="${escapeHtml(titleId)}"><header class="detail-header">${kicker}<h3 id="${escapeHtml(titleId)}">${escapeHtml(record.title)}</h3>${summary}<div class="meta">${meta}</div></header>${detailSection(record.canvasSectionTitle || "", record.canvasHtml || "", "workflow-canvas-detail-section")}${detailSection(summarySectionTitle, summaryBody)}${detailSection(record.relationshipsSectionTitle || t("detailRelationships"), relationshipBody)}${detailSection(sourceSectionTitle, sourceBody)}</article>`;
 }
 
 function detailSection(title, body, className = "") {
