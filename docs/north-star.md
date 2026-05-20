@@ -204,14 +204,14 @@ Activity, inbox, and status are separate concepts:
 | Channel | Writer | Reader | Data | Location |
 | --- | --- | --- | --- | --- |
 | Activity log | Hooks | UI and debugging | Append-only JSONL | `worktrees/<id>/activity.jsonl` |
-| Inbox | Intended sender | Target participant | TOML file queue | `messages/<id>/inbox/` |
+| Inbox | Intended sender or delivery owner | Target agent and scope owner | Scoped TOML file queue | `messages/agents/<agent>/inbox/<state>/` |
 | Status | Hooks | Anyone | Single TOML snapshot | `worktrees/<id>/status.toml` |
 
 Activity is not communication. Hooks may automatically update activity and
 status, but inbox messages should represent intentional signals or defined
 lifecycle events.
 
-A future message schema can borrow A2A vocabulary while staying local:
+A scoped message schema can borrow A2A vocabulary while staying local:
 
 ```toml
 [meta]

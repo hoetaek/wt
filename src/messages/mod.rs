@@ -354,17 +354,9 @@ impl MessageStore {
             });
         }
 
-        let delivered_dir = agent.inbox_state_dir(&self.root, MessageDeliveryState::Delivered);
-        fs::create_dir_all(&delivered_dir).with_context(|| {
-            format!(
-                "Failed to create delivered inbox: {}",
-                delivered_dir.display()
-            )
-        })?;
-
-        let mut messages = Vec::new();
+        let mut pending = Vec::new();
         for path in paths {
-            let mut message = read_message_for_agent(&agent, &path)?;
+            let message = read_message_for_agent(&agent, &path)?;
             if message.delivery.state != MessageDeliveryState::New {
                 bail!(
                     "Message {} is in inbox/new but delivery.state is `{}`",
@@ -379,6 +371,19 @@ impl MessageStore {
                     message.scope.kind.as_str()
                 );
             }
+            pending.push((path, message));
+        }
+
+        let delivered_dir = agent.inbox_state_dir(&self.root, MessageDeliveryState::Delivered);
+        fs::create_dir_all(&delivered_dir).with_context(|| {
+            format!(
+                "Failed to create delivered inbox: {}",
+                delivered_dir.display()
+            )
+        })?;
+
+        let mut messages = Vec::new();
+        for (path, mut message) in pending {
             message.mark_delivered();
             let delivered_path = next_state_path(&delivered_dir, &path)?;
             let content = toml::to_string_pretty(&message)
@@ -460,6 +465,7 @@ fn reject_pre_redesign_message_paths(inbox: &Path) -> Result<()> {
     }
 
     let mut legacy_paths = message_paths(inbox)?;
+    legacy_paths.extend(message_paths(&inbox.join("read"))?);
     if legacy_paths.is_empty() {
         return Ok(());
     }
@@ -850,6 +856,21 @@ mod tests {
     }
 
     #[test]
+    fn check_inbox_rejects_pre_redesign_read_messages() {
+        let temp = TempDir::new().unwrap();
+        let store = MessageStore::new(temp.path().join("messages"));
+        let read_dir = temp.path().join("messages/agents/codex/inbox/read");
+        fs::create_dir_all(&read_dir).unwrap();
+        fs::write(read_dir.join("old.toml"), "legacy = true\n").unwrap();
+
+        let err = store.check_inbox("codex").unwrap_err().to_string();
+
+        assert!(err.contains("pre-redesign message file"));
+        assert!(err.contains("inbox/read/old.toml"));
+        assert!(err.contains("does not silently consume root inbox files"));
+    }
+
+    #[test]
     fn check_inbox_rejects_scoped_messages_until_claim_delivery_exists() {
         let temp = TempDir::new().unwrap();
         let store = MessageStore::new(temp.path().join("messages"));
@@ -870,6 +891,53 @@ mod tests {
 
         assert!(err.contains("scope.kind `workflow`"));
         assert!(err.contains("scoped claim delivery"));
+    }
+
+    #[test]
+    fn check_inbox_validates_all_messages_before_delivery_moves() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("messages");
+        let store = MessageStore::new(&root);
+        let new_dir = root.join("agents/codex/inbox/new");
+        fs::create_dir_all(&new_dir).unwrap();
+
+        let from = AgentId::parse("agents/claude").unwrap();
+        let to = AgentId::parse("agents/codex").unwrap();
+        let valid = Message::new(
+            "a-valid".into(),
+            "2026-05-20T12:00:00Z".into(),
+            from.clone(),
+            to.clone(),
+            "valid",
+        );
+        let mut invalid = Message::new(
+            "z-invalid".into(),
+            "2026-05-20T12:00:00Z".into(),
+            from,
+            to,
+            "invalid",
+        );
+        invalid.scope = MessageScope {
+            kind: MessageScopeKind::Workflow,
+            id: Some("2026-05-20-001".into()),
+        };
+        fs::write(
+            new_dir.join("a-valid.toml"),
+            toml::to_string_pretty(&valid).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            new_dir.join("z-invalid.toml"),
+            toml::to_string_pretty(&invalid).unwrap(),
+        )
+        .unwrap();
+
+        let err = store.check_inbox("codex").unwrap_err().to_string();
+
+        assert!(err.contains("scope.kind `workflow`"));
+        assert!(new_dir.join("a-valid.toml").exists());
+        assert!(new_dir.join("z-invalid.toml").exists());
+        assert!(!root.join("agents/codex/inbox/delivered").exists());
     }
 
     #[test]
