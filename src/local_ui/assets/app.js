@@ -244,6 +244,24 @@ const STRINGS = {
     taskRunState: "TaskRun status",
     taskDocumentToml: "TaskDocument TOML",
     workflowTaskRuns: "Workflow TaskRuns",
+    workflowRelationships: "Workflow relationship summary",
+    workflowModeLabel: "mode",
+    workflowBaseLabel: "base",
+    workflowPolicyLabel: "policy",
+    workflowRunnableLabel: "runnable",
+    workflowUpdatedAtLabel: "updated_at",
+    taskDocumentLabel: "TaskDocument",
+    taskRunLabel: "TaskRun",
+    agentObservationLabel: "Agent",
+    agentNotObserved: "not observed",
+    missingTaskDocumentLabel: "TaskDocument missing",
+    missingTaskRunLabel: "TaskRun missing",
+    profileLabel: "profile",
+    parentLabel: "parent",
+    stackOrderLabel: "stack order",
+    batchSiblingLabel: "sibling",
+    matrixProfileLabel: "profile run",
+    relationshipEmpty: "No linked task rows",
     unlinkedTaskDocuments: "TaskDocuments without TaskRuns",
     invalidTaskDocuments: "Invalid TaskDocuments",
     workflows: "Workflow",
@@ -512,6 +530,24 @@ const STRINGS = {
     taskRunState: "TaskRun 상태",
     taskDocumentToml: "TaskDocument TOML",
     workflowTaskRuns: "워크플로우의 작업 실행",
+    workflowRelationships: "Workflow 관계 요약",
+    workflowModeLabel: "mode",
+    workflowBaseLabel: "base",
+    workflowPolicyLabel: "policy",
+    workflowRunnableLabel: "runnable",
+    workflowUpdatedAtLabel: "updated_at",
+    taskDocumentLabel: "TaskDocument",
+    taskRunLabel: "TaskRun",
+    agentObservationLabel: "Agent",
+    agentNotObserved: "관찰 없음",
+    missingTaskDocumentLabel: "TaskDocument 누락",
+    missingTaskRunLabel: "TaskRun 누락",
+    profileLabel: "profile",
+    parentLabel: "parent",
+    stackOrderLabel: "stack 순서",
+    batchSiblingLabel: "동시 항목",
+    matrixProfileLabel: "profile 실행",
+    relationshipEmpty: "연결된 작업 행이 없습니다",
     unlinkedTaskDocuments: "TaskRun이 없는 TaskDocument",
     invalidTaskDocuments: "오류 작업문서",
     workflows: "워크플로우",
@@ -1516,8 +1552,9 @@ function invalidProfileMasterDetailRecord(row) {
 function workflowsCockpit(snapshot) {
   const workflows = sortedWorkflows(snapshot.workflows.items);
   const groups = countBy(workflows, workflowUiGroup);
-  const invalid = snapshot.workflows.invalid.map((row) => invalidScanRow(row, t("invalidWorkflows")));
-  const rows = workflows.map(workflowScanRow).concat(invalid);
+  const records = workflows
+    .map(workflowMasterDetailRecord)
+    .concat(snapshot.workflows.invalid.map(invalidWorkflowMasterDetailRecord));
   const attentionCount = (groups.needs_attention || 0) + snapshot.workflows.invalid.length;
   const stats = [
     attentionStat(attentionCount),
@@ -1525,7 +1562,206 @@ function workflowsCockpit(snapshot) {
     { label: t("preparedWorkflows"), value: groups.prepared || 0 },
     { label: t("metricWorkflows"), value: workflows.length },
   ];
-  return cockpitPanel(t("cockpitWorkflowTitle"), t("cockpitWorkflowSubtitle"), stats, t("workflowIndex"), rows, t("noWorkflows"), "workflow-cockpit");
+  return masterDetailPanel({
+    id: "workflow-cockpit",
+    tabKey: "workflows",
+    title: t("cockpitWorkflowTitle"),
+    subtitle: t("cockpitWorkflowSubtitle"),
+    stats,
+    listTitle: t("workflowIndex"),
+    records,
+    emptyText: t("noWorkflows"),
+  });
+}
+
+function workflowMasterDetailRecord(row) {
+  const group = workflowUiGroup(row);
+  const needsAttention = group === "needs_attention";
+  return {
+    id: `workflow-${row.id}`,
+    group: stateLabel(group),
+    tone: needsAttention ? "red" : "",
+    needsAttention,
+    kicker: `Workflow ${row.id}`,
+    listKicker: "",
+    title: row.title,
+    listPills: workflowPills(row, group),
+    summary: row.state_error || workflowRelationshipPreview(row) || row.body_summary || "",
+    pills: workflowPills(row, group),
+    paths: [row.path],
+    summarySectionTitle: t("workflowRelationships"),
+    summaryHtml: workflowRelationshipSummary(row),
+    fields: workflowFactFields(row),
+    relationshipsSectionTitle: t("sourcePaths"),
+    relationships: workflowSourceFields(row),
+    collapseSources: true,
+    sources: [
+      { label: t("body"), text: row.body, kind: "prose" },
+      { label: t("sourceToml"), text: row.source_text, kind: "source" },
+    ],
+  };
+}
+
+function invalidWorkflowMasterDetailRecord(row) {
+  return {
+    id: `invalid-workflow-${row.key}`,
+    group: t("needsAttention"),
+    tone: "red",
+    needsAttention: true,
+    kicker: t("invalidWorkflows"),
+    listKicker: "",
+    title: row.key,
+    summary: row.error,
+    pills: [pill(t("invalid"), "red")],
+    paths: [row.path],
+    summarySectionTitle: t("needsAttention"),
+    fields: [
+      { label: "Workflow", value: row.key },
+      { label: t("errorLabel"), value: row.error },
+    ],
+    relationshipsSectionTitle: t("sourcePaths"),
+    relationships: [{ label: t("source"), value: row.path, tone: "red" }],
+    collapseSources: true,
+    sources: [{ label: t("sourceToml"), text: [row.error, row.source_text].filter(Boolean).join("\n\n"), kind: "source" }],
+  };
+}
+
+function workflowPills(row, group = workflowUiGroup(row)) {
+  return [
+    pill(stateLabel(group), groupColor(group)),
+    pill(row.mode, "blue"),
+    pill(`${row.task_runs.total} ${t("metricTaskRuns")}`),
+    row.runnable.runnable_count ? pill(`${row.runnable.runnable_count} runnable`, "green") : "",
+    row.task_runs.running ? pill(`${row.task_runs.running} ${stateLabel("running").toLowerCase()}`, "green") : "",
+    row.task_runs.failed ? pill(`${row.task_runs.failed} ${stateLabel("failed").toLowerCase()}`, "red") : "",
+    row.task_runs.missing ? pill(`${row.task_runs.missing} missing`, "red") : "",
+    row.profile ? pill(`${t("profileLabel")} ${row.profile}`, "violet") : "",
+    row.profiles.length ? pill(`${row.profiles.length} profiles`, "violet") : "",
+    pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
+  ];
+}
+
+function workflowRelationshipPreview(row) {
+  const rows = row.relationship_rows || [];
+  if (!rows.length) {
+    return "";
+  }
+  const taskCount = row.mode === "matrix" ? 1 : rows.length;
+  const runCount = rows.length;
+  return `Workflow ${row.id} - ${taskCount} TaskDocument${taskCount === 1 ? "" : "s"} - ${runCount} TaskRun${runCount === 1 ? "" : "s"}`;
+}
+
+function workflowFactFields(row) {
+  return [
+    { label: "Workflow", value: row.id },
+    { label: t("workflowModeLabel"), value: row.mode },
+    { label: t("workflowBaseLabel"), value: row.base || row.base_mode },
+    { label: t("workflowPolicyLabel"), value: `${row.policy.pull_request}/${row.policy.landing}` },
+    { label: t("workflowRunnableLabel"), value: row.runnable.runnable_count },
+    { label: t("workflowUpdatedAtLabel"), value: row.updated_at },
+    row.profile ? { label: t("profileLabel"), value: row.profile } : null,
+    row.profiles.length ? { label: t("profileLabel"), value: row.profiles.join(", ") } : null,
+    row.state_error ? { label: t("errorLabel"), value: row.state_error, tone: "red" } : null,
+  ].filter(Boolean);
+}
+
+function workflowSourceFields(row) {
+  const fields = [{ label: "Workflow", value: row.path }];
+  const seen = new Set([row.path]);
+  (row.relationship_rows || []).forEach((item) => {
+    const documentPath = item.task_document?.path;
+    if (documentPath && !seen.has(documentPath)) {
+      seen.add(documentPath);
+      fields.push({ label: t("taskDocumentLabel"), value: documentPath });
+    }
+    const runPath = item.task_run?.path || item.task_run_path;
+    if (runPath && !seen.has(runPath)) {
+      seen.add(runPath);
+      fields.push({ label: t("taskRunLabel"), value: runPath, tone: item.task_run_error ? "red" : "" });
+    }
+  });
+  return fields;
+}
+
+function workflowRelationshipSummary(row) {
+  const relationships = row.relationship_rows || [];
+  if (!relationships.length) {
+    return `<div class="relationship-empty">${escapeHtml(t("relationshipEmpty"))}</div>`;
+  }
+  return `<div class="workflow-relationship-summary mode-${escapeHtml(domId(row.mode))}" role="list" aria-label="${escapeHtml(t("workflowRelationships"))}">${relationships.map((item) => workflowRelationshipRow(row, item)).join("")}</div>`;
+}
+
+function workflowRelationshipRow(workflow, item) {
+  const taskRun = item.task_run;
+  const taskDocument = item.task_document;
+  const attention = Boolean(item.task_document_error || item.task_run_error || taskRun?.error || taskRun?.status === "failed");
+  const tone = attention ? "red" : statusColor(taskRun?.status || "waiting");
+  return `<article class="workflow-relationship-row tone-${tone || "neutral"}" role="listitem">${workflowRelationshipRail(workflow, item)}<div class="relationship-segments">${workflowTaskDocumentSegment(item, taskDocument)}${workflowTaskRunSegment(item, taskRun)}${workflowAgentSegment()}</div></article>`;
+}
+
+function workflowRelationshipRail(workflow, item) {
+  if (workflow.mode === "stack") {
+    return `<div class="relationship-rail"><span>${escapeHtml(item.index)}</span><small>${escapeHtml(t("stackOrderLabel"))}</small></div>`;
+  }
+  if (workflow.mode === "matrix") {
+    return `<div class="relationship-rail is-profile"><span aria-hidden="true"></span><small>${escapeHtml(t("matrixProfileLabel"))}</small></div>`;
+  }
+  if (workflow.mode === "batch") {
+    return `<div class="relationship-rail is-peer"><span aria-hidden="true"></span><small>${escapeHtml(t("batchSiblingLabel"))}</small></div>`;
+  }
+  return `<div class="relationship-rail is-single"><span aria-hidden="true"></span><small>${escapeHtml(workflow.mode)}</small></div>`;
+}
+
+function workflowTaskDocumentSegment(item, taskDocument) {
+  const title = taskDocument ? taskDocument.title : t("missingTaskDocumentLabel");
+  const meta = [
+    pill(`task ${taskDocument?.key || item.task}`, "blue"),
+    taskDocument?.branch ? pill(`branch ${taskDocument.branch}`) : "",
+  ];
+  return relationshipSegment({
+    label: t("taskDocumentLabel"),
+    title,
+    meta,
+    path: taskDocument?.path,
+    error: item.task_document_error,
+    tone: taskDocument ? "blue" : "red",
+  });
+}
+
+function workflowTaskRunSegment(item, taskRun) {
+  const title = taskRun ? taskRun.id : (item.run_id || t("missingTaskRunLabel"));
+  const meta = [
+    taskRun ? pill(stateLabel(taskRun.status), statusColor(taskRun.status)) : pill(t("missingTaskRunLabel"), "red"),
+    item.profile ? pill(`${t("profileLabel")} ${item.profile}`, "violet") : "",
+    taskRun?.branch ? pill(`branch ${taskRun.branch}`) : "",
+    item.parent ? pill(`${t("parentLabel")} ${item.parent}`, "violet") : "",
+  ];
+  return relationshipSegment({
+    label: t("taskRunLabel"),
+    title,
+    meta,
+    path: taskRun?.path || item.task_run_path,
+    error: [item.task_run_error, taskRun?.error].filter(Boolean).join("\n"),
+    tone: taskRun ? statusColor(taskRun.status) : "red",
+  });
+}
+
+function workflowAgentSegment() {
+  return relationshipSegment({
+    label: t("agentObservationLabel"),
+    title: t("agentNotObserved"),
+    meta: [],
+    path: "",
+    error: "",
+    tone: "",
+  });
+}
+
+function relationshipSegment({ label: labelText, title, meta, path, error, tone }) {
+  const metaHtml = meta.filter(Boolean).join("");
+  const pathHtml = path ? `<p class="relationship-path">${escapeHtml(path)}</p>` : "";
+  const errorHtml = error ? `<p class="relationship-error">${escapeHtml(error)}</p>` : "";
+  return `<section class="relationship-segment tone-${tone || "neutral"}"><span>${escapeHtml(labelText)}</span><strong>${escapeHtml(title)}</strong>${metaHtml ? `<div class="relationship-meta meta">${metaHtml}</div>` : ""}${pathHtml}${errorHtml}</section>`;
 }
 
 function taskRunsCockpit(snapshot) {
@@ -1690,7 +1926,7 @@ function masterDetailPane(record) {
   const relationshipsHtml = detailFields(record.relationships || []);
   const relationshipBody = [pathsHtml, relationshipsHtml].filter(Boolean).join("");
   const sourceBody = detailSourceBlocks(record.sources || [], { collapsed: record.collapseSources });
-  const summaryBody = [detailCards(record.cards || []), detailFields(record.fields || [])].filter(Boolean).join("");
+  const summaryBody = [detailCards(record.cards || []), record.summaryHtml || "", detailFields(record.fields || [])].filter(Boolean).join("");
   const summarySectionTitle = record.hideSummarySectionTitle ? "" : (record.summarySectionTitle || t("detailSummary"));
   const sourceSectionTitle = record.hideSourceSectionTitle ? "" : (record.sourceSectionTitle || t("sourceContent"));
   return `<article class="detail-pane tone-${record.tone || "neutral"}" aria-labelledby="${escapeHtml(titleId)}"><header class="detail-header">${kicker}<h3 id="${escapeHtml(titleId)}">${escapeHtml(record.title)}</h3>${summary}<div class="meta">${meta}</div></header>${detailSection(summarySectionTitle, summaryBody)}${detailSection(record.relationshipsSectionTitle || t("detailRelationships"), relationshipBody)}${detailSection(sourceSectionTitle, sourceBody)}</article>`;

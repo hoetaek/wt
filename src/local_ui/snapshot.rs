@@ -341,6 +341,7 @@ struct WorkflowSummary {
     task_count: usize,
     task_runs: TaskRunCounts,
     task_run_groups: Vec<WorkflowTaskRunGroup>,
+    relationship_rows: Vec<WorkflowRelationshipRow>,
     runnable: RunnableSummary,
     base_mode: String,
     base: Option<String>,
@@ -349,6 +350,31 @@ struct WorkflowSummary {
     policy: WorkflowPolicySummary,
     updated_at: String,
     state_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowRelationshipRow {
+    index: usize,
+    task: String,
+    parent: Option<String>,
+    profile: Option<String>,
+    run_id: String,
+    task_document: Option<TaskDocumentLinkSummary>,
+    task_document_error: Option<String>,
+    task_run: Option<WorkflowRelationshipTaskRunSummary>,
+    task_run_path: Option<String>,
+    task_run_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowRelationshipTaskRunSummary {
+    id: String,
+    path: String,
+    task: String,
+    branch: String,
+    status: String,
+    group: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -713,6 +739,7 @@ fn workflow_summary(
     let (runnable, state_error) = workflow_runnable(ctx, path, &metadata);
     let presentation_group = workflow_presentation_group(&counts, &runnable, state_error.as_ref());
     let task_run_groups = workflow_task_run_groups(ctx, &metadata);
+    let relationship_rows = workflow_relationship_rows(ctx, &metadata);
     let title = workflow_title_label(ctx, &id, &metadata);
     let body_summary = metadata.body.as_deref().and_then(body_summary);
     let body = non_empty_string(metadata.body);
@@ -737,6 +764,7 @@ fn workflow_summary(
         task_count: metadata.tasks.len(),
         task_runs: counts,
         task_run_groups,
+        relationship_rows,
         runnable,
         base_mode: metadata.base_mode,
         base: metadata.base,
@@ -748,6 +776,101 @@ fn workflow_summary(
         },
         updated_at: metadata.updated_at,
         state_error,
+    }
+}
+
+fn workflow_relationship_rows(
+    ctx: &Ctx,
+    metadata: &WorkflowMetadata,
+) -> Vec<WorkflowRelationshipRow> {
+    if matches!(metadata.mode, WorkflowMode::Matrix) {
+        return metadata
+            .tasks
+            .first()
+            .into_iter()
+            .flat_map(|task| {
+                task.runs
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, run)| workflow_relationship_row(ctx, idx + 1, task, Some(run)))
+            })
+            .collect();
+    }
+
+    metadata
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(idx, task)| workflow_relationship_row(ctx, idx + 1, task, None))
+        .collect()
+}
+
+fn workflow_relationship_row(
+    ctx: &Ctx,
+    index: usize,
+    task: &workflow::WorkflowTask,
+    profile_run: Option<&workflow::WorkflowTaskRun>,
+) -> WorkflowRelationshipRow {
+    let task_key = task::safe_task_key(&task.task);
+    let (task_document, task_document_error) = linked_task_document(ctx, &task_key);
+    let run_id = profile_run
+        .map(|run| run.run.clone())
+        .unwrap_or_else(|| task.run.clone());
+    let (task_run, task_run_path, task_run_error) = workflow_relationship_task_run(ctx, &run_id);
+
+    WorkflowRelationshipRow {
+        index,
+        task: task_key,
+        parent: task.parent.clone(),
+        profile: profile_run.map(|run| run.profile.clone()),
+        run_id,
+        task_document,
+        task_document_error,
+        task_run,
+        task_run_path,
+        task_run_error,
+    }
+}
+
+fn workflow_relationship_task_run(
+    ctx: &Ctx,
+    run_id: &str,
+) -> (
+    Option<WorkflowRelationshipTaskRunSummary>,
+    Option<String>,
+    Option<String>,
+) {
+    if run_id.trim().is_empty() {
+        return (
+            None,
+            None,
+            Some("Workflow task is missing TaskRun id".into()),
+        );
+    }
+
+    let path = match task_run::resolve(ctx, run_id) {
+        Ok(path) => path,
+        Err(err) => return (None, None, Some(format!("{err:#}"))),
+    };
+    let display_path = relative_path(ctx, &path);
+    match task_run::read(&path) {
+        Ok(run) => {
+            let id = task_run::id_from_path(&path).unwrap_or_else(|_| run_id.to_string());
+            (
+                Some(WorkflowRelationshipTaskRunSummary {
+                    id,
+                    path: display_path.clone(),
+                    task: run.task,
+                    branch: run.branch,
+                    status: run.status.as_str().into(),
+                    group: run.group,
+                    error: run.error,
+                }),
+                Some(display_path),
+                None,
+            )
+        }
+        Err(err) => (None, Some(display_path), Some(format!("{err:#}"))),
     }
 }
 
@@ -2023,6 +2146,16 @@ mod tests {
                 .as_ref()
                 .map(|document| document.body.as_deref()),
             Some(Some("Demo body"))
+        );
+        let relationship = &snapshot.workflows.items[0].relationship_rows[0];
+        assert_eq!(relationship.index, 1);
+        assert_eq!(relationship.task, "demo");
+        assert_eq!(relationship.run_id, "run-demo");
+        assert_eq!(relationship.task_document.as_ref().unwrap().title, "Demo");
+        assert_eq!(relationship.task_run.as_ref().unwrap().status, "prepared");
+        assert_eq!(
+            relationship.task_run.as_ref().unwrap().path,
+            "<git-common-dir>/wt/task-runs/run-demo.toml"
         );
         assert_eq!(
             snapshot.workflows.items[0].body.as_deref(),

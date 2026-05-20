@@ -197,6 +197,8 @@ mod tests {
         assert!(APP_CSS.contains(".master-list-row"));
         assert!(APP_CSS.contains(".detail-cards"));
         assert!(APP_CSS.contains(".detail-pane"));
+        assert!(APP_CSS.contains(".workflow-relationship-summary"));
+        assert!(APP_CSS.contains(".relationship-segment"));
         assert!(APP_CSS.contains(".record-list"));
         assert!(APP_CSS.contains(".record-card.tone-green::before"));
         assert!(APP_CSS.contains(".read-more.is-open"));
@@ -213,6 +215,10 @@ mod tests {
         assert!(APP_JS.contains("handleMasterDetailKeydown"));
         assert!(APP_JS.contains("configMasterDetailRecords"));
         assert!(APP_JS.contains("workflowScanRow"));
+        assert!(APP_JS.contains("workflowMasterDetailRecord"));
+        assert!(APP_JS.contains("workflowRelationshipSummary"));
+        assert!(APP_JS.contains("TaskDocument"));
+        assert!(APP_JS.contains("agentNotObserved"));
         assert!(APP_JS.contains("taskRunScanRow"));
         assert!(APP_JS.contains("data-read-toggle"));
         assert!(APP_JS.contains("summary-full full-text"));
