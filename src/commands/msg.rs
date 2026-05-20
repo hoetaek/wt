@@ -7,20 +7,56 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 use std::io::Write;
 
-pub(crate) fn send(ctx: &Ctx, to: &str, message: &[String]) -> Result<()> {
+pub(crate) fn send(ctx: &Ctx, to: &str, scope: Option<&str>, message: &[String]) -> Result<()> {
     let text = message.join(" ");
     if text.trim().is_empty() {
         bail!("Message cannot be empty");
     }
 
     let store = MessageStore::new(ctx.storage_root.messages_dir());
-    let sent = store.send(to, &text)?;
+    let sent = match scope {
+        Some(scope) => store.send_scoped(to, parse_scope_arg(scope)?, &text)?,
+        None => store.send(to, &text)?,
+    };
 
     if !ctx.quiet {
         println!("{}", ctx.storage_root.display_path(&sent.path));
     }
 
     Ok(())
+}
+
+fn parse_scope_arg(scope: &str) -> Result<MessageScope> {
+    let raw = scope.trim();
+    if raw.is_empty() {
+        bail!("Message scope cannot be empty. Use direct, repo, workflow:<id>, or task_run:<id>.");
+    }
+
+    match raw {
+        "direct" => return Ok(MessageScope::direct()),
+        "repo" => return Ok(MessageScope::repo()),
+        "workflow" => bail!("Message scope `workflow` requires an id. Use workflow:<id>."),
+        "task_run" => bail!("Message scope `task_run` requires an id. Use task_run:<id>."),
+        _ => {}
+    }
+
+    let Some((kind, id)) = raw.split_once(':') else {
+        bail!("Invalid message scope `{raw}`. Use direct, repo, workflow:<id>, or task_run:<id>.");
+    };
+    let id = id.trim();
+    if id.is_empty() {
+        bail!("Message scope `{kind}` requires a non-empty id");
+    }
+    match kind {
+        "workflow" => MessageScope::workflow(id),
+        "task_run" => MessageScope::task_run(id),
+        "direct" | "repo" => {
+            bail!("Message scope `{kind}` must not include an id. Use `{kind}`.")
+        }
+        _ => bail!(
+            "Invalid message scope kind `{kind}`. Use direct, repo, workflow:<id>, or task_run:<id>."
+        ),
+    }
 }
 
 pub(crate) fn list(ctx: &Ctx, agent: &str) -> Result<()> {

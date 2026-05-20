@@ -200,10 +200,14 @@ Canonical scriptable send:
 ```bash
 wt msg send --to agents/codex "hello"
 wt msg send --to codex "hello"
+wt msg send --scope workflow:2026-05-20-001 --to coordinator "Agent Completion Report: ..."
 ```
 
 `wt msg send` writes `meta.from = "agents/user"` unless `WT_AGENT_ID` is set to `agents/<agent>` or
-`<agent>`. It writes direct-scope messages to `inbox/new`.
+`<agent>`. Without `--scope`, it writes direct-scope messages to `inbox/new`; direct
+`wt msg send --to coordinator ...` is therefore a direct/default coordinator message and must not be
+treated as workflow-owned delivery. Explicit scoped sends accept `direct`, `repo`,
+`workflow:<id>`, and `task_run:<id>`.
 
 Canonical hook compatibility delivery:
 
@@ -1015,8 +1019,10 @@ Workflow coordinator handoff는 `stack` 전용 개념이 아니라 `wt run workf
 모든 task prompt의 계약이다. Prompt에는 `Workflow Coordinator Handoff` section이 포함되고,
 현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
 `cmux send-key ... enter` 명령이 들어간다. 같은 section은 file inbox fallback으로
-`wt msg send --to coordinator ...`도 포함한다. 이 좌표와 inbox target은 현재 transport
-정보일 뿐이므로 Workflow file, TaskRun, TaskDocument에 저장하지 않는다. cmux 좌표가
+`wt msg send --scope workflow:<workflow-id> --to coordinator ...`를 포함한다. 이 explicit
+workflow scope가 shared `agents/coordinator` inbox message의 workflow ownership이다. 이 좌표와
+inbox target은 현재 transport 정보일 뿐이므로 Workflow file, TaskRun, TaskDocument에 저장하지
+않는다. cmux 좌표가
 unavailable 또는 stale이면 agent는 coordinator inbox로 같은 `Agent Completion Report`를
 보내고, 둘 다 unavailable이면 task session에 남기고 기다린다. Handoff section과 그 안의
 cmux/inbox report 명령은 긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서 terminal

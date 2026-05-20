@@ -18,8 +18,8 @@ use crate::workflow::render::{
     render_single_workflow_snapshot, stack_task_already_running_message,
     started_stack_task_message, test_auto_landing_policy, test_workflow_policy,
     workflow_batch_task_prompt_content, workflow_batch_task_prompt_content_for_policy,
-    workflow_metadata_prompt_context, workflow_single_task_prompt_content,
-    workflow_single_task_prompt_content_for_policy,
+    workflow_matrix_task_handoff_section, workflow_metadata_prompt_context,
+    workflow_single_task_prompt_content, workflow_single_task_prompt_content_for_policy,
     workflow_single_task_prompt_content_for_policy_and_closing_refs,
     workflow_stack_task_prompt_content, workflow_task_prompt_content_with_policy,
     workflow_task_prompt_content_with_policy_and_parent,
@@ -422,7 +422,9 @@ cli = "none"
         assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains("file inbox target `coordinator`"));
         assert!(content.contains("normalizes to `agents/coordinator`"));
-        assert!(content.contains("wt msg send --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("explicit workflow scope `workflow:test`"));
+        assert!(content.contains("Workflow supervisors may claim shared `agents/coordinator` inbox messages only when this explicit workflow scope matches."));
+        assert!(content.contains("wt msg send --scope workflow:test --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
         assert!(content.contains("If neither coordinator route is available"));
         assert!(content.contains("wt workflow complete"));
         assert!(!content.contains("--run-next"));
@@ -1835,7 +1837,7 @@ landing = "auto"
         assert!(content.contains("update the pull request body if it became stale"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
-        assert!(content.contains("wt msg send --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("wt msg send --scope workflow:2026-05-16-001 --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(content.contains(
             "wt workflow complete /repo/.git/wt/workflows/2026-05-16-001.toml PROJ-2 --run-next"
         ));
@@ -2009,6 +2011,29 @@ landing = "auto"
         assert!(content.contains("gh pr create --body-file <pr-body-file> --base main"));
         assert!(!content.contains("gh pr create --draft"));
         assert!(content.contains("PR=<pr-url>"));
+    }
+
+    #[test]
+    fn workflow_matrix_prompt_uses_scoped_coordinator_handoff() {
+        let row = WorkflowTask::new("matrix-task", "run-matrix");
+        let workflow_path = PathBuf::from("/repo/.git/wt/workflows/2026-05-17-002.toml");
+        let policy = test_workflow_policy(WorkflowPullRequestMode::Ready);
+
+        let content = workflow_matrix_task_handoff_section(
+            &workflow_path,
+            &row,
+            "alpha",
+            &policy,
+            "main",
+            &[],
+        );
+
+        assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}}"));
+        assert!(content.contains("wt msg send --scope workflow:2026-05-17-002 --to coordinator"));
+        assert!(content.contains(
+            "workflow complete /repo/.git/wt/workflows/2026-05-17-002.toml matrix-task:alpha"
+        ));
+        assert!(!content.contains("--run-next"));
     }
 
     #[test]

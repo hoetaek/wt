@@ -8,6 +8,14 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added explicit scoped sends for `wt msg send` with `--scope workflow:<id>`,
+  `--scope task_run:<id>`, `--scope repo`, and `--scope direct`. Workflow
+  coordinator handoff prompts now use workflow-scoped coordinator inbox fallback
+  commands so shared `agents/coordinator` messages can be attributed to the
+  owning workflow.
+- Bumped the package version to `0.41.0` because scoped message sending extends
+  the user-facing CLI and workflow handoff contract while `wt` is still pre-1.0.
+
 - Added read-only message lifecycle inspection with `wt msg list --agent <agent>`
   and `wt msg read --agent <agent> <message-id>`. The commands report retained
   `new`, `claimed`, `delivered`, `retry`, and `failed` messages without claiming

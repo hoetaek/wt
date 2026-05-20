@@ -972,6 +972,7 @@ fn msg_help_explains_agent_inbox_contract() {
             "<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>",
         ))
         .stdout(predicate::str::contains("wt msg send --to <agent>"))
+        .stdout(predicate::str::contains("--scope workflow:<id>"))
         .stdout(predicate::str::contains("coordinator"))
         .stdout(predicate::str::contains("agents/coordinator"))
         .stdout(predicate::str::contains("wt msg list --agent <agent>"))
@@ -993,6 +994,12 @@ fn msg_help_explains_agent_inbox_contract() {
         ))
         .stdout(predicate::str::contains(
             "coordinator targets agents/coordinator",
+        ))
+        .stdout(predicate::str::contains(
+            "Message ownership scope: direct, repo, workflow:<id>, or task_run:<id>",
+        ))
+        .stdout(predicate::str::contains(
+            "Unscoped sends use the direct/default scope",
         ))
         .stdout(predicate::str::contains("Message text"));
 
@@ -1096,11 +1103,94 @@ fn msg_send_to_coordinator_alias_writes_to_coordinator_inbox() {
     assert_eq!(message["meta"]["to"].as_str(), Some("agents/coordinator"));
     assert_eq!(message["meta"]["from"].as_str(), Some("agents/user"));
     assert_eq!(message["scope"]["kind"].as_str(), Some("direct"));
+    assert!(message["scope"].get("id").is_none());
     assert_eq!(message["delivery"]["state"].as_str(), Some("new"));
     assert_eq!(
         message["body"]["parts"][0]["content"].as_str(),
         Some("hello")
     );
+}
+
+#[test]
+fn msg_send_accepts_explicit_workflow_scope() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--scope",
+            "workflow:2026-05-20-001",
+            "--to",
+            "coordinator",
+            "workflow",
+            "owned",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "<git-common-dir>/wt/messages/agents/coordinator/inbox/new/",
+        ));
+
+    let inbox = temp
+        .path()
+        .join(".git/wt/messages/agents/coordinator/inbox");
+    let files = toml_files(&inbox.join("new"));
+    assert_eq!(files.len(), 1);
+
+    let content = std::fs::read_to_string(&files[0]).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(message["meta"]["to"].as_str(), Some("agents/coordinator"));
+    assert_eq!(message["scope"]["kind"].as_str(), Some("workflow"));
+    assert_eq!(message["scope"]["id"].as_str(), Some("2026-05-20-001"));
+    assert_eq!(message["body"]["summary"].as_str(), Some("workflow owned"));
+}
+
+#[test]
+fn msg_send_rejects_invalid_scope() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--scope",
+            "workflow",
+            "--to",
+            "coordinator",
+            "missing",
+            "id",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Message scope `workflow` requires an id",
+        ));
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--scope",
+            "direct:2026-05-20-001",
+            "--to",
+            "coordinator",
+            "direct",
+            "id",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Message scope `direct` must not include an id",
+        ));
 }
 
 #[test]
