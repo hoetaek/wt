@@ -38,6 +38,7 @@ use crate::workflow::{
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
+mod archive;
 mod display;
 mod list_command;
 mod repair;
@@ -49,6 +50,10 @@ use display::show_workflow;
 use selection::list_runnable_workflow_candidates;
 use selection::resolve_run_workflow_path;
 use stack_completion::complete_workflow;
+
+pub fn archive(ctx: &Ctx, workflow: &str) -> Result<()> {
+    archive::run(ctx, workflow)
+}
 
 pub fn list(ctx: &Ctx) -> Result<()> {
     list_command::run(ctx)

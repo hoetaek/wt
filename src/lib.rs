@@ -71,6 +71,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         },
         Commands::Workflow { command } => match command {
             WorkflowCommand::List => commands::workflow::list(ctx),
+            WorkflowCommand::Archive { workflow } => commands::workflow::archive(ctx, workflow),
             WorkflowCommand::Task {
                 tasks,
                 mode,
