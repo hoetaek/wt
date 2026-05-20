@@ -1658,7 +1658,7 @@ function workflowRelationshipPreview(row) {
   if (!rows.length) {
     return "";
   }
-  const taskCount = row.mode === "matrix" ? 1 : rows.length;
+  const taskCount = row.mode === "matrix" ? new Set(rows.map((item) => item.task)).size : rows.length;
   const runCount = rows.length;
   return tr("workflowRelationshipPreview", {
     workflow: t("workflowEntityLabel"),

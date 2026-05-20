@@ -894,7 +894,7 @@ snapshot과 UI에 invalid record로 드러내며, invalid TOML을 조용히 숨�
 
 Workflow detail의 relationship summary도 같은 파생 presentation이다. 행은 Workflow file의
 `[[tasks]]`/`[[tasks.runs]]` 링크, TaskDocument, TaskRun snapshot을 읽어
-`Workflow → TaskDocument → TaskRun → Agent` 관계를 보여주지만 새 Task Unit, graph node,
+`Workflow → TaskDocument → TaskRun → Agent` 관계를 보여주지만 새 TaskDocument, graph node,
 canvas position, agent contact, live agent state를 Workflow/TaskDocument/TaskRun에 저장하지
 않는다. Agent 칸은 durable/현재 관찰 가능한 정보가 없으면 중립적인 not-observed 상태로
 남기고, `TaskRun.status`와 `agent.state`/`agent.status`를 합치지 않는다.
