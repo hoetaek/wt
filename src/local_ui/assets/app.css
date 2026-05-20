@@ -1382,6 +1382,9 @@ main {
 }
 
 .workflow-canvas-toolbar {
+  position: absolute;
+  inset: 10px 10px auto 10px;
+  z-index: 3;
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
@@ -1397,11 +1400,13 @@ main {
   padding: 4px 9px;
   border: 1px solid #b8d8cb;
   border-radius: 999px;
-  background: #f4fbf7;
+  background: rgba(244, 251, 247, 0.94);
   color: var(--green);
   font-size: 11px;
   font-weight: 840;
   text-transform: uppercase;
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(8px);
 }
 
 .workflow-canvas-controls {
@@ -1414,9 +1419,12 @@ main {
   min-height: 30px;
   padding: 4px 9px;
   border-radius: 7px;
+  background: rgba(255, 255, 255, 0.92);
   color: var(--ink-soft);
   font-size: 11px;
   font-weight: 820;
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(8px);
 }
 
 .workflow-canvas-shell {
@@ -1427,18 +1435,24 @@ main {
   align-items: stretch;
 }
 
+.workflow-canvas-frame {
+  position: relative;
+  min-width: 0;
+}
+
 .workflow-canvas-viewport {
   min-width: 0;
-  min-height: 410px;
+  min-height: 430px;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
   background:
-    repeating-linear-gradient(135deg, rgba(98, 112, 102, 0.035) 0, rgba(98, 112, 102, 0.035) 8px, transparent 8px, transparent 18px),
-    radial-gradient(circle at 1px 1px, rgba(98, 112, 102, 0.23) 1px, transparent 1.4px),
+    repeating-linear-gradient(135deg, rgba(98, 112, 102, 0.04) 0, rgba(98, 112, 102, 0.04) 9px, transparent 9px, transparent 20px),
+    radial-gradient(circle at 1px 1px, rgba(98, 112, 102, 0.22) 1px, transparent 1.45px),
     #fbfcfa;
   background-size: auto, 20px 20px, auto;
   cursor: default;
+  scrollbar-gutter: stable;
 }
 
 .workflow-canvas-plane {
@@ -1459,7 +1473,8 @@ main {
 .workflow-canvas-edge {
   fill: none;
   stroke: #6e7d72;
-  stroke-linecap: round;
+  stroke-linecap: square;
+  stroke-linejoin: round;
   stroke-width: 2;
 }
 
@@ -1492,13 +1507,50 @@ main {
   display: grid;
   gap: 0;
   border: 1px solid var(--line);
-  border-left: 3px solid var(--line-strong);
+  border-left: 4px solid var(--line-strong);
   border-radius: 8px;
   background: #ffffff;
-  box-shadow: 0 8px 22px rgba(23, 27, 24, 0.08);
+  box-shadow: 0 10px 24px rgba(23, 27, 24, 0.08);
   color: var(--ink);
-  cursor: default;
-  overflow: hidden;
+  cursor: grab;
+  overflow: visible;
+  touch-action: none;
+  user-select: none;
+  transition:
+    border-color 140ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 140ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.workflow-canvas-port {
+  position: absolute;
+  z-index: 2;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #aebbb0;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(23, 27, 24, 0.12);
+}
+
+.workflow-canvas-port.is-input {
+  top: calc(50% - 5px);
+  left: -6px;
+}
+
+.workflow-canvas-port.is-output {
+  top: calc(50% - 5px);
+  right: -6px;
+}
+
+.workflow-canvas-port.is-bottom-output {
+  bottom: -6px;
+  left: calc(50% - 5px);
+}
+
+.workflow-canvas-port.is-top-input {
+  top: -6px;
+  left: calc(50% - 5px);
 }
 
 .workflow-canvas-node.is-task {
@@ -1511,22 +1563,51 @@ main {
   box-shadow: 0 0 0 4px rgba(11, 111, 85, 0.16), 0 8px 22px rgba(23, 27, 24, 0.08);
 }
 
+.workflow-canvas-node.is-dragging {
+  z-index: 4;
+  cursor: grabbing;
+  box-shadow: 0 16px 34px rgba(23, 27, 24, 0.16);
+  transform: translateY(-1px);
+}
+
+.workflow-canvas-node.is-blocked {
+  box-shadow:
+    0 0 0 3px rgba(178, 59, 59, 0.18),
+    0 16px 34px rgba(23, 27, 24, 0.14);
+}
+
 .workflow-canvas-node.tone-green {
   border-left-color: var(--green);
+}
+
+.workflow-canvas-node.tone-green .workflow-canvas-port {
+  border-color: #8fc9aa;
 }
 
 .workflow-canvas-node.tone-blue {
   border-left-color: var(--blue);
 }
 
+.workflow-canvas-node.tone-blue .workflow-canvas-port {
+  border-color: #9ec3df;
+}
+
 .workflow-canvas-node.tone-amber {
   border-left-color: var(--amber);
+}
+
+.workflow-canvas-node.tone-amber .workflow-canvas-port {
+  border-color: #e0bd82;
 }
 
 .workflow-canvas-node.tone-red {
   border-color: #e6b9b9;
   border-left-color: var(--red);
   background: #fffafa;
+}
+
+.workflow-canvas-node.tone-red .workflow-canvas-port {
+  border-color: #d98f8f;
 }
 
 .workflow-canvas-node.is-workflow {
@@ -1563,7 +1644,7 @@ main {
   color: var(--ink);
   font-size: 13px;
   font-weight: 780;
-  line-height: 1.28;
+  line-height: 1.24;
   overflow-wrap: anywhere;
   overflow: hidden;
   display: -webkit-box;
@@ -1572,7 +1653,7 @@ main {
 }
 
 .workflow-canvas-band strong {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .workflow-canvas-node.is-workflow p {
@@ -1591,12 +1672,25 @@ main {
 .workflow-canvas-band {
   min-width: 0;
   display: grid;
-  gap: 5px;
+  gap: 4px;
   align-content: start;
-  padding: 9px 10px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   background: #ffffff;
   overflow: hidden;
+}
+
+.workflow-canvas-node > .workflow-canvas-band:first-of-type {
+  border-radius: 4px 4px 0 0;
+}
+
+.workflow-canvas-node > .workflow-canvas-band:last-child,
+.workflow-canvas-node > .workflow-canvas-band.is-standalone {
+  border-radius: 0 0 4px 4px;
+}
+
+.workflow-canvas-node > .workflow-canvas-band.is-standalone {
+  border-radius: 4px;
 }
 
 .workflow-canvas-band:last-child,
@@ -1626,9 +1720,9 @@ main {
 
 .workflow-canvas-meta .pill {
   max-width: 100%;
-  min-height: 21px;
+  min-height: 20px;
   padding-inline: 7px;
-  font-size: 11px;
+  font-size: 10.5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

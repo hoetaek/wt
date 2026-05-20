@@ -20,11 +20,11 @@ const WORKFLOW_CANVAS = {
   workflowW: 214,
   workflowH: 112,
   taskW: 260,
-  taskH: 184,
+  taskH: 216,
   agentW: 144,
   agentH: 76,
   matrixRunW: 238,
-  matrixRunH: 128,
+  matrixRunH: 140,
   gapX: 60,
   gapY: 70,
   agentGap: 22,
@@ -661,6 +661,8 @@ languageButton.addEventListener("click", () => {
 content.addEventListener("click", handleReadToggle);
 content.addEventListener("click", handleMasterDetailSelection);
 content.addEventListener("click", handleWorkflowCanvasControl);
+content.addEventListener("pointerdown", handleWorkflowCanvasPointerDown);
+content.addEventListener("keydown", handleWorkflowCanvasNodeKeydown);
 content.addEventListener("keydown", handleMasterDetailKeydown);
 
 applyLocale();
@@ -816,6 +818,167 @@ function handleWorkflowCanvasControl(event) {
       summary.focus({ preventScroll: false });
     }
   }
+}
+
+function handleWorkflowCanvasPointerDown(event) {
+  if (event.button !== 0) {
+    return;
+  }
+  const node = event.target.closest(".workflow-canvas-node");
+  if (!node || !content.contains(node)) {
+    return;
+  }
+  const plane = node.closest(".workflow-canvas-plane");
+  if (!plane) {
+    return;
+  }
+
+  event.preventDefault();
+  node.focus({ preventScroll: true });
+  const drag = {
+    node,
+    plane,
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startX: workflowCanvasNodeLeft(node),
+    startY: workflowCanvasNodeTop(node),
+  };
+  node.classList.add("is-dragging");
+  node.setPointerCapture?.(event.pointerId);
+  node.addEventListener("pointermove", handleWorkflowCanvasPointerMove);
+  node.addEventListener("pointerup", handleWorkflowCanvasPointerEnd);
+  node.addEventListener("pointercancel", handleWorkflowCanvasPointerEnd);
+  node._workflowCanvasDrag = drag;
+}
+
+function handleWorkflowCanvasPointerMove(event) {
+  const drag = event.currentTarget._workflowCanvasDrag;
+  if (!drag || event.pointerId !== drag.pointerId) {
+    return;
+  }
+  event.preventDefault();
+  const nextX = drag.startX + event.clientX - drag.startClientX;
+  const nextY = drag.startY + event.clientY - drag.startClientY;
+  workflowCanvasMoveNode(drag.node, drag.plane, nextX, nextY, { avoidOverlap: true });
+}
+
+function handleWorkflowCanvasPointerEnd(event) {
+  const node = event.currentTarget;
+  const drag = node._workflowCanvasDrag;
+  if (drag && event.pointerId === drag.pointerId) {
+    node.releasePointerCapture?.(event.pointerId);
+  }
+  node.classList.remove("is-dragging", "is-blocked");
+  node.removeEventListener("pointermove", handleWorkflowCanvasPointerMove);
+  node.removeEventListener("pointerup", handleWorkflowCanvasPointerEnd);
+  node.removeEventListener("pointercancel", handleWorkflowCanvasPointerEnd);
+  delete node._workflowCanvasDrag;
+}
+
+function handleWorkflowCanvasNodeKeydown(event) {
+  const node = event.target.closest(".workflow-canvas-node");
+  if (!node || !content.contains(node)) {
+    return;
+  }
+  const keyMoves = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+  };
+  const move = keyMoves[event.key];
+  if (!move) {
+    return;
+  }
+  const plane = node.closest(".workflow-canvas-plane");
+  if (!plane) {
+    return;
+  }
+  event.preventDefault();
+  const step = event.shiftKey ? 48 : 12;
+  workflowCanvasMoveNode(node, plane, workflowCanvasNodeLeft(node) + move[0] * step, workflowCanvasNodeTop(node) + move[1] * step, { avoidOverlap: true });
+}
+
+function workflowCanvasMoveNode(node, plane, left, top, options = {}) {
+  const next = workflowCanvasClampedPosition(node, plane, left, top);
+  if (options.avoidOverlap && workflowCanvasOverlaps(node, plane, next.left, next.top)) {
+    node.classList.add("is-blocked");
+    return false;
+  }
+  node.classList.remove("is-blocked");
+  node.style.left = `${Math.round(next.left)}px`;
+  node.style.top = `${Math.round(next.top)}px`;
+  workflowCanvasUpdateEdges(plane);
+  return true;
+}
+
+function workflowCanvasClampedPosition(node, plane, left, top) {
+  const maxLeft = Math.max(0, plane.offsetWidth - node.offsetWidth);
+  const maxTop = Math.max(0, plane.offsetHeight - node.offsetHeight);
+  return {
+    left: Math.min(Math.max(0, left), maxLeft),
+    top: Math.min(Math.max(0, top), maxTop),
+  };
+}
+
+function workflowCanvasOverlaps(node, plane, left, top) {
+  const padding = 12;
+  const next = {
+    left: left - padding,
+    right: left + node.offsetWidth + padding,
+    top: top - padding,
+    bottom: top + node.offsetHeight + padding,
+  };
+  return Array.from(plane.querySelectorAll(".workflow-canvas-node")).some((other) => {
+    if (other === node) {
+      return false;
+    }
+    const otherLeft = workflowCanvasNodeLeft(other);
+    const otherTop = workflowCanvasNodeTop(other);
+    const box = {
+      left: otherLeft,
+      right: otherLeft + other.offsetWidth,
+      top: otherTop,
+      bottom: otherTop + other.offsetHeight,
+    };
+    return next.left < box.right && next.right > box.left && next.top < box.bottom && next.bottom > box.top;
+  });
+}
+
+function workflowCanvasUpdateEdges(plane) {
+  const nodesById = new Map(
+    Array.from(plane.querySelectorAll(".workflow-canvas-node[data-workflow-canvas-node]")).map((node) => [node.dataset.workflowCanvasNode, node])
+  );
+  plane.querySelectorAll(".workflow-canvas-edge[data-edge-from][data-edge-to]").forEach((edge) => {
+    const from = nodesById.get(edge.dataset.edgeFrom);
+    const to = nodesById.get(edge.dataset.edgeTo);
+    if (!from || !to) {
+      return;
+    }
+    edge.setAttribute("d", workflowCanvasEdgePath(workflowCanvasElementEdgePoints(from, to)));
+  });
+}
+
+function workflowCanvasElementEdgePoints(from, to) {
+  return workflowCanvasEdgePoints(workflowCanvasElementBox(from), workflowCanvasElementBox(to));
+}
+
+function workflowCanvasElementBox(node) {
+  return {
+    x: workflowCanvasNodeLeft(node),
+    y: workflowCanvasNodeTop(node),
+    w: node.offsetWidth,
+    h: node.offsetHeight,
+  };
+}
+
+function workflowCanvasNodeLeft(node) {
+  return Number.parseFloat(node.style.left || "0") || 0;
+}
+
+function workflowCanvasNodeTop(node) {
+  return Number.parseFloat(node.style.top || "0") || 0;
 }
 
 function handleMasterDetailKeydown(event) {
@@ -2025,7 +2188,7 @@ function workflowCanvasTaskNode(item, index, x, y) {
 
 function workflowCanvasMatrixDocumentNode(item, index, x, y) {
   const attention = Boolean(item.task_document_error || !item.task_document);
-  return { id: `matrix-document-${index}`, kind: "matrix-document", item, x, y, w: WORKFLOW_CANVAS.taskW, h: 128, tone: attention ? "red" : "blue" };
+  return { id: `matrix-document-${index}`, kind: "matrix-document", item, x, y, w: WORKFLOW_CANVAS.taskW, h: 140, tone: attention ? "red" : "blue" };
 }
 
 function workflowCanvasMatrixRunNode(item, index, x, y) {
@@ -2084,7 +2247,7 @@ function workflowCanvasEdges(row, graph) {
   const edgeHtml = graph.edges
     .map((edge) => {
       const className = edge.kind === "dashed" ? "is-dashed" : edge.kind === "parent" ? "is-parent" : "is-solid";
-      return `<path class="workflow-canvas-edge ${className}" d="${workflowCanvasEdgePath(edge)}" marker-end="url(#${markerId})"></path>`;
+      return `<path class="workflow-canvas-edge ${className}" data-edge-from="${escapeHtml(edge.from)}" data-edge-to="${escapeHtml(edge.to)}" d="${workflowCanvasEdgePath(edge)}" marker-end="url(#${markerId})"></path>`;
     })
     .join("");
   return `<svg class="workflow-canvas-edges" viewBox="0 0 ${graph.width} ${graph.height}" width="${graph.width}" height="${graph.height}" aria-hidden="true"><defs><marker id="${markerId}" viewBox="0 0 12 12" refX="10.5" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 2 2 L 10 6 L 2 10 z"></path></marker></defs>${edgeHtml}</svg>`;
@@ -2109,7 +2272,7 @@ function workflowCanvasNode(node) {
   const style = `style="left:${Math.round(node.x)}px;top:${Math.round(node.y)}px;width:${Math.round(node.w)}px;height:${Math.round(node.h)}px"`;
   const classes = `workflow-canvas-node is-${node.kind} tone-${node.tone || "neutral"}`;
   const labelText = workflowCanvasNodeLabel(node);
-  return `<article class="${classes}" tabindex="0" ${style} aria-label="${escapeHtml(labelText)}">${workflowCanvasNodePorts(node)}${workflowCanvasNodeBody(node)}</article>`;
+  return `<article class="${classes}" data-workflow-canvas-node="${escapeHtml(node.id)}" tabindex="0" ${style} aria-label="${escapeHtml(labelText)}">${workflowCanvasNodePorts(node)}${workflowCanvasNodeBody(node)}</article>`;
 }
 
 function workflowCanvasNodePorts(node) {
@@ -2164,7 +2327,7 @@ function workflowCanvasDocumentBand(item, options = {}) {
   const error = item.task_document_error ? `<p class="workflow-canvas-error">${escapeHtml(item.task_document_error)}</p>` : "";
   const standalone = options.standalone ? " is-standalone" : "";
   const tone = taskDocument ? "blue" : "red";
-  return `<section class="workflow-canvas-band is-document tone-${tone}${standalone}"><span>${escapeHtml(t("taskDocumentLabel"))}</span><strong>${escapeHtml(title)}</strong>${meta ? `<div class="workflow-canvas-meta meta">${meta}</div>` : ""}${error}</section>`;
+  return `<section class="workflow-canvas-band is-document tone-${tone}${standalone}"><span>${escapeHtml(t("taskDocumentLabel"))}</span><strong>${escapeHtml(compactText(title, 56))}</strong>${meta ? `<div class="workflow-canvas-meta meta">${meta}</div>` : ""}${error}</section>`;
 }
 
 function workflowCanvasRunBand(item, options = {}) {
