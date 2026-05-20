@@ -581,7 +581,17 @@ impl MessageStore {
         let delivered_path = exact_state_path(&delivered_dir, &claimed_path)?;
 
         message.mark_delivered();
-        transition_message_atomically(&claimed_path, &delivered_path, &message, "delivered")?;
+        match transition_message_atomically(&claimed_path, &delivered_path, &message, "delivered")?
+        {
+            MessageTransitionOutcome::Completed
+            | MessageTransitionOutcome::DestinationAlreadyExists => {}
+            MessageTransitionOutcome::SourceMissing => {
+                bail!(
+                    "Claimed message {} disappeared before delivery acknowledgement completed",
+                    claimed_path.display()
+                );
+            }
+        }
         Ok(DeliveredMessage {
             original_path: claimed_path,
             delivered_path,
@@ -605,7 +615,16 @@ impl MessageStore {
         let retry_path = exact_state_path(&retry_dir, &claimed_path)?;
 
         message.mark_retry(&error);
-        transition_message_atomically(&claimed_path, &retry_path, &message, "retry")?;
+        match transition_message_atomically(&claimed_path, &retry_path, &message, "retry")? {
+            MessageTransitionOutcome::Completed
+            | MessageTransitionOutcome::DestinationAlreadyExists => {}
+            MessageTransitionOutcome::SourceMissing => {
+                bail!(
+                    "Claimed message {} disappeared before retry transition completed",
+                    claimed_path.display()
+                );
+            }
+        }
         Ok(RetriedMessage {
             original_path: claimed_path,
             retry_path,
@@ -629,7 +648,16 @@ impl MessageStore {
         let failed_path = exact_state_path(&failed_dir, &claimed_path)?;
 
         message.mark_failed(&error, true);
-        transition_message_atomically(&claimed_path, &failed_path, &message, "failed")?;
+        match transition_message_atomically(&claimed_path, &failed_path, &message, "failed")? {
+            MessageTransitionOutcome::Completed
+            | MessageTransitionOutcome::DestinationAlreadyExists => {}
+            MessageTransitionOutcome::SourceMissing => {
+                bail!(
+                    "Claimed message {} disappeared before failed transition completed",
+                    claimed_path.display()
+                );
+            }
+        }
         Ok(FailedMessage {
             original_path: claimed_path,
             failed_path,
@@ -696,7 +724,11 @@ impl MessageStore {
             })?;
             let retry_path = exact_state_path(&retry_dir, &path)?;
             message.mark_retry(&format!("lease expired at {lease_expires_at}"));
-            transition_message_atomically(&path, &retry_path, &message, "retry")?;
+            match transition_message_atomically(&path, &retry_path, &message, "retry")? {
+                MessageTransitionOutcome::Completed
+                | MessageTransitionOutcome::DestinationAlreadyExists => {}
+                MessageTransitionOutcome::SourceMissing => continue,
+            }
             reclaimed.push(ReclaimedMessage {
                 original_path: path,
                 retry_path,
@@ -759,11 +791,16 @@ impl MessageStore {
             .and_then(|content| toml::from_str::<Message>(&content).ok());
 
         let mut message = parsed;
-        if let Some(message) = message.as_mut() {
+        let outcome = if let Some(message) = message.as_mut() {
             message.mark_failed(&error, false);
-            transition_message_atomically(path, &failed_path, message, "failed poison")?;
+            transition_message_atomically(path, &failed_path, message, "failed poison")?
         } else {
-            transition_raw_message_atomically(path, &failed_path, "failed poison")?;
+            transition_raw_message_atomically(path, &failed_path, "failed poison")?
+        };
+        match outcome {
+            MessageTransitionOutcome::Completed
+            | MessageTransitionOutcome::DestinationAlreadyExists => {}
+            MessageTransitionOutcome::SourceMissing => return Ok(None),
         }
 
         Ok(Some(FailedMessage {
@@ -833,7 +870,11 @@ impl MessageStore {
         for (path, mut message) in pending {
             let delivered_path = next_state_path(&delivered_dir, &path)?;
             message.mark_delivered();
-            transition_message_atomically(&path, &delivered_path, &message, "delivered")?;
+            match transition_message_atomically(&path, &delivered_path, &message, "delivered")? {
+                MessageTransitionOutcome::Completed
+                | MessageTransitionOutcome::DestinationAlreadyExists => {}
+                MessageTransitionOutcome::SourceMissing => continue,
+            }
             messages.push(DeliveredMessage {
                 original_path: path,
                 delivered_path,
@@ -949,6 +990,7 @@ fn read_inbox_candidate_for_agent(agent: &AgentId, path: &Path) -> Result<Option
         Ok(message) => message,
         Err(_) => return Ok(None),
     };
+    validate_message_file_name(path, &message)?;
     message.scope = canonicalize_scope_value(&message.scope)
         .with_context(|| format!("Message {} has invalid scope", path.display()))?;
     validate_message_for_agent(agent, &message, path)?;
@@ -960,9 +1002,30 @@ fn read_message_file(path: &Path) -> Result<Message> {
         .with_context(|| format!("Failed to read message: {}", path.display()))?;
     let mut message: Message = toml::from_str(&content)
         .with_context(|| format!("Failed to parse message: {}", path.display()))?;
+    validate_message_file_name(path, &message)?;
     message.scope = canonicalize_scope_value(&message.scope)
         .with_context(|| format!("Message {} has invalid scope", path.display()))?;
     Ok(message)
+}
+
+fn validate_message_file_name(path: &Path, message: &Message) -> Result<()> {
+    let actual_file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let actual_stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let expected_file_name = message_file_name(&message.meta.id)?;
+    if actual_file_name != expected_file_name || actual_stem != message.meta.id {
+        bail!(
+            "Message {} has meta.id `{}` but file name is `{actual_file_name}`",
+            path.display(),
+            message.meta.id
+        );
+    }
+    Ok(())
 }
 
 fn validate_message_for_agent(agent: &AgentId, message: &Message, path: &Path) -> Result<()> {
@@ -1275,10 +1338,12 @@ fn remove_source_if_destination_completed(
                 destination_path.display()
             )
         })?;
-        if existing.meta.id != message.meta.id || existing.delivery.state != message.delivery.state
-        {
+        let claimed_contention = message.delivery.state == MessageDeliveryState::Claimed
+            && existing.meta.id == message.meta.id
+            && existing.delivery.state == message.delivery.state;
+        if !claimed_contention && existing != *message {
             bail!(
-                "Cannot complete message transition: target {} already exists for a different message state",
+                "Cannot complete message transition: target {} already exists with different content",
                 destination_path.display()
             );
         }
@@ -2291,6 +2356,91 @@ mod tests {
                 .unwrap()
                 .contains("addressed to agents/other")
         );
+    }
+
+    #[test]
+    fn claim_poison_filename_meta_id_mismatch_without_blocking_valid_messages() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("messages");
+        let store = MessageStore::new(&root);
+        let new_dir = root.join("agents/codex/inbox/new");
+        fs::create_dir_all(&new_dir).unwrap();
+        let from = AgentId::parse("agents/claude").unwrap();
+        let codex = AgentId::parse("agents/codex").unwrap();
+        let mismatch = Message::new(
+            "z-other".into(),
+            "2026-05-20T12:00:00Z".into(),
+            from.clone(),
+            codex.clone(),
+            "mismatched id",
+        );
+        let valid = Message::new(
+            "b-valid".into(),
+            "2026-05-20T12:00:00Z".into(),
+            from,
+            codex,
+            "valid target",
+        );
+        fs::write(
+            new_dir.join("a-mismatch.toml"),
+            toml::to_string_pretty(&mismatch).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            new_dir.join("b-valid.toml"),
+            toml::to_string_pretty(&valid).unwrap(),
+        )
+        .unwrap();
+
+        let claimed = store
+            .claim_next(
+                "agents/codex",
+                &MessageScope::direct(),
+                "agents/supervisor",
+                MessageLease::new(Duration::from_secs(60)).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(claimed.message.meta.id, "b-valid");
+        let failed = read_toml_message(&root.join("agents/codex/inbox/failed/a-mismatch.toml"));
+        assert_eq!(failed["delivery"]["state"].as_str(), Some("failed"));
+        assert!(
+            failed["delivery"]["last_error"]
+                .as_str()
+                .unwrap()
+                .contains("meta.id `z-other` but file name is `a-mismatch.toml`")
+        );
+    }
+
+    #[test]
+    fn acknowledge_rejects_claimed_filename_meta_id_mismatch() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("messages");
+        let store = MessageStore::new(&root);
+        let claimed_dir = root.join("agents/codex/inbox/claimed");
+        fs::create_dir_all(&claimed_dir).unwrap();
+        let supervisor = AgentId::parse("agents/supervisor").unwrap();
+        let mut message = Message::new(
+            "other".into(),
+            "2026-05-20T12:00:00Z".into(),
+            AgentId::parse("agents/claude").unwrap(),
+            AgentId::parse("agents/codex").unwrap(),
+            "claimed mismatch",
+        );
+        message.mark_claimed(&supervisor, "2026-05-20T12:01:00Z".into());
+        fs::write(
+            claimed_dir.join("expected.toml"),
+            toml::to_string_pretty(&message).unwrap(),
+        )
+        .unwrap();
+
+        let err = store
+            .acknowledge_delivery("agents/codex", "agents/supervisor", "expected")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("meta.id `other` but file name is `expected.toml`"));
     }
 
     #[test]
