@@ -184,10 +184,14 @@ impl MessageScope {
 
     fn with_required_id(kind: MessageScopeKind, id: impl Into<String>) -> Result<Self> {
         let id = id.into();
-        if id.trim().is_empty() {
+        let id = id.trim();
+        if id.is_empty() {
             bail!("Message scope `{}` requires a non-empty id", kind.as_str());
         }
-        Ok(Self { kind, id: Some(id) })
+        Ok(Self {
+            kind,
+            id: Some(id.into()),
+        })
     }
 }
 
@@ -429,7 +433,7 @@ impl MessageStore {
         if text.trim().is_empty() {
             bail!("Message cannot be empty");
         }
-        validate_scope_value(&scope).context("Invalid message scope")?;
+        let scope = canonicalize_scope_value(&scope).context("Invalid message scope")?;
 
         let inbox = to.inbox_state_dir(&self.root, MessageDeliveryState::New);
         fs::create_dir_all(&inbox)
@@ -475,11 +479,11 @@ impl MessageStore {
         let agent = AgentId::parse(agent)?;
         let claimed_by =
             AgentId::parse(claimed_by).context("Invalid delivery claimant agent id")?;
-        validate_scope_value(scope).context("Invalid claim scope")?;
+        let scope = canonicalize_scope_value(scope).context("Invalid claim scope")?;
 
         for state in [MessageDeliveryState::New, MessageDeliveryState::Retry] {
             if let Some(claimed) =
-                self.claim_next_from_state(&agent, scope, &claimed_by, lease, state)?
+                self.claim_next_from_state(&agent, &scope, &claimed_by, lease, state)?
             {
                 return Ok(Some(claimed));
             }
@@ -498,8 +502,9 @@ impl MessageStore {
     ) -> Result<Option<ClaimedMessage>> {
         let state_dir = agent.inbox_state_dir(&self.root, state);
         for path in message_paths(&state_dir)? {
-            let message = match read_message_for_agent(agent, &path) {
-                Ok(message) => message,
+            let message = match read_inbox_candidate_for_agent(agent, &path) {
+                Ok(Some(message)) => message,
+                Ok(None) => continue,
                 Err(err) => {
                     self.poison_message(agent, &path, &format!("{err:#}"))?;
                     continue;
@@ -784,8 +789,9 @@ impl MessageStore {
 
         let mut pending = Vec::new();
         for path in paths {
-            let message = match read_message_for_agent(&agent, &path) {
-                Ok(message) => message,
+            let message = match read_inbox_candidate_for_agent(&agent, &path) {
+                Ok(Some(message)) => message,
+                Ok(None) => continue,
                 Err(err) => {
                     self.poison_message(&agent, &path, &format!("{err:#}"))?;
                     continue;
@@ -929,11 +935,33 @@ fn message_paths(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn read_message_for_agent(agent: &AgentId, path: &Path) -> Result<Message> {
+    let message = read_message_file(path)?;
+    validate_message_for_agent(agent, &message, path)?;
+    Ok(message)
+}
+
+fn read_inbox_candidate_for_agent(agent: &AgentId, path: &Path) -> Result<Option<Message>> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return Ok(None),
+    };
+    let mut message: Message = match toml::from_str(&content) {
+        Ok(message) => message,
+        Err(_) => return Ok(None),
+    };
+    message.scope = canonicalize_scope_value(&message.scope)
+        .with_context(|| format!("Message {} has invalid scope", path.display()))?;
+    validate_message_for_agent(agent, &message, path)?;
+    Ok(Some(message))
+}
+
+fn read_message_file(path: &Path) -> Result<Message> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read message: {}", path.display()))?;
-    let message: Message = toml::from_str(&content)
+    let mut message: Message = toml::from_str(&content)
         .with_context(|| format!("Failed to parse message: {}", path.display()))?;
-    validate_message_for_agent(agent, &message, path)?;
+    message.scope = canonicalize_scope_value(&message.scope)
+        .with_context(|| format!("Message {} has invalid scope", path.display()))?;
     Ok(message)
 }
 
@@ -1006,20 +1034,28 @@ fn validate_message_scope(scope: &MessageScope, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn validate_scope_value(scope: &MessageScope) -> Result<()> {
+fn canonicalize_scope_value(scope: &MessageScope) -> Result<MessageScope> {
     match scope.kind {
         MessageScopeKind::Direct | MessageScopeKind::Repo => {
             if scope.id.is_some() {
                 bail!("scope.kind `{}` must not set scope.id", scope.kind.as_str());
             }
+            Ok(MessageScope {
+                kind: scope.kind,
+                id: None,
+            })
         }
         MessageScopeKind::Workflow | MessageScopeKind::TaskRun => {
-            if scope.id.as_deref().unwrap_or_default().trim().is_empty() {
+            let id = scope.id.as_deref().unwrap_or_default().trim();
+            if id.is_empty() {
                 bail!("scope.kind `{}` requires scope.id", scope.kind.as_str());
             }
+            Ok(MessageScope {
+                kind: scope.kind,
+                id: Some(id.into()),
+            })
         }
     }
-    Ok(())
 }
 
 fn validate_message_delivery(delivery: &MessageDelivery, path: &Path) -> Result<()> {
@@ -1575,6 +1611,17 @@ mod tests {
     }
 
     #[test]
+    fn message_scope_canonicalizes_required_ids() {
+        let workflow = MessageScope::workflow(" wf-1 ").unwrap();
+        let task_run = MessageScope::task_run("\ttask-1\n").unwrap();
+
+        assert_eq!(workflow.id.as_deref(), Some("wf-1"));
+        assert_eq!(workflow, MessageScope::workflow("wf-1").unwrap());
+        assert_eq!(task_run.id.as_deref(), Some("task-1"));
+        assert!(MessageScope::workflow("   ").is_err());
+    }
+
+    #[test]
     fn send_writes_a_toml_message_to_the_agent_inbox_new_state() {
         let temp = TempDir::new().unwrap();
         let store = MessageStore::new(temp.path().join("messages"));
@@ -2084,15 +2131,48 @@ mod tests {
     }
 
     #[test]
-    fn claim_poison_invalid_toml_without_blocking_valid_messages() {
+    fn check_inbox_leaves_unparsable_messages_transient_without_blocking_valid_messages() {
         let temp = TempDir::new().unwrap();
         let root = temp.path().join("messages");
         let store = MessageStore::new(&root);
         let new_dir = root.join("agents/codex/inbox/new");
         fs::create_dir_all(&new_dir).unwrap();
-        fs::write(new_dir.join("a-invalid.toml"), "not = [valid\n").unwrap();
+        fs::write(new_dir.join("a-partial.toml"), "not = [valid\n").unwrap();
+        let valid = Message::new(
+            "b-valid".into(),
+            "2026-05-20T12:00:00Z".into(),
+            AgentId::parse("agents/claude").unwrap(),
+            AgentId::parse("agents/codex").unwrap(),
+            "valid",
+        );
+        fs::write(
+            new_dir.join("b-valid.toml"),
+            toml::to_string_pretty(&valid).unwrap(),
+        )
+        .unwrap();
+
+        let delivery = store.check_inbox("codex").unwrap();
+
+        assert_eq!(delivery.messages.len(), 1);
+        assert_eq!(delivery.messages[0].message.meta.id, "b-valid");
+        assert!(new_dir.join("a-partial.toml").exists());
+        assert!(
+            message_paths(&root.join("agents/codex/inbox/failed"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn claim_leaves_unparsable_new_messages_transient_without_blocking_valid_messages() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("messages");
+        let store = MessageStore::new(&root);
+        let new_dir = root.join("agents/codex/inbox/new");
+        fs::create_dir_all(&new_dir).unwrap();
+        fs::write(new_dir.join("a-partial.toml"), "not = [valid\n").unwrap();
         let valid = store
-            .send_from("agents/claude", "agents/codex", "valid after poison")
+            .send_from("agents/claude", "agents/codex", "valid after partial")
             .unwrap();
 
         let claimed = store
@@ -2106,13 +2186,54 @@ mod tests {
             .unwrap();
 
         assert_eq!(claimed.message.meta.id, valid.id);
-        assert!(!new_dir.join("a-invalid.toml").exists());
-        let failed_files = message_paths(&root.join("agents/codex/inbox/failed")).unwrap();
-        assert_eq!(failed_files.len(), 1);
+        assert!(new_dir.join("a-partial.toml").exists());
         assert!(
-            fs::read_to_string(&failed_files[0])
+            message_paths(&root.join("agents/codex/inbox/failed"))
                 .unwrap()
-                .contains("not = [valid")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn claim_leaves_unparsable_retry_messages_transient_without_blocking_valid_messages() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("messages");
+        let store = MessageStore::new(&root);
+        let retry_dir = root.join("agents/codex/inbox/retry");
+        fs::create_dir_all(&retry_dir).unwrap();
+        fs::write(retry_dir.join("a-partial.toml"), "not = [valid\n").unwrap();
+        let mut valid = Message::new(
+            "b-valid".into(),
+            "2026-05-20T12:00:00Z".into(),
+            AgentId::parse("agents/claude").unwrap(),
+            AgentId::parse("agents/codex").unwrap(),
+            "valid retry",
+        );
+        valid.delivery.state = MessageDeliveryState::Retry;
+        valid.delivery.attempts = 1;
+        valid.delivery.last_error = Some("temporary failure".into());
+        fs::write(
+            retry_dir.join("b-valid.toml"),
+            toml::to_string_pretty(&valid).unwrap(),
+        )
+        .unwrap();
+
+        let claimed = store
+            .claim_next(
+                "agents/codex",
+                &MessageScope::direct(),
+                "agents/supervisor",
+                MessageLease::new(Duration::from_secs(60)).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(claimed.message.meta.id, "b-valid");
+        assert!(retry_dir.join("a-partial.toml").exists());
+        assert!(
+            message_paths(&root.join("agents/codex/inbox/failed"))
+                .unwrap()
+                .is_empty()
         );
     }
 
