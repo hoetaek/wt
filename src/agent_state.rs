@@ -15,8 +15,9 @@ pub(crate) struct WaitObservation {
     pub(crate) recorded_at: String,
     pub(crate) wait_class: String,
     pub(crate) wait_reason: String,
-    pub(crate) wait_seconds: u64,
+    pub(crate) elapsed_seconds: u64,
     pub(crate) bound_seconds: u64,
+    pub(crate) unchanged_seconds: u64,
     pub(crate) target: String,
     pub(crate) branch: String,
     pub(crate) worktree: Option<String>,
@@ -26,49 +27,85 @@ pub(crate) struct WaitObservation {
     pub(crate) last_tool: Option<String>,
     pub(crate) last_event_at: Option<String>,
     pub(crate) session_id: Option<String>,
-    pub(crate) cmux_workspace: Option<String>,
-    pub(crate) cmux_surface: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NewWaitObservation {
+    pub(crate) wait_reason: String,
+    pub(crate) elapsed_seconds: u64,
+    pub(crate) bound_seconds: u64,
+    pub(crate) unchanged_seconds: u64,
+    pub(crate) target: String,
+    pub(crate) branch: String,
+    pub(crate) agent_kind: String,
+    pub(crate) agent_state: String,
 }
 
 impl WaitObservation {
-    pub(crate) fn new_non_idle(
-        wait_reason: impl Into<String>,
-        wait_seconds: u64,
-        bound_seconds: u64,
-        target: impl Into<String>,
-        branch: impl Into<String>,
-        agent_kind: impl Into<String>,
-        agent_state: impl Into<String>,
-    ) -> Self {
+    pub(crate) fn new_non_idle(input: NewWaitObservation) -> Self {
         Self {
             recorded_at: current_utc_timestamp(),
             wait_class: NON_IDLE_WAIT_CLASS.into(),
-            wait_reason: wait_reason.into(),
-            wait_seconds,
-            bound_seconds,
-            target: target.into(),
-            branch: branch.into(),
+            wait_reason: input.wait_reason,
+            elapsed_seconds: input.elapsed_seconds,
+            bound_seconds: input.bound_seconds,
+            unchanged_seconds: input.unchanged_seconds,
+            target: input.target,
+            branch: input.branch,
             worktree: None,
             task_run_id: None,
-            agent_kind: agent_kind.into(),
-            agent_state: agent_state.into(),
+            agent_kind: input.agent_kind,
+            agent_state: input.agent_state,
             last_tool: None,
             last_event_at: None,
             session_id: None,
-            cmux_workspace: None,
-            cmux_surface: None,
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct WaitObservationSummary {
     pub(crate) path: String,
     pub(crate) count: u64,
     pub(crate) sum_seconds: u64,
     pub(crate) min_seconds: Option<u64>,
     pub(crate) max_seconds: Option<u64>,
+    pub(crate) average_seconds: Option<f64>,
     pub(crate) buckets: BTreeMap<String, u64>,
+    pub(crate) groups: WaitObservationGroups,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub(crate) struct WaitObservationGroups {
+    pub(crate) wait_reason: BTreeMap<String, WaitObservationGroupSummary>,
+    pub(crate) bound_seconds: BTreeMap<String, WaitObservationGroupSummary>,
+    pub(crate) agent_kind: BTreeMap<String, WaitObservationGroupSummary>,
+    pub(crate) agent_state: BTreeMap<String, WaitObservationGroupSummary>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub(crate) struct WaitObservationGroupSummary {
+    pub(crate) count: u64,
+    pub(crate) sum_seconds: u64,
+    pub(crate) min_seconds: Option<u64>,
+    pub(crate) max_seconds: Option<u64>,
+    pub(crate) average_seconds: Option<f64>,
+}
+
+impl WaitObservationGroupSummary {
+    fn record(&mut self, seconds: u64) {
+        self.count += 1;
+        self.sum_seconds += seconds;
+        self.min_seconds = Some(match self.min_seconds {
+            Some(current) => current.min(seconds),
+            None => seconds,
+        });
+        self.max_seconds = Some(match self.max_seconds {
+            Some(current) => current.max(seconds),
+            None => seconds,
+        });
+        self.average_seconds = Some(average_seconds(self.sum_seconds, self.count));
+    }
 }
 
 impl WaitObservationSummary {
@@ -79,7 +116,9 @@ impl WaitObservationSummary {
             sum_seconds: 0,
             min_seconds: None,
             max_seconds: None,
+            average_seconds: None,
             buckets: BTreeMap::new(),
+            groups: WaitObservationGroups::default(),
         }
     }
 
@@ -88,20 +127,39 @@ impl WaitObservationSummary {
             return;
         }
 
+        let seconds = observation.elapsed_seconds;
         self.count += 1;
-        self.sum_seconds += observation.wait_seconds;
+        self.sum_seconds += seconds;
         self.min_seconds = Some(match self.min_seconds {
-            Some(current) => current.min(observation.wait_seconds),
-            None => observation.wait_seconds,
+            Some(current) => current.min(seconds),
+            None => seconds,
         });
         self.max_seconds = Some(match self.max_seconds {
-            Some(current) => current.max(observation.wait_seconds),
-            None => observation.wait_seconds,
+            Some(current) => current.max(seconds),
+            None => seconds,
         });
-        *self
-            .buckets
-            .entry(bucket_for(observation.wait_seconds).into())
-            .or_insert(0) += 1;
+        self.average_seconds = Some(average_seconds(self.sum_seconds, self.count));
+        *self.buckets.entry(bucket_for(seconds).into()).or_insert(0) += 1;
+        self.groups
+            .wait_reason
+            .entry(observation.wait_reason.clone())
+            .or_default()
+            .record(seconds);
+        self.groups
+            .bound_seconds
+            .entry(observation.bound_seconds.to_string())
+            .or_default()
+            .record(seconds);
+        self.groups
+            .agent_kind
+            .entry(observation.agent_kind.clone())
+            .or_default()
+            .record(seconds);
+        self.groups
+            .agent_state
+            .entry(observation.agent_state.clone())
+            .or_default()
+            .record(seconds);
     }
 }
 
@@ -188,6 +246,14 @@ fn bucket_for(seconds: u64) -> &'static str {
         300..=899 => "5-14m",
         900..=3_599 => "15-59m",
         _ => "1h+",
+    }
+}
+
+fn average_seconds(sum_seconds: u64, count: u64) -> f64 {
+    if count == 0 {
+        0.0
+    } else {
+        sum_seconds as f64 / count as f64
     }
 }
 

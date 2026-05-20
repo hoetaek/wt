@@ -1590,6 +1590,8 @@ fn agent_wait_stats_help_explains_read_only_summary() {
         .success()
         .stdout(predicate::str::contains("non-idle wait observations"))
         .stdout(predicate::str::contains("read-only"))
+        .stdout(predicate::str::contains("average"))
+        .stdout(predicate::str::contains("low-cardinality group data"))
         .stdout(predicate::str::contains(
             "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
         ))
@@ -1603,9 +1605,9 @@ fn agent_wait_stats_reports_sample_jsonl_summary() {
     git_init(temp.path());
     write_wait_observations(
         temp.path(),
-        r#"{"recorded_at":"2026-05-20T00:00:00Z","wait_class":"non_idle","wait_reason":"heartbeat","wait_seconds":5,"bound_seconds":5,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"codex","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null,"cmux_workspace":null,"cmux_surface":null}
-{"recorded_at":"2026-05-20T00:01:10Z","wait_class":"non_idle","wait_reason":"heartbeat","wait_seconds":70,"bound_seconds":60,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"codex","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null,"cmux_workspace":null,"cmux_surface":null}
-{"recorded_at":"2026-05-20T00:06:40Z","wait_class":"non_idle","wait_reason":"timeout","wait_seconds":400,"bound_seconds":400,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"codex","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null,"cmux_workspace":null,"cmux_surface":null}
+        r#"{"recorded_at":"2026-05-20T00:00:00Z","wait_class":"non_idle","wait_reason":"heartbeat","elapsed_seconds":60,"bound_seconds":60,"unchanged_seconds":60,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"codex","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null}
+{"recorded_at":"2026-05-20T00:01:00Z","wait_class":"non_idle","wait_reason":"heartbeat","elapsed_seconds":120,"bound_seconds":60,"unchanged_seconds":60,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"codex","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null}
+{"recorded_at":"2026-05-20T00:05:00Z","wait_class":"non_idle","wait_reason":"timeout","elapsed_seconds":300,"bound_seconds":300,"unchanged_seconds":180,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"claude_code","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null}
 "#,
     );
 
@@ -1618,12 +1620,68 @@ fn agent_wait_stats_reports_sample_jsonl_summary() {
             "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
         ))
         .stdout(predicate::str::contains("Count: 3"))
-        .stdout(predicate::str::contains("Sum seconds: 475"))
-        .stdout(predicate::str::contains("Min seconds: 5"))
-        .stdout(predicate::str::contains("Max seconds: 400"))
-        .stdout(predicate::str::contains("0-59s: 1"))
-        .stdout(predicate::str::contains("1-4m: 1"))
-        .stdout(predicate::str::contains("5-14m: 1"));
+        .stdout(predicate::str::contains("Sum seconds: 480"))
+        .stdout(predicate::str::contains("Average seconds: 160"))
+        .stdout(predicate::str::contains("Min seconds: 60"))
+        .stdout(predicate::str::contains("Max seconds: 300"))
+        .stdout(predicate::str::contains("1-4m: 2"))
+        .stdout(predicate::str::contains("5-14m: 1"))
+        .stdout(predicate::str::contains("wait_reason:"))
+        .stdout(predicate::str::contains("heartbeat: count 2, avg 90s"))
+        .stdout(predicate::str::contains("timeout: count 1, avg 300s"))
+        .stdout(predicate::str::contains("bound_seconds:"))
+        .stdout(predicate::str::contains("60: count 2, avg 90s"))
+        .stdout(predicate::str::contains("agent_kind:"))
+        .stdout(predicate::str::contains("codex: count 2, avg 90s"))
+        .stdout(predicate::str::contains("claude_code: count 1, avg 300s"))
+        .stdout(predicate::str::contains("agent_state:"))
+        .stdout(predicate::str::contains("running: count 3, avg 160s"));
+}
+
+#[test]
+fn agent_wait_stats_json_reports_average_and_group_summaries() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_wait_observations(
+        temp.path(),
+        r#"{"recorded_at":"2026-05-20T00:00:00Z","wait_class":"non_idle","wait_reason":"heartbeat","elapsed_seconds":60,"bound_seconds":60,"unchanged_seconds":60,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"codex","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null}
+{"recorded_at":"2026-05-20T00:01:00Z","wait_class":"non_idle","wait_reason":"heartbeat","elapsed_seconds":120,"bound_seconds":60,"unchanged_seconds":60,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"codex","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null}
+{"recorded_at":"2026-05-20T00:05:00Z","wait_class":"non_idle","wait_reason":"timeout","elapsed_seconds":300,"bound_seconds":300,"unchanged_seconds":180,"target":"feature","branch":"feature","worktree":null,"task_run_id":null,"agent_kind":"claude_code","agent_state":"running","last_tool":null,"last_event_at":null,"session_id":null}
+"#,
+    );
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "agent",
+            "wait-stats",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["count"], 3);
+    assert_eq!(value["sum_seconds"], 480);
+    assert_eq!(value["average_seconds"].as_f64().unwrap(), 160.0);
+    assert_eq!(value["min_seconds"], 60);
+    assert_eq!(value["max_seconds"], 300);
+    assert_eq!(value["buckets"]["1-4m"], 2);
+    assert_eq!(value["buckets"]["5-14m"], 1);
+    assert_eq!(value["groups"]["wait_reason"]["heartbeat"]["count"], 2);
+    assert_eq!(
+        value["groups"]["wait_reason"]["heartbeat"]["average_seconds"]
+            .as_f64()
+            .unwrap(),
+        90.0
+    );
+    assert_eq!(value["groups"]["bound_seconds"]["60"]["count"], 2);
+    assert_eq!(value["groups"]["agent_kind"]["codex"]["sum_seconds"], 180);
+    assert_eq!(value["groups"]["agent_state"]["running"]["count"], 3);
 }
 
 #[test]

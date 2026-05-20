@@ -360,7 +360,7 @@ pub enum AgentCommand {
     },
     /// Summarize recorded non-idle wait observations
     #[command(
-        long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch --record-wait-observations`. This is read-only: it summarizes <git-common-dir>/wt/agent.state/wait-observations.jsonl and does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
+        long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch --record-wait-observations`. This is read-only: it summarizes <git-common-dir>/wt/agent.state/wait-observations.jsonl with count, sum, average, min, max, bucket, and low-cardinality group data; it does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
     )]
     WaitStats,
     /// Install or uninstall local agent hook adapters

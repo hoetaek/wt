@@ -1,4 +1,6 @@
-use crate::agent_state::{WaitObservation, WaitObservationStore, WaitObservationSummary};
+use crate::agent_state::{
+    NewWaitObservation, WaitObservation, WaitObservationStore, WaitObservationSummary,
+};
 use crate::agents::AgentStatus;
 use crate::context::Ctx;
 use crate::error::WtError;
@@ -107,7 +109,14 @@ fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) ->
 
         if let Some(timeout) = options.timeout.filter(|timeout| elapsed >= *timeout) {
             if options.record_wait_observations {
-                record_wait_observation(ctx, &report, "timeout", elapsed, timeout)?;
+                record_wait_observation(
+                    ctx,
+                    &report,
+                    "timeout",
+                    elapsed,
+                    timeout,
+                    now.duration_since(last_output_at),
+                )?;
             }
             if ctx.is_json() {
                 print_json_line(&report_with_warning(
@@ -125,10 +134,17 @@ fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) ->
                 .heartbeat
                 .is_some_and(|heartbeat| now.duration_since(last_output_at) >= heartbeat)
         {
-            let wait_duration = now.duration_since(last_output_at);
+            let unchanged_duration = now.duration_since(last_output_at);
             let heartbeat = options.heartbeat.expect("heartbeat was checked above");
             if options.record_wait_observations {
-                record_wait_observation(ctx, &report, "heartbeat", wait_duration, heartbeat)?;
+                record_wait_observation(
+                    ctx,
+                    &report,
+                    "heartbeat",
+                    elapsed,
+                    heartbeat,
+                    unchanged_duration,
+                )?;
             }
             if ctx.is_json() {
                 print_json_line(&report)?;
@@ -440,25 +456,25 @@ fn record_wait_observation(
     ctx: &Ctx,
     report: &AgentStatusReport,
     wait_reason: &str,
-    wait_duration: Duration,
+    elapsed_duration: Duration,
     bound_duration: Duration,
+    unchanged_duration: Duration,
 ) -> Result<()> {
-    let mut observation = WaitObservation::new_non_idle(
-        wait_reason,
-        wait_duration.as_secs(),
-        bound_duration.as_secs(),
-        report.target.clone(),
-        report.branch.clone(),
-        report.agent.kind.clone(),
-        report.agent.state.clone(),
-    );
+    let mut observation = WaitObservation::new_non_idle(NewWaitObservation {
+        wait_reason: wait_reason.into(),
+        elapsed_seconds: elapsed_duration.as_secs(),
+        bound_seconds: bound_duration.as_secs(),
+        unchanged_seconds: unchanged_duration.as_secs(),
+        target: report.target.clone(),
+        branch: report.branch.clone(),
+        agent_kind: report.agent.kind.clone(),
+        agent_state: report.agent.state.clone(),
+    });
     observation.worktree = report.worktree.clone();
     observation.task_run_id = report.task_run.id.clone();
     observation.last_tool = report.agent.last_tool.clone();
     observation.last_event_at = report.agent.last_event_at.clone();
     observation.session_id = report.agent.session_id.clone();
-    observation.cmux_workspace = report.cmux.workspace.clone();
-    observation.cmux_surface = report.cmux.surface.clone();
 
     let store = WaitObservationStore::new(ctx.storage_root.wait_observations_jsonl());
     store.append(&observation).with_context(|| {
@@ -492,6 +508,10 @@ fn print_wait_stats(ctx: &Ctx, summary: &WaitObservationSummary) {
     ctx.ui
         .print_dim(&format!("  Sum seconds: {}", summary.sum_seconds));
     ctx.ui.print_dim(&format!(
+        "  Average seconds: {}",
+        format_average_seconds(summary.average_seconds)
+    ));
+    ctx.ui.print_dim(&format!(
         "  Min seconds: {}",
         format_optional_seconds(summary.min_seconds)
     ));
@@ -511,12 +531,49 @@ fn print_wait_stats(ctx: &Ctx, summary: &WaitObservationSummary) {
             ctx.ui.print_dim(&format!("    - {bucket}: {count}"));
         }
     }
+    print_wait_stats_groups(ctx, summary);
 }
 
 fn format_optional_seconds(value: Option<u64>) -> String {
     value
         .map(|seconds| seconds.to_string())
         .unwrap_or_else(|| "none".into())
+}
+
+fn format_average_seconds(value: Option<f64>) -> String {
+    match value {
+        Some(value) if value.fract().abs() < f64::EPSILON => format!("{value:.0}"),
+        Some(value) => format!("{value:.2}"),
+        None => "none".into(),
+    }
+}
+
+fn print_wait_stats_groups(ctx: &Ctx, summary: &WaitObservationSummary) {
+    if summary.count == 0 {
+        return;
+    }
+    ctx.ui.print_dim("  Groups:");
+    print_wait_stats_group(ctx, "wait_reason", &summary.groups.wait_reason);
+    print_wait_stats_group(ctx, "bound_seconds", &summary.groups.bound_seconds);
+    print_wait_stats_group(ctx, "agent_kind", &summary.groups.agent_kind);
+    print_wait_stats_group(ctx, "agent_state", &summary.groups.agent_state);
+}
+
+fn print_wait_stats_group(
+    ctx: &Ctx,
+    label: &str,
+    groups: &BTreeMap<String, crate::agent_state::WaitObservationGroupSummary>,
+) {
+    ctx.ui.print_dim(&format!("    {label}:"));
+    for (value, group) in groups {
+        ctx.ui.print_dim(&format!(
+            "      - {value}: count {}, avg {}s, min {}, max {}",
+            group.count,
+            format_average_seconds(group.average_seconds),
+            format_optional_seconds(group.min_seconds),
+            format_optional_seconds(group.max_seconds)
+        ));
+    }
 }
 
 fn print_text(ctx: &Ctx, report: &AgentStatusReport) {
@@ -1240,13 +1297,52 @@ mod tests {
         assert_eq!(observations.len(), 1);
         assert_eq!(observations[0]["wait_class"], "non_idle");
         assert_eq!(observations[0]["wait_reason"], "timeout");
-        assert_eq!(observations[0]["wait_seconds"], 0);
+        assert_eq!(observations[0]["elapsed_seconds"], 0);
         assert_eq!(observations[0]["bound_seconds"], 0);
+        assert_eq!(observations[0]["unchanged_seconds"], 0);
         assert_eq!(observations[0]["agent_state"], "running");
         assert_eq!(observations[0]["agent_kind"], "codex");
         assert_eq!(observations[0]["target"], "feature");
         assert_eq!(observations[0]["last_tool"], "Bash");
-        assert_eq!(observations[0]["cmux_workspace"], "workspace:1");
+        assert_no_cmux_transport_fields(&observations[0]);
+    }
+
+    #[test]
+    fn wait_observation_record_separates_elapsed_bound_and_unchanged_seconds() {
+        let fixture = Fixture::new();
+        let ctx = fixture.ctx(MockRunner::new(), OutputMode::Text);
+        let report = test_running_report();
+
+        record_wait_observation(
+            &ctx,
+            &report,
+            "heartbeat",
+            Duration::from_secs(125),
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        record_wait_observation(
+            &ctx,
+            &report,
+            "timeout",
+            Duration::from_secs(300),
+            Duration::from_secs(300),
+            Duration::from_secs(140),
+        )
+        .unwrap();
+
+        let observations = read_wait_observations(&fixture);
+        assert_eq!(observations.len(), 2);
+        assert_eq!(observations[0]["wait_reason"], "heartbeat");
+        assert_eq!(observations[0]["elapsed_seconds"], 125);
+        assert_eq!(observations[0]["bound_seconds"], 60);
+        assert_eq!(observations[0]["unchanged_seconds"], 60);
+        assert_eq!(observations[1]["wait_reason"], "timeout");
+        assert_eq!(observations[1]["elapsed_seconds"], 300);
+        assert_eq!(observations[1]["bound_seconds"], 300);
+        assert_eq!(observations[1]["unchanged_seconds"], 140);
+        assert!(observations.iter().all(has_no_cmux_transport_fields));
     }
 
     #[test]
@@ -1337,10 +1433,12 @@ mod tests {
         assert_eq!(observations.len(), 1);
         assert_eq!(observations[0]["wait_class"], "non_idle");
         assert_eq!(observations[0]["wait_reason"], "heartbeat");
-        assert_eq!(observations[0]["wait_seconds"], 0);
+        assert_eq!(observations[0]["elapsed_seconds"], 0);
         assert_eq!(observations[0]["bound_seconds"], 0);
+        assert_eq!(observations[0]["unchanged_seconds"], 0);
         assert_eq!(observations[0]["agent_state"], "running");
         assert_eq!(observations[0]["task_run_id"], "run-feature");
+        assert_no_cmux_transport_fields(&observations[0]);
     }
 
     #[test]
@@ -1501,5 +1599,51 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    fn assert_no_cmux_transport_fields(observation: &serde_json::Value) {
+        assert!(has_no_cmux_transport_fields(observation));
+    }
+
+    fn has_no_cmux_transport_fields(observation: &serde_json::Value) -> bool {
+        observation
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|key| !key.starts_with("cmux_"))
+    }
+
+    fn test_running_report() -> AgentStatusReport {
+        AgentStatusReport {
+            target: "feature".into(),
+            branch: "feature".into(),
+            worktree: Some("/tmp/sample-feature".into()),
+            task_run: TaskRunStatusReport {
+                id: Some("run-feature".into()),
+                status: Some("running".into()),
+                context: Some("direct".into()),
+            },
+            agent: AgentObservationReport {
+                kind: "codex".into(),
+                state: "running".into(),
+                last_tool: Some("Bash".into()),
+                last_event_at: Some("2026-05-16T00:00:10Z".into()),
+                session_id: Some("codex-session".into()),
+                needs_input_since: None,
+                metadata: BTreeMap::new(),
+            },
+            cmux: CmuxObservationReport {
+                state: "terminal_surface_ready".into(),
+                workspace: Some("workspace:1".into()),
+                surface: Some("surface:4".into()),
+                workspace_id: Some("uuid-workspace-1".into()),
+                surface_id: Some("uuid-surface-4".into()),
+                pane: Some("pane:3".into()),
+                window: Some("window:1".into()),
+                workspace_title: Some("feature".into()),
+                candidates: Vec::new(),
+            },
+            warnings: Vec::new(),
+        }
     }
 }
