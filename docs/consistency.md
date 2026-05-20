@@ -185,9 +185,9 @@ Directory state is the visible source of truth for inspection and atomic transit
   scoped send surface says otherwise.
 - `claim`: move `inbox/new` or eligible `inbox/retry` to `inbox/claimed`, set `delivery.state =
   "claimed"`, `delivery.claimed_by`, and `delivery.lease_expires_at`.
-- `deliver`: move `inbox/claimed` to `inbox/delivered` after successful transport delivery. The
-  current hook compatibility path may deliver direct-scope `inbox/new` messages directly to
-  `inbox/delivered` until claim primitives are implemented.
+- `deliver`: move `inbox/claimed` to `inbox/delivered` after successful transport delivery.
+  The hook compatibility path may still deliver direct-scope `inbox/new` messages directly to
+  `inbox/delivered`; scoped consumers use the claim lifecycle.
 - `retry`: move failed delivery attempts to `inbox/retry`, increment `delivery.attempts`, and set
   `delivery.last_error`.
 - `fail`: move poison or exhausted messages to `inbox/failed` with `delivery.last_error`.
