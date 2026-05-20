@@ -2188,7 +2188,7 @@ function workflowCanvasTaskNode(item, index, x, y) {
 
 function workflowCanvasMatrixDocumentNode(item, index, x, y) {
   const attention = Boolean(item.task_document_error || !item.task_document);
-  return { id: `matrix-document-${index}`, kind: "matrix-document", item, x, y, w: WORKFLOW_CANVAS.taskW, h: 140, tone: attention ? "red" : "blue" };
+  return { id: `matrix-document-${index}`, kind: "matrix-document", item, x, y, w: WORKFLOW_CANVAS.taskW, h: WORKFLOW_CANVAS.matrixRunH, tone: attention ? "red" : "blue" };
 }
 
 function workflowCanvasMatrixRunNode(item, index, x, y) {
