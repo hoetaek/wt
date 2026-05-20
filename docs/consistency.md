@@ -231,6 +231,25 @@ runtime integration, and detached supervisor commands are outside this contract 
 delivery implementations must build on the same address/scope/delivery lifecycle instead of adding
 a second hidden inbox model.
 
+Canonical read-only message lifecycle inspection:
+
+```bash
+wt msg list --agent agents/codex
+wt msg read --agent agents/codex <message-id>
+```
+
+`wt msg list` scans the canonical state directories without claiming, acknowledging, reclaiming, or
+poisoning messages. Its counts use the visible directory state for `new`, `claimed`, `delivered`,
+`retry`, and `failed`; invalid records are included in those state counts and also reported as
+invalid diagnostics instead of being hidden. Rows include scope, attempts, claim owner, lease expiry,
+last error, and summary when the record can be parsed.
+
+`wt msg read` reads one exact message id from the same lifecycle directories without mutating it.
+If the same id exists in multiple lifecycle directories, the command fails rather than guessing the
+intended record. `--json` is supported for both inspection commands and uses the same read-only
+inventory model. This is message inventory; runtime observation stays under `wt agent status` and
+`wt agent watch`.
+
 ## Agent Adapter Policy
 
 `wt`는 Git에 commit되는 source를 자동으로 바꾸지 않는다.

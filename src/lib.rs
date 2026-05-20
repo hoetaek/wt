@@ -189,6 +189,8 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Ui { port } => commands::ui::run(ctx, *port),
         Commands::Msg { command } => match command {
             MsgCommand::Send { to, message } => commands::msg::send(ctx, to, message),
+            MsgCommand::List { agent } => commands::msg::list(ctx, agent),
+            MsgCommand::Read { agent, message_id } => commands::msg::read(ctx, agent, message_id),
             MsgCommand::CheckInbox { agent } => commands::msg::check_inbox(ctx, agent),
         },
         Commands::Send {

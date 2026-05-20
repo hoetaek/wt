@@ -8,6 +8,13 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Added read-only message lifecycle inspection with `wt msg list --agent <agent>`
+  and `wt msg read --agent <agent> <message-id>`. The commands report retained
+  `new`, `claimed`, `delivered`, `retry`, and `failed` messages without claiming
+  or acknowledging them, including JSON output for coordinator diagnostics.
+- Bumped the package version to `0.40.0` because message lifecycle inspection
+  adds user-facing CLI subcommands while `wt` is still pre-1.0.
+
 - Migrated `wt msg check-inbox` onto the scoped message delivery lifecycle. Hook
   delivery now reclaims expired leases, claims deliverable direct-scope messages,
   emits hook JSON on stdout, and acknowledges successful output into

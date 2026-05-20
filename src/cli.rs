@@ -191,9 +191,9 @@ pub enum Commands {
         #[arg(long, default_value_t = 0, value_name = "PORT")]
         port: u16,
     },
-    /// Send and deliver file-based agent inbox messages
+    /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send and deliver file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable sends. The short target `coordinator` normalizes to the local coordinator inbox `agents/coordinator`. Use `wt msg check-inbox --agent <agent>` from agent hooks; deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable sends. The short target `coordinator` normalizes to the local coordinator inbox `agents/coordinator`. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg check-inbox --agent <agent>` from agent hooks; deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -439,6 +439,20 @@ pub enum MsgCommand {
             allow_hyphen_values = true
         )]
         message: Vec<String>,
+    },
+    /// List lifecycle messages for one agent inbox without claiming them
+    List {
+        /// Agent id as NAME or agents/NAME
+        #[arg(long)]
+        agent: String,
+    },
+    /// Read one lifecycle message by id without changing delivery state
+    Read {
+        /// Agent id as NAME or agents/NAME
+        #[arg(long)]
+        agent: String,
+        /// Message id without the .toml extension
+        message_id: String,
     },
     /// Claim deliverable inbox messages, emit hook JSON, and acknowledge delivery
     CheckInbox {

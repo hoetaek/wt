@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -98,7 +98,7 @@ impl Message {
         }
     }
 
-    fn text_content(&self) -> String {
+    pub fn text_content(&self) -> String {
         self.body
             .parts
             .iter()
@@ -282,6 +282,14 @@ impl MessageDeliveryState {
     }
 }
 
+pub const MESSAGE_DELIVERY_STATES: [MessageDeliveryState; 5] = [
+    MessageDeliveryState::New,
+    MessageDeliveryState::Claimed,
+    MessageDeliveryState::Delivered,
+    MessageDeliveryState::Retry,
+    MessageDeliveryState::Failed,
+];
+
 impl std::fmt::Display for MessageDeliveryState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -377,6 +385,55 @@ impl InboxDelivery {
 
     pub fn additional_context(&self) -> String {
         render_additional_context(self)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageInventory {
+    pub agent: AgentId,
+    pub counts: MessageInventoryCounts,
+    pub messages: Vec<MessageInspectionRecord>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MessageInventoryCounts {
+    pub total: usize,
+    pub new: usize,
+    pub claimed: usize,
+    pub delivered: usize,
+    pub retry: usize,
+    pub failed: usize,
+    pub invalid: usize,
+}
+
+impl MessageInventoryCounts {
+    fn add(&mut self, state: MessageDeliveryState, invalid: bool) {
+        self.total += 1;
+        match state {
+            MessageDeliveryState::New => self.new += 1,
+            MessageDeliveryState::Claimed => self.claimed += 1,
+            MessageDeliveryState::Delivered => self.delivered += 1,
+            MessageDeliveryState::Retry => self.retry += 1,
+            MessageDeliveryState::Failed => self.failed += 1,
+        }
+        if invalid {
+            self.invalid += 1;
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageInspectionRecord {
+    pub id: String,
+    pub state: MessageDeliveryState,
+    pub path: PathBuf,
+    pub message: Option<Message>,
+    pub error: Option<String>,
+}
+
+impl MessageInspectionRecord {
+    pub fn is_valid(&self) -> bool {
+        self.error.is_none()
     }
 }
 
@@ -844,6 +901,63 @@ impl MessageStore {
         }
         Ok(delivered)
     }
+
+    pub fn list(&self, agent: &str) -> Result<MessageInventory> {
+        let agent = AgentId::parse(agent)?;
+        let mut counts = MessageInventoryCounts::default();
+        let mut messages = Vec::new();
+
+        for state in MESSAGE_DELIVERY_STATES {
+            let state_dir = agent.inbox_state_dir(&self.root, state);
+            for path in message_paths(&state_dir)? {
+                let record = inspect_message_record(&agent, state, &path);
+                counts.add(state, !record.is_valid());
+                messages.push(record);
+            }
+        }
+
+        Ok(MessageInventory {
+            agent,
+            counts,
+            messages,
+        })
+    }
+
+    pub fn read_for_inspection(
+        &self,
+        agent: &str,
+        message_id: &str,
+    ) -> Result<MessageInspectionRecord> {
+        let agent = AgentId::parse(agent)?;
+        let file_name = message_file_name(message_id)?;
+        let mut matches = Vec::new();
+
+        for state in MESSAGE_DELIVERY_STATES {
+            let path = agent.inbox_state_dir(&self.root, state).join(&file_name);
+            if path.is_file() {
+                matches.push(inspect_message_record(&agent, state, &path));
+            }
+        }
+
+        match matches.len() {
+            0 => bail!(
+                "No message `{message_id}` found for {} in inbox/new, inbox/claimed, inbox/delivered, inbox/retry, or inbox/failed",
+                agent.as_str()
+            ),
+            1 => Ok(matches.remove(0)),
+            _ => {
+                let states = matches
+                    .iter()
+                    .map(|record| record.state.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!(
+                    "Message `{message_id}` for {} exists in multiple lifecycle states: {states}",
+                    agent.as_str()
+                );
+            }
+        }
+    }
 }
 
 fn sender_agent_id() -> Result<AgentId> {
@@ -933,6 +1047,74 @@ fn message_paths(dir: &Path) -> Result<Vec<PathBuf>> {
     }
     paths.sort();
     Ok(paths)
+}
+
+fn inspect_message_record(
+    agent: &AgentId,
+    state: MessageDeliveryState,
+    path: &Path,
+) -> MessageInspectionRecord {
+    let id = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) => {
+            return MessageInspectionRecord {
+                id,
+                state,
+                path: path.to_path_buf(),
+                message: None,
+                error: Some(format!("Failed to read message: {}: {err}", path.display())),
+            };
+        }
+    };
+    let mut message: Message = match toml::from_str(&content) {
+        Ok(message) => message,
+        Err(err) => {
+            return MessageInspectionRecord {
+                id,
+                state,
+                path: path.to_path_buf(),
+                message: None,
+                error: Some(format!(
+                    "Failed to parse message: {}: {err}",
+                    path.display()
+                )),
+            };
+        }
+    };
+
+    let validation = validate_message_file_name(path, &message)
+        .and_then(|()| {
+            message.scope = canonicalize_scope_value(&message.scope)
+                .with_context(|| format!("Message {} has invalid scope", path.display()))?;
+            Ok(())
+        })
+        .and_then(|()| validate_message_for_agent(agent, &message, path))
+        .and_then(|()| {
+            if message.delivery.state == state {
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "Message {} is in inbox/{} but delivery.state is `{}`",
+                    path.display(),
+                    state.directory_name(),
+                    message.delivery.state
+                ))
+            }
+        });
+
+    MessageInspectionRecord {
+        id,
+        state,
+        path: path.to_path_buf(),
+        message: Some(message),
+        error: validation.err().map(|err| format!("{err:#}")),
+    }
 }
 
 fn read_message_for_agent(agent: &AgentId, path: &Path) -> Result<Message> {

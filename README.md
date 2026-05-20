@@ -311,6 +311,12 @@ merge.
   claims deliverable direct-scope messages from `inbox/new` or eligible
   `inbox/retry`, emits hook JSON, and acknowledges them into `inbox/delivered`
   after stdout is written; it is not a separate unread/read lifecycle.
+- `wt msg list --agent <agent>` is the read-only lifecycle inventory. It counts
+  and summarizes `new`, `claimed`, `delivered`, `retry`, and `failed` messages,
+  including claim owner, lease, attempts, scope, and error metadata when present.
+- `wt msg read --agent <agent> <message-id>` reads one retained lifecycle
+  message without claiming or acknowledging it. Pass `--json` to either
+  inspection command for stable machine-readable output.
 
 `wt workflow` is the canonical prepared-work surface. `single`, `batch`,
 `stack`, and `matrix` are workflow mode values, not separate command surfaces. Use

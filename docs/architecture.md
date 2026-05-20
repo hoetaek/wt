@@ -76,10 +76,11 @@ handoff route, but it must not be required for inbox delivery.
 `<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>/<message-id>.toml`.
 It owns message ids, sender and target `AgentId`s, address/scope/delivery TOML
 shape, send-time normalization, state-directory ordering and transitions, and
-hook JSON rendering. It does not own activity logs, status snapshots, agent hook
-install files, runtime process launch, cmux transport, or Workflow/TaskRun state.
-Hook adapters call into `wt msg check-inbox`; they do not define the message
-schema.
+hook JSON rendering. `wt msg list` and `wt msg read` are read-only inspection
+surfaces over the same lifecycle directories. Message state does not own
+activity logs, status snapshots, agent hook install files, runtime process
+launch, cmux transport, or Workflow/TaskRun state. Hook adapters call into
+`wt msg check-inbox`; they do not define the message schema.
 
 Site providers are external services. `SiteConfig` and provider choice live in
 `src/config/`; service dispatch lives in `src/services/site.rs`; provider
