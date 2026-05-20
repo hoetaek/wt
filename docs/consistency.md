@@ -1113,9 +1113,11 @@ patch로 올린다.
 `wt workflow`와 `<git-common-dir>/wt/workflows`로 수렴시키는 변경은 CLI와 상태
 파일 계약을 바꾸므로 patch가 아니라 pre-1.0 minor 변경이다.
 
-다만 version bump는 일반 개발 커밋마다 하지 않는다. `develop`은 기본 개발 브랜치이고,
-`master`는 릴리즈 브랜치다. 릴리즈 PR에서 `Cargo.toml`/`Cargo.lock` version을 한 번만
-올리고, 그 릴리즈에 포함된 변경 중 가장 큰 SemVer 범위를 적용한다. 릴리즈 PR이
+다만 version bump는 일반 개발 커밋마다 하지 않는다. 버전 변경은 릴리즈 작업에서만
+허용하며, 기능/버그/문서/리팩터링 PR은 변경 범위와 무관하게 `Cargo.toml`/`Cargo.lock`
+version을 올리지 않는다. `develop`은 기본 개발 브랜치이고, `master`는 릴리즈 브랜치다.
+릴리즈 PR에서 `Cargo.toml`/`Cargo.lock` version을 한 번만 올리고, 그 릴리즈에 포함된
+변경 중 가장 큰 SemVer 범위를 적용한다. 릴리즈 PR이
 `master`에 merge되고 tag가 생성되면, version bump를 다시 `develop`에 merge해서 두
 브랜치의 기준점을 맞춘다.
 
