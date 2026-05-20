@@ -232,10 +232,13 @@ a future documented policy proves matching TaskRun ownership. Raw recipient addr
 `agents/coordinator`, `WT_COORDINATOR_AGENT_ID`, `coordinator` alias normalization, or
 `correlates_with` is insufficient ownership evidence.
 
-`PostToolUse` polling, push delivery, `wt://` artifact semantics, provider-private Claude/Codex
-runtime integration, and detached supervisor commands are outside this contract slice. Future
-delivery implementations must build on the same address/scope/delivery lifecycle instead of adding
-a second hidden inbox model.
+wt-managed Claude/Codex agent hooks register the same inbox check on both `UserPromptSubmit` and
+`PostToolUse`; both events route through the `wt msg check-inbox` claim → hook JSON → acknowledge
+lifecycle above.
+
+Push delivery, `wt://` artifact semantics, provider-private Claude/Codex runtime integration, and
+detached supervisor commands are outside this contract slice. Future delivery implementations must
+build on the same address/scope/delivery lifecycle instead of adding a second hidden inbox model.
 
 Canonical read-only message lifecycle inspection:
 
@@ -314,8 +317,8 @@ wt agent hook uninstall claude
 ```
 
 이 adapter는 Claude 전용이다. Install은 worktree-local
-`.claude/settings.local.json`에만 `UserPromptSubmit` hook dispatcher를 추가한다. Hook
-command는 runtime env `WT_AGENT_ID`를 읽어 다음 delivery command를 실행하고,
+`.claude/settings.local.json`에만 `UserPromptSubmit`과 `PostToolUse` hook dispatcher를
+추가한다. 두 event의 Hook command는 runtime env `WT_AGENT_ID`를 읽어 다음 delivery command를 실행하고,
 `WT_AGENT_ID`가 없으면 성공으로 조용히 종료한다.
 
 ```bash
@@ -329,10 +332,10 @@ Claude Code가 shell command로 실행할 때 `#` 뒤 marker는 shell comment로
 
 Install은 먼저 per-worktree Git exclude file에 local settings path를 추가한다.
 `.claude`가 `.agents` 같은 repo-local directory로 향하는 symlink라면 symlink path와
-실제 target path를 모두 exclude한다. Reinstall은 wt-managed dispatcher hook을 하나만
-남기는 idempotent operation이다. `--agent <agent>`가 남아 있다면 manual/test override다.
+실제 target path를 모두 exclude한다. Reinstall은 managed event마다 wt-managed dispatcher
+hook을 하나씩만 남기는 idempotent operation이다. `--agent <agent>`가 남아 있다면 manual/test override다.
 이 override는 hook을 특정 agent에 묶으므로 normal run UX의 일부가 아니다. Uninstall은
-wt-managed Claude hook entry만 제거하고, 사용자가 작성한 다른 Claude hook이나 settings key는
+wt-managed Claude hook entry만 managed event별로 제거하고, 사용자가 작성한 다른 Claude hook이나 settings key는
 보존한다. `--agent <agent>` uninstall은 manual/test override entry만 대상으로 한다.
 
 Tracked `.claude/settings.local.json` 또는 symlink target local settings file이 있으면
@@ -350,9 +353,9 @@ wt agent hook uninstall codex
 
 이 adapter는 Codex 전용이다. 현재 Codex는 project-local `.codex/hooks.json` discovery를
 신뢰할 수 없으므로 user-level `$CODEX_HOME/hooks.json` 또는 `~/.codex/hooks.json`에만
-`UserPromptSubmit` hook dispatcher를 추가한다. User-level hook은 특정 agent id에 영구로
-묶이면 안 된다. 기본 hook command는 runtime env `WT_AGENT_ID`를 읽어 다음 delivery command를
-실행하고, `WT_AGENT_ID`가 없으면 성공으로 조용히 종료한다.
+`UserPromptSubmit`과 `PostToolUse` hook dispatcher를 추가한다. User-level hook은 특정 agent
+id에 영구로 묶이면 안 된다. 두 event의 기본 hook command는 runtime env `WT_AGENT_ID`를 읽어
+다음 delivery command를 실행하고, `WT_AGENT_ID`가 없으면 성공으로 조용히 종료한다.
 
 ```bash
 wt msg check-inbox --agent "$WT_AGENT_ID"
@@ -361,8 +364,8 @@ wt msg check-inbox --agent "$WT_AGENT_ID"
 Codex는 user-level custom hook을 실행하기 전에 matching trust state를 요구한다. Install은
 Codex가 쓰는 hook identity와 같은 방식으로 `trusted_hash`를 계산해
 `$CODEX_HOME/config.toml` 또는 `~/.codex/config.toml`의 `[hooks.state]` 아래에 쓴다. Hash
-identity는 event key `user_prompt_submit`, normalized command handler, default timeout
-`600`, `async = false`를 canonical JSON으로 정렬한 뒤 SHA-256으로 계산한다. Install은
+identity는 event key `user_prompt_submit` 또는 `post_tool_use`, normalized command handler,
+default timeout `600`, `async = false`를 canonical JSON으로 정렬한 뒤 SHA-256으로 계산한다. Install은
 `[features].hooks = true`도 보장한다.
 
 `--agent <agent>`가 남아 있다면 manual/test override다. 이 override는 user-level hook을
@@ -430,9 +433,9 @@ file inbox만 검증한다.
 message path를 실제 agent lifecycle에서 관찰하는 추가 검증이지, message transport의 canonical
 요구사항은 아니다.
 
-Reinstall은 wt-managed Codex dispatcher hook을 하나만 남기는 idempotent operation이다.
-Uninstall은 wt-managed Codex `UserPromptSubmit` dispatcher entry와 matching trust state만
-제거한다. `--agent <agent>` uninstall은 manual/test override entry만 대상으로 한다. cmux가
+Reinstall은 managed event마다 wt-managed Codex dispatcher hook을 하나씩만 남기는 idempotent
+operation이다. Uninstall은 wt-managed Codex `UserPromptSubmit`/`PostToolUse` dispatcher entry와
+matching trust state만 제거한다. `--agent <agent>` uninstall은 manual/test override entry만 대상으로 한다. cmux가
 설치한 Codex hook, 사용자가 작성한 다른 Codex hook, 다른 `hooks.state` entry는 보존한다.
 
 ## Canonical Interfaces

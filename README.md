@@ -282,9 +282,9 @@ merge.
   wt-managed inbox hooks. Today that means Claude Code and Codex dispatcher
   hooks. `wt uninstall` removes those wt-managed hooks while preserving
   user-managed hooks, cmux hooks, and unrelated trust state.
-- `wt agent hook install claude` installs a Claude-specific Claude Code
-  `UserPromptSubmit` hook dispatcher in worktree-local
-  `.claude/settings.local.json`. The hook reads `WT_AGENT_ID` at runtime, runs
+- `wt agent hook install claude` installs Claude-specific Claude Code
+  `UserPromptSubmit` and `PostToolUse` hook dispatchers in worktree-local
+  `.claude/settings.local.json`. Each hook reads `WT_AGENT_ID` at runtime, runs
   `wt msg check-inbox --agent "$WT_AGENT_ID"` when it is set, and otherwise
   exits successfully without output. The generated command stores its wt marker
   after `#`, so shell execution treats the marker as a comment rather than as
@@ -292,11 +292,11 @@ merge.
   `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the
   per-run agent by setting `WT_AGENT_ID=agents/<branch_slug>` in the cmux
   `new-workspace --command` string when launching Claude.
-- `wt agent hook install codex` installs a Codex-specific user-level
-  `UserPromptSubmit` hook dispatcher in `$CODEX_HOME/hooks.json` or
-  `~/.codex/hooks.json`. The hook reads `WT_AGENT_ID` at runtime, runs
+- `wt agent hook install codex` installs Codex-specific user-level
+  `UserPromptSubmit` and `PostToolUse` hook dispatchers in `$CODEX_HOME/hooks.json`
+  or `~/.codex/hooks.json`. Each hook reads `WT_AGENT_ID` at runtime, runs
   `wt msg check-inbox --agent "$WT_AGENT_ID"` when it is set, and otherwise
-  exits successfully without output. It also writes the matching trusted hook
+  exits successfully without output. It also writes matching trusted hook
   state to Codex `config.toml`, preserving existing cmux and non-wt hooks/trust
   entries. `--agent <agent>` is only a manual/test override; normal
   `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the
