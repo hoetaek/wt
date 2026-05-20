@@ -1017,6 +1017,11 @@ main {
   background: #fbf6ec;
 }
 
+.detail-fields div.red {
+  border-color: #e6b9b9;
+  background: #fffafa;
+}
+
 .detail-fields dt {
   color: var(--muted);
   font-size: 11px;
@@ -1195,6 +1200,175 @@ main {
 
 .detail-source .source-panel {
   max-height: min(58vh, 560px);
+}
+
+.workflow-relationship-summary {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.relationship-empty {
+  min-height: 66px;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: #fbfcfa;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workflow-relationship-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 9px;
+  align-items: stretch;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.workflow-relationship-row.tone-green {
+  border-left-color: var(--green);
+}
+
+.workflow-relationship-row.tone-blue {
+  border-left-color: var(--blue);
+}
+
+.workflow-relationship-row.tone-amber {
+  border-left-color: var(--amber);
+}
+
+.workflow-relationship-row.tone-red {
+  border-color: #e6b9b9;
+  border-left-color: var(--red);
+  background: #fffafa;
+}
+
+.relationship-rail {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  align-content: start;
+  justify-items: center;
+  padding-top: 3px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.relationship-rail span {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.relationship-rail.is-profile span,
+.relationship-rail.is-peer span,
+.relationship-rail.is-single span {
+  width: 12px;
+  height: 12px;
+  margin-top: 8px;
+  background: var(--line-strong);
+}
+
+.relationship-rail small {
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.relationship-segments {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 1.04fr) minmax(120px, 0.58fr);
+  gap: 7px;
+}
+
+.relationship-segment {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  align-content: start;
+  padding: 8px;
+  border: 1px solid rgba(207, 216, 208, 0.82);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.relationship-segment.tone-blue {
+  border-color: #bad0e4;
+  background: #f5f9fd;
+}
+
+.relationship-segment.tone-green {
+  border-color: #b8d8cb;
+  background: #f4fbf7;
+}
+
+.relationship-segment.tone-amber {
+  border-color: #ead3af;
+  background: #fbf6ec;
+}
+
+.relationship-segment.tone-red {
+  border-color: #e6b9b9;
+  background: #fffafa;
+}
+
+.relationship-segment > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 1.25;
+}
+
+.relationship-segment strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.relationship-meta {
+  align-content: start;
+}
+
+.relationship-path,
+.relationship-error {
+  min-width: 0;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.relationship-path {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.relationship-error {
+  color: var(--red);
+  white-space: pre-wrap;
 }
 
 .jump-nav {
@@ -1707,6 +1881,10 @@ main {
 
   .detail-pane {
     position: static;
+  }
+
+  .relationship-segments {
+    grid-template-columns: 1fr;
   }
 
   .record-aside {

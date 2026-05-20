@@ -892,6 +892,13 @@ group은 linked TaskRun 상태와 runnable metadata에서 파생한 presentation
 Workflow나 TaskDocument에 새 status/column 값을 쓰지 않는다. Parse/validation failure는
 snapshot과 UI에 invalid record로 드러내며, invalid TOML을 조용히 숨기지 않는다.
 
+Workflow detail의 relationship summary도 같은 파생 presentation이다. 행은 Workflow file의
+`[[tasks]]`/`[[tasks.runs]]` 링크, TaskDocument, TaskRun snapshot을 읽어
+`Workflow → TaskDocument → TaskRun → Agent` 관계를 보여주지만 새 TaskDocument, graph node,
+canvas position, agent contact, live agent state를 Workflow/TaskDocument/TaskRun에 저장하지
+않는다. Agent 칸은 durable/현재 관찰 가능한 정보가 없으면 중립적인 not-observed 상태로
+남기고, `TaskRun.status`와 `agent.state`/`agent.status`를 합치지 않는다.
+
 MVP `wt ui`는 write API, drag/drop mutation, 별도 DB, frontend build pipeline, Tauri/Electron,
 arbitrary repo file serving, `.env` 읽기를 추가하지 않는다. `/api/snapshot`은 state-owner
 reader와 config/profile loader를 거쳐 요약 DTO만 만들고, CLI text output을 scrape하지 않는다.
