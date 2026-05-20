@@ -6,7 +6,7 @@ use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::work::{self, WorkSessionState};
 use crate::task_run;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -29,7 +29,6 @@ pub fn watch(
     interval_secs: u64,
     timeout_secs: Option<u64>,
     heartbeat_secs: Option<u64>,
-    record_wait_observations: bool,
 ) -> Result<()> {
     watch_with_options(
         ctx,
@@ -38,7 +37,6 @@ pub fn watch(
             interval: duration_from_secs(interval_secs),
             timeout: timeout_secs.map(duration_from_secs),
             heartbeat: heartbeat_secs.map(duration_from_secs),
-            record_wait_observations,
         },
     )
 }
@@ -64,7 +62,6 @@ fn watch_with_interval(ctx: &Ctx, target: Option<&str>, interval: Duration) -> R
             interval,
             timeout: None,
             heartbeat: None,
-            record_wait_observations: false,
         },
     )
 }
@@ -74,11 +71,9 @@ struct WatchOptions {
     interval: Duration,
     timeout: Option<Duration>,
     heartbeat: Option<Duration>,
-    record_wait_observations: bool,
 }
 
 fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) -> Result<()> {
-    validate_watch_options(options)?;
     let target = resolve_agent_target(ctx, target, "watch")?;
     let started_at = Instant::now();
     let mut last_output_at = started_at;
@@ -108,16 +103,14 @@ fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) ->
         }
 
         if let Some(timeout) = options.timeout.filter(|timeout| elapsed >= *timeout) {
-            if options.record_wait_observations {
-                record_wait_observation(
-                    ctx,
-                    &report,
-                    "timeout",
-                    elapsed,
-                    timeout,
-                    now.duration_since(last_output_at),
-                )?;
-            }
+            record_wait_observation(
+                ctx,
+                &report,
+                "timeout",
+                elapsed,
+                timeout,
+                now.duration_since(last_output_at),
+            )?;
             if ctx.is_json() {
                 print_json_line(&report_with_warning(
                     &report,
@@ -136,16 +129,14 @@ fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) ->
         {
             let unchanged_duration = now.duration_since(last_output_at);
             let heartbeat = options.heartbeat.expect("heartbeat was checked above");
-            if options.record_wait_observations {
-                record_wait_observation(
-                    ctx,
-                    &report,
-                    "heartbeat",
-                    elapsed,
-                    heartbeat,
-                    unchanged_duration,
-                )?;
-            }
+            record_wait_observation(
+                ctx,
+                &report,
+                "heartbeat",
+                elapsed,
+                heartbeat,
+                unchanged_duration,
+            )?;
             if ctx.is_json() {
                 print_json_line(&report)?;
             } else {
@@ -165,16 +156,6 @@ fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) ->
             std::thread::sleep(sleep_duration);
         }
     }
-}
-
-fn validate_watch_options(options: WatchOptions) -> Result<()> {
-    if options.record_wait_observations && options.timeout.is_none() && options.heartbeat.is_none()
-    {
-        bail!(
-            "wt agent watch --record-wait-observations requires --heartbeat or --timeout. Pass an explicit wait bound so wt knows which non-idle waits to record."
-        );
-    }
-    Ok(())
 }
 
 fn duration_from_secs(seconds: u64) -> Duration {
@@ -1234,7 +1215,6 @@ mod tests {
                 interval: Duration::ZERO,
                 timeout: Some(Duration::ZERO),
                 heartbeat: None,
-                record_wait_observations: false,
             },
         )
         .unwrap();
@@ -1248,28 +1228,6 @@ mod tests {
         assert!(dims.contains("Last tool: Bash"));
         assert!(dims.contains("Session: codex-session"));
         assert!(dims.contains("cmux: workspace:1 surface:4"));
-    }
-
-    #[test]
-    fn watch_recording_requires_explicit_wait_bound() {
-        let fixture = Fixture::new();
-        let ctx = fixture.ctx(MockRunner::new(), OutputMode::Text);
-
-        let err = watch_with_options(
-            &ctx,
-            Some("feature"),
-            WatchOptions {
-                interval: Duration::ZERO,
-                timeout: None,
-                heartbeat: None,
-                record_wait_observations: true,
-            },
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(err.contains("--record-wait-observations requires --heartbeat or --timeout"));
-        assert!(err.contains("explicit wait bound"));
     }
 
     #[test]
@@ -1288,7 +1246,6 @@ mod tests {
                 interval: Duration::ZERO,
                 timeout: Some(Duration::ZERO),
                 heartbeat: None,
-                record_wait_observations: true,
             },
         )
         .unwrap();
@@ -1380,7 +1337,6 @@ mod tests {
                 interval: Duration::ZERO,
                 timeout: None,
                 heartbeat: Some(Duration::ZERO),
-                record_wait_observations: false,
             },
         )
         .unwrap();
@@ -1424,7 +1380,6 @@ mod tests {
                 interval: Duration::ZERO,
                 timeout: None,
                 heartbeat: Some(Duration::ZERO),
-                record_wait_observations: true,
             },
         )
         .unwrap();
@@ -1487,7 +1442,6 @@ mod tests {
                 interval: Duration::ZERO,
                 timeout: Some(Duration::ZERO),
                 heartbeat: None,
-                record_wait_observations: true,
             },
         )
         .unwrap();

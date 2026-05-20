@@ -2221,39 +2221,17 @@ fn agent_watch_help_explains_polling_target() {
         .stdout(predicate::str::contains("--interval"))
         .stdout(predicate::str::contains("--timeout"))
         .stdout(predicate::str::contains("--heartbeat"))
-        .stdout(predicate::str::contains("--record-wait-observations"))
+        .stdout(predicate::str::contains("--record-wait-observations").not())
         .stdout(predicate::str::contains(
             "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
         ))
         .stdout(predicate::str::contains(
-            "opt-in write requires --heartbeat or --timeout",
+            "When --timeout or --heartbeat emits a non-idle sample",
         ))
         .stdout(predicate::str::contains("unchanged running observations"))
         .stdout(predicate::str::contains(
             "Omit TARGET in an interactive terminal",
         ));
-}
-
-#[test]
-fn agent_watch_record_wait_observations_requires_bound() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "watch",
-            "feature",
-            "--record-wait-observations",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "--record-wait-observations requires --heartbeat or --timeout",
-        ))
-        .stderr(predicate::str::contains("explicit wait bound"));
 }
 
 #[test]

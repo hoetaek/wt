@@ -269,8 +269,9 @@ merge.
 - `wt agent status [<target>]` observes the current agent/cmux state, and
   `wt agent watch [<target>]` polls it. `wt agent watch` prints state
   transitions by default; `--timeout <seconds>` bounds the wait, and
-  `--heartbeat <seconds>` opts into unchanged running reports. Agent state is
-  separate from `TaskRun.status`.
+  `--heartbeat <seconds>` opts into unchanged running reports. Non-idle
+  heartbeat and timeout samples are recorded under local `agent.state`, which
+  stays separate from `TaskRun.status`.
 - `wt install` scans PATH for supported agent CLIs and installs the matching
   wt-managed inbox hooks. Today that means Claude Code and Codex dispatcher
   hooks. `wt uninstall` removes those wt-managed hooks while preserving

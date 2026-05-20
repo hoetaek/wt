@@ -335,7 +335,7 @@ pub enum AgentCommand {
     },
     /// Poll a task agent's runtime state until it is no longer running, becomes blocked, or reaches a bound
     #[command(
-        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. Add --record-wait-observations to append heartbeat/timeout samples to the local <git-common-dir>/wt/agent.state/wait-observations.jsonl file; this opt-in write requires --heartbeat or --timeout. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
+        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. When --timeout or --heartbeat emits a non-idle sample, wt agent watch appends it to the local <git-common-dir>/wt/agent.state/wait-observations.jsonl file. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
     )]
     Watch {
         /// Branch, worktree path/name, or TaskRun id to watch
@@ -354,13 +354,10 @@ pub enum AgentCommand {
         /// Print unchanged running observations at this positive-second interval
         #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
         heartbeat: Option<u64>,
-        /// Append non-idle heartbeat/timeout samples to local agent.state JSONL
-        #[arg(long)]
-        record_wait_observations: bool,
     },
     /// Summarize recorded non-idle wait observations
     #[command(
-        long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch --record-wait-observations`. This is read-only: it summarizes <git-common-dir>/wt/agent.state/wait-observations.jsonl with count, sum, average, min, max, bucket, and low-cardinality group data; it does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
+        long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch` when heartbeat or timeout samples are emitted. This is read-only: it summarizes <git-common-dir>/wt/agent.state/wait-observations.jsonl with count, sum, average, min, max, bucket, and low-cardinality group data; it does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
     )]
     WaitStats,
     /// Install or uninstall local agent hook adapters
@@ -1168,9 +1165,9 @@ mod tests {
         assert!(help.contains("[TARGET]"));
         assert!(help.contains("--timeout"));
         assert!(help.contains("--heartbeat"));
-        assert!(help.contains("--record-wait-observations"));
+        assert!(!help.contains("--record-wait-observations"));
         assert!(help.contains("<git-common-dir>/wt/agent.state/wait-observations.jsonl"));
-        assert!(help.contains("opt-in write requires --heartbeat or --timeout"));
+        assert!(help.contains("When --timeout or --heartbeat emits a non-idle sample"));
         assert!(help.contains("unchanged running observations"));
         assert!(help.contains("Omit TARGET in an interactive terminal"));
     }
@@ -1215,20 +1212,11 @@ mod tests {
                     interval: 5,
                     timeout: Some(60),
                     heartbeat: Some(10),
-                    record_wait_observations: false,
                 }
             }) if target.as_deref() == Some("feature")
         ));
 
-        let cli = parse(&[
-            "wt",
-            "agent",
-            "watch",
-            "feature",
-            "--heartbeat",
-            "10",
-            "--record-wait-observations",
-        ]);
+        let cli = parse(&["wt", "agent", "watch", "feature", "--heartbeat", "10"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Agent {
@@ -1237,7 +1225,6 @@ mod tests {
                     interval: 2,
                     timeout: None,
                     heartbeat: Some(10),
-                    record_wait_observations: true,
                 }
             }) if target.as_deref() == Some("feature")
         ));
@@ -1251,7 +1238,6 @@ mod tests {
                     interval: 2,
                     timeout: None,
                     heartbeat: None,
-                    record_wait_observations: false,
                 }
             })
         ));

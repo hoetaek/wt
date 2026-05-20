@@ -158,15 +158,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 interval,
                 timeout,
                 heartbeat,
-                record_wait_observations,
-            } => commands::agent::watch(
-                ctx,
-                target.as_deref(),
-                *interval,
-                *timeout,
-                *heartbeat,
-                *record_wait_observations,
-            ),
+            } => commands::agent::watch(ctx, target.as_deref(), *interval, *timeout, *heartbeat),
             AgentCommand::WaitStats => commands::agent::wait_stats(ctx),
             AgentCommand::Hook { command } => match command {
                 AgentHookCommand::Install { command } => match command {

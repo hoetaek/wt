@@ -1157,17 +1157,17 @@ agent kind/state, 마지막 tool/session/event, cmux contact/warning을 compact�
 현재 observation exit-code contract로 종료한다. 따라서 여전히 running이고 blocked/failed가
 아니라면 observable/not blocked인 0으로 끝난다.
 
-`wt agent watch --record-wait-observations`는 opt-in local telemetry write다. 이 flag는
-`--heartbeat`나 `--timeout`처럼 사용자가 명시한 wait bound가 있을 때만 허용하고, bound에
-도달한 순간의 still-running observation만 `<git-common-dir>/wt/agent.state/wait-observations.jsonl`
-에 append-only JSONL sample로 기록한다. idle, needs_input, failed, no_session observation은
-non-idle wait sample을 만들지 않는다. 이 state owner는 `agent.state`이며 runtime observation
-자료일 뿐이므로 TaskRun status, Workflow file, TaskDocument, cmux transport 좌표에 쓰지 않는다.
-sample은 watch 시작 이후의 안정된 `elapsed_seconds`, 사용자가 지정한 heartbeat/timeout bound인
-`bound_seconds`, 마지막 출력 이후 변하지 않은 시간을 나타내는 `unchanged_seconds`를 분리한다.
-sample 기록 때문에 TaskRun을 failed, blocked, done, skipped로 전이하지 않고, `wt agent watch`를
-delivery loop나 detached supervisor로 넓히지 않는다. 명시 flag가 없으면 wait telemetry는
-저장하지 않는다.
+`wt agent watch`는 `--heartbeat`나 `--timeout`으로 non-idle heartbeat/timeout sample을
+emit할 때마다 `<git-common-dir>/wt/agent.state/wait-observations.jsonl`에 append-only JSONL
+sample로 기록한다. 별도 기록 flag, opt-out flag, config key는 없다. idle, needs_input,
+failed, no_session observation은 non-idle wait sample을 만들지 않는다. 이 state owner는
+`agent.state`이며 runtime observation 자료일 뿐이므로 TaskRun status, Workflow file,
+TaskDocument, cmux transport 좌표에 쓰지 않는다. sample은 watch 시작 이후의 안정된
+`elapsed_seconds`, 사용자가 지정한 heartbeat/timeout bound인 `bound_seconds`, 마지막 출력 이후
+변하지 않은 시간을 나타내는 `unchanged_seconds`를 분리한다. sample 기록 때문에 TaskRun을
+failed, blocked, done, skipped로 전이하지 않고, `wt agent watch`를 delivery loop나 detached
+supervisor로 넓히지 않는다. `--heartbeat`와 `--timeout`이 모두 없으면 기록할 heartbeat/timeout
+sample도 없다.
 
 `wt agent wait-stats`는 `<git-common-dir>/wt/agent.state/wait-observations.jsonl`을 읽는
 read-only summary surface다. count, sum, average, min, max, bucket과 `wait_reason`,
