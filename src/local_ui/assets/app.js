@@ -15,6 +15,21 @@ const repoLabel = document.querySelector("#repo-label");
 const languageButton = document.querySelector("#language-toggle");
 const statusRegion = document.querySelector("#status");
 
+const WORKFLOW_CANVAS = {
+  margin: 44,
+  workflowW: 214,
+  workflowH: 112,
+  taskW: 260,
+  taskH: 216,
+  agentW: 144,
+  agentH: 76,
+  matrixRunW: 238,
+  matrixRunH: 140,
+  gapX: 60,
+  gapY: 70,
+  agentGap: 22,
+};
+
 const STRINGS = {
   en: {
     eyebrow: "Read-only personal inventory",
@@ -244,6 +259,44 @@ const STRINGS = {
     taskRunState: "TaskRun status",
     taskDocumentToml: "TaskDocument TOML",
     workflowTaskRuns: "Workflow TaskRuns",
+    workflowRelationships: "Workflow relationship summary",
+    workflowRelationshipPreview: "{workflow} {id} - {taskDocuments} - {taskRuns}",
+    workflowEntityLabel: "Workflow",
+    taskDocumentCountOne: "{count} TaskDocument",
+    taskDocumentCountMany: "{count} TaskDocuments",
+    taskRunCountOne: "{count} TaskRun",
+    taskRunCountMany: "{count} TaskRuns",
+    workflowCanvas: "Workflow canvas",
+    workflowCanvasAria: "Workflow relationship canvas",
+    workflowReadOnly: "Read-only",
+    workflowCanvasFit: "Fit",
+    workflowCanvasCenter: "Center",
+    workflowCanvasSource: "Source",
+    workflowCanvasInspector: "Inspector",
+    workflowCanvasLegend: "Legend",
+    workflowCanvasSolidEdge: "solid: Workflow/task",
+    workflowCanvasDashedEdge: "dashed: Agent observation",
+    workflowCanvasAttentionEdge: "red: missing or invalid link",
+    workflowContainsLabel: "contains",
+    workflowObservedByLabel: "observed by",
+    workflowModeLabel: "mode",
+    workflowBaseLabel: "base",
+    workflowPolicyLabel: "policy",
+    workflowRunnableLabel: "runnable",
+    workflowUpdatedAtLabel: "updated_at",
+    taskDocumentLabel: "TaskDocument",
+    taskRunLabel: "TaskRun",
+    workflowAnchorLabel: "Workflow",
+    agentObservationLabel: "Agent",
+    agentNotObserved: "not observed",
+    missingTaskDocumentLabel: "TaskDocument missing",
+    missingTaskRunLabel: "TaskRun missing",
+    profileLabel: "profile",
+    parentLabel: "parent",
+    stackOrderLabel: "stack order",
+    batchSiblingLabel: "sibling",
+    matrixProfileLabel: "profile run",
+    relationshipEmpty: "No linked task rows",
     unlinkedTaskDocuments: "TaskDocuments without TaskRuns",
     invalidTaskDocuments: "Invalid TaskDocuments",
     workflows: "Workflow",
@@ -512,6 +565,44 @@ const STRINGS = {
     taskRunState: "TaskRun 상태",
     taskDocumentToml: "TaskDocument TOML",
     workflowTaskRuns: "워크플로우의 작업 실행",
+    workflowRelationships: "Workflow 관계 요약",
+    workflowRelationshipPreview: "{workflow} {id} - {taskDocuments} - {taskRuns}",
+    workflowEntityLabel: "Workflow",
+    taskDocumentCountOne: "TaskDocument {count}개",
+    taskDocumentCountMany: "TaskDocument {count}개",
+    taskRunCountOne: "TaskRun {count}개",
+    taskRunCountMany: "TaskRun {count}개",
+    workflowCanvas: "Workflow 캔버스",
+    workflowCanvasAria: "Workflow 관계 캔버스",
+    workflowReadOnly: "읽기 전용",
+    workflowCanvasFit: "맞춤",
+    workflowCanvasCenter: "중앙",
+    workflowCanvasSource: "원본",
+    workflowCanvasInspector: "검사",
+    workflowCanvasLegend: "범례",
+    workflowCanvasSolidEdge: "실선: Workflow/task",
+    workflowCanvasDashedEdge: "점선: Agent 관찰",
+    workflowCanvasAttentionEdge: "빨강: 누락 또는 오류 링크",
+    workflowContainsLabel: "포함",
+    workflowObservedByLabel: "관찰",
+    workflowModeLabel: "mode",
+    workflowBaseLabel: "base",
+    workflowPolicyLabel: "policy",
+    workflowRunnableLabel: "runnable",
+    workflowUpdatedAtLabel: "updated_at",
+    taskDocumentLabel: "TaskDocument",
+    taskRunLabel: "TaskRun",
+    workflowAnchorLabel: "Workflow",
+    agentObservationLabel: "Agent",
+    agentNotObserved: "관찰 없음",
+    missingTaskDocumentLabel: "TaskDocument 누락",
+    missingTaskRunLabel: "TaskRun 누락",
+    profileLabel: "profile",
+    parentLabel: "parent",
+    stackOrderLabel: "stack 순서",
+    batchSiblingLabel: "동시 항목",
+    matrixProfileLabel: "profile 실행",
+    relationshipEmpty: "연결된 작업 행이 없습니다",
     unlinkedTaskDocuments: "TaskRun이 없는 TaskDocument",
     invalidTaskDocuments: "오류 작업문서",
     workflows: "워크플로우",
@@ -569,6 +660,9 @@ languageButton.addEventListener("click", () => {
 
 content.addEventListener("click", handleReadToggle);
 content.addEventListener("click", handleMasterDetailSelection);
+content.addEventListener("click", handleWorkflowCanvasControl);
+content.addEventListener("pointerdown", handleWorkflowCanvasPointerDown);
+content.addEventListener("keydown", handleWorkflowCanvasNodeKeydown);
 content.addEventListener("keydown", handleMasterDetailKeydown);
 
 applyLocale();
@@ -686,6 +780,205 @@ function handleMasterDetailSelection(event) {
     return;
   }
   selectMasterDetailRecord(button.dataset.mdTab, button.dataset.mdRecord, { focusRecord: true });
+}
+
+function handleWorkflowCanvasControl(event) {
+  const control = event.target.closest("[data-workflow-canvas-control]");
+  if (!control || !content.contains(control)) {
+    return;
+  }
+  const canvas = control.closest("[data-workflow-canvas]");
+  const viewport = canvas?.querySelector(".workflow-canvas-viewport");
+  if (!canvas || !viewport) {
+    return;
+  }
+
+  event.preventDefault();
+  const action = control.dataset.workflowCanvasControl;
+  if (action === "fit") {
+    viewport.scrollTo({ left: 0, top: 0, behavior: "smooth" });
+    viewport.focus({ preventScroll: true });
+    return;
+  }
+  if (action === "center") {
+    const anchor = canvas.querySelector(".workflow-canvas-node.is-workflow");
+    if (anchor) {
+      anchor.focus({ preventScroll: true });
+      anchor.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
+    }
+    return;
+  }
+  if (action === "source") {
+    const source = canvas.querySelector(".workflow-canvas-inspector details");
+    const summary = source?.querySelector("summary");
+    if (source) {
+      source.open = true;
+    }
+    if (summary) {
+      summary.focus({ preventScroll: false });
+    }
+  }
+}
+
+function handleWorkflowCanvasPointerDown(event) {
+  if (event.button !== 0) {
+    return;
+  }
+  const node = event.target.closest(".workflow-canvas-node");
+  if (!node || !content.contains(node)) {
+    return;
+  }
+  const plane = node.closest(".workflow-canvas-plane");
+  if (!plane) {
+    return;
+  }
+
+  event.preventDefault();
+  node.focus({ preventScroll: true });
+  const drag = {
+    node,
+    plane,
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startX: workflowCanvasNodeLeft(node),
+    startY: workflowCanvasNodeTop(node),
+  };
+  node.classList.add("is-dragging");
+  node.setPointerCapture?.(event.pointerId);
+  node.addEventListener("pointermove", handleWorkflowCanvasPointerMove);
+  node.addEventListener("pointerup", handleWorkflowCanvasPointerEnd);
+  node.addEventListener("pointercancel", handleWorkflowCanvasPointerEnd);
+  node._workflowCanvasDrag = drag;
+}
+
+function handleWorkflowCanvasPointerMove(event) {
+  const drag = event.currentTarget._workflowCanvasDrag;
+  if (!drag || event.pointerId !== drag.pointerId) {
+    return;
+  }
+  event.preventDefault();
+  const nextX = drag.startX + event.clientX - drag.startClientX;
+  const nextY = drag.startY + event.clientY - drag.startClientY;
+  workflowCanvasMoveNode(drag.node, drag.plane, nextX, nextY, { avoidOverlap: true });
+}
+
+function handleWorkflowCanvasPointerEnd(event) {
+  const node = event.currentTarget;
+  const drag = node._workflowCanvasDrag;
+  if (drag && event.pointerId === drag.pointerId) {
+    node.releasePointerCapture?.(event.pointerId);
+  }
+  node.classList.remove("is-dragging", "is-blocked");
+  node.removeEventListener("pointermove", handleWorkflowCanvasPointerMove);
+  node.removeEventListener("pointerup", handleWorkflowCanvasPointerEnd);
+  node.removeEventListener("pointercancel", handleWorkflowCanvasPointerEnd);
+  delete node._workflowCanvasDrag;
+}
+
+function handleWorkflowCanvasNodeKeydown(event) {
+  const node = event.target.closest(".workflow-canvas-node");
+  if (!node || !content.contains(node)) {
+    return;
+  }
+  const keyMoves = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+  };
+  const move = keyMoves[event.key];
+  if (!move) {
+    return;
+  }
+  const plane = node.closest(".workflow-canvas-plane");
+  if (!plane) {
+    return;
+  }
+  event.preventDefault();
+  const step = event.shiftKey ? 48 : 12;
+  workflowCanvasMoveNode(node, plane, workflowCanvasNodeLeft(node) + move[0] * step, workflowCanvasNodeTop(node) + move[1] * step, { avoidOverlap: true });
+}
+
+function workflowCanvasMoveNode(node, plane, left, top, options = {}) {
+  const next = workflowCanvasClampedPosition(node, plane, left, top);
+  if (options.avoidOverlap && workflowCanvasOverlaps(node, plane, next.left, next.top)) {
+    node.classList.add("is-blocked");
+    return false;
+  }
+  node.classList.remove("is-blocked");
+  node.style.left = `${Math.round(next.left)}px`;
+  node.style.top = `${Math.round(next.top)}px`;
+  workflowCanvasUpdateEdges(plane);
+  return true;
+}
+
+function workflowCanvasClampedPosition(node, plane, left, top) {
+  const maxLeft = Math.max(0, plane.offsetWidth - node.offsetWidth);
+  const maxTop = Math.max(0, plane.offsetHeight - node.offsetHeight);
+  return {
+    left: Math.min(Math.max(0, left), maxLeft),
+    top: Math.min(Math.max(0, top), maxTop),
+  };
+}
+
+function workflowCanvasOverlaps(node, plane, left, top) {
+  const padding = 12;
+  const next = {
+    left: left - padding,
+    right: left + node.offsetWidth + padding,
+    top: top - padding,
+    bottom: top + node.offsetHeight + padding,
+  };
+  return Array.from(plane.querySelectorAll(".workflow-canvas-node")).some((other) => {
+    if (other === node) {
+      return false;
+    }
+    const otherLeft = workflowCanvasNodeLeft(other);
+    const otherTop = workflowCanvasNodeTop(other);
+    const box = {
+      left: otherLeft,
+      right: otherLeft + other.offsetWidth,
+      top: otherTop,
+      bottom: otherTop + other.offsetHeight,
+    };
+    return next.left < box.right && next.right > box.left && next.top < box.bottom && next.bottom > box.top;
+  });
+}
+
+function workflowCanvasUpdateEdges(plane) {
+  const nodesById = new Map(
+    Array.from(plane.querySelectorAll(".workflow-canvas-node[data-workflow-canvas-node]")).map((node) => [node.dataset.workflowCanvasNode, node])
+  );
+  plane.querySelectorAll(".workflow-canvas-edge[data-edge-from][data-edge-to]").forEach((edge) => {
+    const from = nodesById.get(edge.dataset.edgeFrom);
+    const to = nodesById.get(edge.dataset.edgeTo);
+    if (!from || !to) {
+      return;
+    }
+    edge.setAttribute("d", workflowCanvasEdgePath(workflowCanvasElementEdgePoints(from, to)));
+  });
+}
+
+function workflowCanvasElementEdgePoints(from, to) {
+  return workflowCanvasEdgePoints(workflowCanvasElementBox(from), workflowCanvasElementBox(to));
+}
+
+function workflowCanvasElementBox(node) {
+  return {
+    x: workflowCanvasNodeLeft(node),
+    y: workflowCanvasNodeTop(node),
+    w: node.offsetWidth,
+    h: node.offsetHeight,
+  };
+}
+
+function workflowCanvasNodeLeft(node) {
+  return Number.parseFloat(node.style.left || "0") || 0;
+}
+
+function workflowCanvasNodeTop(node) {
+  return Number.parseFloat(node.style.top || "0") || 0;
 }
 
 function handleMasterDetailKeydown(event) {
@@ -1516,8 +1809,9 @@ function invalidProfileMasterDetailRecord(row) {
 function workflowsCockpit(snapshot) {
   const workflows = sortedWorkflows(snapshot.workflows.items);
   const groups = countBy(workflows, workflowUiGroup);
-  const invalid = snapshot.workflows.invalid.map((row) => invalidScanRow(row, t("invalidWorkflows")));
-  const rows = workflows.map(workflowScanRow).concat(invalid);
+  const records = workflows
+    .map(workflowMasterDetailRecord)
+    .concat(snapshot.workflows.invalid.map(invalidWorkflowMasterDetailRecord));
   const attentionCount = (groups.needs_attention || 0) + snapshot.workflows.invalid.length;
   const stats = [
     attentionStat(attentionCount),
@@ -1525,7 +1819,546 @@ function workflowsCockpit(snapshot) {
     { label: t("preparedWorkflows"), value: groups.prepared || 0 },
     { label: t("metricWorkflows"), value: workflows.length },
   ];
-  return cockpitPanel(t("cockpitWorkflowTitle"), t("cockpitWorkflowSubtitle"), stats, t("workflowIndex"), rows, t("noWorkflows"), "workflow-cockpit");
+  return masterDetailPanel({
+    id: "workflow-cockpit",
+    tabKey: "workflows",
+    title: t("cockpitWorkflowTitle"),
+    subtitle: t("cockpitWorkflowSubtitle"),
+    stats,
+    listTitle: t("workflowIndex"),
+    records,
+    emptyText: t("noWorkflows"),
+  });
+}
+
+function workflowMasterDetailRecord(row) {
+  const group = workflowUiGroup(row);
+  const needsAttention = group === "needs_attention";
+  return {
+    id: `workflow-${row.id}`,
+    group: stateLabel(group),
+    tone: needsAttention ? "red" : "",
+    needsAttention,
+    kicker: `Workflow ${row.id}`,
+    listKicker: "",
+    title: row.title,
+    listPills: workflowPills(row, group),
+    summary: row.state_error || workflowRelationshipPreview(row) || row.body_summary || "",
+    pills: workflowPills(row, group),
+    paths: [row.path],
+    summarySectionTitle: t("workflowRelationships"),
+    summaryHtml: workflowRelationshipSummary(row),
+    canvasSectionTitle: t("workflowCanvas"),
+    canvasHtml: workflowCanvasSection(row),
+    fields: workflowFactFields(row),
+    relationshipsSectionTitle: t("sourcePaths"),
+    relationships: workflowSourceFields(row),
+    collapseSources: true,
+    sources: [
+      { label: t("body"), text: row.body, kind: "prose" },
+      { label: t("sourceToml"), text: row.source_text, kind: "source" },
+    ],
+  };
+}
+
+function invalidWorkflowMasterDetailRecord(row) {
+  return {
+    id: `invalid-workflow-${row.key}`,
+    group: t("needsAttention"),
+    tone: "red",
+    needsAttention: true,
+    kicker: t("invalidWorkflows"),
+    listKicker: "",
+    title: row.key,
+    summary: row.error,
+    pills: [pill(t("invalid"), "red")],
+    paths: [row.path],
+    summarySectionTitle: t("needsAttention"),
+    fields: [
+      { label: "Workflow", value: row.key },
+      { label: t("errorLabel"), value: row.error },
+    ],
+    relationshipsSectionTitle: t("sourcePaths"),
+    relationships: [{ label: t("source"), value: row.path, tone: "red" }],
+    collapseSources: true,
+    sources: [{ label: t("sourceToml"), text: [row.error, row.source_text].filter(Boolean).join("\n\n"), kind: "source" }],
+  };
+}
+
+function workflowPills(row, group = workflowUiGroup(row)) {
+  return [
+    pill(stateLabel(group), groupColor(group)),
+    pill(row.mode, "blue"),
+    pill(`${row.task_runs.total} ${t("metricTaskRuns")}`),
+    row.runnable.runnable_count ? pill(`${row.runnable.runnable_count} runnable`, "green") : "",
+    row.task_runs.running ? pill(`${row.task_runs.running} ${stateLabel("running").toLowerCase()}`, "green") : "",
+    row.task_runs.failed ? pill(`${row.task_runs.failed} ${stateLabel("failed").toLowerCase()}`, "red") : "",
+    row.task_runs.missing ? pill(`${row.task_runs.missing} missing`, "red") : "",
+    row.profile ? pill(`${t("profileLabel")} ${row.profile}`, "violet") : "",
+    row.profiles.length ? pill(`${row.profiles.length} profiles`, "violet") : "",
+    pill(`${row.policy.pull_request}/${row.policy.landing}`, "amber"),
+  ];
+}
+
+function workflowRelationshipPreview(row) {
+  const rows = row.relationship_rows || [];
+  if (!rows.length) {
+    return "";
+  }
+  const taskCount = row.mode === "matrix" ? new Set(rows.map((item) => item.task)).size : rows.length;
+  const runCount = rows.length;
+  return tr("workflowRelationshipPreview", {
+    workflow: t("workflowEntityLabel"),
+    id: row.id,
+    taskDocuments: countLabel(taskCount, "taskDocumentCountOne", "taskDocumentCountMany"),
+    taskRuns: countLabel(runCount, "taskRunCountOne", "taskRunCountMany"),
+  });
+}
+
+function countLabel(count, oneKey, manyKey) {
+  return tr(count === 1 ? oneKey : manyKey, { count });
+}
+
+function workflowFactFields(row) {
+  return [
+    { label: "Workflow", value: row.id },
+    { label: t("workflowModeLabel"), value: row.mode },
+    { label: t("workflowBaseLabel"), value: row.base || row.base_mode },
+    { label: t("workflowPolicyLabel"), value: `${row.policy.pull_request}/${row.policy.landing}` },
+    { label: t("workflowRunnableLabel"), value: row.runnable.runnable_count },
+    { label: t("workflowUpdatedAtLabel"), value: row.updated_at },
+    row.profile ? { label: t("profileLabel"), value: row.profile } : null,
+    row.profiles.length ? { label: t("profileLabel"), value: row.profiles.join(", ") } : null,
+    row.state_error ? { label: t("errorLabel"), value: row.state_error, tone: "red" } : null,
+  ].filter(Boolean);
+}
+
+function workflowSourceFields(row) {
+  const fields = [{ label: "Workflow", value: row.path }];
+  const seen = new Set([row.path]);
+  (row.relationship_rows || []).forEach((item) => {
+    const documentPath = item.task_document?.path;
+    if (documentPath && !seen.has(documentPath)) {
+      seen.add(documentPath);
+      fields.push({ label: t("taskDocumentLabel"), value: documentPath });
+    }
+    const runPath = item.task_run?.path || item.task_run_path;
+    if (runPath && !seen.has(runPath)) {
+      seen.add(runPath);
+      fields.push({ label: t("taskRunLabel"), value: runPath, tone: item.task_run_error ? "red" : "" });
+    }
+  });
+  return fields;
+}
+
+function workflowRelationshipSummary(row) {
+  const relationships = row.relationship_rows || [];
+  if (!relationships.length) {
+    return `<div class="relationship-empty">${escapeHtml(t("relationshipEmpty"))}</div>`;
+  }
+  return `<div class="workflow-relationship-summary mode-${escapeHtml(domId(row.mode))}" role="list" aria-label="${escapeHtml(t("workflowRelationships"))}">${relationships.map((item) => workflowRelationshipRow(row, item)).join("")}</div>`;
+}
+
+function workflowRelationshipRow(workflow, item) {
+  const taskRun = item.task_run;
+  const taskDocument = item.task_document;
+  const attention = Boolean(item.task_document_error || item.task_run_error || taskRun?.error || taskRun?.status === "failed");
+  const tone = attention ? "red" : statusColor(taskRun?.status || "waiting");
+  return `<article class="workflow-relationship-row tone-${tone || "neutral"}" role="listitem">${workflowRelationshipRail(workflow, item)}<div class="relationship-segments">${workflowTaskDocumentSegment(item, taskDocument)}${workflowTaskRunSegment(item, taskRun)}${workflowAgentSegment()}</div></article>`;
+}
+
+function workflowRelationshipRail(workflow, item) {
+  if (workflow.mode === "stack") {
+    return `<div class="relationship-rail"><span>${escapeHtml(item.index)}</span><small>${escapeHtml(t("stackOrderLabel"))}</small></div>`;
+  }
+  if (workflow.mode === "matrix") {
+    return `<div class="relationship-rail is-profile"><span aria-hidden="true"></span><small>${escapeHtml(t("matrixProfileLabel"))}</small></div>`;
+  }
+  if (workflow.mode === "batch") {
+    return `<div class="relationship-rail is-peer"><span aria-hidden="true"></span><small>${escapeHtml(t("batchSiblingLabel"))}</small></div>`;
+  }
+  return `<div class="relationship-rail is-single"><span aria-hidden="true"></span><small>${escapeHtml(workflow.mode)}</small></div>`;
+}
+
+function workflowTaskDocumentSegment(item, taskDocument) {
+  const title = taskDocument ? taskDocument.title : t("missingTaskDocumentLabel");
+  const meta = [
+    pill(`task ${taskDocument?.key || item.task}`, "blue"),
+    taskDocument?.branch ? pill(`branch ${taskDocument.branch}`) : "",
+  ];
+  return relationshipSegment({
+    label: t("taskDocumentLabel"),
+    title,
+    meta,
+    path: taskDocument?.path,
+    error: item.task_document_error,
+    tone: taskDocument ? "blue" : "red",
+  });
+}
+
+function workflowTaskRunSegment(item, taskRun) {
+  const title = taskRun ? taskRun.id : (item.run_id || t("missingTaskRunLabel"));
+  const meta = [
+    taskRun ? pill(stateLabel(taskRun.status), statusColor(taskRun.status)) : pill(t("missingTaskRunLabel"), "red"),
+    item.profile ? pill(`${t("profileLabel")} ${item.profile}`, "violet") : "",
+    taskRun?.branch ? pill(`branch ${taskRun.branch}`) : "",
+    item.parent ? pill(`${t("parentLabel")} ${item.parent}`, "violet") : "",
+  ];
+  return relationshipSegment({
+    label: t("taskRunLabel"),
+    title,
+    meta,
+    path: taskRun?.path || item.task_run_path,
+    error: [item.task_run_error, taskRun?.error].filter(Boolean).join("\n"),
+    tone: taskRun ? statusColor(taskRun.status) : "red",
+  });
+}
+
+function workflowAgentSegment() {
+  return relationshipSegment({
+    label: t("agentObservationLabel"),
+    title: t("agentNotObserved"),
+    meta: [],
+    path: "",
+    error: "",
+    tone: "",
+  });
+}
+
+function relationshipSegment({ label: labelText, title, meta, path, error, tone }) {
+  const metaHtml = meta.filter(Boolean).join("");
+  const pathHtml = path ? `<p class="relationship-path">${escapeHtml(path)}</p>` : "";
+  const errorHtml = error ? `<p class="relationship-error">${escapeHtml(error)}</p>` : "";
+  return `<section class="relationship-segment tone-${tone || "neutral"}"><span>${escapeHtml(labelText)}</span><strong>${escapeHtml(title)}</strong>${metaHtml ? `<div class="relationship-meta meta">${metaHtml}</div>` : ""}${pathHtml}${errorHtml}</section>`;
+}
+
+function workflowCanvasSection(row) {
+  const graph = workflowCanvasGraph(row);
+  if (!graph) {
+    return "";
+  }
+  const planeStyle = `style="width:${graph.width}px;height:${graph.height}px"`;
+  const controls = ["fit", "center", "source"]
+    .map((action) => {
+      const key = action === "fit" ? "workflowCanvasFit" : action === "center" ? "workflowCanvasCenter" : "workflowCanvasSource";
+      return `<button type="button" class="workflow-canvas-control" data-workflow-canvas-control="${action}">${escapeHtml(t(key))}</button>`;
+    })
+    .join("");
+  return `<div class="workflow-canvas mode-${escapeHtml(domId(row.mode))}" data-workflow-canvas><div class="workflow-canvas-shell"><div class="workflow-canvas-frame"><div class="workflow-canvas-toolbar"><span class="workflow-canvas-badge">${escapeHtml(t("workflowReadOnly"))}</span><div class="workflow-canvas-controls">${controls}</div></div><div class="workflow-canvas-viewport" tabindex="0" aria-label="${escapeHtml(t("workflowCanvasAria"))}"><div class="workflow-canvas-plane" ${planeStyle}>${workflowCanvasEdges(row, graph)}${graph.nodes.map(workflowCanvasNode).join("")}</div></div></div>${workflowCanvasInspector(row)}</div></div>`;
+}
+
+function workflowCanvasGraph(row) {
+  const relationships = row.relationship_rows || [];
+  if (!relationships.length) {
+    return null;
+  }
+  if (row.mode === "matrix") {
+    return workflowMatrixCanvasGraph(row, relationships);
+  }
+  if (row.mode === "batch") {
+    return workflowBatchCanvasGraph(row, relationships);
+  }
+  if (row.mode === "stack") {
+    return workflowStackCanvasGraph(row, relationships);
+  }
+  return workflowSingleCanvasGraph(row, relationships);
+}
+
+function workflowStackCanvasGraph(row, relationships) {
+  const c = WORKFLOW_CANVAS;
+  const nodes = [];
+  const edges = [];
+  const taskStartX = c.margin + c.workflowW + c.gapX;
+  const taskY = 44;
+  const agentY = taskY + c.taskH + c.agentGap;
+  const workflowY = taskY + 36;
+  nodes.push(workflowCanvasWorkflowNode(row, c.margin, workflowY));
+
+  relationships.forEach((item, index) => {
+    const taskX = taskStartX + index * (c.taskW + c.gapX);
+    const taskNode = workflowCanvasTaskNode(item, index, taskX, taskY);
+    const agentNode = workflowCanvasAgentNode(item, index, taskX + (c.taskW - c.agentW) / 2, agentY);
+    nodes.push(taskNode, agentNode);
+    edges.push(workflowCanvasEdge(index === 0 ? "workflow" : `task-${index - 1}`, taskNode.id, index === 0 ? t("workflowContainsLabel") : t("parentLabel"), index === 0 ? "solid" : "parent"));
+    edges.push(workflowCanvasEdge(taskNode.id, agentNode.id, t("workflowObservedByLabel"), "dashed"));
+  });
+
+  return workflowCanvasResolveGraph(nodes, edges, {
+    width: Math.max(720, taskStartX + relationships.length * c.taskW + Math.max(0, relationships.length - 1) * c.gapX + c.margin),
+    height: agentY + c.agentH + c.margin,
+  });
+}
+
+function workflowBatchCanvasGraph(row, relationships) {
+  const c = WORKFLOW_CANVAS;
+  const nodes = [];
+  const edges = [];
+  const taskStartX = c.margin + c.workflowW + c.gapX;
+  const columns = Math.min(3, Math.max(1, relationships.length));
+  const laneH = c.taskH + c.agentGap + c.agentH + c.gapY;
+  const rows = Math.ceil(relationships.length / columns);
+  const height = Math.max(330, c.margin * 2 + rows * laneH - c.gapY);
+  nodes.push(workflowCanvasWorkflowNode(row, c.margin, Math.round(height / 2 - c.workflowH / 2)));
+
+  relationships.forEach((item, index) => {
+    const col = index % columns;
+    const rowIndex = Math.floor(index / columns);
+    const taskX = taskStartX + col * (c.taskW + c.gapX);
+    const taskY = c.margin + rowIndex * laneH;
+    const taskNode = workflowCanvasTaskNode(item, index, taskX, taskY);
+    const agentNode = workflowCanvasAgentNode(item, index, taskX + (c.taskW - c.agentW) / 2, taskY + c.taskH + c.agentGap);
+    nodes.push(taskNode, agentNode);
+    edges.push(workflowCanvasEdge("workflow", taskNode.id, t("workflowContainsLabel"), "solid"));
+    edges.push(workflowCanvasEdge(taskNode.id, agentNode.id, t("workflowObservedByLabel"), "dashed"));
+  });
+
+  return workflowCanvasResolveGraph(nodes, edges, {
+    width: Math.max(720, taskStartX + columns * c.taskW + Math.max(0, columns - 1) * c.gapX + c.margin),
+    height,
+  });
+}
+
+function workflowMatrixCanvasGraph(row, relationships) {
+  const c = WORKFLOW_CANVAS;
+  const nodes = [];
+  const edges = [];
+  const documentX = c.margin + c.workflowW + c.gapX;
+  const runStartX = documentX + c.taskW + c.gapX;
+  const columns = relationships.length <= 3 ? relationships.length : 2;
+  const safeColumns = Math.max(1, columns);
+  const laneH = c.matrixRunH + c.agentGap + c.agentH + c.gapY;
+  const rows = Math.ceil(relationships.length / safeColumns);
+  const height = Math.max(360, c.margin * 2 + rows * laneH - c.gapY);
+  const docItem = relationships.find((item) => item.task_document) || relationships[0];
+  const docNode = workflowCanvasMatrixDocumentNode(docItem, 0, documentX, Math.round(height / 2 - 64));
+  nodes.push(workflowCanvasWorkflowNode(row, c.margin, Math.round(height / 2 - c.workflowH / 2)), docNode);
+  edges.push(workflowCanvasEdge("workflow", docNode.id, t("workflowContainsLabel"), "solid"));
+
+  relationships.forEach((item, index) => {
+    const col = index % safeColumns;
+    const rowIndex = Math.floor(index / safeColumns);
+    const runX = runStartX + col * (c.matrixRunW + c.gapX);
+    const runY = c.margin + rowIndex * laneH;
+    const runNode = workflowCanvasMatrixRunNode(item, index, runX, runY);
+    const agentNode = workflowCanvasAgentNode(item, index, runX + (c.matrixRunW - c.agentW) / 2, runY + c.matrixRunH + c.agentGap);
+    nodes.push(runNode, agentNode);
+    edges.push(workflowCanvasEdge(docNode.id, runNode.id, item.profile || t("matrixProfileLabel"), "solid"));
+    edges.push(workflowCanvasEdge(runNode.id, agentNode.id, t("workflowObservedByLabel"), "dashed"));
+  });
+
+  return workflowCanvasResolveGraph(nodes, edges, {
+    width: Math.max(900, runStartX + safeColumns * c.matrixRunW + Math.max(0, safeColumns - 1) * c.gapX + c.margin),
+    height,
+  });
+}
+
+function workflowSingleCanvasGraph(row, relationships) {
+  const c = WORKFLOW_CANVAS;
+  const nodes = [];
+  const edges = [];
+  const taskStartX = c.margin + c.workflowW + c.gapX;
+  const laneH = c.taskH + c.agentGap + c.agentH + c.gapY;
+  const height = Math.max(320, c.margin * 2 + relationships.length * laneH - c.gapY);
+  nodes.push(workflowCanvasWorkflowNode(row, c.margin, Math.round(height / 2 - c.workflowH / 2)));
+
+  relationships.forEach((item, index) => {
+    const taskX = taskStartX;
+    const taskY = c.margin + index * laneH;
+    const taskNode = workflowCanvasTaskNode(item, index, taskX, taskY);
+    const agentNode = workflowCanvasAgentNode(item, index, taskX + c.taskW + c.gapX, taskY + Math.round((c.taskH - c.agentH) / 2));
+    nodes.push(taskNode, agentNode);
+    edges.push(workflowCanvasEdge("workflow", taskNode.id, t("workflowContainsLabel"), "solid"));
+    edges.push(workflowCanvasEdge(taskNode.id, agentNode.id, t("workflowObservedByLabel"), "dashed"));
+  });
+
+  return workflowCanvasResolveGraph(nodes, edges, {
+    width: Math.max(720, taskStartX + c.taskW + c.gapX + c.agentW + c.margin),
+    height,
+  });
+}
+
+function workflowCanvasWorkflowNode(row, x, y) {
+  return { id: "workflow", kind: "workflow", row, x, y, w: WORKFLOW_CANVAS.workflowW, h: WORKFLOW_CANVAS.workflowH, tone: workflowNeedsAttention(row) ? "red" : "green" };
+}
+
+function workflowCanvasTaskNode(item, index, x, y) {
+  const attention = workflowRelationshipAttention(item);
+  return { id: `task-${index}`, kind: "task", item, x, y, w: WORKFLOW_CANVAS.taskW, h: WORKFLOW_CANVAS.taskH, tone: attention ? "red" : statusColor(item.task_run?.status || "waiting") };
+}
+
+function workflowCanvasMatrixDocumentNode(item, index, x, y) {
+  const attention = Boolean(item.task_document_error || !item.task_document);
+  return { id: `matrix-document-${index}`, kind: "matrix-document", item, x, y, w: WORKFLOW_CANVAS.taskW, h: WORKFLOW_CANVAS.matrixRunH, tone: attention ? "red" : "blue" };
+}
+
+function workflowCanvasMatrixRunNode(item, index, x, y) {
+  const attention = Boolean(item.task_run_error || item.task_run?.error || item.task_run?.status === "failed" || !item.task_run);
+  return { id: `matrix-run-${index}`, kind: "matrix-run", item, x, y, w: WORKFLOW_CANVAS.matrixRunW, h: WORKFLOW_CANVAS.matrixRunH, tone: attention ? "red" : statusColor(item.task_run?.status || "waiting") };
+}
+
+function workflowCanvasAgentNode(item, index, x, y) {
+  return { id: `agent-${index}`, kind: "agent", item, x, y, w: WORKFLOW_CANVAS.agentW, h: WORKFLOW_CANVAS.agentH, tone: "" };
+}
+
+function workflowCanvasEdge(from, to, labelText, kind) {
+  return { from, to, label: labelText, kind };
+}
+
+function workflowCanvasResolveGraph(nodes, edges, size) {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  return {
+    width: size.width,
+    height: size.height,
+    nodes,
+    edges: edges
+      .map((edge) => {
+        const from = byId.get(edge.from);
+        const to = byId.get(edge.to);
+        if (!from || !to) {
+          return null;
+        }
+        const points = workflowCanvasEdgePoints(from, to);
+        return { ...edge, ...points };
+      })
+      .filter(Boolean),
+  };
+}
+
+function workflowCanvasEdgePoints(from, to) {
+  const horizontal = Math.abs(to.x - from.x) >= Math.abs(to.y - from.y);
+  if (horizontal && to.x >= from.x) {
+    return {
+      x1: from.x + from.w,
+      y1: from.y + from.h / 2,
+      x2: to.x,
+      y2: to.y + to.h / 2,
+    };
+  }
+  return {
+    x1: from.x + from.w / 2,
+    y1: from.y + from.h,
+    x2: to.x + to.w / 2,
+    y2: to.y,
+  };
+}
+
+function workflowCanvasEdges(row, graph) {
+  const markerId = `workflow-canvas-arrow-${domId(row.id)}`;
+  const edgeHtml = graph.edges
+    .map((edge) => {
+      const className = edge.kind === "dashed" ? "is-dashed" : edge.kind === "parent" ? "is-parent" : "is-solid";
+      return `<path class="workflow-canvas-edge ${className}" data-edge-from="${escapeHtml(edge.from)}" data-edge-to="${escapeHtml(edge.to)}" d="${workflowCanvasEdgePath(edge)}" marker-end="url(#${markerId})"></path>`;
+    })
+    .join("");
+  return `<svg class="workflow-canvas-edges" viewBox="0 0 ${graph.width} ${graph.height}" width="${graph.width}" height="${graph.height}" aria-hidden="true"><defs><marker id="${markerId}" viewBox="0 0 12 12" refX="10.5" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 2 2 L 10 6 L 2 10 z"></path></marker></defs>${edgeHtml}</svg>`;
+}
+
+function workflowCanvasEdgePath(edge) {
+  const x1 = Math.round(edge.x1);
+  const y1 = Math.round(edge.y1);
+  const x2 = Math.round(edge.x2);
+  const y2 = Math.round(edge.y2);
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const bend = Math.min(72, Math.max(36, Math.abs(dx) * 0.42));
+    return `M ${x1} ${y1} C ${Math.round(x1 + bend)} ${y1}, ${Math.round(x2 - bend)} ${y2}, ${x2} ${y2}`;
+  }
+  const bend = Math.min(64, Math.max(34, Math.abs(dy) * 0.42));
+  return `M ${x1} ${y1} C ${x1} ${Math.round(y1 + bend)}, ${x2} ${Math.round(y2 - bend)}, ${x2} ${y2}`;
+}
+
+function workflowCanvasNode(node) {
+  const style = `style="left:${Math.round(node.x)}px;top:${Math.round(node.y)}px;width:${Math.round(node.w)}px;height:${Math.round(node.h)}px"`;
+  const classes = `workflow-canvas-node is-${node.kind} tone-${node.tone || "neutral"}`;
+  const labelText = workflowCanvasNodeLabel(node);
+  return `<article class="${classes}" data-workflow-canvas-node="${escapeHtml(node.id)}" tabindex="0" ${style} aria-label="${escapeHtml(labelText)}">${workflowCanvasNodePorts(node)}${workflowCanvasNodeBody(node)}</article>`;
+}
+
+function workflowCanvasNodePorts(node) {
+  if (node.kind === "workflow") {
+    return `<span class="workflow-canvas-port is-output" aria-hidden="true"></span>`;
+  }
+  if (node.kind === "agent") {
+    return `<span class="workflow-canvas-port is-top-input" aria-hidden="true"></span>`;
+  }
+  return `<span class="workflow-canvas-port is-input" aria-hidden="true"></span><span class="workflow-canvas-port is-output" aria-hidden="true"></span><span class="workflow-canvas-port is-bottom-output" aria-hidden="true"></span>`;
+}
+
+function workflowCanvasNodeLabel(node) {
+  if (node.kind === "workflow") {
+    return `Workflow ${node.row.id}`;
+  }
+  if (node.kind === "agent") {
+    return `${t("agentObservationLabel")} ${t("agentNotObserved")}`;
+  }
+  const item = node.item || {};
+  return `${item.task || item.run_id || node.id}`;
+}
+
+function workflowCanvasNodeBody(node) {
+  if (node.kind === "workflow") {
+    const row = node.row;
+    const meta = [
+      pill(row.mode, "blue"),
+      row.base || row.base_mode ? pill(compactText(row.base || row.base_mode, 24)) : "",
+    ].filter(Boolean).join("");
+    return `<div class="workflow-canvas-node-head"><span>${escapeHtml(t("workflowAnchorLabel"))}</span><strong>${escapeHtml(row.title || row.id)}</strong></div><div class="workflow-canvas-meta meta">${meta}</div>`;
+  }
+  if (node.kind === "agent") {
+    return `<div class="workflow-canvas-agent"><span>${escapeHtml(t("agentObservationLabel"))}</span><strong>${escapeHtml(t("agentNotObserved"))}</strong></div>`;
+  }
+  if (node.kind === "matrix-document") {
+    return workflowCanvasDocumentBand(node.item, { standalone: true });
+  }
+  if (node.kind === "matrix-run") {
+    return workflowCanvasRunBand(node.item, { standalone: true });
+  }
+  return `${workflowCanvasDocumentBand(node.item)}${workflowCanvasRunBand(node.item)}`;
+}
+
+function workflowCanvasDocumentBand(item, options = {}) {
+  const taskDocument = item.task_document;
+  const title = taskDocument ? taskDocument.title : t("missingTaskDocumentLabel");
+  const meta = [
+    pill(`task ${compactText(taskDocument?.key || item.task, 24)}`, "blue"),
+    item.profile ? pill(`${t("profileLabel")} ${compactText(item.profile, 18)}`, "violet") : "",
+  ].filter(Boolean).join("");
+  const error = item.task_document_error ? `<p class="workflow-canvas-error">${escapeHtml(item.task_document_error)}</p>` : "";
+  const standalone = options.standalone ? " is-standalone" : "";
+  const tone = taskDocument ? "blue" : "red";
+  return `<section class="workflow-canvas-band is-document tone-${tone}${standalone}"><span>${escapeHtml(t("taskDocumentLabel"))}</span><strong>${escapeHtml(compactText(title, 56))}</strong>${meta ? `<div class="workflow-canvas-meta meta">${meta}</div>` : ""}${error}</section>`;
+}
+
+function workflowCanvasRunBand(item, options = {}) {
+  const taskRun = item.task_run;
+  const title = taskRun ? taskRun.id : (item.run_id || t("missingTaskRunLabel"));
+  const runTone = taskRun ? statusColor(taskRun.status) : "red";
+  const meta = [
+    taskRun ? pill(stateLabel(taskRun.status), statusColor(taskRun.status)) : pill(t("missingTaskRunLabel"), "red"),
+    item.profile ? pill(`${t("profileLabel")} ${compactText(item.profile, 18)}`, "violet") : "",
+  ].filter(Boolean).join("");
+  const error = [item.task_run_error, taskRun?.error].filter(Boolean).join("\n");
+  const errorHtml = error ? `<p class="workflow-canvas-error">${escapeHtml(error)}</p>` : "";
+  const standalone = options.standalone ? " is-standalone" : "";
+  return `<section class="workflow-canvas-band is-run tone-${runTone || "neutral"}${standalone}"><span>${escapeHtml(t("taskRunLabel"))}</span><strong>${escapeHtml(compactText(title, 34))}</strong>${meta ? `<div class="workflow-canvas-meta meta">${meta}</div>` : ""}${errorHtml}</section>`;
+}
+
+function workflowCanvasInspector(row) {
+  const sourceFields = workflowSourceFields(row);
+  const sourceHtml = sourceFields.length
+    ? `<div class="workflow-canvas-source-list">${sourceFields.map((field) => `<p><span>${escapeHtml(field.label)}</span><code>${escapeHtml(field.value)}</code></p>`).join("")}</div>`
+    : "";
+  const facts = detailFields([
+    { label: t("workflowModeLabel"), value: row.mode },
+    { label: t("workflowPolicyLabel"), value: `${row.policy.pull_request}/${row.policy.landing}` },
+    { label: t("workflowRunnableLabel"), value: row.runnable.runnable_count },
+  ]);
+  return `<aside class="workflow-canvas-inspector" aria-label="${escapeHtml(t("workflowCanvasInspector"))}"><h5>${escapeHtml(t("workflowCanvasInspector"))}</h5>${facts}<details><summary>${escapeHtml(t("workflowCanvasSource"))}</summary>${sourceHtml}</details><div class="workflow-canvas-legend"><span>${escapeHtml(t("workflowCanvasLegend"))}</span><p>${escapeHtml(t("workflowCanvasSolidEdge"))}</p><p>${escapeHtml(t("workflowCanvasDashedEdge"))}</p><p>${escapeHtml(t("workflowCanvasAttentionEdge"))}</p></div></aside>`;
+}
+
+function workflowRelationshipAttention(item) {
+  return Boolean(item.task_document_error || item.task_run_error || item.task_run?.error || item.task_run?.status === "failed" || !item.task_document || !item.task_run);
 }
 
 function taskRunsCockpit(snapshot) {
@@ -1690,18 +2523,19 @@ function masterDetailPane(record) {
   const relationshipsHtml = detailFields(record.relationships || []);
   const relationshipBody = [pathsHtml, relationshipsHtml].filter(Boolean).join("");
   const sourceBody = detailSourceBlocks(record.sources || [], { collapsed: record.collapseSources });
-  const summaryBody = [detailCards(record.cards || []), detailFields(record.fields || [])].filter(Boolean).join("");
+  const summaryBody = [detailCards(record.cards || []), record.summaryHtml || "", detailFields(record.fields || [])].filter(Boolean).join("");
   const summarySectionTitle = record.hideSummarySectionTitle ? "" : (record.summarySectionTitle || t("detailSummary"));
   const sourceSectionTitle = record.hideSourceSectionTitle ? "" : (record.sourceSectionTitle || t("sourceContent"));
-  return `<article class="detail-pane tone-${record.tone || "neutral"}" aria-labelledby="${escapeHtml(titleId)}"><header class="detail-header">${kicker}<h3 id="${escapeHtml(titleId)}">${escapeHtml(record.title)}</h3>${summary}<div class="meta">${meta}</div></header>${detailSection(summarySectionTitle, summaryBody)}${detailSection(record.relationshipsSectionTitle || t("detailRelationships"), relationshipBody)}${detailSection(sourceSectionTitle, sourceBody)}</article>`;
+  return `<article class="detail-pane tone-${record.tone || "neutral"}" aria-labelledby="${escapeHtml(titleId)}"><header class="detail-header">${kicker}<h3 id="${escapeHtml(titleId)}">${escapeHtml(record.title)}</h3>${summary}<div class="meta">${meta}</div></header>${detailSection(record.canvasSectionTitle || "", record.canvasHtml || "", "workflow-canvas-detail-section")}${detailSection(summarySectionTitle, summaryBody)}${detailSection(record.relationshipsSectionTitle || t("detailRelationships"), relationshipBody)}${detailSection(sourceSectionTitle, sourceBody)}</article>`;
 }
 
-function detailSection(title, body) {
+function detailSection(title, body, className = "") {
   if (!body) {
     return "";
   }
   const heading = title ? `<h4>${escapeHtml(title)}</h4>` : "";
-  return `<section class="detail-section">${heading}${body}</section>`;
+  const classAttr = className ? ` ${escapeHtml(className)}` : "";
+  return `<section class="detail-section${classAttr}">${heading}${body}</section>`;
 }
 
 function detailFields(fields) {
