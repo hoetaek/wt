@@ -44,6 +44,11 @@ group, error, and timestamps. A missing `group` means direct execution; a
 link makes the run workflow-linked. Workflow mode lives on the workflow, not on
 TaskRun.
 
+TaskDocuments and workflow tasks must carry a planning estimate before launch.
+Until the repo schema explicitly supports a machine field, the estimate belongs
+in the TaskDocument `body` under `Planning:` as `expected duration: <duration>`,
+not as a top-level TOML field.
+
 ## Command Choice
 
 Use `wt run task` when each selected TaskDocument should get its own worktree now:
@@ -83,6 +88,10 @@ when a saved workflow is useful.
 ## Start Rules
 
 - Prefer explicit task keys in scripts; omit keys only for interactive selection.
+- Before launching, inspect the selected TaskDocument bodies or workflow task
+  prompts and confirm every task has `Planning: ... expected duration: ...`.
+  If any task is missing an expected duration, do not start it; return to
+  `wt-ready` or update the TaskDocument body first.
 - Use `--base .` for current branch, `--base <branch>` for an explicit base,
   or bare `--base` for interactive base selection.
 - Direct TaskDocument execution is `wt run task`; use workflow commands only for saved workflow execution.

@@ -328,14 +328,14 @@ for runtime observation.
 ## Coordinator Handoff
 
 Task prompts started by `wt run task` and `wt run workflow` include coordinator
-handoff instructions when cmux coordinates are available. The prompt gives the
-agent a `cmux send --workspace ... --surface ...` report command and a matching
-`cmux send-key ... enter` command. It also gives the coordinator file inbox
-target, where `coordinator` normalizes to `agents/coordinator`. Workflow
-handoffs render the inbox fallback as `wt msg send --scope workflow:<id> --to
-coordinator ...` so workflow supervisors can attribute shared coordinator
-messages to the owning workflow. Direct `wt msg send --to coordinator ...`
-remains a direct/default-scope coordinator message, not workflow-owned delivery.
+handoff instructions. Workflow handoffs give the agent the scoped coordinator
+file inbox target, `wt msg send --scope workflow:<id> --to coordinator ...`,
+where `coordinator` normalizes to `agents/coordinator`, so workflow supervisors
+can attribute shared coordinator messages to the owning workflow. The prompt
+also includes fallback cmux coordinates with a `cmux send --workspace ...
+--surface ...` report command and a matching `cmux send-key ... enter` command.
+Direct `wt msg send --to coordinator ...` remains a direct/default-scope
+coordinator message, not workflow-owned delivery.
 
 Workflow supervisors may claim shared `agents/coordinator` inbox messages only
 when the message has explicit matching workflow scope. The recipient address,

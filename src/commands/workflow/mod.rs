@@ -418,14 +418,16 @@ cli = "none"
         assert!(content.contains("## Workflow Coordinator Handoff"));
         assert!(content.contains("Workflow policy sets `pull_request = \"none\"`"));
         assert!(content.contains("PR=none"));
-        assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
-        assert!(content.contains("{{coordinator_enter_command}}"));
-        assert!(content.contains("file inbox target `coordinator`"));
+        assert!(content.contains("coordinator inbox"));
+        assert!(content.contains("wt msg send --scope workflow:test --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
         assert!(content.contains("normalizes to `agents/coordinator`"));
         assert!(content.contains("explicit workflow scope `workflow:test`"));
         assert!(content.contains("Workflow supervisors may claim shared `agents/coordinator` inbox messages only when this explicit workflow scope matches."));
-        assert!(content.contains("wt msg send --scope workflow:test --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("If the file inbox route is unavailable"));
+        assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains("If neither coordinator route is available"));
+        assert_inbox_route_precedes_cmux_fallback(content);
         assert!(content.contains("wt workflow complete"));
         assert!(!content.contains("--run-next"));
     }
@@ -436,9 +438,16 @@ cli = "none"
         );
     }
 
-    fn assert_workflow_send_command_precedes_policy(content: &str) {
+    fn assert_inbox_route_precedes_cmux_fallback(content: &str) {
         assert!(
-            content.find("cmux send --workspace").unwrap()
+            content.find("wt msg send --scope workflow:").unwrap()
+                < content.find("fallback cmux surface").unwrap()
+        );
+    }
+
+    fn assert_workflow_inbox_command_precedes_policy(content: &str) {
+        assert!(
+            content.find("wt msg send --scope workflow:").unwrap()
                 < content
                     .find("Workflow policy sets")
                     .unwrap_or(content.len())
@@ -1823,7 +1832,8 @@ landing = "auto"
 
         assert!(content.contains("## Workflow Coordinator Handoff"));
         assert_workflow_handoff_precedes_task_body(&content, "title = \"API\"");
-        assert_workflow_send_command_precedes_policy(&content);
+        assert_workflow_inbox_command_precedes_policy(&content);
+        assert_inbox_route_precedes_cmux_fallback(&content);
         assert!(content.contains("Workflow policy sets `pull_request = \"draft\"`"));
         assert!(content.contains("against the workflow parent branch"));
         assert!(content.contains("gh pr create --draft --body-file <pr-body-file> --base PROJ-1"));
@@ -1944,7 +1954,9 @@ landing = "auto"
         assert_report_only_workflow_handoff(&content);
         assert_workflow_handoff_precedes_task_body(&content, "title = \"API\"");
         assert!(
-            content.find("cmux send --workspace").unwrap()
+            content
+                .find("wt msg send --scope workflow:test --to coordinator")
+                .unwrap()
                 < content.find("title = \"API\"").unwrap()
         );
     }
@@ -2119,6 +2131,24 @@ landing = "auto"
         let content = workflow_batch_task_prompt_content("title = \"API\"\n");
 
         assert_report_only_workflow_handoff(&content);
+    }
+
+    #[test]
+    fn workflow_matrix_prompt_includes_report_only_coordinator_handoff() {
+        let row = WorkflowTask::new("task", "run-task");
+        let content = workflow_matrix_task_handoff_section(
+            Path::new("/repo/.git/wt/workflows/test.toml"),
+            &row,
+            "alpha",
+            &test_workflow_policy(WorkflowPullRequestMode::None),
+            "main",
+            &[],
+        );
+
+        assert_report_only_workflow_handoff(&content);
+        assert!(
+            content.contains("wt workflow complete /repo/.git/wt/workflows/test.toml task:alpha")
+        );
     }
 
     #[test]

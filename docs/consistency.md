@@ -990,6 +990,13 @@ group은 linked TaskRun 상태와 runnable metadata에서 파생한 presentation
 Workflow나 TaskDocument에 새 status/column 값을 쓰지 않는다. Parse/validation failure는
 snapshot과 UI에 invalid record로 드러내며, invalid TOML을 조용히 숨기지 않는다.
 
+Workflow detail의 relationship summary와 secondary canvas view도 같은 파생 presentation이다.
+행과 canvas node는 Workflow file의 `[[tasks]]`/`[[tasks.runs]]` 링크, TaskDocument, TaskRun
+snapshot을 읽어 `Workflow → TaskDocument → TaskRun → Agent` 관계를 보여주지만 새 TaskDocument,
+graph node, canvas position, agent contact, live agent state를 Workflow/TaskDocument/TaskRun에
+저장하지 않는다. Agent 칸은 durable/현재 관찰 가능한 정보가 없으면 중립적인 not-observed
+상태로 남기고, `TaskRun.status`와 `agent.state`/`agent.status`를 합치지 않는다.
+
 MVP `wt ui`는 write API, drag/drop mutation, 별도 DB, frontend build pipeline, Tauri/Electron,
 arbitrary repo file serving, `.env` 읽기를 추가하지 않는다. `/api/snapshot`은 state-owner
 reader와 config/profile loader를 거쳐 요약 DTO만 만들고, CLI text output을 scrape하지 않는다.
@@ -1002,30 +1009,31 @@ Workspace label은 저장 상태가 아니라 현재 실행을 찾기 위한 표
 contract에 포함하지 않는다.
 
 `wt run task` coordinator handoff는 즉시 TaskDocument 실행 handoff다. `wt run task`가
-시작하는 prompt에는 `Task Run Coordinator Handoff` section이 포함되고, 현재 coordinator
-cmux workspace/surface 좌표로 렌더링되는 `cmux send`와 `cmux send-key ... enter` 명령이
-들어간다. 같은 section은 file inbox fallback으로 `wt msg send --to coordinator ...`도
-포함한다. `coordinator`는 `agents/coordinator`로 normalize되는 예약된 local target이다.
+시작하는 prompt에는 `Task Run Coordinator Handoff` section이 포함되고, 기본 보고 route인
+`wt msg send --to coordinator ...` 명령이 먼저 들어간다. `coordinator`는
+`agents/coordinator`로 normalize되는 예약된 local target이다. 같은 section은 fallback으로
+현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
+`cmux send-key ... enter` 명령도 포함한다.
 이것은 Workflow orchestration이나 completion command가 아니다. Task-run agent는
 `PR=none`인 `Agent Completion Report`를 coordinator에게 보내고, coordinator가 review,
 landing, cleanup을 명시적으로 처리할 때까지 기다린다. 좌표는 현재 transport 정보일 뿐이므로
-TaskDocument나 TaskRun에 저장하지 않는다. cmux 좌표가 unavailable 또는 stale이면 agent는
-coordinator inbox로 같은 보고를 보내고, 둘 다 unavailable이면 task session에 남기고
-기다린다. Handoff section과 그 안의 cmux/inbox report 명령은 긴 TaskDocument 본문과
+TaskDocument나 TaskRun에 저장하지 않는다. file inbox route가 unavailable이면 agent는
+cmux fallback으로 같은 보고를 보내고, 둘 다 unavailable이면 task session에 남기고
+기다린다. Handoff section과 그 안의 inbox/cmux report 명령은 긴 TaskDocument 본문과
 분리된 첫 prompt로 먼저 보내서 terminal prompt가 축약되어도 coordinator route가 앞쪽에
 남게 한다.
 
 Workflow coordinator handoff는 `stack` 전용 개념이 아니라 `wt run workflow`가 시작하는
 모든 task prompt의 계약이다. Prompt에는 `Workflow Coordinator Handoff` section이 포함되고,
-현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
-`cmux send-key ... enter` 명령이 들어간다. 같은 section은 file inbox fallback으로
-`wt msg send --scope workflow:<workflow-id> --to coordinator ...`를 포함한다. 이 explicit
-workflow scope가 shared `agents/coordinator` inbox message의 workflow ownership이다. 이 좌표와
-inbox target은 현재 transport 정보일 뿐이므로 Workflow file, TaskRun, TaskDocument에 저장하지
-않는다. cmux 좌표가
-unavailable 또는 stale이면 agent는 coordinator inbox로 같은 `Agent Completion Report`를
-보내고, 둘 다 unavailable이면 task session에 남기고 기다린다. Handoff section과 그 안의
-cmux/inbox report 명령은 긴 TaskDocument 본문과 분리된 첫 prompt로 먼저 보내서 terminal
+기본 보고 route인 `wt msg send --scope workflow:<workflow-id> --to coordinator ...` 명령이
+먼저 들어간다. 이 explicit workflow scope가 shared `agents/coordinator` inbox message의
+workflow ownership이다. 같은 section은 fallback으로 현재 coordinator cmux workspace/surface
+좌표로 렌더링되는 `cmux send`와 `cmux send-key ... enter` 명령도 포함한다. 이 inbox
+target과 좌표는 현재 transport 정보일 뿐이므로 Workflow file, TaskRun, TaskDocument에
+저장하지 않는다. file inbox route가 unavailable이면 agent는 cmux fallback으로 같은
+`Agent Completion Report`를 보내고, 둘 다 unavailable이면 task session에 남기고 기다린다.
+Handoff section과 그 안의 inbox/cmux report 명령은 긴 TaskDocument 본문과 분리된 첫
+prompt로 먼저 보내서 terminal
 prompt가 축약되어도 coordinator route가 앞쪽에 남게 한다.
 사용자 정의 `[agent.prompt.workflow]` prompt가 있으면 이 built-in handoff와 TaskDocument
 snapshot 뒤, 기존 `issue`/`branch` setup-mode prompt 앞에 보낸다.
@@ -1213,9 +1221,11 @@ patch로 올린다.
 `wt workflow`와 `<git-common-dir>/wt/workflows`로 수렴시키는 변경은 CLI와 상태
 파일 계약을 바꾸므로 patch가 아니라 pre-1.0 minor 변경이다.
 
-다만 version bump는 일반 개발 커밋마다 하지 않는다. `develop`은 기본 개발 브랜치이고,
-`master`는 릴리즈 브랜치다. 릴리즈 PR에서 `Cargo.toml`/`Cargo.lock` version을 한 번만
-올리고, 그 릴리즈에 포함된 변경 중 가장 큰 SemVer 범위를 적용한다. 릴리즈 PR이
+다만 version bump는 일반 개발 커밋마다 하지 않는다. 버전 변경은 릴리즈 작업에서만
+허용하며, 기능/버그/문서/리팩터링 PR은 변경 범위와 무관하게 `Cargo.toml`/`Cargo.lock`
+version을 올리지 않는다. `develop`은 기본 개발 브랜치이고, `master`는 릴리즈 브랜치다.
+릴리즈 PR에서 `Cargo.toml`/`Cargo.lock` version을 한 번만 올리고, 그 릴리즈에 포함된
+변경 중 가장 큰 SemVer 범위를 적용한다. 릴리즈 PR이
 `master`에 merge되고 tag가 생성되면, version bump를 다시 `develop`에 merge해서 두
 브랜치의 기준점을 맞춘다.
 
