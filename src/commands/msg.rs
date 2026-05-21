@@ -5,7 +5,6 @@ use crate::messages::{
 };
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use std::collections::HashSet;
 use std::env;
 use std::io::Write;
 
@@ -160,22 +159,16 @@ fn coordinator_alias_error() -> &'static str {
     "The `coordinator` alias requires WT_COORDINATOR_AGENT_ID. Run `wt coord use <id>` in the coordinator shell or enable ambient binding with `eval \"$(wt shell-init zsh)\"`."
 }
 
-fn inbox_agents_from_context(ctx: &Ctx) -> Result<Vec<String>> {
-    let mut seen = HashSet::new();
+fn inbox_agents_from_context(_ctx: &Ctx) -> Result<Vec<String>> {
     let mut agents = Vec::new();
     match env::var("WT_AGENT_ID") {
         Ok(value) => {
-            if !value.is_empty() && seen.insert(value.clone()) {
+            if !value.is_empty() {
                 agents.push(value);
             }
         }
         Err(env::VarError::NotPresent) => {}
         Err(env::VarError::NotUnicode(_)) => bail!("Invalid WT_AGENT_ID: value is not Unicode"),
-    }
-    if let Some(value) = ctx.coordinator_agent_id.as_deref() {
-        if !value.is_empty() && seen.insert(value.to_string()) {
-            agents.push(value.to_string());
-        }
     }
     Ok(agents)
 }

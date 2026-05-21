@@ -2012,7 +2012,7 @@ fn msg_check_inbox_without_agent_uses_wt_agent_id_env() {
 }
 
 #[test]
-fn msg_check_inbox_without_agent_checks_runtime_and_coordinator_env_ids() {
+fn msg_check_inbox_without_agent_uses_only_runtime_agent_id() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -2058,25 +2058,28 @@ fn msg_check_inbox_without_agent_checks_runtime_and_coordinator_env_ids() {
         .unwrap()
         .lines()
         .collect::<Vec<_>>();
-    assert_eq!(lines.len(), 2);
-    let contexts = lines
-        .iter()
-        .map(|line| {
-            let value: serde_json::Value = serde_json::from_str(line).unwrap();
-            value["hookSpecificOutput"]["additionalContext"]
-                .as_str()
-                .unwrap()
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-    assert!(contexts[0].contains("WT INBOX for agents/codex: 1 new message"));
-    assert!(contexts[0].contains("runtime message"));
-    assert!(contexts[1].contains("WT INBOX for agents/coordinator: 1 new message"));
-    assert!(contexts[1].contains("coordinator message"));
+    assert_eq!(lines.len(), 1);
+    let value: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/codex: 1 new message"));
+    assert!(context.contains("runtime message"));
+    assert!(!context.contains("coordinator message"));
+
+    let messages_root = temp.path().join(".git/wt/messages/agents");
+    assert_eq!(
+        toml_files(&messages_root.join("codex/inbox/delivered")).len(),
+        1
+    );
+    assert_eq!(
+        toml_files(&messages_root.join("coordinator/inbox/new")).len(),
+        1
+    );
 }
 
 #[test]
-fn msg_check_inbox_without_agent_deduplicates_matching_env_ids() {
+fn msg_check_inbox_without_agent_delivers_coordinator_when_runtime_agent_matches() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 

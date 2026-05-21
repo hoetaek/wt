@@ -282,13 +282,15 @@ inbox state and is active only for shells that explicitly set `WT_COORDINATOR_AG
 Canonical hook compatibility delivery:
 
 ```bash
-wt msg check-inbox --agent agents/codex
+wt msg check-inbox
 ```
 
-`check-inbox` exits successfully with no output when there are no deliverable messages for its
-recipient. Before rendering hook output it reclaims expired leases according to the delivery
-lifecycle policy, claims deliverable messages from `inbox/new` or eligible `inbox/retry`, prints
-JSON containing `hookSpecificOutput.additionalContext`, and acknowledges the claims into
+Without `--agent`, `check-inbox` reads only `WT_AGENT_ID` and exits successfully with no output when
+there is no runtime agent id or no deliverable message for that agent. `WT_COORDINATOR_AGENT_ID` is
+not an implicit receive binding for workers; it only resolves the `coordinator` alias at explicit
+CLI surfaces. Before rendering hook output `check-inbox` reclaims expired leases according to the
+delivery lifecycle policy, claims deliverable messages from `inbox/new` or eligible `inbox/retry`,
+prints JSON containing `hookSpecificOutput.additionalContext`, and acknowledges the claims into
 `inbox/delivered/` only after stdout is written successfully. Active non-expired claims remain owned
 by their current claimant. This command is a compatibility consumer for agent hooks, not a separate
 unread/read lifecycle.
