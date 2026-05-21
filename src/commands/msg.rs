@@ -156,7 +156,7 @@ fn coordinator_agent_from_context(ctx: &Ctx) -> Result<AgentId> {
 }
 
 fn coordinator_alias_error() -> &'static str {
-    "The `coordinator` alias requires WT_COORDINATOR_AGENT_ID. Run `wt coord use <id>` in the coordinator shell or enable ambient binding with `eval \"$(wt shell-init zsh)\"`."
+    "The `coordinator` alias requires WT_COORDINATOR_AGENT_ID. Run `wt coord use <id>` in the coordinator shell, bind the current session with `eval \"$(wt session set <id>)\"`, or enable ambient binding with `eval \"$(wt shell-init zsh)\"`."
 }
 
 fn inbox_agents_from_context(_ctx: &Ctx) -> Result<Vec<String>> {
@@ -450,6 +450,7 @@ mod tests {
 
         assert!(err.contains("WT_COORDINATOR_AGENT_ID"));
         assert!(err.contains("wt coord use <id>"));
+        assert!(err.contains("wt session set <id>"));
         assert!(err.contains("wt shell-init zsh"));
     }
 

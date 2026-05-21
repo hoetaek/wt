@@ -68,6 +68,14 @@ pub enum Commands {
         #[command(subcommand)]
         command: CoordCommand,
     },
+    /// Declare, clear, or inspect the current session agent identity
+    #[command(
+        long_about = "Declare, clear, or inspect the current session agent identity using the current terminal or agent-session anchor.\n\nUse `eval \"$(wt session set <id>)\"` to bind this shell or agent session to WT_AGENT_ID and WT_COORDINATOR_AGENT_ID while also writing a marker that later wt invocations from the same anchor can resolve."
+    )]
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
     /// Start workspace execution from issue, PR, branch text, task, or workflow
     #[command(
         long_about = "Start workspace execution from issues, pull requests, branch-name text, local TaskDocuments, or saved Workflows.\n\nCanonical start surfaces are `wt run issue`, `wt run pr`, `wt run branch`, `wt run task`, and `wt run workflow`.\n\n`wt run` only starts workspace execution. Cleanup stays under `wt done`, inspection under `wt inspect`, agent observation under `wt agent`, and saved workflow lifecycle actions under `wt workflow`."
@@ -388,6 +396,26 @@ pub enum CoordCommand {
     },
     /// Print unsets for clearing the coordinator identity
     Exit,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum SessionCommand {
+    /// Write a session identity marker and print shell exports
+    #[command(
+        long_about = "Write a session identity marker for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set my-coord)\"`, so the current shell gets WT_AGENT_ID and WT_COORDINATOR_AGENT_ID immediately while later wt invocations from the same anchor can resolve the marker."
+    )]
+    Set {
+        /// Agent id as NAME or agents/NAME
+        id: String,
+    },
+    /// Remove the current session identity marker and print shell unsets
+    Unset,
+    /// Print the current session identity resolution
+    Whoami {
+        /// Emit machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
