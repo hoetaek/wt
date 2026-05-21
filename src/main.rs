@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use wt::cli::{
-    AgentCommand, Cli, ColorMode, Commands, CoordCommand, MsgCommand, TaskCommand, WorkflowCommand,
+    AgentCommand, Cli, ColorMode, Commands, CoordCommand, MsgCommand, SessionCommand, TaskCommand,
+    WorkflowCommand,
 };
 use wt::config::{Config, ConfigSource};
 use wt::context::{Ctx, CtxOptions, OutputMode};
@@ -147,8 +148,30 @@ fn build_ctx(cli: &Cli, command: &Commands) -> Result<(Ctx, ConfigSource)> {
     } else {
         OutputMode::Text
     };
-    let launcher_coordinator_id = launcher_coordinator_id_from_env()?;
-    let coordinator_agent_id = coordinator_agent_id_from_env()?;
+    let ctx_seed = Ctx::new_with_options(
+        repo_root.clone(),
+        invocation_root.clone(),
+        config.clone(),
+        Box::new(RealRunner),
+        Box::new(TerminalUi::with_decoration(false, false)),
+        CtxOptions {
+            base_config: base_config.clone(),
+            config_source: config_source.clone(),
+            storage_root: Some(storage_root.clone()),
+            output_mode,
+            verbosity: cli.verbose,
+            quiet: cli.quiet,
+            launcher_coordinator_id: None,
+            coordinator_agent_id: None,
+        },
+    );
+    let marker = wt::services::identity_locator::resolve_identity(&ctx_seed)
+        .ok()
+        .flatten();
+    let launcher_coordinator_id = launcher_coordinator_id_from_env()?
+        .or_else(|| marker.as_ref().map(|marker| marker.id.clone()));
+    let coordinator_agent_id = coordinator_agent_id_from_env()?
+        .or_else(|| marker.as_ref().map(|marker| marker.id.clone()));
 
     let ctx = Ctx::new_with_options(
         repo_root,
@@ -399,6 +422,9 @@ fn supports_json(command: &Commands) -> bool {
                     command: MsgCommand::List { .. }
                         | MsgCommand::Read { .. }
                         | MsgCommand::CheckInbox { .. },
+                }
+                | Commands::Session {
+                    command: SessionCommand::Whoami { .. },
                 }
                 | Commands::Doctor { .. }
                 | Commands::Profile { .. }

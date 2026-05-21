@@ -732,6 +732,200 @@ fn coord_use_rejects_invalid_ids_without_stdout() {
 }
 
 #[test]
+fn session_set_writes_marker_and_prints_exports() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "session", "set", "my-coord"])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .success()
+        .stdout("export WT_AGENT_ID=agents/my-coord;\nexport WT_COORDINATOR_AGENT_ID=agents/my-coord;\n")
+        .stderr("");
+
+    let files = toml_files(&temp.path().join(".git/wt/sessions"));
+    assert_eq!(files.len(), 1);
+    let content = std::fs::read_to_string(&files[0]).unwrap();
+    let marker: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(marker["id"].as_str(), Some("agents/my-coord"));
+    assert_eq!(marker["anchor_kind"].as_str(), Some("surface"));
+    assert_eq!(marker["anchor_value"].as_str(), Some("surface-1"));
+}
+
+#[test]
+fn session_set_rejects_invalid_ids_without_stdout() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "session", "set", ""])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("Agent id cannot be empty"));
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "agents/foo/bar",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains(
+            "Agent ids must be NAME or agents/NAME",
+        ));
+}
+
+#[test]
+fn session_whoami_reports_marker_and_json() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "my-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .env("CMUX_WORKSPACE_ID", "workspace:1")
+        .assert()
+        .success();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "session", "whoami"])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .env("CMUX_WORKSPACE_ID", "workspace:1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("id: agents/my-coord"))
+        .stdout(predicate::str::contains("source: marker"))
+        .stdout(predicate::str::contains("anchor_kind: surface"))
+        .stdout(predicate::str::contains("anchor_value: surface-1"))
+        .stdout(predicate::str::contains("marker: "))
+        .stdout(predicate::str::contains("cmux_workspace_id: workspace:1"));
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "whoami",
+            "--json",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["id"].as_str(), Some("agents/my-coord"));
+    assert_eq!(value["source"].as_str(), Some("marker"));
+    assert_eq!(value["anchor_kind"].as_str(), Some("surface"));
+    assert_eq!(value["anchor_value"].as_str(), Some("surface-1"));
+    assert!(
+        value["marker_path"]
+            .as_str()
+            .unwrap()
+            .contains(".git/wt/sessions")
+    );
+}
+
+#[test]
+fn session_unset_removes_marker_and_whoami_reports_none() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "my-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .success();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "session", "unset"])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .success()
+        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stderr("");
+
+    assert!(toml_files(&temp.path().join(".git/wt/sessions")).is_empty());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "session", "whoami"])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("id: none"))
+        .stdout(predicate::str::contains("source: none"));
+}
+
+#[test]
+fn msg_send_to_coordinator_alias_resolves_from_session_marker() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "my-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "coordinator",
+            "hello",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "<git-common-dir>/wt/messages/agents/my-coord/inbox/new/",
+        ));
+
+    let inbox = temp.path().join(".git/wt/messages/agents/my-coord/inbox");
+    let files = toml_files(&inbox.join("new"));
+    assert_eq!(files.len(), 1);
+}
+
+#[test]
+fn session_set_help_explains_eval_pattern() {
+    wt_command()
+        .args(["session", "set", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("eval \"$(wt session set <id>)\""));
+}
+
+#[test]
 fn coord_use_help_explains_eval_and_shell_init() {
     wt_command()
         .args(["coord", "use", "--help"])
@@ -1411,6 +1605,7 @@ fn msg_send_to_coordinator_alias_without_env_errors_with_hint() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("wt coord use <id>"))
+        .stderr(predicate::str::contains("wt session set <id>"))
         .stderr(predicate::str::contains("wt shell-init zsh"));
 }
 
