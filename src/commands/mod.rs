@@ -4,6 +4,7 @@ pub mod agent_report;
 pub mod agent_runtime;
 pub mod clean;
 pub mod config;
+pub mod coord;
 pub mod doctor;
 pub mod done;
 pub mod editor;

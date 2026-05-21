@@ -31,7 +31,7 @@ use context::Ctx;
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
     match command {
-        Commands::Version | Commands::Completion { .. } => Ok(()),
+        Commands::Version | Commands::Completion { .. } | Commands::Coord { .. } => Ok(()),
         Commands::DeprecatedIssue { .. } => {
             deprecated_start_command_error("wt issue", "wt run issue")
         }
