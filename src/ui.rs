@@ -9,9 +9,10 @@ const PROMPT_MAX_ROWS: usize = 10;
 const PROMPT_HINT_GAP: usize = 2;
 const PROMPT_SEARCH_SEPARATOR: char = '\x1f';
 const BAR: &str = "│";
-const RADIO_SELECTED: &str = "◉";
+const RADIO_SELECTED: &str = "●";
 const RADIO_UNSELECTED: &str = "○";
 const CHECKBOX_SELECTED: &str = "☑";
+const CHECKBOX_ACTIVE: &str = "◻";
 const CHECKBOX_UNSELECTED: &str = "☐";
 
 pub struct TerminalUi {
@@ -197,7 +198,9 @@ impl Theme for WtPromptTheme {
             ThemeState::Active | ThemeState::Error(_) if selected => {
                 accent_style().apply_to(RADIO_SELECTED)
             }
-            ThemeState::Active | ThemeState::Error(_) => muted_style().apply_to(RADIO_UNSELECTED),
+            ThemeState::Active | ThemeState::Error(_) => {
+                inactive_style().apply_to(RADIO_UNSELECTED)
+            }
             ThemeState::Submit if selected => selected_style().apply_to(RADIO_SELECTED),
             ThemeState::Cancel if selected => muted_style().apply_to(RADIO_SELECTED),
             _ => Style::new().apply_to(""),
@@ -211,10 +214,10 @@ impl Theme for WtPromptTheme {
                 selected_style().apply_to(CHECKBOX_SELECTED)
             }
             ThemeState::Active | ThemeState::Error(_) if active => {
-                accent_style().apply_to(CHECKBOX_UNSELECTED)
+                accent_style().apply_to(CHECKBOX_ACTIVE)
             }
             ThemeState::Active | ThemeState::Error(_) => {
-                muted_style().apply_to(CHECKBOX_UNSELECTED)
+                inactive_style().apply_to(CHECKBOX_UNSELECTED)
             }
             ThemeState::Submit if selected => selected_style().apply_to(CHECKBOX_SELECTED),
             ThemeState::Cancel if selected => muted_style().apply_to(CHECKBOX_SELECTED),
@@ -227,9 +230,10 @@ impl Theme for WtPromptTheme {
         match state {
             ThemeState::Cancel if selected => Style::new().dim().strikethrough(),
             ThemeState::Submit if selected => muted_style(),
-            ThemeState::Active | ThemeState::Error(_) if active => Style::new().bold(),
-            ThemeState::Active | ThemeState::Error(_) if selected => Style::new(),
-            _ => muted_style(),
+            ThemeState::Active | ThemeState::Error(_) if active && selected => selected_style(),
+            ThemeState::Active | ThemeState::Error(_) if active => accent_style(),
+            ThemeState::Active | ThemeState::Error(_) if selected => Style::new().bold(),
+            _ => inactive_style(),
         }
     }
 
@@ -249,11 +253,7 @@ impl Theme for WtPromptTheme {
             state,
             self.bar_color(state),
             self.radio_symbol(state, selected),
-            if selected {
-                Style::new().bold()
-            } else {
-                muted_style()
-            },
+            select_label_style(state, selected),
             label,
             hint,
         )
@@ -293,6 +293,19 @@ fn selected_style() -> Style {
 
 fn muted_style() -> Style {
     Style::new().color256(245)
+}
+
+fn inactive_style() -> Style {
+    Style::new().color256(245).dim()
+}
+
+fn select_label_style(state: &ThemeState, selected: bool) -> Style {
+    match state {
+        ThemeState::Active | ThemeState::Error(_) if selected => accent_style(),
+        ThemeState::Submit if selected => muted_style(),
+        ThemeState::Cancel if selected => Style::new().dim().strikethrough(),
+        _ => inactive_style(),
+    }
 }
 
 fn hint_style(state: &ThemeState) -> Style {
@@ -394,8 +407,30 @@ mod tests {
         console::set_colors_enabled(true);
 
         let plain = strip_ansi_codes(&rendered);
-        assert!(plain.contains("◉  Fix editor"));
+        assert!(plain.contains("●  Fix editor"));
         assert!(plain.contains("task PROJ-123 · Linear"));
+    }
+
+    #[test]
+    fn prompt_theme_gives_active_select_row_a_stronger_plain_marker() {
+        let active = strip_ansi_codes(&WtPromptTheme.format_select_item(
+            &ThemeState::Active,
+            true,
+            "Fix editor",
+            "",
+        ))
+        .into_owned();
+        let inactive = strip_ansi_codes(&WtPromptTheme.format_select_item(
+            &ThemeState::Active,
+            false,
+            "Publish docs",
+            "",
+        ))
+        .into_owned();
+
+        assert!(active.contains("●  Fix editor"));
+        assert!(inactive.contains("○  Publish docs"));
+        assert_ne!(active, inactive);
     }
 
     #[test]
@@ -413,6 +448,43 @@ mod tests {
         let plain = strip_ansi_codes(&rendered);
         assert!(plain.contains("☑  Publish docs"));
         assert!(plain.contains("PROJ-123 · Todo · alice"));
+    }
+
+    #[test]
+    fn prompt_theme_renders_distinct_multiselect_row_states_without_color() {
+        console::set_colors_enabled(false);
+        let selected = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            true,
+            false,
+            "Publish docs",
+            "",
+        ))
+        .into_owned();
+        let active_unselected = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            false,
+            true,
+            "Preview docs",
+            "",
+        ))
+        .into_owned();
+        let inactive_unselected = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            false,
+            false,
+            "Archive docs",
+            "",
+        ))
+        .into_owned();
+        console::set_colors_enabled(true);
+
+        assert!(selected.contains("☑  Publish docs"));
+        assert!(active_unselected.contains("◻  Preview docs"));
+        assert!(inactive_unselected.contains("☐  Archive docs"));
+        assert_ne!(selected, active_unselected);
+        assert_ne!(active_unselected, inactive_unselected);
+        assert_ne!(selected, inactive_unselected);
     }
 
     #[test]
