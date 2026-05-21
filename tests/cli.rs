@@ -649,6 +649,54 @@ fn no_args_prints_help_successfully() {
 }
 
 #[test]
+fn coord_use_prints_exact_exports_without_repo() {
+    wt_command()
+        .args(["coord", "use", "my-coord"])
+        .assert()
+        .success()
+        .stdout("export WT_AGENT_ID=agents/my-coord;\nexport WT_COORDINATOR_AGENT_ID=agents/my-coord;\n")
+        .stderr("");
+}
+
+#[test]
+fn coord_exit_prints_exact_unsets_without_repo() {
+    wt_command()
+        .args(["coord", "exit"])
+        .assert()
+        .success()
+        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stderr("");
+}
+
+#[test]
+fn coord_use_rejects_invalid_ids_without_stdout() {
+    wt_command()
+        .args(["coord", "use", ""])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("Agent id cannot be empty"));
+
+    wt_command()
+        .args(["coord", "use", "foo/bar"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("path-like ids are ambiguous"));
+}
+
+#[test]
+fn coord_use_help_explains_eval_and_shell_init() {
+    wt_command()
+        .args(["coord", "use", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("eval \"$(wt coord use <id>)\""))
+        .stdout(predicate::str::contains("wt shell-init"))
+        .stdout(predicate::str::contains("wt-coord-use my-coord"));
+}
+
+#[test]
 fn run_branch_without_args_requires_branch_text() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());

@@ -44,6 +44,14 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+    /// Declare or clear the coordinator identity for the current shell
+    #[command(
+        long_about = "Print shell statements for declaring or clearing the coordinator identity in the current shell.\n\nUse `eval \"$(wt coord use <id>)\"` once per coordinator session, for example `eval \"$(wt coord use my-coord)\"`. `wt coord use` sets WT_AGENT_ID and WT_COORDINATOR_AGENT_ID to the same agent because a coordinator session is its own coordinator.\n\n`wt shell-init <shell>` provides a shell function wrapper so users can run `wt-coord-use my-coord` directly."
+    )]
+    Coord {
+        #[command(subcommand)]
+        command: CoordCommand,
+    },
     /// Start workspace execution from issue, PR, branch text, task, or workflow
     #[command(
         long_about = "Start workspace execution from issues, pull requests, branch-name text, local TaskDocuments, or saved Workflows.\n\nCanonical start surfaces are `wt run issue`, `wt run pr`, `wt run branch`, `wt run task`, and `wt run workflow`.\n\n`wt run` only starts workspace execution. Cleanup stays under `wt done`, inspection under `wt inspect`, agent observation under `wt agent`, and saved workflow lifecycle actions under `wt workflow`."
@@ -350,6 +358,20 @@ pub enum HooksCommand {
         #[command(subcommand)]
         command: HookAgentCommand,
     },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum CoordCommand {
+    /// Print exports for using this shell as a coordinator
+    #[command(
+        long_about = "Print shell exports for using this shell as a coordinator.\n\nUse `eval \"$(wt coord use <id>)\"` once per coordinator session, for example `eval \"$(wt coord use my-coord)\"`.\n\n`wt shell-init <shell>` provides a shell function wrapper so users can run `wt-coord-use my-coord` directly."
+    )]
+    Use {
+        /// Coordinator agent id as NAME or agents/NAME
+        id: String,
+    },
+    /// Print unsets for clearing the coordinator identity
+    Exit,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]

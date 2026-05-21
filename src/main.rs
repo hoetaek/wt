@@ -4,7 +4,9 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use wt::cli::{AgentCommand, Cli, ColorMode, Commands, MsgCommand, TaskCommand, WorkflowCommand};
+use wt::cli::{
+    AgentCommand, Cli, ColorMode, Commands, CoordCommand, MsgCommand, TaskCommand, WorkflowCommand,
+};
 use wt::config::{Config, ConfigSource};
 use wt::context::{Ctx, CtxOptions, OutputMode};
 use wt::error::WtError;
@@ -54,6 +56,13 @@ fn try_main() -> Result<()> {
             clap_complete::generate(*shell, &mut command, bin_name, &mut buffer);
             let script = String::from_utf8(buffer)?;
             io::stdout().write_all(strip_removed_completion_entries(*shell, &script).as_bytes())?;
+            return Ok(());
+        }
+        Commands::Coord { command } => {
+            match command {
+                CoordCommand::Use { id } => wt::commands::coord::use_coordinator(id)?,
+                CoordCommand::Exit => wt::commands::coord::exit_coordinator(),
+            }
             return Ok(());
         }
         _ => {}
