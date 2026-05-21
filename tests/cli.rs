@@ -249,6 +249,36 @@ updated_at = "2026-05-18T00:00:00.000000000Z"
     .unwrap();
 }
 
+fn write_task_run_file_with_coordinator(
+    root: &Path,
+    id: &str,
+    task: &str,
+    branch: &str,
+    status: &str,
+    group: &str,
+    coordinator_id: Option<&str>,
+) {
+    let dir = root.join(".git/wt/task-runs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let coordinator = coordinator_id
+        .map(|id| format!("coordinator_id = \"{id}\"\n"))
+        .unwrap_or_default();
+    std::fs::write(
+        dir.join(format!("{id}.toml")),
+        format!(
+            r#"task = "{task}"
+branch = "{branch}"
+status = "{status}"
+group = "{group}"
+creation_order = 1
+{coordinator}created_at = "2026-05-18T00:00:00.000000000Z"
+updated_at = "2026-05-18T00:00:00.000000000Z"
+"#
+        ),
+    )
+    .unwrap();
+}
+
 fn write_wait_observations(root: &Path, content: &str) {
     let dir = root.join(".git/wt/agent.state");
     std::fs::create_dir_all(&dir).unwrap();
@@ -694,6 +724,155 @@ fn coord_use_help_explains_eval_and_shell_init() {
         .stdout(predicate::str::contains("eval \"$(wt coord use <id>)\""))
         .stdout(predicate::str::contains("wt shell-init"))
         .stdout(predicate::str::contains("wt-coord-use my-coord"));
+}
+
+#[test]
+fn env_prints_worker_binding_with_coordinator_for_matching_task_run() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let status = git_command()
+        .args(["checkout", "-b", "feat-env"])
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    write_task_run_file_with_coordinator(
+        temp.path(),
+        "run-feat-env",
+        "feat-env",
+        "feat-env",
+        "running",
+        "2026-05-21-001",
+        Some("agents/coord-a"),
+    );
+
+    wt_command()
+        .current_dir(temp.path())
+        .args(["env"])
+        .assert()
+        .success()
+        .stdout(
+            "export WT_AGENT_ID=agents/feat-env;\nexport WT_COORDINATOR_AGENT_ID=agents/coord-a;\n",
+        )
+        .stderr("");
+}
+
+#[test]
+fn env_prints_worker_binding_without_coordinator_for_matching_task_run() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let status = git_command()
+        .args(["checkout", "-b", "feat-env"])
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    write_task_run_file_with_coordinator(
+        temp.path(),
+        "run-feat-env",
+        "feat-env",
+        "feat-env",
+        "running",
+        "2026-05-21-001",
+        None,
+    );
+
+    wt_command()
+        .current_dir(temp.path())
+        .args(["env"])
+        .assert()
+        .success()
+        .stdout("export WT_AGENT_ID=agents/feat-env;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stderr("");
+}
+
+#[test]
+fn env_unsets_identity_without_matching_task_run() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+
+    wt_command()
+        .current_dir(temp.path())
+        .args(["env"])
+        .assert()
+        .success()
+        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stderr("");
+}
+
+#[test]
+fn env_unsets_identity_outside_git_repo() {
+    let temp = TempDir::new().unwrap();
+
+    wt_command()
+        .current_dir(temp.path())
+        .args(["env"])
+        .assert()
+        .success()
+        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stderr("");
+}
+
+#[test]
+fn shell_init_prints_valid_bash_source() {
+    let temp = TempDir::new().unwrap();
+    let output = wt_command()
+        .args(["shell-init", "bash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wt-env"))
+        .stdout(predicate::str::contains("wt-coord-use"))
+        .stdout(predicate::str::contains("PROMPT_COMMAND"))
+        .get_output()
+        .stdout
+        .clone();
+    let script = temp.path().join("wt-init.bash");
+    std::fs::write(&script, output).unwrap();
+
+    let status = StdCommand::new("bash")
+        .args(["-n", script.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
+fn shell_init_prints_valid_zsh_source_when_zsh_is_available() {
+    if StdCommand::new("zsh").arg("--version").status().is_err() {
+        return;
+    }
+
+    let temp = TempDir::new().unwrap();
+    let output = wt_command()
+        .args(["shell-init", "zsh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("chpwd_functions"))
+        .stdout(predicate::str::contains("wt-coord-exit"))
+        .get_output()
+        .stdout
+        .clone();
+    let script = temp.path().join("wt-init.zsh");
+    std::fs::write(&script, output).unwrap();
+
+    let status = StdCommand::new("zsh")
+        .args(["-n", script.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
+fn shell_init_rejects_unsupported_shell_with_supported_list() {
+    wt_command()
+        .args(["shell-init", "fish"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("Supported shells: zsh, bash"));
 }
 
 #[test]

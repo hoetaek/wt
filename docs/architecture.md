@@ -84,6 +84,34 @@ launch, cmux transport, or Workflow/TaskRun state. Hook adapters call into
 `wt msg check-inbox` from managed `UserPromptSubmit` and `PostToolUse` events;
 they do not define the message schema.
 
+## Shell Integration
+
+Shell integration owns ambient identity binding for worker worktree shells. It
+does not install itself or modify shell rc files; users opt in by adding one
+line to their own shell configuration:
+
+```sh
+eval "$(wt shell-init zsh)"
+```
+
+Use `bash` instead of `zsh` for bash shells. The generated source defines
+`wt-env`, `wt-coord-use`, and `wt-coord-exit`, then registers `wt-env` with
+zsh `chpwd_functions` or bash `PROMPT_COMMAND`. The registration is idempotent:
+re-evaluating the generated source refreshes the function definitions without
+adding duplicate directory-change hooks.
+
+`wt env` is the internal command called by those hooks. It resolves the current
+directory to the git common dir, reads the current branch, scans
+`<git-common-dir>/wt/task-runs/*.toml`, and picks the most recent TaskRun whose
+`branch` matches. A match exports `WT_AGENT_ID=agents/<branch_slug>` and exports
+`WT_COORDINATOR_AGENT_ID` only when the TaskRun recorded `coordinator_id`;
+without a match, outside a git repo, or on a detached branch, it unsets both
+variables. This prevents identity from leaking after leaving a worker worktree.
+
+Coordinator identity remains explicit. `wt shell-init` provides convenience
+functions for `wt coord use` and `wt coord exit`, but it does not derive a
+coordinator from the repo root or any other cwd.
+
 `agent.state` is the local runtime observation state owner. Its source-of-truth
 module is `src/agent_state.rs`, and its first durable location is
 `<git-common-dir>/wt/agent.state/wait-observations.jsonl`. It owns append-only

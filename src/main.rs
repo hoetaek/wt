@@ -58,6 +58,16 @@ fn try_main() -> Result<()> {
             io::stdout().write_all(strip_removed_completion_entries(*shell, &script).as_bytes())?;
             return Ok(());
         }
+        Commands::ShellInit { shell } => {
+            wt::commands::shell_init::run(shell)?;
+            return Ok(());
+        }
+        Commands::Env => {
+            let current_dir = std::env::current_dir()?;
+            let working_dir = resolve_directory(&current_dir, cli.directory.as_deref())?;
+            wt::commands::env::run(working_dir.as_deref().unwrap_or(&current_dir))?;
+            return Ok(());
+        }
         Commands::Coord { command } => {
             match command {
                 CoordCommand::Use { id } => wt::commands::coord::use_coordinator(id)?,
