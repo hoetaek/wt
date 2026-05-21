@@ -69,7 +69,8 @@ Canonical personal storage layout:
 │   └── <slug>/
 │       ├── requirements.md
 │       ├── design.md
-│       └── tasks.md
+│       ├── tasks.md
+│       └── workflow.md   # optional, when execution shape is non-trivial
 ├── tasks/
 ├── workflows/
 ├── task-runs/
@@ -100,14 +101,14 @@ Markdown이거나 TOML body일 수 있다. Idea는 committed-work status가 없�
 
 `wt-ready`가 idea를 받고 사용자가 실행에 commit하면 idea는 spec으로 promotion된다.
 Promotion은 `ideas/<slug>.{md,toml}`을 제거하고
-`specs/<slug>/{requirements.md,design.md,tasks.md}`를 만드는 동작이다. 이 directory
-location change가 visible commit gate다. `wt` state tree를 읽는 사람은 `ideas/` 아래의
-exploration과 `specs/<slug>/` 아래의 committed prep work를 directory 위치만으로 구분할 수
-있어야 한다.
+`specs/<slug>/{requirements.md,design.md,tasks.md}`와 필요할 때 optional `workflow.md`를
+만드는 동작이다. 이 directory location change가 visible commit gate다. `wt` state tree를
+읽는 사람은 `ideas/` 아래의 exploration과 `specs/<slug>/` 아래의 committed prep work를
+directory 위치만으로 구분할 수 있어야 한다.
 
 TaskDocument는 계속 `<git-common-dir>/wt/tasks/<slug>.toml`에 있는 launch unit이다. 그
 body는 `specs/<slug>/` relative path를 참조할 수 있지만 TaskDocument schema는 바뀌지
-않는다. Spec은 requirements, design, tasks를 담는 긴 human/AI artifact이고,
+않는다. Spec은 requirements, design, tasks, optional workflow rationale을 담는 긴 human/AI artifact이고,
 TaskDocument는 `wt run task`와 `wt workflow`가 소비하는 실행 단위다. 이 contract에서 wt CLI는
 `specs/`를 직접 읽거나 쓰지 않는다. Spec 없이 TaskDocument TOML만 있는 pre-redesign task도
 valid local task로 남는다.
@@ -141,9 +142,37 @@ Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 
 `specs/<slug>/tasks.md`는 sequenced atomic unit을 checkbox item으로 나열한다. 각 item은
 dependency를 적고, dependency가 없는 item은 parallel 가능하다고 표시할 수 있다.
 
+`specs/<slug>/workflow.md`는 `tasks.md`에서 드러난 slice graph를 어떤 execution shape로
+실행할지와 그 이유를 prose로 기록하는 optional prep artifact다. 여러 slice를 하나의 saved
+Workflow로 묶거나, stack/matrix처럼 execution shape 선택 자체가 작업 의미에 영향을 줄 때
+쓴다. 단일 sequential slice처럼 execution shape 결정이 없는 spec은 `workflow.md`를 생략할 수
+있다. 그래도 파일을 남기면 `mode = none`이라고 짧게 적고, saved Workflow TOML이 필요 없는
+이유를 한 문단으로 기록하는 정도면 충분하다.
+
+`workflow.md`에 권장되는 section은 Chosen mode, Why, Slices → TaskDocument mapping, Linked
+workflow TOML path, Risks다. 이 파일은 prose-only spec artifact이며 executable Workflow
+TOML이 아니다. 실제 saved execution plan은 계속 `<git-common-dir>/wt/workflows/<id>.toml`에
+있고, wt CLI는 이 iteration에서 `specs/`나 `workflow.md`를 직접 읽거나 쓰지 않는다.
+
+Canonical `tasks.md` slice graph → workflow mode mapping:
+
+| tasks.md slice graph | Workflow mode |
+| --- | --- |
+| All sequential, single agent | `single` |
+| All independent, same base | `batch` |
+| Parent → child chain (each builds on previous branch) | `stack` |
+| One task × multiple profiles | `matrix` |
+| One direct slice only, or mixed-lifecycle slices | `none` |
+
+`none`은 `<git-common-dir>/wt/workflows/<id>.toml`에 저장되는 Workflow `mode` 값이 아니라 spec
+prep 판단이다. 이 값은 direct `wt run task`로 충분하거나, slice들이 서로 다른 lifecycle에서
+실행되어 하나의 saved Workflow로 표현하면 오히려 모델이 흐려지는 경우를 뜻한다.
+
 Spec은 `wt-ready` exit 시점에 frozen되지 않는다. Execution 중 `wt-coordinate` phase에서
-findings가 나오면 design이나 task list를 in place로 업데이트할 수 있다. Spec과
-implementation이 drift하면 조용히 갈라지게 두지 말고 spec을 업데이트해 다시 맞춘다.
+findings가 나오면 design, task list, execution shape rationale을 in place로 업데이트할 수
+있다. 선택한 mode가 더 이상 맞지 않거나 실제 Workflow TOML과 spec이 갈라지면
+`workflow.md`를 rationale과 함께 업데이트한다. Spec과 implementation이 drift하면 조용히
+갈라지게 두지 말고 spec을 업데이트해 다시 맞춘다.
 
 ### Worktree Identity
 
