@@ -68,6 +68,14 @@ pub enum Commands {
         #[command(subcommand)]
         command: CoordCommand,
     },
+    /// Declare, clear, or inspect the current session agent identity
+    #[command(
+        long_about = "Declare, clear, or inspect the current session agent identity using the current terminal or agent-session anchor.\n\nUse `eval \"$(wt session set <id>)\"` to bind this shell or agent session to WT_AGENT_ID and WT_COORDINATOR_AGENT_ID while also writing a marker that later wt invocations from the same anchor can resolve."
+    )]
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
     /// Start workspace execution from issue, PR, branch text, task, or workflow
     #[command(
         long_about = "Start workspace execution from issues, pull requests, branch-name text, local TaskDocuments, or saved Workflows.\n\nCanonical start surfaces are `wt run issue`, `wt run pr`, `wt run branch`, `wt run task`, and `wt run workflow`.\n\n`wt run` only starts workspace execution. Cleanup stays under `wt done`, inspection under `wt inspect`, agent observation under `wt agent`, and saved workflow lifecycle actions under `wt workflow`."
@@ -222,7 +230,7 @@ pub enum Commands {
     },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send, deliver, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg check-inbox --silent` from agent hooks so the WT_AGENT_ID inbox is checked; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use `wt msg check-inbox --silent` from agent hooks so the WT_AGENT_ID inbox is checked; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -250,6 +258,9 @@ pub enum Commands {
         /// Run checks against the effective config for <git-common-dir>/wt/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
+        /// Delete one env-keyed session marker by display key, for example surface:A22D...
+        #[arg(long, value_name = "KEY")]
+        prune_env_markers: Option<String>,
     },
     /// Print, edit, or refactor wt config files
     #[command(
@@ -333,6 +344,25 @@ pub enum CoordCommand {
     Exit,
 }
 
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum SessionCommand {
+    /// Write a session identity marker and print shell exports
+    #[command(
+        long_about = "Write a session identity marker for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set my-coord)\"`, so the current shell gets WT_AGENT_ID and WT_COORDINATOR_AGENT_ID immediately while later wt invocations from the same anchor can resolve the marker."
+    )]
+    Set {
+        /// Agent id as NAME or agents/NAME
+        id: String,
+    },
+    /// Remove the current session identity marker and print shell unsets
+    Unset,
+    /// Print the current session identity resolution
+    Whoami {
+        /// Emit machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellInitShell {
     Zsh,
@@ -456,6 +486,21 @@ pub enum MsgCommand {
         /// Hook mode: exit 0 silently when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup). Intended for agent hooks installed globally; direct CLI use should omit this flag.
         #[arg(long)]
         silent: bool,
+    },
+    /// Observe pending or newly-arriving inbox/new messages without claiming them
+    #[command(
+        long_about = "Observe pending or newly-arriving inbox/new messages for one agent without claiming, moving, or acknowledging them.\n\n`wt msg watch` arms a filesystem watcher, drains existing .toml messages in mtime order, and exits after emitting pending messages, one new arrival, or a timeout. Omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use --json for newline-delimited JSON rows with the same fields as `wt msg list --json` message records. Use `wt msg list` for a snapshot instead of --timeout 0."
+    )]
+    Watch {
+        /// Explicit single agent id as NAME or agents/NAME; omitted tries WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID
+        #[arg(long)]
+        agent: Option<String>,
+        /// Maximum seconds to wait for a new inbox/new message; must be greater than 0
+        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..))]
+        timeout: u64,
+        /// Emit newline-delimited JSON message rows
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -871,7 +916,10 @@ mod tests {
         assert_eq!(cli.verbose, 2);
         assert!(matches!(
             cli.command,
-            Some(Commands::Doctor { profile: None })
+            Some(Commands::Doctor {
+                profile: None,
+                prune_env_markers: None
+            })
         ));
     }
 
@@ -881,7 +929,10 @@ mod tests {
         assert!(cli.no_color);
         assert!(matches!(
             cli.command,
-            Some(Commands::Doctor { profile: None })
+            Some(Commands::Doctor {
+                profile: None,
+                prune_env_markers: None
+            })
         ));
     }
 
@@ -2059,7 +2110,10 @@ mod tests {
         let cli = parse(&["wt", "doctor"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Doctor { profile: None })
+            Some(Commands::Doctor {
+                profile: None,
+                prune_env_markers: None
+            })
         ));
     }
 
@@ -2070,7 +2124,20 @@ mod tests {
             cli.command,
             Some(Commands::Doctor {
                 profile: Some(ref profile),
+                prune_env_markers: None,
             }) if profile == "codex"
+        ));
+    }
+
+    #[test]
+    fn doctor_accepts_prune_env_markers_flag() {
+        let cli = parse(&["wt", "doctor", "--prune-env-markers", "surface:A22D"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Doctor {
+                profile: None,
+                prune_env_markers: Some(ref key),
+            }) if key == "surface:A22D"
         ));
     }
 

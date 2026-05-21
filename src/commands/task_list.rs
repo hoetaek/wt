@@ -1,10 +1,20 @@
-use crate::context::{Ctx, PromptItem};
+use crate::context::Ctx;
 use crate::task::{self, TaskDocument};
 use anyhow::{Context, Result};
+use console::measure_text_width;
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+
+const LIST_START: &str = "◆";
+const BAR: &str = "│";
+const FOOTER: &str = "└";
+const BULLET: &str = "•";
+const TITLE_COLUMN_MAX: usize = 56;
+const SOURCE_COLUMN_MAX: usize = 18;
+const TASK_COLUMN_MAX: usize = 34;
+const BRANCH_COLUMN_MAX: usize = 48;
 
 pub(crate) fn run(ctx: &Ctx) -> Result<()> {
     let report = collect(ctx)?;
@@ -151,18 +161,12 @@ fn one_line(value: &str) -> String {
 fn print_text(ctx: &Ctx, report: &TaskListReport) {
     if report.tasks.is_empty() && report.invalid_tasks.is_empty() {
         ctx.ui
-            .print_step("No tasks found in <git-common-dir>/wt/tasks");
+            .print_plain("No tasks found in <git-common-dir>/wt/tasks");
         return;
     }
 
-    for row in &report.tasks {
-        ctx.ui.print_step(&task_inventory_label(row));
-        ctx.ui.print_dim(&format!("  Path: {}", row.path));
-        ctx.ui
-            .print_dim(&format!("  Origin: {}", origin_label(row)));
-        if let Some(summary) = row.body_summary.as_deref() {
-            ctx.ui.print_dim(&format!("  Summary: {summary}"));
-        }
+    for line in render_text_lines(report) {
+        ctx.ui.print_plain(&line);
     }
 
     for invalid in &report.invalid_tasks {
@@ -174,17 +178,149 @@ fn print_text(ctx: &Ctx, report: &TaskListReport) {
     }
 }
 
-fn task_inventory_label(row: &TaskListRow) -> String {
-    let mut hint_parts = row.display.inventory_hint_parts();
-    hint_parts.push(format!("source {}", row.source));
-    PromptItem::from_hint_parts(row.display.label().to_string(), hint_parts).render_plain()
+fn render_text_lines(report: &TaskListReport) -> Vec<String> {
+    let mut lines = vec![format!("{LIST_START} Tasks"), BAR.to_string()];
+    let mut emitted_group = false;
+    for group in ["provider-origin", "local"] {
+        let rows = report
+            .tasks
+            .iter()
+            .filter(|row| row.source == group)
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            continue;
+        }
+
+        if emitted_group {
+            lines.push(BAR.to_string());
+        }
+        lines.push(format!("{BAR} {group}"));
+        emitted_group = true;
+        let widths = task_list_column_widths(&rows);
+        for row in rows {
+            lines.push(format!(
+                "{BAR}  {BULLET}  {}",
+                task_inventory_label(row, &widths)
+            ));
+        }
+    }
+    lines.push(FOOTER.to_string());
+    lines
 }
 
-fn origin_label(row: &TaskListRow) -> String {
+#[derive(Debug, Clone, Copy)]
+struct TaskListColumnWidths {
+    title: usize,
+    source: usize,
+    task: usize,
+    branch: usize,
+}
+
+fn task_list_column_widths(rows: &[&TaskListRow]) -> TaskListColumnWidths {
+    rows.iter().fold(
+        TaskListColumnWidths {
+            title: 0,
+            source: 0,
+            task: 0,
+            branch: 0,
+        },
+        |widths, row| {
+            let columns = task_inventory_columns(row);
+            TaskListColumnWidths {
+                title: capped_width(widths.title, &columns.title, TITLE_COLUMN_MAX),
+                source: capped_width(widths.source, &columns.source, SOURCE_COLUMN_MAX),
+                task: capped_width(widths.task, &columns.task, TASK_COLUMN_MAX),
+                branch: columns.branch.as_deref().map_or(widths.branch, |branch| {
+                    capped_width(widths.branch, branch, BRANCH_COLUMN_MAX)
+                }),
+            }
+        },
+    )
+}
+
+#[derive(Debug, Clone)]
+struct TaskInventoryColumns {
+    title: String,
+    source: String,
+    task: String,
+    branch: Option<String>,
+}
+
+fn task_inventory_columns(row: &TaskListRow) -> TaskInventoryColumns {
+    TaskInventoryColumns {
+        title: row.display.label().to_string(),
+        source: task_inventory_source(row),
+        task: format!("task {}", row.key),
+        branch: row.branch.as_ref().map(|branch| format!("branch {branch}")),
+    }
+}
+
+fn task_inventory_source(row: &TaskListRow) -> String {
     row.origin
         .as_ref()
-        .map(|origin| format!("{}:{}", origin.provider, origin.id))
-        .unwrap_or_else(|| "none".into())
+        .map(|origin| {
+            format!(
+                "{} {}",
+                provider_display_label(&origin.provider),
+                origin.id.trim()
+            )
+        })
+        .unwrap_or_else(|| "not published".into())
+}
+
+fn provider_display_label(provider: &str) -> String {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "github" => "GitHub".into(),
+        "linear" => "Linear".into(),
+        "" => "external".into(),
+        other => other.to_string(),
+    }
+}
+
+fn task_inventory_label(row: &TaskListRow, widths: &TaskListColumnWidths) -> String {
+    let columns = task_inventory_columns(row);
+    let mut parts = vec![
+        pad_column(&columns.title, widths.title),
+        pad_column(&columns.source, widths.source),
+        pad_column(&columns.task, widths.task),
+    ];
+    if let Some(branch) = columns.branch {
+        parts.push(truncate_display_width(&branch, widths.branch));
+    }
+    parts.join("  ")
+}
+
+fn capped_width(current: usize, value: &str, max_width: usize) -> usize {
+    current.max(measure_text_width(value).min(max_width))
+}
+
+fn pad_column(value: &str, width: usize) -> String {
+    let value = truncate_display_width(value, width);
+    let padding = width.saturating_sub(measure_text_width(&value));
+    format!("{value}{}", " ".repeat(padding))
+}
+
+fn truncate_display_width(value: &str, max_width: usize) -> String {
+    if measure_text_width(value) <= max_width {
+        return value.to_string();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let mut width = 0;
+    let mut truncated = String::new();
+    let target_width = max_width - 3;
+    for ch in value.chars() {
+        let ch_width = measure_text_width(&ch.to_string());
+        if width + ch_width > target_width {
+            break;
+        }
+        truncated.push(ch);
+        width += ch_width;
+    }
+    truncated.push_str("...");
+    truncated
 }
 
 fn write_json(report: &TaskListReport) -> Result<()> {

@@ -8,7 +8,7 @@ use crossterm::{
 use std::cmp;
 use std::io::{self, Write};
 
-pub(crate) const DEFAULT_VISIBLE_OPTIONS: usize = 10;
+pub(crate) const DEFAULT_VISIBLE_ROWS: usize = 10;
 
 const PROMPT_START: &str = "◆";
 const BAR: &str = "│";
@@ -198,7 +198,7 @@ pub(crate) struct SelectorState {
     query: String,
     active_row: Option<usize>,
     visible_option_offset: usize,
-    max_visible_options: usize,
+    max_visible_rows: usize,
 }
 
 impl SelectorState {
@@ -211,13 +211,13 @@ impl SelectorState {
     }
 
     pub(crate) fn new(mode: SelectorMode, rows: Vec<SelectorRow>) -> Self {
-        Self::with_max_visible_options(mode, rows, DEFAULT_VISIBLE_OPTIONS)
+        Self::with_max_visible_rows(mode, rows, DEFAULT_VISIBLE_ROWS)
     }
 
-    pub(crate) fn with_max_visible_options(
+    pub(crate) fn with_max_visible_rows(
         mode: SelectorMode,
         rows: Vec<SelectorRow>,
-        max_visible_options: usize,
+        max_visible_rows: usize,
     ) -> Self {
         let mut state = Self {
             mode,
@@ -225,7 +225,7 @@ impl SelectorState {
             query: String::new(),
             active_row: None,
             visible_option_offset: 0,
-            max_visible_options: max_visible_options.max(1),
+            max_visible_rows: max_visible_rows.max(1),
         };
         state.reset_active_after_filter();
         state
@@ -290,34 +290,23 @@ impl SelectorState {
     }
 
     pub(crate) fn visible_window(&self) -> SelectorWindow {
-        let matching_options = self.matching_option_rows();
+        let matching_options = self.matching_option_rows_with_sections();
         let start = self.visible_start(matching_options.len());
-        let end = cmp::min(start + self.max_visible_options, matching_options.len());
-        let visible_options = &matching_options[start..end];
-
-        let mut row_indices = Vec::new();
-        let mut current_section = None;
-        let mut emitted_section = None;
-        for (row_index, row) in self.rows.iter().enumerate() {
-            match row {
-                SelectorRow::Section(_) => current_section = Some(row_index),
-                SelectorRow::Option(_) if visible_options.contains(&row_index) => {
-                    if let Some(section_index) = current_section
-                        && emitted_section != Some(section_index)
-                    {
-                        row_indices.push(section_index);
-                        emitted_section = Some(section_index);
-                    }
-                    row_indices.push(row_index);
-                }
-                _ => {}
-            }
-        }
+        let built = self.build_visible_window(&matching_options, start);
+        let min_body_rows = if matching_options.is_empty() {
+            1
+        } else {
+            cmp::min(matching_body_rows(&matching_options), self.max_visible_rows)
+        };
 
         SelectorWindow {
-            row_indices,
+            row_indices: built.row_indices,
             hidden_before: start,
-            hidden_after: matching_options.len().saturating_sub(end),
+            hidden_after: matching_options
+                .len()
+                .saturating_sub(start + built.visible_options),
+            min_body_rows,
+            has_hidden_context: start > 0 || matching_options.len() > start + built.visible_options,
         }
     }
 
@@ -382,48 +371,97 @@ impl SelectorState {
     }
 
     fn ensure_active_visible(&mut self) {
-        let matching_options = self.matching_option_rows();
+        let matching_options = self.matching_option_rows_with_sections();
         if matching_options.is_empty() {
             self.visible_option_offset = 0;
             return;
         }
 
-        let max_start = matching_options
-            .len()
-            .saturating_sub(self.max_visible_options);
-        self.visible_option_offset = cmp::min(self.visible_option_offset, max_start);
+        self.visible_option_offset = cmp::min(
+            self.visible_option_offset,
+            matching_options.len().saturating_sub(1),
+        );
 
         let Some(active_row) = self.active_row else {
             return;
         };
-        let Some(active_position) = matching_options.iter().position(|row| *row == active_row)
+        let Some(active_position) = matching_options
+            .iter()
+            .position(|option| option.row_index == active_row)
         else {
             return;
         };
 
         if active_position < self.visible_option_offset {
             self.visible_option_offset = active_position;
-        } else if active_position >= self.visible_option_offset + self.max_visible_options {
-            self.visible_option_offset = active_position + 1 - self.max_visible_options;
+            return;
+        }
+
+        while !self
+            .build_visible_window(&matching_options, self.visible_option_offset)
+            .contains_option_position(active_position)
+        {
+            if self.visible_option_offset >= active_position {
+                break;
+            }
+            self.visible_option_offset += 1;
         }
     }
 
     fn visible_start(&self, matching_count: usize) -> usize {
-        cmp::min(
-            self.visible_option_offset,
-            matching_count.saturating_sub(self.max_visible_options),
-        )
+        cmp::min(self.visible_option_offset, matching_count.saturating_sub(1))
     }
 
-    fn matching_option_rows(&self) -> Vec<usize> {
-        self.rows
-            .iter()
-            .enumerate()
-            .filter_map(|(row_index, row)| match row {
-                SelectorRow::Option(option) if option.matches_query(&self.query) => Some(row_index),
-                _ => None,
-            })
-            .collect()
+    fn matching_option_rows_with_sections(&self) -> Vec<MatchingOptionRow> {
+        let mut current_section = None;
+        let mut matching_options = Vec::new();
+        for (row_index, row) in self.rows.iter().enumerate() {
+            match row {
+                SelectorRow::Section(_) => current_section = Some(row_index),
+                SelectorRow::Option(option) if option.matches_query(&self.query) => {
+                    matching_options.push(MatchingOptionRow {
+                        row_index,
+                        section_index: current_section,
+                    });
+                }
+                SelectorRow::Option(_) => {}
+            }
+        }
+        matching_options
+    }
+
+    fn build_visible_window(
+        &self,
+        matching_options: &[MatchingOptionRow],
+        start: usize,
+    ) -> BuiltSelectorWindow {
+        let mut row_indices = Vec::new();
+        let mut visible_options = 0;
+        let mut body_rows = 0;
+        let mut emitted_section = None;
+
+        for option in matching_options.iter().skip(start) {
+            let next_rows = option_body_rows(*option, emitted_section, body_rows > 0);
+            if visible_options > 0 && body_rows + next_rows > self.max_visible_rows {
+                break;
+            }
+
+            if let Some(section_index) = option.section_index
+                && emitted_section != Some(section_index)
+            {
+                row_indices.push(section_index);
+                emitted_section = Some(section_index);
+            }
+            row_indices.push(option.row_index);
+            body_rows += next_rows;
+            visible_options += 1;
+        }
+
+        BuiltSelectorWindow {
+            row_indices,
+            first_option_position: start,
+            visible_options,
+        }
     }
 
     fn focusable_matching_option_rows(&self) -> Vec<usize> {
@@ -456,6 +494,54 @@ pub(crate) struct SelectorWindow {
     pub(crate) row_indices: Vec<usize>,
     pub(crate) hidden_before: usize,
     pub(crate) hidden_after: usize,
+    pub(crate) min_body_rows: usize,
+    pub(crate) has_hidden_context: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MatchingOptionRow {
+    row_index: usize,
+    section_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BuiltSelectorWindow {
+    row_indices: Vec<usize>,
+    first_option_position: usize,
+    visible_options: usize,
+}
+
+impl BuiltSelectorWindow {
+    fn contains_option_position(&self, option_position: usize) -> bool {
+        option_position >= self.first_option_position
+            && option_position < self.first_option_position + self.visible_options
+    }
+}
+
+fn matching_body_rows(matching_options: &[MatchingOptionRow]) -> usize {
+    let mut body_rows = 0;
+    let mut emitted_section = None;
+    for option in matching_options {
+        body_rows += option_body_rows(*option, emitted_section, body_rows > 0);
+        if option.section_index.is_some() {
+            emitted_section = option.section_index;
+        }
+    }
+    body_rows
+}
+
+fn option_body_rows(
+    option: MatchingOptionRow,
+    emitted_section: Option<usize>,
+    has_previous_rows: bool,
+) -> usize {
+    let section_rows = match option.section_index {
+        Some(section_index) if emitted_section != Some(section_index) => {
+            1 + usize::from(has_previous_rows)
+        }
+        _ => 0,
+    };
+    section_rows + 1
 }
 
 #[derive(Debug, Clone)]
@@ -503,9 +589,9 @@ pub(crate) fn render_selector(state: &SelectorState, options: &SelectorRenderOpt
         styled(PROMPT_START, accent_style(), options.decorated),
         options.prompt
     ));
-    if state.query().is_empty() {
+    if state.query().is_empty() && !window.has_hidden_context {
         lines.push(styled(BAR, bar_style(), options.decorated));
-    } else {
+    } else if !state.query().is_empty() {
         lines.push(format!(
             "{} Filter: {}",
             styled(BAR, bar_style(), options.decorated),
@@ -519,18 +605,27 @@ pub(crate) fn render_selector(state: &SelectorState, options: &SelectorRenderOpt
             styled(BAR, bar_style(), options.decorated),
             window.hidden_before
         ));
+    } else if window.has_hidden_context {
+        lines.push(styled(BAR, bar_style(), options.decorated));
     }
 
+    let mut body_rows = 0;
     if window.row_indices.is_empty() {
         lines.push(format!(
             "{} No matches",
             styled(BAR, bar_style(), options.decorated)
         ));
+        body_rows += 1;
     } else {
-        for row_index in &window.row_indices {
+        for (rendered_rows, row_index) in window.row_indices.iter().enumerate() {
             match &state.rows[*row_index] {
                 SelectorRow::Section(section) => {
+                    if rendered_rows > 0 {
+                        lines.push(styled(BAR, bar_style(), options.decorated));
+                        body_rows += 1;
+                    }
                     lines.push(render_section(section, options.decorated));
+                    body_rows += 1;
                 }
                 SelectorRow::Option(option) => {
                     lines.push(render_option(
@@ -540,9 +635,15 @@ pub(crate) fn render_selector(state: &SelectorState, options: &SelectorRenderOpt
                         hint_label_width,
                         options.decorated,
                     ));
+                    body_rows += 1;
                 }
             }
         }
+    }
+
+    while body_rows < window.min_body_rows {
+        lines.push(styled(BAR, bar_style(), options.decorated));
+        body_rows += 1;
     }
 
     if window.hidden_after > 0 {
@@ -551,6 +652,8 @@ pub(crate) fn render_selector(state: &SelectorState, options: &SelectorRenderOpt
             styled(BAR, bar_style(), options.decorated),
             window.hidden_after
         ));
+    } else if window.has_hidden_context {
+        lines.push(styled(BAR, bar_style(), options.decorated));
     }
 
     if let Some(summary) = selected_summary(state, options) {
@@ -635,11 +738,15 @@ impl<'a, W: Write> CrosstermSelectorTerminal<'a, W> {
                 terminal::Clear(ClearType::FromCursorDown)
             )?;
         }
-        write!(self.writer, "{rendered}")?;
+        write!(self.writer, "{}", raw_terminal_output(rendered))?;
         self.writer.flush()?;
         self.rendered_lines = rendered.lines().count().try_into().unwrap_or(u16::MAX);
         Ok(())
     }
+}
+
+fn raw_terminal_output(rendered: &str) -> String {
+    rendered.replace('\n', "\r\n")
 }
 
 struct RawModeGuard;
@@ -979,6 +1086,7 @@ mod tests {
 │ GitHub
 │ ❯ ●  Fix            GitHub #73
 │   ○  Publish docs   GitHub #74
+│
 │ Local
 │   ○  Local cleanup  prepared
 │ Selected: Fix
@@ -1018,19 +1126,63 @@ mod tests {
         rows.extend((0..6).map(|index| SelectorRow::option(index, format!("Task {index}"))));
         rows.push(SelectorRow::section("Local"));
         rows.extend((6..12).map(|index| SelectorRow::option(index, format!("Task {index}"))));
-        let mut state = SelectorState::with_max_visible_options(SelectorMode::Single, rows, 3);
+        let mut state = SelectorState::with_max_visible_rows(SelectorMode::Single, rows, 3);
 
         for _ in 0..4 {
             state.apply_input(SelectorInput::Down);
         }
 
         let window = state.visible_window();
-        assert_eq!(window.hidden_before, 2);
+        assert_eq!(window.hidden_before, 3);
         assert_eq!(window.hidden_after, 7);
 
         let rendered = render_plain(&state, selector_options("Tasks"));
-        assert!(rendered.contains("│ ↑ 2 more"));
+        assert!(rendered.contains("│ ↑ 3 more"));
         assert!(rendered.contains("│ ↓ 7 more"));
+    }
+
+    #[test]
+    fn grouped_selector_keeps_frame_height_stable_while_scrolling() {
+        let mut rows = vec![
+            SelectorRow::section("not started"),
+            SelectorRow::option(0, "Task 0"),
+            SelectorRow::option(1, "Task 1"),
+            SelectorRow::section("prepared"),
+            SelectorRow::option(2, "Task 2"),
+            SelectorRow::option(3, "Task 3"),
+            SelectorRow::option(4, "Task 4"),
+            SelectorRow::section("skipped"),
+            SelectorRow::option(5, "Task 5"),
+            SelectorRow::section("failed"),
+            SelectorRow::option(6, "Task 6"),
+            SelectorRow::option(7, "Task 7"),
+            SelectorRow::section("running"),
+            SelectorRow::option(8, "Task 8"),
+            SelectorRow::section("done"),
+        ];
+        rows.extend((9..28).map(|index| SelectorRow::option(index, format!("Task {index}"))));
+        let mut state = SelectorState::multi(rows);
+        state.apply_input(SelectorInput::Space);
+
+        for _ in 0..5 {
+            state.apply_input(SelectorInput::Down);
+        }
+        let mixed_groups = render_plain(
+            &state,
+            selector_options("Tasks to publish").selected_summary(true),
+        );
+
+        for _ in 0..8 {
+            state.apply_input(SelectorInput::Down);
+        }
+        let single_group = render_plain(
+            &state,
+            selector_options("Tasks to publish").selected_summary(true),
+        );
+
+        assert!(mixed_groups.contains("│ skipped"));
+        assert!(single_group.contains("│ done"));
+        assert_eq!(mixed_groups.lines().count(), single_group.lines().count());
     }
 
     #[test]
@@ -1083,6 +1235,11 @@ mod tests {
             SelectorInput::from_key_event(ctrl_c),
             Some(SelectorInput::Cancel)
         );
+    }
+
+    #[test]
+    fn raw_terminal_output_returns_to_column_zero_after_each_line() {
+        assert_eq!(raw_terminal_output("one\ntwo\n"), "one\r\ntwo\r\n");
     }
 
     fn type_text(state: &mut SelectorState, text: &str) {

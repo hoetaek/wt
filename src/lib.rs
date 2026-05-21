@@ -22,7 +22,8 @@ pub mod worktree_naming;
 
 use anyhow::Result;
 use cli::{
-    AgentCommand, Commands, ConfigCommand, MsgCommand, RunCommand, TaskCommand, WorkflowCommand,
+    AgentCommand, Commands, ConfigCommand, MsgCommand, RunCommand, SessionCommand, TaskCommand,
+    WorkflowCommand,
 };
 use commands::agent_runtime::KnownAgentCli;
 use context::Ctx;
@@ -34,6 +35,13 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         | Commands::ShellInit { .. }
         | Commands::Env
         | Commands::Coord { .. } => Ok(()),
+        Commands::Session { command } => match command {
+            SessionCommand::Set { id } => commands::session::set(ctx, id),
+            SessionCommand::Unset => commands::session::unset(ctx),
+            SessionCommand::Whoami { json } => {
+                commands::session::whoami(ctx, ctx.is_json() || *json)
+            }
+        },
         Commands::DeprecatedIssue { .. } => {
             deprecated_start_command_error("wt issue", "wt run issue")
         }
@@ -194,13 +202,26 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             MsgCommand::CheckInbox { agent, silent: _ } => {
                 commands::msg::check_inbox(ctx, agent.as_deref())
             }
+            MsgCommand::Watch {
+                agent,
+                timeout,
+                json,
+            } => commands::msg::watch(
+                ctx,
+                agent.as_deref(),
+                std::time::Duration::from_secs(*timeout),
+                ctx.is_json() || *json,
+            ),
         },
         Commands::Send {
             target,
             message,
             no_enter,
         } => commands::send::run(ctx, target, message, *no_enter),
-        Commands::Doctor { profile } => commands::doctor::run(ctx, profile.as_deref()),
+        Commands::Doctor {
+            profile,
+            prune_env_markers,
+        } => commands::doctor::run(ctx, profile.as_deref(), prune_env_markers.as_deref()),
         Commands::Config { profile, command } => match command {
             Some(ConfigCommand::Edit { source }) => {
                 commands::config::edit(ctx, profile.as_deref(), source.as_deref())

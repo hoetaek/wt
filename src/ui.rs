@@ -1,7 +1,7 @@
 use crate::context::{PromptItem, PromptOption, PromptRow, UserInterface, prompt_items_to_rows};
 use crate::error::WtError;
 use crate::ui::selector::{
-    DEFAULT_VISIBLE_OPTIONS, SelectorOption, SelectorRenderOptions, SelectorRow, SelectorSection,
+    DEFAULT_VISIBLE_ROWS, SelectorOption, SelectorRenderOptions, SelectorRow, SelectorSection,
     SelectorState, SelectorSubmission, run_selector_prompt,
 };
 use anyhow::{Result, anyhow, bail};
@@ -106,10 +106,17 @@ impl UserInterface for TerminalUi {
             return;
         }
         if self.decorated {
-            println!("{} {}", style("==>").green(), msg);
+            println!("{} {}", style(PROMPT_START).green(), msg);
         } else {
             println!("{msg}");
         }
+    }
+
+    fn print_plain(&self, msg: &str) {
+        if self.quiet {
+            return;
+        }
+        println!("{msg}");
     }
 
     fn print_dim(&self, msg: &str) {
@@ -184,7 +191,7 @@ fn should_show_selected_summary(rows: &[PromptRow]) -> bool {
             PromptRow::Option(_) => options += 1,
         }
     }
-    has_section || options > DEFAULT_VISIBLE_OPTIONS
+    has_section || options > DEFAULT_VISIBLE_ROWS
 }
 
 fn ensure_selectable_rows(prompt: &str, rows: &[PromptRow]) -> Result<()> {
@@ -410,7 +417,7 @@ mod tests {
             PromptRow::option("Two"),
         ];
         let compact = vec![PromptRow::option("One"), PromptRow::option("Two")];
-        let long = (0..=DEFAULT_VISIBLE_OPTIONS)
+        let long = (0..=DEFAULT_VISIBLE_ROWS)
             .map(|index| PromptRow::option(format!("Task {index}")))
             .collect::<Vec<_>>();
 

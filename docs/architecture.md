@@ -113,6 +113,37 @@ Coordinator identity remains explicit. `wt shell-init` provides convenience
 functions for `wt coord use` and `wt coord exit`, but it does not derive a
 coordinator from the repo root or any other cwd.
 
+## Identity Locator
+
+The identity locator owns post-hoc binding from the current terminal or agent
+session to a flat `AgentId`. Its source-of-truth module is
+`src/services/identity_locator/`, and its durable marker location is
+`<git-common-dir>/wt/sessions/<encoded-anchor-key>.toml`.
+
+Anchor keys are derived in priority order:
+
+1. `CMUX_SURFACE_ID` as `surface:<value>`
+2. `CLAUDE_CODE_SESSION_ID` as `claude-session:<value>`
+3. `CODEX_THREAD_ID` as `codex-thread:<value>`
+4. POSIX shell session id plus process start time as `shell-sid:<sid>:<start_time>`
+
+Marker files store the resolved `id`, `anchor_kind`, `anchor_value`, optional
+shell liveness fields, optional `anchor_agent_kind`, the creating `cwd`, and
+timestamps. Env-keyed markers are cheap locator records: `wt doctor` may list
+them for manual review, but it must not infer staleness from its own process
+environment. Only `shell-sid` markers can be verified automatically by PID plus
+start-time liveness.
+
+Runtime identity resolution is layered. Explicit launch environment remains the
+first source: `WT_AGENT_ID` and `WT_COORDINATOR_AGENT_ID` win when present and
+valid. If those are absent, `wt` derives the current anchor key and reads the
+matching marker. If no live marker exists, worker identity falls back to the
+cwd/TaskRun path used by `wt shell-init` and `wt env`.
+
+The detached-agent supervisor is a separate layer. It may use the same resolved
+identity model, but supervisor lifecycle, polling, and recovery policy belong
+to its own spec and must not turn marker files into process supervision state.
+
 `agent.state` is the local runtime observation state owner. Its source-of-truth
 module is `src/agent_state.rs`, and its first durable location is
 `<git-common-dir>/wt/agent.state/wait-observations.jsonl`. It owns append-only
