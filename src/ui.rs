@@ -106,7 +106,7 @@ impl UserInterface for TerminalUi {
             return;
         }
         if self.decorated {
-            println!("{} {}", style("==>").green(), msg);
+            println!("{} {}", style(PROMPT_START).green(), msg);
         } else {
             println!("{msg}");
         }
