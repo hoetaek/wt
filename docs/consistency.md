@@ -39,8 +39,8 @@
 | 4 | worktree context | `<git-common-dir>/wt/worktrees/<id>/` | Tier 3 안의 하위 state |
 
 Tier 2는 팀이 이미 사용하는 시스템과 어떻게 통합하는지의 설정이다. 팀이 공유하는 작업
-데이터가 아니다. TaskDocument, Workflow, TaskRun, 메시지, activity, worktree registry는
-개인 작업 state이므로 Tier 3에 둔다.
+데이터가 아니다. Idea, Spec, TaskDocument, Workflow, TaskRun, 메시지, activity,
+worktree registry는 개인 작업 state이므로 Tier 3에 둔다.
 
 Config precedence는 다음 순서다.
 
@@ -63,6 +63,13 @@ Canonical personal storage layout:
 <git-common-dir>/wt/
 ├── config.toml
 ├── profiles/
+├── ideas/
+│   └── <slug>.{md,toml}
+├── specs/
+│   └── <slug>/
+│       ├── requirements.md
+│       ├── design.md
+│       └── tasks.md
 ├── tasks/
 ├── workflows/
 ├── task-runs/
@@ -82,6 +89,61 @@ Repo-root `.local` state is not canonical. 새 코드와 새 문서는 위 layou
 `<git-common-dir>/wt/...` 경로를 primary state로 읽고 쓴다. 이전 repo-root local state를
 다뤄야 하면 명시적 import/repair 명령으로 다루고, silent fallback이나 alias처럼 동작시키지
 않는다.
+
+### Idea And Spec Prep
+
+Idea는 kill-able exploration이고 Spec은 실행하기로 결정한 작업의 prep artifact다.
+`wt-idea`는 `<git-common-dir>/wt/ideas/<slug>.{md,toml}`에 쓴다. Format은 자유로운
+Markdown이거나 TOML body일 수 있다. Idea는 committed-work status가 없고, 언제든 삭제하거나
+다시 쓸 수 있다. Idea 삭제나 재작성은 다른 component가 관찰해야 하는 state transition이
+아니다.
+
+`wt-ready`가 idea를 받고 사용자가 실행에 commit하면 idea는 spec으로 promotion된다.
+Promotion은 `ideas/<slug>.{md,toml}`을 제거하고
+`specs/<slug>/{requirements.md,design.md,tasks.md}`를 만드는 동작이다. 이 directory
+location change가 visible commit gate다. `wt` state tree를 읽는 사람은 `ideas/` 아래의
+exploration과 `specs/<slug>/` 아래의 committed prep work를 directory 위치만으로 구분할 수
+있어야 한다.
+
+TaskDocument는 계속 `<git-common-dir>/wt/tasks/<slug>.toml`에 있는 launch unit이다. 그
+body는 `specs/<slug>/` relative path를 참조할 수 있지만 TaskDocument schema는 바뀌지
+않는다. Spec은 requirements, design, tasks를 담는 긴 human/AI artifact이고,
+TaskDocument는 `wt run task`와 `wt workflow`가 소비하는 실행 단위다. 이 contract에서 wt CLI는
+`specs/`를 직접 읽거나 쓰지 않는다. Spec 없이 TaskDocument TOML만 있는 pre-redesign task도
+valid local task로 남는다.
+
+`specs/<slug>/requirements.md`는 User Story line으로 시작한다.
+
+```text
+As a [role], I want [feature] so that [benefit]
+```
+
+Functional requirement는 EARS statement로 쓴다.
+
+```text
+WHEN <condition> THE SYSTEM SHALL <behavior>
+GIVEN <precondition> WHEN <trigger> THE SYSTEM SHALL <response>
+```
+
+Non-functional section은 성능, 보안, 호환성, 또는 해당 작업에 적용되는 cross-cutting
+constraint를 명시적으로 이름 붙인다. Regression-sensitive work는 preserved behavior를 다음
+형태로 적는다.
+
+```text
+WHEN <condition> THE SYSTEM SHALL CONTINUE TO <preserved behavior>
+```
+
+`specs/<slug>/design.md`는 architecture decision, affected component, constraint를 적는다.
+Brownfield work에서는 새 design 전에 Static Model section(Purpose, Components, Business
+Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw code dump가
+아니라 intent와 component responsibility 중심으로 설명한다.
+
+`specs/<slug>/tasks.md`는 sequenced atomic unit을 checkbox item으로 나열한다. 각 item은
+dependency를 적고, dependency가 없는 item은 parallel 가능하다고 표시할 수 있다.
+
+Spec은 `wt-ready` exit 시점에 frozen되지 않는다. Execution 중 `wt-coordinate` phase에서
+findings가 나오면 design이나 task list를 in place로 업데이트할 수 있다. Spec과
+implementation이 drift하면 조용히 갈라지게 두지 말고 spec을 업데이트해 다시 맞춘다.
 
 ### Worktree Identity
 
@@ -723,8 +785,11 @@ Profile convention file은 `<git-common-dir>/wt/profiles/<name>/prompts/workflow
 
 저장되는 상태는 사용자가 이해할 수 있는 상태여야 한다.
 
-TaskDocument는 작업이 무엇인지를 담는 정의다. `<git-common-dir>/wt/tasks/<task>.toml`
-아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다.
+TaskDocument는 작업이 무엇인지를 담는 실행 정의다. `<git-common-dir>/wt/tasks/<task>.toml`
+아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다. Spec이
+있는 작업에서는 자세한 requirements/design/tasks prep artifact가
+`<git-common-dir>/wt/specs/<slug>/`에 병렬로 존재할 수 있고, TaskDocument body는 그 경로를
+가리키는 launch summary로 남는다.
 
 `wt task list`는 `<git-common-dir>/wt/tasks/<task>.toml`에 저장된 TaskDocument file의 canonical
 read-only inventory다. `wt run task`의 runnable selector가 아니므로 이미 완료된
@@ -1009,10 +1074,12 @@ UI 서버는 binary에 embedded된 no-build HTML/CSS/JS asset과 allowlisted rou
 retrospectives, profile summaries, effective config summary/source paths를 한 snapshot으로
 반환한다.
 
-`wt ui`는 inventory lens이지 새로운 state owner가 아니다. TaskDocument는 계속
-`<git-common-dir>/wt/tasks`, Workflow는 `<git-common-dir>/wt/workflows`, TaskRun은 `<git-common-dir>/wt/task-runs`, config/profile
-layering은 `.wt.toml`, `<git-common-dir>/wt/config.toml`, `<git-common-dir>/wt/profiles`가 source of truth다. UI board
-group은 linked TaskRun 상태와 runnable metadata에서 파생한 presentation일 뿐이고,
+`wt ui`는 inventory lens이지 새로운 state owner가 아니다. Ideas는
+`<git-common-dir>/wt/ideas`, Specs는 `<git-common-dir>/wt/specs`, TaskDocument는 계속
+`<git-common-dir>/wt/tasks`, Workflow는 `<git-common-dir>/wt/workflows`, TaskRun은
+`<git-common-dir>/wt/task-runs`, config/profile layering은 `.wt.toml`,
+`<git-common-dir>/wt/config.toml`, `<git-common-dir>/wt/profiles`가 source of truth다. UI
+board group은 linked TaskRun 상태와 runnable metadata에서 파생한 presentation일 뿐이고,
 Workflow나 TaskDocument에 새 status/column 값을 쓰지 않는다. Parse/validation failure는
 snapshot과 UI에 invalid record로 드러내며, invalid TOML을 조용히 숨기지 않는다.
 
