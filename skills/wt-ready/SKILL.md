@@ -62,11 +62,8 @@ focused question at a time and include your recommended answer.
 Resolve terminology as you go. If the user uses a term that conflicts with the
 repo docs or code, point to the conflict and propose the canonical term.
 
-When you are authoring a spec file (`requirements.md`, `design.md`, `tasks.md`,
-or `workflow.md`), follow the grill cycle in **Grill The Spec** instead. The
-two rules apply to different moments and are not contradictory: this section
-keeps non-spec questions terse; the grill cycle drives active per-file
-challenge dialogue during spec authoring.
+When authoring a spec file (`requirements.md`, `design.md`, `tasks.md`,
+`workflow.md`), use the **Grill The Spec** cycle instead.
 
 ## Slice The Work
 
@@ -87,13 +84,10 @@ For each slice, record:
 - acceptance checks
 - notes for experiments or tradeoffs that shaped the slice
 
-When you prepare new TaskDocuments, preserve this planning context inside the
-TaskDocument `body` as a text section, not as top-level TOML fields. Current
-TaskDocument TOML accepts only the canonical task fields; planning metadata is
-for the task agent to read in the prompt. Every prepared TaskDocument or
-workflow task must include an expected duration in its `Planning:` body section
-before `wt-start`; if an existing TaskDocument lacks one, update the body or
-stop with that as the remaining preparation work.
+Record this planning context in the TaskDocument `body` as a text section, not
+as top-level TOML fields (only canonical task fields are accepted). Every
+TaskDocument or workflow task must include an expected duration in its
+`Planning:` body section before `wt-start`.
 
 Example body section:
 
@@ -151,18 +145,12 @@ Canonical `tasks.md` → workflow mode mapping:
 
 Then act on the chosen mode:
 
-- `single` / `batch` / `stack` / `matrix` — create the executable workflow TOML
-  via `wt workflow task --mode <mode> ...`. The TOML lives at
-  `<git-common-dir>/wt/workflows/<id>.toml` and is the runnable artifact.
-  Record its path in `workflow.md` under "Linked workflow TOML".
-- `none` — no workflow TOML is created. The slices launch as direct
-  TaskDocuments via `wt run task <slug>` or as direct local edits outside the
-  wt-managed repo. `workflow.md` may be very brief or omitted.
-
-The workflow mode in the TOML must match the rationale in `workflow.md`. If
-execution later drifts from the chosen mode, `wt-coordinate` updates
-`workflow.md` rather than letting the TOML and the spec diverge silently
-(same two-way sync rule as `design.md` / `tasks.md`).
+- `single` / `batch` / `stack` / `matrix` — create the workflow TOML via
+  `wt workflow task --mode <mode> ...` at
+  `<git-common-dir>/wt/workflows/<id>.toml`. Record its path in `workflow.md`
+  under "Linked workflow TOML".
+- `none` — no workflow TOML. Slices launch as direct TaskDocuments
+  (`wt run task <slug>`) or as direct local edits outside the wt-managed repo.
 
 ## Workflow Policy
 
@@ -185,37 +173,17 @@ coordinator stops after review until the user explicitly directs landing.
 to proceed to landing/cleanup, while still enforcing dirty-worktree, check,
 unresolved-review, and ancestry safety checks.
 
-Do not treat policy as state. PR review result, merge ancestry, cleanup,
-TaskRun lifecycle, and branch deletion remain explicit later steps.
-
 ## Spec Deliverables
 
 ### Prep eagerly across in-flight work
 
-When multiple ideas, partially-drafted specs, or decisions made in the current
-conversation can be identified, prepare them all to launch-ready state rather
-than sequencing prep behind execution. Specs are living artifacts (see the
-two-way sync rule near the end of this section); the cost of revising a spec
-mid-execution is small, and the cost of carrying unprepared decisions through
-other work — context loss, decision drift, missed cross-spec consistency — is
-large. Cross-spec relationships are also easier to check when all specs exist
-simultaneously.
-
-Sequence prep behind execution only when there is a genuine blocking
-dependency (a downstream spec cannot be authored until the upstream has
-partially landed). "The spec might change later" is not a blocking dependency —
-that is exactly the case the living-artifact rule covers.
-
-When asked "is anything else not wt-ready yet?", enumerate every in-flight
-item (recent ideas, just-decided framings, conversation-only specs) and bring
-them all to ready unless the user explicitly defers a specific one.
-
-Spec authoring is not one-shot drafting. Each file in `specs/<slug>/` is produced
-through the grill cycle described in **Grill The Spec** below: draft → challenge
-the user with file-specific questions → revise → confirm, then move to the next
-file. The derivation procedure in **Choose Execution Shape > Derive workflow
-mode from `tasks.md`** runs only after `tasks.md` is confirmed, so the grill
-loops happen first.
+Prepare every identifiable in-flight item (ideas, partial specs, decisions
+made in the current conversation) to launch-ready, rather than sequencing
+prep behind execution. Specs are living artifacts — "the spec might change
+later" is not a blocking dependency. Sequence prep only when a downstream
+spec genuinely cannot be authored until an upstream has partially landed.
+When asked "anything still not ready?", enumerate everything in-flight and
+bring it all to ready unless the user explicitly defers a specific item.
 
 Prepared wt work lives in three state directories under `<git-common-dir>/wt/`:
 
@@ -227,9 +195,8 @@ Prepared wt work lives in three state directories under `<git-common-dir>/wt/`:
 - `tasks/<slug>.toml` — TaskDocument, the launch unit. Schema unchanged. The body
   may reference `specs/<slug>/` files by relative path.
 
-The wt CLI does not read or write `specs/` directly. The spec is a human/AI
-artifact. TaskDocument and TaskRun models are unchanged; no new wt commands are
-involved in spec authoring.
+The wt CLI does not read or write `specs/` directly — the spec is a human/AI
+artifact. TaskDocument and TaskRun models are unchanged.
 
 ### Promotion (idea → spec)
 
@@ -276,10 +243,6 @@ idea, may go straight into `specs/<slug>/` without an idea file existing first.
     constraint.
   - **Layered or cross-spec relationships** — how this design depends on or is
     depended on by sibling specs (dependency direction, layer assignment).
-  - Three small focused diagrams beat one mega-diagram.
-- Treat diagrams as a Confirm-step requirement: after the prose draft passes
-  the grill, produce or refine diagrams and commit them to design.md before
-  moving on to `tasks.md`.
 
 `tasks.md`:
 
@@ -322,11 +285,6 @@ Spec authoring is an active dialogue, not one-shot generation. For each file in
 before moving on. Drafts are working material; only the user's confirmation
 makes a file authoritative.
 
-This section absorbs the pattern from the `grill-with-docs` skill so a separate
-`/grill-with-docs` invocation is not needed while `wt-ready` is the active
-skill. The lineage matters: grill-style challenge dialogue is what produces a
-spec that the rest of `wt-ready` can derive an execution shape from.
-
 ### Per-file cycle
 
 1. **Draft** the file from the evidence gathered in **First Read** and **Gather
@@ -337,25 +295,38 @@ spec that the rest of `wt-ready` can derive an execution shape from.
 3. **Revise** the draft inline based on the answer. Surface terminology
    conflicts against `docs/consistency.md` (or the project's CONTEXT.md when
    present) as they appear — ubiquitous-language drift is cheapest to fix here.
-4. **Display for review** — after every revision (and especially after the
-   prose draft has passed the grill and any ASCII diagrams have been added for
-   `design.md`), surface the *actual file content* so the user can read it
-   end-to-end before confirming. Prose summaries of "what changed" are not a
-   substitute. Pick one of these mechanisms in order of preference based on
-   the user's setup:
+4. **Display for review** — after every revision, surface what changed so
+   the user can confirm. Default to a **structured summary** in chat, not
+   the full file contents. Dumping the entire file duplicates bytes that
+   are already in context from the preceding Edit/Write and burns tokens
+   for no comprehension gain.
+
+   **Default: summarize, don't dump.**
+   - List what changed and where (file path + section heading + one-line
+     gist per change: "added", "moved", "rewrote", "removed").
+   - Quote only the 2-10 lines that carry the substantive decision or
+     wording the user must confirm — never the whole file.
+   - Goal: user verifies the substance of the revision in seconds, without
+     re-reading bytes they already approved.
+
+   **For end-to-end review, use a zero-token surface (in this order):**
    1. **`wt config`-configured editor** — if `[editor].command` is set
-      (e.g., `code {{path}}`, `vi {{path}}`, `cursor {{path}}`), invoke that
-      command with the modified file path so it opens in the user's editor of
-      choice. This is the cleanest path because it does not flood the
-      conversation surface and the user can review with full editor tooling
-      (folding, syntax highlight, etc.).
-   2. **cmux markdown pane** — if cmux is active and the user prefers a
-      side-by-side review surface, open the file in a cmux pane configured for
-      markdown rendering. Useful when the user wants to keep the agent
-      conversation visible while reviewing.
-   3. **Terminal print** — as a last resort, print the file content directly
-      to the conversation. This always works but bloats the chat. Acceptable
-      for short files; for long specs (>200 lines) prefer the editor path.
+      (e.g., `code {{path}}`, `vi {{path}}`, `cursor {{path}}`), invoke
+      that command with the file path. Zero conversation tokens; full
+      editor tooling (folding, syntax highlight).
+   2. **cmux markdown pane** — if cmux is active, open the file in a pane
+      configured for markdown rendering. Zero conversation tokens; lets
+      the user keep the agent conversation visible while reviewing.
+   3. **`Ctrl+E` to expand existing tool output** — if you just ran
+      Read/Edit/Write, the file content is already in the Claude Code UI
+      (collapsed by default). Direct the user to press `Ctrl+E` to expand
+      it in place, instead of re-Reading and re-printing.
+
+   **Avoid** re-Reading a file solely to print it back into chat — Claude
+   Code collapses tool output by default, so the dump is invisible without
+   `Ctrl+E` anyway. Acceptable only for very short files (< 50 lines) when
+   no editor or cmux pane exists.
+
    When in doubt, ask once which mechanism the user prefers and apply that
    choice consistently for the rest of the wt-ready cycle.
 5. **Confirm** with the user that the file is settled before moving to the
@@ -412,39 +383,31 @@ spec that the rest of `wt-ready` can derive an execution shape from.
 
 ### Ubiquitous language
 
-The grill is also the place to catch terminology drift. When the user uses a
-term that already has a canonical definition in `docs/consistency.md` (or the
-project glossary), call it out immediately and propose the canonical term —
-mirror the grill-with-docs pattern. Resolving these now is cheaper than after
-the TaskDocument is launched.
+When the user uses a term that conflicts with `docs/consistency.md` (or the
+project glossary), call it out immediately and propose the canonical term.
+This is part of step 3 (Revise), called out separately because terminology
+drift is the cheapest defect to fix during grilling.
 
 
 
 End with one of these concrete outputs:
 
 - spec deliverables prepared (or promoted from `ideas/`) at
-  `<git-common-dir>/wt/specs/<slug>/` with `requirements.md`, `design.md`,
-  `tasks.md`, and optionally `workflow.md` recording the chosen execution shape
-- existing TaskDocuments/workflow are ready, with the exact `wt-start` target
-- new TaskDocument TOML files are prepared
-- a saved workflow is prepared, including mode, base, order, and policy
-- a short list of unresolved HITL decisions blocks launch
+  `<git-common-dir>/wt/specs/<slug>/`, recording the chosen execution shape
+- existing TaskDocuments/workflow ready, with the exact `wt-start` target
+- new TaskDocument TOML files prepared
+- a saved workflow prepared (mode, base, order, policy)
+- a short list of unresolved HITL decisions that blocks launch
 
 Use existing repo patterns for TaskDocument bodies. Avoid stale implementation
-file paths unless they are necessary for the task. For new TaskDocuments,
-include a concise `Planning:` section in `body` when HITL/AFK classification,
-expected duration, dependencies, execution shape, or acceptance checks would
-help the task agent. Do not add fields such as `type`, `blocked_by`,
-`expected_duration`, or `[planning]` to the TaskDocument TOML unless the repo
-schema explicitly supports them.
+file paths unless they are necessary for the task.
 
 Report:
 
 - evidence checked
 - selected approach and rejected alternatives
 - slice list with dependencies and chosen execution shape
-- expected duration for each slice and whether it is a firm estimate or a
-  conservative planning guess
+- expected duration per slice (firm or conservative planning guess)
 - PR/landing policy source: `[workflow]` config, CLI/workflow override, or
   explicit user answer
 - exact next command or target for `wt-start`
