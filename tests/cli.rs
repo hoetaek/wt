@@ -2,6 +2,7 @@ use assert_cmd::Command;
 use assert_fs::TempDir;
 use predicates::prelude::*;
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 
@@ -25,8 +26,7 @@ const GIT_LOCAL_ENV_KEYS: &[&str] = &[
 
 const CLAUDE_MANUAL_INBOX_HOOK_COMMAND: &str =
     "wt msg check-inbox --agent agents/claude --silent # wt-agent-hook:claude-inbox";
-const CLAUDE_INBOX_HOOK_COMMAND: &str =
-    "wt msg check-inbox --silent # wt-agent-hook:claude-inbox";
+const CLAUDE_INBOX_HOOK_COMMAND: &str = "wt msg check-inbox --silent # wt-agent-hook:claude-inbox";
 const PRE_SILENT_CLAUDE_INBOX_HOOK_COMMAND: &str =
     "wt msg check-inbox # wt-agent-hook:claude-inbox";
 const LEGACY_CLAUDE_INBOX_HOOK_COMMAND: &str = "if [ -n \"${WT_AGENT_ID:-}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi # wt-agent-hook:claude-inbox";
@@ -538,7 +538,16 @@ fn codex_hook_trusted_hash(command: &str, event_key: &str) -> String {
     let serialized = serde_json::to_vec(&canonical).unwrap();
     let mut hasher = Sha256::new();
     hasher.update(serialized);
-    format!("sha256:{:x}", hasher.finalize())
+    sha256_version(hasher.finalize().as_ref())
+}
+
+fn sha256_version(bytes: &[u8]) -> String {
+    let mut version = String::with_capacity("sha256:".len() + bytes.len() * 2);
+    version.push_str("sha256:");
+    for byte in bytes {
+        let _ = write!(&mut version, "{byte:02x}");
+    }
+    version
 }
 
 fn canonical_json(value: &serde_json::Value) -> serde_json::Value {
