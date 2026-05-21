@@ -826,16 +826,24 @@ fn shell_init_prints_valid_bash_source() {
         .stdout(predicate::str::contains("wt-env"))
         .stdout(predicate::str::contains("wt-coord-use"))
         .stdout(predicate::str::contains("PROMPT_COMMAND"))
+        .stdout(predicate::str::contains("declare -p PROMPT_COMMAND"))
+        .stdout(predicate::str::contains("PROMPT_COMMAND+=(wt-env)"))
         .get_output()
         .stdout
         .clone();
     let script = temp.path().join("wt-init.bash");
     std::fs::write(&script, output).unwrap();
 
-    let status = StdCommand::new("bash")
+    let status = match StdCommand::new("bash")
         .args(["-n", script.to_str().unwrap()])
         .status()
-        .unwrap();
+    {
+        Ok(status) => status,
+        Err(err) => {
+            eprintln!("skipping bash syntax check because bash is unavailable: {err}");
+            return;
+        }
+    };
     assert!(status.success());
 }
 
@@ -872,7 +880,8 @@ fn shell_init_rejects_unsupported_shell_with_supported_list() {
         .assert()
         .failure()
         .stdout("")
-        .stderr(predicate::str::contains("Supported shells: zsh, bash"));
+        .stderr(predicate::str::contains("invalid value 'fish'"))
+        .stderr(predicate::str::contains("[possible values: zsh, bash]"));
 }
 
 #[test]

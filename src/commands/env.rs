@@ -73,7 +73,9 @@ fn latest_task_run_for_branch(
         if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
             continue;
         }
-        let run = task_run::read(&path)?;
+        let Ok(run) = task_run::read(&path) else {
+            continue;
+        };
         if run.branch != branch {
             continue;
         }
@@ -163,5 +165,30 @@ updated_at = "2026-05-21T00:00:00.000000000Z"
             elapsed.as_millis() < 50,
             "TaskRun scan took {elapsed:?}, expected under 50ms"
         );
+    }
+
+    #[test]
+    fn latest_task_run_scan_skips_malformed_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let task_runs_dir = temp.path().join("task-runs");
+        fs::create_dir_all(&task_runs_dir).unwrap();
+        fs::write(task_runs_dir.join("bad.toml"), "not valid toml").unwrap();
+        fs::write(
+            task_runs_dir.join("good.toml"),
+            r#"task = "task"
+branch = "target-branch"
+status = "running"
+creation_order = 1
+created_at = "2026-05-21T00:00:00.000000000Z"
+updated_at = "2026-05-21T00:00:00.000000000Z"
+"#,
+        )
+        .unwrap();
+
+        let record = latest_task_run_for_branch(task_runs_dir, "target-branch")
+            .unwrap()
+            .expect("expected valid matching task run");
+
+        assert_eq!(record.id, "good");
     }
 }

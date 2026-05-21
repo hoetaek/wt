@@ -50,7 +50,8 @@ pub enum Commands {
     )]
     ShellInit {
         /// Shell to initialize: zsh or bash
-        shell: String,
+        #[arg(value_enum)]
+        shell: ShellInitShell,
     },
     /// Print shell statements for the current worker worktree identity
     #[command(
@@ -409,6 +410,12 @@ pub enum HookAgentCommand {
 pub enum HookAgent {
     Claude,
     Codex,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellInitShell {
+    Zsh,
+    Bash,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]

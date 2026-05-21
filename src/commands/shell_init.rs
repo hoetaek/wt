@@ -1,16 +1,9 @@
-use anyhow::{Result, bail};
+use crate::cli::ShellInitShell;
 
-pub fn run(shell: &str) -> Result<()> {
+pub fn run(shell: ShellInitShell) {
     match shell {
-        "zsh" => {
-            print!("{ZSH_INIT}");
-            Ok(())
-        }
-        "bash" => {
-            print!("{BASH_INIT}");
-            Ok(())
-        }
-        other => bail!("Unsupported shell `{other}`. Supported shells: zsh, bash"),
+        ShellInitShell::Zsh => print!("{ZSH_INIT}"),
+        ShellInitShell::Bash => print!("{BASH_INIT}"),
     }
 }
 
@@ -47,15 +40,29 @@ wt-coord-exit() {
   eval "$(wt coord exit)"
 }
 
-case ";${PROMPT_COMMAND:-};" in
-  *";wt-env;"*) ;;
-  *)
-    if [ -n "${PROMPT_COMMAND:-}" ]; then
-      PROMPT_COMMAND="${PROMPT_COMMAND}; wt-env"
-    else
-      PROMPT_COMMAND="wt-env"
+if declare -p PROMPT_COMMAND 2>/dev/null | grep -q '^declare \-[^ ]*a'; then
+  wt_prompt_has_env=0
+  for wt_prompt_command in "${PROMPT_COMMAND[@]}"; do
+    if [ "$wt_prompt_command" = "wt-env" ]; then
+      wt_prompt_has_env=1
+      break
     fi
-    ;;
-esac
+  done
+  if [ "$wt_prompt_has_env" -eq 0 ]; then
+    PROMPT_COMMAND+=(wt-env)
+  fi
+  unset wt_prompt_has_env wt_prompt_command
+else
+  case ";${PROMPT_COMMAND:-};" in
+    *";wt-env;"*) ;;
+    *)
+      if [ -n "${PROMPT_COMMAND:-}" ]; then
+        PROMPT_COMMAND="${PROMPT_COMMAND}; wt-env"
+      else
+        PROMPT_COMMAND="wt-env"
+      fi
+      ;;
+  esac
+fi
 wt-env
 "#;

@@ -59,7 +59,7 @@ fn try_main() -> Result<()> {
             return Ok(());
         }
         Commands::ShellInit { shell } => {
-            wt::commands::shell_init::run(shell)?;
+            wt::commands::shell_init::run(*shell);
             return Ok(());
         }
         Commands::Env => {
