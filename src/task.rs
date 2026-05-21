@@ -86,6 +86,15 @@ impl TaskDocumentDisplay {
 }
 
 impl TaskDocument {
+    pub(crate) fn empty(slug: &str) -> Self {
+        Self {
+            title: slug.to_string(),
+            branch: slug.to_string(),
+            body: String::new(),
+            origin: None,
+        }
+    }
+
     pub(crate) fn title_or_key(&self, key: &str) -> String {
         if self.title.trim().is_empty() {
             key.to_string()
@@ -538,7 +547,7 @@ pub(crate) fn workspace_run_label(idx: usize, total: usize, identifier: Option<&
     label
 }
 
-fn render_task_document(task: &TaskDocument) -> String {
+pub(crate) fn render_task_document(task: &TaskDocument) -> String {
     let mut content = String::new();
     content.push_str(&format!("title = {}\n", toml_quote(&task.title)));
     if !task.branch.trim().is_empty() {

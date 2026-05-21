@@ -23,6 +23,7 @@ pub mod profile;
 pub mod profile_match;
 pub(crate) mod profile_selection;
 pub(crate) mod profile_workspace;
+pub mod scaffold;
 pub mod send;
 pub mod session;
 pub mod shell_init;

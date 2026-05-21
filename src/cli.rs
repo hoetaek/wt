@@ -124,6 +124,39 @@ pub enum Commands {
         #[command(subcommand)]
         command: WorkflowCommand,
     },
+    /// Create blank skeleton documents for a feature
+    #[command(
+        long_about = "Create blank skeleton documents for a feature under <git-common-dir>/wt ideas, specs, tasks, workflows, and retrospectives. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
+    )]
+    Scaffold {
+        /// Feature slug to use for every generated path
+        #[arg(value_name = "FEATURE")]
+        feature: String,
+        /// Create <git-common-dir>/wt/ideas/<feature>.md
+        #[arg(long)]
+        idea: bool,
+        /// Create <git-common-dir>/wt/specs/<feature>/requirements.md and design.md
+        #[arg(long)]
+        spec: bool,
+        /// Create <git-common-dir>/wt/tasks/<feature>.toml
+        #[arg(long)]
+        task: bool,
+        /// Create <git-common-dir>/wt/workflows/<feature>.toml
+        #[arg(long)]
+        workflow: bool,
+        /// Create <git-common-dir>/wt/retrospectives/<feature>.md
+        #[arg(long)]
+        retrospect: bool,
+        /// Create all scaffold document kinds
+        #[arg(
+            long,
+            conflicts_with_all = ["idea", "spec", "task", "workflow", "retrospect"]
+        )]
+        all: bool,
+        /// Overwrite existing scaffold files
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
     /// Show worktree, branch, site, and setup state
     List {
         /// Do not truncate table columns to fit the terminal
@@ -1616,6 +1649,56 @@ mod tests {
     }
 
     #[test]
+    fn scaffold_accepts_feature_and_kind_flags() {
+        let cli = parse(&["wt", "scaffold", "foo", "--idea", "--task"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Scaffold {
+                ref feature,
+                idea: true,
+                spec: false,
+                task: true,
+                workflow: false,
+                retrospect: false,
+                all: false,
+                force: false,
+            }) if feature == "foo"
+        ));
+    }
+
+    #[test]
+    fn scaffold_rejects_all_with_kind_flags() {
+        let result = Cli::try_parse_from(["wt", "scaffold", "foo", "--all", "--idea"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn scaffold_rejects_missing_feature() {
+        let result = Cli::try_parse_from(["wt", "scaffold", "--idea"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn scaffold_help_exposes_document_kind_flags() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("scaffold")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("Create blank skeleton documents for a feature"));
+        assert!(help.contains("<FEATURE>"));
+        assert!(help.contains("--idea"));
+        assert!(help.contains("--spec"));
+        assert!(help.contains("--task"));
+        assert!(help.contains("--workflow"));
+        assert!(help.contains("--retrospect"));
+        assert!(help.contains("--all"));
+        assert!(help.contains("--force"));
+    }
+
+    #[test]
     fn run_task_accepts_task_keys_base_and_profile() {
         let cli = parse(&["wt", "run", "task", "task-a", "task-b", "--base", "main"]);
         assert!(matches!(
@@ -2155,6 +2238,7 @@ mod tests {
         assert!(help.contains("wt run branch"));
         assert!(help.contains("wt run task"));
         assert!(help.contains("wt run workflow"));
+        assert!(help.contains("Create blank skeleton documents for a feature"));
         assert!(help.contains("Use wt open"));
         assert!(!help.contains("wt new"));
     }
