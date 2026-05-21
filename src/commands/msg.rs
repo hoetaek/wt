@@ -5,6 +5,8 @@ use crate::messages::{
 };
 use anyhow::{Result, bail};
 use serde::Serialize;
+use std::collections::HashSet;
+use std::env;
 use std::io::Write;
 
 pub(crate) fn send(ctx: &Ctx, to: &str, scope: Option<&str>, message: &[String]) -> Result<()> {
@@ -102,21 +104,49 @@ fn canonical_read_message_id(message_id: &str) -> Result<&str> {
     Ok(id)
 }
 
-pub(crate) fn check_inbox(ctx: &Ctx, agent: &str) -> Result<()> {
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
-    let delivery = store.check_inbox(agent)?;
-    if delivery.is_empty() {
+pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
+    let agents = match agent {
+        Some(agent) => vec![agent.to_string()],
+        None => inbox_agents_from_env()?,
+    };
+    if agents.is_empty() {
         return Ok(());
     }
 
-    let output = HookOutput::new("UserPromptSubmit", delivery.additional_context());
-    let stdout = std::io::stdout();
-    let mut handle = stdout.lock();
-    serde_json::to_writer(&mut handle, &output)?;
-    writeln!(handle)?;
-    handle.flush()?;
-    store.acknowledge_inbox_delivery(&delivery)?;
+    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    for agent in agents {
+        let delivery = store.check_inbox(&agent)?;
+        if delivery.is_empty() {
+            continue;
+        }
+
+        let output = HookOutput::new("UserPromptSubmit", delivery.additional_context());
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        serde_json::to_writer(&mut handle, &output)?;
+        writeln!(handle)?;
+        handle.flush()?;
+        store.acknowledge_inbox_delivery(&delivery)?;
+    }
     Ok(())
+}
+
+fn inbox_agents_from_env() -> Result<Vec<String>> {
+    let mut seen = HashSet::new();
+    let mut agents = Vec::new();
+    for key in ["WT_AGENT_ID", "WT_COORDINATOR_AGENT_ID"] {
+        match env::var(key) {
+            Ok(value) => {
+                if value.is_empty() || !seen.insert(value.clone()) {
+                    continue;
+                }
+                agents.push(value);
+            }
+            Err(env::VarError::NotPresent) => {}
+            Err(env::VarError::NotUnicode(_)) => bail!("Invalid {key}: value is not Unicode"),
+        }
+    }
+    Ok(agents)
 }
 
 #[derive(Debug, Serialize)]

@@ -225,7 +225,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             }
             MsgCommand::List { agent } => commands::msg::list(ctx, agent),
             MsgCommand::Read { agent, message_id } => commands::msg::read(ctx, agent, message_id),
-            MsgCommand::CheckInbox { agent } => commands::msg::check_inbox(ctx, agent),
+            MsgCommand::CheckInbox { agent } => commands::msg::check_inbox(ctx, agent.as_deref()),
         },
         Commands::Send {
             target,

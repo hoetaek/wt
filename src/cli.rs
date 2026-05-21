@@ -129,7 +129,7 @@ pub enum Commands {
     },
     /// Set up and remove wt-managed agent hooks
     #[command(
-        long_about = "Set up and remove wt-managed agent hooks.\n\nThe canonical one-shot hook setup surface is `wt hooks setup`, which scans PATH for supported agent commands such as `claude` and `codex`, then installs matching WT_AGENT_ID dispatcher hooks. Use `wt hooks setup codex` or `wt hooks setup --agent codex` to set up one adapter. Use `wt hooks uninstall` to remove wt-managed hooks while preserving user-managed hooks, cmux hooks, and unrelated trust state."
+        long_about = "Set up and remove wt-managed agent hooks.\n\nThe canonical one-shot hook setup surface is `wt hooks setup`, which scans PATH for supported agent commands such as `claude` and `codex`, then installs matching WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher hooks. Use `wt hooks setup codex` or `wt hooks setup --agent codex` to set up one adapter. Use `wt hooks uninstall` to remove wt-managed hooks while preserving user-managed hooks, cmux hooks, and unrelated trust state."
     )]
     Hooks {
         #[command(subcommand)]
@@ -137,7 +137,7 @@ pub enum Commands {
     },
     /// Install hooks for detected agent CLIs
     #[command(
-        long_about = "Compatibility alias for `wt hooks setup`.\n\n`wt install` scans PATH for supported agent commands such as `claude` and `codex`, then installs the matching WT_AGENT_ID dispatcher hooks. New scripts should use `wt hooks setup`. Hook installation is capability setup only; per-session identity still comes from `wt codex`, `wt claude`, `wt as`, or wt-launched run/workflow sessions."
+        long_about = "Compatibility alias for `wt hooks setup`.\n\n`wt install` scans PATH for supported agent commands such as `claude` and `codex`, then installs the matching WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher hooks. New scripts should use `wt hooks setup`. Hook installation is capability setup only; per-session identity still comes from `wt codex`, `wt claude`, `wt as`, or wt-launched run/workflow sessions."
     )]
     Install,
     /// Uninstall wt-managed agent hooks
@@ -201,7 +201,7 @@ pub enum Commands {
     },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send, deliver, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` normalizes to the local coordinator inbox `agents/coordinator`. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg check-inbox --agent <agent>` from agent hooks; deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` normalizes to the local coordinator inbox `agents/coordinator`. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg check-inbox` from agent hooks so WT_AGENT_ID and WT_COORDINATOR_AGENT_ID inboxes are checked; pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -302,7 +302,7 @@ pub enum Commands {
 pub enum HooksCommand {
     /// Set up wt-managed hooks for detected or selected agent CLIs
     #[command(
-        long_about = "Set up wt-managed inbox hooks for detected or selected agent CLIs.\n\n`wt hooks setup` scans PATH for supported agent commands such as `claude` and `codex`, then installs matching WT_AGENT_ID dispatcher hooks. Use `wt hooks setup codex` or `wt hooks setup --agent codex` to set up one adapter. Hook setup is capability setup only; per-session identity still comes from `wt codex`, `wt claude`, `wt as`, or wt-launched run/workflow sessions."
+        long_about = "Set up wt-managed inbox hooks for detected or selected agent CLIs.\n\n`wt hooks setup` scans PATH for supported agent commands such as `claude` and `codex`, then installs matching WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher hooks. Use `wt hooks setup codex` or `wt hooks setup --agent codex` to set up one adapter. Hook setup is capability setup only; per-session identity still comes from `wt codex`, `wt claude`, `wt as`, or wt-launched run/workflow sessions."
     )]
     Setup {
         /// Supported agent adapter to set up
@@ -446,7 +446,7 @@ pub enum AgentCommand {
     WaitStats,
     /// Install or uninstall local agent hook adapters
     #[command(
-        long_about = "Install or uninstall local agent hook adapters.\n\nThe Claude adapter is Claude-specific: it uses Claude Code worktree-local `.claude/settings.local.json` hooks to deliver the wt file inbox through a WT_AGENT_ID dispatcher, and adds that path to the per-worktree Git exclude file. The Codex adapter is Codex-specific: it uses user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` hooks plus matching trusted hook state in `config.toml`. Adapter installation preserves non-wt hooks and trust state."
+        long_about = "Install or uninstall local agent hook adapters.\n\nThe Claude adapter is Claude-specific: it uses Claude Code worktree-local `.claude/settings.local.json` hooks to deliver the wt file inbox through a WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher, and adds that path to the per-worktree Git exclude file. The Codex adapter is Codex-specific: it uses user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` hooks plus matching trusted hook state in `config.toml`. Adapter installation preserves non-wt hooks and trust state."
     )]
     Hook {
         #[command(subcommand)]
@@ -472,7 +472,7 @@ pub enum AgentHookCommand {
 pub enum AgentHookInstallCommand {
     /// Install Claude Code inbox polling
     #[command(
-        long_about = "Install the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis writes worktree-local `.claude/settings.local.json` UserPromptSubmit and PostToolUse hooks that read WT_AGENT_ID at runtime and run `wt msg check-inbox --agent \"$WT_AGENT_ID\"`; when WT_AGENT_ID is unset, the hooks exit successfully without output. Install also adds that local settings path to the per-worktree Git exclude file, preserves existing local Claude settings, and fails instead of modifying tracked settings or source files.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and WT_COORDINATOR_AGENT_ID=agents/coordinator when they launch Claude."
+        long_about = "Install the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis writes worktree-local `.claude/settings.local.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox`; the command reads WT_AGENT_ID and WT_COORDINATOR_AGENT_ID at runtime, and exits successfully without output when neither is set. Install also adds that local settings path to the per-worktree Git exclude file, preserves existing local Claude settings, and fails instead of modifying tracked settings or source files.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and WT_COORDINATOR_AGENT_ID=agents/coordinator when they launch Claude."
     )]
     Claude {
         /// Manual/test override: bind this hook to one agent instead of WT_AGENT_ID
@@ -481,7 +481,7 @@ pub enum AgentHookInstallCommand {
     },
     /// Install Codex inbox polling
     #[command(
-        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit and PostToolUse hooks that read WT_AGENT_ID at runtime and run `wt msg check-inbox --agent \"$WT_AGENT_ID\"`; when WT_AGENT_ID is unset, the hooks exit successfully without output. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and WT_COORDINATOR_AGENT_ID=agents/coordinator when they launch Codex."
+        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox`; the command reads WT_AGENT_ID and WT_COORDINATOR_AGENT_ID at runtime, and exits successfully without output when neither is set. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and WT_COORDINATOR_AGENT_ID=agents/coordinator when they launch Codex."
     )]
     Codex {
         /// Manual/test override: bind this user-level hook to one agent instead of WT_AGENT_ID
@@ -551,9 +551,9 @@ pub enum MsgCommand {
     },
     /// Claim deliverable inbox messages, emit hook JSON, and acknowledge delivery
     CheckInbox {
-        /// Agent id as NAME or agents/NAME
+        /// Explicit single agent id as NAME or agents/NAME; omitted uses WT_AGENT_ID and WT_COORDINATOR_AGENT_ID
         #[arg(long)]
-        agent: String,
+        agent: Option<String>,
     },
 }
 

@@ -232,7 +232,7 @@ impl ClaudeHookTarget {
 
     fn label(&self) -> String {
         match self {
-            Self::Dispatcher => "WT_AGENT_ID dispatcher".into(),
+            Self::Dispatcher => "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher".into(),
             Self::Agent(agent) => format!("manual override {}", agent.as_str()),
         }
     }
@@ -256,7 +256,7 @@ impl CodexHookTarget {
 
     fn label(&self) -> String {
         match self {
-            Self::Dispatcher => "WT_AGENT_ID dispatcher".into(),
+            Self::Dispatcher => "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher".into(),
             Self::Agent(agent) => format!("manual override {}", agent.as_str()),
         }
     }
@@ -964,9 +964,7 @@ fn managed_claude_hook_command(agent: &str) -> String {
 }
 
 fn managed_claude_dispatcher_command() -> String {
-    format!(
-        "if [ -n \"${{WT_AGENT_ID:-}}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi {WT_CLAUDE_HOOK_MARKER}"
-    )
+    format!("wt msg check-inbox {WT_CLAUDE_HOOK_MARKER}")
 }
 
 fn managed_codex_hook_command(agent: &str) -> String {
@@ -974,9 +972,7 @@ fn managed_codex_hook_command(agent: &str) -> String {
 }
 
 fn managed_codex_dispatcher_command() -> String {
-    format!(
-        "if [ -n \"${{WT_AGENT_ID:-}}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi {WT_CODEX_HOOK_MARKER}"
-    )
+    format!("wt msg check-inbox {WT_CODEX_HOOK_MARKER}")
 }
 
 fn codex_trust_key(
@@ -1001,11 +997,11 @@ pub(crate) fn codex_event_trust_key(
 }
 
 pub(crate) fn is_wt_managed_codex_command(command: &str) -> bool {
-    command.contains(WT_CODEX_HOOK_MARKER) && command.contains("wt msg check-inbox --agent ")
+    command.contains(WT_CODEX_HOOK_MARKER) && command.contains("wt msg check-inbox")
 }
 
 fn is_wt_managed_claude_command(command: &str) -> bool {
-    command.contains(WT_CLAUDE_HOOK_MARKER) && command.contains("wt msg check-inbox --agent ")
+    command.contains(WT_CLAUDE_HOOK_MARKER) && command.contains("wt msg check-inbox")
 }
 
 pub(crate) fn codex_command_hook_hash(command: &str, event_key: &str) -> String {

@@ -323,10 +323,13 @@ merge.
   coordinator reports, `--scope task_run:<id>` for TaskRun-owned delivery, and
   `--scope repo` for repo-local singleton delivery. Workflow and TaskRun
   ownership belong in explicit message scope metadata, not in `correlates_with`.
-- `wt msg check-inbox --agent <agent>` is the hook-compatible consumer. It
-  claims deliverable direct-scope messages from `inbox/new` or eligible
-  `inbox/retry`, emits hook JSON, and acknowledges them into `inbox/delivered`
-  after stdout is written; it is not a separate unread/read lifecycle.
+- `wt msg check-inbox` is the hook-compatible consumer. With no `--agent`, it
+  checks the unique non-empty inbox ids from `WT_AGENT_ID` and
+  `WT_COORDINATOR_AGENT_ID`; `--agent <agent>` is an explicit single-inbox
+  override. It claims deliverable direct-scope messages from `inbox/new` or
+  eligible `inbox/retry`, emits hook JSON, and acknowledges them into
+  `inbox/delivered` after stdout is written; it is not a separate unread/read
+  lifecycle.
 - `wt msg list --agent <agent>` is the read-only lifecycle inventory. It counts
   and summarizes `new`, `claimed`, `delivered`, `retry`, and `failed` messages,
   including claim owner, lease, attempts, scope, and error metadata when present.

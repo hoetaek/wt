@@ -25,7 +25,8 @@ const GIT_LOCAL_ENV_KEYS: &[&str] = &[
 
 const CLAUDE_MANUAL_INBOX_HOOK_COMMAND: &str =
     "wt msg check-inbox --agent agents/claude # wt-agent-hook:claude-inbox";
-const CLAUDE_INBOX_HOOK_COMMAND: &str = "if [ -n \"${WT_AGENT_ID:-}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi # wt-agent-hook:claude-inbox";
+const CLAUDE_INBOX_HOOK_COMMAND: &str = "wt msg check-inbox # wt-agent-hook:claude-inbox";
+const LEGACY_CLAUDE_INBOX_HOOK_COMMAND: &str = "if [ -n \"${WT_AGENT_ID:-}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi # wt-agent-hook:claude-inbox";
 const CODEX_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 const MANAGED_INBOX_HOOK_EVENTS: &[(&str, &str)] = &[
     ("UserPromptSubmit", "user_prompt_submit"),
@@ -46,6 +47,7 @@ fn wt_command() -> Command {
         command.env_remove(key);
     }
     command.env_remove("WT_AGENT_ID");
+    command.env_remove("WT_COORDINATOR_AGENT_ID");
     command
 }
 
@@ -462,6 +464,10 @@ fn codex_hook_command(agent: &str) -> String {
 }
 
 fn codex_dispatcher_command() -> String {
+    format!("wt msg check-inbox {CODEX_INBOX_HOOK_MARKER}")
+}
+
+fn legacy_codex_dispatcher_command() -> String {
     format!(
         "if [ -n \"${{WT_AGENT_ID:-}}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi {CODEX_INBOX_HOOK_MARKER}"
     )
@@ -1002,9 +1008,8 @@ fn msg_help_explains_agent_inbox_contract() {
         .stdout(predicate::str::contains(
             "wt msg read --agent <agent> <message-id>",
         ))
-        .stdout(predicate::str::contains(
-            "wt msg check-inbox --agent <agent>",
-        ))
+        .stdout(predicate::str::contains("wt msg check-inbox"))
+        .stdout(predicate::str::contains("WT_COORDINATOR_AGENT_ID"))
         .stdout(predicate::str::contains("inbox/new"))
         .stdout(predicate::str::contains("inbox/delivered"));
 
@@ -1031,7 +1036,8 @@ fn msg_help_explains_agent_inbox_contract() {
         .assert()
         .success()
         .stdout(predicate::str::contains("hook JSON"))
-        .stdout(predicate::str::contains("Agent id as NAME or agents/NAME"));
+        .stdout(predicate::str::contains("Explicit single agent id"))
+        .stdout(predicate::str::contains("WT_COORDINATOR_AGENT_ID"));
 
     wt_command()
         .args(["msg", "list", "--help"])
@@ -1935,6 +1941,221 @@ fn msg_check_empty_inbox_exits_quietly() {
 }
 
 #[test]
+fn msg_check_inbox_without_agent_and_no_env_exits_quietly() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn msg_check_inbox_without_agent_uses_wt_agent_id_env() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "runtime",
+            "env",
+        ])
+        .assert()
+        .success();
+
+    let output = wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .env("WT_AGENT_ID", "agents/codex")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/codex: 1 new message"));
+    assert!(context.contains("runtime env"));
+}
+
+#[test]
+fn msg_check_inbox_without_agent_checks_runtime_and_coordinator_env_ids() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "runtime",
+            "message",
+        ])
+        .assert()
+        .success();
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "coordinator",
+            "coordinator",
+            "message",
+        ])
+        .assert()
+        .success();
+
+    let output = wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .env("WT_AGENT_ID", "agents/codex")
+        .env("WT_COORDINATOR_AGENT_ID", "agents/coordinator")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let lines = std::str::from_utf8(&output)
+        .unwrap()
+        .lines()
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2);
+    let contexts = lines
+        .iter()
+        .map(|line| {
+            let value: serde_json::Value = serde_json::from_str(line).unwrap();
+            value["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert!(contexts[0].contains("WT INBOX for agents/codex: 1 new message"));
+    assert!(contexts[0].contains("runtime message"));
+    assert!(contexts[1].contains("WT INBOX for agents/coordinator: 1 new message"));
+    assert!(contexts[1].contains("coordinator message"));
+}
+
+#[test]
+fn msg_check_inbox_without_agent_deduplicates_matching_env_ids() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/coordinator",
+            "deduped",
+            "message",
+        ])
+        .assert()
+        .success();
+
+    let output = wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .env("WT_AGENT_ID", "agents/coordinator")
+        .env("WT_COORDINATOR_AGENT_ID", "agents/coordinator")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let lines = std::str::from_utf8(&output)
+        .unwrap()
+        .lines()
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1);
+    let value: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/coordinator: 1 new message"));
+    assert!(context.contains("deduped message"));
+}
+
+#[test]
+fn msg_check_inbox_explicit_agent_ignores_runtime_env_ids() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    for (agent, message) in [
+        ("agents/manual", "manual override"),
+        ("agents/codex", "runtime env"),
+        ("agents/coordinator", "coordinator env"),
+    ] {
+        wt_command()
+            .args([
+                "-C",
+                temp.path().to_str().unwrap(),
+                "msg",
+                "send",
+                "--to",
+                agent,
+                message,
+            ])
+            .assert()
+            .success();
+    }
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/manual",
+        ])
+        .env("WT_AGENT_ID", "agents/codex")
+        .env("WT_COORDINATOR_AGENT_ID", "agents/coordinator")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/manual: 1 new message"));
+    assert!(context.contains("manual override"));
+    assert!(!context.contains("runtime env"));
+    assert!(!context.contains("coordinator env"));
+
+    let messages_root = temp.path().join(".git/wt/messages/agents");
+    assert_eq!(
+        toml_files(&messages_root.join("manual/inbox/delivered")).len(),
+        1
+    );
+    assert_eq!(toml_files(&messages_root.join("codex/inbox/new")).len(), 1);
+    assert_eq!(
+        toml_files(&messages_root.join("coordinator/inbox/new")).len(),
+        1
+    );
+}
+
+#[test]
 fn msg_rejects_invalid_or_ambiguous_agent_ids() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -2611,7 +2832,9 @@ fn agent_hook_help_explains_claude_file_inbox_adapter() {
         .stdout(predicate::str::contains("Claude-specific"))
         .stdout(predicate::str::contains("Codex-specific"))
         .stdout(predicate::str::contains(".claude/settings.local.json"))
-        .stdout(predicate::str::contains("WT_AGENT_ID dispatcher"))
+        .stdout(predicate::str::contains(
+            "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher",
+        ))
         .stdout(predicate::str::contains("hooks.json"))
         .stdout(predicate::str::contains("trusted hook state"))
         .stdout(predicate::str::contains("file inbox"))
@@ -2805,6 +3028,55 @@ fn agent_hook_install_claude_dispatcher_replaces_wt_managed_manual_override() {
         .success();
 
     let settings = json_file(&temp.path().join(".claude/settings.local.json"));
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        assert_eq!(
+            claude_event_commands(&settings, event_name),
+            vec![CLAUDE_INBOX_HOOK_COMMAND]
+        );
+    }
+}
+
+#[test]
+fn agent_hook_install_claude_dispatcher_replaces_legacy_wt_agent_id_dispatcher() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let settings_path = temp.path().join(".claude/settings.local.json");
+    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": LEGACY_CLAUDE_INBOX_HOOK_COMMAND,
+                    }],
+                }],
+                "PostToolUse": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": LEGACY_CLAUDE_INBOX_HOOK_COMMAND,
+                    }],
+                }],
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "claude",
+        ])
+        .assert()
+        .success();
+
+    let settings = json_file(&settings_path);
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
         assert_eq!(
             claude_event_commands(&settings, event_name),
@@ -3037,9 +3309,7 @@ fn agent_hook_install_codex_preserves_existing_hooks_and_writes_trust_state() {
         .success()
         .stdout(predicate::str::contains("Codex hook installed"))
         .stdout(predicate::str::contains("WT_AGENT_ID"))
-        .stdout(predicate::str::contains(
-            "wt msg check-inbox --agent \"$WT_AGENT_ID\"",
-        ));
+        .stdout(predicate::str::contains("wt msg check-inbox"));
 
     let hooks = json_file(&codex_home.join("hooks.json"));
     let commands = codex_event_commands(&hooks, "UserPromptSubmit");
@@ -3121,6 +3391,57 @@ fn agent_hook_install_codex_reinstall_is_idempotent() {
         assert_eq!(
             codex_trusted_hash(&config, &wt_key).as_deref(),
             Some(codex_hook_trusted_hash(&codex_dispatcher_command(), event_key).as_str())
+        );
+    }
+}
+
+#[test]
+fn agent_hook_install_codex_dispatcher_replaces_legacy_wt_agent_id_dispatcher() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let codex_home = temp.path().join("codex-home");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    let legacy_command = legacy_codex_dispatcher_command();
+    std::fs::write(
+        codex_home.join("hooks.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": legacy_command,
+                    }],
+                }],
+                "PostToolUse": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": legacy_command,
+                    }],
+                }],
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "codex",
+        ])
+        .assert()
+        .success();
+
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        assert_eq!(
+            codex_event_commands(&hooks, event_name),
+            vec![codex_dispatcher_command()]
         );
     }
 }
@@ -3470,11 +3791,19 @@ fn agent_hook_claude_dispatcher_noops_without_runtime_identity() {
         .into_iter()
         .find(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
         .unwrap();
+    let wt_bin = assert_cmd::cargo::cargo_bin("wt");
+    let wt_bin_dir = wt_bin.parent().unwrap();
+    let mut paths = vec![wt_bin_dir.to_path_buf()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
     let output = StdCommand::new("sh")
         .arg("-c")
         .arg(&command)
         .current_dir(temp.path())
+        .env("PATH", std::env::join_paths(paths).unwrap())
         .env_remove("WT_AGENT_ID")
+        .env_remove("WT_COORDINATOR_AGENT_ID")
         .output()
         .unwrap();
 
@@ -3712,7 +4041,9 @@ fn hooks_help_explains_canonical_detected_agent_hook_setup() {
         .assert()
         .success()
         .stdout(predicate::str::contains("detected or selected agent CLIs"))
-        .stdout(predicate::str::contains("WT_AGENT_ID dispatcher hooks"))
+        .stdout(predicate::str::contains(
+            "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher hooks",
+        ))
         .stdout(predicate::str::contains("wt hooks setup --agent codex"))
         .stdout(predicate::str::contains("Hook setup is capability setup"));
 
@@ -3734,7 +4065,9 @@ fn top_level_install_uninstall_help_marks_compatibility_aliases() {
         .stdout(predicate::str::contains("Compatibility alias"))
         .stdout(predicate::str::contains("wt hooks setup"))
         .stdout(predicate::str::contains("supported agent commands"))
-        .stdout(predicate::str::contains("WT_AGENT_ID dispatcher hooks"))
+        .stdout(predicate::str::contains(
+            "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher hooks",
+        ))
         .stdout(predicate::str::contains(
             "Hook installation is capability setup",
         ));
