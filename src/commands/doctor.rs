@@ -70,7 +70,19 @@ fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorRepo
     collect_cmux_check(ctx, config, &mut checks);
     collect_codex_hook_readiness_checks(config, &mut checks);
     let session_markers = match scan_session_markers(ctx) {
-        Ok(scan) => scan.report,
+        Ok(scan) => {
+            for warning in scan.warnings {
+                checks.push(DoctorCheck::warning(
+                    "session_markers",
+                    format!(
+                        "skipped marker {}: {}",
+                        warning.path.display(),
+                        warning.message
+                    ),
+                ));
+            }
+            scan.report
+        }
         Err(err) => {
             checks.push(DoctorCheck::warning(
                 "session_markers",
@@ -813,6 +825,7 @@ fn check_github_cli(ctx: &Ctx, config: &Config) {
 struct SessionMarkerScan {
     report: SessionMarkerReport,
     env_keyed: Vec<EnvKeyedMarkerForReview>,
+    warnings: Vec<SessionMarkerScanWarning>,
 }
 
 #[derive(Clone, Debug)]
@@ -820,6 +833,12 @@ struct EnvKeyedMarkerForReview {
     key: String,
     id: String,
     path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct SessionMarkerScanWarning {
+    path: PathBuf,
+    message: String,
 }
 
 fn check_session_markers(ctx: &Ctx) -> Result<()> {
@@ -838,6 +857,13 @@ fn check_session_markers(ctx: &Ctx) -> Result<()> {
             marker.key
         ));
     }
+    for warning in scan.warnings {
+        ctx.ui.print_warning(&format!(
+            "Session marker skipped: path={} reason={}",
+            warning.path.display(),
+            warning.message
+        ));
+    }
 
     Ok(())
 }
@@ -850,16 +876,19 @@ fn scan_session_markers_with(
     ctx: &Ctx,
     marker_is_live: impl Fn(&Marker) -> Result<MarkerLiveness>,
 ) -> Result<SessionMarkerScan> {
-    let markers = identity_locator::list_markers(ctx)?;
+    let (markers, warnings) = identity_locator::list_markers_with_warnings(ctx)?;
     let scanned = markers.len();
     let mut stale_cleaned = 0;
     let mut env_keyed = Vec::new();
 
-    for marker in markers {
+    for entry in markers {
+        let marker = entry.marker;
         let key = marker_anchor_key(&marker);
         if marker.anchor_kind == AnchorKind::ShellSid {
             if marker_is_live(&marker)? == MarkerLiveness::NotLive {
-                identity_locator::remove_marker(ctx, &key)?;
+                fs::remove_file(&entry.path).with_context(|| {
+                    format!("Failed to remove marker: {}", entry.path.display())
+                })?;
                 stale_cleaned += 1;
             }
             continue;
@@ -879,6 +908,13 @@ fn scan_session_markers_with(
             env_keyed_listed_for_review: env_keyed.len(),
         },
         env_keyed,
+        warnings: warnings
+            .into_iter()
+            .map(|warning| SessionMarkerScanWarning {
+                path: warning.path,
+                message: warning.message,
+            })
+            .collect(),
     })
 }
 
@@ -1289,7 +1325,11 @@ mod tests {
 
     fn write_marker_file(ctx: &Ctx, marker: &Marker) -> PathBuf {
         let key = marker_anchor_key(marker);
-        let path = identity_locator::marker_path(ctx, &key);
+        write_marker_file_at_key(ctx, &key, marker)
+    }
+
+    fn write_marker_file_at_key(ctx: &Ctx, key: &AnchorKey, marker: &Marker) -> PathBuf {
+        let path = identity_locator::marker_path(ctx, key);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, toml::to_string_pretty(marker).unwrap()).unwrap();
         path
@@ -1463,6 +1503,50 @@ mod tests {
     }
 
     #[test]
+    fn session_marker_scan_deletes_scanned_path_not_payload_path() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        let scanned_key = AnchorKey {
+            kind: AnchorKind::ShellSid,
+            value: "111:100.000000000".into(),
+        };
+        let payload_key = AnchorKey {
+            kind: AnchorKind::ShellSid,
+            value: "222:200.000000000".into(),
+        };
+        let mut stale_payload = marker_fixture(
+            AnchorKind::ShellSid,
+            "222:200.000000000",
+            "agents/stale-payload",
+        );
+        stale_payload.liveness_pid = Some(222);
+        stale_payload.liveness_start_time = Some("200.000000000".into());
+        let mut protected = marker_fixture(
+            AnchorKind::ShellSid,
+            "222:200.000000000",
+            "agents/protected",
+        );
+        protected.liveness_pid = Some(222);
+        protected.liveness_start_time = Some("200.000000000".into());
+        let scanned_path = write_marker_file_at_key(&ctx, &scanned_key, &stale_payload);
+        let protected_path = write_marker_file_at_key(&ctx, &payload_key, &protected);
+
+        let scan = scan_session_markers_with(&ctx, |marker| {
+            if marker.id == "agents/protected" {
+                Ok(MarkerLiveness::Live)
+            } else {
+                Ok(MarkerLiveness::NotLive)
+            }
+        })
+        .unwrap();
+
+        assert_eq!(scan.report.scanned, 2);
+        assert_eq!(scan.report.stale_cleaned, 1);
+        assert!(!scanned_path.exists());
+        assert!(protected_path.exists());
+    }
+
+    #[test]
     fn session_marker_scan_preserves_live_shell_sid_marker() {
         let temp = TempDir::new().unwrap();
         let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
@@ -1491,6 +1575,24 @@ mod tests {
         assert_eq!(scan.report.stale_cleaned, 0);
         assert_eq!(scan.report.env_keyed_listed_for_review, 1);
         assert_eq!(scan.env_keyed[0].key, "surface:A22D");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn session_marker_scan_skips_malformed_marker_and_continues() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        write_malformed_marker_file(&ctx);
+        let marker = marker_fixture(AnchorKind::Surface, "A22D", "agents/coord");
+        let path = write_marker_file(&ctx, &marker);
+
+        let scan = scan_session_markers(&ctx).unwrap();
+
+        assert_eq!(scan.report.scanned, 1);
+        assert_eq!(scan.report.stale_cleaned, 0);
+        assert_eq!(scan.report.env_keyed_listed_for_review, 1);
+        assert_eq!(scan.warnings.len(), 1);
+        assert!(scan.warnings[0].message.contains("Failed to parse marker"));
         assert!(path.exists());
     }
 
@@ -1535,7 +1637,7 @@ mod tests {
         run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
-        assert!(warnings.contains("Session markers: scan failed"));
+        assert!(warnings.contains("Session marker skipped"));
         assert!(warnings.contains("Failed to parse marker"));
     }
 
@@ -1559,7 +1661,7 @@ mod tests {
             check["message"]
                 .as_str()
                 .unwrap()
-                .contains("scan failed: Failed to parse marker")
+                .contains("skipped marker")
         );
         assert_eq!(value["session_markers"]["scanned"], 0);
         assert_eq!(value["session_markers"]["stale_cleaned"], 0);

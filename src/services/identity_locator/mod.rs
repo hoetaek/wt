@@ -125,6 +125,18 @@ pub struct Marker {
     pub updated_at: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkerEntry {
+    pub path: PathBuf,
+    pub marker: Marker,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkerScanWarning {
+    pub path: PathBuf,
+    pub message: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MarkerLiveness {
     Live,
@@ -275,6 +287,54 @@ pub fn list_markers(ctx: &Ctx) -> Result<Vec<Marker>> {
         left_key.cmp(&right_key)
     });
     Ok(markers)
+}
+
+pub fn list_markers_with_warnings(ctx: &Ctx) -> Result<(Vec<MarkerEntry>, Vec<MarkerScanWarning>)> {
+    let dir = sessions_dir(ctx);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((Vec::new(), Vec::new())),
+        Err(err) => return Err(err).with_context(|| format!("Failed to read {}", dir.display())),
+    };
+    let mut markers = Vec::new();
+    let mut warnings = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("Failed to read entry in {}", dir.display()))?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            continue;
+        }
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(err) => {
+                warnings.push(MarkerScanWarning {
+                    path,
+                    message: format!("Failed to read marker: {err}"),
+                });
+                continue;
+            }
+        };
+        let marker = match toml::from_str::<Marker>(&content) {
+            Ok(marker) => marker,
+            Err(err) => {
+                warnings.push(MarkerScanWarning {
+                    path,
+                    message: format!("Failed to parse marker: {err}"),
+                });
+                continue;
+            }
+        };
+        markers.push(MarkerEntry { path, marker });
+    }
+    markers.sort_by(|left, right| {
+        let left_key = marker_anchor_key(&left.marker).display();
+        let right_key = marker_anchor_key(&right.marker).display();
+        left_key
+            .cmp(&right_key)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    warnings.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok((markers, warnings))
 }
 
 pub fn marker_is_live(marker: &Marker) -> Result<MarkerLiveness> {
