@@ -261,6 +261,9 @@ pub enum Commands {
         /// Run checks against the effective config for <git-common-dir>/wt/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
+        /// Delete one env-keyed session marker by display key, for example surface:A22D...
+        #[arg(long, value_name = "KEY")]
+        prune_env_markers: Option<String>,
     },
     /// Print, edit, or refactor wt config files
     #[command(
@@ -1044,7 +1047,10 @@ mod tests {
         assert_eq!(cli.verbose, 2);
         assert!(matches!(
             cli.command,
-            Some(Commands::Doctor { profile: None })
+            Some(Commands::Doctor {
+                profile: None,
+                prune_env_markers: None
+            })
         ));
     }
 
@@ -1054,7 +1060,10 @@ mod tests {
         assert!(cli.no_color);
         assert!(matches!(
             cli.command,
-            Some(Commands::Doctor { profile: None })
+            Some(Commands::Doctor {
+                profile: None,
+                prune_env_markers: None
+            })
         ));
     }
 
@@ -2232,7 +2241,10 @@ mod tests {
         let cli = parse(&["wt", "doctor"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Doctor { profile: None })
+            Some(Commands::Doctor {
+                profile: None,
+                prune_env_markers: None
+            })
         ));
     }
 
@@ -2243,7 +2255,20 @@ mod tests {
             cli.command,
             Some(Commands::Doctor {
                 profile: Some(ref profile),
+                prune_env_markers: None,
             }) if profile == "codex"
+        ));
+    }
+
+    #[test]
+    fn doctor_accepts_prune_env_markers_flag() {
+        let cli = parse(&["wt", "doctor", "--prune-env-markers", "surface:A22D"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Doctor {
+                profile: None,
+                prune_env_markers: Some(ref key),
+            }) if key == "surface:A22D"
         ));
     }
 

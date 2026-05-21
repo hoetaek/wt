@@ -1,7 +1,8 @@
 use crate::commands::agent_hook;
 use crate::config::{AgentCli, Config, IssueProviderType, SiteProvider};
 use crate::context::Ctx;
-use anyhow::{Result, anyhow};
+use crate::services::identity_locator::{self, AnchorKey, AnchorKind, Marker, MarkerLiveness};
+use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
@@ -19,9 +20,12 @@ const CODEX_CMUX_HOOK_EVENTS: [(&str, &str); 5] = [
     ("UserPromptSubmit", "user_prompt_submit"),
 ];
 
-pub fn run(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
+pub fn run(ctx: &Ctx, profile: Option<&str>, prune_env_markers: Option<&str>) -> Result<()> {
     let resolved = resolve_config(ctx, profile)?;
     let config = resolved.config();
+    if let Some(key) = prune_env_markers {
+        prune_env_marker(ctx, key)?;
+    }
 
     if ctx.is_json() {
         return run_json(ctx, config, profile);
@@ -39,11 +43,12 @@ pub fn run(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     check_worktree_naming(ctx, config);
     check_cmux(ctx, config);
     check_codex_hook_readiness(ctx, config);
+    check_session_markers(ctx)?;
     Ok(())
 }
 
 fn run_json(ctx: &Ctx, config: &Config, profile: Option<&str>) -> Result<()> {
-    let report = build_report(ctx, config, profile);
+    let report = build_report(ctx, config, profile)?;
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     serde_json::to_writer_pretty(&mut handle, &report)?;
@@ -51,7 +56,7 @@ fn run_json(ctx: &Ctx, config: &Config, profile: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorReport {
+fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> Result<DoctorReport> {
     let mut checks = Vec::new();
     collect_issue_provider_checks(ctx, config, &mut checks);
     collect_github_cli_check(ctx, config, &mut checks);
@@ -61,11 +66,13 @@ fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorRepo
     collect_worktree_naming_checks(ctx, config, &mut checks);
     collect_cmux_check(ctx, config, &mut checks);
     collect_codex_hook_readiness_checks(config, &mut checks);
+    let session_markers = scan_session_markers(ctx)?.report;
 
-    DoctorReport {
+    Ok(DoctorReport {
         profile: profile.map(str::to_string),
         checks,
-    }
+        session_markers,
+    })
 }
 
 enum ResolvedConfig<'a> {
@@ -101,6 +108,14 @@ struct DoctorReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     profile: Option<String>,
     checks: Vec<DoctorCheck>,
+    session_markers: SessionMarkerReport,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct SessionMarkerReport {
+    scanned: usize,
+    stale_cleaned: usize,
+    env_keyed_listed_for_review: usize,
 }
 
 #[derive(Serialize)]
@@ -778,6 +793,101 @@ fn check_github_cli(ctx: &Ctx, config: &Config) {
         .print_step(&format!("gh CLI: {status} (needed for wt run pr)"));
 }
 
+#[derive(Clone, Debug)]
+struct SessionMarkerScan {
+    report: SessionMarkerReport,
+    env_keyed: Vec<EnvKeyedMarkerForReview>,
+}
+
+#[derive(Clone, Debug)]
+struct EnvKeyedMarkerForReview {
+    key: String,
+    id: String,
+    path: PathBuf,
+}
+
+fn check_session_markers(ctx: &Ctx) -> Result<()> {
+    let scan = scan_session_markers(ctx)?;
+    ctx.ui.print_step(&format!(
+        "Session markers: scanned={}, stale_cleaned={}, env_keyed_listed={}",
+        scan.report.scanned, scan.report.stale_cleaned, scan.report.env_keyed_listed_for_review
+    ));
+
+    for marker in scan.env_keyed {
+        ctx.ui.print_warning(&format!(
+            "Session marker requires manual review: {} id={} path={}. Prune with `wt doctor --prune-env-markers {}`.",
+            marker.key,
+            marker.id,
+            marker.path.display(),
+            marker.key
+        ));
+    }
+
+    Ok(())
+}
+
+fn scan_session_markers(ctx: &Ctx) -> Result<SessionMarkerScan> {
+    scan_session_markers_with(ctx, identity_locator::marker_is_live)
+}
+
+fn scan_session_markers_with(
+    ctx: &Ctx,
+    marker_is_live: impl Fn(&Marker) -> Result<MarkerLiveness>,
+) -> Result<SessionMarkerScan> {
+    let markers = identity_locator::list_markers(ctx)?;
+    let scanned = markers.len();
+    let mut stale_cleaned = 0;
+    let mut env_keyed = Vec::new();
+
+    for marker in markers {
+        let key = marker_anchor_key(&marker);
+        if marker.anchor_kind == AnchorKind::ShellSid {
+            if marker_is_live(&marker)? == MarkerLiveness::NotLive {
+                identity_locator::remove_marker(ctx, &key)?;
+                stale_cleaned += 1;
+            }
+            continue;
+        }
+
+        env_keyed.push(EnvKeyedMarkerForReview {
+            key: key.display(),
+            id: marker.id,
+            path: identity_locator::marker_path(ctx, &key),
+        });
+    }
+
+    Ok(SessionMarkerScan {
+        report: SessionMarkerReport {
+            scanned,
+            stale_cleaned,
+            env_keyed_listed_for_review: env_keyed.len(),
+        },
+        env_keyed,
+    })
+}
+
+fn prune_env_marker(ctx: &Ctx, key: &str) -> Result<()> {
+    let key = AnchorKey::parse_display(key)?;
+    if key.kind == AnchorKind::ShellSid {
+        return Err(anyhow!(
+            "`--prune-env-markers` only deletes env-keyed session markers"
+        ));
+    }
+    let removed = identity_locator::remove_marker(ctx, &key)
+        .with_context(|| format!("Failed to prune session marker {}", key.display()))?;
+    if !removed {
+        return Err(anyhow!("No session marker found for {}", key.display()));
+    }
+    Ok(())
+}
+
+fn marker_anchor_key(marker: &Marker) -> AnchorKey {
+    AnchorKey {
+        kind: marker.anchor_kind.clone(),
+        value: marker.anchor_value.clone(),
+    }
+}
+
 fn check_site_provider(ctx: &Ctx, config: &Config) {
     let Some(site) = config.effective_site() else {
         ctx.ui.print_step("Site provider: none");
@@ -1058,10 +1168,12 @@ fn toml_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::{
-        AgentConfig, Config, IssuesConfig, ReadyMode, SiteConfig, SubmitMode, WorktreeNamingConfig,
+        AgentConfig, Config, ConfigSource, IssuesConfig, ReadyMode, SiteConfig, SubmitMode,
+        WorktreeNamingConfig,
     };
     use crate::context::mock::MockRunner;
-    use crate::context::{Ctx, UserInterface};
+    use crate::context::{Ctx, CtxOptions, OutputMode, UserInterface};
+    use crate::storage::StorageRoot;
     use anyhow::{Result, bail};
     use serde_json::json;
     use std::fs;
@@ -1134,6 +1246,51 @@ mod tests {
             Box::new(runner),
             Box::new(ui),
         )
+    }
+
+    fn ctx_with_storage(temp: &TempDir, output_mode: OutputMode, ui: RecordingUi) -> Ctx {
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let storage_root = StorageRoot::from_git_common_dir(repo.join(".git"));
+        Ctx::new_with_options(
+            repo.clone(),
+            repo,
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+            CtxOptions {
+                base_config: Config::default(),
+                config_source: ConfigSource::Default,
+                storage_root: Some(storage_root),
+                output_mode,
+                verbosity: 0,
+                quiet: false,
+                launcher_coordinator_id: None,
+                coordinator_agent_id: None,
+            },
+        )
+    }
+
+    fn write_marker_file(ctx: &Ctx, marker: &Marker) -> PathBuf {
+        let key = marker_anchor_key(marker);
+        let path = identity_locator::marker_path(ctx, &key);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, toml::to_string_pretty(marker).unwrap()).unwrap();
+        path
+    }
+
+    fn marker_fixture(kind: AnchorKind, value: &str, id: &str) -> Marker {
+        Marker {
+            id: id.into(),
+            anchor_kind: kind,
+            anchor_value: value.into(),
+            liveness_pid: None,
+            liveness_start_time: None,
+            anchor_agent_kind: None,
+            cwd: PathBuf::from("/tmp/repo"),
+            created_at: "2026-05-21T00:00:00.000000000Z".into(),
+            updated_at: "2026-05-21T00:00:00.000000000Z".into(),
+        }
     }
 
     fn write_codex_hooks(home: &Path) {
@@ -1241,6 +1398,106 @@ mod tests {
     }
 
     #[test]
+    fn session_marker_scan_cleans_dead_shell_sid_marker() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        let mut stale =
+            marker_fixture(AnchorKind::ShellSid, "999999:100.000000000", "agents/stale");
+        stale.liveness_pid = Some(999999);
+        stale.liveness_start_time = Some("100.000000000".into());
+        let path = write_marker_file(&ctx, &stale);
+
+        let scan = scan_session_markers(&ctx).unwrap();
+
+        assert_eq!(scan.report.scanned, 1);
+        assert_eq!(scan.report.stale_cleaned, 1);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn session_marker_scan_cleans_shell_sid_start_time_mismatch() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        let pid = std::process::id() as i32;
+        let mut reused = marker_fixture(
+            AnchorKind::ShellSid,
+            &format!("{pid}:reused"),
+            "agents/reused",
+        );
+        reused.liveness_pid = Some(pid);
+        reused.liveness_start_time = Some("definitely-not-this-process-start-time".into());
+        let path = write_marker_file(&ctx, &reused);
+
+        let scan = scan_session_markers(&ctx).unwrap();
+
+        assert_eq!(scan.report.scanned, 1);
+        assert_eq!(scan.report.stale_cleaned, 1);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn session_marker_scan_preserves_live_shell_sid_marker() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        let mut live = marker_fixture(AnchorKind::ShellSid, "42:200.000000000", "agents/live");
+        live.liveness_pid = Some(42);
+        live.liveness_start_time = Some("200.000000000".into());
+        let path = write_marker_file(&ctx, &live);
+
+        let scan = scan_session_markers_with(&ctx, |_| Ok(MarkerLiveness::Live)).unwrap();
+
+        assert_eq!(scan.report.scanned, 1);
+        assert_eq!(scan.report.stale_cleaned, 0);
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn session_marker_scan_lists_env_keyed_marker_without_deleting() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        let marker = marker_fixture(AnchorKind::Surface, "A22D", "agents/coord");
+        let path = write_marker_file(&ctx, &marker);
+
+        let scan = scan_session_markers(&ctx).unwrap();
+
+        assert_eq!(scan.report.scanned, 1);
+        assert_eq!(scan.report.stale_cleaned, 0);
+        assert_eq!(scan.report.env_keyed_listed_for_review, 1);
+        assert_eq!(scan.env_keyed[0].key, "surface:A22D");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn doctor_prune_env_markers_deletes_named_marker() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        let marker = marker_fixture(AnchorKind::Surface, "A22D", "agents/coord");
+        let path = write_marker_file(&ctx, &marker);
+
+        run(&ctx, None, Some("surface:A22D")).unwrap();
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn doctor_text_output_reports_session_marker_counts_and_hint() {
+        let temp = TempDir::new().unwrap();
+        let ui = RecordingUi::new();
+        let steps = Arc::clone(&ui.steps);
+        let warnings = Arc::clone(&ui.warnings);
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, ui);
+        let marker = marker_fixture(AnchorKind::Surface, "A22D", "agents/coord");
+        write_marker_file(&ctx, &marker);
+
+        run(&ctx, None, None).unwrap();
+
+        let steps = steps.lock().unwrap().join("\n");
+        let warnings = warnings.lock().unwrap().join("\n");
+        assert!(steps.contains("Session markers: scanned=1, stale_cleaned=0, env_keyed_listed=1"));
+        assert!(warnings.contains("wt doctor --prune-env-markers surface:A22D"));
+    }
+
+    #[test]
     fn warns_when_linear_provider_cli_is_missing() {
         let config = Config {
             issues: Some(IssuesConfig {
@@ -1253,7 +1510,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("linear CLI: missing"));
@@ -1276,7 +1533,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, runner, ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let steps = steps.lock().unwrap().join("\n");
         assert!(steps.contains("Issue provider: github"));
@@ -1297,7 +1554,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("valet CLI: missing"));
@@ -1318,7 +1575,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let steps = steps.lock().unwrap().join("\n");
         assert!(steps.contains("Site provider: docker_proxy"));
@@ -1346,7 +1603,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("claude CLI: missing"));
@@ -1379,7 +1636,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, runner, ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let steps = steps.lock().unwrap().join("\n");
         assert!(steps.contains("claude CLI: ok"));
@@ -1407,7 +1664,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("claude CLI: missing"));
@@ -1434,7 +1691,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Agent command: missing"));
@@ -1461,7 +1718,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Agent command is ignored"));
@@ -1481,7 +1738,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("worktree.naming.command: missing"));
@@ -1498,7 +1755,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("cmux CLI: missing"));
@@ -1639,7 +1896,7 @@ mod tests {
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with(config, MockRunner::new(), ui);
 
-        run(&ctx, None).unwrap();
+        run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Workspace config: missing"));
@@ -1675,7 +1932,7 @@ provider = "linear"
             ui,
         );
 
-        run(&ctx, Some("codex")).unwrap();
+        run(&ctx, Some("codex"), None).unwrap();
 
         let steps_joined = steps.lock().unwrap().join("\n");
         let warnings_joined = warnings.lock().unwrap().join("\n");
@@ -1703,7 +1960,7 @@ provider = "linear"
             RecordingUi::new(),
         );
 
-        let err = run(&ctx, Some("missing")).unwrap_err();
+        let err = run(&ctx, Some("missing"), None).unwrap_err();
         assert!(
             err.to_string().contains("Profile 'missing' not found"),
             "unexpected error: {err}"
@@ -1720,7 +1977,7 @@ provider = "linear"
             RecordingUi::new(),
         );
 
-        let err = run(&ctx, Some("default")).unwrap_err();
+        let err = run(&ctx, Some("default"), None).unwrap_err();
         assert!(
             err.to_string().contains("reserved"),
             "unexpected error: {err}"
@@ -1753,7 +2010,7 @@ provider = "linear"
         )
         .unwrap()
         .unwrap();
-        let report = build_report(&ctx, &config, Some("codex"));
+        let report = build_report(&ctx, &config, Some("codex")).unwrap();
 
         let value = serde_json::to_value(&report).unwrap();
         assert_eq!(value["profile"], serde_json::Value::String("codex".into()));
@@ -1779,12 +2036,13 @@ provider = "linear"
             RecordingUi::new(),
         );
 
-        let report = build_report(&ctx, &ctx.config, None);
+        let report = build_report(&ctx, &ctx.config, None).unwrap();
         let value = serde_json::to_value(&report).unwrap();
         assert!(
             value.get("profile").is_none(),
             "expected no profile field when none selected, got {value}"
         );
         assert!(value["checks"].is_array());
+        assert_eq!(value["session_markers"]["scanned"], 0);
     }
 }
