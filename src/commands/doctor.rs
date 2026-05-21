@@ -43,12 +43,15 @@ pub fn run(ctx: &Ctx, profile: Option<&str>, prune_env_markers: Option<&str>) ->
     check_worktree_naming(ctx, config);
     check_cmux(ctx, config);
     check_codex_hook_readiness(ctx, config);
-    check_session_markers(ctx)?;
+    if let Err(err) = check_session_markers(ctx) {
+        ctx.ui
+            .print_warning(&format!("Session markers: scan failed ({err})"));
+    }
     Ok(())
 }
 
 fn run_json(ctx: &Ctx, config: &Config, profile: Option<&str>) -> Result<()> {
-    let report = build_report(ctx, config, profile)?;
+    let report = build_report(ctx, config, profile);
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     serde_json::to_writer_pretty(&mut handle, &report)?;
@@ -56,7 +59,7 @@ fn run_json(ctx: &Ctx, config: &Config, profile: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> Result<DoctorReport> {
+fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorReport {
     let mut checks = Vec::new();
     collect_issue_provider_checks(ctx, config, &mut checks);
     collect_github_cli_check(ctx, config, &mut checks);
@@ -66,13 +69,26 @@ fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> Result<Doc
     collect_worktree_naming_checks(ctx, config, &mut checks);
     collect_cmux_check(ctx, config, &mut checks);
     collect_codex_hook_readiness_checks(config, &mut checks);
-    let session_markers = scan_session_markers(ctx)?.report;
+    let session_markers = match scan_session_markers(ctx) {
+        Ok(scan) => scan.report,
+        Err(err) => {
+            checks.push(DoctorCheck::warning(
+                "session_markers",
+                format!("scan failed: {err}"),
+            ));
+            SessionMarkerReport {
+                scanned: 0,
+                stale_cleaned: 0,
+                env_keyed_listed_for_review: 0,
+            }
+        }
+    };
 
-    Ok(DoctorReport {
+    DoctorReport {
         profile: profile.map(str::to_string),
         checks,
         session_markers,
-    })
+    }
 }
 
 enum ResolvedConfig<'a> {
@@ -1279,6 +1295,17 @@ mod tests {
         path
     }
 
+    fn write_malformed_marker_file(ctx: &Ctx) -> PathBuf {
+        let key = AnchorKey {
+            kind: AnchorKind::Surface,
+            value: "BROKEN".into(),
+        };
+        let path = identity_locator::marker_path(ctx, &key);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "not = [valid").unwrap();
+        path
+    }
+
     fn marker_fixture(kind: AnchorKind, value: &str, id: &str) -> Marker {
         Marker {
             id: id.into(),
@@ -1495,6 +1522,48 @@ mod tests {
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(steps.contains("Session markers: scanned=1, stale_cleaned=0, env_keyed_listed=1"));
         assert!(warnings.contains("wt doctor --prune-env-markers surface:A22D"));
+    }
+
+    #[test]
+    fn doctor_text_output_warns_when_session_marker_scan_fails() {
+        let temp = TempDir::new().unwrap();
+        let ui = RecordingUi::new();
+        let warnings = Arc::clone(&ui.warnings);
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, ui);
+        write_malformed_marker_file(&ctx);
+
+        run(&ctx, None, None).unwrap();
+
+        let warnings = warnings.lock().unwrap().join("\n");
+        assert!(warnings.contains("Session markers: scan failed"));
+        assert!(warnings.contains("Failed to parse marker"));
+    }
+
+    #[test]
+    fn doctor_json_report_warns_when_session_marker_scan_fails() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Json, RecordingUi::new());
+        write_malformed_marker_file(&ctx);
+
+        let report = build_report(&ctx, &ctx.config, None);
+        let value = serde_json::to_value(&report).unwrap();
+
+        let check = value["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "session_markers")
+            .expect("missing session_markers warning check");
+        assert_eq!(check["status"], "warning");
+        assert!(
+            check["message"]
+                .as_str()
+                .unwrap()
+                .contains("scan failed: Failed to parse marker")
+        );
+        assert_eq!(value["session_markers"]["scanned"], 0);
+        assert_eq!(value["session_markers"]["stale_cleaned"], 0);
+        assert_eq!(value["session_markers"]["env_keyed_listed_for_review"], 0);
     }
 
     #[test]
@@ -2010,7 +2079,7 @@ provider = "linear"
         )
         .unwrap()
         .unwrap();
-        let report = build_report(&ctx, &config, Some("codex")).unwrap();
+        let report = build_report(&ctx, &config, Some("codex"));
 
         let value = serde_json::to_value(&report).unwrap();
         assert_eq!(value["profile"], serde_json::Value::String("codex".into()));
@@ -2036,7 +2105,7 @@ provider = "linear"
             RecordingUi::new(),
         );
 
-        let report = build_report(&ctx, &ctx.config, None).unwrap();
+        let report = build_report(&ctx, &ctx.config, None);
         let value = serde_json::to_value(&report).unwrap();
         assert!(
             value.get("profile").is_none(),
