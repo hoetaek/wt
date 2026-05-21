@@ -278,37 +278,12 @@ merge.
   `--heartbeat <seconds>` opts into unchanged running reports. Non-idle
   heartbeat and timeout samples are recorded under local `agent.state`, which
   stays separate from `TaskRun.status`.
-- `wt hooks setup` scans PATH for supported agent CLIs and installs the matching
-  wt-managed inbox hooks. Today that means Claude Code and Codex dispatcher
-  hooks. Use `wt hooks setup codex` or `wt hooks setup --agent codex` to set up
-  one adapter. `wt hooks uninstall` removes those wt-managed hooks while
-  preserving user-managed hooks, cmux hooks, and unrelated trust state; it also
-  accepts `wt hooks uninstall codex` and `wt hooks uninstall --agent codex`.
-  `wt install` and `wt uninstall` remain compatibility aliases for the all-agent
-  setup and cleanup commands.
-- `wt agent hook install claude` is the Claude-specific escape hatch. It installs Claude Code
-  `UserPromptSubmit` and `PostToolUse` hook dispatchers in worktree-local
-  `.claude/settings.local.json`. Each hook reads `WT_AGENT_ID` at runtime, runs
-  `wt msg check-inbox --agent "$WT_AGENT_ID"` when it is set, and otherwise
-  exits successfully without output. The generated command stores its wt marker
-  after `#`, so shell execution treats the marker as a comment rather than as
-  an argument. `--agent <agent>` is only a manual/test override; normal
-  `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the
-  per-run agent by setting `WT_AGENT_ID=agents/<branch_slug>` in the cmux
-  `new-workspace --command` string when launching Claude.
-- `wt agent hook install codex` installs Codex-specific user-level
-  `UserPromptSubmit` and `PostToolUse` hook dispatchers in `$CODEX_HOME/hooks.json`
-  or `~/.codex/hooks.json`. Each hook reads `WT_AGENT_ID` at runtime, runs
-  `wt msg check-inbox --agent "$WT_AGENT_ID"` when it is set, and otherwise
-  exits successfully without output. It also writes matching trusted hook
-  state to Codex `config.toml`, preserving existing cmux and non-wt hooks/trust
-  entries. `--agent <agent>` is only a manual/test override; normal
-  `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the
-  per-run agent by setting `WT_AGENT_ID=agents/<branch_slug>` in the cmux
-  `new-workspace --command` string when launching Codex. wt-launched Claude and
-  future agent CLI commands receive the same launch-time environment binding.
-  `wt agent hook uninstall codex` removes only wt-managed Codex hook and trust
-  entries.
+- `wt setup` configures per-machine wt integration. It detects supported agent
+  CLIs, prompts before installing wt-managed Claude and Codex inbox hooks, and
+  can add shell integration and completion eval lines to the resolved shell rc
+  file. Use `--yes` to accept detected steps, `--dry-run` to preview writes,
+  and `--remove` to remove wt-managed per-machine entries while preserving
+  user-managed hooks, cmux hooks, and unrelated trust state.
 - `wt codex` and `wt claude` launch those agent CLIs with
   `WT_AGENT_ID=agents/<branch_slug>` and
   `WT_COORDINATOR_AGENT_ID=agents/coordinator`. In the same worktree, pass a
@@ -569,16 +544,7 @@ there for one named profile.
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
 | `wt agent status` | Observe the matching task agent surface once |
 | `wt agent watch` | Poll the matching task agent surface, with optional timeout and heartbeat |
-| `wt hooks setup` | Install wt-managed hooks for detected agent CLIs |
-| `wt hooks setup <agent>` | Install wt-managed hooks for one adapter, such as `codex` or `claude` |
-| `wt hooks uninstall` | Remove wt-managed agent hooks |
-| `wt hooks uninstall <agent>` | Remove wt-managed hooks for one adapter |
-| `wt install` | Compatibility alias for `wt hooks setup` |
-| `wt uninstall` | Compatibility alias for `wt hooks uninstall` |
-| `wt agent hook install claude` | Adapter escape hatch for Claude Code file inbox delivery through local hooks |
-| `wt agent hook uninstall claude` | Remove wt-managed Claude Code inbox hook entries |
-| `wt agent hook install codex` | Adapter escape hatch for Codex file inbox delivery through a user-level trusted dispatcher hook |
-| `wt agent hook uninstall codex` | Remove wt-managed Codex inbox hook and trust entries |
+| `wt setup` | Set up or remove per-machine wt integration |
 | `wt codex [@role]` | Launch Codex with a derived worktree agent identity |
 | `wt claude [@role]` | Launch Claude with a derived worktree agent identity |
 | `wt as <agent-id> -- <command...>` | Run any command with an explicit wt agent identity |
