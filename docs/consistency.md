@@ -1072,7 +1072,9 @@ parent chain으로 실행하고, current `running` TaskRun이 있으면 다음 t
 Stack-mode에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 명시적 completion
 신호를 기다리는 상태다. 완료를 추정해서 다음 task를 시작하지 않는다.
 
-`wt run workflow`에서 workflow target 생략은 runnable workflow를 고르는 기본 동작이다.
+`wt run workflow`에서 workflow target 생략은 runnable workflow를 고르는 기본 동작이다. 후보가
+하나뿐이어도 selector를 생략하고 바로 실행하지 않는다. 비대화형 shell에서는 명시 workflow
+id/path를 넘겨야 한다.
 `single`은 linked TaskRun 전체가 `prepared` 또는 `failed`일 때만 runnable이고, `batch`는
 하나 이상의 linked TaskRun이 `prepared` 또는 `failed`이면 runnable이며, `stack`은 다음
 `prepared` 또는 `failed` task가 있고 현재 `running` task가 없을 때 runnable이다. 명시

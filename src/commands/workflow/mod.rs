@@ -908,6 +908,52 @@ cli = "none"
     }
 
     #[test]
+    fn stack_workflow_preserves_task_start_error_message() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_response("", true); // checked_out_path
+        runner.add_response("", true); // fetch
+        runner.add_response("", false); // local branch exists
+        runner.add_response("", false); // remote branch exists
+        runner.add_response_with_stderr("", "fatal: invalid reference: finished-stack", false);
+        let ctx = ctx_with_runner_ui(dir.path(), runner, Arc::new(MockUi::new()));
+
+        let record = prepare_workflow(
+            &ctx,
+            WorkflowModeArg::Stack,
+            &["finished stack", "retry stack"],
+        );
+        update_task_run(
+            &ctx,
+            &record.workflow.tasks[0],
+            STATUS_DONE,
+            Some("finished-stack"),
+        );
+        update_task_run(&ctx, &record.workflow.tasks[1], STATUS_FAILED, None);
+
+        let err = run(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap_err();
+        let message = err.to_string();
+
+        assert!(
+            message.contains("git worktree add -b"),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            message.contains("fatal: invalid reference: finished-stack"),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            !message.contains("Workflow stack failed"),
+            "unexpected error message: {message}"
+        );
+
+        let retry_run = task_run_record(&ctx, &record.workflow.tasks[1].run).unwrap();
+        assert_eq!(retry_run.status, STATUS_FAILED);
+        assert_eq!(retry_run.error.as_deref(), Some(message.as_str()));
+    }
+
+    #[test]
     fn task_prepares_single_mode_workflow_with_new_task_runs() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
@@ -2434,16 +2480,28 @@ landing = "auto"
     }
 
     #[test]
-    fn bare_workflow_run_with_one_candidate_returns_it_without_prompt() {
+    fn bare_workflow_run_with_one_candidate_prompts() {
         let dir = tempfile::tempdir().unwrap();
-        let ui = Arc::new(MockUi::new());
+        let mut ui = MockUi::new();
+        ui.add_select(0);
+        let ui = Arc::new(ui);
         let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
         let workflow = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["only runnable"]);
 
         let path = resolve_run_workflow_path(&ctx, None).unwrap().unwrap();
 
         assert_eq!(path, workflow.path);
-        assert!(ui.prompts.lock().unwrap().is_empty());
+        assert_eq!(
+            ui.prompts.lock().unwrap().as_slice(),
+            ["select: Workflow to run"]
+        );
+        let items = ui.select_items.lock().unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(items[0][0].starts_with("only runnable"));
+        assert!(items[0][0].contains("batch"));
+        assert!(items[0][0].contains("runnable 1"));
+        assert!(!items[0][0].contains(&workflow.id));
+        assert!(!items[0][0].contains("<git-common-dir>/wt/workflows/"));
     }
 
     #[test]
@@ -2466,11 +2524,13 @@ landing = "auto"
         let items = ui.select_items.lock().unwrap();
         assert_eq!(items.len(), 1);
         assert!(items[0][0].starts_with("first workflow"));
-        assert!(items[0][0].contains(&first.id));
-        assert!(items[0][0].contains("mode single"));
+        assert!(items[0][0].contains("single"));
+        assert!(items[0][0].contains("runnable 1"));
+        assert!(!items[0][0].contains(&first.id));
         assert!(items[0][1].starts_with("second workflow"));
-        assert!(items[0][1].contains(&second.id));
-        assert!(items[0][1].contains("mode batch"));
+        assert!(items[0][1].contains("batch"));
+        assert!(items[0][1].contains("runnable 1"));
+        assert!(!items[0][1].contains(&second.id));
     }
 
     #[test]
@@ -2497,6 +2557,27 @@ landing = "auto"
         assert!(ui.prompts.lock().unwrap().is_empty());
         assert_eq!(fs::read_to_string(first_run_path).unwrap(), first_before);
         assert_eq!(fs::read_to_string(second_run_path).unwrap(), second_before);
+    }
+
+    #[test]
+    fn bare_workflow_run_with_one_candidate_non_interactive_lists_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.set_prompt_available(false);
+        let ui = Arc::new(ui);
+        let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
+        let workflow = prepare_workflow(&ctx, WorkflowModeArg::Batch, &["only noninteractive"]);
+        let run_path = task_run::resolve(&ctx, &workflow.workflow.tasks[0].run).unwrap();
+        let run_before = fs::read_to_string(&run_path).unwrap();
+
+        let err = resolve_run_workflow_path(&ctx, None).unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("Runnable workflow found"));
+        assert!(message.contains(&format!("wt run workflow {}", workflow.id)));
+        assert!(message.contains("<git-common-dir>/wt/workflows/"));
+        assert!(ui.prompts.lock().unwrap().is_empty());
+        assert_eq!(fs::read_to_string(run_path).unwrap(), run_before);
     }
 
     #[test]
