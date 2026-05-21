@@ -39,11 +39,19 @@ pub trait UserInterface: Send + Sync {
         true
     }
     fn select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<usize> {
-        let rendered = render_prompt_items(items);
-        self.select(prompt, &rendered)
+        let rows = prompt_items_to_rows(items);
+        self.select_rows(prompt, &rows)
     }
     fn multi_select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<Vec<usize>> {
-        let rendered = render_prompt_items(items);
+        let rows = prompt_items_to_rows(items);
+        self.multi_select_rows(prompt, &rows)
+    }
+    fn select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+        let rendered = render_prompt_rows(rows);
+        self.select(prompt, &rendered)
+    }
+    fn multi_select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<Vec<usize>> {
+        let rendered = render_prompt_rows(rows);
         self.multi_select(prompt, &rendered)
     }
     fn confirm(&self, prompt: &str, default: bool) -> Result<bool>;
@@ -88,6 +96,153 @@ impl PromptItem {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptOption {
+    pub label: String,
+    pub hint: Option<String>,
+    pub search_text: Vec<String>,
+    pub value_index: Option<usize>,
+    pub selected: bool,
+    pub disabled: bool,
+}
+
+impl PromptOption {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            hint: None,
+            search_text: Vec::new(),
+            value_index: None,
+            selected: false,
+            disabled: false,
+        }
+    }
+
+    pub fn with_hint(label: impl Into<String>, hint: impl Into<String>) -> Self {
+        let hint = hint.into();
+        Self {
+            label: label.into(),
+            hint: non_empty_hint(hint),
+            search_text: Vec::new(),
+            value_index: None,
+            selected: false,
+            disabled: false,
+        }
+    }
+
+    pub fn from_hint_parts(label: impl Into<String>, parts: Vec<String>) -> Self {
+        Self::with_hint(label, join_prompt_hint(parts))
+    }
+
+    pub fn search_text(mut self, text: impl Into<String>) -> Self {
+        if let Some(text) = non_empty_hint(text.into()) {
+            self.search_text.push(text);
+        }
+        self
+    }
+
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    pub fn value_index(mut self, value_index: usize) -> Self {
+        self.value_index = Some(value_index);
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn render_plain(&self) -> String {
+        match self.hint.as_deref() {
+            Some(hint) => format!("{}  {}", self.label, hint),
+            None => self.label.clone(),
+        }
+    }
+}
+
+impl From<PromptItem> for PromptOption {
+    fn from(item: PromptItem) -> Self {
+        Self {
+            label: item.label,
+            hint: item.hint,
+            search_text: Vec::new(),
+            value_index: None,
+            selected: false,
+            disabled: false,
+        }
+    }
+}
+
+impl From<String> for PromptOption {
+    fn from(label: String) -> Self {
+        Self::new(label)
+    }
+}
+
+impl From<&str> for PromptOption {
+    fn from(label: &str) -> Self {
+        Self::new(label)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptSection {
+    pub title: String,
+    pub hint: Option<String>,
+}
+
+impl PromptSection {
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            hint: None,
+        }
+    }
+
+    pub fn with_hint(title: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            hint: non_empty_hint(hint.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptRow {
+    Section(PromptSection),
+    Option(PromptOption),
+}
+
+impl PromptRow {
+    pub fn section(title: impl Into<String>) -> Self {
+        Self::Section(PromptSection::new(title))
+    }
+
+    pub fn section_with_hint(title: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self::Section(PromptSection::with_hint(title, hint))
+    }
+
+    pub fn option(label: impl Into<String>) -> Self {
+        Self::Option(PromptOption::new(label))
+    }
+
+    pub fn option_with_hint(label: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self::Option(PromptOption::with_hint(label, hint))
+    }
+
+    pub fn from_item(item: PromptItem) -> Self {
+        Self::Option(PromptOption::from(item))
+    }
+
+    pub fn from_indexed_item(index: usize, item: PromptItem) -> Self {
+        Self::Option(PromptOption::from(item).value_index(index))
+    }
+}
+
 impl From<String> for PromptItem {
     fn from(label: String) -> Self {
         Self::new(label)
@@ -111,6 +266,19 @@ pub fn join_prompt_hint(parts: Vec<String>) -> String {
 
 pub fn render_prompt_items(items: &[PromptItem]) -> Vec<String> {
     items.iter().map(PromptItem::render_plain).collect()
+}
+
+pub fn render_prompt_rows(rows: &[PromptRow]) -> Vec<String> {
+    rows.iter()
+        .filter_map(|row| match row {
+            PromptRow::Section(_) => None,
+            PromptRow::Option(option) => Some(option.render_plain()),
+        })
+        .collect()
+}
+
+pub fn prompt_items_to_rows(items: &[PromptItem]) -> Vec<PromptRow> {
+    items.iter().cloned().map(PromptRow::from_item).collect()
 }
 
 fn non_empty_hint(hint: String) -> Option<String> {
@@ -314,6 +482,8 @@ pub mod mock {
         pub prompts: Mutex<Vec<String>>,
         pub select_items: Mutex<Vec<Vec<String>>>,
         pub multi_select_items: Mutex<Vec<Vec<String>>>,
+        pub select_rows: Mutex<Vec<Vec<PromptRow>>>,
+        pub multi_select_rows: Mutex<Vec<Vec<PromptRow>>>,
         pub steps: Mutex<Vec<String>>,
         pub dims: Mutex<Vec<String>>,
         pub warnings: Mutex<Vec<String>>,
@@ -336,6 +506,8 @@ pub mod mock {
                 prompts: Mutex::new(Vec::new()),
                 select_items: Mutex::new(Vec::new()),
                 multi_select_items: Mutex::new(Vec::new()),
+                select_rows: Mutex::new(Vec::new()),
+                multi_select_rows: Mutex::new(Vec::new()),
                 steps: Mutex::new(Vec::new()),
                 dims: Mutex::new(Vec::new()),
                 warnings: Mutex::new(Vec::new()),
@@ -394,6 +566,16 @@ pub mod mock {
                 .ok_or_else(|| anyhow::anyhow!("MockUi: no multi_select response"))
         }
 
+        fn select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+            self.select_rows.lock().unwrap().push(rows.to_vec());
+            self.select(prompt, &render_prompt_rows(rows))
+        }
+
+        fn multi_select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<Vec<usize>> {
+            self.multi_select_rows.lock().unwrap().push(rows.to_vec());
+            self.multi_select(prompt, &render_prompt_rows(rows))
+        }
+
         fn can_prompt(&self) -> bool {
             self.prompt_available
         }
@@ -445,6 +627,14 @@ pub mod mock {
 
         fn multi_select(&self, prompt: &str, items: &[String]) -> Result<Vec<usize>> {
             self.as_ref().multi_select(prompt, items)
+        }
+
+        fn select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+            self.as_ref().select_rows(prompt, rows)
+        }
+
+        fn multi_select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<Vec<usize>> {
+            self.as_ref().multi_select_rows(prompt, rows)
         }
 
         fn can_prompt(&self) -> bool {

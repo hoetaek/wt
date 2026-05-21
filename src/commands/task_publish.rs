@@ -1,5 +1,5 @@
 use crate::commands::{issue, task as task_command};
-use crate::context::{Ctx, PromptItem};
+use crate::context::{Ctx, PromptItem, PromptRow};
 use crate::services::issues::CreateIssueRequest;
 use crate::services::issues::IssueProvider;
 use crate::task;
@@ -78,11 +78,8 @@ fn select_publish_task_keys(ctx: &Ctx) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
 
-    let items = candidates
-        .iter()
-        .map(publish_candidate_item)
-        .collect::<Vec<_>>();
-    let selections = ctx.ui.multi_select_items("Tasks to publish", &items)?;
+    let rows = publish_candidate_rows(&candidates);
+    let selections = ctx.ui.multi_select_rows("Tasks to publish", &rows)?;
     let mut keys = Vec::new();
     for idx in selections {
         let candidate = candidates
@@ -167,6 +164,23 @@ fn publish_candidate_item(candidate: &PublishCandidate) -> PromptItem {
         candidate.document.title_or_key(&candidate.task_key),
         hint_parts,
     )
+}
+
+fn publish_candidate_rows(candidates: &[PublishCandidate]) -> Vec<PromptRow> {
+    let mut rows = Vec::new();
+    let mut current_group = None;
+    for (index, candidate) in candidates.iter().enumerate() {
+        let group = publish_candidate_state_label(candidate).to_string();
+        if current_group.as_deref() != Some(group.as_str()) {
+            rows.push(PromptRow::section(group.clone()));
+            current_group = Some(group);
+        }
+        rows.push(PromptRow::from_indexed_item(
+            index,
+            publish_candidate_item(candidate),
+        ));
+    }
+    rows
 }
 
 fn publish_candidate_state_label(candidate: &PublishCandidate) -> &'static str {
@@ -668,6 +682,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["not started", "prepared", "failed", "running", "done"]
         );
+        let rows = ui.multi_select_rows.lock().unwrap();
+        assert_eq!(
+            section_titles(&rows[0]),
+            vec!["not started", "prepared", "failed", "running", "done"]
+        );
     }
 
     #[test]
@@ -1012,5 +1031,14 @@ mod tests {
         assert!(err.contains("Provider issue linear:PROJ-123 was created"));
         assert!(err.contains("<git-common-dir>/wt/tasks/add-publish.toml"));
         assert!(err.contains("disk is read-only"));
+    }
+
+    fn section_titles(rows: &[PromptRow]) -> Vec<String> {
+        rows.iter()
+            .filter_map(|row| match row {
+                PromptRow::Section(section) => Some(section.title.clone()),
+                PromptRow::Option(_) => None,
+            })
+            .collect()
     }
 }

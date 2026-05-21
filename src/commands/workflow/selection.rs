@@ -1,5 +1,5 @@
 use super::resolve_mutating_target;
-use crate::context::{Ctx, PromptItem};
+use crate::context::{Ctx, PromptItem, PromptRow};
 use crate::task_run::STATUS_PREPARED;
 use crate::workflow as workflow_store;
 use crate::workflow::planner::{RunnableWorkflowInfo, runnable_workflow_info};
@@ -18,6 +18,7 @@ pub(super) struct RunnableWorkflowCandidate {
     pub(super) id: String,
     pub(super) path: PathBuf,
     item: PromptItem,
+    group: String,
     label: String,
 }
 
@@ -40,11 +41,8 @@ fn select_runnable_workflow_path(ctx: &Ctx) -> Result<Option<PathBuf>> {
         }
         _ if !ctx.ui.can_prompt() => bail!("{}", runnable_workflows_message(ctx, &candidates)),
         _ => {
-            let items = candidates
-                .iter()
-                .map(|candidate| candidate.item.clone())
-                .collect::<Vec<_>>();
-            let idx = ctx.ui.select_items("Workflow to run", &items)?;
+            let rows = workflow_candidate_rows(&candidates);
+            let idx = ctx.ui.select_rows("Workflow to run", &rows)?;
             let candidate = candidates
                 .get(idx)
                 .ok_or_else(|| anyhow::anyhow!("Selected workflow index out of range: {idx}"))?;
@@ -77,11 +75,13 @@ pub(super) fn list_runnable_workflow_candidates(
             continue;
         };
         let item = workflow_selection_item(ctx, &id, &workflow, &states, &info);
+        let group = workflow_selection_group(&workflow.mode);
         let label = item.render_plain();
         candidates.push(RunnableWorkflowCandidate {
             id,
             path,
             item,
+            group,
             label,
         });
     }
@@ -168,6 +168,38 @@ fn workflow_selection_item(
     }
 
     PromptItem::from_hint_parts(workflow_title_label(ctx, workflow_id, metadata), fields)
+}
+
+fn workflow_candidate_rows(candidates: &[RunnableWorkflowCandidate]) -> Vec<PromptRow> {
+    let mut rows = Vec::new();
+    let mut groups = Vec::<String>::new();
+    for candidate in candidates {
+        if !groups.contains(&candidate.group) {
+            groups.push(candidate.group.clone());
+        }
+    }
+
+    for group in groups {
+        rows.push(PromptRow::section(group.clone()));
+        for (index, candidate) in candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| candidate.group == group)
+        {
+            rows.push(PromptRow::from_indexed_item(index, candidate.item.clone()));
+        }
+    }
+    rows
+}
+
+fn workflow_selection_group(mode: &WorkflowMode) -> String {
+    match mode {
+        WorkflowMode::Single => "single workflows",
+        WorkflowMode::Batch => "batch workflows",
+        WorkflowMode::Stack => "stack workflows",
+        WorkflowMode::Matrix => "matrix workflows",
+    }
+    .to_string()
 }
 
 fn runnable_workflows_message(ctx: &Ctx, candidates: &[RunnableWorkflowCandidate]) -> String {

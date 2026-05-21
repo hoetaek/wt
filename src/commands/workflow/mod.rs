@@ -227,7 +227,7 @@ mod tests {
     use super::*;
     use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::mock::{MockRunner, MockUi};
-    use crate::context::{CommandRunner, Ctx};
+    use crate::context::{CommandRunner, Ctx, PromptRow};
     use std::fs;
     use std::sync::Arc;
 
@@ -2531,6 +2531,11 @@ landing = "auto"
         assert!(items[0][1].contains("batch"));
         assert!(items[0][1].contains("runnable 1"));
         assert!(!items[0][1].contains(&second.id));
+        let rows = ui.select_rows.lock().unwrap();
+        assert_eq!(
+            section_titles(&rows[0]),
+            vec!["single workflows", "batch workflows"]
+        );
     }
 
     #[test]
@@ -2604,5 +2609,14 @@ landing = "auto"
         );
         assert_eq!(fs::read_to_string(workflow.path).unwrap(), workflow_before);
         assert_eq!(fs::read_to_string(run_path).unwrap(), run_before);
+    }
+
+    fn section_titles(rows: &[PromptRow]) -> Vec<String> {
+        rows.iter()
+            .filter_map(|row| match row {
+                PromptRow::Section(section) => Some(section.title.clone()),
+                PromptRow::Option(_) => None,
+            })
+            .collect()
     }
 }

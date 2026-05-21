@@ -1,4 +1,4 @@
-use crate::context::{Ctx, PromptItem};
+use crate::context::{Ctx, PromptItem, PromptRow};
 use crate::task_run;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -135,8 +135,8 @@ pub(crate) fn select_local_task(ctx: &Ctx) -> Result<SelectedTask> {
         bail!("No task files found in <git-common-dir>/wt/tasks");
     }
 
-    let items = tasks.iter().map(task_selection_item).collect::<Vec<_>>();
-    let idx = ctx.ui.select_items("Task to start", &items)?;
+    let rows = task_selection_rows(&tasks);
+    let idx = ctx.ui.select_rows("Task to start", &rows)?;
     let task = tasks
         .get(idx)
         .ok_or_else(|| anyhow::anyhow!("Selected task index out of range: {idx}"))?;
@@ -149,8 +149,8 @@ pub(crate) fn select_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
         bail!("No task files found in <git-common-dir>/wt/tasks");
     }
 
-    let items = tasks.iter().map(task_selection_item).collect::<Vec<_>>();
-    let selections = ctx.ui.multi_select_items("Tasks to start", &items)?;
+    let rows = task_selection_rows(&tasks);
+    let selections = ctx.ui.multi_select_rows("Tasks to start", &rows)?;
     let mut selected = Vec::new();
     for idx in selections {
         let task = tasks
@@ -167,8 +167,8 @@ pub(crate) fn select_local_task_documents(ctx: &Ctx) -> Result<Vec<SelectedTask>
         bail!("No task files found in <git-common-dir>/wt/tasks");
     }
 
-    let items = tasks.iter().map(task_selection_item).collect::<Vec<_>>();
-    let selections = ctx.ui.multi_select_items("Tasks", &items)?;
+    let rows = task_selection_rows(&tasks);
+    let selections = ctx.ui.multi_select_rows("Tasks", &rows)?;
     let mut selected = Vec::new();
     for idx in selections {
         let task = tasks
@@ -437,6 +437,49 @@ pub(crate) fn task_selection_item(task: &SelectedTask) -> PromptItem {
     )
 }
 
+fn task_selection_rows(tasks: &[SelectedTask]) -> Vec<PromptRow> {
+    let mut rows = Vec::new();
+    let mut provider_groups = Vec::<String>::new();
+    let mut has_local_group = false;
+    let candidates = tasks
+        .iter()
+        .enumerate()
+        .map(|(index, task)| {
+            let group = task_selection_group(task);
+            if group == "Local" {
+                has_local_group = true;
+            } else if !provider_groups.contains(&group) {
+                provider_groups.push(group.clone());
+            }
+            (index, group, task_selection_item(task))
+        })
+        .collect::<Vec<_>>();
+
+    let mut groups = provider_groups;
+    if has_local_group {
+        groups.push("Local".to_string());
+    }
+
+    for group in groups {
+        rows.push(PromptRow::section(group.clone()));
+        for (index, _, item) in candidates
+            .iter()
+            .filter(|(_, candidate_group, _)| candidate_group == &group)
+        {
+            rows.push(PromptRow::from_indexed_item(*index, item.clone()));
+        }
+    }
+    rows
+}
+
+fn task_selection_group(task: &SelectedTask) -> String {
+    task.document
+        .origin
+        .as_ref()
+        .map(|origin| provider_display_label(&origin.provider))
+        .unwrap_or_else(|| "Local".to_string())
+}
+
 pub(crate) fn task_resource_item(key: &str, document: &TaskDocument, status: &str) -> PromptItem {
     let display = TaskDocumentDisplay::for_status(key, document, status);
     PromptItem::from_hint_parts(display.label().to_string(), display.selector_hint_parts())
@@ -614,6 +657,36 @@ mod tests {
         };
 
         assert_eq!(task_selection_label(&task), "local-task  branch local-task");
+    }
+
+    #[test]
+    fn task_selection_rows_group_provider_tasks_before_local_tasks() {
+        let tasks = vec![
+            selected_task("local-a", "Local A", "local-a", None),
+            selected_task(
+                "PROJ-123",
+                "Provider task",
+                "alice/proj-123-provider-task",
+                Some(TaskOrigin {
+                    provider: "linear".into(),
+                    id: "PROJ-123".into(),
+                }),
+            ),
+            selected_task("local-b", "Local B", "local-b", None),
+        ];
+
+        let rows = task_selection_rows(&tasks);
+
+        assert_eq!(
+            selector_row_summary(&rows),
+            vec![
+                "section:Linear",
+                "option:1:Provider task",
+                "section:Local",
+                "option:0:Local A",
+                "option:2:Local B",
+            ]
+        );
     }
 
     #[test]
@@ -895,5 +968,37 @@ mod tests {
 
         assert!(result.is_err());
         assert!(format!("{:#}", result.unwrap_err()).contains("unknown field"));
+    }
+
+    fn selected_task(
+        key: &str,
+        title: &str,
+        branch: &str,
+        origin: Option<TaskOrigin>,
+    ) -> SelectedTask {
+        SelectedTask {
+            key: key.into(),
+            path: format!("<git-common-dir>/wt/tasks/{key}.toml"),
+            content: String::new(),
+            document: TaskDocument {
+                title: title.into(),
+                branch: branch.into(),
+                body: String::new(),
+                origin,
+            },
+        }
+    }
+
+    fn selector_row_summary(rows: &[PromptRow]) -> Vec<String> {
+        rows.iter()
+            .map(|row| match row {
+                PromptRow::Section(section) => format!("section:{}", section.title),
+                PromptRow::Option(option) => format!(
+                    "option:{}:{}",
+                    option.value_index.unwrap_or(usize::MAX),
+                    option.label
+                ),
+            })
+            .collect()
     }
 }

@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::context::{Ctx, PromptItem};
+use crate::context::{Ctx, PromptItem, PromptRow};
 use crate::error::WtError;
 use crate::names::WorktreeNames;
 use crate::services::git::GitService;
@@ -39,8 +39,8 @@ fn select_prs(ctx: &Ctx, github: &GithubService<'_>) -> Result<Vec<PullRequest>>
         bail!("No open PRs found");
     }
 
-    let items = format_pr_select_prompt_items(&prs);
-    let selected_indices = ctx.ui.multi_select_items("PRs to start", &items)?;
+    let rows = format_pr_select_prompt_rows(&prs);
+    let selected_indices = ctx.ui.multi_select_rows("PRs to start", &rows)?;
     if selected_indices.is_empty() {
         ctx.ui.print_warning("No PRs selected");
         return Ok(Vec::new());
@@ -208,8 +208,20 @@ fn format_pr_select_items(prs: &[PullRequest]) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn format_pr_select_prompt_items(prs: &[PullRequest]) -> Vec<PromptItem> {
     prs.iter().map(format_pr_select_item).collect()
+}
+
+fn format_pr_select_prompt_rows(prs: &[PullRequest]) -> Vec<PromptRow> {
+    let mut rows = vec![PromptRow::section("GitHub")];
+    rows.extend(
+        prs.iter()
+            .map(format_pr_select_item)
+            .enumerate()
+            .map(|(index, item)| PromptRow::from_indexed_item(index, item)),
+    );
+    rows
 }
 
 fn format_pr_select_item(pr: &PullRequest) -> PromptItem {
@@ -513,6 +525,8 @@ cli = "codex"
             .map(|(_, args, _)| args[3].clone())
             .collect::<Vec<_>>();
         assert_eq!(created_branches, vec!["alice/first", "alice/third"]);
+        let rows = ui.multi_select_rows.lock().unwrap();
+        assert_eq!(section_titles(&rows[0]), vec!["GitHub"]);
         assert!(ui.warnings.lock().unwrap().is_empty());
     }
 
@@ -654,5 +668,14 @@ cli = "codex"
                 "Long author  PR #123 | @octocat | OPEN | head octocat/long | base main"
             ]
         );
+    }
+
+    fn section_titles(rows: &[PromptRow]) -> Vec<String> {
+        rows.iter()
+            .filter_map(|row| match row {
+                PromptRow::Section(section) => Some(section.title.clone()),
+                PromptRow::Option(_) => None,
+            })
+            .collect()
     }
 }

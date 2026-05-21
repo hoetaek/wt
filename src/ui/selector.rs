@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use console::{Style, measure_text_width};
 use crossterm::{
     cursor,
@@ -28,18 +26,17 @@ pub(crate) enum SelectorRow {
 }
 
 impl SelectorRow {
+    #[cfg(test)]
     pub(crate) fn section(title: impl Into<String>) -> Self {
         Self::Section(SelectorSection::new(title))
     }
 
-    pub(crate) fn section_with_hint(title: impl Into<String>, hint: impl Into<String>) -> Self {
-        Self::Section(SelectorSection::with_hint(title, hint))
-    }
-
+    #[cfg(test)]
     pub(crate) fn option(index: usize, label: impl Into<String>) -> Self {
         Self::Option(SelectorOption::new(index, label))
     }
 
+    #[cfg(test)]
     pub(crate) fn option_with_hint(
         index: usize,
         label: impl Into<String>,
@@ -271,14 +268,11 @@ impl SelectorState {
         }
     }
 
-    pub(crate) fn mode(&self) -> SelectorMode {
-        self.mode
-    }
-
     pub(crate) fn query(&self) -> &str {
         &self.query
     }
 
+    #[cfg(test)]
     pub(crate) fn active_index(&self) -> Option<usize> {
         self.active_option().map(|option| option.index)
     }
@@ -492,6 +486,7 @@ impl SelectorRenderOptions {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn summary_label_limit(mut self, summary_label_limit: usize) -> Self {
         self.summary_label_limit = summary_label_limit.max(1);
         self
