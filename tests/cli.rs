@@ -1421,17 +1421,17 @@ id = "PROJ-123"
         .args(["-C", temp.path().to_str().unwrap(), "task", "list"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("◆ Tasks"))
+        .stdout(predicate::str::contains("│ provider-origin"))
+        .stdout(predicate::str::contains("│ local"))
         .stdout(predicate::str::contains(
-            "local  not published | task local | branch feature/local | source local",
+            "•  local  not published  task local  branch feature/local",
         ))
         .stdout(predicate::str::contains(
-            "Provider task  Linear PROJ-123 | task provider | branch alice/provider-task | source provider-origin",
+            "•  Provider task  Linear PROJ-123  task provider  branch alice/provider-task",
         ))
-        .stdout(predicate::str::contains("Path: <git-common-dir>/wt/tasks/local.toml"))
-        .stdout(predicate::str::contains("Origin: none"))
-        .stdout(predicate::str::contains("Origin: linear:PROJ-123"))
-        .stdout(predicate::str::contains("Summary: Task body"))
-        .stdout(predicate::str::contains("Summary: Provider task body"))
+        .stdout(predicate::str::contains("Path:").not())
+        .stdout(predicate::str::contains("Summary:").not())
         .stderr(predicate::str::contains(
             "Invalid task <git-common-dir>/wt/tasks/bad.toml",
         ));

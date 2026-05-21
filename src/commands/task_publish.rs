@@ -153,17 +153,31 @@ fn publish_candidate_label(candidate: &PublishCandidate) -> String {
     publish_candidate_item(candidate).render_plain()
 }
 
+#[cfg(test)]
 fn publish_candidate_item(candidate: &PublishCandidate) -> PromptItem {
     let mut hint_parts = vec![publish_candidate_state_label(candidate).to_string()];
+    hint_parts.extend(publish_candidate_identity_hint_parts(candidate));
+    PromptItem::from_hint_parts(
+        candidate.document.title_or_key(&candidate.task_key),
+        hint_parts,
+    )
+}
+
+fn publish_candidate_grouped_item(candidate: &PublishCandidate) -> PromptItem {
+    PromptItem::from_hint_parts(
+        candidate.document.title_or_key(&candidate.task_key),
+        publish_candidate_identity_hint_parts(candidate),
+    )
+}
+
+fn publish_candidate_identity_hint_parts(candidate: &PublishCandidate) -> Vec<String> {
+    let mut hint_parts = Vec::new();
     if let Some(branch) = task::prepared_branch_name(&candidate.document.branch) {
         hint_parts.push(format!("branch {branch}"));
     } else {
         hint_parts.push(format!("task {}", candidate.task_key));
     }
-    PromptItem::from_hint_parts(
-        candidate.document.title_or_key(&candidate.task_key),
-        hint_parts,
-    )
+    hint_parts
 }
 
 fn publish_candidate_rows(candidates: &[PublishCandidate]) -> Vec<PromptRow> {
@@ -172,15 +186,26 @@ fn publish_candidate_rows(candidates: &[PublishCandidate]) -> Vec<PromptRow> {
     for (index, candidate) in candidates.iter().enumerate() {
         let group = publish_candidate_state_label(candidate).to_string();
         if current_group.as_deref() != Some(group.as_str()) {
-            rows.push(PromptRow::section(group.clone()));
+            let count = candidates
+                .iter()
+                .filter(|candidate| publish_candidate_state_label(candidate) == group)
+                .count();
+            rows.push(PromptRow::section_with_hint(
+                group.clone(),
+                format!("{count} {}", pluralize_task(count)),
+            ));
             current_group = Some(group);
         }
         rows.push(PromptRow::from_indexed_item(
             index,
-            publish_candidate_item(candidate),
+            publish_candidate_grouped_item(candidate),
         ));
     }
     rows
+}
+
+fn pluralize_task(count: usize) -> &'static str {
+    if count == 1 { "task" } else { "tasks" }
 }
 
 fn publish_candidate_state_label(candidate: &PublishCandidate) -> &'static str {
@@ -674,13 +699,9 @@ mod tests {
         assert_eq!(
             items[0]
                 .iter()
-                .map(|item| item
-                    .split("  ")
-                    .nth(1)
-                    .and_then(|hint| hint.split(" | ").next())
-                    .unwrap_or(""))
+                .map(|item| item.split("  ").next().unwrap_or(""))
                 .collect::<Vec<_>>(),
-            vec!["not started", "prepared", "failed", "running", "done"]
+            vec!["Fresh", "Prepared", "Failed", "Running", "Done"]
         );
         let rows = ui.multi_select_rows.lock().unwrap();
         assert_eq!(
