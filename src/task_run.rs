@@ -4,9 +4,14 @@ use crate::workflow::{self, WorkflowMode};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::cmp::Ordering;
+use std::env;
+#[cfg(test)]
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) const STATUS_PREPARED: TaskRunStatus = TaskRunStatus::Prepared;
@@ -83,6 +88,7 @@ pub(crate) struct TaskRun {
     pub(crate) group: Option<String>,
     pub(crate) error: Option<String>,
     pub(crate) creation_order: Option<u64>,
+    pub(crate) coordinator_id: Option<String>,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
 }
@@ -107,6 +113,8 @@ struct RawTaskRun {
     error: Option<String>,
     #[serde(default)]
     creation_order: Option<u64>,
+    #[serde(default)]
+    coordinator_id: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -125,6 +133,7 @@ impl TryFrom<RawTaskRun> for TaskRun {
             group: raw.group,
             error: raw.error,
             creation_order: raw.creation_order,
+            coordinator_id: raw.coordinator_id,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
         };
@@ -179,11 +188,23 @@ impl TaskRunContext {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn create(
     ctx: &Ctx,
     task: &str,
     branch: &str,
     group: Option<&str>,
+    status: TaskRunStatus,
+) -> Result<TaskRunRecord> {
+    create_with_coordinator_id(ctx, task, branch, group, None, status)
+}
+
+pub(crate) fn create_with_coordinator_id(
+    ctx: &Ctx,
+    task: &str,
+    branch: &str,
+    group: Option<&str>,
+    coordinator_id: Option<&str>,
     status: TaskRunStatus,
 ) -> Result<TaskRunRecord> {
     let now = current_utc_timestamp();
@@ -195,10 +216,62 @@ pub(crate) fn create(
         group: group.and_then(optional_string),
         error: None,
         creation_order: Some(creation_order),
+        coordinator_id: coordinator_id.and_then(optional_string),
         created_at: now.clone(),
         updated_at: now,
     };
     write_new(ctx, &run)
+}
+
+pub(crate) fn launcher_coordinator_id() -> Result<Option<String>> {
+    match env::var("WT_AGENT_ID") {
+        Ok(value) => Ok(optional_string(&value)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => bail!("Invalid WT_AGENT_ID: value is not Unicode"),
+    }
+}
+
+#[cfg(test)]
+static WT_AGENT_ID_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) struct WtAgentIdTestGuard {
+    _guard: MutexGuard<'static, ()>,
+    previous: Option<OsString>,
+}
+
+#[cfg(test)]
+impl WtAgentIdTestGuard {
+    pub(crate) fn set(value: Option<&str>) -> Self {
+        let guard = WT_AGENT_ID_TEST_LOCK.lock().unwrap();
+        let previous = env::var_os("WT_AGENT_ID");
+        // SAFETY: Tests that mutate WT_AGENT_ID share WT_AGENT_ID_TEST_LOCK for
+        // the guard lifetime, and production code reads the variable synchronously.
+        unsafe {
+            match value {
+                Some(value) => env::set_var("WT_AGENT_ID", value),
+                None => env::remove_var("WT_AGENT_ID"),
+            }
+        }
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for WtAgentIdTestGuard {
+    fn drop(&mut self) {
+        // SAFETY: The guard still owns WT_AGENT_ID_TEST_LOCK while restoring the
+        // previous value, so cooperating tests cannot mutate it concurrently.
+        unsafe {
+            match self.previous.as_ref() {
+                Some(value) => env::set_var("WT_AGENT_ID", value),
+                None => env::remove_var("WT_AGENT_ID"),
+            }
+        }
+    }
 }
 
 pub(crate) fn read(path: &Path) -> Result<TaskRun> {
@@ -423,6 +496,12 @@ fn write(path: &Path, run: &TaskRun) -> Result<()> {
     }
     if let Some(creation_order) = run.creation_order {
         content.push_str(&format!("creation_order = {creation_order}\n"));
+    }
+    if let Some(coordinator_id) = run.coordinator_id.as_deref() {
+        content.push_str(&format!(
+            "coordinator_id = {}\n",
+            toml_quote(coordinator_id)
+        ));
     }
     content.push_str(&format!("created_at = {}\n", toml_quote(&run.created_at)));
     content.push_str(&format!("updated_at = {}\n", toml_quote(&run.updated_at)));
@@ -775,6 +854,48 @@ mod tests {
     }
 
     #[test]
+    fn task_run_toml_round_trips_coordinator_id_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        let record = create_with_coordinator_id(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            None,
+            Some("agents/coord-a"),
+            STATUS_RUNNING,
+        )
+        .unwrap();
+
+        let parsed = read(&record.path).unwrap();
+        assert_eq!(parsed.coordinator_id.as_deref(), Some("agents/coord-a"));
+
+        let content = std::fs::read_to_string(record.path).unwrap();
+        assert!(content.contains("coordinator_id = \"agents/coord-a\""));
+    }
+
+    #[test]
+    fn task_run_toml_without_coordinator_id_parses_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.toml");
+
+        std::fs::write(
+            &path,
+            r#"task = "add-schema"
+branch = "add-schema"
+status = "running"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let parsed = read(&path).unwrap();
+        assert!(parsed.coordinator_id.is_none());
+    }
+
+    #[test]
     fn linked_worktree_reads_common_dir_task_and_task_run_state() {
         let temp = tempfile::tempdir().unwrap();
         let repo = temp.path().join("repo");
@@ -1100,6 +1221,7 @@ updated_at = "2026-05-16T00:00:00Z"
             group: None,
             error: None,
             creation_order,
+            coordinator_id: None,
             created_at: created_at.into(),
             updated_at: created_at.into(),
         }

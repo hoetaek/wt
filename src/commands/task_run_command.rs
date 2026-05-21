@@ -121,11 +121,14 @@ fn run_selected_task(
         return Ok(result);
     }
 
-    let run = task_run::create(
+    let coordinator_id = task_run::launcher_coordinator_id()?;
+
+    let run = task_run::create_with_coordinator_id(
         ctx,
         &selected.key,
         &selected.document.branch,
         None,
+        coordinator_id.as_deref(),
         task_run::STATUS_PREPARED,
     )?;
 
@@ -205,7 +208,15 @@ fn record_task_failure(ctx: &Ctx, selected: &task::SelectedTask, err: &anyhow::E
         task_run::STATUS_FAILED
     };
     let message = err.to_string();
-    if let Ok(run) = task_run::create(ctx, &selected.key, &selected.document.branch, None, status) {
+    let coordinator_id = task_run::launcher_coordinator_id().ok().flatten();
+    if let Ok(run) = task_run::create_with_coordinator_id(
+        ctx,
+        &selected.key,
+        &selected.document.branch,
+        None,
+        coordinator_id.as_deref(),
+        status,
+    ) {
         let _ = task_run::update(ctx, &run.id, status, None, Some(&message));
     }
 }
@@ -215,11 +226,13 @@ fn record_task_profile_success(
     selected: &task::SelectedTask,
     result: &issue::IssueRunResult,
 ) -> Result<()> {
-    task_run::create(
+    let coordinator_id = task_run::launcher_coordinator_id()?;
+    task_run::create_with_coordinator_id(
         ctx,
         &selected.key,
         &result.branch_name,
         None,
+        coordinator_id.as_deref(),
         task_run::STATUS_RUNNING,
     )?;
     write_task_branch_from_result(ctx, selected, result)?;
@@ -411,6 +424,7 @@ mod tests {
 
     #[test]
     fn task_run_with_key_runs_named_task_snapshot() {
+        let _env = task_run::WtAgentIdTestGuard::set(Some("agents/coord-a"));
         let repo = tempfile::tempdir().unwrap();
         let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -473,6 +487,55 @@ mod tests {
         assert_eq!(runs[0].run.task, "add-schema");
         assert_eq!(runs[0].run.status, task_run::STATUS_RUNNING);
         assert_eq!(runs[0].run.branch, "add-schema");
+        assert_eq!(
+            runs[0].run.coordinator_id.as_deref(),
+            Some("agents/coord-a")
+        );
+
+        let content = std::fs::read_to_string(&runs[0].path).unwrap();
+        assert!(content.contains("coordinator_id = \"agents/coord-a\""));
+    }
+
+    #[test]
+    fn task_run_leaves_coordinator_id_empty_without_launcher_identity() {
+        let _env = task_run::WtAgentIdTestGuard::set(None);
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".git/wt/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        add_task_worktree_creation_responses(&mut runner, repo.path());
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config {
+                issues: Some(IssuesConfig {
+                    provider: IssueProviderType::Linear,
+                    gh_user: None,
+                }),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, &["add-schema".into()], &None, None, &[], false).unwrap();
+
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].run.coordinator_id.is_none());
+
+        let content = std::fs::read_to_string(&runs[0].path).unwrap();
+        assert!(!content.contains("coordinator_id"));
     }
 
     #[test]
