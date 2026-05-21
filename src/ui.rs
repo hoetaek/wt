@@ -137,6 +137,7 @@ struct PromptEntry {
 fn prompt_entries(items: &[PromptItem]) -> Vec<PromptEntry> {
     let hint_label_width = items
         .iter()
+        .take(PROMPT_MAX_ROWS)
         .filter(|item| has_prompt_hint(item))
         .map(|item| measure_text_width(&item.label))
         .max();
@@ -588,7 +589,7 @@ mod tests {
     }
 
     #[test]
-    fn task_selector_origin_state_starts_in_same_rendered_column_for_full_width_titles() {
+    fn task_selector_hint_starts_in_same_rendered_column_for_full_width_titles() {
         console::set_colors_enabled(true);
         let local = task::task_resource_item(
             "a",
@@ -634,13 +635,69 @@ mod tests {
         console::set_colors_enabled(true);
 
         assert_eq!(
-            rendered_column(&local, "not published"),
+            rendered_column(&local, "branch a"),
             rendered_column(&provider, "Linear PROJ-123")
         );
-        assert!(items[0].label.contains("not published | task a | branch a"));
-        assert!(items[1].label.contains(
-            "Linear PROJ-123 | task very-long-task-key | branch team/very-long-task-key"
+        assert!(items[0].label.contains("branch a"));
+        assert!(
+            items[1]
+                .label
+                .contains("Linear PROJ-123 | branch team/very-long-task-key")
+        );
+    }
+
+    #[test]
+    fn prompt_entries_align_hint_columns_with_visible_rows_only() {
+        console::set_colors_enabled(true);
+        let mut source = vec![
+            PromptItem::with_hint("Short", "branch short"),
+            PromptItem::with_hint("Visible longer", "branch visible"),
+        ];
+        for index in 0..(PROMPT_MAX_ROWS - source.len()) {
+            source.push(PromptItem::with_hint(
+                format!("Filler {index}"),
+                format!("branch filler-{index}"),
+            ));
+        }
+        source.push(PromptItem::with_hint(
+            "Hidden item with a much much longer title than the visible rows",
+            "branch hidden",
         ));
+        let items = prompt_entries(&source);
+
+        let short = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            true,
+            true,
+            &items[0].label,
+            &items[0].hint,
+        ))
+        .into_owned();
+        let visible_longer = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            false,
+            false,
+            &items[1].label,
+            &items[1].hint,
+        ))
+        .into_owned();
+        let hidden = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            false,
+            false,
+            &items[PROMPT_MAX_ROWS].label,
+            &items[PROMPT_MAX_ROWS].hint,
+        ))
+        .into_owned();
+        console::set_colors_enabled(true);
+
+        assert_eq!(
+            rendered_column(&short, "branch short"),
+            rendered_column(&visible_longer, "branch visible")
+        );
+        assert!(
+            rendered_column(&short, "branch short") < rendered_column(&hidden, "branch hidden")
+        );
     }
 
     #[test]

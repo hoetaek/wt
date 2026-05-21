@@ -72,7 +72,16 @@ impl TaskDocumentDisplay {
     }
 
     pub(crate) fn selector_hint_parts(&self) -> Vec<String> {
-        self.metadata_hint_parts()
+        let mut hint_parts = Vec::new();
+        if self.origin_state != "not published" && !self.origin_state.is_empty() {
+            hint_parts.push(self.origin_state.clone());
+        }
+        if let Some(branch) = &self.branch {
+            hint_parts.push(format!("branch {branch}"));
+        } else if !self.task_key.is_empty() {
+            hint_parts.push(format!("task {}", self.task_key));
+        }
+        hint_parts
     }
 
     pub(crate) fn inventory_hint_parts(&self) -> Vec<String> {
@@ -568,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn task_selection_label_keeps_title_key_origin_and_branch_separate() {
+    fn task_selection_label_keeps_title_origin_and_branch_separate() {
         let task = SelectedTask {
             key: "PROJ-123".into(),
             path: "<git-common-dir>/wt/tasks/PROJ-123.toml".into(),
@@ -586,12 +595,12 @@ mod tests {
 
         assert_eq!(
             task_selection_label(&task),
-            "Fix editor  Linear PROJ-123 | task PROJ-123 | branch alice/proj-123-fix-editor"
+            "Fix editor  Linear PROJ-123 | branch alice/proj-123-fix-editor"
         );
     }
 
     #[test]
-    fn task_selection_label_keeps_task_key_in_metadata_when_title_is_missing() {
+    fn task_selection_label_omits_redundant_local_origin() {
         let task = SelectedTask {
             key: "local-task".into(),
             path: "<git-common-dir>/wt/tasks/local-task.toml".into(),
@@ -604,10 +613,7 @@ mod tests {
             },
         };
 
-        assert_eq!(
-            task_selection_label(&task),
-            "local-task  not published | task local-task | branch local-task"
-        );
+        assert_eq!(task_selection_label(&task), "local-task  branch local-task");
     }
 
     #[test]

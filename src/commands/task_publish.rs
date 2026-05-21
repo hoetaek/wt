@@ -3,6 +3,7 @@ use crate::context::{Ctx, PromptItem};
 use crate::services::issues::CreateIssueRequest;
 use crate::services::issues::IssueProvider;
 use crate::task;
+use crate::task_run;
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::fs;
@@ -19,6 +20,7 @@ struct PublishResult {
 struct PublishCandidate {
     task_key: String,
     document: task::TaskDocument,
+    latest_run_status: Option<task_run::TaskRunStatus>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,12 +100,32 @@ fn list_publish_candidates(ctx: &Ctx) -> Result<Vec<PublishCandidate>> {
         if document.origin.is_some() {
             continue;
         }
+        let latest_run_status =
+            task_run::latest_for_task(ctx, &key)?.map(|record| record.run.status);
         candidates.push(PublishCandidate {
             task_key: key,
             document,
+            latest_run_status,
         });
     }
+    candidates.sort_by(|left, right| {
+        publish_candidate_rank(left)
+            .cmp(&publish_candidate_rank(right))
+            .then_with(|| left.task_key.cmp(&right.task_key))
+    });
     Ok(candidates)
+}
+
+fn publish_candidate_rank(candidate: &PublishCandidate) -> u8 {
+    use task_run::TaskRunStatus;
+
+    match candidate.latest_run_status {
+        None => 0,
+        Some(TaskRunStatus::Prepared | TaskRunStatus::Skipped) => 1,
+        Some(TaskRunStatus::Failed) => 2,
+        Some(TaskRunStatus::Running) => 3,
+        Some(TaskRunStatus::Done) => 4,
+    }
 }
 
 fn read_publish_candidate(ctx: &Ctx, path: &Path) -> Result<(String, task::TaskDocument)> {
@@ -135,7 +157,23 @@ fn publish_candidate_label(candidate: &PublishCandidate) -> String {
 }
 
 fn publish_candidate_item(candidate: &PublishCandidate) -> PromptItem {
-    task::task_resource_item(&candidate.task_key, &candidate.document, "origin:none")
+    let mut hint_parts = vec![publish_candidate_state_label(candidate).to_string()];
+    if let Some(branch) = task::prepared_branch_name(&candidate.document.branch) {
+        hint_parts.push(format!("branch {branch}"));
+    } else {
+        hint_parts.push(format!("task {}", candidate.task_key));
+    }
+    PromptItem::from_hint_parts(
+        candidate.document.title_or_key(&candidate.task_key),
+        hint_parts,
+    )
+}
+
+fn publish_candidate_state_label(candidate: &PublishCandidate) -> &'static str {
+    candidate
+        .latest_run_status
+        .map(|status| status.as_str())
+        .unwrap_or("not started")
 }
 
 fn preflight_task_documents(
@@ -151,6 +189,7 @@ fn preflight_task_documents(
         candidates.push(PublishCandidate {
             task_key: key.clone(),
             document,
+            latest_run_status: None,
         });
     }
 
@@ -332,6 +371,7 @@ mod tests {
     use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::mock::{MockRunner, MockUi};
     use crate::services::issues::{EnsuredBranch, IssueInfo, IssueListItem};
+    use crate::task_run::{STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING};
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
@@ -576,7 +616,62 @@ mod tests {
     }
 
     #[test]
-    fn publish_candidate_label_shows_title_key_origin_and_branch() {
+    fn bare_publish_orders_unstarted_tasks_before_started_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "a-running",
+            "title = \"Running\"\nbranch = \"a-running\"\n",
+        );
+        write_task(
+            dir.path(),
+            "b-done",
+            "title = \"Done\"\nbranch = \"b-done\"\n",
+        );
+        write_task(
+            dir.path(),
+            "x-failed",
+            "title = \"Failed\"\nbranch = \"x-failed\"\n",
+        );
+        write_task(
+            dir.path(),
+            "y-prepared",
+            "title = \"Prepared\"\nbranch = \"y-prepared\"\n",
+        );
+        write_task(
+            dir.path(),
+            "z-fresh",
+            "title = \"Fresh\"\nbranch = \"z-fresh\"\n",
+        );
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![]);
+        let ui = Arc::new(ui);
+        let ctx = ctx_with_config_and_ui(dir.path(), linear_config(), Arc::clone(&ui));
+        task_run::create(&ctx, "a-running", "a-running", None, STATUS_RUNNING).unwrap();
+        task_run::create(&ctx, "b-done", "b-done", None, STATUS_DONE).unwrap();
+        task_run::create(&ctx, "x-failed", "x-failed", None, STATUS_FAILED).unwrap();
+        task_run::create(&ctx, "y-prepared", "y-prepared", None, STATUS_PREPARED).unwrap();
+
+        let keys = select_publish_task_keys(&ctx).unwrap();
+
+        assert!(keys.is_empty());
+        let items = ui.multi_select_items.lock().unwrap();
+        assert_eq!(
+            items[0]
+                .iter()
+                .map(|item| item
+                    .split("  ")
+                    .nth(1)
+                    .and_then(|hint| hint.split(" | ").next())
+                    .unwrap_or(""))
+                .collect::<Vec<_>>(),
+            vec!["not started", "prepared", "failed", "running", "done"]
+        );
+    }
+
+    #[test]
+    fn publish_candidate_label_shows_publish_state_and_branch_columns() {
         let candidate = PublishCandidate {
             task_key: "add-publish".into(),
             document: task::TaskDocument {
@@ -585,11 +680,12 @@ mod tests {
                 body: String::new(),
                 origin: None,
             },
+            latest_run_status: None,
         };
 
         assert_eq!(
             publish_candidate_label(&candidate),
-            "Add publish  not published | task add-publish | branch team/add-publish"
+            "Add publish  not started | branch team/add-publish"
         );
     }
 
