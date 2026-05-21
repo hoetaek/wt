@@ -9,11 +9,9 @@ const PROMPT_MAX_ROWS: usize = 10;
 const PROMPT_HINT_GAP: usize = 2;
 const PROMPT_SEARCH_SEPARATOR: char = '\x1f';
 const BAR: &str = "│";
+const CURSOR_ACTIVE: &str = "❯";
 const RADIO_SELECTED: &str = "●";
 const RADIO_UNSELECTED: &str = "○";
-const CHECKBOX_SELECTED: &str = "☑";
-const CHECKBOX_ACTIVE: &str = "◻";
-const CHECKBOX_UNSELECTED: &str = "☐";
 
 pub struct TerminalUi {
     quiet: bool,
@@ -208,19 +206,16 @@ impl Theme for WtPromptTheme {
         .to_string()
     }
 
-    fn checkbox_symbol(&self, state: &ThemeState, selected: bool, active: bool) -> String {
+    fn checkbox_symbol(&self, state: &ThemeState, selected: bool, _active: bool) -> String {
         match state {
             ThemeState::Active | ThemeState::Error(_) if selected => {
-                selected_style().apply_to(CHECKBOX_SELECTED)
-            }
-            ThemeState::Active | ThemeState::Error(_) if active => {
-                accent_style().apply_to(CHECKBOX_ACTIVE)
+                selected_style().apply_to(RADIO_SELECTED)
             }
             ThemeState::Active | ThemeState::Error(_) => {
-                inactive_style().apply_to(CHECKBOX_UNSELECTED)
+                inactive_style().apply_to(RADIO_UNSELECTED)
             }
-            ThemeState::Submit if selected => selected_style().apply_to(CHECKBOX_SELECTED),
-            ThemeState::Cancel if selected => muted_style().apply_to(CHECKBOX_SELECTED),
+            ThemeState::Submit if selected => selected_style().apply_to(RADIO_SELECTED),
+            ThemeState::Cancel if selected => muted_style().apply_to(RADIO_SELECTED),
             _ => Style::new().apply_to(""),
         }
         .to_string()
@@ -272,9 +267,10 @@ impl Theme for WtPromptTheme {
             _ => {}
         }
 
-        format_prompt_row(
+        format_multiselect_prompt_row(
             state,
             self.bar_color(state),
+            cursor_symbol(state, active),
             self.checkbox_symbol(state, selected, active),
             self.checkbox_style(state, selected, active),
             label,
@@ -308,6 +304,22 @@ fn select_label_style(state: &ThemeState, selected: bool) -> Style {
     }
 }
 
+fn cursor_symbol(state: &ThemeState, active: bool) -> String {
+    match state {
+        ThemeState::Active | ThemeState::Error(_) if active => {
+            accent_style().apply_to(CURSOR_ACTIVE).to_string()
+        }
+        ThemeState::Active | ThemeState::Error(_) => {
+            muted_style().apply_to(inactive_cursor_slot()).to_string()
+        }
+        _ => Style::new().apply_to(inactive_cursor_slot()).to_string(),
+    }
+}
+
+fn inactive_cursor_slot() -> String {
+    " ".repeat(measure_text_width(CURSOR_ACTIVE))
+}
+
 fn hint_style(state: &ThemeState) -> Style {
     match state {
         ThemeState::Cancel => Style::new().dim().strikethrough(),
@@ -328,6 +340,24 @@ fn format_prompt_row(
     let hint = format_hint(state, hint);
     format!(
         "{bar}  {marker}  {label}{hint}\n",
+        bar = bar_style.apply_to(BAR),
+        label = label_style.apply_to(label),
+    )
+}
+
+fn format_multiselect_prompt_row(
+    state: &ThemeState,
+    bar_style: Style,
+    cursor: String,
+    marker: String,
+    label_style: Style,
+    label: &str,
+    hint: &str,
+) -> String {
+    let label = display_label(label);
+    let hint = format_hint(state, hint);
+    format!(
+        "{bar} {cursor} {marker}  {label}{hint}\n",
         bar = bar_style.apply_to(BAR),
         label = label_style.apply_to(label),
     )
@@ -434,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_theme_renders_checkbox_rows_without_color() {
+    fn prompt_theme_renders_multiselect_rows_without_color() {
         console::set_colors_enabled(false);
         let rendered = WtPromptTheme.format_multiselect_item(
             &ThemeState::Active,
@@ -446,14 +476,22 @@ mod tests {
         console::set_colors_enabled(true);
 
         let plain = strip_ansi_codes(&rendered);
-        assert!(plain.contains("☑  Publish docs"));
+        assert!(plain.contains("❯ ●  Publish docs"));
         assert!(plain.contains("PROJ-123 · Todo · alice"));
     }
 
     #[test]
     fn prompt_theme_renders_distinct_multiselect_row_states_without_color() {
         console::set_colors_enabled(false);
-        let selected = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+        let selected_active = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
+            &ThemeState::Active,
+            true,
+            true,
+            "Publish docs",
+            "",
+        ))
+        .into_owned();
+        let selected_inactive = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
             &ThemeState::Active,
             true,
             false,
@@ -479,12 +517,14 @@ mod tests {
         .into_owned();
         console::set_colors_enabled(true);
 
-        assert!(selected.contains("☑  Publish docs"));
-        assert!(active_unselected.contains("◻  Preview docs"));
-        assert!(inactive_unselected.contains("☐  Archive docs"));
-        assert_ne!(selected, active_unselected);
+        assert!(selected_active.contains("❯ ●  Publish docs"));
+        assert!(selected_inactive.contains("  ●  Publish docs"));
+        assert!(active_unselected.contains("❯ ○  Preview docs"));
+        assert!(inactive_unselected.contains("  ○  Archive docs"));
+        assert_ne!(selected_active, selected_inactive);
+        assert_ne!(selected_inactive, active_unselected);
         assert_ne!(active_unselected, inactive_unselected);
-        assert_ne!(selected, inactive_unselected);
+        assert_ne!(selected_inactive, inactive_unselected);
     }
 
     #[test]
@@ -511,8 +551,8 @@ mod tests {
         console::set_colors_enabled(true);
 
         assert_eq!(
-            hint_column(&short, "task PROJ-123"),
-            hint_column(&long, "task PROJ-456")
+            rendered_column(&short, "task PROJ-123"),
+            rendered_column(&long, "task PROJ-456")
         );
     }
 
@@ -542,8 +582,8 @@ mod tests {
         console::set_colors_enabled(true);
 
         assert_eq!(
-            hint_column(&short, "task PROJ-123"),
-            hint_column(&long, "task PROJ-456")
+            rendered_column(&short, "task PROJ-123"),
+            rendered_column(&long, "task PROJ-456")
         );
     }
 
