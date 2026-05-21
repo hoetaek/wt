@@ -701,7 +701,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             command_arg,
-            "export WT_AGENT_ID=agents/feature WT_COORDINATOR_AGENT_ID=agents/coordinator; codex --model repo-feature --cd /tmp/repo-feature"
+            "export WT_AGENT_ID=agents/feature; codex --model repo-feature --cd /tmp/repo-feature"
         );
 
         assert!(!calls.iter().any(|(cmd, args, _)| {
@@ -834,7 +834,7 @@ args = ["--model", "gpt-5.5"]
             .unwrap();
         assert_eq!(
             command_arg,
-            "export WT_AGENT_ID=agents/feature-codex WT_COORDINATOR_AGENT_ID=agents/coordinator; codex --model gpt-5.5"
+            "export WT_AGENT_ID=agents/feature-codex; codex --model gpt-5.5"
         );
     }
 
@@ -946,7 +946,7 @@ args = ["--yolo"]
             .unwrap();
         assert_eq!(
             command_arg,
-            "export WT_AGENT_ID=agents/feature-codex-yolo WT_COORDINATOR_AGENT_ID=agents/coordinator; codex --yolo"
+            "export WT_AGENT_ID=agents/feature-codex-yolo; codex --yolo"
         );
     }
 
@@ -1042,7 +1042,7 @@ args = ["--yolo"]
             .unwrap();
         assert_eq!(
             command_arg,
-            "export WT_AGENT_ID=agents/feature-codex WT_COORDINATOR_AGENT_ID=agents/coordinator; claude"
+            "export WT_AGENT_ID=agents/feature-codex; claude"
         );
     }
 

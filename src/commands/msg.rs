@@ -1,11 +1,10 @@
 use crate::context::Ctx;
 use crate::messages::{
-    AgentId, HookOutput, Message, MessageDeliveryState, MessageInspectionRecord, MessageInventory,
-    MessageInventoryCounts, MessageScope, MessageStore,
+    AgentId, COORDINATOR_AGENT_ALIAS, HookOutput, Message, MessageDeliveryState,
+    MessageInspectionRecord, MessageInventory, MessageInventoryCounts, MessageScope, MessageStore,
 };
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use std::collections::HashSet;
 use std::env;
 use std::io::Write;
 
@@ -16,9 +15,11 @@ pub(crate) fn send(ctx: &Ctx, to: &str, scope: Option<&str>, message: &[String])
     }
 
     let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let scope = scope.map(parse_scope_arg).transpose()?;
+    let to = resolve_agent_arg(ctx, to).context("Invalid target agent id")?;
     let sent = match scope {
-        Some(scope) => store.send_scoped(to, parse_scope_arg(scope)?, &text)?,
-        None => store.send(to, &text)?,
+        Some(scope) => store.send_scoped(to.as_str(), scope, &text)?,
+        None => store.send(to.as_str(), &text)?,
     };
 
     if !ctx.quiet {
@@ -63,7 +64,8 @@ fn parse_scope_arg(scope: &str) -> Result<MessageScope> {
 
 pub(crate) fn list(ctx: &Ctx, agent: &str) -> Result<()> {
     let store = MessageStore::new(ctx.storage_root.messages_dir());
-    let inventory = store.list(agent)?;
+    let agent = resolve_agent_arg(ctx, agent).context("Invalid agent id")?;
+    let inventory = store.list(agent.as_str())?;
     let report = MessageListReport::from_inventory(ctx, inventory);
 
     if ctx.is_json() {
@@ -77,7 +79,7 @@ pub(crate) fn list(ctx: &Ctx, agent: &str) -> Result<()> {
 
 pub(crate) fn read(ctx: &Ctx, agent: &str, message_id: &str) -> Result<()> {
     let message_id = canonical_read_message_id(message_id)?;
-    let agent = AgentId::parse(agent)?;
+    let agent = resolve_agent_arg(ctx, agent).context("Invalid agent id")?;
     let store = MessageStore::new(ctx.storage_root.messages_dir());
     let record = store.read_for_inspection(agent.as_str(), message_id)?;
     let row = MessageRow::from_record(ctx, record);
@@ -106,8 +108,13 @@ fn canonical_read_message_id(message_id: &str) -> Result<&str> {
 
 pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
     let agents = match agent {
-        Some(agent) => vec![agent.to_string()],
-        None => inbox_agents_from_env()?,
+        Some(agent) => vec![
+            resolve_agent_arg(ctx, agent)
+                .context("Invalid agent id")?
+                .as_str()
+                .to_string(),
+        ],
+        None => inbox_agents_from_context(ctx)?,
     };
     if agents.is_empty() {
         return Ok(());
@@ -115,7 +122,7 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
 
     let store = MessageStore::new(ctx.storage_root.messages_dir());
     for agent in agents {
-        let delivery = store.check_inbox(&agent)?;
+        let delivery = store.check_inbox(&agent, ctx.coordinator_agent_id.as_deref())?;
         if delivery.is_empty() {
             continue;
         }
@@ -131,20 +138,37 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn inbox_agents_from_env() -> Result<Vec<String>> {
-    let mut seen = HashSet::new();
+fn resolve_agent_arg(ctx: &Ctx, input: &str) -> Result<AgentId> {
+    if input.trim() == COORDINATOR_AGENT_ALIAS {
+        return coordinator_agent_from_context(ctx);
+    }
+    AgentId::parse(input)
+}
+
+fn coordinator_agent_from_context(ctx: &Ctx) -> Result<AgentId> {
+    let Some(value) = ctx.coordinator_agent_id.as_deref() else {
+        bail!(coordinator_alias_error());
+    };
+    if value.trim().is_empty() {
+        bail!(coordinator_alias_error());
+    }
+    AgentId::parse(value).map_err(|err| anyhow::anyhow!("Invalid WT_COORDINATOR_AGENT_ID: {err:#}"))
+}
+
+fn coordinator_alias_error() -> &'static str {
+    "The `coordinator` alias requires WT_COORDINATOR_AGENT_ID. Run `wt coord use <id>` in the coordinator shell or enable ambient binding with `eval \"$(wt shell-init zsh)\"`."
+}
+
+fn inbox_agents_from_context(_ctx: &Ctx) -> Result<Vec<String>> {
     let mut agents = Vec::new();
-    for key in ["WT_AGENT_ID", "WT_COORDINATOR_AGENT_ID"] {
-        match env::var(key) {
-            Ok(value) => {
-                if value.is_empty() || !seen.insert(value.clone()) {
-                    continue;
-                }
+    match env::var("WT_AGENT_ID") {
+        Ok(value) => {
+            if !value.is_empty() {
                 agents.push(value);
             }
-            Err(env::VarError::NotPresent) => {}
-            Err(env::VarError::NotUnicode(_)) => bail!("Invalid {key}: value is not Unicode"),
         }
+        Err(env::VarError::NotPresent) => {}
+        Err(env::VarError::NotUnicode(_)) => bail!("Invalid WT_AGENT_ID: value is not Unicode"),
     }
     Ok(agents)
 }
@@ -394,4 +418,54 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 
 fn quoted(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::{CtxOptions, OutputMode};
+    use crate::storage::StorageRoot;
+    use tempfile::TempDir;
+
+    #[test]
+    fn coordinator_alias_resolves_from_runtime_env() {
+        let temp = TempDir::new().unwrap();
+        let ctx = test_ctx(temp.path(), Some("agents/foo".into()));
+
+        let agent = resolve_agent_arg(&ctx, "coordinator").unwrap();
+
+        assert_eq!(agent.as_str(), "agents/foo");
+    }
+
+    #[test]
+    fn coordinator_alias_without_runtime_env_errors_with_setup_hint() {
+        let temp = TempDir::new().unwrap();
+        let ctx = test_ctx(temp.path(), None);
+
+        let err = resolve_agent_arg(&ctx, "coordinator")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("WT_COORDINATOR_AGENT_ID"));
+        assert!(err.contains("wt coord use <id>"));
+        assert!(err.contains("wt shell-init zsh"));
+    }
+
+    fn test_ctx(root: &std::path::Path, coordinator_agent_id: Option<String>) -> Ctx {
+        Ctx::new_with_options(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+            CtxOptions {
+                storage_root: Some(StorageRoot::from_git_common_dir(root.join(".git"))),
+                output_mode: OutputMode::Text,
+                coordinator_agent_id,
+                ..CtxOptions::default()
+            },
+        )
+    }
 }

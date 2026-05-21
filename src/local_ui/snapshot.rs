@@ -82,6 +82,7 @@ impl SnapshotState {
                 verbosity: 0,
                 quiet: true,
                 launcher_coordinator_id: None,
+                coordinator_agent_id: None,
             },
         )
     }

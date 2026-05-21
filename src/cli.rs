@@ -147,7 +147,7 @@ pub enum Commands {
     Uninstall,
     /// Launch Codex with the current worktree's wt agent identity
     #[command(
-        long_about = "Launch Codex with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID=agents/coordinator.\n\nUse `wt codex` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt codex @planner` or `wt codex @reviewer` to launch a separate inbox like `agents/<branch_slug>-planner`, so multiple agents do not consume each other's messages. Extra Codex arguments are passed through after the optional role."
+        long_about = "Launch Codex with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID resolved from the launch context when available.\n\nUse `wt codex` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt codex @planner` or `wt codex @reviewer` to launch a separate inbox like `agents/<branch_slug>-planner`, so multiple agents do not consume each other's messages. Extra Codex arguments are passed through after the optional role."
     )]
     Codex {
         /// Optional @role followed by arguments passed to codex
@@ -161,7 +161,7 @@ pub enum Commands {
     },
     /// Launch Claude with the current worktree's wt agent identity
     #[command(
-        long_about = "Launch Claude with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID=agents/coordinator.\n\nUse `wt claude` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt claude @coordinator` or `wt claude @reviewer` to launch a separate inbox like `agents/<branch_slug>-coordinator`, so multiple agents do not consume each other's messages. Extra Claude arguments are passed through after the optional role."
+        long_about = "Launch Claude with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID resolved from the launch context when available.\n\nUse `wt claude` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt claude @coordinator` or `wt claude @reviewer` to launch a separate inbox like `agents/<branch_slug>-coordinator`, so multiple agents do not consume each other's messages. Extra Claude arguments are passed through after the optional role."
     )]
     Claude {
         /// Optional @role followed by arguments passed to claude
@@ -175,7 +175,7 @@ pub enum Commands {
     },
     /// Run any command with an explicit wt agent identity
     #[command(
-        long_about = "Run any command with an explicit WT_AGENT_ID and WT_COORDINATOR_AGENT_ID=agents/coordinator.\n\nUse `wt as <AGENT> -- <COMMAND>` as the low-level escape hatch for scripts, unusual agent CLIs, or identities that should not be derived from the current branch. For daily Codex and Claude launches, prefer `wt codex`, `wt codex @planner`, `wt claude`, or `wt claude @reviewer`."
+        long_about = "Run any command with an explicit WT_AGENT_ID and context-resolved WT_COORDINATOR_AGENT_ID when available.\n\nUse `wt as <AGENT> -- <COMMAND>` as the low-level escape hatch for scripts, unusual agent CLIs, or identities that should not be derived from the current branch. For daily Codex and Claude launches, prefer `wt codex`, `wt codex @planner`, `wt claude`, or `wt claude @reviewer`."
     )]
     As {
         /// Agent id as NAME or agents/NAME
@@ -201,7 +201,7 @@ pub enum Commands {
     },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send, deliver, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` normalizes to the local coordinator inbox `agents/coordinator`. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg check-inbox` from agent hooks so WT_AGENT_ID and WT_COORDINATOR_AGENT_ID inboxes are checked; pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg check-inbox` from agent hooks so the WT_AGENT_ID inbox is checked; pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -472,7 +472,7 @@ pub enum AgentHookCommand {
 pub enum AgentHookInstallCommand {
     /// Install Claude Code inbox polling
     #[command(
-        long_about = "Install the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis writes worktree-local `.claude/settings.local.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox`; the command reads WT_AGENT_ID and WT_COORDINATOR_AGENT_ID at runtime, and exits successfully without output when neither is set. Install also adds that local settings path to the per-worktree Git exclude file, preserves existing local Claude settings, and fails instead of modifying tracked settings or source files.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and WT_COORDINATOR_AGENT_ID=agents/coordinator when they launch Claude."
+        long_about = "Install the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis writes worktree-local `.claude/settings.local.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox`; the command reads WT_AGENT_ID at runtime, and exits successfully without output when it is unset. Install also adds that local settings path to the per-worktree Git exclude file, preserves existing local Claude settings, and fails instead of modifying tracked settings or source files.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and context-resolved WT_COORDINATOR_AGENT_ID when they launch Claude."
     )]
     Claude {
         /// Manual/test override: bind this hook to one agent instead of WT_AGENT_ID
@@ -481,7 +481,7 @@ pub enum AgentHookInstallCommand {
     },
     /// Install Codex inbox polling
     #[command(
-        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox`; the command reads WT_AGENT_ID and WT_COORDINATOR_AGENT_ID at runtime, and exits successfully without output when neither is set. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and WT_COORDINATOR_AGENT_ID=agents/coordinator when they launch Codex."
+        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox`; the command reads WT_AGENT_ID at runtime, and exits successfully without output when it is unset. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and context-resolved WT_COORDINATOR_AGENT_ID when they launch Codex."
     )]
     Codex {
         /// Manual/test override: bind this user-level hook to one agent instead of WT_AGENT_ID
@@ -519,7 +519,7 @@ pub enum MsgCommand {
         long_about = "Write one message to an agent inbox.\n\nUnscoped sends use the direct/default scope. Use `--scope workflow:<id>` for workflow-owned coordinator reports, `--scope task_run:<id>` for TaskRun-owned delivery, or `--scope repo` for repo-local singleton delivery."
     )]
     Send {
-        /// Target agent id as NAME or agents/NAME; coordinator targets agents/coordinator
+        /// Target agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
         #[arg(long)]
         to: String,
         /// Message ownership scope: direct, repo, workflow:<id>, or task_run:<id>
@@ -537,13 +537,13 @@ pub enum MsgCommand {
     },
     /// List lifecycle messages for one agent inbox without claiming them
     List {
-        /// Agent id as NAME or agents/NAME
+        /// Agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
         #[arg(long)]
         agent: String,
     },
     /// Read one lifecycle message by id without changing delivery state
     Read {
-        /// Agent id as NAME or agents/NAME
+        /// Agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
         #[arg(long)]
         agent: String,
         /// Message id without the .toml extension
@@ -551,7 +551,7 @@ pub enum MsgCommand {
     },
     /// Claim deliverable inbox messages, emit hook JSON, and acknowledge delivery
     CheckInbox {
-        /// Explicit single agent id as NAME or agents/NAME; omitted uses WT_AGENT_ID and WT_COORDINATOR_AGENT_ID
+        /// Explicit single agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID; omitted uses WT_AGENT_ID
         #[arg(long)]
         agent: Option<String>,
     },

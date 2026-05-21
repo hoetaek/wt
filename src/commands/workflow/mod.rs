@@ -425,9 +425,9 @@ cli = "none"
         assert!(content.contains("PR=none"));
         assert!(content.contains("coordinator inbox"));
         assert!(content.contains("wt msg send --scope workflow:test --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
-        assert!(content.contains("normalizes to `agents/coordinator`"));
+        assert!(content.contains("resolves from `WT_COORDINATOR_AGENT_ID`"));
         assert!(content.contains("explicit workflow scope `workflow:test`"));
-        assert!(content.contains("Workflow supervisors may claim shared `agents/coordinator` inbox messages only when this explicit workflow scope matches."));
+        assert!(content.contains("Workflow supervisors may claim resolved coordinator inbox messages only when this explicit workflow scope matches."));
         assert!(content.contains("If the file inbox route is unavailable"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));

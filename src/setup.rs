@@ -181,7 +181,7 @@ pub(crate) fn run_setup_with_workspace_color_kind(
 mod tests {
     use super::*;
     use crate::context::mock::{MockRunner, MockUi};
-    use crate::context::{CmdOutput, CommandRunner};
+    use crate::context::{CmdOutput, CommandRunner, CtxOptions};
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -469,12 +469,16 @@ mod tests {
             site: Some("sample-app-proj-680".into()),
         };
 
-        let ctx = Ctx::new(
+        let ctx = Ctx::new_with_options(
             PathBuf::from("/home/dev/sample-app"),
             PathBuf::from("/home/dev/sample-app"),
             Config::default(),
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
+            CtxOptions {
+                launcher_coordinator_id: Some("agents/coord-a".into()),
+                ..CtxOptions::default()
+            },
         );
 
         let actual_worktree_path = PathBuf::from("/tmp/existing-sample-app-proj-680");
@@ -499,7 +503,7 @@ mod tests {
         );
         assert_eq!(
             vars.get("wt_coordinator_agent_id").unwrap(),
-            "agents/coordinator"
+            "agents/coord-a"
         );
         assert_eq!(vars.get("coordinator_msg_target").unwrap(), "coordinator");
         assert_eq!(vars.get("issue_title").unwrap(), "Document editor");
@@ -1639,7 +1643,7 @@ mod tests {
         assert_eq!(
             command_arg,
             &format!(
-                "export WT_AGENT_ID=agents/issue-1-test WT_COORDINATOR_AGENT_ID=agents/coordinator; codex --model wt-test-agent-command-repo-issue-1-test --cd {}",
+                "export WT_AGENT_ID=agents/issue-1-test; codex --model wt-test-agent-command-repo-issue-1-test --cd {}",
                 wt.display()
             )
         );
@@ -1740,7 +1744,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             command_arg,
-            "export WT_AGENT_ID=agents/issue-1-test WT_COORDINATOR_AGENT_ID=agents/coordinator; claude"
+            "export WT_AGENT_ID=agents/issue-1-test; claude"
         );
 
         fs::remove_dir_all(&repo).ok();

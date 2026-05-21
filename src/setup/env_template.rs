@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::context::Ctx;
-use crate::messages::{COORDINATOR_AGENT_ALIAS, COORDINATOR_AGENT_ID};
+use crate::messages::COORDINATOR_AGENT_ALIAS;
 use crate::names::WorktreeNames;
 use crate::template;
 use anyhow::Result;
@@ -50,7 +50,7 @@ pub(crate) fn build_template_vars(
     vars.insert("wt_agent_id".into(), format!("agents/{branch_slug}"));
     vars.insert(
         "wt_coordinator_agent_id".into(),
-        COORDINATOR_AGENT_ID.into(),
+        ctx.launcher_coordinator_id.clone().unwrap_or_default(),
     );
     vars.insert(
         "coordinator_msg_target".into(),
