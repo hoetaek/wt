@@ -429,7 +429,7 @@ fn workflow_tasks_from_prepared(
     }
 
     let group = task_run::group_from_path(workflow_path)?;
-    let coordinator_id = task_run::launcher_coordinator_id()?;
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
     let mut parent = Some(initial_parent.to_string());
     let mut tasks = Vec::new();
     let mut task_runs = Vec::new();
@@ -439,7 +439,7 @@ fn workflow_tasks_from_prepared(
             &task.key,
             &task.branch,
             Some(&group),
-            coordinator_id.as_deref(),
+            coordinator_id,
             STATUS_PREPARED,
         ) {
             Ok(run) => run,
@@ -470,7 +470,7 @@ fn matrix_workflow_tasks_from_prepared(
         bail!("matrix mode workflow requires exactly one task");
     };
     let group = task_run::group_from_path(workflow_path)?;
-    let coordinator_id = task_run::launcher_coordinator_id()?;
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
     let mut task_runs = Vec::new();
     let mut runs = Vec::new();
     for profile in profiles {
@@ -480,7 +480,7 @@ fn matrix_workflow_tasks_from_prepared(
             &task.key,
             &branch,
             Some(&group),
-            coordinator_id.as_deref(),
+            coordinator_id,
             STATUS_PREPARED,
         ) {
             Ok(run) => run,

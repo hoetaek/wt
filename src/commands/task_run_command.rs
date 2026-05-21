@@ -121,14 +121,14 @@ fn run_selected_task(
         return Ok(result);
     }
 
-    let coordinator_id = task_run::launcher_coordinator_id()?;
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
 
     let run = task_run::create_with_coordinator_id(
         ctx,
         &selected.key,
         &selected.document.branch,
         None,
-        coordinator_id.as_deref(),
+        coordinator_id,
         task_run::STATUS_PREPARED,
     )?;
 
@@ -208,13 +208,13 @@ fn record_task_failure(ctx: &Ctx, selected: &task::SelectedTask, err: &anyhow::E
         task_run::STATUS_FAILED
     };
     let message = err.to_string();
-    let coordinator_id = task_run::launcher_coordinator_id().ok().flatten();
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
     if let Ok(run) = task_run::create_with_coordinator_id(
         ctx,
         &selected.key,
         &selected.document.branch,
         None,
-        coordinator_id.as_deref(),
+        coordinator_id,
         status,
     ) {
         let _ = task_run::update(ctx, &run.id, status, None, Some(&message));
@@ -226,13 +226,13 @@ fn record_task_profile_success(
     selected: &task::SelectedTask,
     result: &issue::IssueRunResult,
 ) -> Result<()> {
-    let coordinator_id = task_run::launcher_coordinator_id()?;
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
     task_run::create_with_coordinator_id(
         ctx,
         &selected.key,
         &result.branch_name,
         None,
-        coordinator_id.as_deref(),
+        coordinator_id,
         task_run::STATUS_RUNNING,
     )?;
     write_task_branch_from_result(ctx, selected, result)?;
@@ -424,7 +424,6 @@ mod tests {
 
     #[test]
     fn task_run_with_key_runs_named_task_snapshot() {
-        let _env = task_run::WtAgentIdTestGuard::set(Some("agents/coord-a"));
         let repo = tempfile::tempdir().unwrap();
         let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -448,7 +447,7 @@ mod tests {
         runner.add_response("", true);
         let runner = Arc::new(runner);
 
-        let ctx = Ctx::new(
+        let ctx = Ctx::new_with_options(
             repo.path().to_path_buf(),
             repo.path().to_path_buf(),
             Config {
@@ -462,6 +461,10 @@ mod tests {
                 inner: Arc::clone(&runner),
             }),
             Box::new(MockUi::new()),
+            crate::context::CtxOptions {
+                launcher_coordinator_id: Some("agents/coord-a".into()),
+                ..crate::context::CtxOptions::default()
+            },
         );
 
         run(&ctx, &["add-schema".into()], &None, None, &[], false).unwrap();
@@ -498,7 +501,6 @@ mod tests {
 
     #[test]
     fn task_run_leaves_coordinator_id_empty_without_launcher_identity() {
-        let _env = task_run::WtAgentIdTestGuard::set(None);
         let repo = tempfile::tempdir().unwrap();
         let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();

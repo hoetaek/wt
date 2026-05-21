@@ -489,9 +489,18 @@ cli = "none"
 
     #[test]
     fn task_prepares_workflow_task_runs_with_launcher_coordinator_id() {
-        let _env = task_run::WtAgentIdTestGuard::set(Some("agents/coord-workflow"));
         let dir = tempfile::tempdir().unwrap();
-        let ctx = ctx(dir.path());
+        let ctx = Ctx::new_with_options(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+            crate::context::CtxOptions {
+                launcher_coordinator_id: Some("agents/coord-workflow".into()),
+                ..crate::context::CtxOptions::default()
+            },
+        );
 
         task(
             &ctx,
@@ -513,7 +522,6 @@ cli = "none"
 
     #[test]
     fn task_prepares_workflow_task_runs_without_coordinator_id_when_unset() {
-        let _env = task_run::WtAgentIdTestGuard::set(None);
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
 

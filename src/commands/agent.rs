@@ -1483,6 +1483,7 @@ mod tests {
                     output_mode,
                     verbosity: 0,
                     quiet: false,
+                    launcher_coordinator_id: None,
                 },
             )
         }

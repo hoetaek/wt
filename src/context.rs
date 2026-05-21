@@ -136,6 +136,7 @@ pub struct CtxOptions {
     pub output_mode: OutputMode,
     pub verbosity: u8,
     pub quiet: bool,
+    pub launcher_coordinator_id: Option<String>,
 }
 
 impl Default for CtxOptions {
@@ -147,6 +148,7 @@ impl Default for CtxOptions {
             output_mode: OutputMode::Text,
             verbosity: 0,
             quiet: false,
+            launcher_coordinator_id: None,
         }
     }
 }
@@ -166,6 +168,7 @@ pub struct Ctx {
     pub output_mode: OutputMode,
     pub verbosity: u8,
     pub quiet: bool,
+    pub launcher_coordinator_id: Option<String>,
 }
 
 impl Ctx {
@@ -183,6 +186,7 @@ impl Ctx {
             output_mode: OutputMode::Text,
             verbosity: 0,
             quiet: false,
+            launcher_coordinator_id: None,
         };
         Self::new_with_options(repo_root, invocation_root, config, runner, ui, options)
     }
@@ -218,6 +222,7 @@ impl Ctx {
             output_mode: options.output_mode,
             verbosity: options.verbosity,
             quiet: options.quiet,
+            launcher_coordinator_id: options.launcher_coordinator_id,
         }
     }
 

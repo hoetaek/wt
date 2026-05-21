@@ -1830,6 +1830,7 @@ mod tests {
                 output_mode: OutputMode::Text,
                 verbosity: 0,
                 quiet: false,
+                launcher_coordinator_id: None,
             },
         )
     }

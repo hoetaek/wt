@@ -4,14 +4,9 @@ use crate::workflow::{self, WorkflowMode};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::cmp::Ordering;
-use std::env;
-#[cfg(test)]
-use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) const STATUS_PREPARED: TaskRunStatus = TaskRunStatus::Prepared;
@@ -223,55 +218,8 @@ pub(crate) fn create_with_coordinator_id(
     write_new(ctx, &run)
 }
 
-pub(crate) fn launcher_coordinator_id() -> Result<Option<String>> {
-    match env::var("WT_AGENT_ID") {
-        Ok(value) => Ok(optional_string(&value)),
-        Err(env::VarError::NotPresent) => Ok(None),
-        Err(env::VarError::NotUnicode(_)) => bail!("Invalid WT_AGENT_ID: value is not Unicode"),
-    }
-}
-
-#[cfg(test)]
-static WT_AGENT_ID_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-#[cfg(test)]
-pub(crate) struct WtAgentIdTestGuard {
-    _guard: MutexGuard<'static, ()>,
-    previous: Option<OsString>,
-}
-
-#[cfg(test)]
-impl WtAgentIdTestGuard {
-    pub(crate) fn set(value: Option<&str>) -> Self {
-        let guard = WT_AGENT_ID_TEST_LOCK.lock().unwrap();
-        let previous = env::var_os("WT_AGENT_ID");
-        // SAFETY: Tests that mutate WT_AGENT_ID share WT_AGENT_ID_TEST_LOCK for
-        // the guard lifetime, and production code reads the variable synchronously.
-        unsafe {
-            match value {
-                Some(value) => env::set_var("WT_AGENT_ID", value),
-                None => env::remove_var("WT_AGENT_ID"),
-            }
-        }
-        Self {
-            _guard: guard,
-            previous,
-        }
-    }
-}
-
-#[cfg(test)]
-impl Drop for WtAgentIdTestGuard {
-    fn drop(&mut self) {
-        // SAFETY: The guard still owns WT_AGENT_ID_TEST_LOCK while restoring the
-        // previous value, so cooperating tests cannot mutate it concurrently.
-        unsafe {
-            match self.previous.as_ref() {
-                Some(value) => env::set_var("WT_AGENT_ID", value),
-                None => env::remove_var("WT_AGENT_ID"),
-            }
-        }
-    }
+pub(crate) fn launcher_coordinator_id(ctx: &Ctx) -> Option<&str> {
+    ctx.launcher_coordinator_id.as_deref()
 }
 
 pub(crate) fn read(path: &Path) -> Result<TaskRun> {
