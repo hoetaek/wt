@@ -549,6 +549,9 @@ pub enum AgentSupervisorCommand {
         /// Pre-bound cmux surface id for later delivery slices
         #[arg(long, value_name = "ID")]
         surface: Option<String>,
+        /// Target agent kind fallback when cmux cannot detect it
+        #[arg(long, value_name = "claude|codex|unknown")]
+        kind: Option<String>,
         /// Whether session-end cleanup should stop this supervisor
         #[arg(long, value_name = "BOOL")]
         cleanup_on_session_end: Option<bool>,
@@ -591,15 +594,34 @@ pub enum AgentSupervisorCommand {
         /// Pre-bound cmux surface id for later delivery slices
         #[arg(long, value_name = "ID")]
         surface: Option<String>,
+        /// Target agent kind fallback when cmux cannot detect it
+        #[arg(long, value_name = "claude|codex|unknown")]
+        kind: Option<String>,
         /// Whether session-end cleanup should stop this supervisor
         #[arg(long, value_name = "BOOL")]
         cleanup_on_session_end: Option<bool>,
         /// Parsed stale threshold from start
-        #[arg(long, default_value_t = 900, value_name = "SECONDS")]
+        #[arg(
+            long,
+            default_value_t = 900,
+            value_name = "SECONDS",
+            value_parser = parse_positive_u64
+        )]
         stale_threshold_secs: u64,
         /// Parsed poll interval from start
-        #[arg(long, default_value_t = 60, value_name = "SECONDS")]
+        #[arg(
+            long,
+            default_value_t = 60,
+            value_name = "SECONDS",
+            value_parser = parse_positive_u64
+        )]
         poll_interval_secs: u64,
+        /// Maximum stale messages processed per poll cycle
+        #[arg(long, default_value_t = 64, value_name = "COUNT", value_parser = parse_positive_usize)]
+        cycle_cap: usize,
+        /// Maximum rendered payload size in bytes
+        #[arg(long, default_value_t = 1024, value_name = "BYTES", value_parser = parse_positive_usize)]
+        payload_cap: usize,
         /// Log path for the detached supervisor process
         #[arg(long, value_name = "PATH")]
         log_path: Option<PathBuf>,

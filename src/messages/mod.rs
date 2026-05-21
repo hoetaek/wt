@@ -667,6 +667,63 @@ impl MessageStore {
         })
     }
 
+    pub fn acknowledge_claimed_path(
+        &self,
+        agent: &str,
+        claimed_by: &str,
+        claimed_path: &Path,
+    ) -> Result<DeliveredMessage> {
+        let agent = AgentId::parse(agent)?;
+        self.ensure_state_path(&agent, MessageDeliveryState::Claimed, claimed_path)?;
+        let claimed_by =
+            AgentId::parse(claimed_by).context("Invalid delivery claimant agent id")?;
+        let mut message = read_message_for_agent(&agent, claimed_path)?;
+        if message.delivery.state != MessageDeliveryState::Claimed {
+            bail!(
+                "Message {} is in inbox/claimed but delivery.state is `{}`",
+                claimed_path.display(),
+                message.delivery.state
+            );
+        }
+        if message.delivery.claimed_by.as_deref() != Some(claimed_by.as_str()) {
+            bail!(
+                "Message {} is claimed by {}, not {}",
+                claimed_path.display(),
+                message
+                    .delivery
+                    .claimed_by
+                    .as_deref()
+                    .unwrap_or("<missing>"),
+                claimed_by.as_str()
+            );
+        }
+
+        let delivered_dir = agent.inbox_state_dir(&self.root, MessageDeliveryState::Delivered);
+        fs::create_dir_all(&delivered_dir).with_context(|| {
+            format!(
+                "Failed to create delivered inbox: {}",
+                delivered_dir.display()
+            )
+        })?;
+        let delivered_path = exact_state_path(&delivered_dir, claimed_path)?;
+        message.mark_delivered();
+        match transition_message_atomically(claimed_path, &delivered_path, &message, "delivered")? {
+            MessageTransitionOutcome::Completed
+            | MessageTransitionOutcome::DestinationAlreadyExists => {}
+            MessageTransitionOutcome::SourceMissing => {
+                bail!(
+                    "Claimed message {} disappeared before delivery acknowledgement completed",
+                    claimed_path.display()
+                );
+            }
+        }
+        Ok(DeliveredMessage {
+            original_path: claimed_path.to_path_buf(),
+            delivered_path,
+            message,
+        })
+    }
+
     pub fn retry_delivery(
         &self,
         agent: &str,
@@ -731,6 +788,149 @@ impl MessageStore {
             failed_path,
             message: Some(message),
         })
+    }
+
+    pub fn list_new(&self, agent: &str) -> Result<Vec<MessageInspectionRecord>> {
+        let agent = AgentId::parse(agent)?;
+        let new_dir = agent.inbox_state_dir(&self.root, MessageDeliveryState::New);
+        let mut records = Vec::new();
+        for path in message_paths(&new_dir)? {
+            records.push(inspect_message_record(
+                &agent,
+                MessageDeliveryState::New,
+                &path,
+            ));
+        }
+        records.sort_by(|left, right| {
+            let left_created = left
+                .message
+                .as_ref()
+                .map(|message| message.meta.created_at.as_str())
+                .unwrap_or_default();
+            let right_created = right
+                .message
+                .as_ref()
+                .map(|message| message.meta.created_at.as_str())
+                .unwrap_or_default();
+            left_created
+                .cmp(right_created)
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        Ok(records)
+    }
+
+    pub fn claim_new_path(
+        &self,
+        agent: &str,
+        path: &Path,
+        claimed_by: &str,
+        lease: MessageLease,
+    ) -> Result<Option<ClaimedMessage>> {
+        let agent = AgentId::parse(agent)?;
+        self.ensure_state_path(&agent, MessageDeliveryState::New, path)?;
+        let claimed_by =
+            AgentId::parse(claimed_by).context("Invalid delivery claimant agent id")?;
+        let Some(message) = read_inbox_candidate_for_agent(&agent, path)? else {
+            return Ok(None);
+        };
+        if message.delivery.state != MessageDeliveryState::New {
+            self.poison_message(
+                &agent,
+                path,
+                &format!(
+                    "Message {} is in inbox/new but delivery.state is `{}`",
+                    path.display(),
+                    message.delivery.state
+                ),
+            )?;
+            return Ok(None);
+        }
+        self.claim_path(&agent, path, message, &claimed_by, lease)
+    }
+
+    pub fn deliver_new_without_claim(
+        &self,
+        agent: &str,
+        path: &Path,
+    ) -> Result<Option<DeliveredMessage>> {
+        let agent = AgentId::parse(agent)?;
+        self.ensure_state_path(&agent, MessageDeliveryState::New, path)?;
+        let Some(mut message) = read_inbox_candidate_for_agent(&agent, path)? else {
+            return Ok(None);
+        };
+        if message.delivery.state != MessageDeliveryState::New {
+            self.poison_message(
+                &agent,
+                path,
+                &format!(
+                    "Message {} is in inbox/new but delivery.state is `{}`",
+                    path.display(),
+                    message.delivery.state
+                ),
+            )?;
+            return Ok(None);
+        }
+        let delivered_dir = agent.inbox_state_dir(&self.root, MessageDeliveryState::Delivered);
+        fs::create_dir_all(&delivered_dir).with_context(|| {
+            format!(
+                "Failed to create delivered inbox: {}",
+                delivered_dir.display()
+            )
+        })?;
+        let delivered_path = exact_state_path(&delivered_dir, path)?;
+        message.mark_delivered();
+        match transition_message_atomically(path, &delivered_path, &message, "delivered")? {
+            MessageTransitionOutcome::Completed
+            | MessageTransitionOutcome::DestinationAlreadyExists => {}
+            MessageTransitionOutcome::SourceMissing => return Ok(None),
+        }
+        Ok(Some(DeliveredMessage {
+            original_path: path.to_path_buf(),
+            delivered_path,
+            message,
+        }))
+    }
+
+    pub fn fail_new_path(
+        &self,
+        agent: &str,
+        path: &Path,
+        error: &str,
+    ) -> Result<Option<FailedMessage>> {
+        let agent = AgentId::parse(agent)?;
+        self.ensure_state_path(&agent, MessageDeliveryState::New, path)?;
+        self.poison_message(&agent, path, error)
+    }
+
+    fn ensure_state_path(
+        &self,
+        agent: &AgentId,
+        state: MessageDeliveryState,
+        path: &Path,
+    ) -> Result<()> {
+        let expected_dir = agent.inbox_state_dir(&self.root, state);
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow!("Message path has no parent: {}", path.display()))?;
+        let expected_dir = fs::canonicalize(&expected_dir).with_context(|| {
+            format!(
+                "Failed to inspect expected inbox/{} directory: {}",
+                state.directory_name(),
+                expected_dir.display()
+            )
+        })?;
+        let parent = fs::canonicalize(parent).with_context(|| {
+            format!("Failed to inspect message directory: {}", parent.display())
+        })?;
+        if parent != expected_dir {
+            bail!(
+                "Message path {} is outside {} inbox/{}",
+                path.display(),
+                agent.as_str(),
+                state.directory_name()
+            );
+        }
+        Ok(())
     }
 
     pub fn reclaim_expired_leases(
@@ -2085,6 +2285,66 @@ mod tests {
         let persisted = read_message(&claimed.claimed_path);
         assert_eq!(persisted.delivery.state, MessageDeliveryState::Claimed);
         assert_eq!(persisted.scope, scope);
+    }
+
+    #[test]
+    fn path_specific_helpers_reject_paths_outside_expected_state_dir() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("messages");
+        let store = MessageStore::new(&root);
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "outside")
+            .unwrap();
+        let outside_dir = temp.path().join("outside");
+        fs::create_dir_all(&outside_dir).unwrap();
+        let outside_new = outside_dir.join(format!("{}.toml", sent.id));
+        fs::write(&outside_new, toml::to_string_pretty(&sent.message).unwrap()).unwrap();
+
+        let claim_err = store
+            .claim_new_path(
+                "agents/codex",
+                &outside_new,
+                "agents/supervisor",
+                MessageLease::new(Duration::from_secs(60)).unwrap(),
+            )
+            .unwrap_err();
+        assert!(
+            claim_err
+                .to_string()
+                .contains("outside agents/codex inbox/new")
+        );
+
+        let deliver_err = store
+            .deliver_new_without_claim("agents/codex", &outside_new)
+            .unwrap_err();
+        assert!(
+            deliver_err
+                .to_string()
+                .contains("outside agents/codex inbox/new")
+        );
+
+        let outside_claimed = outside_dir.join(format!("claimed-{}.toml", sent.id));
+        let mut claimed_message = sent.message.clone();
+        claimed_message.mark_claimed(
+            &AgentId::parse("agents/supervisor").unwrap(),
+            "2099-01-01T00:00:00Z".into(),
+        );
+        claimed_message.meta.id = format!("claimed-{}", sent.id);
+        fs::create_dir_all(root.join("agents/codex/inbox/claimed")).unwrap();
+        fs::write(
+            &outside_claimed,
+            toml::to_string_pretty(&claimed_message).unwrap(),
+        )
+        .unwrap();
+
+        let ack_err = store
+            .acknowledge_claimed_path("agents/codex", "agents/supervisor", &outside_claimed)
+            .unwrap_err();
+        assert!(
+            ack_err
+                .to_string()
+                .contains("outside agents/codex inbox/claimed")
+        );
     }
 
     #[test]
