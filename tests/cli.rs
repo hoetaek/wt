@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command as StdCommand};
 use std::time::{Duration, Instant};
 #[cfg(unix)]
-use wt::services::identity_locator::process_start_time;
+use wt::services::identity_locator::{percent_encode, process_start_time};
 
 const GIT_LOCAL_ENV_KEYS: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -314,7 +314,7 @@ fn write_supervisor_registration(
 ) -> PathBuf {
     let dir = root.join(".git/wt/supervisors");
     std::fs::create_dir_all(&dir).unwrap();
-    let encoded = agent_id.replace('/', "__");
+    let encoded = percent_encode(agent_id);
     let path = dir.join(format!("{encoded}.toml"));
     let log_path = dir.join(format!("{encoded}.log"));
     let pid_start_time = process_start_time(pid as i32).unwrap();
@@ -6101,7 +6101,7 @@ fn supervisor_start_records_threshold_and_poll_interval() {
         .stdout(predicate::str::contains("Supervisor started"));
 
     let content =
-        std::fs::read_to_string(temp.path().join(".git/wt/supervisors/agents__codex.toml"))
+        std::fs::read_to_string(temp.path().join(".git/wt/supervisors/agents%2Fcodex.toml"))
             .unwrap();
     assert!(content.contains("agent_id = \"agents/codex\""));
     assert!(content.contains("target_surface_id = \"surface:72\""));
@@ -6145,7 +6145,7 @@ fn supervisor_start_refuses_live_duplicate_and_replace_succeeds() {
 
     let _ = child.wait();
     assert!(
-        !std::fs::read_to_string(temp.path().join(".git/wt/supervisors/agents__codex.toml"))
+        !std::fs::read_to_string(temp.path().join(".git/wt/supervisors/agents%2Fcodex.toml"))
             .unwrap()
             .contains(&format!("pid = {}", child.id()))
     );
@@ -6224,12 +6224,12 @@ fn supervisor_stop_owned_by_filters_started_by() {
     assert!(
         !temp
             .path()
-            .join(".git/wt/supervisors/agents__owned.toml")
+            .join(".git/wt/supervisors/agents%2Fowned.toml")
             .exists()
     );
     assert!(
         temp.path()
-            .join(".git/wt/supervisors/agents__other.toml")
+            .join(".git/wt/supervisors/agents%2Fother.toml")
             .exists()
     );
     other.kill().unwrap();
@@ -6262,7 +6262,7 @@ fn supervisor_stop_escalates_sigkill_after_timeout() {
     assert!(
         !temp
             .path()
-            .join(".git/wt/supervisors/agents__stubborn.toml")
+            .join(".git/wt/supervisors/agents%2Fstubborn.toml")
             .exists()
     );
 }

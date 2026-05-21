@@ -500,7 +500,7 @@ fn create_temp_file_with_retry(dir: &Path) -> Result<(PathBuf, fs::File)> {
     )
 }
 
-fn percent_encode(value: &str) -> String {
+pub fn percent_encode(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' {

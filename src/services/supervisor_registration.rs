@@ -1,5 +1,5 @@
 use crate::context::Ctx;
-use crate::services::identity_locator::process_start_time;
+use crate::services::identity_locator::{percent_encode, process_start_time};
 use anyhow::{Context, Result};
 use nix::errno::Errno;
 use nix::sys::signal;
@@ -161,7 +161,7 @@ fn registrations_dir(ctx: &Ctx) -> PathBuf {
 }
 
 fn encoded_agent_id(agent_id: &str) -> String {
-    agent_id.replace('/', "__")
+    percent_encode(agent_id)
 }
 
 #[cfg(test)]
@@ -216,7 +216,17 @@ mod tests {
         write_registration(&ctx, &reg).unwrap();
 
         assert_eq!(read_registration(&ctx, "agents/codex").unwrap(), Some(reg));
-        assert!(registration_path(&ctx, "agents/codex").ends_with("agents__codex.toml"));
+        assert!(registration_path(&ctx, "agents/codex").ends_with("agents%2Fcodex.toml"));
+    }
+
+    #[test]
+    fn registration_paths_do_not_collide_for_slashes_and_underscores() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(&dir);
+        assert_ne!(
+            registration_path(&ctx, "foo/bar"),
+            registration_path(&ctx, "foo__bar")
+        );
     }
 
     #[test]
