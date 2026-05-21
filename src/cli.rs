@@ -44,6 +44,22 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+    /// Print shell integration source for ambient worker identity binding
+    #[command(
+        long_about = "Print shell integration source for ambient worker identity binding.\n\nAdd `eval \"$(wt shell-init zsh)\"` or `eval \"$(wt shell-init bash)\"` to your shell rc. The generated hook runs `wt env` when the current directory changes so worker worktree shells inherit WT_AGENT_ID and WT_COORDINATOR_AGENT_ID. See docs/architecture.md#shell-integration."
+    )]
+    ShellInit {
+        /// Shell to initialize: zsh or bash
+        #[arg(value_enum)]
+        shell: ShellInitShell,
+    },
+    /// Print shell statements for the current worker worktree identity
+    #[command(
+        name = "env",
+        hide = true,
+        long_about = "Internal shell-hook command. Print export/unset statements for WT_AGENT_ID and WT_COORDINATOR_AGENT_ID based on the current git worktree branch and matching <git-common-dir>/wt/task-runs records.\n\nThis command is intended to be called by source generated from `wt shell-init <shell>`."
+    )]
+    Env,
     /// Declare or clear the coordinator identity for the current shell
     #[command(
         long_about = "Print shell statements for declaring or clearing the coordinator identity in the current shell.\n\nUse `eval \"$(wt coord use <id>)\"` once per coordinator session, for example `eval \"$(wt coord use my-coord)\"`. `wt coord use` sets WT_AGENT_ID and WT_COORDINATOR_AGENT_ID to the same agent because a coordinator session is its own coordinator.\n\n`wt shell-init <shell>` provides a shell function wrapper so users can run `wt-coord-use my-coord` directly."
@@ -394,6 +410,12 @@ pub enum HookAgentCommand {
 pub enum HookAgent {
     Claude,
     Codex,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellInitShell {
+    Zsh,
+    Bash,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
