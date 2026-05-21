@@ -47,13 +47,13 @@ fn list(ctx: &Ctx) -> Result<()> {
 
     if inventory.profiles.is_empty() && inventory.invalid_profiles.is_empty() {
         ctx.ui
-            .print_step("No profiles found. Create one with: wt profile create <name>");
+            .print_plain("No profiles found. Create one with: wt profile create <name>");
         return Ok(());
     }
 
     for record in &inventory.profiles {
         let summary = ProfileSummary::from_config(&record.name, &record.config);
-        ctx.ui.print_step(&format!(
+        ctx.ui.print_plain(&format!(
             "  {}  (copy: {}, link: {}, agent: {})",
             summary.name, summary.copy_count, summary.link_count, summary.agent
         ));
