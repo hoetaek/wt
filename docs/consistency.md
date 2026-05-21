@@ -386,65 +386,43 @@ Tracked agent instruction file이 이미 있으면 agent가 지원하는 local o
 명시적 opt-in 명령을 요구하거나, clear guidance와 함께 실패한다. Tracked file을 silent patch
 하지 않는다.
 
-### Unified Agent Hook Setup
+### Per-Machine Setup
 
-One-shot hook setup의 canonical surface는 다음 두 명령이다.
-
-```bash
-wt hooks setup
-wt hooks uninstall
-```
-
-`wt hooks setup`은 PATH에서 지원되는 agent CLI를 감지한 뒤 해당 adapter의 dispatcher hook을
-설치한다. 현재 지원 대상은 `claude`와 `codex`다. 이 명령은 hook capability setup만 수행하며,
-특정 `WT_AGENT_ID`를 영구로 hook에 묶지 않는다. Agent identity는 `wt codex`, `wt claude`,
-`wt as`, 또는 `wt run ...`이 agent process를 시작할 때 주입한다.
-
-단일 adapter만 대상으로 할 때는 cmux hooks와 같은 shape를 쓴다.
+Per-machine setup의 canonical surface는 한 명령이다.
 
 ```bash
-wt hooks setup codex
-wt hooks setup --agent codex
-wt hooks uninstall codex
-wt hooks uninstall --agent codex
+wt setup
+wt setup --remove
 ```
 
-`wt hooks uninstall`은 감지 여부와 무관하게 wt-managed Claude/Codex hook을 제거한다. 사용자가
-작성한 hook, cmux hook, unrelated trust state는 보존한다. Provider나 agent runtime이 없어도
-uninstall은 가능한 정리만 수행해야 한다.
+`wt setup`은 한 사용자/한 머신에 필요한 wt integration만 다룬다. 현재 step은 Claude
+user-level settings hook, Codex user-level hook/trust state, shell integration eval line,
+그리고 Homebrew가 아닌 설치에서 shell completion eval line이다. 각 write step은 `[y/N]`
+default No prompt를 거치며, `--yes`는 감지된 step을 모두 수락하고, `--dry-run`은 쓰지 않고
+변경 의도만 출력한다.
 
-이전 one-shot surface는 compatibility alias로만 남긴다.
+`wt setup --remove`는 wt-managed per-machine entry만 제거한다. `<git-common-dir>/wt/`,
+`.wt.toml`, worktree, tracked source, wt binary는 제거 대상이 아니다. 사용자가 작성한 hook,
+cmux hook, unrelated Codex trust state는 보존한다.
 
-```bash
-wt install
-wt uninstall
-```
+Shell rc target은 zsh에서 `$ZDOTDIR/.zshrc`를 우선하고 `$ZDOTDIR`가 없으면 `~/.zshrc`를
+쓴다. bash는 `~/.bashrc`를 쓴다. Unsupported shell이면 eval line을 직접 넣으라는 안내만
+출력하고 파일을 만들지 않는다. Homebrew prefix 아래의 `wt`는 formula가 completion을 제공하는
+것으로 보고 completion eval line을 쓰지 않는다.
 
-고급/테스트용 adapter별 escape hatch는 계속 유지한다.
-
-```bash
-wt agent hook install claude
-wt agent hook install codex
-wt agent hook uninstall claude
-wt agent hook uninstall codex
-```
+이전 per-machine setup-shaped surface는 compatibility alias나 hidden deprecation path로 남기지
+않는다.
 
 ### Claude Hook Adapter
 
-Claude Code inbox polling의 adapter-specific escape hatch는 다음 두 명령이다.
+Claude Code inbox polling adapter는 `wt setup`의 내부 step이다. 이 step은 user-level
+`$CLAUDE_HOME/settings.json` 또는 `~/.claude/settings.json`에 `UserPromptSubmit`과
+`PostToolUse` hook dispatcher를 추가한다. 두 event의 Hook command는 runtime env
+`WT_AGENT_ID`를 읽어 다음 delivery command를 실행하고, `WT_AGENT_ID`가 없으면 성공으로
+조용히 종료한다.
 
 ```bash
-wt agent hook install claude
-wt agent hook uninstall claude
-```
-
-이 adapter는 Claude 전용이다. Install은 worktree-local
-`.claude/settings.local.json`에만 `UserPromptSubmit`과 `PostToolUse` hook dispatcher를
-추가한다. 두 event의 Hook command는 runtime env `WT_AGENT_ID`를 읽어 다음 delivery command를 실행하고,
-`WT_AGENT_ID`가 없으면 성공으로 조용히 종료한다.
-
-```bash
-wt msg check-inbox --agent "$WT_AGENT_ID"
+wt msg check-inbox --silent
 ```
 
 Generated command string은 wt-managed entry를 구분하기 위한 marker를 `#` 뒤에 둔다.
@@ -452,47 +430,32 @@ Claude Code가 shell command로 실행할 때 `#` 뒤 marker는 shell comment로
 `wt msg check-inbox`의 인자로 전달되지 않는다. 이 동작은 CLI integration test로
 검증한다.
 
-Install은 먼저 per-worktree Git exclude file에 local settings path를 추가한다.
-`.claude`가 `.agents` 같은 repo-local directory로 향하는 symlink라면 symlink path와
-실제 target path를 모두 exclude한다. Reinstall은 managed event마다 wt-managed dispatcher
-hook을 하나씩만 남기는 idempotent operation이다. `--agent <agent>`가 남아 있다면 manual/test override다.
-이 override는 hook을 특정 agent에 묶으므로 normal run UX의 일부가 아니다. Uninstall은
-wt-managed Claude hook entry만 managed event별로 제거하고, 사용자가 작성한 다른 Claude hook이나 settings key는
-보존한다. `--agent <agent>` uninstall은 manual/test override entry만 대상으로 한다.
-
-Tracked `.claude/settings.local.json` 또는 symlink target local settings file이 있으면
-install/uninstall은 실패한다. Tracked `CLAUDE.md`, `AGENTS.md`, `.gitignore`,
-`.claude/settings.json` 같은 shared source/config는 adapter가 수정하지 않는다.
+Reinstall은 managed event마다 wt-managed dispatcher hook을 하나씩만 남기는 idempotent
+operation이다. `wt setup --remove`는 wt-managed Claude hook entry만 managed event별로 제거하고,
+사용자가 작성한 다른 Claude hook이나 settings key는 보존한다. Repo-local tracked
+`CLAUDE.md`, `AGENTS.md`, `.gitignore`, `.claude/settings.json` 같은 shared source/config는
+per-machine setup이 수정하지 않는다.
 
 ### Codex Hook Adapter
 
-Codex inbox polling의 adapter-specific escape hatch는 다음 두 명령이다.
-
-```bash
-wt agent hook install codex
-wt agent hook uninstall codex
-```
-
-이 adapter는 Codex 전용이다. 현재 Codex는 project-local `.codex/hooks.json` discovery를
+Codex inbox polling adapter는 `wt setup`의 내부 step이다. 현재 Codex는 project-local `.codex/hooks.json` discovery를
 신뢰할 수 없으므로 user-level `$CODEX_HOME/hooks.json` 또는 `~/.codex/hooks.json`에만
 `UserPromptSubmit`과 `PostToolUse` hook dispatcher를 추가한다. User-level hook은 특정 agent
 id에 영구로 묶이면 안 된다. 두 event의 기본 hook command는 runtime env `WT_AGENT_ID`를 읽어
 다음 delivery command를 실행하고, `WT_AGENT_ID`가 없으면 성공으로 조용히 종료한다.
 
 ```bash
-wt msg check-inbox --agent "$WT_AGENT_ID"
+wt msg check-inbox --silent
 ```
 
-Codex는 user-level custom hook을 실행하기 전에 matching trust state를 요구한다. Install은
+Codex는 user-level custom hook을 실행하기 전에 matching trust state를 요구한다. `wt setup`은
 Codex가 쓰는 hook identity와 같은 방식으로 `trusted_hash`를 계산해
 `$CODEX_HOME/config.toml` 또는 `~/.codex/config.toml`의 `[hooks.state]` 아래에 쓴다. Hash
 identity는 event key `user_prompt_submit` 또는 `post_tool_use`, normalized command handler,
-default timeout `600`, `async = false`를 canonical JSON으로 정렬한 뒤 SHA-256으로 계산한다. Install은
+default timeout `600`, `async = false`를 canonical JSON으로 정렬한 뒤 SHA-256으로 계산한다. `wt setup`은
 `[features].hooks = true`도 보장한다.
 
-`--agent <agent>`가 남아 있다면 manual/test override다. 이 override는 user-level hook을
-특정 agent에 묶으므로 normal run UX의 일부가 아니다. `wt run issue`, `wt run task`,
-`wt run workflow`는 사용자가 매번 hook을 다시 설치하게 하지 않고, Codex launch 시 cmux
+`wt run issue`, `wt run task`, `wt run workflow`는 사용자가 매번 hook을 다시 설치하게 하지 않고, Codex launch 시 cmux
 `new-workspace --command`에 `WT_AGENT_ID=agents/<branch_slug>`를 주입하고, launch context에서
 coordinator identity가 확인될 때만 `WT_COORDINATOR_AGENT_ID=<coordinator-agent-id>`를 함께
 주입해 dispatcher에 agent binding과 coordinator target을 제공해야 한다. `<branch_slug>`는
@@ -545,20 +508,20 @@ Canonical non-LLM smoke는 실제 Claude/Codex 세션을 CI에서 띄우지 않�
 file inbox만 검증한다.
 
 1. 같은 git common dir을 공유하는 linked worktree 두 개를 만든다.
-2. `wt hooks setup`으로 Claude worktree-local dispatcher와 Codex user-level dispatcher를 설치한다.
+2. `wt setup`으로 Claude user-level dispatcher와 Codex user-level dispatcher를 설치한다.
 3. `wt as agents/claude-smoke -- wt msg send --to agents/codex-smoke CLAUDE_SENT`로 Claude identity에서 Codex inbox로 보낸다.
 4. 설치된 Codex hook command를 `WT_AGENT_ID=agents/codex-smoke`로 실행해 `CLAUDE_SENT`를 delivery한다.
 5. `wt as agents/codex-smoke -- wt msg send --to agents/claude-smoke CODEX_SENT REALWT_PONG_SEEN`로 답장한다.
 6. 설치된 Claude hook command를 `WT_AGENT_ID=agents/claude-smoke`로 실행해 `CODEX_SENT REALWT_PONG_SEEN`를 delivery한다.
-7. `wt hooks uninstall`로 wt-managed hook state를 정리한다.
+7. `wt setup --remove`로 wt-managed per-machine hook state를 정리한다.
 
 이 smoke는 cmux workspace/surface를 만들거나 읽지 않는다. Real Claude/Codex manual smoke는 같은
 message path를 실제 agent lifecycle에서 관찰하는 추가 검증이지, message transport의 canonical
 요구사항은 아니다.
 
 Reinstall은 managed event마다 wt-managed Codex dispatcher hook을 하나씩만 남기는 idempotent
-operation이다. Uninstall은 wt-managed Codex `UserPromptSubmit`/`PostToolUse` dispatcher entry와
-matching trust state만 제거한다. `--agent <agent>` uninstall은 manual/test override entry만 대상으로 한다. cmux가
+operation이다. `wt setup --remove`는 wt-managed Codex `UserPromptSubmit`/`PostToolUse` dispatcher entry와
+matching trust state만 제거한다. cmux가
 설치한 Codex hook, 사용자가 작성한 다른 Codex hook, 다른 `hooks.state` entry는 보존한다.
 
 ## Canonical Interfaces
@@ -1389,10 +1352,10 @@ Agent별 상태 신호 준비도는 `agent status`나 `agent watch`가 고치는
 텍스트 fallback을 쓸 수 있지만 약한 관찰이라는 warning을 남겨야 한다. `wt doctor`는 cmux
 상태 신호 준비도를 보고만 한다.
 
-Codex inbox delivery는 상태 신호와 다른 명시적 adapter surface다.
-`wt agent hook install codex`는 사용자가 요청한 경우에만 user-level Codex `hooks.json`과
-`config.toml` trust state를 수정한다. 일반 `wt agent status/watch`, `wt doctor`, `wt msg`
-같은 명령이 전역 Codex hook을 자동 설치하거나 사용자 agent config를 몰래 수정하면 안 된다.
+Codex inbox delivery는 상태 신호와 다른 per-machine setup step이다. `wt setup`은 사용자가
+요청하고 수락한 경우에만 user-level Codex `hooks.json`과 `config.toml` trust state를
+수정한다. 일반 `wt agent status/watch`, `wt doctor`, `wt msg` 같은 명령이 전역 Codex hook을
+자동 설치하거나 사용자 agent config를 몰래 수정하면 안 된다.
 
 Agent runtime observation은 `wt agent status`와 `wt agent watch` 아래에 둔다. Git의
 `status` 문서(`https://git-scm.com/docs/git-status.html`)는 worktree/index state를 뜻하므로

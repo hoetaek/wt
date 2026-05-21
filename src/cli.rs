@@ -192,24 +192,21 @@ pub enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
-    /// Set up and remove wt-managed agent hooks
+    /// Set up or remove per-machine wt integration
     #[command(
-        long_about = "Set up and remove wt-managed agent hooks.\n\nThe canonical one-shot hook setup surface is `wt hooks setup`, which scans PATH for supported agent commands such as `claude` and `codex`, then installs matching WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher hooks. Use `wt hooks setup codex` or `wt hooks setup --agent codex` to set up one adapter. Use `wt hooks uninstall` to remove wt-managed hooks while preserving user-managed hooks, cmux hooks, and unrelated trust state."
+        long_about = "Set up or remove per-machine wt integration.\n\n`wt setup` detects supported local agent CLIs, prompts before installing wt-managed Claude and Codex inbox hooks, and can add shell integration and completion eval lines to the resolved shell rc file. Use --yes to accept detected steps without prompting, --dry-run to preview changes without writing files, and --remove to remove wt-managed per-machine entries."
     )]
-    Hooks {
-        #[command(subcommand)]
-        command: HooksCommand,
+    Setup {
+        /// Accept every detected setup step without prompting
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+        /// Preview setup or removal without writing files
+        #[arg(long)]
+        dry_run: bool,
+        /// Remove wt-managed per-machine setup entries
+        #[arg(long)]
+        remove: bool,
     },
-    /// Install hooks for detected agent CLIs
-    #[command(
-        long_about = "Compatibility alias for `wt hooks setup`.\n\n`wt install` scans PATH for supported agent commands such as `claude` and `codex`, then installs the matching WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher hooks. New scripts should use `wt hooks setup`. Hook installation is capability setup only; per-session identity still comes from `wt codex`, `wt claude`, `wt as`, or wt-launched run/workflow sessions."
-    )]
-    Install,
-    /// Uninstall wt-managed agent hooks
-    #[command(
-        long_about = "Compatibility alias for `wt hooks uninstall`.\n\n`wt uninstall` removes wt-managed Claude and Codex hook entries while preserving user-managed hooks, cmux hooks, and unrelated trust state. New scripts should use `wt hooks uninstall`."
-    )]
-    Uninstall,
     /// Launch Codex with the current worktree's wt agent identity
     #[command(
         long_about = "Launch Codex with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID resolved from the launch context when available.\n\nUse `wt codex` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt codex @planner` or `wt codex @reviewer` to launch a separate inbox like `agents/<branch_slug>-planner`, so multiple agents do not consume each other's messages. Extra Codex arguments are passed through after the optional role."
@@ -367,60 +364,6 @@ pub enum Commands {
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum HooksCommand {
-    /// Set up wt-managed hooks for detected or selected agent CLIs
-    #[command(
-        long_about = "Set up wt-managed inbox hooks for detected or selected agent CLIs.\n\n`wt hooks setup` scans PATH for supported agent commands such as `claude` and `codex`, then installs matching WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher hooks. Use `wt hooks setup codex` or `wt hooks setup --agent codex` to set up one adapter. Hook setup is capability setup only; per-session identity still comes from `wt codex`, `wt claude`, `wt as`, or wt-launched run/workflow sessions."
-    )]
-    Setup {
-        /// Supported agent adapter to set up
-        #[arg(value_name = "AGENT", conflicts_with = "agent_option")]
-        agent: Option<HookAgent>,
-        /// Supported agent adapter to set up
-        #[arg(
-            short = 'a',
-            long = "agent",
-            value_name = "AGENT",
-            conflicts_with = "agent"
-        )]
-        agent_option: Option<HookAgent>,
-        /// Accept setup without prompting; accepted for cmux-style command parity
-        #[arg(short = 'y', long = "yes")]
-        yes: bool,
-    },
-    /// Remove wt-managed hooks for all or one supported agent CLI
-    #[command(
-        long_about = "Remove wt-managed inbox hooks for all or one supported agent CLI.\n\n`wt hooks uninstall` removes wt-managed Claude and Codex hook entries while preserving user-managed hooks, cmux hooks, and unrelated trust state. Use `wt hooks uninstall codex` or `wt hooks uninstall --agent codex` to remove one adapter. Provider or agent runtime detection is not required for cleanup."
-    )]
-    Uninstall {
-        /// Supported agent adapter to remove
-        #[arg(value_name = "AGENT", conflicts_with = "agent_option")]
-        agent: Option<HookAgent>,
-        /// Supported agent adapter to remove
-        #[arg(
-            short = 'a',
-            long = "agent",
-            value_name = "AGENT",
-            conflicts_with = "agent"
-        )]
-        agent_option: Option<HookAgent>,
-        /// Accept uninstall without prompting; accepted for cmux-style command parity
-        #[arg(short = 'y', long = "yes")]
-        yes: bool,
-    },
-    /// Codex hook adapter compatibility aliases
-    Codex {
-        #[command(subcommand)]
-        command: HookAgentCommand,
-    },
-    /// Claude hook adapter compatibility aliases
-    Claude {
-        #[command(subcommand)]
-        command: HookAgentCommand,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum CoordCommand {
     /// Print exports for using this shell as a coordinator
     #[command(
@@ -453,29 +396,6 @@ pub enum SessionCommand {
         json: bool,
     },
 }
-
-#[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum HookAgentCommand {
-    /// Compatibility alias for `wt hooks setup <agent>`
-    Install {
-        /// Accept setup without prompting; accepted for cmux-style command parity
-        #[arg(short = 'y', long = "yes")]
-        yes: bool,
-    },
-    /// Compatibility alias for `wt hooks uninstall <agent>`
-    Uninstall {
-        /// Accept uninstall without prompting; accepted for cmux-style command parity
-        #[arg(short = 'y', long = "yes")]
-        yes: bool,
-    },
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookAgent {
-    Claude,
-    Codex,
-}
-
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellInitShell {
     Zsh,
@@ -552,71 +472,82 @@ pub enum AgentCommand {
         long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch` when heartbeat or timeout samples are emitted. This is read-only: it summarizes <git-common-dir>/wt/agent.state/wait-observations.jsonl with count, sum, average, min, max, bucket, and low-cardinality group data; it does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
     )]
     WaitStats,
-    /// Install or uninstall local agent hook adapters
+    /// Manage opt-in detached supervisors for agent inbox stale-rescue
     #[command(
-        long_about = "Install or uninstall local agent hook adapters.\n\nThe Claude adapter is Claude-specific: it uses Claude Code worktree-local `.claude/settings.local.json` hooks to deliver the wt file inbox through a WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher, and adds that path to the per-worktree Git exclude file. The Codex adapter is Codex-specific: it uses user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` hooks plus matching trusted hook state in `config.toml`. Adapter installation preserves non-wt hooks and trust state."
+        long_about = "Manage opt-in detached supervisors for agent inbox stale-rescue.\n\nA supervisor is default-off Layer 3 insurance for one agent identity. It records a local registration under <git-common-dir>/wt/supervisors/ and, in later delivery slices, only intervenes after an inbox/new message has aged past --stale-threshold. No wt verb starts a supervisor implicitly."
     )]
-    Hook {
+    Supervisor {
         #[command(subcommand)]
-        command: AgentHookCommand,
+        command: AgentSupervisorCommand,
     },
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum AgentHookCommand {
-    /// Install a local hook adapter
-    Install {
-        #[command(subcommand)]
-        command: AgentHookInstallCommand,
-    },
-    /// Uninstall a local hook adapter
-    Uninstall {
-        #[command(subcommand)]
-        command: AgentHookUninstallCommand,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum AgentHookInstallCommand {
-    /// Install Claude Code inbox polling
-    #[command(
-        long_about = "Install the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis writes worktree-local `.claude/settings.local.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox --silent`. The command reads WT_AGENT_ID at runtime and exits successfully without output when it is unset; `--silent` additionally swallows wt context-load errors (non-git CWD, legacy `.local/.wt.toml`, missing setup) so a globally installed hook never blocks Claude. Install also adds that local settings path to the per-worktree Git exclude file, preserves existing local Claude settings, and fails instead of modifying tracked settings or source files.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and context-resolved WT_COORDINATOR_AGENT_ID when they launch Claude."
-    )]
-    Claude {
-        /// Manual/test override: bind this hook to one agent instead of WT_AGENT_ID
+pub enum AgentSupervisorCommand {
+    /// Start a detached supervisor for one agent identity
+    Start {
+        /// Agent id as NAME or agents/NAME
+        agent_id: String,
+        /// Stop any existing live supervisor for this identity before starting
         #[arg(long)]
-        agent: Option<String>,
+        replace: bool,
+        /// Pre-bound cmux surface id for later delivery slices
+        #[arg(long, value_name = "ID")]
+        surface: Option<String>,
+        /// Whether session-end cleanup should stop this supervisor
+        #[arg(long, value_name = "BOOL")]
+        cleanup_on_session_end: Option<bool>,
+        /// Message age before later delivery slices may rescue it
+        #[arg(long, default_value = "15m", value_name = "DURATION")]
+        stale_threshold: String,
+        /// Poll cadence for later delivery slices
+        #[arg(long, default_value = "60s", value_name = "DURATION")]
+        poll_interval: String,
     },
-    /// Install Codex inbox polling
-    #[command(
-        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox --silent`. The command reads WT_AGENT_ID at runtime and exits successfully without output when it is unset; `--silent` additionally swallows wt context-load errors (non-git CWD, legacy `.local/.wt.toml`, missing setup) so a globally installed hook never blocks Codex. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and context-resolved WT_COORDINATOR_AGENT_ID when they launch Codex."
-    )]
-    Codex {
-        /// Manual/test override: bind this user-level hook to one agent instead of WT_AGENT_ID
-        #[arg(long)]
-        agent: Option<String>,
+    /// Stop registered supervisors by target identity or owner
+    Stop {
+        /// Agent id as NAME or agents/NAME
+        agent_id: Option<String>,
+        /// Stop only supervisors started by this agent id
+        #[arg(long, value_name = "AGENT")]
+        owned_by: Option<String>,
     },
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum AgentHookUninstallCommand {
-    /// Uninstall Claude Code inbox polling
-    #[command(
-        long_about = "Uninstall the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis removes wt-managed Claude inbox hook entries for UserPromptSubmit and PostToolUse from worktree-local `.claude/settings.local.json`. Other local Claude settings and user-managed hooks are preserved. Use --agent only to remove a manual/test override for that agent."
-    )]
-    Claude {
-        /// Manual/test override: remove only the wt-managed hook bound to this agent
-        #[arg(long)]
-        agent: Option<String>,
+    /// List registered supervisors
+    Status {
+        /// Agent id as NAME or agents/NAME
+        agent_id: Option<String>,
     },
-    /// Uninstall Codex inbox polling
-    #[command(
-        long_about = "Uninstall the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis removes wt-managed Codex inbox hook entries for UserPromptSubmit and PostToolUse from user-level hooks.json and removes the matching wt-managed trust state from config.toml. Other Codex hooks and trust entries are preserved. Use --agent only to remove a manual/test override for that agent."
-    )]
-    Codex {
-        /// Manual/test override: remove only the wt-managed hook bound to this agent
+    /// Print or follow a supervisor log
+    Logs {
+        /// Agent id as NAME or agents/NAME
+        agent_id: String,
+        /// Continue printing appended log lines
         #[arg(long)]
-        agent: Option<String>,
+        follow: bool,
+    },
+    /// Run the supervisor loop process
+    #[command(hide = true)]
+    Run {
+        /// Agent id as NAME or agents/NAME
+        agent_id: String,
+        /// Run in the foreground for debugging
+        #[arg(long)]
+        foreground: bool,
+        /// Pre-bound cmux surface id for later delivery slices
+        #[arg(long, value_name = "ID")]
+        surface: Option<String>,
+        /// Whether session-end cleanup should stop this supervisor
+        #[arg(long, value_name = "BOOL")]
+        cleanup_on_session_end: Option<bool>,
+        /// Parsed stale threshold from start
+        #[arg(long, default_value_t = 900, value_name = "SECONDS")]
+        stale_threshold_secs: u64,
+        /// Parsed poll interval from start
+        #[arg(long, default_value_t = 60, value_name = "SECONDS")]
+        poll_interval_secs: u64,
+        /// Log path for the detached supervisor process
+        #[arg(long, value_name = "PATH")]
+        log_path: Option<PathBuf>,
     },
 }
 

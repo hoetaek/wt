@@ -23,8 +23,7 @@ pub mod worktree_naming;
 
 use anyhow::Result;
 use cli::{
-    AgentCommand, AgentHookCommand, AgentHookInstallCommand, AgentHookUninstallCommand, Commands,
-    ConfigCommand, HookAgent, HookAgentCommand, HooksCommand, MsgCommand, RunCommand,
+    AgentCommand, AgentSupervisorCommand, Commands, ConfigCommand, MsgCommand, RunCommand,
     SessionCommand, TaskCommand, WorkflowCommand,
 };
 use commands::agent_runtime::KnownAgentCli;
@@ -196,55 +195,78 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 heartbeat,
             } => commands::agent::watch(ctx, target.as_deref(), *interval, *timeout, *heartbeat),
             AgentCommand::WaitStats => commands::agent::wait_stats(ctx),
-            AgentCommand::Hook { command } => match command {
-                AgentHookCommand::Install { command } => match command {
-                    AgentHookInstallCommand::Claude { agent } => {
-                        commands::agent_hook::install_claude(ctx, agent.as_deref())
-                    }
-                    AgentHookInstallCommand::Codex { agent } => {
-                        commands::agent_hook::install_codex(ctx, agent.as_deref())
-                    }
-                },
-                AgentHookCommand::Uninstall { command } => match command {
-                    AgentHookUninstallCommand::Claude { agent } => {
-                        commands::agent_hook::uninstall_claude(ctx, agent.as_deref())
-                    }
-                    AgentHookUninstallCommand::Codex { agent } => {
-                        commands::agent_hook::uninstall_codex(ctx, agent.as_deref())
-                    }
-                },
+            AgentCommand::Supervisor { command } => match command {
+                AgentSupervisorCommand::Start {
+                    agent_id,
+                    replace,
+                    surface,
+                    cleanup_on_session_end,
+                    stale_threshold,
+                    poll_interval,
+                } => commands::agent::supervisor::start(
+                    ctx,
+                    agent_id,
+                    commands::agent::supervisor::StartOptions {
+                        replace: *replace,
+                        surface: surface.clone(),
+                        cleanup_on_session_end: *cleanup_on_session_end,
+                        stale_threshold: stale_threshold.clone(),
+                        poll_interval: poll_interval.clone(),
+                    },
+                ),
+                AgentSupervisorCommand::Stop { agent_id, owned_by } => {
+                    commands::agent::supervisor::stop(
+                        ctx,
+                        commands::agent::supervisor::StopOptions {
+                            agent_id: agent_id.clone(),
+                            owned_by: owned_by.clone(),
+                        },
+                    )
+                }
+                AgentSupervisorCommand::Status { agent_id } => {
+                    commands::agent::supervisor::status(ctx, agent_id.as_deref())
+                }
+                AgentSupervisorCommand::Logs { agent_id, follow } => {
+                    commands::agent::supervisor::logs(
+                        ctx,
+                        agent_id,
+                        commands::agent::supervisor::LogsOptions { follow: *follow },
+                    )
+                }
+                AgentSupervisorCommand::Run {
+                    agent_id,
+                    foreground,
+                    surface,
+                    cleanup_on_session_end,
+                    stale_threshold_secs,
+                    poll_interval_secs,
+                    log_path,
+                } => commands::agent::supervisor::run(
+                    ctx,
+                    agent_id,
+                    commands::agent::supervisor::RunOptions {
+                        foreground: *foreground,
+                        surface: surface.clone(),
+                        cleanup_on_session_end: *cleanup_on_session_end,
+                        stale_threshold_secs: *stale_threshold_secs,
+                        poll_interval_secs: *poll_interval_secs,
+                        log_path: log_path.clone(),
+                    },
+                ),
             },
         },
-        Commands::Hooks { command } => match command {
-            HooksCommand::Setup {
-                agent,
-                agent_option,
-                yes: _,
-            } => commands::install::install_selected(ctx, agent.or(*agent_option)),
-            HooksCommand::Uninstall {
-                agent,
-                agent_option,
-                yes: _,
-            } => commands::install::uninstall_selected(ctx, agent.or(*agent_option)),
-            HooksCommand::Codex { command } => match command {
-                HookAgentCommand::Install { yes: _ } => {
-                    commands::install::install_selected(ctx, Some(HookAgent::Codex))
-                }
-                HookAgentCommand::Uninstall { yes: _ } => {
-                    commands::install::uninstall_selected(ctx, Some(HookAgent::Codex))
-                }
+        Commands::Setup {
+            yes,
+            dry_run,
+            remove,
+        } => commands::setup::run(
+            ctx,
+            commands::setup::SetupOptions {
+                yes: *yes,
+                dry_run: *dry_run,
+                remove: *remove,
             },
-            HooksCommand::Claude { command } => match command {
-                HookAgentCommand::Install { yes: _ } => {
-                    commands::install::install_selected(ctx, Some(HookAgent::Claude))
-                }
-                HookAgentCommand::Uninstall { yes: _ } => {
-                    commands::install::uninstall_selected(ctx, Some(HookAgent::Claude))
-                }
-            },
-        },
-        Commands::Install => commands::install::install(ctx),
-        Commands::Uninstall => commands::install::uninstall(ctx),
+        ),
         Commands::Codex { args } => {
             commands::agent_runtime::run_known(ctx, KnownAgentCli::Codex, args)
         }

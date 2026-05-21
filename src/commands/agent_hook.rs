@@ -3,14 +3,13 @@ use crate::messages::AgentId;
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, value};
 
-const CLAUDE_SETTINGS_PATH: &str = ".claude/settings.local.json";
+const CLAUDE_SETTINGS_PATH: &str = "settings.json";
 pub(crate) const CLAUDE_HOOK_EVENTS: &[&str] = &["UserPromptSubmit", "PostToolUse"];
 const WT_CLAUDE_HOOK_MARKER: &str = "# wt-agent-hook:claude-inbox";
 pub(crate) const CODEX_HOOK_EVENTS: &[(&str, &str)] = &[
@@ -22,24 +21,20 @@ const WT_CODEX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 
 pub(crate) fn install_claude(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
     let target = ClaudeHookTarget::parse(agent)?;
-    let paths = claude_hook_paths(ctx, true)?;
-    ensure_settings_path_is_untracked(ctx, &paths)?;
-    ensure_git_excludes(ctx, &paths.exclude_patterns)?;
+    let settings_path = claude_settings_path(true)?;
 
-    let mut settings = read_settings(&paths.settings_path)?;
+    let mut settings = read_settings(&settings_path)?;
     remove_managed_claude_hook(&mut settings, ClaudeRemoveTarget::AllWtManaged)?;
     let command = target.command();
     install_managed_claude_hook(&mut settings, &command)?;
-    write_settings(&paths.settings_path, &settings)?;
+    write_settings(&settings_path, &settings)?;
 
     if !ctx.quiet {
         ctx.ui
             .print_step(&format!("Claude hook installed for {}", target.label()));
         ctx.ui
-            .print_dim(&format!("  Settings: {}", paths.display_settings));
+            .print_dim(&format!("  Settings: {}", settings_path.display()));
         ctx.ui.print_dim(&format!("  Command: {command}"));
-        ctx.ui
-            .print_dim(&format!("  Git exclude: {}", paths.exclude_path.display()));
     }
 
     Ok(())
@@ -47,19 +42,18 @@ pub(crate) fn install_claude(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
 
 pub(crate) fn uninstall_claude(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
     let target = ClaudeHookTarget::parse(agent)?;
-    let paths = claude_hook_paths(ctx, false)?;
-    if !paths.settings_path.exists() {
+    let settings_path = claude_settings_path(false)?;
+    if !settings_path.exists() {
         if !ctx.quiet {
             ctx.ui
                 .print_step(&format!("Claude hook not installed for {}", target.label()));
             ctx.ui
-                .print_dim(&format!("  Settings: {}", paths.display_settings));
+                .print_dim(&format!("  Settings: {}", settings_path.display()));
         }
         return Ok(());
     }
 
-    ensure_settings_path_is_untracked(ctx, &paths)?;
-    let mut settings = read_settings(&paths.settings_path)?;
+    let mut settings = read_settings(&settings_path)?;
     let remove_target = match &target {
         ClaudeHookTarget::Dispatcher => ClaudeRemoveTarget::AllWtManaged,
         ClaudeHookTarget::Agent(agent) => {
@@ -69,14 +63,14 @@ pub(crate) fn uninstall_claude(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
     let removed = remove_managed_claude_hook(&mut settings, remove_target)?;
     if removed > 0 {
         if settings_is_empty(&settings) {
-            fs::remove_file(&paths.settings_path).with_context(|| {
+            fs::remove_file(&settings_path).with_context(|| {
                 format!(
-                    "Failed to remove empty Claude local settings: {}",
-                    paths.settings_path.display()
+                    "Failed to remove empty Claude settings: {}",
+                    settings_path.display()
                 )
             })?;
         } else {
-            write_settings(&paths.settings_path, &settings)?;
+            write_settings(&settings_path, &settings)?;
         }
     }
 
@@ -89,10 +83,22 @@ pub(crate) fn uninstall_claude(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
         ctx.ui
             .print_step(&format!("Claude hook {status} for {}", target.label()));
         ctx.ui
-            .print_dim(&format!("  Settings: {}", paths.display_settings));
+            .print_dim(&format!("  Settings: {}", settings_path.display()));
     }
 
     Ok(())
+}
+
+pub(crate) fn claude_dispatcher_installed() -> Result<bool> {
+    let settings_path = claude_settings_path(false)?;
+    if !settings_path.exists() {
+        return Ok(false);
+    }
+    let settings = read_settings(&settings_path)?;
+    Ok(claude_has_command_for_all_events(
+        &settings,
+        &managed_claude_dispatcher_command(),
+    ))
 }
 
 pub(crate) fn install_codex(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
@@ -183,11 +189,60 @@ pub(crate) fn uninstall_codex(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-struct ClaudeHookPaths {
-    settings_path: PathBuf,
-    display_settings: String,
-    exclude_path: PathBuf,
-    exclude_patterns: Vec<String>,
+pub(crate) fn codex_dispatcher_installed() -> Result<bool> {
+    let paths = codex_hook_paths(false)?;
+    if !paths.hooks_path.exists() || !paths.config_path.exists() {
+        return Ok(false);
+    }
+
+    let hooks = read_codex_hooks(&paths.hooks_path)?;
+    let command = managed_codex_dispatcher_command();
+    let trust_installs = match find_managed_codex_hook_trust_installs(&hooks, &paths, &command) {
+        Ok(installs) => installs,
+        Err(_) => return Ok(false),
+    };
+
+    let content = fs::read_to_string(&paths.config_path).with_context(|| {
+        format!(
+            "Failed to read Codex config: {}",
+            paths.config_path.display()
+        )
+    })?;
+    let config = content.parse::<DocumentMut>().with_context(|| {
+        format!(
+            "Failed to parse Codex config TOML: {}. Fix config.toml before running `wt setup`.",
+            paths.config_path.display()
+        )
+    })?;
+    let Some(state) = config
+        .get("hooks")
+        .and_then(Item::as_table_like)
+        .and_then(|hooks| hooks.get("state"))
+        .and_then(Item::as_table_like)
+    else {
+        return Ok(false);
+    };
+
+    Ok(trust_installs.iter().all(|install| {
+        state
+            .get(&install.key)
+            .and_then(Item::as_table_like)
+            .and_then(|entry| entry.get("trusted_hash"))
+            .and_then(Item::as_str)
+            == Some(install.trusted_hash.as_str())
+    }))
+}
+
+pub(crate) fn codex_dispatcher_hook_present() -> Result<bool> {
+    let paths = codex_hook_paths(false)?;
+    if !paths.hooks_path.exists() {
+        return Ok(false);
+    }
+    let hooks = read_codex_hooks(&paths.hooks_path)?;
+    Ok(codex_has_command_for_all_events(
+        &hooks,
+        &managed_codex_dispatcher_command(),
+    ))
 }
 
 struct CodexHookPaths {
@@ -324,152 +379,49 @@ pub(crate) fn codex_home_dir() -> Result<PathBuf> {
     }
 }
 
-fn claude_hook_paths(ctx: &Ctx, create_parent: bool) -> Result<ClaudeHookPaths> {
-    let claude_dir = ctx.invocation_root.join(".claude");
-    if create_parent {
-        ensure_claude_dir(&claude_dir)?;
-    }
-
-    let settings_path = ctx.invocation_root.join(CLAUDE_SETTINGS_PATH);
-    let mut exclude_patterns = BTreeSet::from([CLAUDE_SETTINGS_PATH.to_string()]);
-    if let Some(actual_path) = actual_settings_path(&settings_path) {
-        if let Some(relative) = worktree_relative_path(&ctx.invocation_root, &actual_path) {
-            exclude_patterns.insert(relative);
-        }
-    }
-
-    Ok(ClaudeHookPaths {
-        settings_path,
-        display_settings: CLAUDE_SETTINGS_PATH.into(),
-        exclude_path: git_exclude_path(ctx)?,
-        exclude_patterns: exclude_patterns.into_iter().collect(),
-    })
-}
-
-fn ensure_claude_dir(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            if path.is_dir() {
-                Ok(())
-            } else {
-                bail!(
-                    "Cannot install Claude hook: {} is a symlink that does not resolve to a directory.",
-                    path.display()
-                );
-            }
-        }
-        Ok(metadata) if metadata.is_dir() => Ok(()),
-        Ok(_) => bail!(
-            "Cannot install Claude hook: {} exists but is not a directory.",
-            path.display()
-        ),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => fs::create_dir_all(path)
-            .with_context(|| {
-                format!(
-                    "Failed to create Claude local settings dir: {}",
-                    path.display()
-                )
-            }),
-        Err(err) => Err(err).with_context(|| {
-            format!(
-                "Failed to inspect Claude local settings dir: {}",
-                path.display()
-            )
-        }),
-    }
-}
-
-fn actual_settings_path(settings_path: &Path) -> Option<PathBuf> {
-    let file_name = settings_path.file_name()?;
-    let parent = settings_path.parent()?.canonicalize().ok()?;
-    Some(parent.join(file_name))
-}
-
-fn worktree_relative_path(root: &Path, path: &Path) -> Option<String> {
-    let root = root.canonicalize().ok()?;
-    let relative = path.strip_prefix(root).ok()?;
-    Some(path_to_git_pattern(relative))
-}
-
-fn git_exclude_path(ctx: &Ctx) -> Result<PathBuf> {
-    let out = ctx.runner.run(
-        "git",
-        &[
-            "rev-parse",
-            "--path-format=absolute",
-            "--git-path",
-            "info/exclude",
-        ],
-        Some(&ctx.invocation_root),
-    )?;
-    if !out.success {
-        bail!(
-            "Failed to resolve per-worktree Git exclude file: {}",
-            command_error(&out.stdout, &out.stderr)
-        );
-    }
-    Ok(PathBuf::from(out.stdout.trim()))
-}
-
-fn ensure_settings_path_is_untracked(ctx: &Ctx, paths: &ClaudeHookPaths) -> Result<()> {
-    for pattern in &paths.exclude_patterns {
-        if is_tracked_path(ctx, pattern)? {
-            bail!(
-                "Refusing to modify tracked Claude settings file `{pattern}`. `wt agent hook install claude` only writes worktree-local untracked settings. Remove that path from Git tracking or edit the tracked settings manually if you intentionally want a shared project hook."
-            );
-        }
-    }
-    Ok(())
-}
-
-fn is_tracked_path(ctx: &Ctx, path: &str) -> Result<bool> {
-    let out = ctx.runner.run(
-        "git",
-        &["ls-files", "--error-unmatch", "--", path],
-        Some(&ctx.invocation_root),
-    )?;
-    Ok(out.success)
-}
-
-fn ensure_git_excludes(ctx: &Ctx, patterns: &[String]) -> Result<()> {
-    let exclude_path = git_exclude_path(ctx)?;
-    if let Some(parent) = exclude_path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed to create per-worktree Git exclude dir: {}",
-                parent.display()
+pub(crate) fn claude_settings_path(create_home: bool) -> Result<PathBuf> {
+    let claude_home = env::var_os("CLAUDE_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("HOME")
+                .filter(|path| !path.is_empty())
+                .map(|path| PathBuf::from(path).join(".claude"))
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Cannot resolve Claude home: CLAUDE_HOME and HOME are unset. Set CLAUDE_HOME or install Claude so ~/.claude exists."
             )
         })?;
+
+    let claude_home = if claude_home.is_absolute() {
+        claude_home
+    } else {
+        env::current_dir()
+            .map(|cwd| cwd.join(claude_home))
+            .context("Failed to resolve relative CLAUDE_HOME")?
+    };
+
+    match fs::metadata(&claude_home) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => bail!(
+            "Cannot install Claude hook: Claude home exists but is not a directory: {}",
+            claude_home.display()
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound && create_home => {
+            fs::create_dir_all(&claude_home).with_context(|| {
+                format!("Failed to create Claude home: {}", claude_home.display())
+            })?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("Failed to inspect Claude home: {}", claude_home.display())
+            });
+        }
     }
 
-    let existing = fs::read_to_string(&exclude_path).unwrap_or_default();
-    let existing_lines = existing.lines().map(str::trim).collect::<BTreeSet<_>>();
-    let missing = patterns
-        .iter()
-        .filter(|pattern| !existing_lines.contains(pattern.as_str()))
-        .collect::<Vec<_>>();
-    if missing.is_empty() {
-        return Ok(());
-    }
-
-    let mut updated = existing;
-    if !updated.is_empty() && !updated.ends_with('\n') {
-        updated.push('\n');
-    }
-    if !updated.contains("# wt Claude hook adapter") {
-        updated.push_str("# wt Claude hook adapter\n");
-    }
-    for pattern in missing {
-        updated.push_str(pattern);
-        updated.push('\n');
-    }
-
-    fs::write(&exclude_path, updated).with_context(|| {
-        format!(
-            "Failed to update per-worktree Git exclude file: {}",
-            exclude_path.display()
-        )
-    })
+    Ok(claude_home.join(CLAUDE_SETTINGS_PATH))
 }
 
 fn read_settings(path: &Path) -> Result<Value> {
@@ -477,30 +429,23 @@ fn read_settings(path: &Path) -> Result<Value> {
         return Ok(json!({}));
     }
     let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read Claude local settings: {}", path.display()))?;
+        .with_context(|| format!("Failed to read Claude settings: {}", path.display()))?;
     if content.trim().is_empty() {
         return Ok(json!({}));
     }
-    serde_json::from_str(&content).with_context(|| {
-        format!(
-            "Failed to parse Claude local settings JSON: {}",
-            path.display()
-        )
-    })
+    serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse Claude settings JSON: {}", path.display()))
 }
 
 fn write_settings(path: &Path, settings: &Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed to create Claude local settings dir: {}",
-                parent.display()
-            )
+            format!("Failed to create Claude settings dir: {}", parent.display())
         })?;
     }
     let rendered = serde_json::to_string_pretty(settings)?;
     fs::write(path, format!("{rendered}\n"))
-        .with_context(|| format!("Failed to write Claude local settings: {}", path.display()))
+        .with_context(|| format!("Failed to write Claude settings: {}", path.display()))
 }
 
 fn read_codex_hooks(path: &Path) -> Result<Value> {
@@ -514,7 +459,7 @@ fn read_codex_hooks(path: &Path) -> Result<Value> {
     }
     serde_json::from_str(&content).with_context(|| {
         format!(
-            "Failed to parse Codex hooks JSON: {}. Fix hooks.json before running `wt agent hook install codex`.",
+            "Failed to parse Codex hooks JSON: {}. Fix hooks.json before running `wt setup`.",
             path.display()
         )
     })
@@ -545,6 +490,25 @@ fn install_managed_codex_hook(hooks: &mut Value, command: &str) -> Result<()> {
         }));
     }
     Ok(())
+}
+
+fn codex_has_command_for_all_events(hooks: &Value, command: &str) -> bool {
+    CODEX_HOOK_EVENTS.iter().all(|(event_name, _)| {
+        hooks
+            .get("hooks")
+            .and_then(|hooks| hooks.get(*event_name))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|entry| {
+                entry
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .any(|hook| is_managed_command(hook, command))
+            })
+    })
 }
 
 fn codex_remove_target_matches(target: &CodexRemoveTarget, hook: &Value) -> bool {
@@ -724,7 +688,7 @@ fn write_codex_config_trust(path: &Path, update: CodexTrustUpdate) -> Result<()>
     };
     let mut document = content.parse::<DocumentMut>().with_context(|| {
         format!(
-            "Failed to parse Codex config TOML: {}. Fix config.toml before running `wt agent hook install codex`.",
+            "Failed to parse Codex config TOML: {}. Fix config.toml before running `wt setup`.",
             path.display()
         )
     })?;
@@ -758,7 +722,7 @@ fn validate_codex_config_for_trust(path: &Path) -> Result<()> {
         .with_context(|| format!("Failed to read Codex config: {}", path.display()))?;
     content.parse::<DocumentMut>().with_context(|| {
         format!(
-            "Failed to parse Codex config TOML: {}. Fix config.toml before running `wt agent hook install codex`.",
+            "Failed to parse Codex config TOML: {}. Fix config.toml before running `wt setup`.",
             path.display()
         )
     })?;
@@ -851,13 +815,32 @@ fn install_managed_claude_hook(settings: &mut Value, command: &str) -> Result<()
     Ok(())
 }
 
+fn claude_has_command_for_all_events(settings: &Value, command: &str) -> bool {
+    CLAUDE_HOOK_EVENTS.iter().all(|event_name| {
+        settings
+            .get("hooks")
+            .and_then(|hooks| hooks.get(*event_name))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|entry| {
+                entry
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .any(|hook| is_managed_command(hook, command))
+            })
+    })
+}
+
 fn remove_managed_claude_hook(settings: &mut Value, target: ClaudeRemoveTarget) -> Result<usize> {
     let root = settings_object(settings)?;
     let Some(hooks_value) = root.get_mut("hooks") else {
         return Ok(0);
     };
     let Some(hooks) = hooks_value.as_object_mut() else {
-        bail!("Cannot update Claude local settings: `hooks` must be a JSON object.");
+        bail!("Cannot update Claude settings: `hooks` must be a JSON object.");
     };
 
     let mut removed = 0;
@@ -867,7 +850,7 @@ fn remove_managed_claude_hook(settings: &mut Value, target: ClaudeRemoveTarget) 
             continue;
         };
         let Some(event_entries) = event_value.as_array_mut() else {
-            bail!("Cannot update Claude local settings: `hooks.{event_name}` must be an array.");
+            bail!("Cannot update Claude settings: `hooks.{event_name}` must be an array.");
         };
 
         let mut kept = Vec::with_capacity(event_entries.len());
@@ -900,13 +883,13 @@ fn remove_claude_command_from_event_entry(
     target: &ClaudeRemoveTarget,
 ) -> Result<usize> {
     let Some(entry) = entry.as_object_mut() else {
-        bail!("Cannot update Claude local settings: hook event entries must be JSON objects.");
+        bail!("Cannot update Claude settings: hook event entries must be JSON objects.");
     };
     let Some(hooks_value) = entry.get_mut("hooks") else {
         return Ok(0);
     };
     let Some(hooks) = hooks_value.as_array_mut() else {
-        bail!("Cannot update Claude local settings: hook event `hooks` must be an array.");
+        bail!("Cannot update Claude settings: hook event `hooks` must be an array.");
     };
     let before = hooks.len();
     hooks.retain(|hook| !claude_remove_target_matches(target, hook));
@@ -937,9 +920,7 @@ fn event_entry_has_no_hooks(entry: &Value) -> bool {
 
 fn settings_object(settings: &mut Value) -> Result<&mut Map<String, Value>> {
     settings.as_object_mut().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Cannot update Claude local settings: top-level JSON value must be an object."
-        )
+        anyhow::anyhow!("Cannot update Claude settings: top-level JSON value must be an object.")
     })
 }
 
@@ -949,15 +930,15 @@ fn object_entry<'a>(
 ) -> Result<&'a mut Map<String, Value>> {
     let value = object.entry(key.to_string()).or_insert_with(|| json!({}));
     value.as_object_mut().ok_or_else(|| {
-        anyhow::anyhow!("Cannot update Claude local settings: `{key}` must be a JSON object.")
+        anyhow::anyhow!("Cannot update Claude settings: `{key}` must be a JSON object.")
     })
 }
 
 fn array_entry<'a>(object: &'a mut Map<String, Value>, key: &str) -> Result<&'a mut Vec<Value>> {
     let value = object.entry(key.to_string()).or_insert_with(|| json!([]));
-    value.as_array_mut().ok_or_else(|| {
-        anyhow::anyhow!("Cannot update Claude local settings: `{key}` must be an array.")
-    })
+    value
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("Cannot update Claude settings: `{key}` must be an array."))
 }
 
 fn managed_claude_hook_command(agent: &str) -> String {
@@ -1057,19 +1038,4 @@ fn canonical_json(value: &Value) -> Value {
 
 fn settings_is_empty(settings: &Value) -> bool {
     settings.as_object().is_some_and(Map::is_empty)
-}
-
-fn path_to_git_pattern(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn command_error(stdout: &str, stderr: &str) -> String {
-    if stderr.trim().is_empty() {
-        stdout.trim().to_string()
-    } else {
-        stderr.trim().to_string()
-    }
 }

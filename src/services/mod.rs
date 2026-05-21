@@ -9,6 +9,7 @@ pub mod issues;
 pub mod linear;
 pub mod runtime_binding;
 pub mod site;
+pub mod supervisor_registration;
 pub mod traefik;
 pub mod valet;
 pub mod work;
