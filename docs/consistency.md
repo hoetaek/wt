@@ -217,20 +217,24 @@ Canonical hook compatibility delivery:
 wt msg check-inbox --agent agents/codex
 ```
 
-`check-inbox` exits successfully with no output when there are no deliverable direct-scope
-messages. Before rendering hook output it reclaims expired leases according to the delivery
-lifecycle policy, claims deliverable direct-scope messages from `inbox/new` or eligible
-`inbox/retry`, prints JSON containing `hookSpecificOutput.additionalContext`, and acknowledges the
-claims into `inbox/delivered/` only after stdout is written successfully. Active non-expired claims
-remain owned by their current claimant. This command is a compatibility consumer for agent hooks,
-not a separate unread/read lifecycle.
+`check-inbox` exits successfully with no output when there are no deliverable messages for its
+recipient. Before rendering hook output it reclaims expired leases according to the delivery
+lifecycle policy, claims deliverable messages from `inbox/new` or eligible `inbox/retry`, prints
+JSON containing `hookSpecificOutput.additionalContext`, and acknowledges the claims into
+`inbox/delivered/` only after stdout is written successfully. Active non-expired claims remain owned
+by their current claimant. This command is a compatibility consumer for agent hooks, not a separate
+unread/read lifecycle.
 
-Workflow supervisors must scope-match before claiming. In particular, `agents/coordinator` is a
-shared local coordinator address; a workflow supervisor must not claim shared `agents/coordinator`
-messages unless the message has explicit `scope.kind = "workflow"` with the matching Workflow id, or
-a future documented policy proves matching TaskRun ownership. Raw recipient address
-`agents/coordinator`, `WT_COORDINATOR_AGENT_ID`, `coordinator` alias normalization, or
-`correlates_with` is insufficient ownership evidence.
+For ordinary agent recipients, `check-inbox` only claims direct-scope messages. `agents/coordinator`
+is the local coordinator's shared user-facing queue, so `wt msg check-inbox --agent coordinator`
+claims all valid message scopes for that recipient: `direct`, `repo`, `workflow:<id>`, and
+`task_run:<id>`. Hook context includes a `scope:` line for non-direct messages so the coordinator can
+distinguish standalone, repo, workflow, and task-run reports.
+
+General workflow-supervisor ownership is not implemented yet. Future supervisor identities that are
+not the local `agents/coordinator` queue must define explicit scope ownership before claiming shared
+messages; raw recipient address, `WT_COORDINATOR_AGENT_ID`, alias normalization, or
+`correlates_with` is insufficient ownership evidence for that future mechanism.
 
 wt-managed Claude/Codex agent hooks register the same inbox check on both `UserPromptSubmit` and
 `PostToolUse`; both events route through the `wt msg check-inbox` claim → hook JSON → acknowledge
