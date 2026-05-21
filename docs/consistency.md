@@ -303,10 +303,12 @@ treated as workflow-owned delivery. Explicit scoped sends accept `direct`, `repo
 `workflow:<id>`, and `task_run:<id>`.
 
 The user-facing recipient `coordinator` is a context-resolved alias, not a fixed inbox. At `wt msg`
-CLI surfaces it resolves from `WT_COORDINATOR_AGENT_ID`; if that environment variable is absent or
-invalid, the command must fail with setup guidance such as `wt coord use <id>` or
-`eval "$(wt shell-init zsh)"`. Existing `messages/agents/coordinator/...` state remains ordinary
-inbox state and is active only for shells that explicitly set `WT_COORDINATOR_AGENT_ID=agents/coordinator`.
+CLI surfaces it resolves in three steps: `WT_COORDINATOR_AGENT_ID`, then the current anchor marker
+written by `wt session set`, then the cwd/TaskRun identity path used by `wt shell-init`. If all three
+are absent or invalid, the command must fail with setup guidance such as `wt session set <id>`,
+`wt coord use <id>`, or `eval "$(wt shell-init zsh)"`. Existing
+`messages/agents/coordinator/...` state remains ordinary inbox state and is active only for shells
+that explicitly set `WT_COORDINATOR_AGENT_ID=agents/coordinator`.
 
 Canonical hook compatibility delivery:
 

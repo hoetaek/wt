@@ -24,6 +24,7 @@ pub mod profile_match;
 pub(crate) mod profile_selection;
 pub(crate) mod profile_workspace;
 pub mod send;
+pub mod session;
 pub mod shell_init;
 pub mod site;
 pub mod task;
