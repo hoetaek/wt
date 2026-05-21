@@ -10,6 +10,7 @@ pub mod local_ui;
 pub mod messages;
 pub mod names;
 pub mod runner;
+pub mod scaffold;
 pub mod services;
 pub mod setup;
 pub mod storage;
@@ -155,6 +156,28 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 run_next,
             } => commands::workflow::complete(ctx, workflow, task.as_deref(), *run_next),
         },
+        Commands::Scaffold {
+            feature,
+            idea,
+            spec,
+            task,
+            workflow,
+            retrospect,
+            all,
+            force,
+        } => commands::scaffold::run(
+            ctx,
+            feature,
+            commands::scaffold::ScaffoldFlags {
+                idea: *idea,
+                spec: *spec,
+                task: *task,
+                workflow: *workflow,
+                retrospect: *retrospect,
+                all: *all,
+                force: *force,
+            },
+        ),
         Commands::List { wide } => commands::list::run(ctx, *wide),
         Commands::Open { target } => commands::open::run(ctx, target.as_deref()),
         Commands::Done { targets } => commands::done::run(ctx, targets),

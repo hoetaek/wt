@@ -3116,6 +3116,31 @@ run = "run-archive-unique"
 }
 
 #[test]
+fn scaffold_supports_json_global_flag() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    let output = wt_command()
+        .current_dir(temp.path())
+        .args(["--json", "scaffold", "demo", "--retrospect"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("JSON output is supported").not())
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["feature"], "demo");
+    assert_eq!(
+        value["created"][0],
+        "<git-common-dir>/wt/retrospectives/demo.md"
+    );
+    assert!(value["skipped"].as_array().unwrap().is_empty());
+    assert!(temp.path().join(".git/wt/retrospectives/demo.md").is_file());
+}
+
+#[test]
 fn workflow_prepare_help_uses_pr_mode() {
     wt_command()
         .args(["workflow", "task", "--help"])

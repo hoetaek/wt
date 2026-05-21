@@ -89,6 +89,10 @@ impl StorageRoot {
         self.personal_root.join("ideas")
     }
 
+    pub fn specs_dir(&self) -> PathBuf {
+        self.personal_root.join("specs")
+    }
+
     pub fn retrospectives_dir(&self) -> PathBuf {
         self.personal_root.join("retrospectives")
     }
@@ -330,6 +334,7 @@ mod tests {
             PathBuf::from("/repo/.git/wt/messages")
         );
         assert_eq!(storage.ideas_dir(), PathBuf::from("/repo/.git/wt/ideas"));
+        assert_eq!(storage.specs_dir(), PathBuf::from("/repo/.git/wt/specs"));
         assert_eq!(
             storage.retrospectives_dir(),
             PathBuf::from("/repo/.git/wt/retrospectives")

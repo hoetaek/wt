@@ -136,6 +136,12 @@ pub struct WorkflowRecord {
 }
 
 impl WorkflowMetadata {
+    pub fn empty(slug: &str) -> Self {
+        let mut metadata = Self::new(WorkflowMode::Single, "default", None, Vec::new());
+        metadata.title = Some(slug.to_string());
+        metadata
+    }
+
     pub fn new(
         mode: WorkflowMode,
         base_mode: impl Into<String>,
@@ -538,7 +544,7 @@ fn validate_matrix_workflow_task(workflow: &WorkflowMetadata, item: &WorkflowTas
     Ok(())
 }
 
-fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
+pub(crate) fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
     let mut content = String::new();
     if let Some(title) = workflow.title.as_deref() {
         content.push_str(&format!("title = {}\n", toml_quote(title)));
