@@ -1618,6 +1618,108 @@ fn msg_check_inbox_emits_hook_json_and_acknowledges_claimed_messages() {
 }
 
 #[test]
+fn msg_check_inbox_coordinator_delivers_workflow_scoped_messages() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--scope",
+            "workflow:2026-05-20-001",
+            "--to",
+            "coordinator",
+            "workflow",
+            "done",
+        ])
+        .assert()
+        .success();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "coordinator",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/coordinator: 1 new message"));
+    assert!(context.contains("scope: workflow:2026-05-20-001"));
+    assert!(context.contains("workflow done"));
+
+    let inbox = temp
+        .path()
+        .join(".git/wt/messages/agents/coordinator/inbox");
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert!(toml_files(&inbox.join("claimed")).is_empty());
+    let delivered = toml_files(&inbox.join("delivered"));
+    assert_eq!(delivered.len(), 1);
+    let content = std::fs::read_to_string(&delivered[0]).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(message["scope"]["kind"].as_str(), Some("workflow"));
+    assert_eq!(message["delivery"]["state"].as_str(), Some("delivered"));
+}
+
+#[test]
+fn msg_check_inbox_non_coordinator_leaves_workflow_scoped_messages_new() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--scope",
+            "workflow:2026-05-20-001",
+            "--to",
+            "codex",
+            "workflow",
+            "owned",
+        ])
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "codex",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let new = toml_files(&inbox.join("new"));
+    assert_eq!(new.len(), 1);
+    assert!(!inbox.join("claimed").exists());
+    assert!(!inbox.join("delivered").exists());
+    let content = std::fs::read_to_string(&new[0]).unwrap();
+    let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(message["scope"]["kind"].as_str(), Some("workflow"));
+    assert_eq!(message["delivery"]["state"].as_str(), Some("new"));
+}
+
+#[test]
 fn msg_check_inbox_does_not_steal_active_claims() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());

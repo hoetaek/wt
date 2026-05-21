@@ -8,6 +8,11 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Changed `wt msg check-inbox --agent coordinator` to claim coordinator inbox
+  messages across all scopes, including workflow- and task-run-scoped
+  completion reports, while ordinary agent inbox checks remain direct-scope
+  only. Hook context now includes `scope:` for non-direct delivered messages.
+
 - Extended wt-managed Claude and Codex inbox hooks to register `wt msg
   check-inbox` on both `UserPromptSubmit` and `PostToolUse`, so long
   tool-running turns can receive pending file inbox messages after tool calls.

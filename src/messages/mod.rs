@@ -535,7 +535,24 @@ impl MessageStore {
 
         for state in [MessageDeliveryState::New, MessageDeliveryState::Retry] {
             if let Some(claimed) =
-                self.claim_next_from_state(&agent, &scope, &claimed_by, lease, state)?
+                self.claim_next_from_state(&agent, Some(&scope), &claimed_by, lease, state)?
+            {
+                return Ok(Some(claimed));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn claim_next_any_scope(
+        &self,
+        agent: &AgentId,
+        claimed_by: &AgentId,
+        lease: MessageLease,
+    ) -> Result<Option<ClaimedMessage>> {
+        for state in [MessageDeliveryState::New, MessageDeliveryState::Retry] {
+            if let Some(claimed) =
+                self.claim_next_from_state(agent, None, claimed_by, lease, state)?
             {
                 return Ok(Some(claimed));
             }
@@ -547,7 +564,7 @@ impl MessageStore {
     fn claim_next_from_state(
         &self,
         agent: &AgentId,
-        scope: &MessageScope,
+        scope: Option<&MessageScope>,
         claimed_by: &AgentId,
         lease: MessageLease,
         state: MessageDeliveryState,
@@ -575,7 +592,7 @@ impl MessageStore {
                 )?;
                 continue;
             }
-            if &message.scope != scope {
+            if scope.is_some_and(|scope| &message.scope != scope) {
                 continue;
             }
 
@@ -871,13 +888,19 @@ impl MessageStore {
         let claimed_by = agent.clone();
         let lease = MessageLease::new(Duration::from_secs(60))?;
         let mut messages = Vec::new();
-        while let Some(claimed) = self.claim_next(
-            agent.as_str(),
-            &MessageScope::direct(),
-            claimed_by.as_str(),
-            lease,
-        )? {
-            messages.push(claimed);
+        if agent.as_str() == COORDINATOR_AGENT_ID {
+            while let Some(claimed) = self.claim_next_any_scope(&agent, &claimed_by, lease)? {
+                messages.push(claimed);
+            }
+        } else {
+            while let Some(claimed) = self.claim_next(
+                agent.as_str(),
+                &MessageScope::direct(),
+                claimed_by.as_str(),
+                lease,
+            )? {
+                messages.push(claimed);
+            }
         }
 
         Ok(InboxDelivery {
@@ -1629,6 +1652,9 @@ fn render_additional_context(delivery: &InboxDelivery) -> String {
         lines.push(String::new());
         lines.push(format!("- id: {}", message.meta.id));
         lines.push(format!("  from: {}", message.meta.from));
+        if message.scope.kind != MessageScopeKind::Direct {
+            lines.push(format!("  scope: {}", message_scope_label(&message.scope)));
+        }
         lines.push(format!("  summary: {}", message.body.summary));
         lines.push("  content:".into());
         let content = message.text_content();
@@ -1642,6 +1668,13 @@ fn render_additional_context(delivery: &InboxDelivery) -> String {
     }
 
     lines.join("\n")
+}
+
+fn message_scope_label(scope: &MessageScope) -> String {
+    match scope.id.as_deref() {
+        Some(id) => format!("{}:{id}", scope.kind.as_str()),
+        None => scope.kind.as_str().into(),
+    }
 }
 
 fn new_message_id(from: &str, to: &str, text: &str) -> String {
@@ -2430,10 +2463,13 @@ mod tests {
     }
 
     #[test]
-    fn check_inbox_skips_scoped_messages_and_claims_direct_messages() {
+    fn coordinator_check_inbox_claims_scope_mixed_messages() {
         let temp = TempDir::new().unwrap();
         let store = MessageStore::new(temp.path().join("messages"));
-        let scoped = store
+        let direct = store
+            .send_from("agents/claude", "agents/coordinator", "direct")
+            .unwrap();
+        let workflow = store
             .send_scoped_from(
                 "agents/claude",
                 "agents/coordinator",
@@ -2441,11 +2477,72 @@ mod tests {
                 "workflow scoped",
             )
             .unwrap();
-        let direct = store
-            .send_from("agents/claude", "agents/coordinator", "direct")
+        let task_run = store
+            .send_scoped_from(
+                "agents/claude",
+                "agents/coordinator",
+                MessageScope::task_run("run-1").unwrap(),
+                "task run scoped",
+            )
+            .unwrap();
+        let repo = store
+            .send_scoped_from(
+                "agents/claude",
+                "agents/coordinator",
+                MessageScope::repo(),
+                "repo scoped",
+            )
             .unwrap();
 
         let delivery = store.check_inbox("agents/coordinator").unwrap();
+
+        assert_eq!(
+            delivery
+                .messages
+                .iter()
+                .map(|claimed| claimed.message.meta.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                direct.id.as_str(),
+                workflow.id.as_str(),
+                task_run.id.as_str(),
+                repo.id.as_str()
+            ]
+        );
+        assert!(!direct.path.exists());
+        assert!(!workflow.path.exists());
+        assert!(!task_run.path.exists());
+        assert!(!repo.path.exists());
+        assert!(
+            delivery
+                .messages
+                .iter()
+                .all(|claimed| claimed.claimed_path.exists())
+        );
+
+        let context = delivery.additional_context();
+        assert!(context.contains("scope: workflow:2026-05-20-001"));
+        assert!(context.contains("scope: task_run:run-1"));
+        assert!(context.contains("scope: repo"));
+    }
+
+    #[test]
+    fn non_coordinator_check_inbox_skips_scoped_messages_and_claims_direct_messages() {
+        let temp = TempDir::new().unwrap();
+        let store = MessageStore::new(temp.path().join("messages"));
+        let scoped = store
+            .send_scoped_from(
+                "agents/claude",
+                "agents/codex",
+                MessageScope::workflow("2026-05-20-001").unwrap(),
+                "workflow scoped",
+            )
+            .unwrap();
+        let direct = store
+            .send_from("agents/claude", "agents/codex", "direct")
+            .unwrap();
+
+        let delivery = store.check_inbox("agents/codex").unwrap();
 
         assert_eq!(delivery.messages.len(), 1);
         assert_eq!(delivery.messages[0].message.meta.id, direct.id);
