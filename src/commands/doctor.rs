@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 const CODEX_HOOK_INSTALL_HINT: &str =
     "Run cmux hooks codex install --yes to enable reliable Codex status events.";
 const CODEX_WT_HOOK_INSTALL_HINT: &str =
-    "Run wt hooks setup to enable wt inbox delivery through detected agent hook dispatchers.";
+    "Run wt setup to enable wt inbox delivery through detected agent hook dispatchers.";
+const WT_SETUP_HINT: &str = "Run wt setup to install per-machine wt integration.";
+const WT_INIT_HINT: &str = "Run wt init to create repo-local wt setup.";
 const CODEX_CMUX_HOOK_EVENTS: [(&str, &str); 5] = [
     ("PermissionRequest", "permission_request"),
     ("PreToolUse", "pre_tool_use"),
@@ -42,6 +44,8 @@ pub fn run(ctx: &Ctx, profile: Option<&str>, prune_env_markers: Option<&str>) ->
     check_workspace_config(ctx, config);
     check_worktree_naming(ctx, config);
     check_cmux(ctx, config);
+    check_per_machine_setup(ctx, config);
+    check_repo_setup(ctx);
     check_codex_hook_readiness(ctx, config);
     if let Err(err) = check_session_markers(ctx) {
         ctx.ui
@@ -68,6 +72,8 @@ fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorRepo
     collect_workspace_config_checks(config, &mut checks);
     collect_worktree_naming_checks(ctx, config, &mut checks);
     collect_cmux_check(ctx, config, &mut checks);
+    collect_per_machine_setup_checks(ctx, config, &mut checks);
+    collect_repo_setup_checks(ctx, &mut checks);
     collect_codex_hook_readiness_checks(config, &mut checks);
     let session_markers = match scan_session_markers(ctx) {
         Ok(scan) => {
@@ -389,6 +395,124 @@ fn collect_cmux_check(ctx: &Ctx, config: &Config, checks: &mut Vec<DoctorCheck>)
         checks.push(DoctorCheck::ok(
             "cmux_cli",
             Some("missing; optional for wt agent status/watch, inspect, and send".into()),
+        ));
+    }
+}
+
+fn collect_per_machine_setup_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<DoctorCheck>) {
+    if !ctx.repo_root.exists() {
+        return;
+    }
+    collect_shell_integration_check(config, checks);
+    collect_claude_hook_readiness_checks(ctx, config, checks);
+}
+
+fn collect_shell_integration_check(config: &Config, checks: &mut Vec<DoctorCheck>) {
+    if !agent_launch_requested(config) {
+        return;
+    }
+
+    let Some((path, line)) = shell_integration_target() else {
+        checks.push(DoctorCheck::warning("shell_integration", WT_SETUP_HINT));
+        return;
+    };
+    match fs::read_to_string(&path) {
+        Ok(content) if content.lines().any(|existing| existing == line) => {
+            checks.push(DoctorCheck::ok(
+                "shell_integration",
+                Some(path.display().to_string()),
+            ));
+        }
+        Ok(_) => checks.push(DoctorCheck::warning(
+            "shell_integration",
+            format!("missing `{line}` in {}. {WT_SETUP_HINT}", path.display()),
+        )),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            checks.push(DoctorCheck::warning(
+                "shell_integration",
+                format!("missing {}. {WT_SETUP_HINT}", path.display()),
+            ));
+        }
+        Err(err) => checks.push(DoctorCheck::warning(
+            "shell_integration",
+            format!("cannot read {}: {err}. {WT_SETUP_HINT}", path.display()),
+        )),
+    }
+}
+
+fn shell_integration_target() -> Option<(PathBuf, &'static str)> {
+    let shell = std::env::var_os("SHELL")?;
+    let shell_name = Path::new(&shell).file_name()?.to_str()?;
+    match shell_name {
+        "zsh" => {
+            let dir = std::env::var_os("ZDOTDIR")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
+            Some((dir.join(".zshrc"), "eval \"$(wt shell-init zsh)\""))
+        }
+        "bash" => {
+            let home = std::env::var_os("HOME").map(PathBuf::from)?;
+            Some((home.join(".bashrc"), "eval \"$(wt shell-init bash)\""))
+        }
+        _ => None,
+    }
+}
+
+fn collect_claude_hook_readiness_checks(ctx: &Ctx, config: &Config, checks: &mut Vec<DoctorCheck>) {
+    if !claude_agent_configured(config) && !ctx.runner.has_command("claude") {
+        return;
+    }
+
+    match agent_hook::claude_dispatcher_installed() {
+        Ok(true) => checks.push(DoctorCheck::ok(
+            "claude_wt_inbox_hook",
+            Some("wt-managed inbox hooks installed".into()),
+        )),
+        Ok(false) => checks.push(DoctorCheck::warning("claude_wt_inbox_hook", WT_SETUP_HINT)),
+        Err(err) => checks.push(DoctorCheck::warning(
+            "claude_wt_inbox_hook",
+            format!("{err:#}. {WT_SETUP_HINT}"),
+        )),
+    }
+}
+
+fn collect_repo_setup_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
+    if !ctx.repo_root.exists() {
+        return;
+    }
+    let shared_config = ctx.repo_root.join(".wt.toml");
+    let personal_config = ctx.storage_root.config_toml();
+    if shared_config.is_file() || personal_config.is_file() {
+        checks.push(DoctorCheck::ok("repo_config", Some("configured".into())));
+    } else {
+        checks.push(DoctorCheck::warning(
+            "repo_config",
+            format!(
+                "missing .wt.toml or {}. {WT_INIT_HINT}",
+                ctx.storage_root.display_path(&personal_config)
+            ),
+        ));
+    }
+
+    let required_dirs = [
+        ctx.storage_root.tasks_dir(),
+        ctx.storage_root.messages_dir(),
+        ctx.storage_root.task_runs_dir(),
+        ctx.storage_root.agent_state_dir(),
+        ctx.storage_root.worktrees_dir(),
+    ];
+    let missing = required_dirs
+        .iter()
+        .filter(|path| !path.is_dir())
+        .map(|path| ctx.storage_root.display_path(path))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        checks.push(DoctorCheck::ok("core_dirs", Some("present".into())));
+    } else {
+        checks.push(DoctorCheck::warning(
+            "core_dirs",
+            format!("missing {}. {WT_INIT_HINT}", missing.join(", ")),
         ));
     }
 }
@@ -729,6 +853,13 @@ fn codex_agent_configured(config: &Config) -> bool {
         .agent
         .as_ref()
         .is_some_and(|agent| agent.cli == AgentCli::Codex)
+}
+
+fn claude_agent_configured(config: &Config) -> bool {
+    config
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.cli == AgentCli::Claude)
 }
 
 fn collect_optional_command(
@@ -1103,6 +1234,40 @@ fn check_cmux(ctx: &Ctx, config: &Config) {
         ctx.ui.print_step(
             "cmux CLI: missing (optional for wt agent status/watch, inspect, and send)",
         );
+    }
+}
+
+fn check_per_machine_setup(ctx: &Ctx, config: &Config) {
+    let mut checks = Vec::new();
+    collect_per_machine_setup_checks(ctx, config, &mut checks);
+    print_named_checks(ctx, &checks);
+}
+
+fn check_repo_setup(ctx: &Ctx) {
+    let mut checks = Vec::new();
+    collect_repo_setup_checks(ctx, &mut checks);
+    print_named_checks(ctx, &checks);
+}
+
+fn print_named_checks(ctx: &Ctx, checks: &[DoctorCheck]) {
+    for check in checks {
+        let label = doctor_label(&check.name);
+        let message = check.message.as_deref().unwrap_or(check.status);
+        if check.status == "ok" {
+            ctx.ui.print_step(&format!("{label}: {message}"));
+        } else {
+            ctx.ui.print_warning(&format!("{label}: {message}"));
+        }
+    }
+}
+
+fn doctor_label(name: &str) -> &str {
+    match name {
+        "shell_integration" => "Shell integration",
+        "claude_wt_inbox_hook" => "Claude wt inbox hook",
+        "repo_config" => "Repo config",
+        "core_dirs" => "Core dirs",
+        _ => name,
     }
 }
 

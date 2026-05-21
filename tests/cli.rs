@@ -1,8 +1,6 @@
 use assert_cmd::Command;
 use assert_fs::TempDir;
 use predicates::prelude::*;
-use sha2::{Digest, Sha256};
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as StdCommand};
 use std::time::{Duration, Instant};
@@ -27,12 +25,7 @@ const GIT_LOCAL_ENV_KEYS: &[&str] = &[
     "GIT_COMMON_DIR",
 ];
 
-const CLAUDE_MANUAL_INBOX_HOOK_COMMAND: &str =
-    "wt msg check-inbox --agent agents/claude --silent # wt-agent-hook:claude-inbox";
 const CLAUDE_INBOX_HOOK_COMMAND: &str = "wt msg check-inbox --silent # wt-agent-hook:claude-inbox";
-const PRE_SILENT_CLAUDE_INBOX_HOOK_COMMAND: &str =
-    "wt msg check-inbox # wt-agent-hook:claude-inbox";
-const LEGACY_CLAUDE_INBOX_HOOK_COMMAND: &str = "if [ -n \"${WT_AGENT_ID:-}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi # wt-agent-hook:claude-inbox";
 const CODEX_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 const MANAGED_INBOX_HOOK_EVENTS: &[(&str, &str)] = &[
     ("UserPromptSubmit", "user_prompt_submit"),
@@ -83,23 +76,6 @@ fn git_commit(path: &Path) {
             "commit",
             "-m",
             "initial",
-        ])
-        .current_dir(path)
-        .status()
-        .unwrap();
-    assert!(status.success());
-}
-
-fn git_commit_message(path: &Path, message: &str) {
-    let status = git_command()
-        .args([
-            "-c",
-            "user.name=wt test",
-            "-c",
-            "user.email=wt@example.com",
-            "commit",
-            "-m",
-            message,
         ])
         .current_dir(path)
         .status()
@@ -219,6 +195,25 @@ printf 'PWD=%s\n' "$PWD"
 #[cfg(not(unix))]
 fn write_fake_agent(_path: &Path, _name: &str) -> std::path::PathBuf {
     panic!("fake agent test helper is only implemented for Unix test environments")
+}
+
+#[cfg(unix)]
+fn write_fake_wt(path: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = path.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let wt = bin.join("wt");
+    std::fs::write(&wt, "#!/bin/sh\nexit 0\n").unwrap();
+    let mut permissions = std::fs::metadata(&wt).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&wt, permissions).unwrap();
+    bin
+}
+
+#[cfg(not(unix))]
+fn write_fake_wt(_path: &Path) -> std::path::PathBuf {
+    panic!("fake wt test helper is only implemented for Unix test environments")
 }
 
 fn write_task_document(root: &Path, key: &str, branch: &str) {
@@ -559,156 +554,8 @@ fn codex_managed_inbox_commands(hooks: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-fn codex_hook_command(agent: &str) -> String {
-    format!("wt msg check-inbox --agent agents/{agent} --silent {CODEX_INBOX_HOOK_MARKER}")
-}
-
 fn codex_dispatcher_command() -> String {
     format!("wt msg check-inbox --silent {CODEX_INBOX_HOOK_MARKER}")
-}
-
-fn pre_silent_codex_dispatcher_command() -> String {
-    format!("wt msg check-inbox {CODEX_INBOX_HOOK_MARKER}")
-}
-
-fn legacy_codex_dispatcher_command() -> String {
-    format!(
-        "if [ -n \"${{WT_AGENT_ID:-}}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi {CODEX_INBOX_HOOK_MARKER}"
-    )
-}
-
-fn codex_trust_key(
-    codex_home: &Path,
-    event_key: &str,
-    group_index: usize,
-    handler_index: usize,
-) -> String {
-    format!(
-        "{}:{event_key}:{group_index}:{handler_index}",
-        codex_home.join("hooks.json").display()
-    )
-}
-
-fn codex_hook_trusted_hash(command: &str, event_key: &str) -> String {
-    let identity = serde_json::json!({
-        "event_name": event_key,
-        "hooks": [
-            {
-                "async": false,
-                "command": command,
-                "timeout": 600,
-                "type": "command",
-            }
-        ]
-    });
-    let canonical = canonical_json(&identity);
-    let serialized = serde_json::to_vec(&canonical).unwrap();
-    let mut hasher = Sha256::new();
-    hasher.update(serialized);
-    sha256_version(hasher.finalize().as_ref())
-}
-
-fn sha256_version(bytes: &[u8]) -> String {
-    let mut version = String::with_capacity("sha256:".len() + bytes.len() * 2);
-    version.push_str("sha256:");
-    for byte in bytes {
-        let _ = write!(&mut version, "{byte:02x}");
-    }
-    version
-}
-
-fn canonical_json(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut sorted = serde_json::Map::new();
-            let mut keys = map.keys().collect::<Vec<_>>();
-            keys.sort();
-            for key in keys {
-                sorted.insert(key.clone(), canonical_json(&map[key]));
-            }
-            serde_json::Value::Object(sorted)
-        }
-        serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.iter().map(canonical_json).collect())
-        }
-        other => other.clone(),
-    }
-}
-
-fn toml_file(path: &Path) -> toml::Value {
-    let content = std::fs::read_to_string(path).unwrap();
-    toml::from_str(&content).unwrap()
-}
-
-fn codex_trusted_hash(config: &toml::Value, key: &str) -> Option<String> {
-    config
-        .get("hooks")
-        .and_then(|hooks| hooks.get("state"))
-        .and_then(|state| state.get(key))
-        .and_then(|entry| entry.get("trusted_hash"))
-        .and_then(toml::Value::as_str)
-        .map(String::from)
-}
-
-fn write_codex_home_with_cmux(codex_home: &Path) {
-    std::fs::create_dir_all(codex_home).unwrap();
-    std::fs::write(
-        codex_home.join("hooks.json"),
-        r#"{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cmux hooks codex prompt-submit",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cmux hooks codex stop"
-          }
-        ]
-      }
-    ]
-  }
-}
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        codex_home.join("config.toml"),
-        format!(
-            r#"[features]
-hooks = true
-
-[hooks.state."{}:user_prompt_submit:0:0"]
-trusted_hash = "sha256:cmux"
-
-[hooks.state."{}:stop:0:0"]
-trusted_hash = "sha256:cmux-stop"
-"#,
-            codex_home.join("hooks.json").display(),
-            codex_home.join("hooks.json").display()
-        ),
-    )
-    .unwrap();
-}
-
-fn git_status_short(path: &Path) -> String {
-    let output = git_command()
-        .args(["status", "--short"])
-        .current_dir(path)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    String::from_utf8(output.stdout).unwrap()
 }
 
 #[test]
@@ -3546,136 +3393,185 @@ fn agent_wait_stats_missing_storage_reports_empty_state() {
         .stdout(predicate::str::contains("Buckets: none"));
 }
 
+#[cfg(unix)]
 #[test]
-fn agent_hook_help_explains_claude_file_inbox_adapter() {
-    wt_command()
-        .args(["agent", "hook", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("local agent hook adapters"))
-        .stdout(predicate::str::contains("Claude-specific"))
-        .stdout(predicate::str::contains("Codex-specific"))
-        .stdout(predicate::str::contains(".claude/settings.local.json"))
-        .stdout(predicate::str::contains(
-            "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher",
-        ))
-        .stdout(predicate::str::contains("hooks.json"))
-        .stdout(predicate::str::contains("trusted hook state"))
-        .stdout(predicate::str::contains("file inbox"))
-        .stdout(predicate::str::contains("per-worktree Git exclude"));
-
-    wt_command()
-        .args(["agent", "hook", "install", "claude", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Claude Code"))
-        .stdout(predicate::str::contains("UserPromptSubmit"))
-        .stdout(predicate::str::contains("PostToolUse"))
-        .stdout(predicate::str::contains("WT_AGENT_ID"))
-        .stdout(predicate::str::contains("agents/<branch_slug>"))
-        .stdout(predicate::str::contains("manual or test override"))
-        .stdout(predicate::str::contains(
-            "preserves existing local Claude settings",
-        ));
-
-    wt_command()
-        .args(["agent", "hook", "uninstall", "claude", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Claude-specific"))
-        .stdout(predicate::str::contains(
-            "wt-managed Claude inbox hook entries",
-        ))
-        .stdout(predicate::str::contains("PostToolUse"))
-        .stdout(predicate::str::contains("Other local Claude settings"))
-        .stdout(predicate::str::contains("manual/test override"));
-
-    wt_command()
-        .args(["agent", "hook", "install", "codex", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Codex-specific"))
-        .stdout(predicate::str::contains("UserPromptSubmit"))
-        .stdout(predicate::str::contains("PostToolUse"))
-        .stdout(predicate::str::contains("hooks.json"))
-        .stdout(predicate::str::contains("config.toml"))
-        .stdout(predicate::str::contains("trusted hook state"))
-        .stdout(predicate::str::contains("non-wt and cmux hooks"))
-        .stdout(predicate::str::contains("WT_AGENT_ID"))
-        .stdout(predicate::str::contains("agents/<branch_slug>"))
-        .stdout(predicate::str::contains("manual or test override"));
-
-    wt_command()
-        .args(["agent", "hook", "uninstall", "codex", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Codex-specific"))
-        .stdout(predicate::str::contains(
-            "wt-managed Codex inbox hook entries",
-        ))
-        .stdout(predicate::str::contains("PostToolUse"))
-        .stdout(predicate::str::contains("trust state"))
-        .stdout(predicate::str::contains("Other Codex hooks"))
-        .stdout(predicate::str::contains("manual/test override"));
-}
-
-#[test]
-fn agent_hook_install_claude_creates_git_excluded_local_settings() {
+fn setup_installs_detected_claude_and_codex_hooks() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+    write_fake_agent(temp.path(), "codex");
 
     wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-        ])
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Claude hook installed"))
-        .stdout(predicate::str::contains("WT_AGENT_ID"));
+        .stdout(predicate::str::contains("Codex hook installed"))
+        .stdout(predicate::str::contains("Next: run `wt init`"));
 
-    let settings_path = temp.path().join(".claude/settings.local.json");
-    let settings = json_file(&settings_path);
+    let settings = json_file(&home.join(".claude/settings.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert_eq!(
-            claude_event_commands(&settings, event_name),
-            vec![CLAUDE_INBOX_HOOK_COMMAND]
-        );
-        assert_eq!(
-            settings["hooks"][event_name][0]["hooks"][0]["type"].as_str(),
-            Some("command")
+        assert!(
+            claude_event_commands(&settings, event_name)
+                .iter()
+                .any(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
         );
     }
+    assert!(!temp.path().join(".claude/settings.local.json").exists());
 
-    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
-    assert!(exclude.contains(".claude/settings.local.json"));
-    assert_eq!(git_status_short(temp.path()), "");
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        assert!(codex_event_commands(&hooks, event_name).contains(&codex_dispatcher_command()));
+    }
 }
 
+#[cfg(unix)]
 #[test]
-fn agent_hook_install_claude_reinstall_is_idempotent() {
+fn setup_preserves_user_hooks_cmux_hooks_and_unrelated_trust() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
+    let home = temp.path().join("home");
+    let claude_home = home.join(".claude");
+    let codex_home = temp.path().join("codex-home");
+    std::fs::create_dir_all(&claude_home).unwrap();
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(
+        claude_home.join("settings.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "echo user-claude-hook"
+                    }]
+                }]
+            },
+            "theme": "dark"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        codex_home.join("hooks.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "cmux hooks codex prompt-submit",
+                        "timeout": 5
+                    }]
+                }],
+                "Stop": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "cmux hooks codex stop"
+                    }]
+                }]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let cmux_key = format!(
+        "{}:user_prompt_submit:0:0",
+        codex_home.join("hooks.json").display()
+    );
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"[features]
+hooks = true
+
+[hooks.state."{cmux_key}"]
+trusted_hash = "sha256:cmux"
+"#
+        ),
+    )
+    .unwrap();
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+    write_fake_agent(temp.path(), "codex");
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success();
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "setup",
+            "--remove",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    let settings = json_file(&claude_home.join("settings.json"));
+    assert_eq!(settings["theme"].as_str(), Some("dark"));
+    assert!(
+        claude_event_commands(&settings, "UserPromptSubmit")
+            .iter()
+            .any(|command| command == "echo user-claude-hook")
+    );
+    assert!(claude_managed_inbox_commands(&settings).is_empty());
+
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    assert!(
+        codex_event_commands(&hooks, "UserPromptSubmit")
+            .iter()
+            .any(|command| command == "cmux hooks codex prompt-submit")
+    );
+    assert_eq!(
+        hooks["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
+        Some("cmux hooks codex stop")
+    );
+    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
+
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml")).unwrap()).unwrap();
+    assert_eq!(
+        config["hooks"]["state"][&cmux_key]["trusted_hash"].as_str(),
+        Some("sha256:cmux")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_and_remove_are_idempotent() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+    write_fake_agent(temp.path(), "codex");
 
     for _ in 0..2 {
         wt_command()
-            .args([
-                "-C",
-                temp.path().to_str().unwrap(),
-                "agent",
-                "hook",
-                "install",
-                "claude",
-            ])
+            .env("HOME", &home)
+            .env("CODEX_HOME", &codex_home)
+            .env("SHELL", "/bin/fish")
+            .env("PATH", path_with_fake_bin(&fake_bin))
+            .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
             .assert()
             .success();
     }
 
-    let settings = json_file(&temp.path().join(".claude/settings.local.json"));
+    let settings = json_file(&home.join(".claude/settings.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
         let commands = claude_event_commands(&settings, event_name);
         assert_eq!(
@@ -3686,466 +3582,6 @@ fn agent_hook_install_claude_reinstall_is_idempotent() {
             1
         );
     }
-
-    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
-    assert_eq!(exclude.matches(".claude/settings.local.json").count(), 1);
-}
-
-#[test]
-fn agent_hook_install_claude_agent_flag_is_manual_override() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-            "--agent",
-            "agents/claude",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("manual override agents/claude"));
-
-    let settings = json_file(&temp.path().join(".claude/settings.local.json"));
-    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert_eq!(
-            claude_event_commands(&settings, event_name),
-            vec![CLAUDE_MANUAL_INBOX_HOOK_COMMAND]
-        );
-    }
-}
-
-#[test]
-fn agent_hook_install_claude_dispatcher_replaces_wt_managed_manual_override() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-            "--agent",
-            "agents/claude",
-        ])
-        .assert()
-        .success();
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-        ])
-        .assert()
-        .success();
-
-    let settings = json_file(&temp.path().join(".claude/settings.local.json"));
-    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert_eq!(
-            claude_event_commands(&settings, event_name),
-            vec![CLAUDE_INBOX_HOOK_COMMAND]
-        );
-    }
-}
-
-#[test]
-fn agent_hook_install_claude_dispatcher_replaces_legacy_wt_agent_id_dispatcher() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let settings_path = temp.path().join(".claude/settings.local.json");
-    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-    std::fs::write(
-        &settings_path,
-        serde_json::to_string_pretty(&serde_json::json!({
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": LEGACY_CLAUDE_INBOX_HOOK_COMMAND,
-                    }],
-                }],
-                "PostToolUse": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": LEGACY_CLAUDE_INBOX_HOOK_COMMAND,
-                    }],
-                }],
-            },
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-        ])
-        .assert()
-        .success();
-
-    let settings = json_file(&settings_path);
-    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert_eq!(
-            claude_event_commands(&settings, event_name),
-            vec![CLAUDE_INBOX_HOOK_COMMAND]
-        );
-    }
-}
-
-#[test]
-fn agent_hook_install_claude_dispatcher_replaces_pre_silent_dispatcher() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let settings_path = temp.path().join(".claude/settings.local.json");
-    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-    std::fs::write(
-        &settings_path,
-        serde_json::to_string_pretty(&serde_json::json!({
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": PRE_SILENT_CLAUDE_INBOX_HOOK_COMMAND,
-                    }],
-                }],
-                "PostToolUse": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": PRE_SILENT_CLAUDE_INBOX_HOOK_COMMAND,
-                    }],
-                }],
-            },
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-        ])
-        .assert()
-        .success();
-
-    let settings = json_file(&settings_path);
-    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert_eq!(
-            claude_event_commands(&settings, event_name),
-            vec![CLAUDE_INBOX_HOOK_COMMAND]
-        );
-    }
-}
-
-#[test]
-fn agent_hook_uninstall_claude_removes_only_wt_managed_empty_settings() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-        ])
-        .assert()
-        .success();
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "uninstall",
-            "claude",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Claude hook uninstalled"));
-
-    assert!(!temp.path().join(".claude/settings.local.json").exists());
-    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
-    assert!(exclude.contains(".claude/settings.local.json"));
-}
-
-#[test]
-fn agent_hook_claude_preserves_non_wt_hooks_on_install_and_uninstall() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let settings_path = temp.path().join(".claude/settings.local.json");
-    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-    std::fs::write(
-        &settings_path,
-        r#"{
-  "permissions": { "allow": ["Bash(echo:*)"] },
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [
-          { "type": "command", "command": "echo keep-user-prompt" }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          { "type": "command", "command": "echo keep-stop" }
-        ]
-      }
-    ]
-  }
-}
-"#,
-    )
-    .unwrap();
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-        ])
-        .assert()
-        .success();
-
-    let settings = json_file(&settings_path);
-    let commands = claude_event_commands(&settings, "UserPromptSubmit");
-    assert!(commands.contains(&"echo keep-user-prompt".to_string()));
-    assert!(commands.contains(&CLAUDE_INBOX_HOOK_COMMAND.to_string()));
-    assert_eq!(
-        claude_event_commands(&settings, "PostToolUse"),
-        vec![CLAUDE_INBOX_HOOK_COMMAND]
-    );
-    assert_eq!(
-        settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
-        Some("echo keep-stop")
-    );
-    assert_eq!(
-        settings["permissions"]["allow"][0].as_str(),
-        Some("Bash(echo:*)")
-    );
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "uninstall",
-            "claude",
-        ])
-        .assert()
-        .success();
-
-    let settings = json_file(&settings_path);
-    let commands = claude_event_commands(&settings, "UserPromptSubmit");
-    assert_eq!(commands, vec!["echo keep-user-prompt".to_string()]);
-    assert!(settings["hooks"].get("PostToolUse").is_none());
-    assert_eq!(
-        settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
-        Some("echo keep-stop")
-    );
-    assert_eq!(
-        settings["permissions"]["allow"][0].as_str(),
-        Some("Bash(echo:*)")
-    );
-}
-
-#[test]
-fn agent_hook_install_claude_rejects_tracked_local_settings() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let settings_path = temp.path().join(".claude/settings.local.json");
-    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-    std::fs::write(&settings_path, "{\"hooks\":{}}\n").unwrap();
-    let status = git_command()
-        .args(["add", ".claude/settings.local.json"])
-        .current_dir(temp.path())
-        .status()
-        .unwrap();
-    assert!(status.success());
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "Refusing to modify tracked Claude settings file",
-        ))
-        .stderr(predicate::str::contains(
-            "only writes worktree-local untracked settings",
-        ))
-        .stderr(predicate::str::contains("shared project hook"));
-
-    assert_eq!(
-        std::fs::read_to_string(&settings_path).unwrap(),
-        "{\"hooks\":{}}\n"
-    );
-}
-
-#[test]
-fn agent_hook_install_claude_preserves_tracked_source_files() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    std::fs::write(temp.path().join("AGENTS.md"), "tracked agents\n").unwrap();
-    std::fs::write(temp.path().join("CLAUDE.md"), "tracked claude\n").unwrap();
-    std::fs::write(temp.path().join(".gitignore"), "target/\n").unwrap();
-    let status = git_command()
-        .args(["add", "AGENTS.md", "CLAUDE.md", ".gitignore"])
-        .current_dir(temp.path())
-        .status()
-        .unwrap();
-    assert!(status.success());
-    git_commit_message(temp.path(), "tracked source files");
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-        ])
-        .assert()
-        .success();
-
-    assert_eq!(
-        std::fs::read_to_string(temp.path().join("AGENTS.md")).unwrap(),
-        "tracked agents\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(temp.path().join("CLAUDE.md")).unwrap(),
-        "tracked claude\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(temp.path().join(".gitignore")).unwrap(),
-        "target/\n"
-    );
-    assert_eq!(git_status_short(temp.path()), "");
-}
-
-#[test]
-fn agent_hook_install_codex_preserves_existing_hooks_and_writes_trust_state() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-    write_codex_home_with_cmux(&codex_home);
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "codex",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Codex hook installed"))
-        .stdout(predicate::str::contains("WT_AGENT_ID"))
-        .stdout(predicate::str::contains("wt msg check-inbox"));
-
-    let hooks = json_file(&codex_home.join("hooks.json"));
-    let commands = codex_event_commands(&hooks, "UserPromptSubmit");
-    assert!(commands.contains(&"cmux hooks codex prompt-submit".to_string()));
-    assert!(commands.contains(&codex_dispatcher_command()));
-    assert_eq!(
-        codex_event_commands(&hooks, "PostToolUse"),
-        vec![codex_dispatcher_command()]
-    );
-    assert_eq!(
-        hooks["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
-        Some("cmux hooks codex stop")
-    );
-
-    let config = toml_file(&codex_home.join("config.toml"));
-    assert_eq!(
-        config["hooks"]["state"][&codex_trust_key(&codex_home, "user_prompt_submit", 0, 0)]
-            ["trusted_hash"]
-            .as_str(),
-        Some("sha256:cmux")
-    );
-    let wt_key = codex_trust_key(&codex_home, "user_prompt_submit", 1, 0);
-    assert_eq!(
-        codex_trusted_hash(&config, &wt_key).as_deref(),
-        Some(codex_hook_trusted_hash(&codex_dispatcher_command(), "user_prompt_submit").as_str())
-    );
-    assert_eq!(
-        config["hooks"]["state"][&wt_key]["enabled"].as_bool(),
-        Some(true)
-    );
-    let post_tool_key = codex_trust_key(&codex_home, "post_tool_use", 0, 0);
-    assert_eq!(
-        codex_trusted_hash(&config, &post_tool_key).as_deref(),
-        Some(codex_hook_trusted_hash(&codex_dispatcher_command(), "post_tool_use").as_str())
-    );
-    assert_eq!(
-        config["hooks"]["state"][&post_tool_key]["enabled"].as_bool(),
-        Some(true)
-    );
-    assert_eq!(config["features"]["hooks"].as_bool(), Some(true));
-}
-
-#[test]
-fn agent_hook_install_codex_reinstall_is_idempotent() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-
-    for _ in 0..2 {
-        wt_command()
-            .env("CODEX_HOME", &codex_home)
-            .args([
-                "-C",
-                temp.path().to_str().unwrap(),
-                "agent",
-                "hook",
-                "install",
-                "codex",
-            ])
-            .assert()
-            .success();
-    }
-
     let hooks = json_file(&codex_home.join("hooks.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
         let commands = codex_event_commands(&hooks, event_name);
@@ -4158,486 +3594,153 @@ fn agent_hook_install_codex_reinstall_is_idempotent() {
         );
     }
 
-    let config = toml_file(&codex_home.join("config.toml"));
-    for &(_, event_key) in MANAGED_INBOX_HOOK_EVENTS {
-        let wt_key = codex_trust_key(&codex_home, event_key, 0, 0);
-        assert_eq!(
-            codex_trusted_hash(&config, &wt_key).as_deref(),
-            Some(codex_hook_trusted_hash(&codex_dispatcher_command(), event_key).as_str())
-        );
+    for _ in 0..2 {
+        wt_command()
+            .env("HOME", &home)
+            .env("CODEX_HOME", &codex_home)
+            .env("SHELL", "/bin/fish")
+            .args([
+                "-C",
+                temp.path().to_str().unwrap(),
+                "setup",
+                "--remove",
+                "--yes",
+            ])
+            .assert()
+            .success();
     }
-}
 
-#[test]
-fn agent_hook_install_codex_dispatcher_replaces_legacy_wt_agent_id_dispatcher() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-    std::fs::create_dir_all(&codex_home).unwrap();
-    let legacy_command = legacy_codex_dispatcher_command();
-    std::fs::write(
-        codex_home.join("hooks.json"),
-        serde_json::to_string_pretty(&serde_json::json!({
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": legacy_command,
-                    }],
-                }],
-                "PostToolUse": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": legacy_command,
-                    }],
-                }],
-            },
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "codex",
-        ])
-        .assert()
-        .success();
-
+    assert!(!home.join(".claude/settings.json").exists());
     let hooks = json_file(&codex_home.join("hooks.json"));
-    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert_eq!(
-            codex_event_commands(&hooks, event_name),
-            vec![codex_dispatcher_command()]
-        );
-    }
-}
-
-#[test]
-fn agent_hook_install_codex_dispatcher_replaces_pre_silent_dispatcher() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-    std::fs::create_dir_all(&codex_home).unwrap();
-    let pre_silent_command = pre_silent_codex_dispatcher_command();
-    std::fs::write(
-        codex_home.join("hooks.json"),
-        serde_json::to_string_pretty(&serde_json::json!({
-            "hooks": {
-                "UserPromptSubmit": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": pre_silent_command,
-                    }],
-                }],
-                "PostToolUse": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": pre_silent_command,
-                    }],
-                }],
-            },
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "codex",
-        ])
-        .assert()
-        .success();
-
-    let hooks = json_file(&codex_home.join("hooks.json"));
-    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert_eq!(
-            codex_event_commands(&hooks, event_name),
-            vec![codex_dispatcher_command()]
-        );
-    }
-}
-
-#[test]
-fn agent_hook_install_codex_agent_flag_is_manual_override() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "codex",
-            "--agent",
-            "agents/manual",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("manual override agents/manual"));
-
-    let hooks = json_file(&codex_home.join("hooks.json"));
-    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert_eq!(
-            codex_event_commands(&hooks, event_name),
-            vec![codex_hook_command("manual")]
-        );
-    }
-}
-
-#[test]
-fn agent_hook_install_codex_dispatcher_replaces_wt_managed_manual_override() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-    write_codex_home_with_cmux(&codex_home);
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "codex",
-            "--agent",
-            "agents/manual",
-        ])
-        .assert()
-        .success();
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "codex",
-        ])
-        .assert()
-        .success();
-
-    let hooks = json_file(&codex_home.join("hooks.json"));
-    let commands = codex_event_commands(&hooks, "UserPromptSubmit");
-    assert_eq!(
-        commands,
-        vec![
-            "cmux hooks codex prompt-submit".to_string(),
-            codex_dispatcher_command()
-        ]
-    );
-    assert_eq!(
-        codex_event_commands(&hooks, "PostToolUse"),
-        vec![codex_dispatcher_command()]
-    );
-    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_hook_command("manual")));
-
-    let config = toml_file(&codex_home.join("config.toml"));
-    let wt_key = codex_trust_key(&codex_home, "user_prompt_submit", 1, 0);
-    assert_eq!(
-        codex_trusted_hash(&config, &wt_key).as_deref(),
-        Some(codex_hook_trusted_hash(&codex_dispatcher_command(), "user_prompt_submit").as_str())
-    );
-    let post_tool_key = codex_trust_key(&codex_home, "post_tool_use", 0, 0);
-    assert_eq!(
-        codex_trusted_hash(&config, &post_tool_key).as_deref(),
-        Some(codex_hook_trusted_hash(&codex_dispatcher_command(), "post_tool_use").as_str())
-    );
-}
-
-#[test]
-fn agent_hook_uninstall_codex_removes_only_wt_managed_hook_and_trust() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-    write_codex_home_with_cmux(&codex_home);
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "codex",
-        ])
-        .assert()
-        .success();
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "uninstall",
-            "codex",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Codex hook uninstalled"));
-
-    let hooks = json_file(&codex_home.join("hooks.json"));
-    let commands = codex_event_commands(&hooks, "UserPromptSubmit");
-    assert_eq!(commands, vec!["cmux hooks codex prompt-submit".to_string()]);
-    assert!(hooks["hooks"].get("PostToolUse").is_none());
-    assert_eq!(
-        hooks["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
-        Some("cmux hooks codex stop")
-    );
-
-    let config = toml_file(&codex_home.join("config.toml"));
-    assert_eq!(
-        config["hooks"]["state"][&codex_trust_key(&codex_home, "user_prompt_submit", 0, 0)]
-            ["trusted_hash"]
-            .as_str(),
-        Some("sha256:cmux")
-    );
-    assert!(
-        codex_trusted_hash(
-            &config,
-            &codex_trust_key(&codex_home, "user_prompt_submit", 1, 0)
-        )
-        .is_none(),
-        "wt-managed Codex UserPromptSubmit trust state should be removed"
-    );
-    assert!(
-        codex_trusted_hash(
-            &config,
-            &codex_trust_key(&codex_home, "post_tool_use", 0, 0)
-        )
-        .is_none(),
-        "wt-managed Codex PostToolUse trust state should be removed"
-    );
-}
-
-#[test]
-fn agent_hook_install_codex_reports_malformed_config_without_changing_hooks() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-    std::fs::create_dir_all(&codex_home).unwrap();
-    std::fs::write(codex_home.join("hooks.json"), r#"{"hooks":{}}"#).unwrap();
-    std::fs::write(codex_home.join("config.toml"), "[features\n").unwrap();
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "codex",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "Failed to parse Codex config TOML",
-        ))
-        .stderr(predicate::str::contains("config.toml"));
-
-    assert_eq!(
-        std::fs::read_to_string(codex_home.join("hooks.json")).unwrap(),
-        r#"{"hooks":{}}"#
-    );
+    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
 }
 
 #[cfg(unix)]
 #[test]
-fn agent_hook_install_claude_excludes_symlinked_local_settings_target() {
+fn setup_dry_run_writes_nothing() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    std::fs::create_dir(temp.path().join(".agents")).unwrap();
-    std::os::unix::fs::symlink(".agents", temp.path().join(".claude")).unwrap();
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let zdotdir = temp.path().join("zdot");
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+    write_fake_agent(temp.path(), "codex");
 
     wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-        ])
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--dry-run"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("dry run complete"));
 
-    assert!(temp.path().join(".agents/settings.local.json").exists());
-    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
-    assert!(exclude.contains(".claude/settings.local.json"));
-    assert!(exclude.contains(".agents/settings.local.json"));
-    assert_eq!(git_status_short(temp.path()), "?? .claude\n");
+    assert!(!home.join(".claude/settings.json").exists());
+    assert!(!codex_home.exists());
+    assert!(!zdotdir.join(".zshrc").exists());
 }
 
 #[cfg(unix)]
 #[test]
-fn agent_hook_install_claude_rejects_tracked_symlinked_local_settings_target() {
+fn setup_shell_lines_honor_zdotdir() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    std::fs::create_dir(temp.path().join(".agents")).unwrap();
-    std::os::unix::fs::symlink(".agents", temp.path().join(".claude")).unwrap();
-    std::fs::write(
-        temp.path().join(".agents/settings.local.json"),
-        "{\"hooks\":{}}\n",
-    )
-    .unwrap();
-    let status = git_command()
-        .args(["add", ".agents/settings.local.json"])
-        .current_dir(temp.path())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let zdotdir = temp.path().join("custom-zdot");
 
     wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-        ])
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "Refusing to modify tracked Claude settings file `.agents/settings.local.json`",
+        .success();
+
+    let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
+    assert!(zshrc.contains("eval \"$(wt shell-init zsh)\""));
+    assert!(zshrc.contains("eval \"$(wt completion zsh)\""));
+    assert!(!home.join(".zshrc").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_skips_completion_for_homebrew_install_source() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let home = temp.path().join("home");
+    let zdotdir = temp.path().join("zdot");
+    let homebrew = temp.path().join("homebrew");
+    let fake_wt_bin = write_fake_wt(&homebrew);
+
+    wt_command()
+        .env("HOME", &home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("HOMEBREW_PREFIX", &homebrew)
+        .env("PATH", path_with_fake_bin(&fake_wt_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "wt installed via Homebrew; completion provided by formula. Skipping.",
         ));
+
+    let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
+    assert!(zshrc.contains("eval \"$(wt shell-init zsh)\""));
+    assert!(!zshrc.contains("eval \"$(wt completion zsh)\""));
+}
+
+#[test]
+fn removed_setup_surfaces_are_unrecognized() {
+    wt_command()
+        .arg("install")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand"));
+
+    wt_command()
+        .args(["hooks", "setup"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand"));
+
+    wt_command()
+        .args(["agent", "hook", "install", "codex"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand"));
 }
 
 #[cfg(unix)]
 #[test]
-fn agent_hook_claude_marker_is_safe_as_a_shell_comment() {
+fn doctor_points_missing_setup_to_setup_and_init() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
+    let config = temp.path().join("agent.toml");
+    std::fs::write(&config, "[agent]\ncli = \"codex\"\n").unwrap();
+    let fake_bin = write_fake_agent(temp.path(), "codex");
 
     wt_command()
+        .env("HOME", temp.path().join("home"))
+        .env("CODEX_HOME", temp.path().join("codex-home"))
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", temp.path().join("zdot"))
+        .env("PATH", path_with_fake_bin(&fake_bin))
         .args([
             "-C",
             temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
+            "--config",
+            config.to_str().unwrap(),
+            "doctor",
         ])
         .assert()
-        .success();
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "msg",
-            "send",
-            "--to",
-            "claude",
-            "marker",
-            "smoke",
-        ])
-        .assert()
-        .success();
-
-    let settings = json_file(&temp.path().join(".claude/settings.local.json"));
-    let command = claude_managed_inbox_commands(&settings)
-        .into_iter()
-        .find(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
-        .unwrap();
-    let wt_bin = assert_cmd::cargo::cargo_bin("wt");
-    let wt_bin_dir = wt_bin.parent().unwrap();
-    let mut paths = vec![wt_bin_dir.to_path_buf()];
-    if let Some(existing) = std::env::var_os("PATH") {
-        paths.extend(std::env::split_paths(&existing));
-    }
-    let output = StdCommand::new("sh")
-        .arg("-c")
-        .arg(&command)
-        .current_dir(temp.path())
-        .env("PATH", std::env::join_paths(paths).unwrap())
-        .env("WT_AGENT_ID", "agents/claude")
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(
-        value["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap()
-            .contains("marker smoke")
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn agent_hook_claude_dispatcher_noops_without_runtime_identity() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "agent",
-            "hook",
-            "install",
-            "claude",
-        ])
-        .assert()
-        .success();
-
-    let settings = json_file(&temp.path().join(".claude/settings.local.json"));
-    let command = claude_managed_inbox_commands(&settings)
-        .into_iter()
-        .find(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
-        .unwrap();
-    let wt_bin = assert_cmd::cargo::cargo_bin("wt");
-    let wt_bin_dir = wt_bin.parent().unwrap();
-    let mut paths = vec![wt_bin_dir.to_path_buf()];
-    if let Some(existing) = std::env::var_os("PATH") {
-        paths.extend(std::env::split_paths(&existing));
-    }
-    let output = StdCommand::new("sh")
-        .arg("-c")
-        .arg(&command)
-        .current_dir(temp.path())
-        .env("PATH", std::env::join_paths(paths).unwrap())
-        .env_remove("WT_AGENT_ID")
-        .env_remove("WT_COORDINATOR_AGENT_ID")
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+        .success()
+        .stderr(predicate::str::contains("Run wt setup"))
+        .stderr(predicate::str::contains("Run wt init"));
 }
 
 #[cfg(unix)]
@@ -4776,207 +3879,6 @@ fn agent_runtime_wrapper_help_explains_role_separation() {
 
 #[cfg(unix)]
 #[test]
-fn hooks_setup_installs_detected_claude_and_codex_hooks() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-    let fake_bin = write_fake_agent(temp.path(), "claude");
-    write_fake_agent(temp.path(), "codex");
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .env("PATH", path_with_fake_bin(&fake_bin))
-        .args(["-C", temp.path().to_str().unwrap(), "hooks", "setup"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "Installing agent hooks for: claude, codex",
-        ))
-        .stdout(predicate::str::contains("Claude hook installed"))
-        .stdout(predicate::str::contains("Codex hook installed"));
-
-    let settings = json_file(&temp.path().join(".claude/settings.local.json"));
-    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert!(
-            claude_event_commands(&settings, event_name)
-                .iter()
-                .any(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
-        );
-    }
-
-    let hooks = json_file(&codex_home.join("hooks.json"));
-    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert!(codex_event_commands(&hooks, event_name).contains(&codex_dispatcher_command()));
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn hooks_uninstall_removes_wt_managed_claude_and_codex_hooks() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-    let fake_bin = write_fake_agent(temp.path(), "claude");
-    write_fake_agent(temp.path(), "codex");
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .env("PATH", path_with_fake_bin(&fake_bin))
-        .args(["-C", temp.path().to_str().unwrap(), "hooks", "setup"])
-        .assert()
-        .success();
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args(["-C", temp.path().to_str().unwrap(), "hooks", "uninstall"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "Uninstalling wt-managed agent hooks",
-        ))
-        .stdout(predicate::str::contains("Claude hook uninstalled"))
-        .stdout(predicate::str::contains("Codex hook uninstalled"));
-
-    assert!(!temp.path().join(".claude/settings.local.json").exists());
-    let hooks = json_file(&codex_home.join("hooks.json"));
-    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
-}
-
-#[test]
-fn hooks_help_explains_canonical_detected_agent_hook_setup() {
-    wt_command()
-        .args(["hooks", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("wt hooks setup"))
-        .stdout(predicate::str::contains("wt hooks uninstall"))
-        .stdout(predicate::str::contains("wt hooks setup codex"))
-        .stdout(predicate::str::contains("user-managed hooks"))
-        .stdout(predicate::str::contains("cmux hooks"));
-
-    wt_command()
-        .args(["hooks", "setup", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("detected or selected agent CLIs"))
-        .stdout(predicate::str::contains(
-            "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher hooks",
-        ))
-        .stdout(predicate::str::contains("wt hooks setup --agent codex"))
-        .stdout(predicate::str::contains("Hook setup is capability setup"));
-
-    wt_command()
-        .args(["hooks", "uninstall", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("wt-managed inbox hooks"))
-        .stdout(predicate::str::contains("wt hooks uninstall --agent codex"))
-        .stdout(predicate::str::contains("preserving user-managed hooks"));
-}
-
-#[test]
-fn top_level_install_uninstall_help_marks_compatibility_aliases() {
-    wt_command()
-        .args(["install", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Compatibility alias"))
-        .stdout(predicate::str::contains("wt hooks setup"))
-        .stdout(predicate::str::contains("supported agent commands"))
-        .stdout(predicate::str::contains(
-            "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher hooks",
-        ))
-        .stdout(predicate::str::contains(
-            "Hook installation is capability setup",
-        ));
-
-    wt_command()
-        .args(["uninstall", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Compatibility alias"))
-        .stdout(predicate::str::contains("wt hooks uninstall"))
-        .stdout(predicate::str::contains(
-            "wt-managed Claude and Codex hook entries",
-        ))
-        .stdout(predicate::str::contains("preserving user-managed hooks"));
-}
-
-#[cfg(unix)]
-#[test]
-fn hooks_setup_supports_selected_agent_forms_and_aliases() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "hooks",
-            "setup",
-            "--agent",
-            "codex",
-            "--yes",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "Installing agent hooks for: codex",
-        ))
-        .stdout(predicate::str::contains("Codex hook installed"));
-
-    assert!(!temp.path().join(".claude/settings.local.json").exists());
-    let hooks = json_file(&codex_home.join("hooks.json"));
-    assert!(codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "hooks",
-            "codex",
-            "uninstall",
-            "-y",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "Uninstalling wt-managed codex agent hooks",
-        ))
-        .stdout(predicate::str::contains("Codex hook uninstalled"));
-
-    let hooks = json_file(&codex_home.join("hooks.json"));
-    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
-}
-
-#[cfg(unix)]
-#[test]
-fn top_level_install_uninstall_aliases_still_parse() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-    let codex_home = temp.path().join("codex-home");
-    let fake_bin = write_fake_agent(temp.path(), "claude");
-    write_fake_agent(temp.path(), "codex");
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .env("PATH", path_with_fake_bin(&fake_bin))
-        .args(["-C", temp.path().to_str().unwrap(), "install"])
-        .assert()
-        .success();
-
-    wt_command()
-        .env("CODEX_HOME", &codex_home)
-        .args(["-C", temp.path().to_str().unwrap(), "uninstall"])
-        .assert()
-        .success();
-}
-
-#[cfg(unix)]
-#[test]
 fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
     let temp = TempDir::new().unwrap();
     let repo = temp.path().join("repo");
@@ -5012,6 +3914,7 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
     assert!(status.success());
 
     let codex_home = temp.path().join("codex-home");
+    let home = temp.path().join("home");
     let fake_bin = write_fake_agent(temp.path(), "claude");
     write_fake_agent(temp.path(), "codex");
     let wt_bin = assert_cmd::cargo::cargo_bin("wt");
@@ -5019,13 +3922,15 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
     let path = path_with_bins(&[wt_bin_dir, fake_bin]);
 
     wt_command()
+        .env("HOME", &home)
         .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
         .env("PATH", &path)
-        .args(["-C", claude_wt.to_str().unwrap(), "install"])
+        .args(["-C", claude_wt.to_str().unwrap(), "setup", "--yes"])
         .assert()
         .success();
 
-    let claude_settings = json_file(&claude_wt.join(".claude/settings.local.json"));
+    let claude_settings = json_file(&home.join(".claude/settings.json"));
     let claude_hook = claude_managed_inbox_commands(&claude_settings)
         .into_iter()
         .find(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
@@ -5103,6 +4008,7 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
         .arg(&claude_hook)
         .current_dir(&claude_wt)
         .env("PATH", &path)
+        .env("HOME", &home)
         .env("WT_AGENT_ID", "agents/claude-smoke")
         .output()
         .unwrap();
@@ -5121,11 +4027,19 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
     assert!(claude_context.contains("CODEX_SENT REALWT_PONG_SEEN"));
 
     wt_command()
+        .env("HOME", &home)
         .env("CODEX_HOME", &codex_home)
-        .args(["-C", claude_wt.to_str().unwrap(), "uninstall"])
+        .env("SHELL", "/bin/fish")
+        .args([
+            "-C",
+            claude_wt.to_str().unwrap(),
+            "setup",
+            "--remove",
+            "--yes",
+        ])
         .assert()
         .success();
-    assert!(!claude_wt.join(".claude/settings.local.json").exists());
+    assert!(!home.join(".claude/settings.json").exists());
     let codex_hooks = json_file(&codex_home.join("hooks.json"));
     assert!(!codex_managed_inbox_commands(&codex_hooks).contains(&codex_dispatcher_command()));
 }
