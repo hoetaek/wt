@@ -83,24 +83,6 @@ impl TaskDocumentDisplay {
         }
         hint_parts
     }
-
-    pub(crate) fn inventory_hint_parts(&self) -> Vec<String> {
-        self.metadata_hint_parts()
-    }
-
-    fn metadata_hint_parts(&self) -> Vec<String> {
-        let mut hint_parts = Vec::new();
-        if !self.origin_state.is_empty() {
-            hint_parts.push(self.origin_state.clone());
-        }
-        if !self.task_key.is_empty() {
-            hint_parts.push(format!("task {}", self.task_key));
-        }
-        if let Some(branch) = &self.branch {
-            hint_parts.push(format!("branch {branch}"));
-        }
-        hint_parts
-    }
 }
 
 impl TaskDocument {

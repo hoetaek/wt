@@ -303,10 +303,12 @@ treated as workflow-owned delivery. Explicit scoped sends accept `direct`, `repo
 `workflow:<id>`, and `task_run:<id>`.
 
 The user-facing recipient `coordinator` is a context-resolved alias, not a fixed inbox. At `wt msg`
-CLI surfaces it resolves from `WT_COORDINATOR_AGENT_ID`; if that environment variable is absent or
-invalid, the command must fail with setup guidance such as `wt coord use <id>` or
-`eval "$(wt shell-init zsh)"`. Existing `messages/agents/coordinator/...` state remains ordinary
-inbox state and is active only for shells that explicitly set `WT_COORDINATOR_AGENT_ID=agents/coordinator`.
+CLI surfaces it resolves in three steps: `WT_COORDINATOR_AGENT_ID`, then the current anchor marker
+written by `wt session set`, then the cwd/TaskRun identity path used by `wt shell-init`. If all three
+are absent or invalid, the command must fail with setup guidance such as `wt session set <id>`,
+`wt coord use <id>`, or `eval "$(wt shell-init zsh)"`. Existing
+`messages/agents/coordinator/...` state remains ordinary inbox state and is active only for shells
+that explicitly set `WT_COORDINATOR_AGENT_ID=agents/coordinator`.
 
 Canonical hook compatibility delivery:
 
@@ -743,7 +745,9 @@ Interactive prompt도 CLI contract다. 사용자가 값을 생략해서 selector
 command는 무엇을 고르는지, 한 개를 고르는지 여러 개를 고르는지, 빈 선택이 허용되는지
 문서와 help text에서 같은 말로 설명해야 한다. Selector는 작은 inline terminal prompt로
 동작한다. Full-screen TUI가 아니며, prompt header/footer/filter input/summary를 제외한
-selector body는 기본 10개 visible row 안에서 bounded list로 보여준다. 명령이 scriptable
+selector body는 기본 10개 visible row 안에서 bounded list로 보여준다. Section header와
+group spacing도 visible row cap을 소비하므로 grouped selector는 스크롤 중 frame height를
+유지한다. 명령이 scriptable
 target argument를 지원하면 non-TTY, `--json`, `--quiet` automation에서는 selector를 열지
 말고 그 explicit argument path를 요구한다.
 
@@ -893,8 +897,9 @@ TaskDocument는 작업이 무엇인지를 담는 실행 정의다. `<git-common-
 read-only inventory다. `wt run task`의 runnable selector가 아니므로 이미 완료된
 TaskRun 때문에 selector에서 빠지는 TaskDocument도 보여주고, selector의 10-row visible
 cap을 적용하지 않는다. Text output은 selector와 같은 TaskDocument display order인
-title, origin/publish state, task key, branch를 먼저 보여주고, inventory-only field인
-source, path, origin, 짧은 body summary를 함께 보여준다. JSON output은 TaskDocument의
+title, origin/publish state, task key, branch를 bounded column으로 나눠 보여주고,
+`provider-origin`과 `local` source group 아래에 둔다. Inventory-only field인 source는 group으로 표현하고,
+path, raw origin, 짧은 body summary는 text에서 반복하지 않고 JSON output에 둔다. JSON output은 TaskDocument의
 key, path, title, branch, origin/publish state, local-vs-provider-origin source, 짧은
 body summary를 stable shape로 보여준다.
 TaskDocument TOML parse/validation failure는 조용히 숨기지 않고 text warning 또는 JSON
@@ -1149,8 +1154,9 @@ default도 all-workflow inventory로 확장하지 않는다. Output은 Workflow 
 `status`를 만들지 않고, linked TaskRun에서 파생한 task-run status count/summary와 mode별
 runnable metadata를 보여준다. Human text output은 `runnable`, `waiting`, `done` 같은
 파생 presentation group 아래에 workflow title, workflow id/mode, TaskRun summary,
-profile/policy preview를 list row로 두고 body summary, origin, human reason, base, path는
-secondary detail line에 둔다. JSON
+profile/action/policy preview를 compact list row로 둔다. Human reason은 waiting row의
+preview로 보여주되 body summary, raw origin, base, path 같은 상세 필드는 text에서 반복하지
+않고 JSON output이나 `wt workflow show`에 둔다. JSON
 output은 top-level `title`, `body`, optional `origin` metadata와 raw runnable reason
 identifiers를 machine-readable metadata로 보존한다.
 Workflow TOML parse/validation failure는 조용히 숨기지 않고

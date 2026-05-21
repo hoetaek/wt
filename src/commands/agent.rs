@@ -484,7 +484,7 @@ fn print_json_line<T: Serialize>(report: &T) -> Result<()> {
 
 fn print_wait_stats(ctx: &Ctx, summary: &WaitObservationSummary) {
     ctx.ui
-        .print_step(&format!("Agent wait stats: {}", summary.path));
+        .print_plain(&format!("Agent wait stats: {}", summary.path));
     ctx.ui.print_dim(&format!("  Count: {}", summary.count));
     ctx.ui
         .print_dim(&format!("  Sum seconds: {}", summary.sum_seconds));

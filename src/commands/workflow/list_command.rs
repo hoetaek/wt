@@ -1,4 +1,4 @@
-use crate::context::{Ctx, PromptItem};
+use crate::context::Ctx;
 use crate::task_run::{
     STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
@@ -16,6 +16,11 @@ use anyhow::Result;
 use serde::Serialize;
 use std::io::Write;
 use std::path::Path;
+
+const LIST_START: &str = "◆";
+const BAR: &str = "│";
+const FOOTER: &str = "└";
+const BULLET: &str = "•";
 
 pub(super) fn run(ctx: &Ctx) -> Result<()> {
     let report = collect(ctx)?;
@@ -303,7 +308,7 @@ fn one_line(value: &str) -> String {
 
 fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
     if report.workflows.is_empty() && report.invalid_workflows.is_empty() {
-        ctx.ui.print_step(&format!(
+        ctx.ui.print_plain(&format!(
             "No workflows found in {}",
             ctx.storage_root
                 .display_path(&ctx.storage_root.workflows_dir())
@@ -311,7 +316,25 @@ fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
         return;
     }
 
-    let mut printed_group = false;
+    for line in render_text_lines(report) {
+        ctx.ui.print_plain(&line);
+    }
+
+    if !report.invalid_workflows.is_empty() {
+        for invalid in &report.invalid_workflows {
+            ctx.ui.print_warning(&format!(
+                "{}  file {}  {}",
+                invalid.id,
+                invalid.path,
+                invalid_workflow_error_summary(&invalid.error)
+            ));
+        }
+    }
+}
+
+fn render_text_lines(report: &WorkflowListReport) -> Vec<String> {
+    let mut lines = vec![format!("{LIST_START} Workflows"), BAR.to_string()];
+    let mut emitted_group = false;
     for group in [
         WorkflowDisplayGroup::Runnable,
         WorkflowDisplayGroup::Waiting,
@@ -325,24 +348,35 @@ fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
         if rows.is_empty() {
             continue;
         }
-        print_workflow_group(ctx, group, &rows, printed_group);
-        printed_group = true;
-    }
 
-    if !report.invalid_workflows.is_empty() {
-        if printed_group {
-            ctx.ui.print_dim("");
+        if emitted_group {
+            lines.push(BAR.to_string());
         }
-        ctx.ui.print_step("invalid");
-        for invalid in &report.invalid_workflows {
-            ctx.ui.print_warning(&format!(
-                "{}  file {}  {}",
-                invalid.id,
-                invalid.path,
-                invalid_workflow_error_summary(&invalid.error)
+        lines.push(format!("{BAR} {}", group.label()));
+        emitted_group = true;
+        for row in rows {
+            lines.push(format!(
+                "{BAR}  {BULLET}  {}",
+                workflow_row_summary(row, group)
             ));
         }
     }
+
+    if !report.invalid_workflows.is_empty() {
+        if emitted_group {
+            lines.push(BAR.to_string());
+        }
+        lines.push(format!("{BAR} invalid"));
+        for invalid in &report.invalid_workflows {
+            lines.push(format!(
+                "{BAR}  {BULLET}  {}  file {}",
+                invalid.id, invalid.path
+            ));
+        }
+    }
+
+    lines.push(FOOTER.to_string());
+    lines
 }
 
 fn invalid_workflow_error_summary(error: &str) -> String {
@@ -383,31 +417,7 @@ fn display_group(row: &WorkflowListRow) -> WorkflowDisplayGroup {
     }
 }
 
-fn print_workflow_group(
-    ctx: &Ctx,
-    group: WorkflowDisplayGroup,
-    rows: &[&WorkflowListRow],
-    already_printed: bool,
-) {
-    if already_printed {
-        ctx.ui.print_dim("");
-    }
-    ctx.ui.print_step(group.label());
-
-    for row in rows {
-        ctx.ui.print_dim(&workflow_row_summary(row));
-        ctx.ui.print_dim(&workflow_detail_line(row, group));
-        if let Some(error) = row.state_error.as_deref() {
-            ctx.ui.print_warning(&format!(
-                "Workflow state unavailable for {}: {}",
-                row.id,
-                one_line(error)
-            ));
-        }
-    }
-}
-
-fn workflow_row_summary(row: &WorkflowListRow) -> String {
+fn workflow_row_summary(row: &WorkflowListRow, group: WorkflowDisplayGroup) -> String {
     let mut parts = vec![
         format!("id {}", row.id),
         format!("mode {}", row.mode),
@@ -417,15 +427,15 @@ fn workflow_row_summary(row: &WorkflowListRow) -> String {
     if let Some(profile) = row_profile_preview(row) {
         parts.push(profile);
     }
+    if let Some(action) = workflow_action_detail(row, group) {
+        parts.push(action);
+    }
     parts.push(format!(
         "policy {}/{}",
         row.policy.pull_request, row.policy.landing
     ));
 
-    format!(
-        "  {}",
-        PromptItem::from_hint_parts(row.title.clone(), parts).render_plain()
-    )
+    format!("{}  {}", row.title, parts.join(" · "))
 }
 
 fn task_run_row_summary(summary: &TaskRunSummary) -> String {
@@ -447,34 +457,6 @@ fn task_run_row_summary(summary: &TaskRunSummary) -> String {
         [(status, count)] if *count == summary.total => format!("{} {status}", summary.total),
         _ => format!("{} mixed ({})", summary.total, summary.summary),
     }
-}
-
-fn workflow_detail_line(row: &WorkflowListRow, group: WorkflowDisplayGroup) -> String {
-    let mut details = Vec::new();
-    if let Some(summary) = row.body_summary.as_deref() {
-        details.push(format!("body {summary}"));
-    }
-    if let Some(origin) = workflow_list_origin_label(row) {
-        details.push(format!("origin {origin}"));
-    }
-    if let Some(action) = workflow_action_detail(row, group) {
-        details.push(action);
-    }
-    details.push(format!("base {}", row_base_label(row)));
-    details.push(format!("file {}", row.path));
-    format!("    {}", details.join(" · "))
-}
-
-fn workflow_list_origin_label(row: &WorkflowListRow) -> Option<String> {
-    row.origin.as_ref().and_then(|origin| {
-        let provider = origin.provider.trim();
-        let id = origin.id.trim();
-        if provider.is_empty() || id.is_empty() {
-            None
-        } else {
-            Some(format!("{provider}:{id}"))
-        }
-    })
 }
 
 fn workflow_action_detail(row: &WorkflowListRow, group: WorkflowDisplayGroup) -> Option<String> {
@@ -514,12 +496,6 @@ fn human_non_runnable_reason(reason: &str) -> &'static str {
         "state_unavailable" => "workflow state unavailable",
         _ => "not currently runnable",
     }
-}
-
-fn row_base_label(row: &WorkflowListRow) -> String {
-    row.base
-        .clone()
-        .unwrap_or_else(|| format!("({})", row.base_mode))
 }
 
 fn row_profile_preview(row: &WorkflowListRow) -> Option<String> {
@@ -713,33 +689,23 @@ run = "run-2026-05-18-003-done"
 
         let steps = ui.steps.lock().unwrap();
         let dims = ui.dims.lock().unwrap();
-        assert_eq!(steps.as_slice(), ["runnable", "waiting", "done"]);
-        assert!(
-            dims.iter()
-                .any(|line| line == "  Ship search  id 2026-05-18-001 | mode batch | runs 1 prepared | policy none/manual")
-        );
-        assert!(
-            dims.iter().any(|line| {
-                line == "    body Keep search work coordinated. · base main · file <git-common-dir>/wt/workflows/2026-05-18-001.toml"
-            })
-        );
-        assert!(
-            dims.iter()
-                .any(|line| line == "  waiting-task  id 2026-05-18-002 | mode stack | runs 1 running | policy none/manual")
-        );
-        assert!(dims.iter().any(|line| {
-            line == "    reason waiting for running task · base main · file <git-common-dir>/wt/workflows/2026-05-18-002.toml"
-        }));
-        assert!(dims.iter().any(|line| {
-            line == "  done-task  id 2026-05-18-003 | mode single | runs 1 done | profile codex | policy none/manual"
-        }));
-
-        let rendered = steps
-            .iter()
-            .chain(dims.iter())
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("\n");
+        assert!(dims.is_empty());
+        let rendered = steps.join("\n");
+        assert!(rendered.contains("◆ Workflows"));
+        assert!(rendered.contains("│ runnable"));
+        assert!(rendered.contains("│ waiting"));
+        assert!(rendered.contains("│ done"));
+        assert!(rendered.contains(
+            "│  •  Ship search  id 2026-05-18-001 · mode batch · runs 1 prepared · policy none/manual"
+        ));
+        assert!(rendered.contains(
+            "│  •  waiting-task  id 2026-05-18-002 · mode stack · runs 1 running · reason waiting for running task · policy none/manual"
+        ));
+        assert!(rendered.contains(
+            "│  •  done-task  id 2026-05-18-003 · mode single · runs 1 done · profile codex · policy none/manual"
+        ));
+        assert!(!rendered.contains("body Keep search work coordinated."));
+        assert!(!rendered.contains("file <git-common-dir>/wt/workflows/2026-05-18-001.toml"));
         assert!(!rendered.contains("stack_has_running_task_run"));
         assert!(!rendered.contains("runnable no"));
         assert!(!rendered.contains("updated 2026-05-18T00:00:00Z"));
@@ -801,9 +767,7 @@ run = "run-{workflow_id}-2"
         print_text(&ctx, &report);
 
         let steps = ui.steps.lock().unwrap();
-        let dims = ui.dims.lock().unwrap();
-        assert_eq!(steps.as_slice(), ["runnable"]);
-        let row = dims
+        let row = steps
             .iter()
             .find(|line| line.contains("2026-05-18-002"))
             .expect("matrix row should be rendered");
@@ -812,12 +776,11 @@ run = "run-{workflow_id}-2"
         assert!(row.contains("profiles 3"));
         assert!(row.contains("none/manual"));
         assert!(!row.contains("devtools-port-with-extra-long-label-alpha"));
-
-        let detail = dims
-            .iter()
-            .find(|line| line.contains("<git-common-dir>/wt/workflows/2026-05-18-002.toml"))
-            .expect("matrix detail should include workflow path");
-        assert!(detail.contains("base main"));
+        assert!(
+            !steps
+                .iter()
+                .any(|line| line.contains("<git-common-dir>/wt/workflows/2026-05-18-002.toml"))
+        );
     }
 
     #[test]
