@@ -240,6 +240,9 @@ mod tests {
         assert!(APP_JS.contains("workflowMasterDetailRecord"));
         assert!(APP_JS.contains("workflowRelationshipSummary"));
         assert!(APP_JS.contains("workflowCanvasSection"));
+        assert!(APP_JS.contains("ideaMasterDetailRecord"));
+        assert!(APP_JS.contains("retrospecMasterDetailRecord"));
+        assert!(APP_JS.contains("invalidPlanningMasterDetailRecord"));
         assert!(APP_JS.contains("TaskDocument"));
         assert!(APP_JS.contains("agentNotObserved"));
         assert!(APP_JS.contains("taskRunScanRow"));
