@@ -2574,7 +2574,7 @@ function retrospecsCockpit(snapshot) {
 function ideaMasterDetailRecord(row) {
   const status = row.status || "unspecified";
   return {
-    id: `idea-${domId(row.key || row.path || row.title)}`,
+    id: planningMasterDetailRecordId("idea", row),
     group: status,
     tone: statusColor(row.status),
     kicker: row.kind,
@@ -2626,7 +2626,7 @@ function ideaFactFields(row) {
 function retrospecMasterDetailRecord(row) {
   const outcome = row.outcome || "unspecified";
   return {
-    id: `retrospec-${domId(row.key || row.path || row.title)}`,
+    id: planningMasterDetailRecordId("retrospec", row),
     group: outcome,
     tone: statusColor(row.outcome),
     kicker: row.kind,
@@ -2678,7 +2678,7 @@ function retrospecFactFields(row) {
 
 function invalidPlanningMasterDetailRecord(row, options) {
   return {
-    id: `${options.idPrefix}-${domId(row.key || row.path)}`,
+    id: planningMasterDetailRecordId(options.idPrefix, row),
     group: options.group,
     tone: "red",
     needsAttention: true,
@@ -2696,6 +2696,20 @@ function invalidPlanningMasterDetailRecord(row, options) {
     collapseSources: true,
     sources: [{ label: t("sourceToml"), text: [row.error, row.source_text].filter(Boolean).join("\n\n"), kind: "source" }],
   };
+}
+
+function planningMasterDetailRecordId(prefix, row) {
+  return `${prefix}-${stableRecordToken(row.path || row.key || row.title)}`;
+}
+
+function stableRecordToken(value) {
+  const input = String(value || "record");
+  let hash = 0x811c9dc5;
+  for (const char of input) {
+    hash ^= char.codePointAt(0);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${hash.toString(16).padStart(8, "0")}-${input.length.toString(36)}`;
 }
 
 function overviewFocusModel(snapshot) {
