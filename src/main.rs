@@ -41,7 +41,7 @@ fn try_main() -> Result<()> {
 
     if cli.json && !supports_json(command) {
         bail!(
-            "JSON output is supported for: wt version, wt list, wt inspect, wt task list, wt workflow list, wt workflow archive, wt agent status, wt agent watch, wt agent wait-stats, wt msg list, wt msg read, wt msg check-inbox, wt doctor, wt profile"
+            "JSON output is supported for: wt version, wt list, wt inspect, wt task list, wt workflow list, wt workflow archive, wt agent status, wt agent watch, wt agent wait-stats, wt msg list, wt msg read, wt msg check-inbox, wt session whoami, wt doctor, wt profile"
         );
     }
 
