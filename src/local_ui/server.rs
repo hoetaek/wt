@@ -240,6 +240,14 @@ mod tests {
         assert!(APP_JS.contains("workflowMasterDetailRecord"));
         assert!(APP_JS.contains("workflowRelationshipSummary"));
         assert!(APP_JS.contains("workflowCanvasSection"));
+        assert!(APP_JS.contains("ideaMasterDetailRecord"));
+        assert!(APP_JS.contains("retrospecMasterDetailRecord"));
+        assert!(APP_JS.contains("invalidPlanningMasterDetailRecord"));
+        assert!(APP_JS.contains("planningMasterDetailRecordId(\"idea\", row)"));
+        assert!(APP_JS.contains("planningMasterDetailRecordId(\"retrospec\", row)"));
+        assert!(APP_JS.contains("stableRecordToken(row.path || row.key || row.title)"));
+        assert!(!APP_JS.contains("id: `idea-${domId(row.key"));
+        assert!(!APP_JS.contains("id: `retrospec-${domId(row.key"));
         assert!(APP_JS.contains("TaskDocument"));
         assert!(APP_JS.contains("agentNotObserved"));
         assert!(APP_JS.contains("taskRunScanRow"));

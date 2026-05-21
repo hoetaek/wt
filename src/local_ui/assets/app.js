@@ -62,6 +62,12 @@ const STRINGS = {
     renderedContent: "Rendered content",
     sourcePaths: "Source paths",
     sourceHome: "Source home",
+    statusLabel: "status",
+    kindLabel: "kind",
+    tagsLabel: "tags",
+    updatedAtLabel: "updated_at",
+    outcomeLabel: "outcome",
+    dateLabel: "date",
     profileName: "Profile name",
     agentLabel: "cli",
     issuesLabel: "Issues",
@@ -368,6 +374,12 @@ const STRINGS = {
     renderedContent: "렌더링된 내용",
     sourcePaths: "원본 경로",
     sourceHome: "원본 위치",
+    statusLabel: "status",
+    kindLabel: "kind",
+    tagsLabel: "tags",
+    updatedAtLabel: "updated_at",
+    outcomeLabel: "outcome",
+    dateLabel: "date",
     profileName: "프로필 이름",
     agentLabel: "cli",
     issuesLabel: "이슈",
@@ -2513,28 +2525,191 @@ function ideasCockpit(snapshot) {
   const ideas = sortedIdeas(snapshot.ideas.items);
   const statusGroups = uniqueCount(ideas, (row) => row.status || "unspecified");
   const tagged = ideas.filter((row) => row.tags.length).length;
-  const rows = ideas.map(ideaScanRow).concat(snapshot.ideas.invalid.map((row) => invalidScanRow(row, t("invalidIdeas"))));
+  const records = snapshot.ideas.invalid
+    .map((row) => invalidIdeaMasterDetailRecord(row))
+    .concat(ideas.map(ideaMasterDetailRecord));
   const stats = [
     attentionStat(snapshot.ideas.invalid.length),
     { label: t("ideas"), value: ideas.length },
     { label: t("statusGroups"), value: statusGroups },
     { label: t("taggedRecords"), value: tagged },
   ];
-  return cockpitPanel(t("cockpitIdeasTitle"), t("cockpitIdeasSubtitle"), stats, t("ideaIndex"), rows, t("noIdeas"), "ideas-cockpit");
+  return masterDetailPanel({
+    id: "ideas-cockpit",
+    tabKey: "ideas",
+    title: t("cockpitIdeasTitle"),
+    subtitle: t("cockpitIdeasSubtitle"),
+    stats,
+    listTitle: t("ideaIndex"),
+    records,
+    emptyText: t("noIdeas"),
+  });
 }
 
 function retrospecsCockpit(snapshot) {
   const retrospecs = sortedRetrospecs(snapshot.retrospecs.items);
   const outcomeGroups = uniqueCount(retrospecs, (row) => row.outcome || "unspecified");
   const tagged = retrospecs.filter((row) => row.tags.length).length;
-  const rows = retrospecs.map(retrospecScanRow).concat(snapshot.retrospecs.invalid.map((row) => invalidScanRow(row, t("invalidRetrospecs"))));
+  const records = snapshot.retrospecs.invalid
+    .map((row) => invalidRetrospecMasterDetailRecord(row))
+    .concat(retrospecs.map(retrospecMasterDetailRecord));
   const stats = [
     attentionStat(snapshot.retrospecs.invalid.length),
     { label: t("retrospecs"), value: retrospecs.length },
     { label: t("outcomeGroups"), value: outcomeGroups },
     { label: t("taggedRecords"), value: tagged },
   ];
-  return cockpitPanel(t("cockpitRetrospecsTitle"), t("cockpitRetrospecsSubtitle"), stats, t("retrospecIndex"), rows, t("noRetrospecs"), "retrospecs-cockpit");
+  return masterDetailPanel({
+    id: "retrospecs-cockpit",
+    tabKey: "retrospecs",
+    title: t("cockpitRetrospecsTitle"),
+    subtitle: t("cockpitRetrospecsSubtitle"),
+    stats,
+    listTitle: t("retrospecIndex"),
+    records,
+    emptyText: t("noRetrospecs"),
+  });
+}
+
+function ideaMasterDetailRecord(row) {
+  const status = row.status || "unspecified";
+  return {
+    id: planningMasterDetailRecordId("idea", row),
+    group: status,
+    tone: statusColor(row.status),
+    kicker: row.kind,
+    title: row.title,
+    summary: row.body_summary,
+    listPills: ideaPills(row),
+    pills: ideaPills(row),
+    paths: [row.path],
+    fields: ideaFactFields(row),
+    relationshipsSectionTitle: t("sourcePaths"),
+    relationships: [{ label: t("source"), value: row.path }],
+    summarySectionTitle: t("renderedContent"),
+    collapseSources: true,
+    sources: [
+      { label: t("body"), text: row.body, kind: "prose" },
+      { label: t("sourceToml"), text: row.source_text, kind: "source" },
+    ],
+  };
+}
+
+function invalidIdeaMasterDetailRecord(row) {
+  return invalidPlanningMasterDetailRecord(row, {
+    idPrefix: "invalid-idea",
+    group: t("needsAttention"),
+    kicker: t("invalidIdeas"),
+    entityLabel: t("ideas"),
+  });
+}
+
+function ideaPills(row) {
+  return [
+    pill(row.status || "unspecified", statusColor(row.status)),
+    pill(row.kind),
+    row.source ? pill(row.source, "blue") : "",
+    ...row.tags.slice(0, 4).map((tag) => pill(tag, "violet")),
+  ];
+}
+
+function ideaFactFields(row) {
+  return [
+    { label: t("kindLabel"), value: row.kind },
+    { label: t("statusLabel"), value: row.status || "unspecified" },
+    row.source ? { label: t("source"), value: row.source } : null,
+    row.tags.length ? { label: t("tagsLabel"), value: row.tags.join(", ") } : null,
+    row.updated_at ? { label: t("updatedAtLabel"), value: row.updated_at } : null,
+  ].filter(Boolean);
+}
+
+function retrospecMasterDetailRecord(row) {
+  const outcome = row.outcome || "unspecified";
+  return {
+    id: planningMasterDetailRecordId("retrospec", row),
+    group: outcome,
+    tone: statusColor(row.outcome),
+    kicker: row.kind,
+    title: row.title,
+    summary: row.body_summary,
+    listPills: retrospecPills(row),
+    pills: retrospecPills(row),
+    paths: [row.path],
+    fields: retrospecFactFields(row),
+    relationshipsSectionTitle: t("sourcePaths"),
+    relationships: [{ label: t("source"), value: row.path }],
+    summarySectionTitle: t("renderedContent"),
+    collapseSources: true,
+    sources: [
+      { label: t("body"), text: row.body, kind: "prose" },
+      { label: t("sourceToml"), text: row.source_text, kind: "source" },
+    ],
+  };
+}
+
+function invalidRetrospecMasterDetailRecord(row) {
+  return invalidPlanningMasterDetailRecord(row, {
+    idPrefix: "invalid-retrospec",
+    group: t("needsAttention"),
+    kicker: t("invalidRetrospecs"),
+    entityLabel: t("retrospecs"),
+  });
+}
+
+function retrospecPills(row) {
+  return [
+    row.outcome ? pill(row.outcome, statusColor(row.outcome)) : pill("unspecified"),
+    row.target ? pill(row.target, "blue") : "",
+    row.date ? pill(row.date, "amber") : "",
+    pill(row.kind),
+    ...row.tags.slice(0, 4).map((tag) => pill(tag, "violet")),
+  ];
+}
+
+function retrospecFactFields(row) {
+  return [
+    { label: t("kindLabel"), value: row.kind },
+    { label: t("outcomeLabel"), value: row.outcome || "unspecified" },
+    row.target ? { label: t("targetLabel"), value: row.target } : null,
+    row.date ? { label: t("dateLabel"), value: row.date } : null,
+    row.tags.length ? { label: t("tagsLabel"), value: row.tags.join(", ") } : null,
+  ].filter(Boolean);
+}
+
+function invalidPlanningMasterDetailRecord(row, options) {
+  return {
+    id: planningMasterDetailRecordId(options.idPrefix, row),
+    group: options.group,
+    tone: "red",
+    needsAttention: true,
+    kicker: options.kicker,
+    title: row.key,
+    summary: row.error,
+    pills: [pill(t("invalid"), "red")],
+    paths: [row.path],
+    fields: [
+      { label: options.entityLabel, value: row.key },
+      { label: t("errorLabel"), value: row.error, tone: "red" },
+    ],
+    relationshipsSectionTitle: t("sourcePaths"),
+    relationships: [{ label: t("source"), value: row.path, tone: "red" }],
+    collapseSources: true,
+    sources: [{ label: t("sourceToml"), text: [row.error, row.source_text].filter(Boolean).join("\n\n"), kind: "source" }],
+  };
+}
+
+function planningMasterDetailRecordId(prefix, row) {
+  return `${prefix}-${stableRecordToken(row.path || row.key || row.title)}`;
+}
+
+function stableRecordToken(value) {
+  const input = String(value || "record");
+  let hash = 0x811c9dc5;
+  for (const char of input) {
+    hash ^= char.codePointAt(0);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${hash.toString(16).padStart(8, "0")}-${input.length.toString(36)}`;
 }
 
 function overviewFocusModel(snapshot) {
