@@ -373,6 +373,17 @@ fn write_personal_config(root: &Path, content: &str) {
     std::fs::write(dir.join("config.toml"), content).unwrap();
 }
 
+fn wt_state_dir_names(root: &Path) -> Vec<String> {
+    let mut dirs = std::fs::read_dir(root.join(".git/wt"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    dirs.sort();
+    dirs
+}
+
 fn toml_files(dir: &Path) -> Vec<PathBuf> {
     let mut files = std::fs::read_dir(dir)
         .unwrap()
@@ -5328,6 +5339,69 @@ fn init_yes_uses_minimal_preset_without_agent() {
 }
 
 #[test]
+fn init_yes_bootstraps_only_core_state_dirs() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        wt_state_dir_names(temp.path()),
+        vec![
+            "agent.state".to_string(),
+            "messages".to_string(),
+            "task-runs".to_string(),
+            "tasks".to_string(),
+            "worktrees".to_string(),
+        ]
+    );
+    for lazy in [
+        "workflows",
+        "archive",
+        "ideas",
+        "retrospectives",
+        "profiles",
+    ] {
+        assert!(!temp.path().join(".git/wt").join(lazy).exists());
+    }
+    assert!(!temp.path().join(".claude/settings.local.json").exists());
+}
+
+#[test]
+fn init_rerun_preserves_user_created_workflow_file() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success();
+
+    let workflow_path = temp.path().join(".git/wt/workflows/2026-05-21-999.toml");
+    std::fs::create_dir_all(workflow_path.parent().unwrap()).unwrap();
+    std::fs::write(&workflow_path, "mode = \"batch\"\n").unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "init",
+            "--yes",
+            "--force",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        std::fs::read_to_string(&workflow_path).unwrap(),
+        "mode = \"batch\"\n"
+    );
+}
+
+#[test]
 fn init_preset_agent_yes_writes_agent() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -5412,6 +5486,8 @@ fn init_dry_run_previews_plan_without_writing_config() {
 
     assert!(!temp.path().join(".wt.toml").exists());
     assert!(!temp.path().join(".git/wt/config.toml").exists());
+    assert!(!temp.path().join(".git/wt").exists());
+    assert!(!temp.path().join(".claude/settings.local.json").exists());
 }
 
 #[test]

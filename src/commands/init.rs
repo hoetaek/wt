@@ -2,8 +2,12 @@ use crate::cli::{InitAgent, InitIssueProvider, InitPreset, InitSiteProvider};
 use crate::config::{AgentCli, AgentConfig, Config, ReadyMode, SubmitMode};
 use crate::context::Ctx;
 use crate::error::WtError;
-use anyhow::{Result, bail};
+use crate::storage::StorageRoot;
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
+
+const CLAUDE_LOCAL_SETTINGS_PATH: &str = ".claude/settings.local.json";
+const CLAUDE_ALLOW_RULES: [&str; 2] = ["Edit(/.git/wt/**)", "Write(/.git/wt/**)"];
 
 #[derive(Debug, Default)]
 pub struct InitOptions {
@@ -34,7 +38,7 @@ struct InitTarget {
     kind: InitTargetKind,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct InitProfile {
     agent: AgentConfig,
 }
@@ -90,7 +94,7 @@ impl InitSection {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct InitCommonConfig {
     worktree_path: Option<String>,
     setup_deps: Vec<InitCommand>,
@@ -98,6 +102,17 @@ struct InitCommonConfig {
     test_commands: Vec<InitCommand>,
     workspace_tabs: Vec<String>,
     post_deps_tabs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct InitDefaults {
+    from_existing_config: bool,
+    preset: Option<InitPreset>,
+    agent: Option<AgentConfig>,
+    issue_provider: Option<InitIssueProvider>,
+    gh_user: Option<String>,
+    site_provider: Option<InitSiteProvider>,
+    common: Option<InitCommonConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +175,99 @@ impl Default for InitCommonConfig {
     }
 }
 
+impl InitCommonConfig {
+    fn from_config(config: &Config) -> Self {
+        let mut common = InitCommonConfig {
+            worktree_path: config.worktree.path.clone(),
+            setup_deps: config
+                .setup
+                .deps
+                .iter()
+                .map(|command| InitCommand {
+                    label: None,
+                    working_dir: command.working_dir.clone(),
+                    run: command.run.clone(),
+                    if_exists: command.if_exists.clone(),
+                    kind: InitCommandKind::Other,
+                    default_enabled: true,
+                })
+                .collect(),
+            editor_command: config.editor.command.clone(),
+            test_commands: config
+                .test
+                .as_ref()
+                .map(|test| {
+                    test.commands
+                        .iter()
+                        .map(|command| InitCommand {
+                            label: command.label.clone(),
+                            working_dir: command.working_dir.clone(),
+                            run: command.run.clone(),
+                            if_exists: command.if_exists.clone(),
+                            kind: InitCommandKind::Other,
+                            default_enabled: true,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            ..InitCommonConfig::default()
+        };
+
+        if let Some(workspace) = config.workspace.as_ref() {
+            common.workspace_tabs = workspace.tabs.clone();
+            common.post_deps_tabs = workspace.post_deps_tabs.clone();
+        }
+
+        common
+    }
+}
+
+impl InitDefaults {
+    fn from_config(config: Config) -> Self {
+        let agent = config
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.agent.clone())
+            .or_else(|| config.agent.clone());
+        let issue_provider = config.issues.as_ref().map(|issues| match &issues.provider {
+            crate::config::IssueProviderType::Github => InitIssueProvider::Github,
+            crate::config::IssueProviderType::Linear => InitIssueProvider::Linear,
+        });
+        let site_provider = config.site.as_ref().map(|site| match &site.provider {
+            crate::config::SiteProvider::None => InitSiteProvider::None,
+            crate::config::SiteProvider::Herd => InitSiteProvider::Herd,
+            crate::config::SiteProvider::Valet => InitSiteProvider::Valet,
+            crate::config::SiteProvider::DockerProxy => InitSiteProvider::DockerProxy,
+            crate::config::SiteProvider::Traefik => InitSiteProvider::Traefik,
+        });
+        let gh_user = config
+            .issues
+            .as_ref()
+            .and_then(|issues| issues.gh_user.clone());
+        let common = InitCommonConfig::from_config(&config);
+        let preset = match (
+            site_provider.as_ref(),
+            issue_provider.as_ref(),
+            agent.as_ref(),
+        ) {
+            (Some(provider), _, _) if *provider != InitSiteProvider::None => InitPreset::App,
+            (_, Some(_), _) => InitPreset::Issue,
+            (_, _, Some(agent)) if agent.cli != AgentCli::None => InitPreset::Agent,
+            _ => InitPreset::Minimal,
+        };
+
+        Self {
+            from_existing_config: true,
+            preset: Some(preset),
+            agent,
+            issue_provider,
+            gh_user,
+            site_provider,
+            common: Some(common),
+        }
+    }
+}
+
 pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     validate_options(&options)?;
     let interactive_wizard = is_interactive_wizard(&options);
@@ -213,6 +321,135 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     ctx.ui
         .print_step(&format!("{action}: {}", plan.target_path.display()));
 
+    bootstrap_core_dirs(&ctx.storage_root)?;
+    maybe_scaffold_claude_allow_rules(ctx, &options)?;
+
+    Ok(())
+}
+
+fn load_init_defaults(path: &Path) -> InitDefaults {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return InitDefaults::default();
+    };
+    let Ok(config) = toml::from_str::<Config>(&content) else {
+        return InitDefaults::default();
+    };
+    InitDefaults::from_config(config)
+}
+
+fn bootstrap_core_dirs(storage_root: &StorageRoot) -> Result<()> {
+    for dir in core_state_dirs(storage_root) {
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("Failed to create wt core state dir: {}", dir.display()))?;
+    }
+    Ok(())
+}
+
+fn core_state_dirs(storage_root: &StorageRoot) -> Vec<PathBuf> {
+    vec![
+        storage_root.tasks_dir(),
+        storage_root.messages_dir(),
+        storage_root.task_runs_dir(),
+        storage_root.agent_state_dir(),
+        storage_root.worktrees_dir(),
+    ]
+}
+
+fn maybe_scaffold_claude_allow_rules(ctx: &Ctx, options: &InitOptions) -> Result<()> {
+    if options.yes {
+        return Ok(());
+    }
+
+    if !ctx.ui.confirm(
+        "Add Edit/Write allow rules for .git/wt/** to .claude/settings.local.json?",
+        false,
+    )? {
+        return Ok(());
+    }
+
+    let path = ctx.repo_root.join(CLAUDE_LOCAL_SETTINGS_PATH);
+    merge_claude_allow_rules(&path)?;
+    ctx.ui.print_step(&format!(
+        "Updated Claude local settings: {}",
+        path.display()
+    ));
+    Ok(())
+}
+
+fn merge_claude_allow_rules(path: &Path) -> Result<()> {
+    let mut settings = read_claude_local_settings(path)?;
+    merge_allow_rules_into_settings(&mut settings)?;
+    write_claude_local_settings(path, &settings)
+}
+
+fn read_claude_local_settings(path: &Path) -> Result<serde_json::Value> {
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read Claude local settings: {}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(&content).with_context(|| {
+        format!(
+            "Failed to parse Claude local settings JSON: {}",
+            path.display()
+        )
+    })
+}
+
+fn write_claude_local_settings(path: &Path, settings: &serde_json::Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create Claude local settings dir: {}",
+                parent.display()
+            )
+        })?;
+    }
+    let rendered = serde_json::to_string_pretty(settings)?;
+    std::fs::write(path, format!("{rendered}\n"))
+        .with_context(|| format!("Failed to write Claude local settings: {}", path.display()))
+}
+
+fn merge_allow_rules_into_settings(settings: &mut serde_json::Value) -> Result<()> {
+    let Some(root) = settings.as_object_mut() else {
+        bail!("Cannot update Claude local settings: root value must be a JSON object.");
+    };
+
+    if !root.contains_key("allowed") {
+        root.insert("allowed".into(), serde_json::Value::Array(Vec::new()));
+    }
+    let Some(allowed) = root
+        .get_mut("allowed")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        bail!("Cannot update Claude local settings: `allowed` must be a JSON array.");
+    };
+
+    let mut seen_wt_rules = std::collections::BTreeSet::new();
+    let existing = std::mem::take(allowed);
+    let mut deduped = Vec::with_capacity(existing.len() + CLAUDE_ALLOW_RULES.len());
+    for item in existing {
+        if let Some(rule) = item.as_str()
+            && CLAUDE_ALLOW_RULES.contains(&rule)
+        {
+            if seen_wt_rules.insert(rule.to_string()) {
+                deduped.push(serde_json::Value::String(rule.to_string()));
+            }
+            continue;
+        }
+        deduped.push(item);
+    }
+
+    for rule in CLAUDE_ALLOW_RULES {
+        if seen_wt_rules.insert(rule.to_string()) {
+            deduped.push(serde_json::Value::String(rule.to_string()));
+        }
+    }
+
+    *allowed = deduped;
     Ok(())
 }
 
@@ -273,7 +510,7 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     }
 }
 
-fn resolve_preset(ctx: &Ctx, options: &InitOptions) -> Result<InitPreset> {
+fn resolve_preset(ctx: &Ctx, options: &InitOptions, defaults: &InitDefaults) -> Result<InitPreset> {
     if options.minimal {
         return Ok(InitPreset::Minimal);
     }
@@ -287,18 +524,12 @@ fn resolve_preset(ctx: &Ctx, options: &InitOptions) -> Result<InitPreset> {
         return Ok(InitPreset::Minimal);
     }
 
-    let items = vec![
-        "Minimal - worktree basics".into(),
-        "Agent - worktree plus coding agent".into(),
-        "Issue - provider issue workflow".into(),
-        "App - setup, tests, site, and tabs".into(),
-    ];
-    Ok(match ctx.ui.select("Starter", &items)? {
-        1 => InitPreset::Agent,
-        2 => InitPreset::Issue,
-        3 => InitPreset::App,
-        _ => InitPreset::Minimal,
-    })
+    let choices = ordered_presets(defaults.preset);
+    let items = choices
+        .iter()
+        .map(|preset| preset_choice_label(*preset))
+        .collect::<Vec<_>>();
+    Ok(choices[ctx.ui.select("Starter", &items)?])
 }
 
 fn preset_from_explicit_overrides(options: &InitOptions) -> Option<InitPreset> {
@@ -317,26 +548,31 @@ fn preset_from_explicit_overrides(options: &InitOptions) -> Option<InitPreset> {
 fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<InitPlan> {
     validate_options(options)?;
     let target_exists = target.path.exists();
+    let defaults = if is_interactive_wizard(options) && target_exists {
+        load_init_defaults(&target.path)
+    } else {
+        InitDefaults::default()
+    };
     let detected = DetectedRepo::scan(&ctx.repo_root);
     if is_interactive_wizard(options) {
         print_wizard_step(ctx, 2, "Starter");
     }
-    let preset = resolve_preset(ctx, options)?;
+    let preset = resolve_preset(ctx, options, &defaults)?;
     if is_interactive_wizard(options) {
         print_wizard_step(ctx, 3, "Integrations");
     }
-    let profile = resolve_profile(ctx, options, preset)?;
-    let issue_provider = resolve_issue_provider(ctx, options, preset)?;
+    let profile = resolve_profile(ctx, options, preset, &defaults)?;
+    let issue_provider = resolve_issue_provider(ctx, options, preset, &defaults)?;
     let gh_user = if issue_provider == Some(InitIssueProvider::Github) {
-        resolve_gh_user(ctx, options)?
+        resolve_gh_user(ctx, options, &defaults)?
     } else {
         None
     };
-    let site_provider = resolve_site_provider(ctx, options, preset)?;
+    let site_provider = resolve_site_provider(ctx, options, preset, &defaults)?;
     if is_interactive_wizard(options) {
         print_wizard_step(ctx, 4, "Detected commands");
     }
-    let common = resolve_common_config(ctx, options, preset, &detected)?;
+    let common = resolve_common_config(ctx, options, preset, &detected, &defaults)?;
 
     let mut s = String::new();
     let mut sections = Vec::new();
@@ -794,16 +1030,25 @@ fn resolve_common_config(
     options: &InitOptions,
     preset: InitPreset,
     detected: &DetectedRepo,
+    defaults: &InitDefaults,
 ) -> Result<InitCommonConfig> {
-    let mut config = InitCommonConfig::default();
+    let existing_common = defaults.common.clone();
+    let mut config = existing_common.clone().unwrap_or_default();
+    let has_existing_defaults = defaults.from_existing_config && existing_common.is_some();
     if preset == InitPreset::App {
-        config = detected_app_common_config(detected);
+        if existing_common.is_none() {
+            config = detected_app_common_config(detected);
+        }
         if options.yes {
             return Ok(config);
         }
 
         let items = vec![
-            "Use detected app defaults".into(),
+            if has_existing_defaults {
+                "Use current config defaults".into()
+            } else {
+                "Use detected app defaults".into()
+            },
             "Customize commands and tabs".into(),
         ];
         if ctx.ui.select("App defaults", &items)? == 0 {
@@ -818,7 +1063,11 @@ fn resolve_common_config(
     }
 
     let items = vec![
-        "Use starter defaults".into(),
+        if has_existing_defaults {
+            "Use current config defaults".into()
+        } else {
+            "Use starter defaults".into()
+        },
         "Customize commands and tabs".into(),
     ];
     if ctx.ui.select("Workspace defaults", &items)? == 0 {
@@ -842,24 +1091,34 @@ fn resolve_custom_common_config(
     mut config: InitCommonConfig,
     detected: &DetectedRepo,
 ) -> Result<InitCommonConfig> {
-    config.worktree_path = resolve_worktree_path(ctx)?;
-    config.workspace_tabs = resolve_workspace_tabs(ctx)?;
+    config.worktree_path = resolve_worktree_path(ctx, config.worktree_path.as_deref())?;
+    config.workspace_tabs = resolve_workspace_tabs(ctx, &config.workspace_tabs)?;
 
-    config.setup_deps = resolve_setup_deps(ctx, detected)?;
+    config.setup_deps = resolve_setup_deps(ctx, detected, &config.setup_deps)?;
 
-    if !detected.post_deps_tabs.is_empty()
-        && ctx
-            .ui
-            .confirm("Start detected dev server after setup?", false)?
-    {
-        config.post_deps_tabs = detected.post_deps_tabs.clone();
+    if !detected.post_deps_tabs.is_empty() {
+        if ctx.ui.confirm(
+            "Start detected dev server after setup?",
+            !config.post_deps_tabs.is_empty(),
+        )? {
+            config.post_deps_tabs = detected.post_deps_tabs.clone();
+        } else {
+            config.post_deps_tabs.clear();
+        }
     }
 
-    if !detected.test_commands.is_empty() && ctx.ui.confirm("Save detected test commands?", true)? {
-        config.test_commands = detected.test_commands.clone();
+    if !detected.test_commands.is_empty() {
+        if ctx.ui.confirm(
+            "Save detected test commands?",
+            !config.test_commands.is_empty(),
+        )? {
+            config.test_commands = detected.test_commands.clone();
+        } else {
+            config.test_commands.clear();
+        }
     }
 
-    config.editor_command = resolve_editor_command(ctx)?;
+    config.editor_command = resolve_editor_command(ctx, config.editor_command.as_deref())?;
     Ok(config)
 }
 
@@ -887,30 +1146,53 @@ fn push_signal(signals: &mut Vec<String>, signal: String) {
     }
 }
 
-fn resolve_worktree_path(ctx: &Ctx) -> Result<Option<String>> {
-    let items = vec![
-        "Default sibling folder".into(),
-        "$HOME/worktrees/{{default_name}}".into(),
-        "Custom folder template".into(),
+fn resolve_worktree_path(ctx: &Ctx, default: Option<&str>) -> Result<Option<String>> {
+    let mut options = vec![
+        ("Default sibling folder".to_string(), None),
+        (
+            "$HOME/worktrees/{{default_name}}".to_string(),
+            Some("$HOME/worktrees/{{default_name}}".to_string()),
+        ),
     ];
-    match ctx.ui.select("Worktree folder", &items)? {
-        0 => Ok(None),
-        1 => Ok(Some("$HOME/worktrees/{{default_name}}".into())),
-        _ => {
-            let input = ctx.ui.input(
-                "Worktree folder template",
-                Some("$HOME/worktrees/{{default_name}}"),
-            )?;
-            let input = input.trim();
-            Ok((!input.is_empty()).then(|| input.to_string()))
-        }
+    if let Some(default) = default
+        && !options
+            .iter()
+            .any(|(_, value)| value.as_deref() == Some(default))
+    {
+        options.insert(
+            0,
+            (format!("Current: {default}"), Some(default.to_string())),
+        );
     }
+    options.push(("Custom folder template".to_string(), None));
+
+    let items = options
+        .iter()
+        .map(|(label, _)| label.clone())
+        .collect::<Vec<_>>();
+    let selection = ctx.ui.select("Worktree folder", &items)?;
+    if selection < options.len() - 1 {
+        return Ok(options[selection].1.clone());
+    }
+
+    let input = ctx.ui.input(
+        "Worktree folder template",
+        default.or(Some("$HOME/worktrees/{{default_name}}")),
+    )?;
+    let input = input.trim();
+    Ok((!input.is_empty()).then(|| input.to_string()))
 }
 
-fn resolve_workspace_tabs(ctx: &Ctx) -> Result<Vec<String>> {
-    let input = ctx
-        .ui
-        .input("Default workspace tabs", Some("lazygit, nvim"))?;
+fn resolve_workspace_tabs(ctx: &Ctx, default_tabs: &[String]) -> Result<Vec<String>> {
+    let default = default_tabs.join(", ");
+    let input = ctx.ui.input(
+        "Default workspace tabs",
+        Some(if default_tabs.is_empty() {
+            ""
+        } else {
+            default.as_str()
+        }),
+    )?;
     let tabs = split_list(&input);
     if tabs.is_empty() {
         Ok(Vec::new())
@@ -919,25 +1201,44 @@ fn resolve_workspace_tabs(ctx: &Ctx) -> Result<Vec<String>> {
     }
 }
 
-fn resolve_editor_command(ctx: &Ctx) -> Result<Option<String>> {
-    let items = vec![
-        "Use system editor".into(),
-        "nvim {{path}}".into(),
-        "code {{path}}".into(),
-        "Custom editor command".into(),
+fn resolve_editor_command(ctx: &Ctx, default: Option<&str>) -> Result<Option<String>> {
+    let mut options = vec![
+        ("Use system editor".to_string(), None),
+        (
+            "nvim {{path}}".to_string(),
+            Some("nvim {{path}}".to_string()),
+        ),
+        (
+            "code {{path}}".to_string(),
+            Some("code {{path}}".to_string()),
+        ),
     ];
-    match ctx.ui.select("Config editor command", &items)? {
-        0 => Ok(None),
-        1 => Ok(Some("nvim {{path}}".into())),
-        2 => Ok(Some("code {{path}}".into())),
-        _ => {
-            let input = ctx
-                .ui
-                .input("Custom editor command", Some("nvim {{path}}"))?;
-            let input = input.trim();
-            Ok((!input.is_empty()).then(|| input.to_string()))
-        }
+    if let Some(default) = default
+        && !options
+            .iter()
+            .any(|(_, value)| value.as_deref() == Some(default))
+    {
+        options.insert(
+            0,
+            (format!("Current: {default}"), Some(default.to_string())),
+        );
     }
+    options.push(("Custom editor command".to_string(), None));
+
+    let items = options
+        .iter()
+        .map(|(label, _)| label.clone())
+        .collect::<Vec<_>>();
+    let selection = ctx.ui.select("Config editor command", &items)?;
+    if selection < options.len() - 1 {
+        return Ok(options[selection].1.clone());
+    }
+
+    let input = ctx
+        .ui
+        .input("Custom editor command", default.or(Some("nvim {{path}}")))?;
+    let input = input.trim();
+    Ok((!input.is_empty()).then(|| input.to_string()))
 }
 
 fn split_list(input: &str) -> Vec<String> {
@@ -949,9 +1250,19 @@ fn split_list(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn resolve_setup_deps(ctx: &Ctx, detected: &DetectedRepo) -> Result<Vec<InitCommand>> {
+fn resolve_setup_deps(
+    ctx: &Ctx,
+    detected: &DetectedRepo,
+    current: &[InitCommand],
+) -> Result<Vec<InitCommand>> {
     let mut selected = Vec::new();
     for mut command in detected.setup_deps.clone() {
+        if let Some(existing) = current.iter().find(|existing| {
+            existing.working_dir == command.working_dir && existing.if_exists == command.if_exists
+        }) {
+            command.run = existing.run.clone();
+            command.default_enabled = true;
+        }
         let display = command_display(&command);
         if !ctx.ui.confirm(
             &format!("Use detected setup command ({display})?"),
@@ -1291,13 +1602,14 @@ fn resolve_profile(
     ctx: &Ctx,
     options: &InitOptions,
     preset: InitPreset,
+    defaults: &InitDefaults,
 ) -> Result<Option<InitProfile>> {
     if !preset_includes_agent(preset) && !explicit_agent_requested(options) {
         return Ok(None);
     }
 
-    let agent = resolve_agent(ctx, options)?;
-    let command = resolve_agent_command(options)?;
+    let agent = resolve_agent(ctx, options, defaults)?;
+    let command = resolve_agent_command(options, &agent, defaults)?;
     if agent == InitAgent::None {
         if command.is_some() {
             bail!("--agent-command cannot be used when --agent none");
@@ -1307,11 +1619,11 @@ fn resolve_profile(
         }
         return Ok(None);
     }
-    let args = resolve_agent_args(ctx, &agent, options)?;
+    let args = resolve_agent_args(ctx, &agent, options, defaults)?;
     Ok(build_profile(&agent, args, command))
 }
 
-fn resolve_agent(ctx: &Ctx, options: &InitOptions) -> Result<InitAgent> {
+fn resolve_agent(ctx: &Ctx, options: &InitOptions, defaults: &InitDefaults) -> Result<InitAgent> {
     if let Some(agent) = &options.agent {
         return Ok(agent.clone());
     }
@@ -1319,29 +1631,38 @@ fn resolve_agent(ctx: &Ctx, options: &InitOptions) -> Result<InitAgent> {
         return Ok(InitAgent::Codex);
     }
 
-    let items = vec![
-        "Codex".into(),
-        "Claude".into(),
-        "Gemini".into(),
-        "No coding agent".into(),
-    ];
-    let agent = match ctx.ui.select("Coding agent", &items)? {
-        0 => InitAgent::Codex,
-        1 => InitAgent::Claude,
-        2 => InitAgent::Gemini,
-        _ => InitAgent::None,
-    };
-    Ok(agent)
+    let default_agent = defaults
+        .agent
+        .as_ref()
+        .map(|agent| init_agent_from_cli(&agent.cli));
+    let choices = ordered_agents(default_agent);
+    let items = choices.iter().map(agent_choice_label).collect::<Vec<_>>();
+    Ok(choices[ctx.ui.select("Coding agent", &items)?].clone())
 }
 
-fn resolve_agent_command(options: &InitOptions) -> Result<Option<String>> {
+fn resolve_agent_command(
+    options: &InitOptions,
+    agent: &InitAgent,
+    defaults: &InitDefaults,
+) -> Result<Option<String>> {
     if let Some(command) = &options.agent_command {
         return Ok(Some(command.clone()));
+    }
+    if *agent == InitAgent::None {
+        return Ok(None);
+    }
+    if let Some(default_agent) = matching_default_agent(defaults, agent) {
+        return Ok(default_agent.command.clone());
     }
     Ok(None)
 }
 
-fn resolve_agent_args(ctx: &Ctx, agent: &InitAgent, options: &InitOptions) -> Result<Vec<String>> {
+fn resolve_agent_args(
+    ctx: &Ctx,
+    agent: &InitAgent,
+    options: &InitOptions,
+    defaults: &InitDefaults,
+) -> Result<Vec<String>> {
     if !options.agent_args.is_empty() {
         return Ok(options.agent_args.clone());
     }
@@ -1352,23 +1673,40 @@ fn resolve_agent_args(ctx: &Ctx, agent: &InitAgent, options: &InitOptions) -> Re
         return Ok(Vec::new());
     }
 
-    let items = vec!["No extra args".into(), "Enter custom args".into()];
-    match ctx.ui.select("Agent launch args", &items)? {
-        0 => Ok(Vec::new()),
-        _ => {
-            let input = ctx.ui.input("Custom agent args", None)?;
-            Ok(input
-                .split_whitespace()
-                .map(str::to_string)
-                .collect::<Vec<_>>())
-        }
+    let default_args = matching_default_agent(defaults, agent)
+        .map(|agent| agent.args.clone())
+        .unwrap_or_default();
+    let default_args_input = (!default_args.is_empty()).then(|| default_args.join(" "));
+    let mut items = Vec::new();
+    if let Some(default) = default_args_input.as_deref() {
+        items.push(format!("Keep existing args: {default}"));
     }
+    items.push("No extra args".into());
+    items.push("Enter custom args".into());
+
+    let selection = ctx.ui.select("Agent launch args", &items)?;
+    if !default_args.is_empty() && selection == 0 {
+        return Ok(default_args);
+    }
+    let custom_index = items.len() - 1;
+    if selection != custom_index {
+        return Ok(Vec::new());
+    }
+
+    let input = ctx
+        .ui
+        .input("Custom agent args", default_args_input.as_deref())?;
+    Ok(input
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>())
 }
 
 fn resolve_issue_provider(
     ctx: &Ctx,
     options: &InitOptions,
     preset: InitPreset,
+    defaults: &InitDefaults,
 ) -> Result<Option<InitIssueProvider>> {
     if let Some(provider) = explicit_issue_provider(options.issue_provider.as_ref()) {
         return Ok(Some(provider));
@@ -1383,22 +1721,24 @@ fn resolve_issue_provider(
         return Ok(Some(InitIssueProvider::Github));
     }
 
-    let items = vec![
-        "GitHub issues".into(),
-        "Linear issues".into(),
-        "Skip issue workflow".into(),
-    ];
-    Ok(match ctx.ui.select("Issue workflow", &items)? {
-        0 => Some(InitIssueProvider::Github),
-        1 => Some(InitIssueProvider::Linear),
-        _ => None,
-    })
+    let choices = ordered_issue_providers(defaults.issue_provider.as_ref());
+    let items = choices
+        .iter()
+        .map(issue_provider_choice_label)
+        .collect::<Vec<_>>();
+    Ok(
+        match choices[ctx.ui.select("Issue workflow", &items)?].clone() {
+            InitIssueProvider::None => None,
+            provider => Some(provider),
+        },
+    )
 }
 
 fn resolve_site_provider(
     ctx: &Ctx,
     options: &InitOptions,
     preset: InitPreset,
+    defaults: &InitDefaults,
 ) -> Result<Option<InitSiteProvider>> {
     if let Some(provider) = explicit_site_provider(options.site_provider.as_ref()) {
         return Ok(Some(provider));
@@ -1413,23 +1753,24 @@ fn resolve_site_provider(
         return Ok(None);
     }
 
-    let items = vec![
-        "No local site".into(),
-        "Herd".into(),
-        "Valet".into(),
-        "Docker proxy".into(),
-        "Traefik".into(),
-    ];
-    Ok(match ctx.ui.select("Local site", &items)? {
-        1 => Some(InitSiteProvider::Herd),
-        2 => Some(InitSiteProvider::Valet),
-        3 => Some(InitSiteProvider::DockerProxy),
-        4 => Some(InitSiteProvider::Traefik),
-        _ => None,
-    })
+    let choices = ordered_site_providers(defaults.site_provider.as_ref());
+    let items = choices
+        .iter()
+        .map(site_provider_choice_label)
+        .collect::<Vec<_>>();
+    Ok(
+        match choices[ctx.ui.select("Local site", &items)?].clone() {
+            InitSiteProvider::None => None,
+            provider => Some(provider),
+        },
+    )
 }
 
-fn resolve_gh_user(ctx: &Ctx, options: &InitOptions) -> Result<Option<String>> {
+fn resolve_gh_user(
+    ctx: &Ctx,
+    options: &InitOptions,
+    defaults: &InitDefaults,
+) -> Result<Option<String>> {
     if let Some(user) = options.gh_user.as_deref() {
         let user = user.trim();
         return Ok((!user.is_empty()).then(|| user.to_string()));
@@ -1438,9 +1779,134 @@ fn resolve_gh_user(ctx: &Ctx, options: &InitOptions) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    let user = ctx.ui.input("GitHub user filter (optional)", Some(""))?;
+    let user = ctx.ui.input(
+        "GitHub user filter (optional)",
+        Some(defaults.gh_user.as_deref().unwrap_or("")),
+    )?;
     let user = user.trim();
     Ok((!user.is_empty()).then(|| user.to_string()))
+}
+
+fn ordered_presets(default: Option<InitPreset>) -> Vec<InitPreset> {
+    ordered_values(
+        &[
+            InitPreset::Minimal,
+            InitPreset::Agent,
+            InitPreset::Issue,
+            InitPreset::App,
+        ],
+        default.as_ref(),
+    )
+}
+
+fn ordered_agents(default: Option<InitAgent>) -> Vec<InitAgent> {
+    ordered_values(
+        &[
+            InitAgent::Codex,
+            InitAgent::Claude,
+            InitAgent::Gemini,
+            InitAgent::None,
+        ],
+        default.as_ref(),
+    )
+}
+
+fn ordered_issue_providers(default: Option<&InitIssueProvider>) -> Vec<InitIssueProvider> {
+    ordered_values(
+        &[
+            InitIssueProvider::Github,
+            InitIssueProvider::Linear,
+            InitIssueProvider::None,
+        ],
+        default,
+    )
+}
+
+fn ordered_site_providers(default: Option<&InitSiteProvider>) -> Vec<InitSiteProvider> {
+    ordered_values(
+        &[
+            InitSiteProvider::None,
+            InitSiteProvider::Herd,
+            InitSiteProvider::Valet,
+            InitSiteProvider::DockerProxy,
+            InitSiteProvider::Traefik,
+        ],
+        default,
+    )
+}
+
+fn ordered_values<T: Clone + PartialEq>(values: &[T], default: Option<&T>) -> Vec<T> {
+    let mut ordered = Vec::with_capacity(values.len());
+    if let Some(default) = default
+        && values.contains(default)
+    {
+        ordered.push(default.clone());
+    }
+    for value in values {
+        if ordered.iter().all(|existing| existing != value) {
+            ordered.push(value.clone());
+        }
+    }
+    ordered
+}
+
+fn preset_choice_label(preset: InitPreset) -> String {
+    match preset {
+        InitPreset::Minimal => "Minimal - worktree basics",
+        InitPreset::Agent => "Agent - worktree plus coding agent",
+        InitPreset::Issue => "Issue - provider issue workflow",
+        InitPreset::App => "App - setup, tests, site, and tabs",
+    }
+    .into()
+}
+
+fn agent_choice_label(agent: &InitAgent) -> String {
+    match agent {
+        InitAgent::Codex => "Codex",
+        InitAgent::Claude => "Claude",
+        InitAgent::Gemini => "Gemini",
+        InitAgent::None => "No coding agent",
+    }
+    .into()
+}
+
+fn issue_provider_choice_label(provider: &InitIssueProvider) -> String {
+    match provider {
+        InitIssueProvider::Github => "GitHub issues",
+        InitIssueProvider::Linear => "Linear issues",
+        InitIssueProvider::None => "Skip issue workflow",
+    }
+    .into()
+}
+
+fn site_provider_choice_label(provider: &InitSiteProvider) -> String {
+    match provider {
+        InitSiteProvider::None => "No local site",
+        InitSiteProvider::Herd => "Herd",
+        InitSiteProvider::Valet => "Valet",
+        InitSiteProvider::DockerProxy => "Docker proxy",
+        InitSiteProvider::Traefik => "Traefik",
+    }
+    .into()
+}
+
+fn init_agent_from_cli(agent: &AgentCli) -> InitAgent {
+    match agent {
+        AgentCli::Codex => InitAgent::Codex,
+        AgentCli::Claude => InitAgent::Claude,
+        AgentCli::Gemini => InitAgent::Gemini,
+        AgentCli::None => InitAgent::None,
+    }
+}
+
+fn matching_default_agent<'a>(
+    defaults: &'a InitDefaults,
+    selected: &InitAgent,
+) -> Option<&'a AgentConfig> {
+    defaults
+        .agent
+        .as_ref()
+        .filter(|agent| agent.cli != AgentCli::None && init_agent_from_cli(&agent.cli) == *selected)
 }
 
 fn build_profile(
@@ -2119,6 +2585,7 @@ mod tests {
         let mut ui = MockUi::new();
         ui.add_select(0); // use detected app defaults
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
         let ui = Arc::new(ui);
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2147,6 +2614,7 @@ mod tests {
             vec![
                 "select: App defaults".to_string(),
                 "confirm: Create config?".to_string(),
+                "confirm: Add Edit/Write allow rules for .git/wt/** to .claude/settings.local.json?".to_string(),
             ]
         );
 
@@ -2269,6 +2737,7 @@ mod tests {
         let mut ui = MockUi::new();
         ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
@@ -2359,6 +2828,7 @@ mod tests {
         ui.add_select(0); // no agent args
         ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
@@ -2402,6 +2872,7 @@ mod tests {
         ui.add_select(0); // no agent args
         ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
@@ -2452,6 +2923,7 @@ mod tests {
         ui.add_select(0); // no agent args
         ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2498,6 +2970,7 @@ mod tests {
         ui.add_select(0); // no agent args
         ui.add_select(0); // use starter defaults
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
         let ui = Arc::new(ui);
 
         let ctx = Ctx::new(
@@ -2560,6 +3033,7 @@ mod tests {
                 "select: Agent launch args".to_string(),
                 "select: Workspace defaults".to_string(),
                 "confirm: Create config?".to_string(),
+                "confirm: Add Edit/Write allow rules for .git/wt/** to .claude/settings.local.json?".to_string(),
             ]
         );
     }
@@ -2575,6 +3049,7 @@ mod tests {
         ui.add_input("--model gpt-5.5");
         ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2629,6 +3104,7 @@ mod tests {
         ui.add_confirm(true); // add detected test commands
         ui.add_select(1); // nvim {{path}}
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2719,6 +3195,7 @@ mod tests {
         ui.add_confirm(false); // do not start detected dev command
         ui.add_select(0); // default editor
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2783,6 +3260,7 @@ mod tests {
         ui.add_confirm(true); // api uv sync
         ui.add_select(0); // default editor
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2868,7 +3346,7 @@ mod tests {
         let agent_args_items = Arc::new(Mutex::new(None));
         let ui = CapturingUi {
             selects: Mutex::new(VecDeque::from([0, 1, 0, 0, 0])),
-            confirms: Mutex::new(VecDeque::from([true])),
+            confirms: Mutex::new(VecDeque::from([true, false])),
             agent_args_items: Arc::clone(&agent_args_items),
         };
         let ctx = Ctx::new(
@@ -2913,6 +3391,7 @@ mod tests {
         ui.add_select(0); // no agent args
         ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -3135,6 +3614,176 @@ mod tests {
     }
 
     #[test]
+    fn init_interactive_rerun_prefills_existing_config_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join(".git/wt");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(
+            local.join("config.toml"),
+            r#"[profile.agent]
+cli = "claude"
+args = ["--model", "sonnet"]
+command = "claude --resume"
+timeout = 45
+send_after = 4
+
+[workspace]
+tabs = ["existing", "vim"]
+"#,
+        )
+        .unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_select(0); // prefilled agent preset
+        ui.add_select(0); // prefilled claude agent
+        ui.add_select(0); // keep existing args
+        ui.add_select(0); // use current config defaults
+        ui.add_confirm(true); // overwrite config
+        ui.add_confirm(false); // do not add Claude allow rules
+        let ui = Arc::new(ui);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                force: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let select_items = ui.select_items.lock().unwrap().clone();
+        assert_eq!(select_items[0][0], "Agent - worktree plus coding agent");
+        assert_eq!(select_items[1][0], "Claude");
+        assert_eq!(select_items[2][0], "Keep existing args: --model sonnet");
+        assert_eq!(select_items[3][0], "Use current config defaults");
+
+        let content = std::fs::read_to_string(local.join("config.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        let agent = config.profile.unwrap().agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Claude);
+        assert_eq!(agent.args, vec!["--model", "sonnet"]);
+        assert_eq!(agent.command.as_deref(), Some("claude --resume"));
+        assert_eq!(
+            config.workspace.unwrap().tabs,
+            vec!["existing".to_string(), "vim".to_string()]
+        );
+    }
+
+    #[test]
+    fn init_accepting_claude_allow_rules_creates_local_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // use starter defaults
+        ui.add_confirm(true); // create config
+        ui.add_confirm(true); // add Claude allow rules
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                preset: Some(InitPreset::Minimal),
+                agent: Some(InitAgent::None),
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        let settings = read_claude_local_settings(&settings_path).unwrap();
+        assert_eq!(
+            allow_rules(&settings),
+            vec!["Edit(/.git/wt/**)", "Write(/.git/wt/**)"]
+        );
+    }
+
+    #[test]
+    fn init_declining_claude_allow_rules_leaves_settings_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // use starter defaults
+        ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                preset: Some(InitPreset::Minimal),
+                agent: Some(InitAgent::None),
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH).exists());
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_preserves_user_entries_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{
+  "allowed": [
+    "Bash(echo:*)",
+    "Edit(/.git/wt/**)"
+  ],
+  "permissions": {
+    "allow": [
+      "Bash(git:*)"
+    ]
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        merge_claude_allow_rules(&settings_path).unwrap();
+        let first = std::fs::read_to_string(&settings_path).unwrap();
+        merge_claude_allow_rules(&settings_path).unwrap();
+        let second = std::fs::read_to_string(&settings_path).unwrap();
+
+        assert_eq!(first, second);
+        let settings: serde_json::Value = serde_json::from_str(&second).unwrap();
+        assert_eq!(
+            allow_rules(&settings),
+            vec!["Bash(echo:*)", "Edit(/.git/wt/**)", "Write(/.git/wt/**)"]
+        );
+        assert_eq!(
+            settings["permissions"]["allow"][0].as_str(),
+            Some("Bash(git:*)")
+        );
+    }
+
+    #[test]
     fn init_refuses_existing_file_without_force_and_overwrites_with_force() {
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join(".git/wt");
@@ -3193,5 +3842,14 @@ mod tests {
                 .join(".git/wt/profiles/claude/profile.toml")
                 .exists()
         );
+    }
+
+    fn allow_rules(settings: &serde_json::Value) -> Vec<&str> {
+        settings["allowed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect()
     }
 }
