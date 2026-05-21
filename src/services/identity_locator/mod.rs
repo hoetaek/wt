@@ -70,11 +70,11 @@ pub struct AnchorKey {
 
 impl AnchorKey {
     pub fn encode(&self) -> String {
-        self.display().replace(':', "__")
+        percent_encode(&self.display())
     }
 
     pub fn decode(encoded: &str) -> Result<Self> {
-        Self::parse_display(&encoded.replace("__", ":"))
+        Self::parse_display(&percent_decode(encoded)?)
     }
 
     pub fn display(&self) -> String {
@@ -337,7 +337,9 @@ fn marker_is_live_with(
     if !process.pid_is_live(pid)? {
         return Ok(MarkerLiveness::NotLive);
     }
-    let actual_start_time = process.process_start_time(pid)?;
+    let Ok(actual_start_time) = process.process_start_time(pid) else {
+        return Ok(MarkerLiveness::NotLive);
+    };
     if actual_start_time == expected_start_time {
         Ok(MarkerLiveness::Live)
     } else {
@@ -354,6 +356,9 @@ fn resolve_identity_with(
     let Some(marker) = read_marker(ctx, &key)? else {
         return Ok(None);
     };
+    if !marker_matches_key(&marker, &key) {
+        return Ok(None);
+    }
     match marker_is_live_with(&marker, env, process)? {
         MarkerLiveness::Live => Ok(Some(marker)),
         MarkerLiveness::NotLive => Ok(None),
@@ -371,6 +376,10 @@ fn marker_anchor_key(marker: &Marker) -> AnchorKey {
     }
 }
 
+fn marker_matches_key(marker: &Marker, key: &AnchorKey) -> bool {
+    marker.anchor_kind == key.kind && marker.anchor_value == key.value
+}
+
 fn write_marker_atomically(path: &Path, marker: &Marker) -> Result<()> {
     let dir = path
         .parent()
@@ -382,18 +391,8 @@ fn write_marker_atomically(path: &Path, marker: &Marker) -> Result<()> {
         )
     })?;
     let content = toml::to_string_pretty(marker).context("Failed to serialize marker TOML")?;
-    let temp_path = unique_temp_path(dir)?;
+    let (temp_path, mut file) = create_temp_file_with_retry(dir)?;
     let result = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .with_context(|| {
-                format!(
-                    "Failed to create temporary session marker: {}",
-                    temp_path.display()
-                )
-            })?;
         file.write_all(content.as_bytes()).with_context(|| {
             format!(
                 "Failed to write temporary session marker: {}",
@@ -417,18 +416,61 @@ fn write_marker_atomically(path: &Path, marker: &Marker) -> Result<()> {
     result
 }
 
-fn unique_temp_path(dir: &Path) -> Result<PathBuf> {
+fn create_temp_file_with_retry(dir: &Path) -> Result<(PathBuf, fs::File)> {
     let pid = std::process::id();
     for attempt in 0..100 {
         let path = dir.join(format!(".wt-session-marker-{pid}-{attempt}.tmp"));
-        if !path.exists() {
-            return Ok(path);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Failed to create temporary session marker: {}",
+                        path.display()
+                    )
+                });
+            }
         }
     }
     bail!(
         "Failed to allocate temporary session marker path in {}",
         dir.display()
     )
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn percent_decode(value: &str) -> Result<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            decoded.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        let Some(hex) = bytes.get(index + 1..index + 3) else {
+            bail!("Invalid percent-encoded anchor key `{value}`");
+        };
+        let hex = std::str::from_utf8(hex).context("Invalid percent-encoded anchor key")?;
+        let byte = u8::from_str_radix(hex, 16)
+            .with_context(|| format!("Invalid percent-encoded anchor key `{value}`"))?;
+        decoded.push(byte);
+        index += 3;
+    }
+    String::from_utf8(decoded).context("Invalid UTF-8 in percent-encoded anchor key")
 }
 
 fn current_timestamp() -> String {
@@ -564,8 +606,15 @@ mod tests {
                 kind: AnchorKind::ShellSid,
                 value: "123:456.000000000".into(),
             },
+            AnchorKey {
+                kind: AnchorKind::Surface,
+                value: "value__with/slashes\\percent%and..dots".into(),
+            },
         ] {
             assert_eq!(AnchorKey::decode(&key.encode()).unwrap(), key);
+            assert!(!key.encode().contains('/'));
+            assert!(!key.encode().contains('\\'));
+            assert!(!key.encode().contains('.'));
         }
     }
 
@@ -628,6 +677,25 @@ mod tests {
     }
 
     #[test]
+    fn shell_sid_liveness_treats_start_time_read_failure_as_not_live() {
+        let process = TestProcess {
+            live_pids: HashSet::from([44]),
+            ..TestProcess::new()
+        };
+        let marker = marker_fixture(
+            AnchorKind::ShellSid,
+            "44:400.000000000",
+            Some(44),
+            Some("400.000000000"),
+        );
+
+        assert_eq!(
+            marker_is_live_with(&marker, &TestEnv::default(), &process).unwrap(),
+            MarkerLiveness::NotLive
+        );
+    }
+
+    #[test]
     fn env_keyed_liveness_uses_injected_env() {
         let marker = marker_fixture(AnchorKind::Surface, "surface-1", None, None);
         let live_env = TestEnv::default().with(CMUX_SURFACE_ID, "surface-1");
@@ -662,6 +730,27 @@ mod tests {
             .unwrap();
         assert_eq!(resolved.id, "agents/coord-a");
         assert_eq!(resolved.anchor_agent_kind.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn resolve_identity_ignores_marker_with_mismatched_anchor_payload() {
+        let fixture = CtxFixture::new();
+        let env = TestEnv::default().with(CMUX_SURFACE_ID, "surface-1");
+        let key = AnchorKey {
+            kind: AnchorKind::Surface,
+            value: "surface-1".into(),
+        };
+        let mut marker = marker_fixture(AnchorKind::Surface, "surface-2", None, None);
+        marker.id = "agents/coord-b".into();
+        let path = marker_path(&fixture.ctx, &key);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, toml::to_string_pretty(&marker).unwrap()).unwrap();
+
+        assert!(
+            resolve_identity_with(&fixture.ctx, &env, &TestProcess::new())
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -729,6 +818,30 @@ mod tests {
         assert!(remove_marker(&fixture.ctx, &key).unwrap());
         assert!(!remove_marker(&fixture.ctx, &key).unwrap());
         assert!(read_marker(&fixture.ctx, &key).unwrap().is_none());
+    }
+
+    #[test]
+    fn write_marker_retries_when_first_temp_path_already_exists() {
+        let fixture = CtxFixture::new();
+        let key = AnchorKey {
+            kind: AnchorKind::Surface,
+            value: "surface-1".into(),
+        };
+        let sessions_dir = sessions_dir(&fixture.ctx);
+        fs::create_dir_all(&sessions_dir).unwrap();
+        let pid = std::process::id();
+        fs::write(
+            sessions_dir.join(format!(".wt-session-marker-{pid}-0.tmp")),
+            "occupied",
+        )
+        .unwrap();
+
+        let marker = write_marker(&fixture.ctx, &key, "agents/coord-a", Some("claude")).unwrap();
+        assert_eq!(marker.id, "agents/coord-a");
+        assert_eq!(
+            read_marker(&fixture.ctx, &key).unwrap().unwrap().id,
+            marker.id
+        );
     }
 
     fn marker_fixture(
