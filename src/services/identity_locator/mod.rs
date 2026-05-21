@@ -500,7 +500,7 @@ fn create_temp_file_with_retry(dir: &Path) -> Result<(PathBuf, fs::File)> {
     )
 }
 
-fn percent_encode(value: &str) -> String {
+pub fn percent_encode(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' {
@@ -570,6 +570,10 @@ fn platform_process_start_time(pid: i32) -> Result<String> {
 #[cfg(target_os = "macos")]
 fn platform_process_start_time(pid: i32) -> Result<String> {
     start_time_macos::process_start_time(pid)
+}
+
+pub fn process_start_time(pid: i32) -> Result<String> {
+    platform_process_start_time(pid)
 }
 
 #[cfg(test)]

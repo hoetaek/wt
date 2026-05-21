@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use wt::cli::{
-    AgentCommand, Cli, ColorMode, Commands, CoordCommand, MsgCommand, SessionCommand, TaskCommand,
-    WorkflowCommand,
+    AgentCommand, AgentSupervisorCommand, Cli, ColorMode, Commands, CoordCommand, MsgCommand,
+    SessionCommand, TaskCommand, WorkflowCommand,
 };
 use wt::config::{Config, ConfigSource};
 use wt::context::{Ctx, CtxOptions, OutputMode};
@@ -41,7 +41,7 @@ fn try_main() -> Result<()> {
 
     if cli.json && !supports_json(command) {
         bail!(
-            "JSON output is supported for: wt version, wt list, wt inspect, wt task list, wt workflow list, wt workflow archive, wt agent status, wt agent watch, wt agent wait-stats, wt msg list, wt msg read, wt msg check-inbox, wt msg watch, wt session whoami, wt doctor, wt profile"
+            "JSON output is supported for: wt version, wt list, wt inspect, wt task list, wt workflow list, wt workflow archive, wt agent status, wt agent watch, wt agent wait-stats, wt agent supervisor status, wt msg list, wt msg read, wt msg check-inbox, wt msg watch, wt session whoami, wt doctor, wt profile"
         );
     }
 
@@ -428,6 +428,11 @@ fn supports_json(command: &Commands) -> bool {
                 }
                 | Commands::Agent {
                     command: AgentCommand::WaitStats,
+                }
+                | Commands::Agent {
+                    command: AgentCommand::Supervisor {
+                        command: AgentSupervisorCommand::Status { .. },
+                    },
                 }
                 | Commands::Msg {
                     command: MsgCommand::List { .. }
