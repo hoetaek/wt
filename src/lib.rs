@@ -239,6 +239,16 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             MsgCommand::CheckInbox { agent, silent: _ } => {
                 commands::msg::check_inbox(ctx, agent.as_deref())
             }
+            MsgCommand::Watch {
+                agent,
+                timeout,
+                json,
+            } => commands::msg::watch(
+                ctx,
+                agent.as_deref(),
+                std::time::Duration::from_secs(*timeout),
+                ctx.is_json() || *json,
+            ),
         },
         Commands::Send {
             target,

@@ -233,7 +233,7 @@ pub enum Commands {
     },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send, deliver, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg check-inbox --silent` from agent hooks so the WT_AGENT_ID inbox is checked; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use `wt msg check-inbox --silent` from agent hooks so the WT_AGENT_ID inbox is checked; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -632,6 +632,21 @@ pub enum MsgCommand {
         /// Hook mode: exit 0 silently when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup). Intended for agent hooks installed globally; direct CLI use should omit this flag.
         #[arg(long)]
         silent: bool,
+    },
+    /// Observe pending or newly-arriving inbox/new messages without claiming them
+    #[command(
+        long_about = "Observe pending or newly-arriving inbox/new messages for one agent without claiming, moving, or acknowledging them.\n\n`wt msg watch` arms a filesystem watcher, drains existing .toml messages in mtime order, and exits after emitting pending messages, one new arrival, or a timeout. Omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use --json for newline-delimited JSON rows with the same fields as `wt msg list --json` message records. Use `wt msg list` for a snapshot instead of --timeout 0."
+    )]
+    Watch {
+        /// Explicit single agent id as NAME or agents/NAME; omitted tries WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID
+        #[arg(long)]
+        agent: Option<String>,
+        /// Maximum seconds to wait for a new inbox/new message; must be greater than 0
+        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..))]
+        timeout: u64,
+        /// Emit newline-delimited JSON message rows
+        #[arg(long)]
+        json: bool,
     },
 }
 
