@@ -226,7 +226,11 @@ pub fn read_marker(ctx: &Ctx, key: &AnchorKey) -> Result<Option<Marker>> {
         Ok(content) => {
             let marker = toml::from_str::<Marker>(&content)
                 .with_context(|| format!("Failed to parse marker: {}", path.display()))?;
-            Ok(Some(marker))
+            if marker_matches_key(&marker, key) {
+                Ok(Some(marker))
+            } else {
+                Ok(None)
+            }
         }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err).with_context(|| format!("Failed to read marker: {}", path.display())),
@@ -356,9 +360,6 @@ fn resolve_identity_with(
     let Some(marker) = read_marker(ctx, &key)? else {
         return Ok(None);
     };
-    if !marker_matches_key(&marker, &key) {
-        return Ok(None);
-    }
     match marker_is_live_with(&marker, env, process)? {
         MarkerLiveness::Live => Ok(Some(marker)),
         MarkerLiveness::NotLive => Ok(None),
@@ -817,6 +818,21 @@ mod tests {
         assert_eq!(list_markers(&fixture.ctx).unwrap().len(), 1);
         assert!(remove_marker(&fixture.ctx, &key).unwrap());
         assert!(!remove_marker(&fixture.ctx, &key).unwrap());
+        assert!(read_marker(&fixture.ctx, &key).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_marker_ignores_mismatched_marker() {
+        let fixture = CtxFixture::new();
+        let key = AnchorKey {
+            kind: AnchorKind::Surface,
+            value: "surface-1".into(),
+        };
+        let marker = marker_fixture(AnchorKind::Surface, "surface-2", None, None);
+        let path = marker_path(&fixture.ctx, &key);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, toml::to_string_pretty(&marker).unwrap()).unwrap();
+
         assert!(read_marker(&fixture.ctx, &key).unwrap().is_none());
     }
 
