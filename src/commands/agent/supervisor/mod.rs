@@ -1,5 +1,6 @@
 use crate::context::Ctx;
 use crate::messages::AgentId;
+use crate::services::identity_locator::process_start_time;
 use crate::services::supervisor_registration::{
     Registration, list_registrations, log_path, read_registration, registration_path,
     remove_registration, supervisor_is_alive, write_registration,
@@ -91,7 +92,7 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
     });
     let started_by = started_by.unwrap_or_else(|| "user".into());
 
-    let child = spawn_detached_run(
+    let mut child = spawn_detached_run(
         ctx,
         agent_id.as_str(),
         &log_path,
@@ -100,10 +101,19 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
         poll_interval_secs,
         cleanup_on_session_end,
     )?;
+    let pid_start_time = match process_start_time(child.id() as i32) {
+        Ok(start_time) => start_time,
+        Err(err) => {
+            let _ = signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+            let _ = child.try_wait();
+            return Err(err).context("Failed to record supervisor process start time after spawn");
+        }
+    };
 
     let registration = Registration {
         agent_id: agent_id.as_str().into(),
         pid: child.id(),
+        pid_start_time,
         started_at: current_utc_timestamp(),
         started_by,
         cleanup_on_session_end,
@@ -115,7 +125,6 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
     };
     if let Err(err) = write_registration(ctx, &registration) {
         let _ = signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
-        let mut child = child;
         let _ = child.try_wait();
         return Err(err).context("Failed to persist supervisor registration after spawn");
     }
@@ -326,15 +335,25 @@ fn stop_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
 
         let start = std::time::Instant::now();
         while start.elapsed() < STOP_GRACE {
-            if read_registration(ctx, &registration.agent_id)?.is_none()
-                || !supervisor_is_alive(registration)?
-            {
-                remove_registration(ctx, &registration.agent_id)?;
-                return Ok(());
+            match read_registration(ctx, &registration.agent_id)? {
+                None => return Ok(()),
+                Some(current) if !same_registered_supervisor(&current, registration) => {
+                    return Ok(());
+                }
+                Some(_) if !supervisor_is_alive(registration)? => {
+                    remove_registration(ctx, &registration.agent_id)?;
+                    return Ok(());
+                }
+                Some(_) => {}
             }
             std::thread::sleep(STOP_POLL);
         }
 
+        if let Some(current) = read_registration(ctx, &registration.agent_id)? {
+            if !same_registered_supervisor(&current, registration) {
+                return Ok(());
+            }
+        }
         if supervisor_is_alive(registration)? {
             signal::kill(pid, Signal::SIGKILL).with_context(|| {
                 format!(
@@ -344,7 +363,20 @@ fn stop_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
             })?;
         }
     }
-    remove_registration(ctx, &registration.agent_id)?;
+    remove_registration_if_current(ctx, registration)?;
+    Ok(())
+}
+
+fn same_registered_supervisor(current: &Registration, expected: &Registration) -> bool {
+    current.pid == expected.pid && current.pid_start_time == expected.pid_start_time
+}
+
+fn remove_registration_if_current(ctx: &Ctx, registration: &Registration) -> Result<()> {
+    if let Some(current) = read_registration(ctx, &registration.agent_id)? {
+        if same_registered_supervisor(&current, registration) {
+            remove_registration(ctx, &registration.agent_id)?;
+        }
+    }
     Ok(())
 }
 
@@ -527,6 +559,53 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::context::mock::{MockRunner, MockUi};
+    use crate::services::supervisor_registration::{read_registration, write_registration};
+    use crate::storage::StorageRoot;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn test_ctx(dir: &TempDir) -> Ctx {
+        let repo_root = dir.path().join("repo");
+        let git_common_dir = repo_root.join(".git");
+        fs::create_dir_all(&git_common_dir).unwrap();
+        Ctx::new_with_options(
+            repo_root.clone(),
+            repo_root,
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+            crate::context::CtxOptions {
+                storage_root: Some(StorageRoot::from_git_common_dir(git_common_dir)),
+                ..Default::default()
+            },
+        )
+    }
+
+    fn registration(agent_id: &str, pid: u32) -> Registration {
+        Registration {
+            agent_id: agent_id.into(),
+            pid,
+            pid_start_time: process_start_time(pid as i32).unwrap(),
+            started_at: "2026-05-22T00:00:00Z".into(),
+            started_by: "user".into(),
+            cleanup_on_session_end: false,
+            target_surface_id: None,
+            target_agent_kind: None,
+            stale_threshold_secs: 900,
+            poll_interval_secs: 60,
+            log_path: PathBuf::from("/tmp/supervisor.log"),
+        }
+    }
+
+    fn spawn_term_ignoring_child() -> std::process::Child {
+        Command::new("sh")
+            .arg("-c")
+            .arg("trap '' TERM; while :; do sleep 1; done")
+            .spawn()
+            .unwrap()
+    }
 
     #[test]
     fn parses_human_durations() {
@@ -540,5 +619,36 @@ mod tests {
         assert!(parse_duration("0s").is_err());
         assert!(parse_duration("m").is_err());
         assert!(parse_duration("10d").is_err());
+    }
+
+    #[test]
+    fn stop_registration_preserves_concurrent_replacement() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(&dir);
+        let mut old_child = spawn_term_ignoring_child();
+        let mut new_child = spawn_term_ignoring_child();
+        let old_registration = registration("agents/codex", old_child.id());
+        let new_registration = registration("agents/codex", new_child.id());
+        write_registration(&ctx, &old_registration).unwrap();
+
+        let replacement_ctx = test_ctx(&dir);
+        let replacement = new_registration.clone();
+        let replacement_thread = std::thread::spawn(move || {
+            std::thread::sleep(STOP_POLL * 2);
+            write_registration(&replacement_ctx, &replacement).unwrap();
+        });
+
+        stop_registration(&ctx, &old_registration).unwrap();
+        replacement_thread.join().unwrap();
+
+        assert_eq!(
+            read_registration(&ctx, "agents/codex").unwrap(),
+            Some(new_registration)
+        );
+
+        let _ = signal::kill(Pid::from_raw(old_child.id() as i32), Signal::SIGKILL);
+        let _ = old_child.wait();
+        let _ = signal::kill(Pid::from_raw(new_child.id() as i32), Signal::SIGKILL);
+        let _ = new_child.wait();
     }
 }

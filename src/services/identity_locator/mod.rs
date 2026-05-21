@@ -572,6 +572,10 @@ fn platform_process_start_time(pid: i32) -> Result<String> {
     start_time_macos::process_start_time(pid)
 }
 
+pub fn process_start_time(pid: i32) -> Result<String> {
+    platform_process_start_time(pid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,6 +6,8 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as StdCommand};
 use std::time::{Duration, Instant};
+#[cfg(unix)]
+use wt::services::identity_locator::process_start_time;
 
 const GIT_LOCAL_ENV_KEYS: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -315,11 +317,13 @@ fn write_supervisor_registration(
     let encoded = agent_id.replace('/', "__");
     let path = dir.join(format!("{encoded}.toml"));
     let log_path = dir.join(format!("{encoded}.log"));
+    let pid_start_time = process_start_time(pid as i32).unwrap();
     std::fs::write(
         &path,
         format!(
             r#"agent_id = "{agent_id}"
 pid = {pid}
+pid_start_time = "{pid_start_time}"
 started_at = "2026-05-22T00:00:00Z"
 started_by = "{started_by}"
 cleanup_on_session_end = false

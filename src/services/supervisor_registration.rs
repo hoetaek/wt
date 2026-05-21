@@ -1,4 +1,5 @@
 use crate::context::Ctx;
+use crate::services::identity_locator::process_start_time;
 use anyhow::{Context, Result};
 use nix::errno::Errno;
 use nix::sys::signal;
@@ -15,6 +16,7 @@ static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct Registration {
     pub agent_id: String,
     pub pid: u32,
+    pub pid_start_time: String,
     pub started_at: String,
     pub started_by: String,
     pub cleanup_on_session_end: bool,
@@ -124,7 +126,10 @@ pub fn list_registrations(ctx: &Ctx) -> Result<Vec<Registration>> {
 pub fn supervisor_is_alive(registration: &Registration) -> Result<bool> {
     let pid = Pid::from_raw(registration.pid as i32);
     match signal::kill(pid, None) {
-        Ok(()) => Ok(true),
+        Ok(()) => match process_start_time(registration.pid as i32) {
+            Ok(start_time) => Ok(start_time == registration.pid_start_time),
+            Err(_) => Ok(false),
+        },
         Err(Errno::ESRCH) => Ok(false),
         Err(Errno::EPERM) => Ok(true),
         Err(err) => Err(err).with_context(|| {
@@ -190,6 +195,7 @@ mod tests {
         Registration {
             agent_id: agent_id.into(),
             pid: 123,
+            pid_start_time: "12345.000000000".into(),
             started_at: "2026-05-22T00:00:00Z".into(),
             started_by: "user".into(),
             cleanup_on_session_end: false,
@@ -257,7 +263,12 @@ mod tests {
             .unwrap();
         let mut reg = registration("agents/live");
         reg.pid = child.id();
+        reg.pid_start_time = process_start_time(child.id() as i32).unwrap();
         assert!(supervisor_is_alive(&reg).unwrap());
+
+        reg.pid_start_time = "0.000000000".into();
+        assert!(!supervisor_is_alive(&reg).unwrap());
+        reg.pid_start_time = process_start_time(child.id() as i32).unwrap();
 
         child.kill().unwrap();
         let _ = child.wait();
