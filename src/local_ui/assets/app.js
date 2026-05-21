@@ -2364,18 +2364,149 @@ function workflowRelationshipAttention(item) {
 function taskRunsCockpit(snapshot) {
   const runs = sortedTaskRuns(snapshot.task_runs.items);
   const groups = countBy(runs, taskRunUiGroup);
-  const rows = runs
-    .map(taskRunScanRow)
-    .concat(snapshot.task_runs.invalid.map((row) => invalidScanRow(row, t("invalidTaskRuns"))))
-    .concat(unlinkedTaskDocuments(snapshot).map(taskDocumentScanRow));
-  const attentionCount = (groups.needs_attention || 0) + snapshot.task_runs.invalid.length;
+  const unlinkedTasks = unlinkedTaskDocuments(snapshot);
+  const records = runs
+    .map(taskRunMasterDetailRecord)
+    .concat(snapshot.task_runs.invalid.map(invalidTaskRunMasterDetailRecord))
+    .concat(unlinkedTasks.map(unlinkedTaskDocumentMasterDetailRecord));
+  const attentionCount = (groups.needs_attention || 0) + snapshot.task_runs.invalid.length + unlinkedTasks.length;
   const stats = [
     attentionStat(attentionCount),
     { label: t("stateRunning"), value: groups.running || 0 },
     { label: t("statePrepared"), value: groups.prepared || 0 },
     { label: t("metricTaskRuns"), value: runs.length },
   ];
-  return cockpitPanel(t("cockpitTaskRunTitle"), t("cockpitTaskRunSubtitle"), stats, t("taskRunIndex"), rows, t("noTaskRuns"), "task-runs-cockpit");
+  return masterDetailPanel({
+    id: "task-runs-cockpit",
+    tabKey: "task-runs",
+    title: t("cockpitTaskRunTitle"),
+    subtitle: t("cockpitTaskRunSubtitle"),
+    stats,
+    listTitle: t("taskRunIndex"),
+    records,
+    emptyText: t("noTaskRuns"),
+  });
+}
+
+function taskRunMasterDetailRecord(row) {
+  const taskDocument = row.task_document;
+  const group = taskRunUiGroup(row);
+  const needsAttention = group === "needs_attention";
+  const title = taskDocument ? taskDocument.title : row.task;
+  const summary = row.error || row.context.error || row.task_document_error || taskDocument?.body_summary || row.context.label || row.branch;
+  return {
+    id: `task-run-${row.id}`,
+    group: stateLabel(group),
+    tone: needsAttention ? "red" : statusColor(group),
+    needsAttention,
+    kicker: `TaskRun ${row.id}`,
+    title,
+    summary,
+    listPills: taskRunPills(row, group),
+    pills: taskRunPills(row, group),
+    paths: [row.path, row.context.workflow_path, taskDocument && taskDocument.path].filter(Boolean),
+    fields: taskRunFactFields(row),
+    relationshipsSectionTitle: t("sourcePaths"),
+    relationships: taskRunSourceFields(row),
+    collapseSources: true,
+    sources: [
+      { label: t("taskRunState"), text: formatTaskRunState(row), kind: "source" },
+      { label: t("taskDocumentToml"), text: taskDocument?.source_text, kind: "source" },
+    ],
+  };
+}
+
+function invalidTaskRunMasterDetailRecord(row) {
+  return {
+    id: `invalid-task-run-${row.key}`,
+    group: t("needsAttention"),
+    tone: "red",
+    needsAttention: true,
+    kicker: t("invalidTaskRuns"),
+    title: row.key,
+    summary: row.error,
+    pills: [pill(t("invalid"), "red")],
+    paths: [row.path],
+    fields: [
+      { label: t("taskRunLabel"), value: row.key },
+      { label: t("errorLabel"), value: row.error, tone: "red" },
+    ],
+    relationshipsSectionTitle: t("sourcePaths"),
+    relationships: [{ label: t("source"), value: row.path, tone: "red" }],
+    collapseSources: true,
+    sources: [{ label: t("sourceToml"), text: [row.error, row.source_text].filter(Boolean).join("\n\n"), kind: "source" }],
+  };
+}
+
+function unlinkedTaskDocumentMasterDetailRecord(row) {
+  return {
+    id: `unlinked-task-document-${row.key}`,
+    group: t("needsAttention"),
+    tone: "red",
+    needsAttention: true,
+    kicker: t("taskDocumentLabel"),
+    title: row.title,
+    summary: row.body_summary,
+    listPills: [
+      pill(t("focusUnlinkedTaskDocument"), "amber"),
+      pill(`task ${row.key}`, "blue"),
+      row.branch ? pill(`branch ${row.branch}`) : "",
+    ],
+    pills: [
+      pill(t("focusUnlinkedTaskDocument"), "amber"),
+      pill(`task ${row.key}`, "blue"),
+      row.branch ? pill(`branch ${row.branch}`) : "",
+    ],
+    paths: [row.path],
+    fields: [
+      { label: t("taskDocumentLabel"), value: row.key },
+      { label: "branch", value: row.branch },
+    ],
+    relationshipsSectionTitle: t("sourcePaths"),
+    relationships: [{ label: t("taskDocumentLabel"), value: row.path, tone: "red" }],
+    collapseSources: true,
+    sources: [{ label: t("taskDocumentToml"), text: row.source_text, kind: "source" }],
+  };
+}
+
+function taskRunPills(row, group = taskRunUiGroup(row)) {
+  return [
+    pill(stateLabel(group), statusColor(group)),
+    pill(`task ${row.task}`, "blue"),
+    row.branch ? pill(`branch ${row.branch}`) : "",
+    row.context.workflow_id ? pill(`workflow ${row.context.workflow_id}`, "violet") : pill(row.context.label || "direct"),
+    row.context.mode ? pill(row.context.mode, "violet") : "",
+    row.group ? pill(`group ${row.group}`, "violet") : "",
+    row.context.error ? pill(t("focusContextError"), "red") : "",
+    row.task_document_error || !row.task_document ? pill(t("focusMissingTaskDocument"), "red") : "",
+  ];
+}
+
+function taskRunFactFields(row) {
+  return [
+    { label: t("taskRunLabel"), value: row.id },
+    { label: t("taskDocumentLabel"), value: row.task },
+    { label: "status", value: stateLabel(taskRunUiGroup(row)) },
+    row.status !== taskRunUiGroup(row) ? { label: "stored_status", value: row.status } : null,
+    { label: "branch", value: row.branch },
+    row.group ? { label: "group", value: row.group } : null,
+    row.context.label ? { label: "context", value: row.context.label } : null,
+    row.context.workflow_id ? { label: t("workflowEntityLabel"), value: row.context.workflow_id } : null,
+    row.context.mode ? { label: t("workflowModeLabel"), value: row.context.mode } : null,
+    row.context.error ? { label: t("focusContextError"), value: row.context.error, tone: "red" } : null,
+    row.error ? { label: t("focusTaskRunError"), value: row.error, tone: "red" } : null,
+    row.task_document_error ? { label: t("focusTaskDocumentError"), value: row.task_document_error, tone: "red" } : null,
+    !row.task_document && !row.task_document_error ? { label: t("focusMissingTaskDocument"), value: row.task, tone: "red" } : null,
+  ].filter(Boolean);
+}
+
+function taskRunSourceFields(row) {
+  const taskDocument = row.task_document;
+  return [
+    { label: t("taskRunLabel"), value: row.path },
+    row.context.workflow_path ? { label: t("workflowEntityLabel"), value: row.context.workflow_path, tone: row.context.error ? "red" : "" } : null,
+    taskDocument?.path ? { label: t("taskDocumentLabel"), value: taskDocument.path, tone: row.task_document_error ? "red" : "" } : null,
+  ].filter(Boolean);
 }
 
 function ideasCockpit(snapshot) {
@@ -3256,7 +3387,7 @@ function sortedRetrospecs(rows) {
 
 function sortedTaskRuns(rows) {
   return [...rows].sort((left, right) => {
-    const status = taskRunStatusOrder(left.status) - taskRunStatusOrder(right.status);
+    const status = taskRunStatusOrder(taskRunUiGroup(left)) - taskRunStatusOrder(taskRunUiGroup(right));
     if (status !== 0) return status;
     const order = (right.creation_order || 0) - (left.creation_order || 0);
     if (order !== 0) return order;
@@ -3273,15 +3404,15 @@ function sortedWorkflows(rows) {
 }
 
 function taskRunStatusOrder(status) {
-  return ["prepared", "running", "done", "skipped", "failed", "needs_attention"].indexOf(status) === -1
+  return ["needs_attention", "running", "prepared", "done", "skipped", "failed"].indexOf(status) === -1
     ? 99
-    : ["prepared", "running", "done", "skipped", "failed", "needs_attention"].indexOf(status);
+    : ["needs_attention", "running", "prepared", "done", "skipped", "failed"].indexOf(status);
 }
 
 function workflowGroupOrder(group) {
-  return ["prepared", "running", "waiting", "done", "needs_attention"].indexOf(group) === -1
+  return ["needs_attention", "running", "prepared", "waiting", "done"].indexOf(group) === -1
     ? 99
-    : ["prepared", "running", "waiting", "done", "needs_attention"].indexOf(group);
+    : ["needs_attention", "running", "prepared", "waiting", "done"].indexOf(group);
 }
 
 function countBy(rows, mapper) {
