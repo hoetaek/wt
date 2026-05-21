@@ -84,6 +84,42 @@ fn try_main() -> Result<()> {
         );
     }
 
+    let silent_check_inbox = matches!(
+        command,
+        Commands::Msg {
+            command: MsgCommand::CheckInbox { silent: true, .. },
+        }
+    );
+
+    let (ctx, config_source) = match build_ctx(&cli, command) {
+        Ok(pair) => pair,
+        Err(_) if silent_check_inbox => return Ok(()),
+        Err(e) => return Err(e),
+    };
+
+    if cli.verbose > 0 && !ctx.is_json() {
+        ctx.ui
+            .print_dim(&format!("repo: {}", ctx.repo_root.display()));
+        ctx.ui
+            .print_dim(&format!("invocation: {}", ctx.invocation_root.display()));
+        match config_source {
+            ConfigSource::Default => ctx.ui.print_dim("config: default"),
+            ConfigSource::File(path) => ctx.ui.print_dim(&format!("config: {}", path.display())),
+            ConfigSource::Files(paths) => {
+                let rendered = paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" + ");
+                ctx.ui.print_dim(&format!("config: {rendered}"));
+            }
+        }
+    }
+
+    wt::dispatch(&ctx, command)
+}
+
+fn build_ctx(cli: &Cli, command: &Commands) -> Result<(Ctx, ConfigSource)> {
     let runner = RealRunner;
     let current_dir = std::env::current_dir()?;
     let working_dir = resolve_directory(&current_dir, cli.directory.as_deref())?;
@@ -121,7 +157,7 @@ fn try_main() -> Result<()> {
         Box::new(RealRunner),
         Box::new(TerminalUi::with_decoration(
             cli.quiet,
-            use_decorative_output(&cli),
+            use_decorative_output(cli),
         )),
         CtxOptions {
             base_config,
@@ -135,26 +171,7 @@ fn try_main() -> Result<()> {
         },
     );
 
-    if cli.verbose > 0 && !ctx.is_json() {
-        ctx.ui
-            .print_dim(&format!("repo: {}", ctx.repo_root.display()));
-        ctx.ui
-            .print_dim(&format!("invocation: {}", ctx.invocation_root.display()));
-        match config_source {
-            ConfigSource::Default => ctx.ui.print_dim("config: default"),
-            ConfigSource::File(path) => ctx.ui.print_dim(&format!("config: {}", path.display())),
-            ConfigSource::Files(paths) => {
-                let rendered = paths
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(" + ");
-                ctx.ui.print_dim(&format!("config: {rendered}"));
-            }
-        }
-    }
-
-    wt::dispatch(&ctx, command)
+    Ok((ctx, config_source))
 }
 
 fn launcher_coordinator_id_from_env() -> Result<Option<String>> {

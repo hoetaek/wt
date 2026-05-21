@@ -960,19 +960,19 @@ fn array_entry<'a>(object: &'a mut Map<String, Value>, key: &str) -> Result<&'a 
 }
 
 fn managed_claude_hook_command(agent: &str) -> String {
-    format!("wt msg check-inbox --agent {agent} {WT_CLAUDE_HOOK_MARKER}")
+    format!("wt msg check-inbox --agent {agent} --silent {WT_CLAUDE_HOOK_MARKER}")
 }
 
 fn managed_claude_dispatcher_command() -> String {
-    format!("wt msg check-inbox {WT_CLAUDE_HOOK_MARKER}")
+    format!("wt msg check-inbox --silent {WT_CLAUDE_HOOK_MARKER}")
 }
 
 fn managed_codex_hook_command(agent: &str) -> String {
-    format!("wt msg check-inbox --agent {agent} {WT_CODEX_HOOK_MARKER}")
+    format!("wt msg check-inbox --agent {agent} --silent {WT_CODEX_HOOK_MARKER}")
 }
 
 fn managed_codex_dispatcher_command() -> String {
-    format!("wt msg check-inbox {WT_CODEX_HOOK_MARKER}")
+    format!("wt msg check-inbox --silent {WT_CODEX_HOOK_MARKER}")
 }
 
 fn codex_trust_key(

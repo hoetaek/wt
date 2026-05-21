@@ -1197,7 +1197,7 @@ mod tests {
     fn write_wt_codex_inbox_hook(home: &Path, include_trust: bool) {
         fs::create_dir_all(home).unwrap();
         let hooks_path = home.join("hooks.json");
-        let command = "wt msg check-inbox # wt-agent-hook:codex-inbox";
+        let command = "wt msg check-inbox --silent # wt-agent-hook:codex-inbox";
         fs::write(
             &hooks_path,
             serde_json::to_string_pretty(&json!({

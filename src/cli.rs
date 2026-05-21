@@ -225,7 +225,7 @@ pub enum Commands {
     },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send, deliver, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg check-inbox` from agent hooks so the WT_AGENT_ID inbox is checked; pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg check-inbox --silent` from agent hooks so the WT_AGENT_ID inbox is checked; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -516,7 +516,7 @@ pub enum AgentHookCommand {
 pub enum AgentHookInstallCommand {
     /// Install Claude Code inbox polling
     #[command(
-        long_about = "Install the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis writes worktree-local `.claude/settings.local.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox`; the command reads WT_AGENT_ID at runtime, and exits successfully without output when it is unset. Install also adds that local settings path to the per-worktree Git exclude file, preserves existing local Claude settings, and fails instead of modifying tracked settings or source files.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and context-resolved WT_COORDINATOR_AGENT_ID when they launch Claude."
+        long_about = "Install the Claude-specific wt inbox hook dispatcher for Claude Code.\n\nThis writes worktree-local `.claude/settings.local.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox --silent`. The command reads WT_AGENT_ID at runtime and exits successfully without output when it is unset; `--silent` additionally swallows wt context-load errors (non-git CWD, legacy `.local/.wt.toml`, missing setup) so a globally installed hook never blocks Claude. Install also adds that local settings path to the per-worktree Git exclude file, preserves existing local Claude settings, and fails instead of modifying tracked settings or source files.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and context-resolved WT_COORDINATOR_AGENT_ID when they launch Claude."
     )]
     Claude {
         /// Manual/test override: bind this hook to one agent instead of WT_AGENT_ID
@@ -525,7 +525,7 @@ pub enum AgentHookInstallCommand {
     },
     /// Install Codex inbox polling
     #[command(
-        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox`; the command reads WT_AGENT_ID at runtime, and exits successfully without output when it is unset. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and context-resolved WT_COORDINATOR_AGENT_ID when they launch Codex."
+        long_about = "Install the Codex-specific wt inbox hook dispatcher for Codex.\n\nThis writes user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` UserPromptSubmit and PostToolUse hooks that run `wt msg check-inbox --silent`. The command reads WT_AGENT_ID at runtime and exits successfully without output when it is unset; `--silent` additionally swallows wt context-load errors (non-git CWD, legacy `.local/.wt.toml`, missing setup) so a globally installed hook never blocks Codex. Install also writes the matching trusted hook state into Codex `config.toml` and preserves existing non-wt and cmux hooks and trust entries.\n\nUse --agent only as a manual or test override. Normal `wt run issue`, `wt run task`, and `wt run workflow` sessions bind the per-run agent by setting WT_AGENT_ID=agents/<branch_slug> and context-resolved WT_COORDINATOR_AGENT_ID when they launch Codex."
     )]
     Codex {
         /// Manual/test override: bind this user-level hook to one agent instead of WT_AGENT_ID
@@ -598,6 +598,9 @@ pub enum MsgCommand {
         /// Explicit single agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID; omitted uses WT_AGENT_ID
         #[arg(long)]
         agent: Option<String>,
+        /// Hook mode: exit 0 silently when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup). Intended for agent hooks installed globally; direct CLI use should omit this flag.
+        #[arg(long)]
+        silent: bool,
     },
 }
 

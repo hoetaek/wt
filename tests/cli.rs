@@ -24,8 +24,11 @@ const GIT_LOCAL_ENV_KEYS: &[&str] = &[
 ];
 
 const CLAUDE_MANUAL_INBOX_HOOK_COMMAND: &str =
-    "wt msg check-inbox --agent agents/claude # wt-agent-hook:claude-inbox";
-const CLAUDE_INBOX_HOOK_COMMAND: &str = "wt msg check-inbox # wt-agent-hook:claude-inbox";
+    "wt msg check-inbox --agent agents/claude --silent # wt-agent-hook:claude-inbox";
+const CLAUDE_INBOX_HOOK_COMMAND: &str =
+    "wt msg check-inbox --silent # wt-agent-hook:claude-inbox";
+const PRE_SILENT_CLAUDE_INBOX_HOOK_COMMAND: &str =
+    "wt msg check-inbox # wt-agent-hook:claude-inbox";
 const LEGACY_CLAUDE_INBOX_HOOK_COMMAND: &str = "if [ -n \"${WT_AGENT_ID:-}\" ]; then wt msg check-inbox --agent \"$WT_AGENT_ID\"; fi # wt-agent-hook:claude-inbox";
 const CODEX_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 const MANAGED_INBOX_HOOK_EVENTS: &[(&str, &str)] = &[
@@ -490,10 +493,14 @@ fn codex_managed_inbox_commands(hooks: &serde_json::Value) -> Vec<String> {
 }
 
 fn codex_hook_command(agent: &str) -> String {
-    format!("wt msg check-inbox --agent agents/{agent} {CODEX_INBOX_HOOK_MARKER}")
+    format!("wt msg check-inbox --agent agents/{agent} --silent {CODEX_INBOX_HOOK_MARKER}")
 }
 
 fn codex_dispatcher_command() -> String {
+    format!("wt msg check-inbox --silent {CODEX_INBOX_HOOK_MARKER}")
+}
+
+fn pre_silent_codex_dispatcher_command() -> String {
     format!("wt msg check-inbox {CODEX_INBOX_HOOK_MARKER}")
 }
 
@@ -2419,6 +2426,119 @@ fn msg_check_inbox_explicit_agent_ignores_runtime_env_ids() {
 }
 
 #[test]
+fn msg_check_inbox_silent_in_non_git_dir_exits_zero() {
+    let temp = TempDir::new().unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--silent",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn msg_check_inbox_silent_with_legacy_local_config_exits_zero() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[agent]\ncli = \"codex\"\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--silent",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn msg_check_inbox_without_silent_still_errors_on_legacy_local_config() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".local")).unwrap();
+    std::fs::write(
+        temp.path().join(".local/.wt.toml"),
+        "[agent]\ncli = \"codex\"\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("legacy repo-root config"));
+}
+
+#[test]
+fn msg_check_inbox_silent_still_delivers_when_context_healthy() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "silent",
+            "delivery",
+        ])
+        .assert()
+        .success();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/codex",
+            "--silent",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["hookSpecificOutput"]["hookEventName"].as_str(),
+        Some("UserPromptSubmit")
+    );
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/codex: 1 new message"));
+    assert!(context.contains("silent delivery"));
+
+    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    let delivered = toml_files(&inbox.join("delivered"));
+    assert_eq!(delivered.len(), 1);
+}
+
+#[test]
 fn msg_rejects_invalid_or_ambiguous_agent_ids() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -3349,6 +3469,55 @@ fn agent_hook_install_claude_dispatcher_replaces_legacy_wt_agent_id_dispatcher()
 }
 
 #[test]
+fn agent_hook_install_claude_dispatcher_replaces_pre_silent_dispatcher() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let settings_path = temp.path().join(".claude/settings.local.json");
+    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": PRE_SILENT_CLAUDE_INBOX_HOOK_COMMAND,
+                    }],
+                }],
+                "PostToolUse": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": PRE_SILENT_CLAUDE_INBOX_HOOK_COMMAND,
+                    }],
+                }],
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "claude",
+        ])
+        .assert()
+        .success();
+
+    let settings = json_file(&settings_path);
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        assert_eq!(
+            claude_event_commands(&settings, event_name),
+            vec![CLAUDE_INBOX_HOOK_COMMAND]
+        );
+    }
+}
+
+#[test]
 fn agent_hook_uninstall_claude_removes_only_wt_managed_empty_settings() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -3679,6 +3848,57 @@ fn agent_hook_install_codex_dispatcher_replaces_legacy_wt_agent_id_dispatcher() 
                     "hooks": [{
                         "type": "command",
                         "command": legacy_command,
+                    }],
+                }],
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "hook",
+            "install",
+            "codex",
+        ])
+        .assert()
+        .success();
+
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        assert_eq!(
+            codex_event_commands(&hooks, event_name),
+            vec![codex_dispatcher_command()]
+        );
+    }
+}
+
+#[test]
+fn agent_hook_install_codex_dispatcher_replaces_pre_silent_dispatcher() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let codex_home = temp.path().join("codex-home");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    let pre_silent_command = pre_silent_codex_dispatcher_command();
+    std::fs::write(
+        codex_home.join("hooks.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": pre_silent_command,
+                    }],
+                }],
+                "PostToolUse": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": pre_silent_command,
                     }],
                 }],
             },
