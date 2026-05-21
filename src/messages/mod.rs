@@ -984,6 +984,18 @@ impl MessageStore {
             }
         }
     }
+
+    pub fn read_at_path(
+        &self,
+        agent: &str,
+        path: &Path,
+    ) -> Result<Option<MessageInspectionRecord>> {
+        let agent = AgentId::parse(agent)?;
+        match inspect_existing_message_record(&agent, MessageDeliveryState::New, path)? {
+            Some(record) => Ok(Some(record)),
+            None => Ok(None),
+        }
+    }
 }
 
 fn is_runtime_coordinator(agent: &str, runtime_coordinator_agent_id: Option<&str>) -> bool {
@@ -1086,6 +1098,33 @@ fn inspect_message_record(
     state: MessageDeliveryState,
     path: &Path,
 ) -> MessageInspectionRecord {
+    match inspect_existing_message_record(agent, state, path) {
+        Ok(Some(record)) => record,
+        Ok(None) => MessageInspectionRecord {
+            id: message_id_from_path(path),
+            state,
+            path: path.to_path_buf(),
+            message: None,
+            error: Some(format!(
+                "Failed to read message: {}: missing",
+                path.display()
+            )),
+        },
+        Err(err) => MessageInspectionRecord {
+            id: message_id_from_path(path),
+            state,
+            path: path.to_path_buf(),
+            message: None,
+            error: Some(format!("{err:#}")),
+        },
+    }
+}
+
+fn inspect_existing_message_record(
+    agent: &AgentId,
+    state: MessageDeliveryState,
+    path: &Path,
+) -> Result<Option<MessageInspectionRecord>> {
     let id = path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -1094,20 +1133,21 @@ fn inspect_message_record(
 
     let content = match fs::read_to_string(path) {
         Ok(content) => content,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return MessageInspectionRecord {
+            return Ok(Some(MessageInspectionRecord {
                 id,
                 state,
                 path: path.to_path_buf(),
                 message: None,
                 error: Some(format!("Failed to read message: {}: {err}", path.display())),
-            };
+            }));
         }
     };
     let mut message: Message = match toml::from_str(&content) {
         Ok(message) => message,
         Err(err) => {
-            return MessageInspectionRecord {
+            return Ok(Some(MessageInspectionRecord {
                 id,
                 state,
                 path: path.to_path_buf(),
@@ -1116,7 +1156,7 @@ fn inspect_message_record(
                     "Failed to parse message: {}: {err}",
                     path.display()
                 )),
-            };
+            }));
         }
     };
 
@@ -1140,13 +1180,20 @@ fn inspect_message_record(
             }
         });
 
-    MessageInspectionRecord {
+    Ok(Some(MessageInspectionRecord {
         id,
         state,
         path: path.to_path_buf(),
         message: Some(message),
         error: validation.err().map(|err| format!("{err:#}")),
-    }
+    }))
+}
+
+fn message_id_from_path(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn read_message_for_agent(agent: &AgentId, path: &Path) -> Result<Message> {

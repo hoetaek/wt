@@ -1,12 +1,18 @@
 use crate::context::Ctx;
+use crate::error::WtError;
 use crate::messages::{
     AgentId, COORDINATOR_AGENT_ALIAS, HookOutput, Message, MessageDeliveryState,
     MessageInspectionRecord, MessageInventory, MessageInventoryCounts, MessageScope, MessageStore,
 };
+use crate::services::inbox_watcher::InboxWatcher;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::env;
+use std::fs;
 use std::io::Write;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 pub(crate) fn send(ctx: &Ctx, to: &str, scope: Option<&str>, message: &[String]) -> Result<()> {
     let text = message.join(" ");
@@ -138,6 +144,58 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn watch(ctx: &Ctx, agent: Option<&str>, timeout: Duration, json: bool) -> Result<()> {
+    if timeout.is_zero() {
+        bail!("wt msg watch: --timeout 0 is invalid (use 'wt msg list' for snapshot)");
+    }
+
+    let signal_state = WatchSignalState::install()?;
+    let agent = resolve_watch_agent(ctx, agent)?;
+    let inbox_new = ctx
+        .storage_root
+        .messages_dir()
+        .join(agent.as_str())
+        .join("inbox")
+        .join("new");
+    fs::create_dir_all(&inbox_new)
+        .with_context(|| format!("Failed to create inbox: {}", inbox_new.display()))?;
+
+    let mut watcher = InboxWatcher::new(&inbox_new)?;
+    signal_state.exit_if_signaled()?;
+    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    let pending = watcher.drain_pending()?;
+    if !pending.is_empty() {
+        emit_paths(ctx, &store, agent.as_str(), &pending, json, &mut out)?;
+        out.flush()?;
+        signal_state.exit_if_signaled()?;
+        return Ok(());
+    }
+
+    let started = Instant::now();
+    loop {
+        signal_state.exit_if_signaled()?;
+        let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
+            out.flush()?;
+            return Ok(());
+        };
+        if remaining.is_zero() {
+            out.flush()?;
+            return Ok(());
+        }
+
+        let wait_for = remaining.min(Duration::from_millis(100));
+        if let Some(path) = watcher.wait_next(wait_for)? {
+            emit_paths(ctx, &store, agent.as_str(), &[path], json, &mut out)?;
+            out.flush()?;
+            signal_state.exit_if_signaled()?;
+            return Ok(());
+        }
+    }
+}
+
 fn resolve_agent_arg(ctx: &Ctx, input: &str) -> Result<AgentId> {
     if input.trim() == COORDINATOR_AGENT_ALIAS {
         return coordinator_agent_from_context(ctx);
@@ -171,6 +229,102 @@ fn inbox_agents_from_context(_ctx: &Ctx) -> Result<Vec<String>> {
         Err(env::VarError::NotUnicode(_)) => bail!("Invalid WT_AGENT_ID: value is not Unicode"),
     }
     Ok(agents)
+}
+
+fn resolve_watch_agent(ctx: &Ctx, agent: Option<&str>) -> Result<AgentId> {
+    if let Some(agent) = agent {
+        return resolve_agent_arg(ctx, agent).context("Invalid agent id");
+    }
+
+    if let Some(agent) = env_agent_id("WT_COORDINATOR_AGENT_ID")? {
+        return Ok(agent);
+    }
+    if let Some(agent) = env_agent_id("WT_AGENT_ID")? {
+        return Ok(agent);
+    }
+
+    bail!(
+        "wt msg watch could not resolve an agent id. Tried explicit --agent, WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Pass --agent <agent>, run `wt coord use <id>`, bind the session with `eval \"$(wt session set <id>)\"`, or launch through `wt as`, `wt codex`, or `wt claude`."
+    )
+}
+
+fn env_agent_id(name: &str) -> Result<Option<AgentId>> {
+    match env::var(name) {
+        Ok(value) => {
+            let value = value.trim();
+            if value.is_empty() {
+                Ok(None)
+            } else {
+                AgentId::parse(value)
+                    .map(Some)
+                    .with_context(|| format!("Invalid {name}"))
+            }
+        }
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => bail!("Invalid {name}: value is not Unicode"),
+    }
+}
+
+fn emit_paths<W: Write>(
+    ctx: &Ctx,
+    store: &MessageStore,
+    agent: &str,
+    paths: &[std::path::PathBuf],
+    json: bool,
+    out: &mut W,
+) -> Result<()> {
+    for path in paths {
+        let Some(record) = store.read_at_path(agent, path)? else {
+            continue;
+        };
+        let row = MessageRow::from_record(ctx, record);
+        if json {
+            emit_line_json(out, &row)?;
+        } else {
+            emit_line_tsv(out, &row)?;
+        }
+    }
+    Ok(())
+}
+
+fn emit_line_tsv<W: Write>(out: &mut W, row: &MessageRow) -> Result<()> {
+    writeln!(out, "{}", list_row_text(row))?;
+    Ok(())
+}
+
+fn emit_line_json<W: Write>(out: &mut W, row: &MessageRow) -> Result<()> {
+    serde_json::to_writer(&mut *out, row)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+struct WatchSignalState {
+    sigint: Arc<AtomicBool>,
+    sigterm: Arc<AtomicBool>,
+}
+
+impl WatchSignalState {
+    fn install() -> Result<Self> {
+        let sigint = Arc::new(AtomicBool::new(false));
+        let sigterm = Arc::new(AtomicBool::new(false));
+        signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&sigint))
+            .context("Failed to install SIGINT handler")?;
+        signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&sigterm))
+            .context("Failed to install SIGTERM handler")?;
+        Ok(Self { sigint, sigterm })
+    }
+
+    fn exit_if_signaled(&self) -> Result<()> {
+        if self.sigint.load(Ordering::Relaxed) {
+            std::io::stdout().flush()?;
+            return Err(WtError::Exit { code: 130 }.into());
+        }
+        if self.sigterm.load(Ordering::Relaxed) {
+            std::io::stdout().flush()?;
+            return Err(WtError::Exit { code: 143 }.into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize)]

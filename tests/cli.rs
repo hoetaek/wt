@@ -1438,6 +1438,21 @@ id = "PROJ-123"
 }
 
 #[test]
+fn task_list_empty_inventory_uses_plain_output() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "task", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "No tasks found in <git-common-dir>/wt/tasks",
+        ))
+        .stdout(predicate::str::contains("==>").not());
+}
+
+#[test]
 fn task_import_help_explains_behavior() {
     wt_command()
         .args(["task", "import", "--help"])
@@ -3057,6 +3072,21 @@ run = "run-2026-05-18-001-schema"
             .unwrap()
             .contains("Failed to parse workflow")
     );
+}
+
+#[test]
+fn workflow_list_empty_inventory_uses_plain_output() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "workflow", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "No workflows found in <git-common-dir>/wt/workflows",
+        ))
+        .stdout(predicate::str::contains("==>").not());
 }
 
 #[test]
