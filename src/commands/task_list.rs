@@ -161,7 +161,7 @@ fn one_line(value: &str) -> String {
 fn print_text(ctx: &Ctx, report: &TaskListReport) {
     if report.tasks.is_empty() && report.invalid_tasks.is_empty() {
         ctx.ui
-            .print_step("No tasks found in <git-common-dir>/wt/tasks");
+            .print_plain("No tasks found in <git-common-dir>/wt/tasks");
         return;
     }
 

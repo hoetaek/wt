@@ -308,7 +308,7 @@ fn one_line(value: &str) -> String {
 
 fn print_text(ctx: &Ctx, report: &WorkflowListReport) {
     if report.workflows.is_empty() && report.invalid_workflows.is_empty() {
-        ctx.ui.print_step(&format!(
+        ctx.ui.print_plain(&format!(
             "No workflows found in {}",
             ctx.storage_root
                 .display_path(&ctx.storage_root.workflows_dir())
