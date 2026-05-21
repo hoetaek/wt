@@ -14,6 +14,23 @@ or decide final scope from this skill. Use `wt-ready` for idea-to-task
 conversion, `wt-start` for execution, `wt-coordinate` for running work, and
 `wt-land` for reviewed work.
 
+## Kill-able Identity
+
+An idea is exploration. It is allowed to die.
+
+- An idea file at `<git-common-dir>/wt/ideas/<slug>.{md,toml}` may be deleted,
+  rewritten, or abandoned at any time without any state transition that other
+  components observe.
+- No downstream consumer (wt CLI, wt-ready, wt-start, workflows) depends on an
+  idea file continuing to exist. Removing one is not breakage.
+- Do not promote prematurely. Do not create TaskDocuments, specs, or workflows
+  from inside `wt-idea`. Promotion is `wt-ready`'s job: when the user commits
+  in `wt-ready`, the idea file is removed and a `specs/<slug>/` directory
+  (with `requirements.md`, `design.md`, `tasks.md`) takes its place. That
+  directory move is the visible commit gate, not anything `wt-idea` does.
+- Treat the idea body as scratch surface, not a contract. Optimise for honest
+  exploration, including recording reasons to drop the idea entirely.
+
 ## First Read
 
 Inspect local truth before asking questions:
@@ -79,26 +96,37 @@ questions.
 
 ## Status Model
 
-Use these statuses in idea files:
+Use these statuses in idea files. Every status describes a state of a living
+idea file; once `wt-ready` promotes the idea, the file itself is removed (see
+"Kill-able Identity"), so there is no post-promotion status to record here.
 
 - `captured`: raw idea saved with minimal context.
 - `enriched`: local/external context and alternatives have been gathered.
 - `ready_for_wt_ready`: enough information exists for `wt-ready` to prepare
   TaskDocuments/workflows.
-- `converted`: already turned into TaskDocuments or workflow by `wt-ready`.
 - `archived`: intentionally not pursuing now.
 
 Default to `enriched` when you performed meaningful research. Use
 `ready_for_wt_ready` only when scope, unresolved questions, and next checks are
-clear enough for `wt-ready` to proceed without rediscovering the basics.
+clear enough for `wt-ready` to proceed without rediscovering the basics. There
+is no `converted` status: promotion deletes the idea file and creates
+`specs/<slug>/`, so a converted idea has no file left to carry a status.
 
 ## File Format
 
-Store ideas in `<git-common-dir>/wt/ideas/<date>-<slug>.toml`. Use lowercase ASCII
-kebab-case slugs. If an idea already exists, update the existing file instead
-of creating a duplicate.
+Store ideas in `<git-common-dir>/wt/ideas/<slug>.{md,toml}`. Use lowercase ASCII
+kebab-case slugs. Pick the extension by what fits the body best:
 
-Use only simple top-level TOML fields and put rich planning context in `body`:
+- `.md` for free-form Markdown notes when prose, links, and loose structure
+  serve the exploration best.
+- `.toml` when you want a few simple top-level fields plus a `body` string.
+
+If an idea already exists at either extension, update that file instead of
+creating a duplicate. Do not write into `<git-common-dir>/wt/specs/` from this
+skill; that directory is `wt-ready`'s output.
+
+TOML shape, when you choose `.toml`. Use only simple top-level fields and put
+rich planning context in `body`:
 
 ```toml
 title = "Short Korean title"
@@ -140,8 +168,25 @@ Next step:
 """
 ```
 
+Markdown shape, when you choose `.md`. Keep front matter optional and lean,
+and put the same sections (raw intent, outcome, evidence, options, tradeoffs,
+risks, non-goals, open questions, next step) as plain headings or bullets.
+
 Do not add nested TOML tables unless the local schema explicitly adopts them.
-Keep the file easy to read, diff, and convert later.
+Keep the file easy to read, diff, and later hand to `wt-ready`.
+
+### Optional light EARS seed
+
+If, while capturing the idea, you already know a core behaviour clearly, you
+MAY include one light EARS-style line such as:
+
+```text
+WHEN <condition> THE SYSTEM SHALL <behavior>.
+```
+
+This is optional. Do not force EARS phrasing in the idea stage; vague ideas
+should stay vague. When it is naturally there, it gives `wt-ready` a head start
+on `requirements.md`. When it is not, leave it out.
 
 ## Questions
 
@@ -162,8 +207,13 @@ End with:
 - exact next skill invocation or target, for example:
 
 ```text
-$wt-ready <git-common-dir>/wt/ideas/YYYY-MM-DD-slug.toml
+$wt-ready <git-common-dir>/wt/ideas/<slug>.md
 ```
+
+When `wt-ready` is later invoked on the idea and the user commits, `wt-ready`
+will remove this idea file and create `<git-common-dir>/wt/specs/<slug>/` with
+`requirements.md`, `design.md`, and `tasks.md`. That promotion is not done from
+inside `wt-idea`.
 
 If the user asked only for a list or review of ideas, do not write files unless
 they explicitly ask to register or update an idea.
