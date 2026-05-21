@@ -5,6 +5,8 @@ use cliclack::{Theme, ThemeState};
 use console::{Style, measure_text_width, style};
 use std::io::{self, IsTerminal};
 
+pub(crate) mod selector;
+
 const PROMPT_MAX_ROWS: usize = 10;
 const PROMPT_HINT_GAP: usize = 2;
 const PROMPT_SEARCH_SEPARATOR: char = '\x1f';
