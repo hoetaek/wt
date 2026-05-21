@@ -47,8 +47,9 @@ pub fn write_registration(ctx: &Ctx, registration: &Registration) -> Result<()> 
     let rendered = toml::to_string_pretty(registration)
         .context("Failed to serialize supervisor registration")?;
     let temp_path = dir.join(format!(
-        ".{}.{}.tmp",
+        ".{}.{}.{}.tmp",
         encoded_agent_id(&registration.agent_id),
+        std::process::id(),
         TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     fs::write(&temp_path, rendered).with_context(|| {
@@ -125,6 +126,7 @@ pub fn supervisor_is_alive(registration: &Registration) -> Result<bool> {
     match signal::kill(pid, None) {
         Ok(()) => Ok(true),
         Err(Errno::ESRCH) => Ok(false),
+        Err(Errno::EPERM) => Ok(true),
         Err(err) => Err(err).with_context(|| {
             format!(
                 "Failed to check supervisor PID {} for {}",

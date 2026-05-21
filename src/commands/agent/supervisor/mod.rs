@@ -113,7 +113,12 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
         poll_interval_secs,
         log_path: log_path.clone(),
     };
-    write_registration(ctx, &registration)?;
+    if let Err(err) = write_registration(ctx, &registration) {
+        let _ = signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+        let mut child = child;
+        let _ = child.try_wait();
+        return Err(err).context("Failed to persist supervisor registration after spawn");
+    }
 
     if !ctx.quiet {
         println!(
