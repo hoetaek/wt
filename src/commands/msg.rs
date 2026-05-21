@@ -244,7 +244,7 @@ fn resolve_watch_agent(ctx: &Ctx, agent: Option<&str>) -> Result<AgentId> {
     }
 
     bail!(
-        "wt msg watch could not resolve an agent id. Tried explicit --agent, WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Pass --agent <agent>, run `wt coord use <id>`, bind the session with `wt session set <id>`, or launch through `wt as`, `wt codex`, or `wt claude`."
+        "wt msg watch could not resolve an agent id. Tried explicit --agent, WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Pass --agent <agent>, run `wt coord use <id>`, bind the session with `eval \"$(wt session set <id>)\"`, or launch through `wt as`, `wt codex`, or `wt claude`."
     )
 }
 

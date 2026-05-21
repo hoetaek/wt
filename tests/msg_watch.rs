@@ -205,18 +205,22 @@ fn msg_watch_skips_message_that_is_claimed_by_a_racing_reader() {
         .spawn()
         .unwrap();
 
+    let mut moved = false;
     for _ in 0..100 {
         let files = toml_files(&inbox.join("new"));
         if let Some(path) = files.first() {
             let target = claimed.join(path.file_name().unwrap());
-            let _ = std::fs::rename(path, target);
+            std::fs::rename(path, target).unwrap();
+            moved = true;
             break;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
 
     let output = child.wait_with_output().unwrap();
+    assert!(moved, "expected race setup to move message into claimed");
     assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
 
@@ -370,9 +374,9 @@ fn msg_watch_rejects_zero_timeout() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "wt msg watch: --timeout 0 is invalid (use 'wt msg list' for snapshot)",
-        ));
+        .stderr(predicate::str::contains("invalid value '0'"))
+        .stderr(predicate::str::contains("--timeout <TIMEOUT>"))
+        .stderr(predicate::str::contains("0 is not in 1.."));
 }
 
 #[test]

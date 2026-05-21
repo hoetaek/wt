@@ -642,7 +642,7 @@ pub enum MsgCommand {
         #[arg(long)]
         agent: Option<String>,
         /// Maximum seconds to wait for a new inbox/new message; must be greater than 0
-        #[arg(long, default_value_t = 300)]
+        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: u64,
         /// Emit newline-delimited JSON message rows
         #[arg(long)]
