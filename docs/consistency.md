@@ -741,13 +741,72 @@ matrix --profiles`는 “명시한 profile subset을 저장된 workflow로 확�
 
 Interactive prompt도 CLI contract다. 사용자가 값을 생략해서 selector가 열리는
 command는 무엇을 고르는지, 한 개를 고르는지 여러 개를 고르는지, 빈 선택이 허용되는지
-문서와 help text에서 같은 말로 설명해야 한다. Selector는 작은 terminal prompt로
-동작하고, filterable list와 최대 10개 visible row 안에서 task, branch, PR, workflow,
-config section 같은 현재 concept label만 보여준다. 색상, symbol, checkbox는 보조
-표현일 뿐이고 의미는 text label에 남아야 한다. 보조 metadata가 있는 row는 같은 prompt
-page 안에서 hint column을 맞춰 보여주되, filter 대상은 padding이 아니라 concept label과
-metadata text여야 한다. Metadata가 없는 plain label selector에는 가짜 column을 만들지
-않는다.
+문서와 help text에서 같은 말로 설명해야 한다. Selector는 작은 inline terminal prompt로
+동작한다. Full-screen TUI가 아니며, prompt header/footer/filter input/summary를 제외한
+selector body는 기본 10개 visible row 안에서 bounded list로 보여준다. 명령이 scriptable
+target argument를 지원하면 non-TTY, `--json`, `--quiet` automation에서는 selector를 열지
+말고 그 explicit argument path를 요구한다.
+
+Canonical selector row model은 두 row type이다.
+
+- Section row: group title과 optional hint를 보여주는 non-selectable header다. Value/index가
+  없고, focus를 받을 수 없으며, space/enter submission 대상이 아니다. Filtering 뒤 selectable
+  option이 하나도 남지 않은 section은 보여주지 않는다.
+- Option row: command가 반환할 value/index를 가진 selectable row다. Option은 concept
+  `label`, optional `hint`/metadata, optional search-only text, selected/disabled state를
+  별도 field로 가진다.
+
+Selector rendering은 label과 metadata를 섞어서 하나의 layout string으로 만들지 않는다.
+Label은 task, branch, PR, workflow, profile, config section 같은 현재 concept의 이름이다.
+Hint/metadata는 provider id, status, branch, path, profile, policy preview처럼 같은 선택지를
+구분하는 보조 정보다. Hint가 있는 row는 같은 prompt page 안에서 hint column을 맞춰 보여줄
+수 있지만, filter 대상은 padding이 아니라 label, metadata, search-only text다. Metadata가
+없는 plain label selector에는 가짜 column을 만들지 않는다.
+
+Selector filtering은 현재 visible text의 모양이 아니라 row data를 대상으로 한다. Typing은
+filter text를 갱신하고, backspace는 filter text를 한 character 지우며, filter가 바뀌면 active
+focus는 첫 matching selectable option으로 이동한다. No-match 상태에서는 option focus가
+없어야 하며 enter/space가 hidden stale option에 적용되면 안 된다. Section header는 matching
+대상이 아니라 matching option의 context다.
+
+Keyboard behavior는 prompt마다 다시 해석하지 않는다.
+
+- Up/down arrows move active focus to the previous/next selectable option in filtered order and
+  skip section rows. They stop at the first/last selectable option unless a future selector contract
+  explicitly adds wrapping.
+- Space toggles the active option only for multiselect prompts. It never toggles a section header.
+- Enter submits the active option for single-select, or the current selected set for multiselect.
+  Whether an empty multiselect is valid is command-specific and must be documented at that command.
+- Escape and ctrl-c cancel cleanly, restore terminal state, and surface the same cancelled prompt
+  error shape as other wt prompt cancellation.
+- Backspace edits the filter text and must not alter selection state.
+
+When filtered rows exceed the visible cap, the selector shows hidden-before/hidden-after context
+using text or stable symbols such as `↑ N more` and `↓ N more`; color can strengthen this but cannot
+be the only cue. Hidden counts count selectable option rows outside the current visible window, not
+decorative section lines. Multiselect row state must remain readable without color: active,
+selected, unselected, disabled, and cancelled/submitted states need stable text or symbols. Grouped
+or long-list multiselects show a `Selected:` summary when that materially improves comprehension;
+compact ungrouped multiselects do not show that summary by default. Summary text uses selected
+labels and may collapse long selections with a `+N more` suffix.
+
+Reference UI evidence for this contract:
+
+- `vercel-labs/skills` `src/prompts/search-multiselect.ts` owns a custom row model, raw key handling,
+  search input, hidden before/after counts, and selected summaries. Its locked section is useful
+  evidence for non-option context, but wt should model ordinary section headers separately from
+  always-selected locked values.
+- `vercel-labs/skills` `src/list.ts` groups non-interactive inventory output by plugin. This supports
+  sectioned scanning as a presentation pattern, but it is not an interactive selector API.
+- Cliclack 0.5.4 `Select`/`MultiSelect` store only option items with `label`/`hint`; theme hooks can
+  format rows, but filtering and submission are still option-list shaped. Section headers would be
+  fake selectable items or require adapter hacks.
+- Inquire 0.9.4 `Select`/`MultiSelect` provide filtering, paging, scorers, defaults, validators, and
+  `ListOption { index, value }`, but the public model is still a non-empty `Vec<T: Display>` of
+  selectable options.
+- Dialoguer 0.12.0 `Select`/`MultiSelect` provide option items, defaults, paging, and optional
+  cancellation surfaces; they do not provide first-class non-selectable section rows. Its
+  `FuzzySelect` is single-select only and still filters a string option list.
 
 ### Progressive Disclosure
 *North star: [Persona](north-star.md#persona).*
