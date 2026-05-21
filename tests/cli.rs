@@ -4,7 +4,8 @@ use predicates::prelude::*;
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
+use std::process::{Child, Command as StdCommand};
+use std::time::{Duration, Instant};
 
 const GIT_LOCAL_ENV_KEYS: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -280,6 +281,57 @@ updated_at = "2026-05-18T00:00:00.000000000Z"
         ),
     )
     .unwrap();
+}
+
+#[cfg(unix)]
+fn spawn_sleeping_child() -> Child {
+    StdCommand::new("sh")
+        .arg("-c")
+        .arg("sleep 30")
+        .spawn()
+        .unwrap()
+}
+
+#[cfg(unix)]
+fn spawn_term_ignoring_child() -> Child {
+    StdCommand::new("sh")
+        .arg("-c")
+        .arg("trap '' TERM; while :; do sleep 1; done")
+        .spawn()
+        .unwrap()
+}
+
+#[cfg(unix)]
+fn write_supervisor_registration(
+    root: &Path,
+    agent_id: &str,
+    pid: u32,
+    started_by: &str,
+    stale_threshold_secs: u64,
+    poll_interval_secs: u64,
+) -> PathBuf {
+    let dir = root.join(".git/wt/supervisors");
+    std::fs::create_dir_all(&dir).unwrap();
+    let encoded = agent_id.replace('/', "__");
+    let path = dir.join(format!("{encoded}.toml"));
+    let log_path = dir.join(format!("{encoded}.log"));
+    std::fs::write(
+        &path,
+        format!(
+            r#"agent_id = "{agent_id}"
+pid = {pid}
+started_at = "2026-05-22T00:00:00Z"
+started_by = "{started_by}"
+cleanup_on_session_end = false
+stale_threshold_secs = {stale_threshold_secs}
+poll_interval_secs = {poll_interval_secs}
+log_path = "{}"
+"#,
+            log_path.display()
+        ),
+    )
+    .unwrap();
+    path
 }
 
 fn write_wait_observations(root: &Path, content: &str) {
@@ -6017,4 +6069,196 @@ fn list_supports_json_and_directory_override() {
 
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert!(value.as_array().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn supervisor_start_records_threshold_and_poll_interval() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "supervisor",
+            "start",
+            "agents/codex",
+            "--stale-threshold",
+            "5m",
+            "--poll-interval",
+            "30s",
+            "--surface",
+            "surface:72",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Supervisor started"));
+
+    let content =
+        std::fs::read_to_string(temp.path().join(".git/wt/supervisors/agents__codex.toml"))
+            .unwrap();
+    assert!(content.contains("agent_id = \"agents/codex\""));
+    assert!(content.contains("target_surface_id = \"surface:72\""));
+    assert!(content.contains("stale_threshold_secs = 300"));
+    assert!(content.contains("poll_interval_secs = 30"));
+}
+
+#[cfg(unix)]
+#[test]
+fn supervisor_start_refuses_live_duplicate_and_replace_succeeds() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let mut child = spawn_sleeping_child();
+    write_supervisor_registration(temp.path(), "agents/codex", child.id(), "user", 900, 60);
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "supervisor",
+            "start",
+            "agents/codex",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Supervisor already running"));
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "supervisor",
+            "start",
+            "agents/codex",
+            "--replace",
+        ])
+        .assert()
+        .success();
+
+    let _ = child.wait();
+    assert!(
+        !std::fs::read_to_string(temp.path().join(".git/wt/supervisors/agents__codex.toml"))
+            .unwrap()
+            .contains(&format!("pid = {}", child.id()))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn supervisor_status_json_includes_timing_fields() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let mut child = spawn_sleeping_child();
+    write_supervisor_registration(temp.path(), "agents/codex", child.id(), "user", 300, 30);
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "agent",
+            "supervisor",
+            "status",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value[0]["agent_id"], "agents/codex");
+    assert_eq!(value[0]["state"], "running");
+    assert_eq!(value[0]["stale_threshold_secs"], 300);
+    assert_eq!(value[0]["poll_interval_secs"], 30);
+
+    child.kill().unwrap();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+#[test]
+fn supervisor_stop_owned_by_filters_started_by() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let mut owned = spawn_sleeping_child();
+    let mut other = spawn_sleeping_child();
+    write_supervisor_registration(
+        temp.path(),
+        "agents/owned",
+        owned.id(),
+        "agents/foo",
+        900,
+        60,
+    );
+    write_supervisor_registration(
+        temp.path(),
+        "agents/other",
+        other.id(),
+        "agents/bar",
+        900,
+        60,
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "supervisor",
+            "stop",
+            "--owned-by",
+            "agents/foo",
+        ])
+        .assert()
+        .success();
+
+    let _ = owned.wait();
+    assert!(
+        !temp
+            .path()
+            .join(".git/wt/supervisors/agents__owned.toml")
+            .exists()
+    );
+    assert!(
+        temp.path()
+            .join(".git/wt/supervisors/agents__other.toml")
+            .exists()
+    );
+    other.kill().unwrap();
+    let _ = other.wait();
+}
+
+#[cfg(unix)]
+#[test]
+fn supervisor_stop_escalates_sigkill_after_timeout() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let mut child = spawn_term_ignoring_child();
+    write_supervisor_registration(temp.path(), "agents/stubborn", child.id(), "user", 900, 60);
+
+    let started = Instant::now();
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "supervisor",
+            "stop",
+            "agents/stubborn",
+        ])
+        .assert()
+        .success();
+    assert!(started.elapsed() >= Duration::from_secs(5));
+
+    let _ = child.wait();
+    assert!(
+        !temp
+            .path()
+            .join(".git/wt/supervisors/agents__stubborn.toml")
+            .exists()
+    );
 }
