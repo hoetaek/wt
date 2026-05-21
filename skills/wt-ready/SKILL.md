@@ -190,6 +190,26 @@ TaskRun lifecycle, and branch deletion remain explicit later steps.
 
 ## Spec Deliverables
 
+### Prep eagerly across in-flight work
+
+When multiple ideas, partially-drafted specs, or decisions made in the current
+conversation can be identified, prepare them all to launch-ready state rather
+than sequencing prep behind execution. Specs are living artifacts (see the
+two-way sync rule near the end of this section); the cost of revising a spec
+mid-execution is small, and the cost of carrying unprepared decisions through
+other work — context loss, decision drift, missed cross-spec consistency — is
+large. Cross-spec relationships are also easier to check when all specs exist
+simultaneously.
+
+Sequence prep behind execution only when there is a genuine blocking
+dependency (a downstream spec cannot be authored until the upstream has
+partially landed). "The spec might change later" is not a blocking dependency —
+that is exactly the case the living-artifact rule covers.
+
+When asked "is anything else not wt-ready yet?", enumerate every in-flight
+item (recent ideas, just-decided framings, conversation-only specs) and bring
+them all to ready unless the user explicitly defers a specific one.
+
 Spec authoring is not one-shot drafting. Each file in `specs/<slug>/` is produced
 through the grill cycle described in **Grill The Spec** below: draft → challenge
 the user with file-specific questions → revise → confirm, then move to the next
@@ -245,6 +265,21 @@ idea, may go straight into `specs/<slug>/` without an idea file existing first.
   Business Rules) and a Dynamic Model (workflow / behavior) section before the
   new design.
 - Prefer intent and component responsibility over raw code dumps.
+- **Embed ASCII diagrams inside design.md** where the static model, dynamic
+  model, or layered relationship with sibling specs would benefit from a
+  structural view. Diagrams that live only in chat evaporate; the durable
+  artifact is the spec file. At minimum, when the design has non-trivial
+  structure, include diagrams for:
+  - **Component layout** — modules / files / boundaries, marking what is new
+    versus reused.
+  - **Key flow paths** — happy path(s) and any critical race or ordering
+    constraint.
+  - **Layered or cross-spec relationships** — how this design depends on or is
+    depended on by sibling specs (dependency direction, layer assignment).
+  - Three small focused diagrams beat one mega-diagram.
+- Treat diagrams as a Confirm-step requirement: after the prose draft passes
+  the grill, produce or refine diagrams and commit them to design.md before
+  moving on to `tasks.md`.
 
 `tasks.md`:
 
@@ -302,9 +337,30 @@ spec that the rest of `wt-ready` can derive an execution shape from.
 3. **Revise** the draft inline based on the answer. Surface terminology
    conflicts against `docs/consistency.md` (or the project's CONTEXT.md when
    present) as they appear — ubiquitous-language drift is cheapest to fix here.
-4. **Confirm** with the user that the file is settled before moving to the next
-   file. Until that confirmation, the draft is not authoritative and downstream
-   derivation (workflow mode, TaskDocument prep) must not run.
+4. **Display for review** — after every revision (and especially after the
+   prose draft has passed the grill and any ASCII diagrams have been added for
+   `design.md`), surface the *actual file content* so the user can read it
+   end-to-end before confirming. Prose summaries of "what changed" are not a
+   substitute. Pick one of these mechanisms in order of preference based on
+   the user's setup:
+   1. **`wt config`-configured editor** — if `[editor].command` is set
+      (e.g., `code {{path}}`, `vi {{path}}`, `cursor {{path}}`), invoke that
+      command with the modified file path so it opens in the user's editor of
+      choice. This is the cleanest path because it does not flood the
+      conversation surface and the user can review with full editor tooling
+      (folding, syntax highlight, etc.).
+   2. **cmux markdown pane** — if cmux is active and the user prefers a
+      side-by-side review surface, open the file in a cmux pane configured for
+      markdown rendering. Useful when the user wants to keep the agent
+      conversation visible while reviewing.
+   3. **Terminal print** — as a last resort, print the file content directly
+      to the conversation. This always works but bloats the chat. Acceptable
+      for short files; for long specs (>200 lines) prefer the editor path.
+   When in doubt, ask once which mechanism the user prefers and apply that
+   choice consistently for the rest of the wt-ready cycle.
+5. **Confirm** with the user that the file is settled before moving to the
+   next file. Until that confirmation, the draft is not authoritative and
+   downstream derivation (workflow mode, TaskDocument prep) must not run.
 
 ### File-specific grill foci
 
