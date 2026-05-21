@@ -1,5 +1,7 @@
 use crate::context::Ctx;
-use crate::messages::AgentId;
+use crate::messages::{AgentId, Message, MessageLease, MessageStore};
+use crate::services::cmux_push::{CmuxPushService, DEFAULT_PAYLOAD_CAP_BYTES, PushKind};
+use crate::services::identity_locator::percent_encode;
 use crate::services::identity_locator::process_start_time;
 use crate::services::supervisor_registration::{
     Registration, list_registrations, log_path, read_registration, registration_path,
@@ -18,6 +20,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_STALE_THRESHOLD_SECS: u64 = 15 * 60;
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
+const DEFAULT_CYCLE_CAP: usize = 64;
+const MAX_PUSH_ATTEMPTS: u32 = 3;
+const CLAIM_LEASE_SECS: u64 = 60;
 const STOP_GRACE: Duration = Duration::from_secs(5);
 const STOP_POLL: Duration = Duration::from_millis(100);
 
@@ -25,6 +30,7 @@ const STOP_POLL: Duration = Duration::from_millis(100);
 pub struct StartOptions {
     pub replace: bool,
     pub surface: Option<String>,
+    pub kind: Option<String>,
     pub cleanup_on_session_end: Option<bool>,
     pub stale_threshold: String,
     pub poll_interval: String,
@@ -40,9 +46,12 @@ pub struct StopOptions {
 pub struct RunOptions {
     pub foreground: bool,
     pub surface: Option<String>,
+    pub kind: Option<String>,
     pub cleanup_on_session_end: Option<bool>,
     pub stale_threshold_secs: u64,
     pub poll_interval_secs: u64,
+    pub cycle_cap: usize,
+    pub payload_cap: usize,
     pub log_path: Option<PathBuf>,
 }
 
@@ -57,6 +66,12 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
         .with_context(|| format!("Invalid --stale-threshold `{}`", options.stale_threshold))?;
     let poll_interval_secs = parse_duration(&options.poll_interval)
         .with_context(|| format!("Invalid --poll-interval `{}`", options.poll_interval))?;
+    let target_agent_kind = options
+        .kind
+        .as_deref()
+        .map(parse_kind_option)
+        .transpose()?
+        .map(|kind| kind.as_str().to_string());
 
     if let Some(existing) = read_registration(ctx, agent_id.as_str())? {
         if supervisor_is_alive(&existing)? {
@@ -118,7 +133,7 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
         started_by,
         cleanup_on_session_end,
         target_surface_id: options.surface.clone(),
-        target_agent_kind: None,
+        target_agent_kind,
         stale_threshold_secs,
         poll_interval_secs,
         log_path: log_path.clone(),
@@ -255,14 +270,304 @@ pub fn run(ctx: &Ctx, agent_id: &str, options: RunOptions) -> Result<()> {
     let log_path = options.log_path.unwrap_or_else(|| {
         crate::services::supervisor_registration::log_path(ctx, agent_id.as_str())
     });
+    let registration = read_registration(ctx, agent_id.as_str())?;
+    let target_surface_id = options.surface.or_else(|| {
+        registration
+            .as_ref()
+            .and_then(|registration| registration.target_surface_id.clone())
+    });
+    let fallback_kind = options
+        .kind
+        .as_deref()
+        .map(parse_kind_option)
+        .transpose()?
+        .or_else(|| {
+            registration
+                .as_ref()
+                .and_then(|registration| registration.target_agent_kind.as_deref())
+                .map(PushKind::parse)
+        })
+        .unwrap_or(PushKind::Unknown);
+    let config = SupervisorLoopConfig {
+        target_surface_id,
+        fallback_kind,
+        stale_threshold_secs: options.stale_threshold_secs,
+        poll_interval_secs: options.poll_interval_secs,
+        cycle_cap: options.cycle_cap,
+        payload_cap: options.payload_cap,
+        log_path,
+    };
+    if config.cycle_cap == 0 {
+        bail!("Supervisor --cycle-cap must be positive");
+    }
+    if config.payload_cap == 0 {
+        bail!("Supervisor --payload-cap must be positive");
+    }
+    if config.stale_threshold_secs == 0 {
+        bail!("Supervisor --stale-threshold-secs must be positive");
+    }
+    if config.poll_interval_secs == 0 {
+        bail!("Supervisor --poll-interval-secs must be positive");
+    }
     append_log(
-        &log_path,
+        &config.log_path,
         &format!(
-            "RUN_STUB agent_id={} event=loop-not-yet-implemented foreground={}",
+            "START agent_id={} foreground={} stale_threshold_secs={} poll_interval_secs={} cycle_cap={} payload_cap={}",
             agent_id.as_str(),
-            options.foreground
+            options.foreground,
+            config.stale_threshold_secs,
+            config.poll_interval_secs,
+            config.cycle_cap,
+            config.payload_cap
         ),
     )?;
+    let mut state = SupervisorLoopState::default();
+    loop {
+        let stop_path = stop_requested_path(ctx, agent_id.as_str());
+        if stop_path.is_file() {
+            append_log(
+                &config.log_path,
+                &format!("STOP agent_id={}", agent_id.as_str()),
+            )?;
+            match fs::remove_file(&stop_path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!("Failed to remove stop sentinel {}", stop_path.display())
+                    });
+                }
+            }
+            remove_registration(ctx, agent_id.as_str())?;
+            return Ok(());
+        }
+        run_one_cycle(ctx, agent_id.as_str(), &config, &mut state)?;
+        std::thread::sleep(Duration::from_secs(config.poll_interval_secs));
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SupervisorLoopConfig {
+    target_surface_id: Option<String>,
+    fallback_kind: PushKind,
+    stale_threshold_secs: u64,
+    poll_interval_secs: u64,
+    cycle_cap: usize,
+    payload_cap: usize,
+    log_path: PathBuf,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct SupervisorLoopState {
+    pushes_total: u64,
+    cycles_since_start: u64,
+    last_push_at: Option<String>,
+}
+
+fn run_one_cycle(
+    ctx: &Ctx,
+    agent_id: &str,
+    config: &SupervisorLoopConfig,
+    state: &mut SupervisorLoopState,
+) -> Result<()> {
+    state.cycles_since_start = state.cycles_since_start.saturating_add(1);
+    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let candidates = store.list_new(agent_id)?;
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let now = SystemTime::now();
+    let mut processed_this_cycle = 0usize;
+    for record in candidates {
+        if !record.is_valid() {
+            let error = record.error.as_deref().unwrap_or("invalid message");
+            if store
+                .fail_new_path(agent_id, &record.path, error)
+                .with_context(|| format!("Failed to quarantine invalid message {}", record.id))?
+                .is_some()
+            {
+                append_log(
+                    &config.log_path,
+                    &format!(
+                        "FAILED_INVALID msg_id={} error={}",
+                        record.id,
+                        log_value(error)
+                    ),
+                )?;
+            }
+            continue;
+        }
+        let Some(message) = record.message.as_ref() else {
+            if store
+                .fail_new_path(agent_id, &record.path, "missing message payload")
+                .with_context(|| format!("Failed to quarantine invalid message {}", record.id))?
+                .is_some()
+            {
+                append_log(
+                    &config.log_path,
+                    &format!("FAILED_INVALID msg_id={} error=missing_message", record.id),
+                )?;
+            }
+            continue;
+        };
+        let created_at = match parse_utc_timestamp(&message.meta.created_at) {
+            Ok(created_at) => created_at,
+            Err(err) => {
+                let error = format!(
+                    "invalid meta.created_at `{}`: {err:#}",
+                    message.meta.created_at
+                );
+                if store
+                    .fail_new_path(agent_id, &record.path, &error)
+                    .with_context(|| {
+                        format!("Failed to quarantine invalid message {}", message.meta.id)
+                    })?
+                    .is_some()
+                {
+                    append_log(
+                        &config.log_path,
+                        &format!(
+                            "FAILED_INVALID msg_id={} error=invalid_created_at detail={}",
+                            message.meta.id,
+                            log_value(&format!("{err:#}"))
+                        ),
+                    )?;
+                }
+                continue;
+            }
+        };
+        let age = now
+            .duration_since(created_at)
+            .unwrap_or_else(|_| Duration::from_secs(0));
+        if age < Duration::from_secs(config.stale_threshold_secs) {
+            append_log(
+                &config.log_path,
+                &format!(
+                    "SKIP_FRESH msg_id={} age_secs={} stale_threshold_secs={}",
+                    message.meta.id,
+                    age.as_secs(),
+                    config.stale_threshold_secs
+                ),
+            )?;
+            continue;
+        }
+        if processed_this_cycle >= config.cycle_cap {
+            append_log(
+                &config.log_path,
+                &format!(
+                    "CYCLE_CAP_REACHED cycle={} cap={} skipped_msg_id={}",
+                    state.cycles_since_start, config.cycle_cap, message.meta.id
+                ),
+            )?;
+            break;
+        }
+        processed_this_cycle += 1;
+
+        if has_terminal_marker(message) {
+            if store
+                .deliver_new_without_claim(agent_id, &record.path)
+                .with_context(|| format!("Failed to deliver terminal message {}", message.meta.id))?
+                .is_some()
+            {
+                append_log(
+                    &config.log_path,
+                    &format!("TERMINAL_DELIVERED msg_id={}", message.meta.id),
+                )?;
+            }
+            continue;
+        }
+
+        let Some(surface_id) = config.target_surface_id.as_deref() else {
+            append_log(
+                &config.log_path,
+                &format!("SKIP_NO_SURFACE msg_id={}", message.meta.id),
+            )?;
+            continue;
+        };
+
+        let lease = MessageLease::new(Duration::from_secs(CLAIM_LEASE_SECS))?;
+        let Some(claimed) =
+            store.claim_new_path(agent_id, &record.path, "agents/supervisor", lease)?
+        else {
+            continue;
+        };
+        let payload = render_payload(&claimed.message, config.payload_cap);
+        let push = CmuxPushService::new(ctx.runner.as_ref()).with_payload_cap(config.payload_cap);
+        let detected_kind = push
+            .detect_target_kind(surface_id)
+            .unwrap_or(PushKind::Unknown);
+        let kind = if detected_kind == PushKind::Unknown {
+            config.fallback_kind
+        } else {
+            detected_kind
+        };
+        append_log(
+            &config.log_path,
+            &format!(
+                "PUSH_ATTEMPT msg_id={} target_surface={} kind={} payload_bytes={}",
+                claimed.message.meta.id,
+                surface_id,
+                kind.as_str(),
+                payload.len()
+            ),
+        )?;
+        match push.push_to_surface(surface_id, kind, &payload) {
+            Ok(()) => {
+                store.acknowledge_claimed_path(
+                    agent_id,
+                    "agents/supervisor",
+                    &claimed.claimed_path,
+                )?;
+                state.pushes_total = state.pushes_total.saturating_add(1);
+                state.last_push_at = Some(current_utc_timestamp());
+                append_log(
+                    &config.log_path,
+                    &format!(
+                        "PUSH_SUCCESS msg_id={} pushes_total={}",
+                        claimed.message.meta.id, state.pushes_total
+                    ),
+                )?;
+            }
+            Err(err) => {
+                let error = format!("{err:#}");
+                if claimed.message.delivery.attempts.saturating_add(1) >= MAX_PUSH_ATTEMPTS {
+                    store.fail_delivery(
+                        agent_id,
+                        "agents/supervisor",
+                        &claimed.message.meta.id,
+                        &error,
+                    )?;
+                    append_log(
+                        &config.log_path,
+                        &format!(
+                            "PUSH_FAILED msg_id={} attempts={} error={}",
+                            claimed.message.meta.id,
+                            claimed.message.delivery.attempts.saturating_add(1),
+                            log_value(&error)
+                        ),
+                    )?;
+                } else {
+                    store.retry_delivery(
+                        agent_id,
+                        "agents/supervisor",
+                        &claimed.message.meta.id,
+                        &error,
+                    )?;
+                    append_log(
+                        &config.log_path,
+                        &format!(
+                            "PUSH_RETRY msg_id={} attempts={} error={}",
+                            claimed.message.meta.id,
+                            claimed.message.delivery.attempts.saturating_add(1),
+                            log_value(&error)
+                        ),
+                    )?;
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -298,10 +603,17 @@ fn spawn_detached_run(
         .arg(stale_threshold_secs.to_string())
         .arg("--poll-interval-secs")
         .arg(poll_interval_secs.to_string())
+        .arg("--cycle-cap")
+        .arg(DEFAULT_CYCLE_CAP.to_string())
+        .arg("--payload-cap")
+        .arg(DEFAULT_PAYLOAD_CAP_BYTES.to_string())
         .arg("--log-path")
         .arg(log_path);
     if let Some(surface) = options.surface.as_ref() {
         command.arg("--surface").arg(surface);
+    }
+    if let Some(kind) = options.kind.as_ref() {
+        command.arg("--kind").arg(kind);
     }
     command
         .arg("--cleanup-on-session-end")
@@ -321,6 +633,67 @@ fn spawn_detached_run(
     command
         .spawn()
         .with_context(|| format!("Failed to spawn detached supervisor for {agent_id}"))
+}
+
+fn parse_kind_option(value: &str) -> Result<PushKind> {
+    let kind = PushKind::parse(value);
+    if kind == PushKind::Unknown && value.trim() != "unknown" {
+        bail!("Supervisor kind must be claude, codex, or unknown");
+    }
+    Ok(kind)
+}
+
+fn stop_requested_path(ctx: &Ctx, agent_id: &str) -> PathBuf {
+    ctx.storage_root
+        .personal_root()
+        .join("supervisors")
+        .join(format!("{}.stop", percent_encode(agent_id)))
+}
+
+fn has_terminal_marker(message: &Message) -> bool {
+    let body = message.text_content();
+    let body = body.trim_start();
+    body.starts_with("[done]") || body.starts_with("[stop]")
+}
+
+fn render_payload(message: &Message, cap_bytes: usize) -> String {
+    let summary = ascii_words(&message.body.summary);
+    let content = ascii_words(&message.text_content());
+    let reply_target = ascii_words(&message.meta.from);
+    let mut payload = format!(
+        "from {}: {}. {} respond via: wt msg send --to {}",
+        reply_target, summary, content, reply_target
+    );
+    payload = compact_spaces(&payload);
+    if payload.len() <= cap_bytes {
+        return payload;
+    }
+
+    let mut metadata_only = compact_spaces(&format!(
+        "from {}: message {}. respond via: wt msg send --to {}",
+        reply_target,
+        ascii_words(&message.meta.id),
+        reply_target
+    ));
+    if metadata_only.len() > cap_bytes {
+        metadata_only.truncate(cap_bytes);
+        while !metadata_only.is_char_boundary(metadata_only.len()) {
+            metadata_only.pop();
+        }
+    }
+    metadata_only
+}
+
+fn ascii_words(value: &str) -> String {
+    compact_spaces(&value.chars().filter(|ch| ch.is_ascii()).collect::<String>())
+}
+
+fn compact_spaces(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn log_value(value: &str) -> String {
+    ascii_words(value).replace(' ', "_")
 }
 
 fn stop_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
@@ -541,6 +914,70 @@ fn current_utc_timestamp() -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
+fn parse_utc_timestamp(value: &str) -> Result<SystemTime> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        bail!("expected UTC timestamp formatted as YYYY-MM-DDTHH:MM:SSZ");
+    }
+    let year = parse_i32_digits(&bytes[0..4], "year")?;
+    let month = parse_u32_digits(&bytes[5..7], "month")?;
+    let day = parse_u32_digits(&bytes[8..10], "day")?;
+    let hour = parse_u32_digits(&bytes[11..13], "hour")?;
+    let minute = parse_u32_digits(&bytes[14..16], "minute")?;
+    let second = parse_u32_digits(&bytes[17..19], "second")?;
+    if !(1..=12).contains(&month) {
+        bail!("month out of range");
+    }
+    if hour > 23 || minute > 59 || second > 59 {
+        bail!("time out of range");
+    }
+    let days = days_from_civil(year, month, day);
+    if civil_from_days(days) != (year as i64, month, day) {
+        bail!("day out of range");
+    }
+    let seconds = days
+        .checked_mul(86_400)
+        .and_then(|base| base.checked_add(i64::from(hour * 3_600 + minute * 60 + second)))
+        .ok_or_else(|| anyhow!("timestamp is out of range"))?;
+    if seconds >= 0 {
+        Ok(UNIX_EPOCH + Duration::from_secs(seconds as u64))
+    } else {
+        Ok(UNIX_EPOCH - Duration::from_secs((-seconds) as u64))
+    }
+}
+
+fn parse_i32_digits(value: &[u8], field: &str) -> Result<i32> {
+    Ok(parse_u32_digits(value, field)? as i32)
+}
+
+fn parse_u32_digits(value: &[u8], field: &str) -> Result<u32> {
+    if !value.iter().all(|byte| byte.is_ascii_digit()) {
+        bail!("{field} contains non-digit characters");
+    }
+    Ok(value
+        .iter()
+        .fold(0_u32, |acc, byte| acc * 10 + u32::from(byte - b'0')))
+}
+
+fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let year = i64::from(year) - if month <= 2 { 1 } else { 0 };
+    let month = i64::from(month);
+    let day_of_year =
+        (153 * (month + if month > 2 { -3 } else { 9 }) + 2).div_euclid(5) + i64::from(day) - 1;
+    let era = if year >= 0 { year } else { year - 399 }.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let day_of_era =
+        year_of_era * 365 + year_of_era.div_euclid(4) - year_of_era.div_euclid(100) + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let days = days + 719_468;
     let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
@@ -561,12 +998,17 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
+    use crate::messages::MessageStore;
     use crate::services::supervisor_registration::{read_registration, write_registration};
     use crate::storage::StorageRoot;
     use std::process::Command;
     use tempfile::TempDir;
 
     fn test_ctx(dir: &TempDir) -> Ctx {
+        test_ctx_with_runner(dir, MockRunner::new())
+    }
+
+    fn test_ctx_with_runner(dir: &TempDir, runner: MockRunner) -> Ctx {
         let repo_root = dir.path().join("repo");
         let git_common_dir = repo_root.join(".git");
         fs::create_dir_all(&git_common_dir).unwrap();
@@ -574,7 +1016,7 @@ mod tests {
             repo_root.clone(),
             repo_root,
             Config::default(),
-            Box::new(MockRunner::new()),
+            Box::new(runner),
             Box::new(MockUi::new()),
             crate::context::CtxOptions {
                 storage_root: Some(StorageRoot::from_git_common_dir(git_common_dir)),
@@ -616,9 +1058,273 @@ mod tests {
 
     #[test]
     fn rejects_invalid_durations() {
-        assert!(parse_duration("0s").is_err());
         assert!(parse_duration("m").is_err());
+        assert!(parse_duration("0s").is_err());
         assert!(parse_duration("10d").is_err());
+    }
+
+    #[test]
+    fn stale_gate_leaves_fresh_message_in_new() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(&dir);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "fresh")
+            .unwrap();
+        rewrite_message_created_at(&sent.path, &current_utc_timestamp());
+        let config = loop_config(&ctx, 900, 10);
+        let mut state = SupervisorLoopState::default();
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+
+        assert!(sent.path.exists());
+        assert!(!inbox_state_dir(&ctx, "codex", "delivered").exists());
+    }
+
+    #[test]
+    fn stale_message_is_claimed_pushed_and_delivered() {
+        let dir = TempDir::new().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"surfaces":[{"surface":"surface:4","env":{"CMUX_AGENT_LAUNCH_KIND":"codex"}}]}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let ctx = test_ctx_with_runner(&dir, runner);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "stale")
+            .unwrap();
+        rewrite_message_created_at(&sent.path, "1970-01-01T00:00:01Z");
+        let config = loop_config(&ctx, 900, 10);
+        let mut state = SupervisorLoopState::default();
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+
+        assert!(!sent.path.exists());
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "delivered")).len(),
+            1
+        );
+        assert_eq!(state.pushes_total, 1);
+    }
+
+    #[test]
+    fn terminal_marker_moves_to_delivered_without_push() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(&dir);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "[done] finished")
+            .unwrap();
+        rewrite_message_created_at(&sent.path, "1970-01-01T00:00:01Z");
+        let config = loop_config(&ctx, 900, 10);
+        let mut state = SupervisorLoopState::default();
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+
+        assert!(!sent.path.exists());
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "delivered")).len(),
+            1
+        );
+        assert_eq!(state.pushes_total, 0);
+    }
+
+    #[test]
+    fn missing_new_file_during_claim_is_treated_as_race() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(&dir);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "claimed by hook")
+            .unwrap();
+        rewrite_message_created_at(&sent.path, "1970-01-01T00:00:01Z");
+        fs::remove_file(&sent.path).unwrap();
+
+        let lease = MessageLease::new(Duration::from_secs(CLAIM_LEASE_SECS)).unwrap();
+        let claimed = store
+            .claim_new_path("agents/codex", &sent.path, "agents/supervisor", lease)
+            .unwrap();
+
+        assert!(claimed.is_none());
+    }
+
+    #[test]
+    fn terminal_marker_inside_user_text_is_not_control_signal() {
+        let dir = TempDir::new().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"surfaces":[{"surface":"surface:4","env":{"CMUX_AGENT_LAUNCH_KIND":"codex"}}]}"#,
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let ctx = test_ctx_with_runner(&dir, runner);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from(
+                "agents/claude",
+                "agents/codex",
+                "please include [done] later",
+            )
+            .unwrap();
+        rewrite_message_created_at(&sent.path, "1970-01-01T00:00:01Z");
+        let config = loop_config(&ctx, 900, 10);
+        let mut state = SupervisorLoopState::default();
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "delivered")).len(),
+            1
+        );
+        assert_eq!(state.pushes_total, 1);
+    }
+
+    #[test]
+    fn malformed_created_at_moves_to_failed() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(&dir);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "bad timestamp")
+            .unwrap();
+        rewrite_message_created_at(&sent.path, "not-a-timestamp");
+        let config = loop_config(&ctx, 900, 10);
+        let mut state = SupervisorLoopState::default();
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+
+        assert!(!sent.path.exists());
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "failed")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn invalid_inspection_record_moves_to_failed_before_claim() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(&dir);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "wrong state")
+            .unwrap();
+        rewrite_message_delivery_state(&sent.path, "retry");
+        let config = loop_config(&ctx, 900, 10);
+        let mut state = SupervisorLoopState::default();
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+
+        assert!(!sent.path.exists());
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "failed")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn cycle_cap_limits_stale_messages_per_poll() {
+        let dir = TempDir::new().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(r#"{"surfaces":[]}"#, true);
+        runner.add_response("", true);
+        let ctx = test_ctx_with_runner(&dir, runner);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let first = store
+            .send_from("agents/claude", "agents/codex", "first")
+            .unwrap();
+        let second = store
+            .send_from("agents/claude", "agents/codex", "second")
+            .unwrap();
+        rewrite_message_created_at(&first.path, "1970-01-01T00:00:01Z");
+        rewrite_message_created_at(&second.path, "1970-01-01T00:00:02Z");
+        let mut config = loop_config(&ctx, 900, 1);
+        config.fallback_kind = PushKind::Claude;
+        let mut state = SupervisorLoopState::default();
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "delivered")).len(),
+            1
+        );
+        assert_eq!(toml_files(&inbox_state_dir(&ctx, "codex", "new")).len(), 1);
+    }
+
+    #[test]
+    fn push_failure_moves_to_retry() {
+        let dir = TempDir::new().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(r#"{"surfaces":[]}"#, true);
+        runner.add_response_with_stderr(
+            "",
+            "Failed to write to socket (Broken pipe, errno 32)",
+            false,
+        );
+        let ctx = test_ctx_with_runner(&dir, runner);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "retry me")
+            .unwrap();
+        rewrite_message_created_at(&sent.path, "1970-01-01T00:00:01Z");
+        let mut config = loop_config(&ctx, 900, 10);
+        config.fallback_kind = PushKind::Claude;
+        let mut state = SupervisorLoopState::default();
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "retry")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn push_failure_after_max_attempts_moves_to_failed() {
+        let dir = TempDir::new().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(r#"{"surfaces":[]}"#, true);
+        runner.add_response_with_stderr("", "surface invalid", false);
+        let ctx = test_ctx_with_runner(&dir, runner);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "fail me")
+            .unwrap();
+        rewrite_message_created_at(&sent.path, "1970-01-01T00:00:01Z");
+        rewrite_message_attempts(&sent.path, MAX_PUSH_ATTEMPTS - 1);
+        let mut config = loop_config(&ctx, 900, 10);
+        config.fallback_kind = PushKind::Claude;
+        let mut state = SupervisorLoopState::default();
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "failed")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn render_payload_is_ascii_and_metadata_only_when_over_cap() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(&dir);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from(
+                "agents/claude",
+                "agents/codex",
+                &format!("안녕 {}", "x".repeat(300)),
+            )
+            .unwrap();
+
+        let payload = render_payload(&sent.message, 96);
+
+        assert!(payload.is_ascii());
+        assert!(payload.len() <= 96);
+        assert!(payload.contains(&sent.id));
     }
 
     #[test]
@@ -650,5 +1356,64 @@ mod tests {
         let _ = old_child.wait();
         let _ = signal::kill(Pid::from_raw(new_child.id() as i32), Signal::SIGKILL);
         let _ = new_child.wait();
+    }
+
+    fn loop_config(ctx: &Ctx, stale_threshold_secs: u64, cycle_cap: usize) -> SupervisorLoopConfig {
+        SupervisorLoopConfig {
+            target_surface_id: Some("surface:4".into()),
+            fallback_kind: PushKind::Unknown,
+            stale_threshold_secs,
+            poll_interval_secs: 1,
+            cycle_cap,
+            payload_cap: DEFAULT_PAYLOAD_CAP_BYTES,
+            log_path: ctx
+                .storage_root
+                .personal_root()
+                .join("supervisors/test.log"),
+        }
+    }
+
+    fn inbox_state_dir(ctx: &Ctx, agent_name: &str, state: &str) -> PathBuf {
+        ctx.storage_root
+            .messages_dir()
+            .join("agents")
+            .join(agent_name)
+            .join("inbox")
+            .join(state)
+    }
+
+    fn toml_files(dir: &Path) -> Vec<PathBuf> {
+        let mut paths = match fs::read_dir(dir) {
+            Ok(entries) => entries
+                .filter_map(|entry| {
+                    let path = entry.ok()?.path();
+                    (path.extension().and_then(|ext| ext.to_str()) == Some("toml")).then_some(path)
+                })
+                .collect::<Vec<_>>(),
+            Err(_) => Vec::new(),
+        };
+        paths.sort();
+        paths
+    }
+
+    fn rewrite_message_created_at(path: &Path, created_at: &str) {
+        let content = fs::read_to_string(path).unwrap();
+        let mut value: toml::Value = toml::from_str(&content).unwrap();
+        value["meta"]["created_at"] = toml::Value::String(created_at.into());
+        fs::write(path, toml::to_string_pretty(&value).unwrap()).unwrap();
+    }
+
+    fn rewrite_message_attempts(path: &Path, attempts: u32) {
+        let content = fs::read_to_string(path).unwrap();
+        let mut value: toml::Value = toml::from_str(&content).unwrap();
+        value["delivery"]["attempts"] = toml::Value::Integer(i64::from(attempts));
+        fs::write(path, toml::to_string_pretty(&value).unwrap()).unwrap();
+    }
+
+    fn rewrite_message_delivery_state(path: &Path, state: &str) {
+        let content = fs::read_to_string(path).unwrap();
+        let mut value: toml::Value = toml::from_str(&content).unwrap();
+        value["delivery"]["state"] = toml::Value::String(state.into());
+        fs::write(path, toml::to_string_pretty(&value).unwrap()).unwrap();
     }
 }
