@@ -3527,7 +3527,7 @@ fn agent_runtime_wrapper_help_explains_role_separation() {
 
 #[cfg(unix)]
 #[test]
-fn install_command_installs_detected_claude_and_codex_hooks() {
+fn hooks_setup_installs_detected_claude_and_codex_hooks() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     let codex_home = temp.path().join("codex-home");
@@ -3537,7 +3537,7 @@ fn install_command_installs_detected_claude_and_codex_hooks() {
     wt_command()
         .env("CODEX_HOME", &codex_home)
         .env("PATH", path_with_fake_bin(&fake_bin))
-        .args(["-C", temp.path().to_str().unwrap(), "install"])
+        .args(["-C", temp.path().to_str().unwrap(), "hooks", "setup"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -3563,7 +3563,145 @@ fn install_command_installs_detected_claude_and_codex_hooks() {
 
 #[cfg(unix)]
 #[test]
-fn uninstall_command_removes_wt_managed_claude_and_codex_hooks() {
+fn hooks_uninstall_removes_wt_managed_claude_and_codex_hooks() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let codex_home = temp.path().join("codex-home");
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+    write_fake_agent(temp.path(), "codex");
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "hooks", "setup"])
+        .assert()
+        .success();
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args(["-C", temp.path().to_str().unwrap(), "hooks", "uninstall"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Uninstalling wt-managed agent hooks",
+        ))
+        .stdout(predicate::str::contains("Claude hook uninstalled"))
+        .stdout(predicate::str::contains("Codex hook uninstalled"));
+
+    assert!(!temp.path().join(".claude/settings.local.json").exists());
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
+}
+
+#[test]
+fn hooks_help_explains_canonical_detected_agent_hook_setup() {
+    wt_command()
+        .args(["hooks", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wt hooks setup"))
+        .stdout(predicate::str::contains("wt hooks uninstall"))
+        .stdout(predicate::str::contains("wt hooks setup codex"))
+        .stdout(predicate::str::contains("user-managed hooks"))
+        .stdout(predicate::str::contains("cmux hooks"));
+
+    wt_command()
+        .args(["hooks", "setup", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("detected or selected agent CLIs"))
+        .stdout(predicate::str::contains("WT_AGENT_ID dispatcher hooks"))
+        .stdout(predicate::str::contains("wt hooks setup --agent codex"))
+        .stdout(predicate::str::contains("Hook setup is capability setup"));
+
+    wt_command()
+        .args(["hooks", "uninstall", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wt-managed inbox hooks"))
+        .stdout(predicate::str::contains("wt hooks uninstall --agent codex"))
+        .stdout(predicate::str::contains("preserving user-managed hooks"));
+}
+
+#[test]
+fn top_level_install_uninstall_help_marks_compatibility_aliases() {
+    wt_command()
+        .args(["install", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Compatibility alias"))
+        .stdout(predicate::str::contains("wt hooks setup"))
+        .stdout(predicate::str::contains("supported agent commands"))
+        .stdout(predicate::str::contains("WT_AGENT_ID dispatcher hooks"))
+        .stdout(predicate::str::contains(
+            "Hook installation is capability setup",
+        ));
+
+    wt_command()
+        .args(["uninstall", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Compatibility alias"))
+        .stdout(predicate::str::contains("wt hooks uninstall"))
+        .stdout(predicate::str::contains(
+            "wt-managed Claude and Codex hook entries",
+        ))
+        .stdout(predicate::str::contains("preserving user-managed hooks"));
+}
+
+#[cfg(unix)]
+#[test]
+fn hooks_setup_supports_selected_agent_forms_and_aliases() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let codex_home = temp.path().join("codex-home");
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "hooks",
+            "setup",
+            "--agent",
+            "codex",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Installing agent hooks for: codex",
+        ))
+        .stdout(predicate::str::contains("Codex hook installed"));
+
+    assert!(!temp.path().join(".claude/settings.local.json").exists());
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    assert!(codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
+
+    wt_command()
+        .env("CODEX_HOME", &codex_home)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "hooks",
+            "codex",
+            "uninstall",
+            "-y",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Uninstalling wt-managed codex agent hooks",
+        ))
+        .stdout(predicate::str::contains("Codex hook uninstalled"));
+
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
+}
+
+#[cfg(unix)]
+#[test]
+fn top_level_install_uninstall_aliases_still_parse() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     let codex_home = temp.path().join("codex-home");
@@ -3581,36 +3719,7 @@ fn uninstall_command_removes_wt_managed_claude_and_codex_hooks() {
         .env("CODEX_HOME", &codex_home)
         .args(["-C", temp.path().to_str().unwrap(), "uninstall"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "Uninstalling wt-managed agent hooks",
-        ))
-        .stdout(predicate::str::contains("Claude hook uninstalled"))
-        .stdout(predicate::str::contains("Codex hook uninstalled"));
-
-    assert!(!temp.path().join(".claude/settings.local.json").exists());
-    let hooks = json_file(&codex_home.join("hooks.json"));
-    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
-}
-
-#[test]
-fn install_uninstall_help_explains_detected_agent_hook_setup() {
-    wt_command()
-        .args(["install", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("detected agent CLIs"))
-        .stdout(predicate::str::contains("WT_AGENT_ID dispatcher hooks"))
-        .stdout(predicate::str::contains(
-            "Hook installation is capability setup",
-        ));
-
-    wt_command()
-        .args(["uninstall", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("wt-managed inbox hooks"))
-        .stdout(predicate::str::contains("preserving user-managed hooks"));
+        .success();
 }
 
 #[cfg(unix)]

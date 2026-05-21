@@ -23,7 +23,8 @@ pub mod worktree_naming;
 use anyhow::Result;
 use cli::{
     AgentCommand, AgentHookCommand, AgentHookInstallCommand, AgentHookUninstallCommand, Commands,
-    ConfigCommand, MsgCommand, RunCommand, TaskCommand, WorkflowCommand,
+    ConfigCommand, HookAgent, HookAgentCommand, HooksCommand, MsgCommand, RunCommand, TaskCommand,
+    WorkflowCommand,
 };
 use commands::agent_runtime::KnownAgentCli;
 use context::Ctx;
@@ -178,6 +179,34 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                         commands::agent_hook::uninstall_codex(ctx, agent.as_deref())
                     }
                 },
+            },
+        },
+        Commands::Hooks { command } => match command {
+            HooksCommand::Setup {
+                agent,
+                agent_option,
+                yes: _,
+            } => commands::install::install_selected(ctx, agent.or(*agent_option)),
+            HooksCommand::Uninstall {
+                agent,
+                agent_option,
+                yes: _,
+            } => commands::install::uninstall_selected(ctx, agent.or(*agent_option)),
+            HooksCommand::Codex { command } => match command {
+                HookAgentCommand::Install { yes: _ } => {
+                    commands::install::install_selected(ctx, Some(HookAgent::Codex))
+                }
+                HookAgentCommand::Uninstall { yes: _ } => {
+                    commands::install::uninstall_selected(ctx, Some(HookAgent::Codex))
+                }
+            },
+            HooksCommand::Claude { command } => match command {
+                HookAgentCommand::Install { yes: _ } => {
+                    commands::install::install_selected(ctx, Some(HookAgent::Claude))
+                }
+                HookAgentCommand::Uninstall { yes: _ } => {
+                    commands::install::uninstall_selected(ctx, Some(HookAgent::Claude))
+                }
             },
         },
         Commands::Install => commands::install::install(ctx),

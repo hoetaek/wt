@@ -285,18 +285,34 @@ Tracked agent instruction file이 이미 있으면 agent가 지원하는 local o
 One-shot hook setup의 canonical surface는 다음 두 명령이다.
 
 ```bash
-wt install
-wt uninstall
+wt hooks setup
+wt hooks uninstall
 ```
 
-`wt install`은 PATH에서 지원되는 agent CLI를 감지한 뒤 해당 adapter의 dispatcher hook을
+`wt hooks setup`은 PATH에서 지원되는 agent CLI를 감지한 뒤 해당 adapter의 dispatcher hook을
 설치한다. 현재 지원 대상은 `claude`와 `codex`다. 이 명령은 hook capability setup만 수행하며,
 특정 `WT_AGENT_ID`를 영구로 hook에 묶지 않는다. Agent identity는 `wt codex`, `wt claude`,
 `wt as`, 또는 `wt run ...`이 agent process를 시작할 때 주입한다.
 
-`wt uninstall`은 감지 여부와 무관하게 wt-managed Claude/Codex hook을 제거한다. 사용자가 작성한
-hook, cmux hook, unrelated trust state는 보존한다. Provider나 agent runtime이 없어도 uninstall은
-가능한 정리만 수행해야 한다.
+단일 adapter만 대상으로 할 때는 cmux hooks와 같은 shape를 쓴다.
+
+```bash
+wt hooks setup codex
+wt hooks setup --agent codex
+wt hooks uninstall codex
+wt hooks uninstall --agent codex
+```
+
+`wt hooks uninstall`은 감지 여부와 무관하게 wt-managed Claude/Codex hook을 제거한다. 사용자가
+작성한 hook, cmux hook, unrelated trust state는 보존한다. Provider나 agent runtime이 없어도
+uninstall은 가능한 정리만 수행해야 한다.
+
+이전 one-shot surface는 compatibility alias로만 남긴다.
+
+```bash
+wt install
+wt uninstall
+```
 
 고급/테스트용 adapter별 escape hatch는 계속 유지한다.
 
@@ -309,7 +325,7 @@ wt agent hook uninstall codex
 
 ### Claude Hook Adapter
 
-Claude Code inbox polling의 canonical install surface는 다음 두 명령이다.
+Claude Code inbox polling의 adapter-specific escape hatch는 다음 두 명령이다.
 
 ```bash
 wt agent hook install claude
@@ -344,7 +360,7 @@ install/uninstall은 실패한다. Tracked `CLAUDE.md`, `AGENTS.md`, `.gitignore
 
 ### Codex Hook Adapter
 
-Codex inbox polling의 canonical install surface는 다음 두 명령이다.
+Codex inbox polling의 adapter-specific escape hatch는 다음 두 명령이다.
 
 ```bash
 wt agent hook install codex
@@ -422,12 +438,12 @@ Canonical non-LLM smoke는 실제 Claude/Codex 세션을 CI에서 띄우지 않�
 file inbox만 검증한다.
 
 1. 같은 git common dir을 공유하는 linked worktree 두 개를 만든다.
-2. `wt install`로 Claude worktree-local dispatcher와 Codex user-level dispatcher를 설치한다.
+2. `wt hooks setup`으로 Claude worktree-local dispatcher와 Codex user-level dispatcher를 설치한다.
 3. `wt as agents/claude-smoke -- wt msg send --to agents/codex-smoke CLAUDE_SENT`로 Claude identity에서 Codex inbox로 보낸다.
 4. 설치된 Codex hook command를 `WT_AGENT_ID=agents/codex-smoke`로 실행해 `CLAUDE_SENT`를 delivery한다.
 5. `wt as agents/codex-smoke -- wt msg send --to agents/claude-smoke CODEX_SENT REALWT_PONG_SEEN`로 답장한다.
 6. 설치된 Claude hook command를 `WT_AGENT_ID=agents/claude-smoke`로 실행해 `CODEX_SENT REALWT_PONG_SEEN`를 delivery한다.
-7. `wt uninstall`로 wt-managed hook state를 정리한다.
+7. `wt hooks uninstall`로 wt-managed hook state를 정리한다.
 
 이 smoke는 cmux workspace/surface를 만들거나 읽지 않는다. Real Claude/Codex manual smoke는 같은
 message path를 실제 agent lifecycle에서 관찰하는 추가 검증이지, message transport의 canonical

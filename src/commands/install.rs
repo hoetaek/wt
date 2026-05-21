@@ -1,3 +1,4 @@
+use crate::cli::HookAgent;
 use crate::commands::agent_hook;
 use crate::context::Ctx;
 use anyhow::{Result, bail};
@@ -18,10 +19,17 @@ impl SupportedAgent {
 }
 
 pub fn install(ctx: &Ctx) -> Result<()> {
-    let agents = detect_supported_agents(ctx);
+    install_selected(ctx, None)
+}
+
+pub fn install_selected(ctx: &Ctx, agent: Option<HookAgent>) -> Result<()> {
+    let agents = match agent {
+        Some(agent) => vec![SupportedAgent::from(agent)],
+        None => detect_supported_agents(ctx),
+    };
     if agents.is_empty() {
         bail!(
-            "No supported agent CLIs found on PATH. Install Codex or Claude, or run `wt agent hook install <agent>` explicitly."
+            "No supported agent CLIs found on PATH. Install Codex or Claude, or run `wt hooks setup <agent>` explicitly."
         );
     }
 
@@ -46,12 +54,28 @@ pub fn install(ctx: &Ctx) -> Result<()> {
 }
 
 pub fn uninstall(ctx: &Ctx) -> Result<()> {
+    uninstall_selected(ctx, None)
+}
+
+pub fn uninstall_selected(ctx: &Ctx, agent: Option<HookAgent>) -> Result<()> {
     if !ctx.quiet {
-        ctx.ui.print_step("Uninstalling wt-managed agent hooks");
+        match agent {
+            Some(agent) => ctx.ui.print_step(&format!(
+                "Uninstalling wt-managed {} agent hooks",
+                SupportedAgent::from(agent).command()
+            )),
+            None => ctx.ui.print_step("Uninstalling wt-managed agent hooks"),
+        }
     }
 
-    agent_hook::uninstall_claude(ctx, None)?;
-    agent_hook::uninstall_codex(ctx, None)?;
+    match agent {
+        Some(HookAgent::Claude) => agent_hook::uninstall_claude(ctx, None)?,
+        Some(HookAgent::Codex) => agent_hook::uninstall_codex(ctx, None)?,
+        None => {
+            agent_hook::uninstall_claude(ctx, None)?;
+            agent_hook::uninstall_codex(ctx, None)?;
+        }
+    }
 
     Ok(())
 }
@@ -61,6 +85,15 @@ fn detect_supported_agents(ctx: &Ctx) -> Vec<SupportedAgent> {
         .into_iter()
         .filter(|agent| ctx.runner.has_command(agent.command()))
         .collect()
+}
+
+impl From<HookAgent> for SupportedAgent {
+    fn from(agent: HookAgent) -> Self {
+        match agent {
+            HookAgent::Claude => Self::Claude,
+            HookAgent::Codex => Self::Codex,
+        }
+    }
 }
 
 #[cfg(test)]

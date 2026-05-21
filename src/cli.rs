@@ -127,14 +127,22 @@ pub enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Set up and remove wt-managed agent hooks
+    #[command(
+        long_about = "Set up and remove wt-managed agent hooks.\n\nThe canonical one-shot hook setup surface is `wt hooks setup`, which scans PATH for supported agent commands such as `claude` and `codex`, then installs matching WT_AGENT_ID dispatcher hooks. Use `wt hooks setup codex` or `wt hooks setup --agent codex` to set up one adapter. Use `wt hooks uninstall` to remove wt-managed hooks while preserving user-managed hooks, cmux hooks, and unrelated trust state."
+    )]
+    Hooks {
+        #[command(subcommand)]
+        command: HooksCommand,
+    },
     /// Install hooks for detected agent CLIs
     #[command(
-        long_about = "Install wt-managed inbox hooks for detected agent CLIs.\n\n`wt install` scans PATH for supported agent commands such as `claude` and `codex`, then installs the matching WT_AGENT_ID dispatcher hooks. Hook installation is capability setup only; per-session identity still comes from `wt codex`, `wt claude`, `wt as`, or wt-launched run/workflow sessions."
+        long_about = "Compatibility alias for `wt hooks setup`.\n\n`wt install` scans PATH for supported agent commands such as `claude` and `codex`, then installs the matching WT_AGENT_ID dispatcher hooks. New scripts should use `wt hooks setup`. Hook installation is capability setup only; per-session identity still comes from `wt codex`, `wt claude`, `wt as`, or wt-launched run/workflow sessions."
     )]
     Install,
     /// Uninstall wt-managed agent hooks
     #[command(
-        long_about = "Uninstall wt-managed inbox hooks for supported agent CLIs.\n\n`wt uninstall` removes wt-managed Claude and Codex hook entries while preserving user-managed hooks, cmux hooks, and unrelated trust state."
+        long_about = "Compatibility alias for `wt hooks uninstall`.\n\n`wt uninstall` removes wt-managed Claude and Codex hook entries while preserving user-managed hooks, cmux hooks, and unrelated trust state. New scripts should use `wt hooks uninstall`."
     )]
     Uninstall,
     /// Launch Codex with the current worktree's wt agent identity
@@ -288,6 +296,82 @@ pub enum Commands {
         #[command(subcommand)]
         command: SiteCommand,
     },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum HooksCommand {
+    /// Set up wt-managed hooks for detected or selected agent CLIs
+    #[command(
+        long_about = "Set up wt-managed inbox hooks for detected or selected agent CLIs.\n\n`wt hooks setup` scans PATH for supported agent commands such as `claude` and `codex`, then installs matching WT_AGENT_ID dispatcher hooks. Use `wt hooks setup codex` or `wt hooks setup --agent codex` to set up one adapter. Hook setup is capability setup only; per-session identity still comes from `wt codex`, `wt claude`, `wt as`, or wt-launched run/workflow sessions."
+    )]
+    Setup {
+        /// Supported agent adapter to set up
+        #[arg(value_name = "AGENT", conflicts_with = "agent_option")]
+        agent: Option<HookAgent>,
+        /// Supported agent adapter to set up
+        #[arg(
+            short = 'a',
+            long = "agent",
+            value_name = "AGENT",
+            conflicts_with = "agent"
+        )]
+        agent_option: Option<HookAgent>,
+        /// Accept setup without prompting; accepted for cmux-style command parity
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+    /// Remove wt-managed hooks for all or one supported agent CLI
+    #[command(
+        long_about = "Remove wt-managed inbox hooks for all or one supported agent CLI.\n\n`wt hooks uninstall` removes wt-managed Claude and Codex hook entries while preserving user-managed hooks, cmux hooks, and unrelated trust state. Use `wt hooks uninstall codex` or `wt hooks uninstall --agent codex` to remove one adapter. Provider or agent runtime detection is not required for cleanup."
+    )]
+    Uninstall {
+        /// Supported agent adapter to remove
+        #[arg(value_name = "AGENT", conflicts_with = "agent_option")]
+        agent: Option<HookAgent>,
+        /// Supported agent adapter to remove
+        #[arg(
+            short = 'a',
+            long = "agent",
+            value_name = "AGENT",
+            conflicts_with = "agent"
+        )]
+        agent_option: Option<HookAgent>,
+        /// Accept uninstall without prompting; accepted for cmux-style command parity
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+    /// Codex hook adapter compatibility aliases
+    Codex {
+        #[command(subcommand)]
+        command: HookAgentCommand,
+    },
+    /// Claude hook adapter compatibility aliases
+    Claude {
+        #[command(subcommand)]
+        command: HookAgentCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum HookAgentCommand {
+    /// Compatibility alias for `wt hooks setup <agent>`
+    Install {
+        /// Accept setup without prompting; accepted for cmux-style command parity
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+    /// Compatibility alias for `wt hooks uninstall <agent>`
+    Uninstall {
+        /// Accept uninstall without prompting; accepted for cmux-style command parity
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookAgent {
+    Claude,
+    Codex,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
