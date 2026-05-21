@@ -11,7 +11,6 @@ static MESSAGE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 static MESSAGE_TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) const COORDINATOR_AGENT_ALIAS: &str = "coordinator";
-pub(crate) const COORDINATOR_AGENT_ID: &str = "agents/coordinator";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentId(String);
@@ -888,7 +887,7 @@ impl MessageStore {
         let claimed_by = agent.clone();
         let lease = MessageLease::new(Duration::from_secs(60))?;
         let mut messages = Vec::new();
-        if agent.as_str() == COORDINATOR_AGENT_ID {
+        if is_runtime_coordinator(agent.as_str())? {
             while let Some(claimed) = self.claim_next_any_scope(&agent, &claimed_by, lease)? {
                 messages.push(claimed);
             }
@@ -979,6 +978,19 @@ impl MessageStore {
                     agent.as_str()
                 );
             }
+        }
+    }
+}
+
+fn is_runtime_coordinator(agent: &str) -> Result<bool> {
+    match env::var("WT_COORDINATOR_AGENT_ID") {
+        Ok(value) => {
+            let coordinator = AgentId::parse(&value).context("Invalid WT_COORDINATOR_AGENT_ID")?;
+            Ok(agent == coordinator.as_str())
+        }
+        Err(env::VarError::NotPresent) => Ok(false),
+        Err(env::VarError::NotUnicode(_)) => {
+            bail!("Invalid WT_COORDINATOR_AGENT_ID: value is not Unicode")
         }
     }
 }
@@ -1827,8 +1839,15 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
 mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};
+    use std::sync::{Mutex, MutexGuard};
     use std::thread;
     use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_lock() -> MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap()
+    }
 
     #[test]
     fn normalizes_agent_ids() {
@@ -1837,9 +1856,10 @@ mod tests {
             AgentId::parse("agents/codex").unwrap().as_str(),
             "agents/codex"
         );
+        assert_eq!(COORDINATOR_AGENT_ALIAS, "coordinator");
         assert_eq!(
             AgentId::parse(COORDINATOR_AGENT_ALIAS).unwrap().as_str(),
-            COORDINATOR_AGENT_ID
+            "agents/coordinator"
         );
     }
 
@@ -2463,16 +2483,20 @@ mod tests {
     }
 
     #[test]
-    fn coordinator_check_inbox_claims_scope_mixed_messages() {
+    fn runtime_coordinator_check_inbox_claims_scope_mixed_messages() {
+        let _guard = env_lock();
+        unsafe {
+            env::set_var("WT_COORDINATOR_AGENT_ID", "agents/coord-a");
+        }
         let temp = TempDir::new().unwrap();
         let store = MessageStore::new(temp.path().join("messages"));
         let direct = store
-            .send_from("agents/claude", "agents/coordinator", "direct")
+            .send_from("agents/claude", "agents/coord-a", "direct")
             .unwrap();
         let workflow = store
             .send_scoped_from(
                 "agents/claude",
-                "agents/coordinator",
+                "agents/coord-a",
                 MessageScope::workflow("2026-05-20-001").unwrap(),
                 "workflow scoped",
             )
@@ -2480,7 +2504,7 @@ mod tests {
         let task_run = store
             .send_scoped_from(
                 "agents/claude",
-                "agents/coordinator",
+                "agents/coord-a",
                 MessageScope::task_run("run-1").unwrap(),
                 "task run scoped",
             )
@@ -2488,13 +2512,13 @@ mod tests {
         let repo = store
             .send_scoped_from(
                 "agents/claude",
-                "agents/coordinator",
+                "agents/coord-a",
                 MessageScope::repo(),
                 "repo scoped",
             )
             .unwrap();
 
-        let delivery = store.check_inbox("agents/coordinator").unwrap();
+        let delivery = store.check_inbox("agents/coord-a").unwrap();
 
         assert_eq!(
             delivery
@@ -2524,6 +2548,9 @@ mod tests {
         assert!(context.contains("scope: workflow:2026-05-20-001"));
         assert!(context.contains("scope: task_run:run-1"));
         assert!(context.contains("scope: repo"));
+        unsafe {
+            env::remove_var("WT_COORDINATOR_AGENT_ID");
+        }
     }
 
     #[test]
@@ -2549,6 +2576,34 @@ mod tests {
         assert!(scoped.path.exists());
         assert!(!direct.path.exists());
         assert!(delivery.messages[0].claimed_path.exists());
+    }
+
+    #[test]
+    fn coordinator_without_runtime_env_claims_only_direct_messages() {
+        let _guard = env_lock();
+        unsafe {
+            env::remove_var("WT_COORDINATOR_AGENT_ID");
+        }
+        let temp = TempDir::new().unwrap();
+        let store = MessageStore::new(temp.path().join("messages"));
+        let scoped = store
+            .send_scoped_from(
+                "agents/claude",
+                "agents/coordinator",
+                MessageScope::workflow("2026-05-20-001").unwrap(),
+                "workflow scoped",
+            )
+            .unwrap();
+        let direct = store
+            .send_from("agents/claude", "agents/coordinator", "direct")
+            .unwrap();
+
+        let delivery = store.check_inbox("agents/coordinator").unwrap();
+
+        assert_eq!(delivery.messages.len(), 1);
+        assert_eq!(delivery.messages[0].message.meta.id, direct.id);
+        assert!(scoped.path.exists());
+        assert!(!direct.path.exists());
     }
 
     #[test]

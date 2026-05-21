@@ -15,7 +15,7 @@ Send the Agent Completion Report back to the coordinator inbox:
 wt msg send --to coordinator "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
 ```
 
-The coordinator inbox target `coordinator` normalizes to `agents/coordinator`. If the file inbox route is unavailable, send the same report to the fallback cmux surface that started this task run:
+The coordinator inbox target `coordinator` resolves from `WT_COORDINATOR_AGENT_ID`. If the file inbox route is unavailable, send the same report to the fallback cmux surface that started this task run:
 
 ```bash
 cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
@@ -713,7 +713,7 @@ id = "PROJ-123"
                 .contains("cmux send-key --workspace workspace:34 --surface surface:103 enter")
         );
         assert!(handoff_prompt.contains("wt msg send --to coordinator \"Agent Completion Report"));
-        assert!(handoff_prompt.contains("normalizes to `agents/coordinator`"));
+        assert!(handoff_prompt.contains("resolves from `WT_COORDINATOR_AGENT_ID`"));
         assert!(handoff_prompt.contains("If the file inbox route is unavailable"));
         assert!(handoff_prompt.contains("If neither coordinator route is available"));
         assert!(!handoff_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
