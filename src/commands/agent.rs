@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
+pub mod supervisor;
+
 pub fn status(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     let (report, exit_code) = observe_status(ctx, target, "status")?;
     if ctx.is_json() {

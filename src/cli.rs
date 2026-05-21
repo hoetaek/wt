@@ -233,7 +233,7 @@ pub enum Commands {
     },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send, deliver, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg check-inbox --silent` from agent hooks so the WT_AGENT_ID inbox is checked; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use `wt msg check-inbox --silent` from agent hooks so the WT_AGENT_ID inbox is checked; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -519,6 +519,14 @@ pub enum AgentCommand {
         long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch` when heartbeat or timeout samples are emitted. This is read-only: it summarizes <git-common-dir>/wt/agent.state/wait-observations.jsonl with count, sum, average, min, max, bucket, and low-cardinality group data; it does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
     )]
     WaitStats,
+    /// Manage opt-in detached supervisors for agent inbox stale-rescue
+    #[command(
+        long_about = "Manage opt-in detached supervisors for agent inbox stale-rescue.\n\nA supervisor is default-off Layer 3 insurance for one agent identity. It records a local registration under <git-common-dir>/wt/supervisors/ and, in later delivery slices, only intervenes after an inbox/new message has aged past --stale-threshold. No wt verb starts a supervisor implicitly."
+    )]
+    Supervisor {
+        #[command(subcommand)]
+        command: AgentSupervisorCommand,
+    },
     /// Install or uninstall local agent hook adapters
     #[command(
         long_about = "Install or uninstall local agent hook adapters.\n\nThe Claude adapter is Claude-specific: it uses Claude Code worktree-local `.claude/settings.local.json` hooks to deliver the wt file inbox through a WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher, and adds that path to the per-worktree Git exclude file. The Codex adapter is Codex-specific: it uses user-level `$CODEX_HOME/hooks.json` or `~/.codex/hooks.json` hooks plus matching trusted hook state in `config.toml`. Adapter installation preserves non-wt hooks and trust state."
@@ -526,6 +534,75 @@ pub enum AgentCommand {
     Hook {
         #[command(subcommand)]
         command: AgentHookCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum AgentSupervisorCommand {
+    /// Start a detached supervisor for one agent identity
+    Start {
+        /// Agent id as NAME or agents/NAME
+        agent_id: String,
+        /// Stop any existing live supervisor for this identity before starting
+        #[arg(long)]
+        replace: bool,
+        /// Pre-bound cmux surface id for later delivery slices
+        #[arg(long, value_name = "ID")]
+        surface: Option<String>,
+        /// Whether session-end cleanup should stop this supervisor
+        #[arg(long, value_name = "BOOL")]
+        cleanup_on_session_end: Option<bool>,
+        /// Message age before later delivery slices may rescue it
+        #[arg(long, default_value = "15m", value_name = "DURATION")]
+        stale_threshold: String,
+        /// Poll cadence for later delivery slices
+        #[arg(long, default_value = "60s", value_name = "DURATION")]
+        poll_interval: String,
+    },
+    /// Stop registered supervisors by target identity or owner
+    Stop {
+        /// Agent id as NAME or agents/NAME
+        agent_id: Option<String>,
+        /// Stop only supervisors started by this agent id
+        #[arg(long, value_name = "AGENT")]
+        owned_by: Option<String>,
+    },
+    /// List registered supervisors
+    Status {
+        /// Agent id as NAME or agents/NAME
+        agent_id: Option<String>,
+    },
+    /// Print or follow a supervisor log
+    Logs {
+        /// Agent id as NAME or agents/NAME
+        agent_id: String,
+        /// Continue printing appended log lines
+        #[arg(long)]
+        follow: bool,
+    },
+    /// Run the supervisor loop process
+    #[command(hide = true)]
+    Run {
+        /// Agent id as NAME or agents/NAME
+        agent_id: String,
+        /// Run in the foreground for debugging
+        #[arg(long)]
+        foreground: bool,
+        /// Pre-bound cmux surface id for later delivery slices
+        #[arg(long, value_name = "ID")]
+        surface: Option<String>,
+        /// Whether session-end cleanup should stop this supervisor
+        #[arg(long, value_name = "BOOL")]
+        cleanup_on_session_end: Option<bool>,
+        /// Parsed stale threshold from start
+        #[arg(long, default_value_t = 900, value_name = "SECONDS")]
+        stale_threshold_secs: u64,
+        /// Parsed poll interval from start
+        #[arg(long, default_value_t = 60, value_name = "SECONDS")]
+        poll_interval_secs: u64,
+        /// Log path for the detached supervisor process
+        #[arg(long, value_name = "PATH")]
+        log_path: Option<PathBuf>,
     },
 }
 
@@ -632,6 +709,21 @@ pub enum MsgCommand {
         /// Hook mode: exit 0 silently when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup). Intended for agent hooks installed globally; direct CLI use should omit this flag.
         #[arg(long)]
         silent: bool,
+    },
+    /// Observe pending or newly-arriving inbox/new messages without claiming them
+    #[command(
+        long_about = "Observe pending or newly-arriving inbox/new messages for one agent without claiming, moving, or acknowledging them.\n\n`wt msg watch` arms a filesystem watcher, drains existing .toml messages in mtime order, and exits after emitting pending messages, one new arrival, or a timeout. Omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use --json for newline-delimited JSON rows with the same fields as `wt msg list --json` message records. Use `wt msg list` for a snapshot instead of --timeout 0."
+    )]
+    Watch {
+        /// Explicit single agent id as NAME or agents/NAME; omitted tries WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID
+        #[arg(long)]
+        agent: Option<String>,
+        /// Maximum seconds to wait for a new inbox/new message; must be greater than 0
+        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..))]
+        timeout: u64,
+        /// Emit newline-delimited JSON message rows
+        #[arg(long)]
+        json: bool,
     },
 }
 
