@@ -891,7 +891,7 @@ impl MessageStore {
         let claimed_by = agent.clone();
         let lease = MessageLease::new(Duration::from_secs(60))?;
         let mut messages = Vec::new();
-        if is_runtime_coordinator(agent.as_str(), runtime_coordinator_agent_id)? {
+        if is_runtime_coordinator(agent.as_str(), runtime_coordinator_agent_id) {
             while let Some(claimed) = self.claim_next_any_scope(&agent, &claimed_by, lease)? {
                 messages.push(claimed);
             }
@@ -986,12 +986,10 @@ impl MessageStore {
     }
 }
 
-fn is_runtime_coordinator(agent: &str, runtime_coordinator_agent_id: Option<&str>) -> Result<bool> {
-    let Some(value) = runtime_coordinator_agent_id else {
-        return Ok(false);
-    };
-    let coordinator = AgentId::parse(value).context("Invalid WT_COORDINATOR_AGENT_ID")?;
-    Ok(agent == coordinator.as_str())
+fn is_runtime_coordinator(agent: &str, runtime_coordinator_agent_id: Option<&str>) -> bool {
+    runtime_coordinator_agent_id
+        .and_then(|value| AgentId::parse(value).ok())
+        .is_some_and(|coordinator| agent == coordinator.as_str())
 }
 
 fn sender_agent_id() -> Result<AgentId> {
@@ -2563,6 +2561,32 @@ mod tests {
         assert!(scoped.path.exists());
         assert!(!direct.path.exists());
         assert!(delivery.messages[0].claimed_path.exists());
+    }
+
+    #[test]
+    fn malformed_runtime_coordinator_id_does_not_block_direct_delivery() {
+        let temp = TempDir::new().unwrap();
+        let store = MessageStore::new(temp.path().join("messages"));
+        let scoped = store
+            .send_scoped_from(
+                "agents/claude",
+                "agents/codex",
+                MessageScope::workflow("2026-05-20-001").unwrap(),
+                "workflow scoped",
+            )
+            .unwrap();
+        let direct = store
+            .send_from("agents/claude", "agents/codex", "direct")
+            .unwrap();
+
+        let delivery = store
+            .check_inbox("agents/codex", Some("agents/bad/nested"))
+            .unwrap();
+
+        assert_eq!(delivery.messages.len(), 1);
+        assert_eq!(delivery.messages[0].message.meta.id, direct.id);
+        assert!(scoped.path.exists());
+        assert!(!direct.path.exists());
     }
 
     #[test]
