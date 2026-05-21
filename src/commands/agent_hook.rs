@@ -5,6 +5,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, value};
@@ -1024,7 +1025,16 @@ fn version_for_canonical_json(value: &Value) -> String {
     let serialized = serde_json::to_vec(&canonical).unwrap_or_default();
     let mut hasher = Sha256::new();
     hasher.update(serialized);
-    format!("sha256:{:x}", hasher.finalize())
+    sha256_version(hasher.finalize().as_ref())
+}
+
+fn sha256_version(bytes: &[u8]) -> String {
+    let mut version = String::with_capacity("sha256:".len() + bytes.len() * 2);
+    version.push_str("sha256:");
+    for byte in bytes {
+        let _ = write!(&mut version, "{byte:02x}");
+    }
+    version
 }
 
 fn canonical_json(value: &Value) -> Value {
