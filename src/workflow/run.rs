@@ -429,18 +429,25 @@ fn workflow_tasks_from_prepared(
     }
 
     let group = task_run::group_from_path(workflow_path)?;
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
     let mut parent = Some(initial_parent.to_string());
     let mut tasks = Vec::new();
     let mut task_runs = Vec::new();
     for task in prepared_tasks {
-        let run =
-            match task_run::create(ctx, &task.key, &task.branch, Some(&group), STATUS_PREPARED) {
-                Ok(run) => run,
-                Err(err) => {
-                    rollback_task_runs(&task_runs);
-                    return Err(err);
-                }
-            };
+        let run = match task_run::create_with_coordinator_id(
+            ctx,
+            &task.key,
+            &task.branch,
+            Some(&group),
+            coordinator_id,
+            STATUS_PREPARED,
+        ) {
+            Ok(run) => run,
+            Err(err) => {
+                rollback_task_runs(&task_runs);
+                return Err(err);
+            }
+        };
 
         let mut row = WorkflowTask::new(task.key.clone(), run.id.clone());
         if mode == WorkflowModeArg::Stack {
@@ -463,11 +470,19 @@ fn matrix_workflow_tasks_from_prepared(
         bail!("matrix mode workflow requires exactly one task");
     };
     let group = task_run::group_from_path(workflow_path)?;
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
     let mut task_runs = Vec::new();
     let mut runs = Vec::new();
     for profile in profiles {
         let branch = matrix_profile_branch(&task.branch, profile)?;
-        let run = match task_run::create(ctx, &task.key, &branch, Some(&group), STATUS_PREPARED) {
+        let run = match task_run::create_with_coordinator_id(
+            ctx,
+            &task.key,
+            &branch,
+            Some(&group),
+            coordinator_id,
+            STATUS_PREPARED,
+        ) {
             Ok(run) => run,
             Err(err) => {
                 rollback_task_runs(&task_runs);

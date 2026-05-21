@@ -81,6 +81,7 @@ impl SnapshotState {
                 output_mode: OutputMode::Text,
                 verbosity: 0,
                 quiet: true,
+                launcher_coordinator_id: None,
             },
         )
     }

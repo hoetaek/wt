@@ -488,6 +488,60 @@ cli = "none"
     }
 
     #[test]
+    fn task_prepares_workflow_task_runs_with_launcher_coordinator_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new_with_options(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+            crate::context::CtxOptions {
+                launcher_coordinator_id: Some("agents/coord-workflow".into()),
+                ..crate::context::CtxOptions::default()
+            },
+        );
+
+        task(
+            &ctx,
+            &["workflow docs".into(), "workflow state".into()],
+            WorkflowModeArg::Batch,
+            None,
+            None,
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 2);
+        assert!(runs.iter().all(|record| {
+            record.run.coordinator_id.as_deref() == Some("agents/coord-workflow")
+        }));
+    }
+
+    #[test]
+    fn task_prepares_workflow_task_runs_without_coordinator_id_when_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        task(
+            &ctx,
+            &["workflow docs".into()],
+            WorkflowModeArg::Batch,
+            None,
+            None,
+            &Some("main".into()),
+            None,
+        )
+        .unwrap();
+
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].run.coordinator_id.is_none());
+    }
+
+    #[test]
     fn task_prepares_workflow_with_title_body_origin_and_show_displays_it() {
         let dir = tempfile::tempdir().unwrap();
         let ui = Arc::new(MockUi::new());
@@ -2090,6 +2144,7 @@ landing = "auto"
                     group: None,
                     error: None,
                     creation_order: None,
+                    coordinator_id: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                 },
@@ -2119,6 +2174,7 @@ landing = "auto"
                     group: None,
                     error: None,
                     creation_order: None,
+                    coordinator_id: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                 },

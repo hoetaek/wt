@@ -92,6 +92,7 @@ fn try_main() -> Result<()> {
     } else {
         OutputMode::Text
     };
+    let launcher_coordinator_id = launcher_coordinator_id_from_env()?;
 
     let ctx = Ctx::new_with_options(
         repo_root,
@@ -109,6 +110,7 @@ fn try_main() -> Result<()> {
             output_mode,
             verbosity: cli.verbose,
             quiet: cli.quiet,
+            launcher_coordinator_id,
         },
     );
 
@@ -132,6 +134,19 @@ fn try_main() -> Result<()> {
     }
 
     wt::dispatch(&ctx, command)
+}
+
+fn launcher_coordinator_id_from_env() -> Result<Option<String>> {
+    match std::env::var("WT_AGENT_ID") {
+        Ok(value) => {
+            let value = value.trim();
+            Ok((!value.is_empty()).then(|| value.to_string()))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("Invalid WT_AGENT_ID: value is not Unicode")
+        }
+    }
 }
 
 const HIDDEN_COMPLETION_PREFIX: &str = "__wt_removed_";
