@@ -878,6 +878,46 @@ fn session_unset_removes_marker_and_whoami_reports_none() {
 }
 
 #[test]
+fn session_whoami_reports_corrupt_marker_but_unset_can_recover() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "my-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .success();
+
+    let files = toml_files(&temp.path().join(".git/wt/sessions"));
+    assert_eq!(files.len(), 1);
+    std::fs::write(&files[0], "not valid toml = [").unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "session", "whoami"])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("Failed to parse marker"));
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "session", "unset"])
+        .env("CMUX_SURFACE_ID", "surface-1")
+        .assert()
+        .success()
+        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stderr("");
+
+    assert!(toml_files(&temp.path().join(".git/wt/sessions")).is_empty());
+}
+
+#[test]
 fn msg_send_to_coordinator_alias_resolves_from_session_marker() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());

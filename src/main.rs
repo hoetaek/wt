@@ -165,9 +165,20 @@ fn build_ctx(cli: &Cli, command: &Commands) -> Result<(Ctx, ConfigSource)> {
             coordinator_agent_id: None,
         },
     );
-    let marker = wt::services::identity_locator::resolve_identity(&ctx_seed)
-        .ok()
-        .flatten();
+    let marker = match wt::services::identity_locator::resolve_identity(&ctx_seed) {
+        Ok(marker) => marker,
+        Err(_)
+            if matches!(
+                command,
+                Commands::Session {
+                    command: SessionCommand::Unset,
+                }
+            ) =>
+        {
+            None
+        }
+        Err(err) => return Err(err),
+    };
     let launcher_coordinator_id = launcher_coordinator_id_from_env()?
         .or_else(|| marker.as_ref().map(|marker| marker.id.clone()));
     let coordinator_agent_id = coordinator_agent_id_from_env()?
