@@ -22,8 +22,8 @@ pub mod worktree_naming;
 
 use anyhow::Result;
 use cli::{
-    AgentCommand, Commands, ConfigCommand, MsgCommand, RunCommand, SessionCommand, TaskCommand,
-    WorkflowCommand,
+    AgentCommand, AgentSupervisorCommand, Commands, ConfigCommand, MsgCommand, RunCommand,
+    SessionCommand, TaskCommand, WorkflowCommand,
 };
 use commands::agent_runtime::KnownAgentCli;
 use context::Ctx;
@@ -172,6 +172,65 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 heartbeat,
             } => commands::agent::watch(ctx, target.as_deref(), *interval, *timeout, *heartbeat),
             AgentCommand::WaitStats => commands::agent::wait_stats(ctx),
+            AgentCommand::Supervisor { command } => match command {
+                AgentSupervisorCommand::Start {
+                    agent_id,
+                    replace,
+                    surface,
+                    cleanup_on_session_end,
+                    stale_threshold,
+                    poll_interval,
+                } => commands::agent::supervisor::start(
+                    ctx,
+                    agent_id,
+                    commands::agent::supervisor::StartOptions {
+                        replace: *replace,
+                        surface: surface.clone(),
+                        cleanup_on_session_end: *cleanup_on_session_end,
+                        stale_threshold: stale_threshold.clone(),
+                        poll_interval: poll_interval.clone(),
+                    },
+                ),
+                AgentSupervisorCommand::Stop { agent_id, owned_by } => {
+                    commands::agent::supervisor::stop(
+                        ctx,
+                        commands::agent::supervisor::StopOptions {
+                            agent_id: agent_id.clone(),
+                            owned_by: owned_by.clone(),
+                        },
+                    )
+                }
+                AgentSupervisorCommand::Status { agent_id } => {
+                    commands::agent::supervisor::status(ctx, agent_id.as_deref())
+                }
+                AgentSupervisorCommand::Logs { agent_id, follow } => {
+                    commands::agent::supervisor::logs(
+                        ctx,
+                        agent_id,
+                        commands::agent::supervisor::LogsOptions { follow: *follow },
+                    )
+                }
+                AgentSupervisorCommand::Run {
+                    agent_id,
+                    foreground,
+                    surface,
+                    cleanup_on_session_end,
+                    stale_threshold_secs,
+                    poll_interval_secs,
+                    log_path,
+                } => commands::agent::supervisor::run(
+                    ctx,
+                    agent_id,
+                    commands::agent::supervisor::RunOptions {
+                        foreground: *foreground,
+                        surface: surface.clone(),
+                        cleanup_on_session_end: *cleanup_on_session_end,
+                        stale_threshold_secs: *stale_threshold_secs,
+                        poll_interval_secs: *poll_interval_secs,
+                        log_path: log_path.clone(),
+                    },
+                ),
+            },
         },
         Commands::Setup {
             yes,
