@@ -1,13 +1,14 @@
 ---
 name: wt-setup
-description: "Use to initialize, audit, improve, or clean wt config: ownership, providers, prompts, workspace, workflow policy, profiles, and validation."
+description: "Use to initialize, audit, improve, or clean wt setup/config: per-machine integration, ownership, providers, prompts, workspace, workflow policy, profiles, and validation."
 ---
 
 # WT Setup
 
-Use this skill only for wt configuration: first setup, existing config audit,
-safe edits, prompt/workspace recommendations, profile structure, and validation.
-Do not start work, coordinate agents, land branches, or clean worktrees here.
+Use this skill only for wt setup and configuration: per-machine integration,
+first config, existing config audit, safe edits, prompt/workspace
+recommendations, profile structure, and validation. Do not start work,
+coordinate agents, land branches, or clean worktrees here.
 
 ## Check First
 
@@ -20,14 +21,17 @@ wt config edit --help
 wt config extract --help
 wt config inline --help
 wt profile create --help
+wt setup --help
+wt shell-init --help
+wt completion --help
 wt doctor --help
 ```
 
 For existing config:
 
 ```bash
-git rev-parse --git-common-dir
-find . "$(git rev-parse --git-common-dir 2>/dev/null)/wt" -maxdepth 3 \
+git rev-parse --path-format=absolute --git-common-dir
+find . "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/wt" -maxdepth 3 \
   -name '.wt.toml' -o -name 'config.toml' -o -name 'profile.toml' 2>/dev/null
 wt config
 wt doctor
@@ -47,6 +51,8 @@ Classify the request:
 - `new config`: use `wt init`; preview with `--dry-run`.
 - `existing config`: use `wt config`, `wt config edit`, `wt config extract`,
   or `wt config inline`; do not use `wt init` as a repair tool.
+- `per-machine setup`: use `wt setup`; preview with `--dry-run`, and remove
+  only wt-managed per-machine entries with `wt setup --remove`.
 - `recommendation`: ask only questions that affect config choices.
 - `cleanup`: simplify comments, ordering, and formatting while preserving
   behavior unless the user asks for behavior changes.
@@ -61,6 +67,42 @@ Choose ownership:
 
 Do not silently move settings between shared/private ownership or normalize a
 mature config into one "correct" shape.
+
+## Per-Machine Setup
+
+`wt setup` configures one user's machine. It is separate from repo config and
+does not create `.wt.toml`, `<git-common-dir>/wt/config.toml`, worktrees, or
+tracked source.
+
+Preview before writing:
+
+```bash
+wt setup --dry-run
+wt setup --yes
+wt setup --remove --dry-run
+wt setup --remove --yes
+```
+
+Current setup steps are:
+
+- user-level Claude inbox hooks when the `claude` CLI is detected.
+- user-level Codex inbox hooks, Codex hook trust state, and Codex hooks feature
+  enablement when the `codex` CLI is detected.
+- shell integration eval line for zsh or bash so worker shells get ambient
+  `WT_AGENT_ID` and `WT_COORDINATOR_AGENT_ID`.
+- shell completion eval line for non-Homebrew installs. Homebrew-provided `wt`
+  skips this because the formula owns completion.
+
+Each write step prompts with default No unless `--yes` is passed. `--dry-run`
+prints planned writes without changing files. `--remove` removes only
+wt-managed per-machine entries; preserve user-authored hooks, cmux hooks,
+unrelated Codex trust state, repo config, personal wt state, worktrees, and the
+wt binary.
+
+Unsupported shells should receive manual eval-line guidance, not file edits.
+Do not treat `wt doctor`, `wt msg`, or `wt agent status/watch` as installers;
+they may report missing setup, but hook installation belongs to explicit
+`wt setup`.
 
 ## New Config
 
@@ -80,16 +122,21 @@ Set only the choices the user has decided:
 Preview before writing:
 
 ```bash
-wt init --preset agent --agent codex --dry-run --yes
-wt init --preset agent --agent codex --yes
+wt init --local --preset agent --agent codex --dry-run --yes
+wt init --local --preset agent --agent codex --yes
+wt init --shared --preset issue --issue-provider github --dry-run --yes
 wt doctor
 ```
 
 Bare `wt init --yes` uses the non-interactive default preset (`minimal`).
+With `--yes`, the default target is `<git-common-dir>/wt/config.toml`; use
+`--shared` only when the settings should be committed for contributors.
 Use `--minimal` as the explicit shortcut for that preset. In non-TTY
 automation, combine `--dry-run` with `--yes` or pass every prompt-affecting
 choice explicitly.
-Use `--force` only after inspecting the existing target.
+Use `--force` only after inspecting the existing target. Interactive `wt init`
+may prompt to add Claude local allow rules for `.git/wt/**`; `--yes` skips that
+prompt.
 
 ## Existing Config
 
@@ -103,6 +150,10 @@ Use the smallest safe edit:
 - use `wt init --dry-run --yes` only as a reference starter shape unless every
   prompt-affecting choice is passed explicitly.
 - preserve user-authored prompt text unless copy editing was requested.
+- config refactors support `.wt.toml`, `<git-common-dir>/wt/config.toml`,
+  `<git-common-dir>/wt/profiles/<name>/profile.toml`, and profile prompt files.
+  Legacy `prompts/new.md` and `prompts/new.append.md` are not supported; use
+  `branch.md` and `branch.append.md`.
 
 ## Recommendation Questions
 
@@ -145,6 +196,47 @@ defaults; `wt config` shows the effective defaults when `[workspace]` is
 configured. Keep init colors commented unless the user wants an override. Use an
 empty string value, such as `task = ""`, to disable color for a kind. Do not add
 site/dev-server tabs unless the project needs them.
+
+Browser launch:
+
+- Browser launch policy belongs to `[workspace.browser]`, not `[site]`.
+- Use `mode = "system"` for the user's normal browser. `app` is valid only in
+  system mode.
+- Use `mode = "chrome_devtools"` to launch an isolated debuggable Chrome
+  session. `[workspace.chrome_devtools]` only tunes that mode; it has no
+  `enabled` or `url` field.
+
+Minimal examples:
+
+```toml
+[workspace.browser]
+mode = "system" # none | system | chrome_devtools
+# url = "{{site_url}}"
+# app = "Google Chrome"
+```
+
+```toml
+[workspace.browser]
+mode = "chrome_devtools"
+# url = "{{site_url}}"
+
+[workspace.chrome_devtools]
+# port = 9222
+# user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
+```
+
+Prefer leaving `port` unset for normal multi-worktree use; setup reserves an
+available localhost port at runtime. Do not set `port = 0`. Set a stable port
+only when the user explicitly needs it and accepts concurrent worktree
+conflicts. Setup exposes `{{chrome_debug_port}}`, `{{chrome_debug_url}}`, and
+`{{chrome_user_data_dir}}` after Chrome DevTools is prepared. Use those values
+in setup templates, post-deps tabs, local context, or agent bootstrap instead
+of hardcoding a port.
+
+Do not point Chrome DevTools `user_data_dir` at the user's normal browser
+profile. The built-in default is `{{worktree_parent}}/.chrome-devtools/{{worktree_name}}`,
+outside the repository checkout when the default sibling worktree layout is
+used.
 
 Workflow policy:
 
@@ -207,8 +299,14 @@ ancestry, cleanup, or TaskRun status.
 - Do not combine `[profile] name` with inline `[profile.agent]`,
   `[profile.worktree]`, `[profile.setup]`, `[profile.workspace]`,
   `[profile.site]`, or `[profile.test]`.
+- `profile.toml` itself must not contain `[profile]`; it is already the named
+  profile layer.
 - Omitted `--profile` means effective config; do not invent a `default`
   profile.
+- `wt profile create <name>` creates the profile directory, `profile.toml`,
+  prompt files for `issue`/`branch`/`pr`, and agent-specific scaffold files
+  when applicable. Use it when that structure is wanted; keep simple personal
+  defaults inline under `[profile.agent]`.
 
 ## Validate
 
@@ -216,6 +314,7 @@ After config changes:
 
 ```bash
 wt config
+wt config --profile <name>
 wt doctor
 ```
 
@@ -228,6 +327,9 @@ Common checks:
 - config differs from expectation: inspect merged layers with `wt config`.
 - workflow behavior differs from expectation: inspect `[workflow]`; it only
   affects future workflow preparation.
+- per-machine hooks or shell integration differ from expectation: run
+  `wt setup --dry-run`, then `wt setup --yes` or `wt setup --remove --yes`
+  only after reviewing the planned entries.
 
 For skill wiring or wt init behavior changes:
 
