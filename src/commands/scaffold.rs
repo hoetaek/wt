@@ -319,7 +319,8 @@ mod tests {
             relative_files(&ctx),
             vec![
                 "specs/foo/design.md".to_string(),
-                "specs/foo/requirements.md".to_string()
+                "specs/foo/requirements.md".to_string(),
+                "specs/foo/tasks.md".to_string()
             ]
         );
         assert_eq!(
@@ -329,6 +330,10 @@ mod tests {
         assert_eq!(
             fs::read_to_string(spec_dir.join("design.md")).unwrap(),
             DocKind::Spec.render("foo")[1].1
+        );
+        assert_eq!(
+            fs::read_to_string(spec_dir.join("tasks.md")).unwrap(),
+            DocKind::Spec.render("foo")[2].1
         );
     }
 
@@ -354,6 +359,7 @@ mod tests {
                 "retrospectives/foo.md".to_string(),
                 "specs/foo/design.md".to_string(),
                 "specs/foo/requirements.md".to_string(),
+                "specs/foo/tasks.md".to_string(),
                 "tasks/foo.toml".to_string(),
                 "workflows/foo.toml".to_string()
             ]

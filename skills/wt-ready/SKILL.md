@@ -195,21 +195,27 @@ Prepared wt work lives in three state directories under `<git-common-dir>/wt/`:
 - `tasks/<slug>.toml` — TaskDocument, the launch unit. Schema unchanged. The body
   may reference `specs/<slug>/` files by relative path.
 
-The wt CLI does not read or write `specs/` directly — the spec is a human/AI
-artifact. TaskDocument and TaskRun models are unchanged.
+The wt CLI does not read, parse, or manage `specs/` content. It can *seed* the
+three core files via `wt scaffold <slug> --spec`; after that, spec authoring
+stays a human/AI artifact. TaskDocument and TaskRun models are unchanged.
 
 ### Promotion (idea → spec)
 
 When `wt-ready` is invoked and the user commits to preparing the work, an
 existing idea file is promoted, not copied:
 
-- delete `<git-common-dir>/wt/ideas/<slug>.{md,toml}`
-- create `<git-common-dir>/wt/specs/<slug>/` containing `requirements.md`,
-  `design.md`, `tasks.md`, and optionally `workflow.md`
+- `rm <git-common-dir>/wt/ideas/<slug>.{md,toml}` — the visible commit gate
+  that distinguishes exploration from committed prep.
+- `wt scaffold <slug> --spec` — seeds `requirements.md`, `design.md`, and
+  `tasks.md`.
+- If a mode decision is recorded at prep time, create `workflow.md` by hand.
+  Scaffold intentionally does not make `workflow.md` — it is a decision
+  artifact, not a skeleton.
 
-The directory move is the visible commit gate that distinguishes exploration
-from committed prep. Work that the user requests directly, without a prior
-idea, may go straight into `specs/<slug>/` without an idea file existing first.
+The deletion plus spec directory creation is the visible commit gate that
+distinguishes exploration from committed prep. Work that the user requests
+directly, without a prior idea, may go straight into `specs/<slug>/` without an
+idea file existing first.
 
 ### Authoring conventions
 
