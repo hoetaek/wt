@@ -9,7 +9,7 @@ use wt::cli::{
     SessionCommand, TaskCommand, WorkflowCommand,
 };
 use wt::config::{Config, ConfigSource};
-use wt::context::{Ctx, CtxOptions, OutputMode};
+use wt::context::{Ctx, CtxOptions, MachineCtx, MachineCtxOptions, OutputMode};
 use wt::error::WtError;
 use wt::runner::RealRunner;
 use wt::services::git::GitService;
@@ -85,6 +85,10 @@ fn try_main() -> Result<()> {
         );
     }
 
+    if matches!(command, Commands::Setup { .. }) {
+        return run_setup_command(&cli, command);
+    }
+
     let silent_check_inbox = matches!(
         command,
         Commands::Msg {
@@ -118,6 +122,28 @@ fn try_main() -> Result<()> {
     }
 
     wt::dispatch(&ctx, command)
+}
+
+fn run_setup_command(cli: &Cli, command: &Commands) -> Result<()> {
+    let current_dir = std::env::current_dir()?;
+    let _working_dir = resolve_directory(&current_dir, cli.directory.as_deref())?;
+    let runner = RealRunner;
+    let ui = TerminalUi::with_decoration(cli.quiet, use_decorative_output(cli));
+    let output_mode = if cli.json {
+        OutputMode::Json
+    } else {
+        OutputMode::Text
+    };
+    let ctx = MachineCtx::new_with_options(
+        &runner,
+        &ui,
+        MachineCtxOptions {
+            output_mode,
+            verbosity: cli.verbose,
+            quiet: cli.quiet,
+        },
+    );
+    wt::dispatch_machine(&ctx, command)
 }
 
 fn build_ctx(cli: &Cli, command: &Commands) -> Result<(Ctx, ConfigSource)> {

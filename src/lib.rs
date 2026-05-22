@@ -21,13 +21,31 @@ pub mod ui;
 pub mod workflow;
 pub mod worktree_naming;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use cli::{
     AgentCommand, AgentSupervisorCommand, Commands, ConfigCommand, MsgCommand, RunCommand,
     SessionCommand, TaskCommand, WorkflowCommand,
 };
 use commands::agent_runtime::KnownAgentCli;
-use context::Ctx;
+use context::{Ctx, MachineCtx};
+
+pub fn dispatch_machine(ctx: &MachineCtx<'_>, command: &Commands) -> Result<()> {
+    match command {
+        Commands::Setup {
+            yes,
+            dry_run,
+            remove,
+        } => commands::setup::run(
+            ctx,
+            commands::setup::SetupOptions {
+                yes: *yes,
+                dry_run: *dry_run,
+                remove: *remove,
+            },
+        ),
+        _ => bail!("command does not support per-machine context"),
+    }
+}
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
     match command {
@@ -267,14 +285,17 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             yes,
             dry_run,
             remove,
-        } => commands::setup::run(
-            ctx,
-            commands::setup::SetupOptions {
-                yes: *yes,
-                dry_run: *dry_run,
-                remove: *remove,
-            },
-        ),
+        } => {
+            let machine_ctx = ctx.machine_ctx();
+            commands::setup::run(
+                &machine_ctx,
+                commands::setup::SetupOptions {
+                    yes: *yes,
+                    dry_run: *dry_run,
+                    remove: *remove,
+                },
+            )
+        }
         Commands::Codex { args } => {
             commands::agent_runtime::run_known(ctx, KnownAgentCli::Codex, args)
         }

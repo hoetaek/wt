@@ -326,6 +326,56 @@ impl Default for CtxOptions {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MachineCtxOptions {
+    pub output_mode: OutputMode,
+    pub verbosity: u8,
+    pub quiet: bool,
+}
+
+impl Default for MachineCtxOptions {
+    fn default() -> Self {
+        Self {
+            output_mode: OutputMode::Text,
+            verbosity: 0,
+            quiet: false,
+        }
+    }
+}
+
+/// Per-machine context for commands that do not need repository state.
+pub struct MachineCtx<'a> {
+    pub runner: &'a dyn CommandRunner,
+    pub ui: &'a dyn UserInterface,
+    pub output_mode: OutputMode,
+    pub verbosity: u8,
+    pub quiet: bool,
+}
+
+impl<'a> MachineCtx<'a> {
+    pub fn new(runner: &'a dyn CommandRunner, ui: &'a dyn UserInterface) -> Self {
+        Self::new_with_options(runner, ui, MachineCtxOptions::default())
+    }
+
+    pub fn new_with_options(
+        runner: &'a dyn CommandRunner,
+        ui: &'a dyn UserInterface,
+        options: MachineCtxOptions,
+    ) -> Self {
+        Self {
+            runner,
+            ui,
+            output_mode: options.output_mode,
+            verbosity: options.verbosity,
+            quiet: options.quiet,
+        }
+    }
+
+    pub fn is_json(&self) -> bool {
+        self.output_mode == OutputMode::Json
+    }
+}
+
 /// Context object carrying all side-effect handles.
 pub struct Ctx {
     pub repo_root: PathBuf,
@@ -404,6 +454,18 @@ impl Ctx {
 
     pub fn is_json(&self) -> bool {
         self.output_mode == OutputMode::Json
+    }
+
+    pub fn machine_ctx(&self) -> MachineCtx<'_> {
+        MachineCtx::new_with_options(
+            self.runner.as_ref(),
+            self.ui.as_ref(),
+            MachineCtxOptions {
+                output_mode: self.output_mode,
+                verbosity: self.verbosity,
+                quiet: self.quiet,
+            },
+        )
     }
 }
 
