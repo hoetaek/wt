@@ -693,8 +693,9 @@ pub enum ColorMode {
 pub enum RunCommand {
     /// Start a workspace from an issue
     Issue {
-        /// Issue number or provider-specific key
-        target: Option<String>,
+        /// Issue numbers or provider-specific keys (omit to select multiple provider issues)
+        #[arg(value_name = "ISSUE")]
+        targets: Vec<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
@@ -704,6 +705,9 @@ pub enum RunCommand {
         /// Start one workspace for each named profile
         #[arg(long, conflicts_with = "profile")]
         matrix: bool,
+        /// Maximum number of provider issues to execute concurrently
+        #[arg(long, default_value_t = 3, value_parser = parse_positive_usize)]
+        jobs: usize,
     },
     /// Start workspaces from pull requests
     Pr {
@@ -713,6 +717,9 @@ pub enum RunCommand {
         /// Apply config from <git-common-dir>/wt/profiles/<name> to the PR worktree
         #[arg(long)]
         profile: Option<String>,
+        /// Maximum number of pull requests to execute concurrently
+        #[arg(long, default_value_t = 3, value_parser = parse_positive_usize)]
+        jobs: usize,
     },
     /// Start a workspace from branch-name text
     #[command(
@@ -746,6 +753,9 @@ pub enum RunCommand {
         /// Create a profiled task worktree from <git-common-dir>/wt/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
+        /// Maximum number of local tasks to execute concurrently
+        #[arg(long, default_value_t = 3, value_parser = parse_positive_usize)]
+        jobs: usize,
     },
     /// Start runnable tasks from a saved workflow
     #[command(
@@ -1149,12 +1159,13 @@ mod tests {
             cli.command,
             Some(Commands::Run {
                 command: RunCommand::Issue {
-                    target: None,
+                    ref targets,
                     base: None,
                     profile: None,
                     matrix: false,
+                    jobs: 3,
                 }
-            })
+            }) if targets.is_empty()
         ));
     }
 
@@ -1164,20 +1175,54 @@ mod tests {
         if let Some(Commands::Run {
             command:
                 RunCommand::Issue {
-                    target,
+                    targets,
                     base,
                     profile,
                     matrix,
+                    jobs,
                 },
         }) = cli.command
         {
-            assert_eq!(target.as_deref(), Some("PROJ-680"));
+            assert_eq!(targets, vec!["PROJ-680".to_string()]);
             assert_eq!(base, None);
             assert_eq!(profile, None);
             assert!(!matrix);
+            assert_eq!(jobs, 3);
         } else {
             panic!("expected Issue");
         }
+    }
+
+    #[test]
+    fn run_issue_with_multiple_targets() {
+        let cli = parse(&["wt", "run", "issue", "PROJ-680", "PROJ-681"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                command: RunCommand::Issue {
+                    ref targets,
+                    base: None,
+                    profile: None,
+                    matrix: false,
+                    jobs: 3,
+                }
+            }) if targets == &vec!["PROJ-680".to_string(), "PROJ-681".to_string()]
+        ));
+    }
+
+    #[test]
+    fn run_issue_accepts_jobs() {
+        let cli = parse(&["wt", "run", "issue", "PROJ-680", "PROJ-681", "--jobs", "1"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                command: RunCommand::Issue {
+                    ref targets,
+                    jobs: 1,
+                    ..
+                }
+            }) if targets == &vec!["PROJ-680".to_string(), "PROJ-681".to_string()]
+        ));
     }
 
     #[test]
@@ -1268,7 +1313,8 @@ mod tests {
             Some(Commands::Run {
                 command: RunCommand::Pr {
                     ref numbers,
-                    profile: None
+                    profile: None,
+                    jobs: 3,
                 }
             }) if numbers.is_empty()
         ));
@@ -1283,6 +1329,7 @@ mod tests {
                 command: RunCommand::Pr {
                     ref numbers,
                     profile: Some(ref profile),
+                    jobs: 3,
                 }
             }) if numbers == &vec![42] && profile == "codex"
         ));
@@ -1297,8 +1344,24 @@ mod tests {
                 command: RunCommand::Pr {
                     ref numbers,
                     profile: Some(ref profile),
+                    jobs: 3,
                 }
             }) if numbers == &vec![42, 43, 44] && profile == "codex"
+        ));
+    }
+
+    #[test]
+    fn run_pr_accepts_jobs() {
+        let cli = parse(&["wt", "run", "pr", "42", "43", "--jobs", "1"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                command: RunCommand::Pr {
+                    ref numbers,
+                    jobs: 1,
+                    ..
+                }
+            }) if numbers == &vec![42, 43]
         ));
     }
 
@@ -1316,6 +1379,24 @@ mod tests {
         assert!(help.contains("[PR]..."));
         assert!(help.contains("Pull request numbers"));
         assert!(help.contains("select multiple open PRs"));
+        assert!(help.contains("--jobs"));
+    }
+
+    #[test]
+    fn run_issue_help_describes_multiple_targets() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("run")
+            .unwrap()
+            .find_subcommand_mut("issue")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("[ISSUE]..."));
+        assert!(help.contains("Issue numbers or provider-specific keys"));
+        assert!(help.contains("select multiple provider issues"));
+        assert!(help.contains("--jobs"));
     }
 
     #[test]
@@ -1750,6 +1831,7 @@ mod tests {
                     ref tasks,
                     base: Some(ref base),
                     profile: None,
+                    jobs: 3,
                 }
             }) if tasks == &vec!["task-a".to_string(), "task-b".to_string()]
                 && base == "main"
@@ -1762,6 +1844,7 @@ mod tests {
                 command: RunCommand::Task {
                     ref tasks,
                     profile: Some(ref profile),
+                    jobs: 3,
                     ..
                 }
             }) if tasks == &vec!["task-a".to_string()] && profile == "codex"
@@ -1778,8 +1861,24 @@ mod tests {
                     ref tasks,
                     base: None,
                     profile: None,
+                    jobs: 3,
                 }
             }) if tasks.is_empty()
+        ));
+    }
+
+    #[test]
+    fn run_task_accepts_jobs() {
+        let cli = parse(&["wt", "run", "task", "task-a", "task-b", "--jobs", "1"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                command: RunCommand::Task {
+                    ref tasks,
+                    jobs: 1,
+                    ..
+                }
+            }) if tasks == &vec!["task-a".to_string(), "task-b".to_string()]
         ));
     }
 
@@ -1832,6 +1931,7 @@ mod tests {
         assert!(help.contains("wt workflow task --mode batch"));
         assert!(help.contains("wt workflow task --mode single"));
         assert!(help.contains("wt run workflow"));
+        assert!(help.contains("--jobs"));
         assert!(!help.contains("--matrix"));
         assert!(!help.contains("--profiles"));
     }

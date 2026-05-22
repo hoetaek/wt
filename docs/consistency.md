@@ -1001,10 +1001,18 @@ TaskDocument를 multi-select로 고르게 하고, 명시 task key는 scriptable 
 성공으로 보고하지 않는다. `origin`은 external issue와의 durable link이지, 아직
 publish해야 한다는 pending request가 아니다.
 
-`wt run issue`는 이미 존재하는 provider issue에서 worktree를 시작하는 명령으로 남긴다.
+`wt run issue`는 이미 존재하는 provider issue에서 worktree를 시작하는 명령으로 남긴다. Bare
+`wt run issue`는 provider issue를 multi-select로 고르게 하고, 명시 issue key 목록은
+scriptable path로 남긴다.
 Provider issue를 TaskDocument로 가져오는 흐름은 `wt task import`, Local TaskDocument를
 provider issue로 만드는 흐름은 `wt task publish`다. `wt run issue import`, `wt run issue create`,
 `sync`, `pull`, `push`, `export` 같은 이름을 같은 개념의 alias로 추가하지 않는다.
+
+여러 대상을 시작하는 `wt run issue`, `wt run pr`, `wt run task`는 기본 `--jobs 3`
+bounded parallel 실행을 사용하고, 순차 실행과 interactive conflict prompt가 필요하면
+`--jobs 1`을 명시한다. Parallel worker 안에서는 기존 worktree 삭제/열기, branch 재사용 선택,
+base 선택 같은 prompt를 열지 않는다. 이런 선택이 필요한 항목은 실패로 기록하거나 실패로
+보고하고, 이미 시작된 다른 항목은 계속 완료한다.
 
 Publish는 TaskDocument의 schema를 넓히지 않는다. TaskDocument에는 계속 title, branch,
 body, optional origin만 둔다. TaskRun, workflow, profile, retry status, pending

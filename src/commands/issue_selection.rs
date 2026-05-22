@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SelectedIssue {
     pub(crate) identifier: String,
+    pub(crate) title: String,
     pub(crate) display: String,
 }
 
@@ -33,19 +34,11 @@ pub(crate) fn select_issues_with_provider(
         let item = issue_prompt_item(issue);
         selected.push(SelectedIssue {
             identifier: issue.identifier.clone(),
+            title: issue.title.clone(),
             display: item.render_plain(),
         });
     }
     Ok(selected)
-}
-
-pub(crate) fn select_issue_index(
-    ctx: &Ctx,
-    prompt: &str,
-    issues: &[IssueListItem],
-) -> Result<usize> {
-    let rows = issue_prompt_rows(issues);
-    ctx.ui.select_rows(prompt, &rows)
 }
 
 fn select_issue_indices(ctx: &Ctx, prompt: &str, issues: &[IssueListItem]) -> Result<Vec<usize>> {

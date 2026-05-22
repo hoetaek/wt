@@ -9,13 +9,14 @@ use crate::config::IssueProviderType;
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::names::WorktreeNames;
+use crate::parallel::{self, ParallelControl};
 use crate::services::git::{CreateType, GitService};
 use crate::services::issues::github::GithubIssueProvider;
 use crate::services::issues::linear::LinearIssueProvider;
 use crate::services::issues::{IssueInfo, IssueProvider};
 use crate::setup;
 use crate::worktree_naming::{self, WorktreeNamingResult};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
@@ -96,21 +97,77 @@ struct ProfileRunOptions<'a> {
     prompt_policy: PromptPolicy,
 }
 
+struct IssueRunBase<'a> {
+    original: &'a Option<String>,
+    provider_override: Option<Option<String>>,
+    create_override: Option<Option<String>>,
+    fallback_parent_base: Option<String>,
+}
+
+impl<'a> IssueRunBase<'a> {
+    fn sequential(base_raw: &'a Option<String>) -> Self {
+        Self {
+            original: base_raw,
+            provider_override: None,
+            create_override: None,
+            fallback_parent_base: None,
+        }
+    }
+
+    fn provider_base_raw(&self) -> &Option<String> {
+        self.provider_override.as_ref().unwrap_or(self.original)
+    }
+
+    fn create_base_raw(&self) -> &Option<String> {
+        self.create_override.as_ref().unwrap_or(self.original)
+    }
+}
+
+#[derive(Clone, Debug)]
+enum IssueWorkItem {
+    Target(String),
+    Resolved(IssueInfo),
+}
+
+impl IssueWorkItem {
+    fn label(&self) -> String {
+        match self {
+            IssueWorkItem::Target(target) => target.clone(),
+            IssueWorkItem::Resolved(issue) => issue.identifier.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct IssueRunOptions<'a, 'b> {
+    profile_selection: ProfileSelection<'b>,
+    matrix: bool,
+    prepared_issue: Option<&'a PreparedIssueContext<'a>>,
+    prompt_policy: PromptPolicy,
+    jobs: usize,
+    base_override: Option<&'b str>,
+}
+
 pub fn run(
     ctx: &Ctx,
-    target: Option<&str>,
+    targets: &[String],
     base_raw: &Option<String>,
     profile: Option<&str>,
     matrix: bool,
+    jobs: usize,
 ) -> Result<()> {
-    run_inner(
+    run_inner_many(
         ctx,
-        target,
+        targets,
         base_raw,
-        ProfileSelection::new(profile, &[]),
-        matrix,
-        None,
-        PromptPolicy::Allow,
+        IssueRunOptions {
+            profile_selection: ProfileSelection::new(profile, &[]),
+            matrix,
+            prepared_issue: None,
+            prompt_policy: PromptPolicy::Allow,
+            jobs,
+            base_override: None,
+        },
     )
     .map(|_| ())
 }
@@ -124,12 +181,16 @@ pub(crate) fn run_with_issue_snapshot(
 ) -> Result<IssueRunResult> {
     run_inner(
         ctx,
-        None,
+        &[],
         base_raw,
-        ProfileSelection::new(profile, &[]),
-        matrix,
-        Some(&prepared),
-        PromptPolicy::Allow,
+        IssueRunOptions {
+            profile_selection: ProfileSelection::new(profile, &[]),
+            matrix,
+            prepared_issue: Some(&prepared),
+            prompt_policy: PromptPolicy::Allow,
+            jobs: 1,
+            base_override: None,
+        },
     )
 }
 
@@ -142,12 +203,39 @@ pub(crate) fn run_with_issue_snapshot_non_interactive(
 ) -> Result<IssueRunResult> {
     run_inner(
         ctx,
-        None,
+        &[],
         base_raw,
-        ProfileSelection::new(profile, &[]),
-        matrix,
-        Some(&prepared),
-        PromptPolicy::Deny,
+        IssueRunOptions {
+            profile_selection: ProfileSelection::new(profile, &[]),
+            matrix,
+            prepared_issue: Some(&prepared),
+            prompt_policy: PromptPolicy::Deny,
+            jobs: 1,
+            base_override: None,
+        },
+    )
+}
+
+pub(crate) fn run_with_issue_snapshot_non_interactive_base_override(
+    ctx: &Ctx,
+    base_raw: &Option<String>,
+    profile: Option<&str>,
+    matrix: bool,
+    prepared: PreparedIssueContext<'_>,
+    base_override: &str,
+) -> Result<IssueRunResult> {
+    run_inner(
+        ctx,
+        &[],
+        base_raw,
+        IssueRunOptions {
+            profile_selection: ProfileSelection::new(profile, &[]),
+            matrix,
+            prepared_issue: Some(&prepared),
+            prompt_policy: PromptPolicy::Deny,
+            jobs: 1,
+            base_override: Some(base_override),
+        },
     )
 }
 
@@ -197,39 +285,34 @@ pub(crate) fn planned_worktrees_for_prepared_issue(
     }])
 }
 
-fn run_inner(
+fn run_inner<'a>(
     ctx: &Ctx,
-    target: Option<&str>,
+    targets: &[String],
     base_raw: &Option<String>,
-    profile_selection: ProfileSelection<'_>,
-    matrix: bool,
-    prepared_issue: Option<&PreparedIssueContext<'_>>,
-    prompt_policy: PromptPolicy,
+    options: IssueRunOptions<'a, '_>,
 ) -> Result<IssueRunResult> {
-    run_inner_many(
-        ctx,
-        target,
-        base_raw,
+    run_inner_many(ctx, targets, base_raw, options)?
+        .into_iter()
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("No worktrees created"))
+}
+
+fn run_inner_many<'a>(
+    ctx: &Ctx,
+    targets: &[String],
+    base_raw: &Option<String>,
+    options: IssueRunOptions<'a, '_>,
+) -> Result<Vec<IssueRunResult>> {
+    let IssueRunOptions {
         profile_selection,
         matrix,
         prepared_issue,
         prompt_policy,
-    )?
-    .into_iter()
-    .last()
-    .ok_or_else(|| anyhow::anyhow!("No worktrees created"))
-}
-
-fn run_inner_many(
-    ctx: &Ctx,
-    target: Option<&str>,
-    base_raw: &Option<String>,
-    profile_selection: ProfileSelection<'_>,
-    matrix: bool,
-    prepared_issue: Option<&PreparedIssueContext<'_>>,
-    prompt_policy: PromptPolicy,
-) -> Result<Vec<IssueRunResult>> {
-    let profile_configs = if matrix || profile_selection.uses_profiles() {
+        jobs,
+        base_override,
+    } = options;
+    let uses_profiles = matrix || profile_selection.uses_profiles();
+    let profile_configs = if uses_profiles {
         Some(profile_selection::load_profile_selection(
             ctx,
             profile_selection,
@@ -238,40 +321,253 @@ fn run_inner_many(
         None
     };
 
-    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+    let work_items = issue_work_items_to_run(ctx, targets, prepared_issue)?;
+    if work_items.is_empty() {
+        ctx.ui.print_warning("No issues selected");
+        return Ok(Vec::new());
+    }
+    let parallel = prepared_issue.is_none() && jobs > 1 && work_items.len() > 1;
+    let run_base = issue_run_base(ctx, base_raw, parallel, uses_profiles, base_override)?;
+    let worker_prompt_policy = if parallel {
+        PromptPolicy::Deny
+    } else {
+        prompt_policy
+    };
 
-    // 1. Resolve issue
+    if parallel {
+        return run_issue_work_items_parallel(
+            ctx,
+            work_items,
+            &run_base,
+            uses_profiles,
+            profile_configs.as_deref(),
+            worker_prompt_policy,
+            jobs,
+        );
+    }
+
+    let issue_count = work_items.len();
+    let mut results = Vec::new();
+    for item in work_items {
+        let issue_label = item.label();
+        let result = run_issue_work_item(
+            ctx,
+            item,
+            &run_base,
+            uses_profiles,
+            profile_configs.as_deref(),
+            prepared_issue,
+            worker_prompt_policy,
+        );
+        let result = if issue_count > 1 {
+            result.with_context(|| format!("Issue {issue_label}"))
+        } else {
+            result
+        };
+        match result {
+            Ok(mut issue_results) => results.append(&mut issue_results),
+            Err(err) => return Err(issue_partial_failure(&results, err)),
+        }
+    }
+
+    Ok(results)
+}
+
+fn issue_run_base<'a>(
+    ctx: &Ctx,
+    base_raw: &'a Option<String>,
+    parallel: bool,
+    uses_profiles: bool,
+    base_override: Option<&str>,
+) -> Result<IssueRunBase<'a>> {
+    if let Some(base) = base_override {
+        if base.trim().is_empty() {
+            bail!("Base branch cannot be empty");
+        }
+        return match BaseMode::from_raw(base_raw) {
+            BaseMode::Default => {
+                let base = base.to_string();
+                let create_override = uses_profiles.then(|| Some(base.clone()));
+                Ok(IssueRunBase {
+                    original: base_raw,
+                    provider_override: Some(Some(base.clone())),
+                    create_override,
+                    fallback_parent_base: Some(base),
+                })
+            }
+            BaseMode::Interactive => {
+                let base = base.to_string();
+                Ok(IssueRunBase {
+                    original: base_raw,
+                    provider_override: Some(Some(base.clone())),
+                    create_override: Some(Some(base)),
+                    fallback_parent_base: None,
+                })
+            }
+            BaseMode::Current | BaseMode::Explicit(_) => Ok(IssueRunBase::sequential(base_raw)),
+        };
+    }
+
+    if !parallel {
+        return Ok(IssueRunBase::sequential(base_raw));
+    }
+
+    match BaseMode::from_raw(base_raw) {
+        BaseMode::Default => {
+            let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+            let base = resolve_base_branch(ctx, &git, base_raw)?;
+            let create_override = uses_profiles.then(|| Some(base.clone()));
+            Ok(IssueRunBase {
+                original: base_raw,
+                provider_override: Some(Some(base.clone())),
+                create_override,
+                fallback_parent_base: Some(base),
+            })
+        }
+        BaseMode::Interactive => {
+            let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+            let base = resolve_base_branch(ctx, &git, base_raw)?;
+            Ok(IssueRunBase {
+                original: base_raw,
+                provider_override: Some(Some(base.clone())),
+                create_override: Some(Some(base)),
+                fallback_parent_base: None,
+            })
+        }
+        BaseMode::Current | BaseMode::Explicit(_) => Ok(IssueRunBase::sequential(base_raw)),
+    }
+}
+
+fn issue_work_items_to_run(
+    ctx: &Ctx,
+    targets: &[String],
+    prepared_issue: Option<&PreparedIssueContext<'_>>,
+) -> Result<Vec<IssueWorkItem>> {
     let naming_enabled = ctx.config.worktree.naming.is_some();
-    let issue = if let Some(prepared) = prepared_issue {
-        IssueInfo {
+    if let Some(prepared) = prepared_issue {
+        return Ok(vec![IssueWorkItem::Resolved(IssueInfo {
             identifier: prepared.identifier.to_string(),
             title: prepared.title.to_string(),
             branch_name: prepared.branch_name.map(str::to_string),
             body: None,
-        }
-    } else if let Some(target) = target {
-        let provider = build_provider(ctx)?;
-        provider.get_issue(target.trim_start_matches('#'))?
-    } else {
-        let provider = build_provider(ctx)?;
-        let issues = provider.list_issues()?;
-        if issues.is_empty() {
-            bail!("No issues found");
-        }
+        })]);
+    }
 
-        let idx = issue_selection::select_issue_index(ctx, "Select an issue", &issues)?;
-        let selected = &issues[idx];
-        if naming_enabled {
-            provider.get_issue(&selected.identifier)?
-        } else {
-            IssueInfo {
-                identifier: selected.identifier.clone(),
-                title: selected.title.clone(),
-                branch_name: None,
-                body: None,
+    if !targets.is_empty() {
+        return Ok(targets
+            .iter()
+            .map(|target| IssueWorkItem::Target(target.clone()))
+            .collect());
+    }
+
+    let provider = build_provider(ctx)?;
+    let selected =
+        issue_selection::select_issues_with_provider(ctx, "Issues to start", provider.as_ref())?;
+    selected
+        .into_iter()
+        .map(|issue| {
+            if naming_enabled {
+                provider
+                    .get_issue(&issue.identifier)
+                    .map(IssueWorkItem::Resolved)
+            } else {
+                Ok(IssueWorkItem::Resolved(IssueInfo {
+                    identifier: issue.identifier,
+                    title: issue.title,
+                    branch_name: None,
+                    body: None,
+                }))
             }
+        })
+        .collect()
+}
+
+fn run_issue_work_item<'a>(
+    ctx: &Ctx,
+    item: IssueWorkItem,
+    run_base: &IssueRunBase<'_>,
+    uses_profiles: bool,
+    profile_configs: Option<&[(String, Config)]>,
+    prepared_issue: Option<&'a PreparedIssueContext<'a>>,
+    prompt_policy: PromptPolicy,
+) -> Result<Vec<IssueRunResult>> {
+    let issue = match item {
+        IssueWorkItem::Resolved(issue) => issue,
+        IssueWorkItem::Target(target) => {
+            let provider = build_provider(ctx)?;
+            provider
+                .get_issue(target.trim_start_matches('#'))
+                .with_context(|| format!("Issue {target}"))?
         }
     };
+    run_resolved_issue(
+        ctx,
+        issue,
+        run_base,
+        uses_profiles,
+        profile_configs,
+        prepared_issue,
+        prompt_policy,
+    )
+}
+
+fn run_issue_work_items_parallel(
+    ctx: &Ctx,
+    items: Vec<IssueWorkItem>,
+    run_base: &IssueRunBase<'_>,
+    uses_profiles: bool,
+    profile_configs: Option<&[(String, Config)]>,
+    prompt_policy: PromptPolicy,
+    jobs: usize,
+) -> Result<Vec<IssueRunResult>> {
+    let mut results = Vec::new();
+    let mut first_error = None;
+    parallel::run_bounded_parallel(
+        items,
+        jobs,
+        |_| Ok(()),
+        |item| {
+            let label = item.label();
+            run_issue_work_item(
+                ctx,
+                item,
+                run_base,
+                uses_profiles,
+                profile_configs,
+                None,
+                prompt_policy,
+            )
+            .with_context(|| format!("Issue {label}"))
+        },
+        |completion| {
+            match completion.result {
+                Ok(mut item_results) => results.append(&mut item_results),
+                Err(err) => {
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                }
+            }
+            Ok(ParallelControl::Continue)
+        },
+    )?;
+
+    if let Some(err) = first_error {
+        return Err(issue_partial_failure(&results, err));
+    }
+    Ok(results)
+}
+
+fn run_resolved_issue<'a>(
+    ctx: &Ctx,
+    issue: IssueInfo,
+    run_base: &IssueRunBase<'_>,
+    uses_profiles: bool,
+    profile_configs: Option<&[(String, Config)]>,
+    prepared_issue: Option<&'a PreparedIssueContext<'a>>,
+    prompt_policy: PromptPolicy,
+) -> Result<Vec<IssueRunResult>> {
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
     let identifier = issue.identifier;
     let title = issue.title;
     let suggested_branch = issue.branch_name;
@@ -309,12 +605,14 @@ fn run_inner_many(
                 &identifier,
                 &title,
                 suggested_branch.as_deref(),
-                Some(base_raw),
+                Some(run_base.provider_base_raw()),
                 prompt_policy,
             )?
         };
     let raw_id = identifier.trim_start_matches('#');
-    let provider_created_branch_base = branch_resolution.provider_created_branch_base;
+    let provider_created_branch_base = branch_resolution
+        .provider_created_branch_base
+        .or_else(|| run_base.fallback_parent_base.clone());
     let branch_name = branch_resolution.branch_name;
     let naming = branch_resolution.naming;
 
@@ -322,14 +620,16 @@ fn run_inner_many(
         .map(|issue| issue.on_start_issue_id)
         .unwrap_or(Some(raw_id));
 
-    if matrix || profile_selection.uses_profiles() {
+    if uses_profiles {
         return run_profiles(
             ctx,
             &title,
             &branch_name,
             naming.as_ref(),
-            base_raw,
-            profile_configs.expect("profile configs loaded before issue resolution"),
+            run_base.create_base_raw(),
+            profile_configs
+                .expect("profile configs loaded before issue resolution")
+                .to_vec(),
             ProfileRunOptions {
                 prepared_issue,
                 on_start_issue_id,
@@ -398,7 +698,7 @@ fn run_inner_many(
         ];
         if prompt_policy == PromptPolicy::Deny {
             bail!(
-                "Worktree {} already exists; parallel batch workers cannot prompt to delete or open it",
+                "Worktree {} already exists; parallel workers cannot prompt to delete or open it",
                 names.path.display()
             );
         }
@@ -438,7 +738,7 @@ fn run_inner_many(
         &git,
         &branch_name,
         &names.path,
-        base_raw,
+        run_base.create_base_raw(),
         provider_created_branch_base.as_deref(),
         prompt_policy,
     )?;
@@ -686,6 +986,13 @@ fn profile_partial_failure(
     IssueRunPartialFailure::new(completed.to_vec(), failed, err).into()
 }
 
+fn issue_partial_failure(completed: &[IssueRunResult], err: anyhow::Error) -> anyhow::Error {
+    if completed.is_empty() {
+        return err;
+    }
+    IssueRunPartialFailure::new(completed.to_vec(), None, err).into()
+}
+
 fn profile_template_vars(
     naming: Option<&WorktreeNamingResult>,
     profile_name: &str,
@@ -805,9 +1112,7 @@ pub(crate) fn materialize_provider_issue_branch(
                         BaseMode::Interactive | BaseMode::Default
                     )
                 {
-                    bail!(
-                        "Base branch resolution is interactive; parallel batch workers cannot prompt"
-                    );
+                    bail!("Base branch resolution is interactive; parallel workers cannot prompt");
                 }
                 let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
                 Some(resolve_base_branch(ctx, &git, base_raw)?)
@@ -934,7 +1239,7 @@ fn create_worktree(
         } else {
             if prompt_policy == PromptPolicy::Deny {
                 bail!(
-                    "Remote branch {branch_name} needs a parent branch selection; parallel batch workers cannot prompt"
+                    "Remote branch {branch_name} needs a parent branch selection; parallel workers cannot prompt"
                 );
             }
             let branches = git.list_local_branches()?;
@@ -953,9 +1258,7 @@ fn create_worktree(
             BaseMode::Explicit(ref b) => b.clone(),
             BaseMode::Interactive => {
                 if prompt_policy == PromptPolicy::Deny {
-                    bail!(
-                        "Base branch selection is interactive; parallel batch workers cannot prompt"
-                    );
+                    bail!("Base branch selection is interactive; parallel workers cannot prompt");
                 }
                 let branches = git.list_local_branches()?;
                 let idx = ctx.ui.select("Select base branch", &branches)?;
@@ -964,7 +1267,7 @@ fn create_worktree(
             BaseMode::Current => git.current_branch()?,
             BaseMode::Default => {
                 if prompt_policy == PromptPolicy::Deny {
-                    bail!("Base branch input is interactive; parallel batch workers cannot prompt");
+                    bail!("Base branch input is interactive; parallel workers cannot prompt");
                 }
                 let current = git.current_branch()?;
                 ctx.ui.input("Base branch", Some(&current))?
@@ -994,7 +1297,7 @@ mod tests {
     use crate::context::{CommandRunner, Ctx};
     use anyhow::Result;
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     fn linear_config() -> Config {
         Config {
@@ -1031,7 +1334,24 @@ mod tests {
         matrix: bool,
     ) -> Result<()> {
         assert!(selected_profiles.is_empty());
-        super::run(ctx, target, base_raw, profile, matrix)
+        let targets = target
+            .map(|target| vec![target.to_string()])
+            .unwrap_or_default();
+        super::run(ctx, &targets, base_raw, profile, matrix, 1)
+    }
+
+    fn run_targets(
+        ctx: &Ctx,
+        targets: &[&str],
+        base_raw: &Option<String>,
+        profile: Option<&str>,
+        matrix: bool,
+    ) -> Result<()> {
+        let targets = targets
+            .iter()
+            .map(|target| target.to_string())
+            .collect::<Vec<_>>();
+        super::run(ctx, &targets, base_raw, profile, matrix, 1)
     }
 
     fn count_linear_start_updates(calls: &[CommandCall], issue_id: &str) -> usize {
@@ -1064,6 +1384,87 @@ mod tests {
 
         fn has_command(&self, cmd: &str) -> bool {
             self.inner.has_command(cmd)
+        }
+    }
+
+    struct IssueParallelRunner {
+        calls: Mutex<Vec<CommandCall>>,
+    }
+
+    impl IssueParallelRunner {
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl CommandRunner for IssueParallelRunner {
+        fn run(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            cwd: Option<&Path>,
+        ) -> Result<crate::context::CmdOutput> {
+            self.calls.lock().unwrap().push((
+                cmd.to_string(),
+                args.iter().map(|s| s.to_string()).collect(),
+                cwd.map(Path::to_path_buf),
+            ));
+
+            let output = |stdout: String, success| crate::context::CmdOutput {
+                stdout,
+                stderr: String::new(),
+                success,
+            };
+
+            match (cmd, args) {
+                ("linear", ["issue", "view", id, "--json"]) => {
+                    let number = id.trim_start_matches("PROJ-");
+                    Ok(output(
+                        format!(
+                            r#"{{"identifier":"PROJ-{number}","title":"Issue {number}","branchName":"alice/proj-{number}"}}"#
+                        ),
+                        true,
+                    ))
+                }
+                ("linear", ["issue", "update", _, "--state", "In Progress"]) => {
+                    Ok(output(String::new(), true))
+                }
+                ("git", ["worktree", "list", "--porcelain"]) => Ok(output(
+                    "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n".into(),
+                    true,
+                )),
+                ("git", ["fetch", "origin"]) => Ok(output(String::new(), true)),
+                ("git", ["worktree", "add", "-b", _, _, _]) => Ok(output(String::new(), true)),
+                ("git", ["config", _, _]) => Ok(output(String::new(), true)),
+                ("git", ["show-ref", "--verify", "--quiet", reference])
+                    if *reference == "refs/heads/main" =>
+                {
+                    Ok(output(String::new(), true))
+                }
+                ("git", ["show-ref", "--verify", "--quiet", _]) => Ok(output(String::new(), false)),
+                _ => bail!("unexpected command: {cmd} {}", args.join(" ")),
+            }
+        }
+
+        fn has_command(&self, _cmd: &str) -> bool {
+            true
+        }
+    }
+
+    impl CommandRunner for Arc<IssueParallelRunner> {
+        fn run(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            cwd: Option<&Path>,
+        ) -> Result<crate::context::CmdOutput> {
+            self.as_ref().run(cmd, args, cwd)
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            self.as_ref().has_command(cmd)
         }
     }
 
@@ -1529,6 +1930,241 @@ mod tests {
     }
 
     #[test]
+    fn issue_with_multiple_targets_runs_each_issue_in_order() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"identifier":"PROJ-1","title":"First issue","branchName":"alice/proj-1-first"}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"identifier":"PROJ-1","title":"First issue","branchName":"alice/proj-1-first"}"#,
+            true,
+        );
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        runner.add_response("", true); // fetch
+        runner.add_response("", false); // local_branch_exists
+        runner.add_response("", false); // remote_branch_exists
+        runner.add_response("", true); // worktree_add_new_branch
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // set parent config
+        runner.add_response("", true); // on_start
+        runner.add_response(
+            r#"{"identifier":"PROJ-3","title":"Third issue","branchName":"alice/proj-3-third"}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"identifier":"PROJ-3","title":"Third issue","branchName":"alice/proj-3-third"}"#,
+            true,
+        );
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        runner.add_response("", true); // fetch
+        runner.add_response("", false); // local_branch_exists
+        runner.add_response("", false); // remote_branch_exists
+        runner.add_response("", true); // worktree_add_new_branch
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // set parent config
+        runner.add_response("", true); // on_start
+        let runner = Arc::new(runner);
+
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            linear_config(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run_targets(&ctx, &["1", "3"], &Some("main".into()), None, false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let created_branches = calls
+            .iter()
+            .filter(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .map(|(_, args, _)| args[3].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            created_branches,
+            vec!["alice/proj-1-first", "alice/proj-3-third"]
+        );
+        assert_eq!(count_linear_start_updates(&calls, "PROJ-1"), 1);
+        assert_eq!(count_linear_start_updates(&calls, "PROJ-3"), 1);
+        assert!(ui.prompts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn issue_with_multiple_targets_runs_parallel_with_jobs() {
+        let repo = tempfile::tempdir().unwrap();
+        let runner = Arc::new(IssueParallelRunner::new());
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            linear_config(),
+            Box::new(Arc::clone(&runner)),
+            Box::new(Arc::clone(&ui)),
+        );
+        let targets = vec!["1".to_string(), "3".to_string()];
+
+        super::run(&ctx, &targets, &Some("main".into()), None, false, 3).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let mut created_branches = calls
+            .iter()
+            .filter(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .map(|(_, args, _)| args[3].clone())
+            .collect::<Vec<_>>();
+        created_branches.sort();
+        assert_eq!(created_branches, vec!["alice/proj-1", "alice/proj-3"]);
+        assert_eq!(count_linear_start_updates(&calls, "PROJ-1"), 1);
+        assert_eq!(count_linear_start_updates(&calls, "PROJ-3"), 1);
+        assert!(ui.prompts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn issue_without_target_multi_selects_provider_issues() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"[
+                {"identifier":"PROJ-1","title":"First issue","state":{"name":"Todo"},"assignee":{"displayName":"alice"}},
+                {"identifier":"PROJ-2","title":"Skipped issue","state":{"name":"Todo"},"assignee":null},
+                {"identifier":"PROJ-3","title":"Third issue","state":{"name":"Todo"},"assignee":{"displayName":"bob"}}
+            ]"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"identifier":"PROJ-1","title":"First issue","branchName":"alice/proj-1-first"}"#,
+            true,
+        );
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        runner.add_response("", true); // fetch
+        runner.add_response("", false); // local_branch_exists
+        runner.add_response("", false); // remote_branch_exists
+        runner.add_response("", true); // worktree_add_new_branch
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // set parent config
+        runner.add_response("", true); // on_start
+        runner.add_response(
+            r#"{"identifier":"PROJ-3","title":"Third issue","branchName":"alice/proj-3-third"}"#,
+            true,
+        );
+        runner.add_response(
+            "worktree /tmp/test-repo\nHEAD abc\nbranch refs/heads/main\n\n",
+            true,
+        );
+        runner.add_response("", true); // fetch
+        runner.add_response("", false); // local_branch_exists
+        runner.add_response("", false); // remote_branch_exists
+        runner.add_response("", true); // worktree_add_new_branch
+        runner.add_response("", true); // parent branch exists
+        runner.add_response("", true); // set parent config
+        runner.add_response("", true); // on_start
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![0, 2]);
+        let ui = Arc::new(ui);
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            linear_config(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run(&ctx, None, &Some("main".into()), None, &[], false).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let created_branches = calls
+            .iter()
+            .filter(|(cmd, args, _)| {
+                cmd == "git"
+                    && args.len() >= 6
+                    && args[0] == "worktree"
+                    && args[1] == "add"
+                    && args[2] == "-b"
+            })
+            .map(|(_, args, _)| args[3].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            created_branches,
+            vec!["alice/proj-1-first", "alice/proj-3-third"]
+        );
+        assert_eq!(count_linear_start_updates(&calls, "PROJ-1"), 1);
+        assert_eq!(count_linear_start_updates(&calls, "PROJ-2"), 0);
+        assert_eq!(count_linear_start_updates(&calls, "PROJ-3"), 1);
+        assert_eq!(
+            ui.prompts.lock().unwrap().as_slice(),
+            &["multi_select: Issues to start"]
+        );
+    }
+
+    #[test]
+    fn issue_without_target_empty_selection_returns_ok() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"[{"identifier":"PROJ-1","title":"First issue","state":{"name":"Todo"},"assignee":null}]"#,
+            true,
+        );
+        let runner = Arc::new(runner);
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![]);
+        let ui = Arc::new(ui);
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            linear_config(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run(&ctx, None, &Some("main".into()), None, &[], false).unwrap();
+
+        assert_eq!(
+            ui.warnings.lock().unwrap().as_slice(),
+            &["No issues selected"]
+        );
+        let calls = runner.calls.lock().unwrap();
+        assert!(calls.iter().all(|(cmd, args, _)| {
+            !(cmd == "git"
+                && args.first().is_some_and(|arg| {
+                    arg == "worktree" && args.get(1).is_some_and(|arg| arg == "add")
+                }))
+        }));
+    }
+
+    #[test]
     fn issue_no_branch_name_returns_error() {
         let mut runner = MockRunner::new();
         // get_issue (provider.get_issue)
@@ -1990,12 +2626,16 @@ mod tests {
 
         let results = run_inner_many(
             &ctx,
-            Some("123"),
+            &["123".to_string()],
             &Some("main".into()),
-            ProfileSelection::new(Some("codex"), &[]),
-            false,
-            None,
-            PromptPolicy::Allow,
+            IssueRunOptions {
+                profile_selection: ProfileSelection::new(Some("codex"), &[]),
+                matrix: false,
+                prepared_issue: None,
+                prompt_policy: PromptPolicy::Allow,
+                jobs: 1,
+                base_override: None,
+            },
         )
         .unwrap();
 
@@ -2043,12 +2683,16 @@ mod tests {
 
         let results = run_inner_many(
             &ctx,
-            Some("123"),
+            &["123".to_string()],
             &Some("main".into()),
-            ProfileSelection::new(None, &[]),
-            true,
-            None,
-            PromptPolicy::Allow,
+            IssueRunOptions {
+                profile_selection: ProfileSelection::new(None, &[]),
+                matrix: true,
+                prepared_issue: None,
+                prompt_policy: PromptPolicy::Allow,
+                jobs: 1,
+                base_override: None,
+            },
         )
         .unwrap();
 
@@ -2099,12 +2743,16 @@ mod tests {
 
         run_inner_many(
             &ctx,
-            Some("123"),
+            &["123".to_string()],
             &Some("main".into()),
-            ProfileSelection::new(Some("codex"), &[]),
-            false,
-            None,
-            PromptPolicy::Allow,
+            IssueRunOptions {
+                profile_selection: ProfileSelection::new(Some("codex"), &[]),
+                matrix: false,
+                prepared_issue: None,
+                prompt_policy: PromptPolicy::Allow,
+                jobs: 1,
+                base_override: None,
+            },
         )
         .unwrap();
 

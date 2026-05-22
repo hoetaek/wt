@@ -1140,8 +1140,11 @@ fn run_issue_help_explains_issue_target() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Issue number or provider-specific key",
+            "Issue numbers or provider-specific keys",
         ))
+        .stdout(predicate::str::contains("[ISSUE]..."))
+        .stdout(predicate::str::contains("select multiple provider issues"))
+        .stdout(predicate::str::contains("--jobs"))
         .stdout(predicate::str::contains("--matrix"))
         .stdout(predicate::str::contains("--profile"));
 }
@@ -1154,7 +1157,8 @@ fn run_pr_help_explains_multiple_targets() {
         .success()
         .stdout(predicate::str::contains("Pull request numbers"))
         .stdout(predicate::str::contains("[PR]..."))
-        .stdout(predicate::str::contains("select multiple open PRs"));
+        .stdout(predicate::str::contains("select multiple open PRs"))
+        .stdout(predicate::str::contains("--jobs"));
 }
 
 #[test]
@@ -1217,7 +1221,8 @@ fn run_task_help_explains_task_execution() {
         ))
         .stdout(predicate::str::contains("Task-run agents report PR=none"))
         .stdout(predicate::str::contains("wt workflow task --mode batch"))
-        .stdout(predicate::str::contains("wt workflow task --mode single"));
+        .stdout(predicate::str::contains("wt workflow task --mode single"))
+        .stdout(predicate::str::contains("--jobs"));
 }
 
 #[test]

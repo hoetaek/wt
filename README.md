@@ -159,7 +159,7 @@ Start work:
 
 ```bash
 wt run issue
-wt run issue PROJ-123 --base .
+wt run issue PROJ-123 PROJ-124 --base .
 wt run pr
 wt run pr 42 43
 wt run branch add profile docs
@@ -229,8 +229,10 @@ merge.
 ## Core Model
 
 - `wt run branch <words...>` starts an ad hoc branch worktree from branch-name text.
-- `wt run issue` starts a worktree from an existing provider issue.
+- `wt run issue` starts worktrees from selected provider issues; `wt run issue <issue>...` starts explicit issues.
 - `wt run pr` opens existing pull request branches as worktrees.
+- `wt run task` starts one direct TaskRun worktree per selected local TaskDocument.
+- Multi-target `wt run issue`, `wt run pr`, and `wt run task` run with up to 3 jobs by default; pass `--jobs 1` for sequential execution with interactive conflict prompts.
 - `wt run` only starts workspace execution. Cleanup stays under `wt done`,
   inspection under `wt inspect`, agent observation under `wt agent`, existing
   branch/worktree opening under `wt open`, and saved workflow lifecycle actions
@@ -535,7 +537,7 @@ there for one named profile.
 | --- | --- |
 | `wt init` | Create or preview repository config |
 | `wt doctor` | Check configured providers and local tools |
-| `wt run issue` | Start work from a provider issue |
+| `wt run issue` | Start work from one or more provider issues |
 | `wt run pr` | Start worktrees from pull requests |
 | `wt run branch` | Start work from branch-name text |
 | `wt task list` | List actionable local TaskDocuments |

@@ -1,10 +1,14 @@
+use crate::cli::BaseMode;
 use crate::commands::issue;
+use crate::commands::profile_workspace::PromptPolicy;
 use crate::context::Ctx;
 use crate::error::WtError;
+use crate::parallel::{self, ParallelControl};
+use crate::services::git::GitService;
 use crate::setup;
 use crate::task;
 use crate::task_run;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 
 const TASK_RUN_COORDINATOR_HANDOFF_SECTION: &str = r#"## Task Run Coordinator Handoff
@@ -33,6 +37,7 @@ pub fn run(
     task_args: &[String],
     base_raw: &Option<String>,
     profile: Option<&str>,
+    jobs: usize,
 ) -> Result<()> {
     let selected = if task_args.is_empty() {
         task::select_local_tasks(ctx)?
@@ -43,8 +48,18 @@ pub fn run(
         bail!("No local tasks selected");
     }
 
-    for task in &selected {
-        run_selected_task(ctx, task, base_raw, profile)?;
+    if jobs > 1 && selected.len() > 1 {
+        return run_selected_tasks_parallel(ctx, selected, base_raw, profile, jobs);
+    }
+
+    let task_count = selected.len();
+    for task in selected {
+        let result = run_selected_task(ctx, &task, base_raw, profile, PromptPolicy::Allow, None);
+        if task_count > 1 {
+            result.with_context(|| format!("Task {}", task.key))?;
+        } else {
+            result?;
+        }
     }
 
     Ok(())
@@ -72,6 +87,8 @@ fn run_selected_task(
     selected: &task::SelectedTask,
     base_raw: &Option<String>,
     profile: Option<&str>,
+    prompt_policy: PromptPolicy,
+    base_override: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
     let branch_name = task::prepared_branch_name(&selected.document.branch);
     if branch_name.is_none() && selected.document.origin.is_none() {
@@ -82,33 +99,13 @@ fn run_selected_task(
     let title = selected.document.title_or_key(&selected.key);
 
     if profile.is_some() {
-        let result = issue::run_with_issue_snapshot(
+        let result = run_prepared_task_snapshot(
             ctx,
             base_raw,
             profile,
-            false,
-            issue::PreparedIssueContext {
-                identifier: &identifier,
-                title: &title,
-                branch_name,
-                setup_mode: selected.document.setup_mode(),
-                additional_prompt_scope: None,
-                workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
-                on_start_issue_id: selected
-                    .document
-                    .origin
-                    .as_ref()
-                    .map(|origin| origin.id.as_str()),
-                prompt_intro: "Use this task before changing code.",
-                completion_section: Some(TASK_RUN_COORDINATOR_HANDOFF_SECTION),
-                pre_snapshot_context: None,
-                workspace_label: None,
-                snapshot: issue::IssueSnapshotContext {
-                    path_label: "Task path",
-                    path: &selected.path,
-                    content: &selected.content,
-                },
-            },
+            prompt_policy,
+            base_override,
+            prepared_task_context(selected, &identifier, &title, branch_name),
         );
         let result = match result {
             Ok(result) => result,
@@ -132,33 +129,13 @@ fn run_selected_task(
         task_run::STATUS_PREPARED,
     )?;
 
-    let result = issue::run_with_issue_snapshot(
+    let result = run_prepared_task_snapshot(
         ctx,
         base_raw,
         profile,
-        false,
-        issue::PreparedIssueContext {
-            identifier: &identifier,
-            title: &title,
-            branch_name,
-            setup_mode: selected.document.setup_mode(),
-            additional_prompt_scope: None,
-            workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
-            on_start_issue_id: selected
-                .document
-                .origin
-                .as_ref()
-                .map(|origin| origin.id.as_str()),
-            prompt_intro: "Use this task before changing code.",
-            completion_section: Some(TASK_RUN_COORDINATOR_HANDOFF_SECTION),
-            pre_snapshot_context: None,
-            workspace_label: None,
-            snapshot: issue::IssueSnapshotContext {
-                path_label: "Task path",
-                path: &selected.path,
-                content: &selected.content,
-            },
-        },
+        prompt_policy,
+        base_override,
+        prepared_task_context(selected, &identifier, &title, branch_name),
     );
 
     let result = match result {
@@ -199,6 +176,145 @@ fn run_selected_task(
     )?;
 
     Ok(result)
+}
+
+fn run_selected_tasks_parallel(
+    ctx: &Ctx,
+    selected: Vec<task::SelectedTask>,
+    base_raw: &Option<String>,
+    profile: Option<&str>,
+    jobs: usize,
+) -> Result<()> {
+    let base_override = parallel_task_base_override(ctx, base_raw)?;
+    let mut first_error = None;
+    parallel::run_bounded_parallel(
+        selected,
+        jobs,
+        |_| Ok(()),
+        |task| {
+            run_selected_task(
+                ctx,
+                &task,
+                base_raw,
+                profile,
+                PromptPolicy::Deny,
+                base_override.as_deref(),
+            )
+            .with_context(|| format!("Task {}", task.key))
+        },
+        |completion| {
+            if let Err(err) = completion.result
+                && first_error.is_none()
+            {
+                first_error = Some(err);
+            }
+            Ok(ParallelControl::Continue)
+        },
+    )?;
+
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+    Ok(())
+}
+
+fn parallel_task_base_override(ctx: &Ctx, base_raw: &Option<String>) -> Result<Option<String>> {
+    match BaseMode::from_raw(base_raw) {
+        BaseMode::Default | BaseMode::Interactive => {
+            let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+            resolve_task_base_branch(ctx, &git, base_raw).map(Some)
+        }
+        BaseMode::Current | BaseMode::Explicit(_) => Ok(None),
+    }
+}
+
+fn resolve_task_base_branch(
+    ctx: &Ctx,
+    git: &GitService<'_>,
+    base_raw: &Option<String>,
+) -> Result<String> {
+    let base = match BaseMode::from_raw(base_raw) {
+        BaseMode::Explicit(branch) => Ok(branch),
+        BaseMode::Interactive => {
+            let branches = git.list_local_branches()?;
+            if branches.is_empty() {
+                bail!("No local branches found");
+            }
+            let idx = ctx.ui.select("Select base branch", &branches)?;
+            Ok(branches[idx].clone())
+        }
+        BaseMode::Current => git.current_branch(),
+        BaseMode::Default => {
+            let current = git.current_branch()?;
+            ctx.ui.input("Base branch", Some(&current))
+        }
+    }?;
+
+    if base.trim().is_empty() {
+        bail!("Base branch cannot be empty");
+    }
+    Ok(base)
+}
+
+fn prepared_task_context<'a>(
+    selected: &'a task::SelectedTask,
+    identifier: &'a str,
+    title: &'a str,
+    branch_name: Option<&'a str>,
+) -> issue::PreparedIssueContext<'a> {
+    issue::PreparedIssueContext {
+        identifier,
+        title,
+        branch_name,
+        setup_mode: selected.document.setup_mode(),
+        additional_prompt_scope: None,
+        workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
+        on_start_issue_id: selected
+            .document
+            .origin
+            .as_ref()
+            .map(|origin| origin.id.as_str()),
+        prompt_intro: "Use this task before changing code.",
+        completion_section: Some(TASK_RUN_COORDINATOR_HANDOFF_SECTION),
+        pre_snapshot_context: None,
+        workspace_label: None,
+        snapshot: issue::IssueSnapshotContext {
+            path_label: "Task path",
+            path: &selected.path,
+            content: &selected.content,
+        },
+    }
+}
+
+fn run_prepared_task_snapshot(
+    ctx: &Ctx,
+    base_raw: &Option<String>,
+    profile: Option<&str>,
+    prompt_policy: PromptPolicy,
+    base_override: Option<&str>,
+    prepared: issue::PreparedIssueContext<'_>,
+) -> Result<issue::IssueRunResult> {
+    match prompt_policy {
+        PromptPolicy::Allow => {
+            issue::run_with_issue_snapshot(ctx, base_raw, profile, false, prepared)
+        }
+        PromptPolicy::Deny => {
+            if let Some(base_override) = base_override {
+                issue::run_with_issue_snapshot_non_interactive_base_override(
+                    ctx,
+                    base_raw,
+                    profile,
+                    false,
+                    prepared,
+                    base_override,
+                )
+            } else {
+                issue::run_with_issue_snapshot_non_interactive(
+                    ctx, base_raw, profile, false, prepared,
+                )
+            }
+        }
+    }
 }
 
 fn record_task_failure(ctx: &Ctx, selected: &task::SelectedTask, err: &anyhow::Error) {
@@ -304,7 +420,7 @@ mod tests {
     ) -> Result<()> {
         assert!(selected_profiles.is_empty());
         assert!(!matrix);
-        super::run(ctx, task_args, base_raw, profile)
+        super::run(ctx, task_args, base_raw, profile, 1)
     }
 
     fn count_linear_start_updates(calls: &[CommandCall], issue_id: &str) -> usize {

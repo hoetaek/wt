@@ -9,6 +9,7 @@ pub mod error;
 pub mod local_ui;
 pub mod messages;
 pub mod names;
+pub(crate) mod parallel;
 pub mod runner;
 pub mod scaffold;
 pub mod services;
@@ -68,14 +69,17 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::DeprecatedNew { .. } => deprecated_start_command_error("wt new", "wt run branch"),
         Commands::Run { command } => match command {
             RunCommand::Issue {
-                target,
+                targets,
                 base,
                 profile,
                 matrix,
-            } => commands::issue::run(ctx, target.as_deref(), base, profile.as_deref(), *matrix),
-            RunCommand::Pr { numbers, profile } => {
-                commands::pr::run(ctx, numbers, profile.as_deref())
-            }
+                jobs,
+            } => commands::issue::run(ctx, targets, base, profile.as_deref(), *matrix, *jobs),
+            RunCommand::Pr {
+                numbers,
+                profile,
+                jobs,
+            } => commands::pr::run(ctx, numbers, profile.as_deref(), *jobs),
             RunCommand::Branch {
                 name,
                 base,
@@ -86,7 +90,8 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 tasks,
                 base,
                 profile,
-            } => commands::task_run_command::run(ctx, tasks, base, profile.as_deref()),
+                jobs,
+            } => commands::task_run_command::run(ctx, tasks, base, profile.as_deref(), *jobs),
             RunCommand::Workflow { workflow, jobs } => {
                 commands::workflow::run(ctx, workflow.as_deref(), *jobs)
             }
