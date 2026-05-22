@@ -144,6 +144,25 @@ cwd/TaskRun path used by `wt shell-init` and `wt env`.
 The detached-agent supervisor is a separate layer. It may use the same resolved
 identity model, but supervisor lifecycle, polling, and recovery policy belong
 to its own spec and must not turn marker files into process supervision state.
+Its spec is `.git/wt/specs/detached-agent-supervisor/`.
+
+## Supervisor
+
+The supervisor is a default-off Layer 3 stale-rescue process for one resolved
+agent identity. Registration and lifecycle state live under
+`<git-common-dir>/wt/supervisors/`; each `<encoded-agent-id>.toml` file records
+the registered PID, PID start time, owner (`started_by`), target cmux surface,
+agent kind, `stale_threshold_secs`, `poll_interval_secs`, and log path. Logs
+remain beside registrations and are not deleted by hygiene scans.
+
+Supervisor runtime behavior belongs to `src/commands/agent/supervisor/` and
+cmux push helpers, not to identity markers or `agent.state`. `wt doctor` owns
+registration garbage collection: it verifies the registered PID plus start time,
+keeps live supervisors, removes stale registration files, and leaves logs for
+post-mortem review. Session cleanup is adapter-specific: Claude Code can install
+a wt-managed `SessionEnd` hook that runs `wt agent supervisor stop --owned-by
+"$WT_AGENT_ID"`, while Codex currently requires manual cleanup because it has no
+SessionEnd hook surface.
 
 `agent.state` is the local runtime observation state owner. Its source-of-truth
 module is `src/agent_state.rs`, and its first durable location is

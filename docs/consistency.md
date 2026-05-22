@@ -356,6 +356,76 @@ provider-private Claude/Codex runtime integration are outside this contract slic
 implementations must build on the same address/scope/delivery lifecycle instead of adding a second
 hidden inbox model.
 
+### Supervisor Lifecycle
+
+The detached agent supervisor is Layer 3 stale-rescue insurance. It is opt-in and default-off. It
+does not replace normal message delivery and it should push zero payloads during engaged operation:
+it only intervenes when a message remains in the recipient's `inbox/new/` longer than the registered
+`stale_threshold_secs`.
+
+The three message attention layers are:
+
+| Layer | Surface | Responsibility |
+| --- | --- | --- |
+| Layer 1 | `wt msg watch` | Human-visible inbox watching and explicit message handling. |
+| Layer 2 | `wt agent watch` | Runtime observation of a specific agent target. |
+| Layer 3 | `wt agent supervisor ...` | Detached stale-rescue push after `inbox/new/` age exceeds threshold. |
+
+Supervisor registrations live at `<git-common-dir>/wt/supervisors/<encoded-agent-id>.toml`; logs
+live beside them as `<encoded-agent-id>.log`. Registration schema is:
+
+```toml
+agent_id = "agents/codex"
+pid = 12345
+pid_start_time = "123.000000000"
+started_at = "2026-05-22T00:00:00Z"
+started_by = "agents/codex"
+cleanup_on_session_end = true
+target_surface_id = "surface:72"
+target_agent_kind = "codex"
+stale_threshold_secs = 900
+poll_interval_secs = 60
+log_path = "/repo/.git/wt/supervisors/agents%2Fcodex.log"
+```
+
+`target_surface_id` and `target_agent_kind` are optional. `stale_threshold_secs` defaults to 900
+seconds and `poll_interval_secs` defaults to 60 seconds when starting a detached supervisor.
+
+Canonical lifecycle commands:
+
+```bash
+wt agent supervisor start <agent>
+wt agent supervisor stop <agent>
+wt agent supervisor stop --owned-by "$WT_AGENT_ID"
+wt agent supervisor status [<agent>]
+wt agent supervisor logs <agent>
+wt agent supervisor run <agent>
+```
+
+Cleanup is PID-registration based. Never use `pkill -f <bare-verb>` in code, tests, docs, or
+operator guidance; broad command patterns can match the calling agent runtime. Always stop through
+`wt agent supervisor stop`, which reads registered PIDs and checks ownership when `--owned-by` is
+used. `wt doctor` scans supervisor registrations, keeps live PIDs, removes stale registration TOML
+files, and preserves log files for post-mortem review.
+
+Claude Code SessionEnd cleanup is installed only through wt-managed hook setup. The generated
+SessionEnd command is:
+
+```bash
+wt agent supervisor stop --owned-by "$WT_AGENT_ID"
+```
+
+Codex does not expose an equivalent SessionEnd hook today. Codex operators should stop owned
+supervisors manually with the same command before closing a session.
+
+Supervisor cmux push payloads are ASCII-only and bounded by the supervisor payload cap. The default
+payload cap follows the cmux push service default. Submit patterns are kind-specific:
+
+| Agent kind | cmux submit pattern |
+| --- | --- |
+| `claude` | Inline newline payload. |
+| `codex` | `send` followed by `send-key enter`. |
+
 Canonical read-only message lifecycle inspection:
 
 ```bash
@@ -426,10 +496,10 @@ Shell rc target은 zsh에서 `$ZDOTDIR/.zshrc`를 우선하고 `$ZDOTDIR`가 없
 ### Claude Hook Adapter
 
 Claude Code inbox polling adapter는 `wt setup`의 내부 step이다. 이 step은 user-level
-`$CLAUDE_HOME/settings.json` 또는 `~/.claude/settings.json`에 `UserPromptSubmit`과
-`PostToolUse` hook dispatcher를 추가한다. 두 event의 Hook command는 runtime env
-`WT_AGENT_ID`를 읽어 다음 delivery command를 실행하고, `WT_AGENT_ID`가 없으면 성공으로
-조용히 종료한다.
+`$CLAUDE_HOME/settings.json` 또는 `~/.claude/settings.json`에 `UserPromptSubmit`,
+`PostToolUse`, `SessionEnd` hook dispatcher를 추가한다. inbox event의 Hook command는
+runtime env `WT_AGENT_ID`를 읽어 다음 delivery command를 실행하고, `WT_AGENT_ID`가 없으면
+성공으로 조용히 종료한다.
 
 ```bash
 wt msg check-inbox --silent
@@ -441,7 +511,8 @@ Claude Code가 shell command로 실행할 때 `#` 뒤 marker는 shell comment로
 검증한다.
 
 Reinstall은 managed event마다 wt-managed dispatcher hook을 하나씩만 남기는 idempotent
-operation이다. `wt setup --remove`는 wt-managed Claude hook entry만 managed event별로 제거하고,
+operation이다. `SessionEnd`에는 owned supervisor cleanup hook을 하나만 남긴다.
+`wt setup --remove`는 wt-managed Claude hook entry만 managed event별로 제거하고,
 사용자가 작성한 다른 Claude hook이나 settings key는 보존한다. Repo-local tracked
 `CLAUDE.md`, `AGENTS.md`, `.gitignore`, `.claude/settings.json` 같은 shared source/config는
 per-machine setup이 수정하지 않는다.

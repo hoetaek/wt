@@ -12,6 +12,8 @@ use toml_edit::{DocumentMut, Item, Table, value};
 const CLAUDE_SETTINGS_PATH: &str = "settings.json";
 pub(crate) const CLAUDE_HOOK_EVENTS: &[&str] = &["UserPromptSubmit", "PostToolUse"];
 const WT_CLAUDE_HOOK_MARKER: &str = "# wt-agent-hook:claude-inbox";
+const WT_CLAUDE_SUPERVISOR_SESSION_END_MARKER: &str =
+    "# wt-agent-hook:claude-supervisor-session-end";
 pub(crate) const CODEX_HOOK_EVENTS: &[(&str, &str)] = &[
     ("UserPromptSubmit", "user_prompt_submit"),
     ("PostToolUse", "post_tool_use"),
@@ -56,9 +58,10 @@ pub(crate) fn uninstall_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Res
     let mut settings = read_settings(&settings_path)?;
     let remove_target = match &target {
         ClaudeHookTarget::Dispatcher => ClaudeRemoveTarget::AllWtManaged,
-        ClaudeHookTarget::Agent(agent) => {
-            ClaudeRemoveTarget::Command(managed_claude_hook_command(agent.as_str()))
-        }
+        ClaudeHookTarget::Agent(agent) => ClaudeRemoveTarget::Commands(vec![
+            managed_claude_hook_command(agent.as_str()),
+            managed_claude_supervisor_session_end_command(),
+        ]),
     };
     let removed = remove_managed_claude_hook(&mut settings, remove_target)?;
     if removed > 0 {
@@ -325,7 +328,7 @@ enum CodexRemoveTarget {
 
 enum ClaudeRemoveTarget {
     AllWtManaged,
-    Command(String),
+    Commands(Vec<String>),
 }
 
 fn codex_hook_paths(create_home: bool) -> Result<CodexHookPaths> {
@@ -812,6 +815,15 @@ fn install_managed_claude_hook(settings: &mut Value, command: &str) -> Result<()
             ]
         }));
     }
+    let session_end = array_entry(hooks, "SessionEnd")?;
+    session_end.push(json!({
+        "hooks": [
+            {
+                "type": "command",
+                "command": managed_claude_supervisor_session_end_command()
+            }
+        ]
+    }));
     Ok(())
 }
 
@@ -845,7 +857,11 @@ fn remove_managed_claude_hook(settings: &mut Value, target: ClaudeRemoveTarget) 
 
     let mut removed = 0;
     let mut empty_events = Vec::new();
-    for &event_name in CLAUDE_HOOK_EVENTS {
+    for event_name in CLAUDE_HOOK_EVENTS
+        .iter()
+        .copied()
+        .chain(std::iter::once("SessionEnd"))
+    {
         let Some(event_value) = hooks.get_mut(event_name) else {
             continue;
         };
@@ -902,7 +918,9 @@ fn claude_remove_target_matches(target: &ClaudeRemoveTarget, hook: &Value) -> bo
             .get("command")
             .and_then(Value::as_str)
             .is_some_and(is_wt_managed_claude_command),
-        ClaudeRemoveTarget::Command(command) => is_managed_command(hook, command),
+        ClaudeRemoveTarget::Commands(commands) => commands
+            .iter()
+            .any(|command| is_managed_command(hook, command)),
     }
 }
 
@@ -949,6 +967,12 @@ fn managed_claude_dispatcher_command() -> String {
     format!("wt msg check-inbox --silent {WT_CLAUDE_HOOK_MARKER}")
 }
 
+fn managed_claude_supervisor_session_end_command() -> String {
+    format!(
+        "wt agent supervisor stop --owned-by \"$WT_AGENT_ID\" {WT_CLAUDE_SUPERVISOR_SESSION_END_MARKER}"
+    )
+}
+
 fn managed_codex_hook_command(agent: &str) -> String {
     format!("wt msg check-inbox --agent {agent} --silent {WT_CODEX_HOOK_MARKER}")
 }
@@ -983,7 +1007,9 @@ pub(crate) fn is_wt_managed_codex_command(command: &str) -> bool {
 }
 
 fn is_wt_managed_claude_command(command: &str) -> bool {
-    command.contains(WT_CLAUDE_HOOK_MARKER) && command.contains("wt msg check-inbox")
+    (command.contains(WT_CLAUDE_HOOK_MARKER) && command.contains("wt msg check-inbox"))
+        || (command.contains(WT_CLAUDE_SUPERVISOR_SESSION_END_MARKER)
+            && command.contains("wt agent supervisor stop"))
 }
 
 pub(crate) fn codex_command_hook_hash(command: &str, event_key: &str) -> String {

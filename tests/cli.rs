@@ -26,6 +26,8 @@ const GIT_LOCAL_ENV_KEYS: &[&str] = &[
 ];
 
 const CLAUDE_INBOX_HOOK_COMMAND: &str = "wt msg check-inbox --silent # wt-agent-hook:claude-inbox";
+const CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND: &str =
+    "wt agent supervisor stop --owned-by \"$WT_AGENT_ID\" # wt-agent-hook:claude-supervisor-session-end";
 const CODEX_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 const MANAGED_INBOX_HOOK_EVENTS: &[(&str, &str)] = &[
     ("UserPromptSubmit", "user_prompt_submit"),
@@ -3453,6 +3455,9 @@ fn setup_installs_detected_claude_and_codex_hooks() {
                 .any(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
         );
     }
+    assert!(claude_event_commands(&settings, "SessionEnd")
+        .iter()
+        .any(|command| command == CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND));
     assert!(!temp.path().join(".claude/settings.local.json").exists());
 
     let hooks = json_file(&codex_home.join("hooks.json"));
@@ -3559,6 +3564,7 @@ trusted_hash = "sha256:cmux"
             .any(|command| command == "echo user-claude-hook")
     );
     assert!(claude_managed_inbox_commands(&settings).is_empty());
+    assert!(claude_event_commands(&settings, "SessionEnd").is_empty());
 
     let hooks = json_file(&codex_home.join("hooks.json"));
     assert!(
@@ -3612,6 +3618,13 @@ fn setup_and_remove_are_idempotent() {
             1
         );
     }
+    assert_eq!(
+        claude_event_commands(&settings, "SessionEnd")
+            .iter()
+            .filter(|command| command.as_str() == CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND)
+            .count(),
+        1
+    );
     let hooks = json_file(&codex_home.join("hooks.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
         let commands = codex_event_commands(&hooks, event_name);
