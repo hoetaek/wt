@@ -216,9 +216,11 @@ fn copy_wt_binary(path: &Path) -> std::path::PathBuf {
     std::fs::create_dir_all(&bin).unwrap();
     let wt = bin.join("wt");
     std::fs::copy(assert_cmd::cargo::cargo_bin("wt"), &wt).unwrap();
+    std::fs::File::open(&wt).unwrap().sync_all().unwrap();
     let mut permissions = std::fs::metadata(&wt).unwrap().permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&wt, permissions).unwrap();
+    std::fs::File::open(&bin).unwrap().sync_all().unwrap();
     wt
 }
 
