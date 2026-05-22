@@ -342,14 +342,14 @@ wt-managed Claude/Codex agent hooks register the same inbox check on both `UserP
 `PostToolUse`; both events route through the `wt msg check-inbox` claim → hook JSON → acknowledge
 lifecycle above.
 
-Detached supervisor delivery is Layer 3 stale-rescue, not a second inbox model. A started
-supervisor watches the target `inbox/new/` directory with `notify` and keeps `--poll-interval` as a
-missed-event/stop-check fallback. It only pushes messages that are older than `--stale-threshold`;
-fresh messages remain available for normal hook delivery at the next `UserPromptSubmit` or
-`PostToolUse` event. When a message is stale, the supervisor claims the exact `inbox/new` path,
-renders a bounded ASCII cmux payload, resolves the target surface's workspace from cmux runtime
-evidence, pushes it to that workspace/surface pair, and acknowledges the claim only after cmux push
-succeeds. Failed pushes move through retry/failed delivery states using the same claim lifecycle.
+Supervisor delivery is Layer 3 stale-rescue, not a second inbox model. A started supervisor watches
+the target `inbox/new/` directory with `notify` and keeps `--poll-interval` as a missed-event and
+stop-check fallback. It only pushes messages that are older than `--stale-threshold`; fresh messages
+remain available for normal hook delivery at the next `UserPromptSubmit` or `PostToolUse` event.
+When a message is stale, the supervisor claims the exact `inbox/new` path, renders a bounded ASCII
+cmux payload, resolves the target surface's workspace from cmux runtime evidence, pushes it to that
+workspace/surface pair, and acknowledges the claim only after cmux push succeeds. Failed pushes move
+through retry/failed delivery states using the same claim lifecycle.
 
 Push delivery outside the supervisor stale-rescue path, `wt://` artifact semantics, and
 provider-private Claude/Codex runtime integration are outside this contract slice. Future delivery
@@ -358,10 +358,12 @@ hidden inbox model.
 
 ### Supervisor Lifecycle
 
-The detached agent supervisor is Layer 3 stale-rescue insurance. It is opt-in and default-off. It
-does not replace normal message delivery and it should push zero payloads during engaged operation:
-it only intervenes when a message remains in the recipient's `inbox/new/` longer than the registered
-`stale_threshold_secs`.
+The agent supervisor is Layer 3 stale-rescue insurance. It is opt-in and default-off. It does not
+replace normal message delivery and it should push zero payloads during engaged operation: it only
+intervenes when a message remains in the recipient's `inbox/new/` longer than the registered
+`stale_threshold_secs`. A supervisor started with `--surface` is hosted inside a hidden cmux
+workspace because cmux push delivery fails from PPID 1 orphan processes; a supervisor without
+`--surface` may use the detached process path because it does not push to cmux.
 
 The three message attention layers are:
 
@@ -369,10 +371,11 @@ The three message attention layers are:
 | --- | --- | --- |
 | Layer 1 | `wt msg watch` | Human-visible inbox watching and explicit message handling. |
 | Layer 2 | `wt agent watch` | Runtime observation of a specific agent target. |
-| Layer 3 | `wt agent supervisor ...` | Detached stale-rescue push after `inbox/new/` age exceeds threshold. |
+| Layer 3 | `wt agent supervisor ...` | Stale-rescue push after `inbox/new/` age exceeds threshold. |
 
 Supervisor registrations live at `<git-common-dir>/wt/supervisors/<encoded-agent-id>.toml`; logs
-live beside them as `<encoded-agent-id>.log`. Registration schema is:
+live beside them as `<encoded-agent-id>.log`. Surface-backed supervisors also record the cmux
+workspace that hosts the supervisor process so `stop` can close it. Registration schema is:
 
 ```toml
 agent_id = "agents/codex"
@@ -383,13 +386,15 @@ started_by = "agents/codex"
 cleanup_on_session_end = true
 target_surface_id = "surface:72"
 target_agent_kind = "codex"
+host_workspace_id = "workspace:19"
 stale_threshold_secs = 900
 poll_interval_secs = 60
 log_path = "/repo/.git/wt/supervisors/agents%2Fcodex.log"
 ```
 
-`target_surface_id` and `target_agent_kind` are optional. `stale_threshold_secs` defaults to 900
-seconds and `poll_interval_secs` defaults to 60 seconds when starting a detached supervisor.
+`target_surface_id`, `target_agent_kind`, and `host_workspace_id` are optional.
+`stale_threshold_secs` defaults to 900 seconds and `poll_interval_secs` defaults to 60 seconds when
+starting a supervisor.
 
 Canonical lifecycle commands:
 

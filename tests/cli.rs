@@ -5502,8 +5502,6 @@ fn supervisor_start_records_threshold_and_poll_interval() {
             "5m",
             "--poll-interval",
             "30s",
-            "--surface",
-            "surface:72",
         ])
         .assert()
         .success()
@@ -5513,7 +5511,6 @@ fn supervisor_start_records_threshold_and_poll_interval() {
         std::fs::read_to_string(temp.path().join(".git/wt/supervisors/agents%2Fcodex.toml"))
             .unwrap();
     assert!(content.contains("agent_id = \"agents/codex\""));
-    assert!(content.contains("target_surface_id = \"surface:72\""));
     assert!(content.contains("stale_threshold_secs = 300"));
     assert!(content.contains("poll_interval_secs = 30"));
 }

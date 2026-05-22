@@ -518,9 +518,9 @@ pub enum AgentCommand {
         long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch` when heartbeat or timeout samples are emitted. This is read-only: it summarizes <git-common-dir>/wt/agent.state/wait-observations.jsonl with count, sum, average, min, max, bucket, and low-cardinality group data; it does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
     )]
     WaitStats,
-    /// Manage opt-in detached supervisors for agent inbox stale-rescue
+    /// Manage opt-in supervisors for agent inbox stale-rescue
     #[command(
-        long_about = "Manage opt-in detached supervisors for agent inbox stale-rescue.\n\nA supervisor is default-off Layer 3 insurance for one agent identity. It records a local registration under <git-common-dir>/wt/supervisors/ and, in later delivery slices, only intervenes after an inbox/new message has aged past --stale-threshold. No wt verb starts a supervisor implicitly."
+        long_about = "Manage opt-in supervisors for agent inbox stale-rescue.\n\nA supervisor is default-off Layer 3 insurance for one agent identity. It records a local registration under <git-common-dir>/wt/supervisors/ and only intervenes after an inbox/new message has aged past --stale-threshold. Supervisors started with --surface run inside a hidden cmux workspace so cmux push delivery stays attached to cmux; supervisors without --surface use the detached process path. No wt verb starts a supervisor implicitly."
     )]
     Supervisor {
         #[command(subcommand)]
@@ -530,7 +530,7 @@ pub enum AgentCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum AgentSupervisorCommand {
-    /// Start a detached supervisor for one agent identity
+    /// Start a supervisor for one agent identity
     Start {
         /// Agent id as NAME or agents/NAME
         agent_id: String,
@@ -613,7 +613,7 @@ pub enum AgentSupervisorCommand {
         /// Maximum rendered payload size in bytes
         #[arg(long, default_value_t = 1024, value_name = "BYTES", value_parser = parse_positive_usize)]
         payload_cap: usize,
-        /// Log path for the detached supervisor process
+        /// Log path for the supervisor process
         #[arg(long, value_name = "PATH")]
         log_path: Option<PathBuf>,
     },

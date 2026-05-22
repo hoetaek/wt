@@ -141,9 +141,9 @@ valid. If those are absent, `wt` derives the current anchor key and reads the
 matching marker. If no live marker exists, worker identity falls back to the
 cwd/TaskRun path used by `wt shell-init` and `wt env`.
 
-The detached-agent supervisor is a separate layer. It may use the same resolved
-identity model, but supervisor lifecycle, polling, and recovery policy belong
-to its own spec and must not turn marker files into process supervision state.
+The agent supervisor is a separate layer. It may use the same resolved identity
+model, but supervisor lifecycle, polling, and recovery policy belong to its own
+spec and must not turn marker files into process supervision state.
 Development spec: `.git/wt/specs/detached-agent-supervisor/`; runtime contract:
 the Supervisor section below and `docs/consistency.md` Supervisor Lifecycle.
 
@@ -153,8 +153,11 @@ The supervisor is a default-off Layer 3 stale-rescue process for one resolved
 agent identity. Registration and lifecycle state live under
 `<git-common-dir>/wt/supervisors/`; each `<encoded-agent-id>.toml` file records
 the registered PID, PID start time, owner (`started_by`), target cmux surface,
-agent kind, `stale_threshold_secs`, `poll_interval_secs`, and log path. Logs
-remain beside registrations and are not deleted by hygiene scans.
+agent kind, optional cmux host workspace, `stale_threshold_secs`,
+`poll_interval_secs`, and log path. Logs remain beside registrations and are not
+deleted by hygiene scans. Supervisors that need cmux push delivery are hosted in
+a hidden cmux workspace; no-surface supervisors may use the detached process
+path.
 
 Supervisor runtime behavior belongs to `src/commands/agent/supervisor/` and
 cmux push helpers, not to identity markers or `agent.state`. `wt doctor` owns

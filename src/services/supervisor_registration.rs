@@ -24,6 +24,8 @@ pub struct Registration {
     pub target_surface_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_agent_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_workspace_id: Option<String>,
     pub stale_threshold_secs: u64,
     pub poll_interval_secs: u64,
     pub log_path: PathBuf,
@@ -226,6 +228,7 @@ mod tests {
             cleanup_on_session_end: false,
             target_surface_id: Some("surface:72".into()),
             target_agent_kind: Some("codex".into()),
+            host_workspace_id: None,
             stale_threshold_secs: 900,
             poll_interval_secs: 60,
             log_path: PathBuf::from("/tmp/supervisor.log"),
@@ -236,7 +239,8 @@ mod tests {
     fn registration_round_trips_with_optional_fields() {
         let dir = TempDir::new().unwrap();
         let ctx = test_ctx(&dir);
-        let reg = registration("agents/codex");
+        let mut reg = registration("agents/codex");
+        reg.host_workspace_id = Some("workspace:9".into());
 
         write_registration(&ctx, &reg).unwrap();
 
@@ -261,12 +265,14 @@ mod tests {
         let mut reg = registration("agents/plain");
         reg.target_surface_id = None;
         reg.target_agent_kind = None;
+        reg.host_workspace_id = None;
 
         write_registration(&ctx, &reg).unwrap();
 
         let content = fs::read_to_string(registration_path(&ctx, "agents/plain")).unwrap();
         assert!(!content.contains("target_surface_id"));
         assert!(!content.contains("target_agent_kind"));
+        assert!(!content.contains("host_workspace_id"));
         assert_eq!(read_registration(&ctx, "agents/plain").unwrap(), Some(reg));
     }
 

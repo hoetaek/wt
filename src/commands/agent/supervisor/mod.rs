@@ -1,6 +1,7 @@
 use crate::context::Ctx;
 use crate::messages::{AgentId, Message, MessageLease, MessageStore};
 use crate::messages::{MessageDeliveryState, MessageInspectionRecord};
+use crate::services::cmux::CmuxService;
 use crate::services::cmux_push::{CmuxPushService, DEFAULT_PAYLOAD_CAP_BYTES, PushKind};
 use crate::services::identity_locator::percent_encode;
 use crate::services::identity_locator::process_start_time;
@@ -18,7 +19,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_STALE_THRESHOLD_SECS: u64 = 15 * 60;
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
@@ -109,7 +110,7 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
     });
     let started_by = started_by.unwrap_or_else(|| "user".into());
 
-    let mut child = spawn_detached_run(
+    let launch = spawn_supervisor_run(
         ctx,
         agent_id.as_str(),
         &log_path,
@@ -118,31 +119,31 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
         poll_interval_secs,
         cleanup_on_session_end,
     )?;
-    let pid_start_time = match process_start_time(child.id() as i32) {
+
+    let pid_start_time = match process_start_time(launch.pid as i32) {
         Ok(start_time) => start_time,
         Err(err) => {
-            let _ = signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
-            let _ = child.try_wait();
+            cleanup_failed_launch(ctx, launch);
             return Err(err).context("Failed to record supervisor process start time after spawn");
         }
     };
 
     let registration = Registration {
         agent_id: agent_id.as_str().into(),
-        pid: child.id(),
+        pid: launch.pid,
         pid_start_time,
         started_at: current_utc_timestamp(),
         started_by,
         cleanup_on_session_end,
         target_surface_id: options.surface.clone(),
         target_agent_kind,
+        host_workspace_id: launch.host_workspace_id.clone(),
         stale_threshold_secs,
         poll_interval_secs,
         log_path: log_path.clone(),
     };
     if let Err(err) = write_registration(ctx, &registration) {
-        let _ = signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
-        let _ = child.try_wait();
+        cleanup_failed_launch(ctx, launch);
         return Err(err).context("Failed to persist supervisor registration after spawn");
     }
 
@@ -232,12 +233,13 @@ pub fn status(ctx: &Ctx, agent_id: Option<&str>) -> Result<()> {
     } else {
         for report in reports {
             println!(
-                "{}\t{}\tpid={}\tstale_threshold={}\tpoll_interval={}\tlog={}",
+                "{}\t{}\tpid={}\tstale_threshold={}\tpoll_interval={}\thost={}\tlog={}",
                 report.agent_id,
                 report.state,
                 report.pid,
                 report.stale_threshold,
                 report.poll_interval,
+                report.host_workspace_id.as_deref().unwrap_or("-"),
                 report.log_path
             );
         }
@@ -371,6 +373,13 @@ struct SupervisorLoopState {
     pushes_total: u64,
     cycles_since_start: u64,
     last_push_at: Option<String>,
+}
+
+#[derive(Debug)]
+struct SupervisorLaunch {
+    pid: u32,
+    host_workspace_id: Option<String>,
+    child: Option<std::process::Child>,
 }
 
 fn run_one_cycle(
@@ -716,6 +725,38 @@ fn next_fresh_message_stale_duration(
     Ok(next)
 }
 
+fn spawn_supervisor_run(
+    ctx: &Ctx,
+    agent_id: &str,
+    log_path: &Path,
+    options: &StartOptions,
+    stale_threshold_secs: u64,
+    poll_interval_secs: u64,
+    cleanup_on_session_end: bool,
+) -> Result<SupervisorLaunch> {
+    if options.surface.is_some() {
+        spawn_cmux_hosted_run(
+            ctx,
+            agent_id,
+            log_path,
+            options,
+            stale_threshold_secs,
+            poll_interval_secs,
+            cleanup_on_session_end,
+        )
+    } else {
+        spawn_detached_run(
+            ctx,
+            agent_id,
+            log_path,
+            options,
+            stale_threshold_secs,
+            poll_interval_secs,
+            cleanup_on_session_end,
+        )
+    }
+}
+
 fn spawn_detached_run(
     ctx: &Ctx,
     agent_id: &str,
@@ -724,7 +765,7 @@ fn spawn_detached_run(
     stale_threshold_secs: u64,
     poll_interval_secs: u64,
     cleanup_on_session_end: bool,
-) -> Result<std::process::Child> {
+) -> Result<SupervisorLaunch> {
     let exe = std::env::current_exe().context("Failed to resolve current wt executable")?;
     let stdout = OpenOptions::new()
         .create(true)
@@ -775,9 +816,139 @@ fn spawn_detached_run(
         });
     }
 
-    command
+    let child = command
         .spawn()
-        .with_context(|| format!("Failed to spawn detached supervisor for {agent_id}"))
+        .with_context(|| format!("Failed to spawn detached supervisor for {agent_id}"))?;
+    Ok(SupervisorLaunch {
+        pid: child.id(),
+        host_workspace_id: None,
+        child: Some(child),
+    })
+}
+
+fn spawn_cmux_hosted_run(
+    ctx: &Ctx,
+    agent_id: &str,
+    log_path: &Path,
+    options: &StartOptions,
+    stale_threshold_secs: u64,
+    poll_interval_secs: u64,
+    cleanup_on_session_end: bool,
+) -> Result<SupervisorLaunch> {
+    let exe = std::env::current_exe().context("Failed to resolve current wt executable")?;
+    let pid_path = log_path.with_extension("pid");
+    let cmux = CmuxService::new_with_workspace_focus(ctx.runner.as_ref(), false);
+    if !cmux.is_available() {
+        bail!("Surface-backed supervisors require cmux on PATH");
+    }
+
+    match fs::remove_file(&pid_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("Failed to remove stale pid file {}", pid_path.display())
+            });
+        }
+    }
+
+    let mut args = vec![
+        shell_arg(&exe.to_string_lossy()),
+        "-C".into(),
+        shell_arg(&ctx.invocation_root.to_string_lossy()),
+        "agent".into(),
+        "supervisor".into(),
+        "run".into(),
+        shell_arg(agent_id),
+        "--foreground".into(),
+        "--stale-threshold-secs".into(),
+        stale_threshold_secs.to_string(),
+        "--poll-interval-secs".into(),
+        poll_interval_secs.to_string(),
+        "--cycle-cap".into(),
+        DEFAULT_CYCLE_CAP.to_string(),
+        "--payload-cap".into(),
+        DEFAULT_PAYLOAD_CAP_BYTES.to_string(),
+        "--log-path".into(),
+        shell_arg(&log_path.to_string_lossy()),
+    ];
+    if let Some(surface) = options.surface.as_ref() {
+        args.push("--surface".into());
+        args.push(shell_arg(surface));
+    }
+    if let Some(kind) = options.kind.as_ref() {
+        args.push("--kind".into());
+        args.push(shell_arg(kind));
+    }
+    args.push("--cleanup-on-session-end".into());
+    args.push(cleanup_on_session_end.to_string());
+
+    let command = format!(
+        "sh -lc {}",
+        shell_arg(&format!(
+            "echo $$ > {}; exec {}",
+            shell_arg(&pid_path.to_string_lossy()),
+            args.join(" ")
+        ))
+    );
+    let name = format!("wt supervisor {}", agent_id.trim_start_matches("agents/"));
+    let host_workspace_id = cmux
+        .new_workspace(&ctx.invocation_root, &name, &command)
+        .with_context(|| format!("Failed to start cmux-hosted supervisor for {agent_id}"))?;
+    let pid = match wait_for_pid_file(&pid_path, Duration::from_secs(5)) {
+        Ok(pid) => pid,
+        Err(err) => {
+            let _ = cmux.close_workspace(&host_workspace_id);
+            return Err(err);
+        }
+    };
+    let _ = fs::remove_file(&pid_path);
+    Ok(SupervisorLaunch {
+        pid,
+        host_workspace_id: Some(host_workspace_id),
+        child: None,
+    })
+}
+
+fn wait_for_pid_file(path: &Path, timeout: Duration) -> Result<u32> {
+    let started = Instant::now();
+    loop {
+        match fs::read_to_string(path) {
+            Ok(content) => {
+                let pid = content
+                    .trim()
+                    .parse::<u32>()
+                    .with_context(|| format!("Invalid supervisor pid file {}", path.display()))?;
+                if pid > 0 {
+                    return Ok(pid);
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("Failed to read supervisor pid file {}", path.display())
+                });
+            }
+        }
+        if started.elapsed() >= timeout {
+            bail!(
+                "Timed out waiting for cmux-hosted supervisor pid file {}",
+                path.display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn cleanup_failed_launch(ctx: &Ctx, mut launch: SupervisorLaunch) {
+    let _ = signal::kill(Pid::from_raw(launch.pid as i32), Signal::SIGKILL);
+    if let Some(workspace) = launch.host_workspace_id.as_deref() {
+        let _ = CmuxService::new(ctx.runner.as_ref()).close_workspace(workspace);
+    }
+    if let Some(child) = launch.child.as_mut() {
+        let _ = signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+        let _ = child.try_wait();
+    }
 }
 
 fn parse_kind_option(value: &str) -> Result<PushKind> {
@@ -841,6 +1012,17 @@ fn log_value(value: &str) -> String {
     ascii_words(value).replace(' ', "_")
 }
 
+fn shell_arg(value: &str) -> String {
+    let safe = value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | ':' | '='));
+    if safe && !value.is_empty() {
+        return value.to_string();
+    }
+
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 fn stop_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
     let pid = Pid::from_raw(registration.pid as i32);
     if supervisor_is_alive(registration)? {
@@ -854,12 +1036,17 @@ fn stop_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
         let start = std::time::Instant::now();
         while start.elapsed() < STOP_GRACE {
             match read_registration(ctx, &registration.agent_id)? {
-                None => return Ok(()),
+                None => {
+                    close_host_workspace(ctx, registration);
+                    return Ok(());
+                }
                 Some(current) if !same_registered_supervisor(&current, registration) => {
+                    close_host_workspace(ctx, registration);
                     return Ok(());
                 }
                 Some(_) if !supervisor_is_alive(registration)? => {
                     remove_registration(ctx, &registration.agent_id)?;
+                    close_host_workspace(ctx, registration);
                     return Ok(());
                 }
                 Some(_) => {}
@@ -869,6 +1056,7 @@ fn stop_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
 
         if let Some(current) = read_registration(ctx, &registration.agent_id)? {
             if !same_registered_supervisor(&current, registration) {
+                close_host_workspace(ctx, registration);
                 return Ok(());
             }
         }
@@ -882,7 +1070,14 @@ fn stop_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
         }
     }
     remove_registration_if_current(ctx, registration)?;
+    close_host_workspace(ctx, registration);
     Ok(())
+}
+
+fn close_host_workspace(ctx: &Ctx, registration: &Registration) {
+    if let Some(workspace) = registration.host_workspace_id.as_deref() {
+        let _ = CmuxService::new(ctx.runner.as_ref()).close_workspace(workspace);
+    }
 }
 
 fn same_registered_supervisor(current: &Registration, expected: &Registration) -> bool {
@@ -908,6 +1103,7 @@ struct StatusReport {
     cleanup_on_session_end: bool,
     target_surface_id: Option<String>,
     target_agent_kind: Option<String>,
+    host_workspace_id: Option<String>,
     stale_threshold_secs: u64,
     poll_interval_secs: u64,
     stale_threshold: String,
@@ -930,6 +1126,7 @@ fn status_report(ctx: &Ctx, registration: &Registration) -> Result<StatusReport>
         cleanup_on_session_end: registration.cleanup_on_session_end,
         target_surface_id: registration.target_surface_id.clone(),
         target_agent_kind: registration.target_agent_kind.clone(),
+        host_workspace_id: registration.host_workspace_id.clone(),
         stale_threshold_secs: registration.stale_threshold_secs,
         poll_interval_secs: registration.poll_interval_secs,
         stale_threshold: format_duration(registration.stale_threshold_secs),
@@ -1180,6 +1377,7 @@ mod tests {
             cleanup_on_session_end: false,
             target_surface_id: None,
             target_agent_kind: None,
+            host_workspace_id: None,
             stale_threshold_secs: 900,
             poll_interval_secs: 60,
             log_path: PathBuf::from("/tmp/supervisor.log"),
@@ -1566,6 +1764,35 @@ mod tests {
         assert!(payload.is_ascii());
         assert!(payload.len() <= 96);
         assert!(payload.contains(&sent.id));
+    }
+
+    #[test]
+    fn surface_supervisor_start_requires_cmux() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(&dir);
+        let options = StartOptions {
+            replace: false,
+            surface: Some("surface:72".into()),
+            kind: Some("codex".into()),
+            cleanup_on_session_end: Some(false),
+            stale_threshold: "15m".into(),
+            poll_interval: "60s".into(),
+        };
+
+        let err = spawn_supervisor_run(
+            &ctx,
+            "agents/codex",
+            &ctx.storage_root
+                .personal_root()
+                .join("supervisors/test.log"),
+            &options,
+            900,
+            60,
+            false,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("require cmux"));
     }
 
     #[test]
