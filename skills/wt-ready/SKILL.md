@@ -60,9 +60,10 @@ the sequence as a waterfall; use it as a set of gates that prevent skipping
 from vague intent straight to runnable work.
 
 If a user enters `wt-ready` directly with implementation-shaped wording,
-reconstruct the missing raw intent and outcome first. If the outcome,
-requirements, design, or task graph cannot be stated clearly, stop at the
-matching earlier artifact instead of fabricating a TaskDocument.
+reconstruct the missing raw intent, purpose/success criteria, and output
+concept first. If the purpose, requirements/principles, output concept, design,
+or task graph cannot be stated clearly, stop at the matching earlier artifact
+instead of fabricating a TaskDocument.
 
 ## Questions
 

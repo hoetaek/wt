@@ -7,9 +7,10 @@ different kind of uncertainty before the work becomes runnable.
 ## Summary
 
 ```text
-Raw intent
--> Outcome / problem
--> Requirements
+Raw intent <-> Context / reference exploration
+-> Purpose / success criteria
+-> Requirements / principles
+-> Output concept
 -> Design
 -> Task graph
 -> Execution handoff
@@ -42,13 +43,42 @@ Gate to next step:
 - The user's wording is preserved enough that later agents can tell what was
   requested, not only what the coordinator inferred.
 - The idea is allowed to die, split, or be rewritten.
+- It is clear whether the user already has enough context to state purpose and
+  success criteria, or whether references/benchmarks are needed first.
 
 Return here when:
 
 - The request is only a symptom, preference, or implementation hunch.
 - Multiple unrelated ideas are mixed together.
 
-## 2. Outcome / problem
+## 2. Context / reference exploration
+
+Owner: `wt-idea` for exploratory research, `wt-ready` when reference gathering
+is needed before committed prep.
+
+Artifact: idea body sections for references/options/tradeoffs, or a short
+discovery section in the spec draft.
+
+Purpose: sharpen raw intent before forcing purpose, requirements, or output
+form. This is where contextual research, reference benchmarking, prior art,
+related tasks, product examples, and possible solution frames belong when the
+user cannot yet picture the desired result.
+
+Gate to next step:
+
+- The discovery set is bounded enough for the current decision.
+- 2-4 plausible directions or frames are named.
+- Each direction has a tradeoff or reason to accept/reject.
+- The user/coordinator can now state clearer purpose/success criteria or choose
+  the next exploration question.
+
+Return here when:
+
+- The purpose feels invented from the first idea instead of discovered.
+- The user needs examples before they can say what they want.
+- There are too many possible product/document/workflow shapes.
+
+## 3. Purpose / success criteria
 
 Owner: `wt-idea` for exploration, `wt-ready` for committed prep.
 
@@ -56,8 +86,9 @@ Artifact: idea body, then `requirements.md` user story and problem context.
 
 Gate to next step:
 
-- The desired user, developer, or maintainer outcome is stated in one sentence.
-- The outcome is not just "change this file" or "add this command".
+- The desired user, developer, or maintainer effect is stated in one sentence.
+- Success criteria describe why the work matters, not just what artifact to
+  create.
 - Success can plausibly be observed.
 
 Return here when:
@@ -65,7 +96,7 @@ Return here when:
 - The implementation is named but the benefit is unclear.
 - A task would need the agent to invent product intent.
 
-## 3. Requirements
+## 4. Requirements / principles
 
 Owner: `wt-ready`.
 
@@ -78,6 +109,8 @@ Gate to next step:
 - Regression-sensitive behavior is explicit:
   `WHEN <condition> THE SYSTEM SHALL CONTINUE TO <preserved behavior>`.
 - Relevant non-functional constraints are named.
+- Principles and constraints are specific enough to reject unsuitable output
+  forms or implementation shapes.
 - Open questions are either resolved, recorded as assumptions, or turned into a
   HITL/spike slice.
 
@@ -87,7 +120,32 @@ Return here when:
   behavior.
 - Acceptance checks cannot be stated.
 
-## 4. Design
+## 5. Output concept
+
+Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
+show that the chosen artifact shape is wrong.
+
+Artifact: `workflow.md` rationale, TaskDocument body planning summary, or spec
+notes that state the output form.
+
+Purpose: choose what kind of artifact should be produced after requirements and
+principles are clear.
+
+Gate to next step:
+
+- The output form is explicit: docs-only change, implementation PR, prototype,
+  spike, direct local edit, TaskDocument, saved Workflow, or mixed-lifecycle
+  handoff.
+- The output form fits the success criteria and requirements.
+- Deferred output forms are named when useful.
+
+Return here when:
+
+- The team is jumping to "make a task" before deciding whether a spec, spike,
+  prototype, docs change, or implementation PR is the right next artifact.
+- A broad idea has several output forms that should not be bundled together.
+
+## 6. Design
 
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
 invalidate assumptions.
@@ -109,7 +167,7 @@ Return here when:
 - The task would create a new user-facing model term without checking
   canonical docs.
 
-## 5. Task graph
+## 7. Task graph
 
 Owner: `wt-ready`.
 
@@ -135,7 +193,7 @@ Return here when:
 - A slice is too large to review or too small to justify its own branch.
 - The proposed stack is only a packaging choice, not a dependency claim.
 
-## 6. Execution handoff
+## 8. Execution handoff
 
 Owner: `wt-ready` prepares; `wt-start` launches.
 
@@ -154,7 +212,7 @@ Return here when:
 - The next command is ambiguous.
 - Required expected duration, policy, or acceptance checks are missing.
 
-## 7. Review / sync
+## 9. Review / sync
 
 Owner: `wt-coordinate`.
 
@@ -174,7 +232,7 @@ Return here when:
 - Implementation reveals a requirement or design assumption was wrong.
 - The diff is too broad for the prepared task and needs re-slicing.
 
-## 8. Retrospect
+## 10. Retrospect
 
 Owner: `wt-retrospect`, normally called by `wt-work` after landing or explicit
 discard.
@@ -199,8 +257,11 @@ Return here when:
 When a step is missing, produce the artifact for that step instead of pretending
 the work is ready for the next one. Examples:
 
-- Missing outcome: capture or enrich an idea.
+- Missing purpose/success criteria: capture or enrich an idea.
+- Missing examples or direction: run bounded discovery/reference benchmarking.
 - Missing observable behavior: write or grill `requirements.md`.
+- Missing output form: choose whether the next artifact is spec, prototype,
+  docs change, TaskDocument, workflow, or spike.
 - Missing ownership/boundary decision: write or grill `design.md`.
 - Missing dependency graph: write or grill `tasks.md` / `workflow.md`.
 - Missing reviewable size: split the task graph.
