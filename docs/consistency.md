@@ -342,9 +342,19 @@ wt-managed Claude/Codex agent hooks register the same inbox check on both `UserP
 `PostToolUse`; both events route through the `wt msg check-inbox` claim → hook JSON → acknowledge
 lifecycle above.
 
-Push delivery, `wt://` artifact semantics, provider-private Claude/Codex runtime integration, and
-detached supervisor commands are outside this contract slice. Future delivery implementations must
-build on the same address/scope/delivery lifecycle instead of adding a second hidden inbox model.
+Detached supervisor delivery is Layer 3 stale-rescue, not a second inbox model. A started
+supervisor watches the target `inbox/new/` directory with `notify` and keeps `--poll-interval` as a
+missed-event/stop-check fallback. It only pushes messages that are older than `--stale-threshold`;
+fresh messages remain available for normal hook delivery at the next `UserPromptSubmit` or
+`PostToolUse` event. When a message is stale, the supervisor claims the exact `inbox/new` path,
+renders a bounded ASCII cmux payload, resolves the target surface's workspace from cmux runtime
+evidence, pushes it to that workspace/surface pair, and acknowledges the claim only after cmux push
+succeeds. Failed pushes move through retry/failed delivery states using the same claim lifecycle.
+
+Push delivery outside the supervisor stale-rescue path, `wt://` artifact semantics, and
+provider-private Claude/Codex runtime integration are outside this contract slice. Future delivery
+implementations must build on the same address/scope/delivery lifecycle instead of adding a second
+hidden inbox model.
 
 Canonical read-only message lifecycle inspection:
 

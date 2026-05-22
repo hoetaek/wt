@@ -29,6 +29,13 @@ impl PushKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmuxPushTarget {
+    pub surface_id: String,
+    pub workspace: Option<String>,
+    pub kind: PushKind,
+}
+
 pub struct CmuxPushService<'a> {
     runner: &'a dyn CommandRunner,
     payload_cap: usize,
@@ -51,20 +58,45 @@ impl<'a> CmuxPushService<'a> {
         detect_target_kind(self.runner, surface_id)
     }
 
+    pub fn detect_target(&self, surface_id: &str) -> Result<CmuxPushTarget> {
+        detect_target(self.runner, surface_id)
+    }
+
     pub fn push_to_surface(&self, surface_id: &str, kind: PushKind, text: &str) -> Result<()> {
         validate_payload(text, self.payload_cap)?;
         push_to_surface_unchecked(self.runner, surface_id, kind, text)
     }
+
+    pub fn push_to_surface_in_workspace(
+        &self,
+        surface_id: &str,
+        workspace: Option<&str>,
+        kind: PushKind,
+        text: &str,
+    ) -> Result<()> {
+        validate_payload(text, self.payload_cap)?;
+        push_to_surface_in_workspace_unchecked(self.runner, surface_id, workspace, kind, text)
+    }
 }
 
 pub fn detect_target_kind(runner: &dyn CommandRunner, surface_id: &str) -> Result<PushKind> {
+    Ok(detect_target(runner, surface_id)?.kind)
+}
+
+pub fn detect_target(runner: &dyn CommandRunner, surface_id: &str) -> Result<CmuxPushTarget> {
     let out = runner.run("cmux", &["top", "--all", "--processes", "--json"], None)?;
     if !out.success {
         bail!("cmux top failed: {}", command_error(&out));
     }
     let value: Value =
         serde_json::from_str(&out.stdout).context("Failed to parse cmux top JSON")?;
-    Ok(find_surface_kind(&value, surface_id).unwrap_or(PushKind::Unknown))
+    Ok(
+        find_surface_target(&value, surface_id, None).unwrap_or_else(|| CmuxPushTarget {
+            surface_id: surface_id.into(),
+            workspace: None,
+            kind: PushKind::Unknown,
+        }),
+    )
 }
 
 pub fn push_to_surface(
@@ -83,18 +115,27 @@ fn push_to_surface_unchecked(
     kind: PushKind,
     text: &str,
 ) -> Result<()> {
+    push_to_surface_in_workspace_unchecked(runner, surface_id, None, kind, text)
+}
+
+fn push_to_surface_in_workspace_unchecked(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: Option<&str>,
+    kind: PushKind,
+    text: &str,
+) -> Result<()> {
     match kind {
         PushKind::Codex => {
-            run_cmux(runner, &["send", "--surface", surface_id, text], "send")?;
-            run_cmux(
-                runner,
-                &["send-key", "--surface", surface_id, "enter"],
-                "send-key",
-            )
+            let send_args = cmux_send_args("send", surface_id, workspace, text);
+            run_cmux(runner, &send_args, "send")?;
+            let send_key_args = cmux_send_args("send-key", surface_id, workspace, "enter");
+            run_cmux(runner, &send_key_args, "send-key")
         }
         PushKind::Claude => {
             let text = format!("{text}\\n");
-            run_cmux(runner, &["send", "--surface", surface_id, &text], "send")
+            let send_args = cmux_send_args("send", surface_id, workspace, &text);
+            run_cmux(runner, &send_args, "send")
         }
         PushKind::Unknown => {
             bail!(
@@ -102,6 +143,20 @@ fn push_to_surface_unchecked(
             )
         }
     }
+}
+
+fn cmux_send_args<'a>(
+    command: &'a str,
+    surface_id: &'a str,
+    workspace: Option<&'a str>,
+    payload: &'a str,
+) -> Vec<&'a str> {
+    let mut args = vec![command, "--surface", surface_id];
+    if let Some(workspace) = workspace {
+        args.extend(["--workspace", workspace]);
+    }
+    args.push(payload);
+    args
 }
 
 fn run_cmux(runner: &dyn CommandRunner, args: &[&str], verb: &str) -> Result<()> {
@@ -138,22 +193,47 @@ fn validate_payload(text: &str, cap: usize) -> Result<()> {
     Ok(())
 }
 
-fn find_surface_kind(value: &Value, surface_id: &str) -> Option<PushKind> {
+fn find_surface_target(
+    value: &Value,
+    surface_id: &str,
+    workspace: Option<&str>,
+) -> Option<CmuxPushTarget> {
+    let current_workspace = object_workspace_ref(value).or(workspace);
+
     if object_matches_surface(value, surface_id) {
-        if let Some(kind) = env_kind(value).or_else(|| process_kind(value)) {
-            return Some(kind);
-        }
+        return Some(CmuxPushTarget {
+            surface_id: surface_id.into(),
+            workspace: current_workspace.map(str::to_string),
+            kind: env_kind(value)
+                .or_else(|| process_kind(value))
+                .unwrap_or(PushKind::Unknown),
+        });
     }
 
     match value {
         Value::Array(items) => items
             .iter()
-            .find_map(|item| find_surface_kind(item, surface_id)),
+            .find_map(|item| find_surface_target(item, surface_id, current_workspace)),
         Value::Object(map) => map
             .values()
-            .find_map(|item| find_surface_kind(item, surface_id)),
+            .find_map(|item| find_surface_target(item, surface_id, current_workspace)),
         _ => None,
     }
+}
+
+fn object_workspace_ref(value: &Value) -> Option<&str> {
+    let Value::Object(map) = value else {
+        return None;
+    };
+    for key in ["workspace", "workspace_ref", "ref", "handle"] {
+        let Some(value) = map.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        if value.starts_with("workspace:") {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn object_matches_surface(value: &Value, surface_id: &str) -> bool {
@@ -241,6 +321,46 @@ mod tests {
     }
 
     #[test]
+    fn codex_push_in_workspace_passes_workspace_to_send_commands() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        runner.add_response("", true);
+
+        CmuxPushService::new(&runner)
+            .push_to_surface_in_workspace(
+                "surface:4",
+                Some("workspace:2"),
+                PushKind::Codex,
+                "hello",
+            )
+            .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "send",
+                "--surface",
+                "surface:4",
+                "--workspace",
+                "workspace:2",
+                "hello"
+            ]
+        );
+        assert_eq!(
+            calls[1].1,
+            vec![
+                "send-key",
+                "--surface",
+                "surface:4",
+                "--workspace",
+                "workspace:2",
+                "enter"
+            ]
+        );
+    }
+
+    #[test]
     fn claude_push_sends_inline_newline() {
         let mut runner = MockRunner::new();
         runner.add_response("", true);
@@ -295,5 +415,19 @@ mod tests {
             detect_target_kind(&runner, "surface:4").unwrap(),
             PushKind::Codex
         );
+    }
+
+    #[test]
+    fn detects_workspace_from_containing_workspace_object() {
+        let mut runner = MockRunner::new();
+        runner.add_response(
+            r#"{"workspaces":[{"ref":"workspace:2","surfaces":[{"ref":"surface:4","processes":[{"name":"codex"}]}]}]}"#,
+            true,
+        );
+
+        let target = detect_target(&runner, "surface:4").unwrap();
+
+        assert_eq!(target.workspace.as_deref(), Some("workspace:2"));
+        assert_eq!(target.kind, PushKind::Codex);
     }
 }

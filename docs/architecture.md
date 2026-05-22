@@ -83,7 +83,8 @@ surfaces over the same lifecycle directories. Message state does not own
 activity logs, status snapshots, agent hook install files, runtime process
 launch, cmux transport, or Workflow/TaskRun state. Hook adapters call into
 `wt msg check-inbox` from managed `UserPromptSubmit` and `PostToolUse` events;
-they do not define the message schema.
+the stale-rescue supervisor calls the same message lifecycle primitives before
+pushing a bounded cmux payload. These adapters do not define the message schema.
 
 ## Shell Integration
 

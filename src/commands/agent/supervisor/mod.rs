@@ -3,6 +3,7 @@ use crate::messages::{AgentId, Message, MessageLease, MessageStore};
 use crate::services::cmux_push::{CmuxPushService, DEFAULT_PAYLOAD_CAP_BYTES, PushKind};
 use crate::services::identity_locator::percent_encode;
 use crate::services::identity_locator::process_start_time;
+use crate::services::inbox_watcher::InboxWatcher;
 use crate::services::supervisor_registration::{
     Registration, list_registrations, log_path, read_registration, registration_path,
     remove_registration, supervisor_is_alive, write_registration,
@@ -312,7 +313,7 @@ pub fn run(ctx: &Ctx, agent_id: &str, options: RunOptions) -> Result<()> {
     append_log(
         &config.log_path,
         &format!(
-            "START agent_id={} foreground={} stale_threshold_secs={} poll_interval_secs={} cycle_cap={} payload_cap={}",
+            "START agent_id={} foreground={} stale_threshold_secs={} poll_interval_secs={} cycle_cap={} payload_cap={} wake=notify",
             agent_id.as_str(),
             options.foreground,
             config.stale_threshold_secs,
@@ -321,6 +322,15 @@ pub fn run(ctx: &Ctx, agent_id: &str, options: RunOptions) -> Result<()> {
             config.payload_cap
         ),
     )?;
+    let inbox_new = ctx
+        .storage_root
+        .messages_dir()
+        .join(agent_id.as_str())
+        .join("inbox")
+        .join("new");
+    fs::create_dir_all(&inbox_new)
+        .with_context(|| format!("Failed to create inbox: {}", inbox_new.display()))?;
+    let mut watcher = InboxWatcher::new(&inbox_new)?;
     let mut state = SupervisorLoopState::default();
     loop {
         let stop_path = stop_requested_path(ctx, agent_id.as_str());
@@ -342,7 +352,7 @@ pub fn run(ctx: &Ctx, agent_id: &str, options: RunOptions) -> Result<()> {
             return Ok(());
         }
         run_one_cycle(ctx, agent_id.as_str(), &config, &mut state)?;
-        std::thread::sleep(Duration::from_secs(config.poll_interval_secs));
+        wait_for_next_cycle(ctx, agent_id.as_str(), &config, &mut watcher)?;
     }
 }
 
@@ -494,9 +504,14 @@ fn run_one_cycle(
         };
         let payload = render_payload(&claimed.message, config.payload_cap);
         let push = CmuxPushService::new(ctx.runner.as_ref()).with_payload_cap(config.payload_cap);
-        let detected_kind = push
-            .detect_target_kind(surface_id)
+        let detected_target = push.detect_target(surface_id).ok();
+        let detected_kind = detected_target
+            .as_ref()
+            .map(|target| target.kind)
             .unwrap_or(PushKind::Unknown);
+        let workspace = detected_target
+            .as_ref()
+            .and_then(|target| target.workspace.as_deref());
         let kind = if detected_kind == PushKind::Unknown {
             config.fallback_kind
         } else {
@@ -512,7 +527,7 @@ fn run_one_cycle(
                 payload.len()
             ),
         )?;
-        match push.push_to_surface(surface_id, kind, &payload) {
+        match push.push_to_surface_in_workspace(surface_id, workspace, kind, &payload) {
             Ok(()) => {
                 store.acknowledge_claimed_path(
                     agent_id,
@@ -569,6 +584,69 @@ fn run_one_cycle(
         }
     }
     Ok(())
+}
+
+fn wait_for_next_cycle(
+    ctx: &Ctx,
+    agent_id: &str,
+    config: &SupervisorLoopConfig,
+    watcher: &mut InboxWatcher,
+) -> Result<()> {
+    let wait_for = next_wait_duration(ctx, agent_id, config)?;
+    match watcher.wait_next(wait_for)? {
+        Some(path) => append_log(
+            &config.log_path,
+            &format!(
+                "WATCH_EVENT agent_id={} path={}",
+                agent_id,
+                ctx.storage_root.display_path(&path)
+            ),
+        ),
+        None => Ok(()),
+    }
+}
+
+fn next_wait_duration(
+    ctx: &Ctx,
+    agent_id: &str,
+    config: &SupervisorLoopConfig,
+) -> Result<Duration> {
+    let poll = Duration::from_secs(config.poll_interval_secs);
+    let Some(until_stale) = next_fresh_message_stale_duration(ctx, agent_id, config)? else {
+        return Ok(poll);
+    };
+    Ok(until_stale.min(poll).max(Duration::from_millis(100)))
+}
+
+fn next_fresh_message_stale_duration(
+    ctx: &Ctx,
+    agent_id: &str,
+    config: &SupervisorLoopConfig,
+) -> Result<Option<Duration>> {
+    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let threshold = Duration::from_secs(config.stale_threshold_secs);
+    let now = SystemTime::now();
+    let mut next = None;
+    for record in store.list_new(agent_id)? {
+        let Some(message) = record.message.as_ref() else {
+            continue;
+        };
+        let Ok(created_at) = parse_utc_timestamp(&message.meta.created_at) else {
+            continue;
+        };
+        let age = now
+            .duration_since(created_at)
+            .unwrap_or_else(|_| Duration::from_secs(0));
+        if age >= threshold {
+            continue;
+        }
+        let remaining = threshold - age;
+        next = Some(match next {
+            Some(current) => remaining.min(current),
+            None => remaining,
+        });
+    }
+    Ok(next)
 }
 
 fn spawn_detached_run(
@@ -1079,6 +1157,27 @@ mod tests {
 
         assert!(sent.path.exists());
         assert!(!inbox_state_dir(&ctx, "codex", "delivered").exists());
+    }
+
+    #[test]
+    fn next_wait_duration_wakes_when_fresh_message_reaches_stale_threshold() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(&dir);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "fresh")
+            .unwrap();
+        rewrite_message_created_at(&sent.path, &current_utc_timestamp());
+        let config = SupervisorLoopConfig {
+            poll_interval_secs: 60,
+            stale_threshold_secs: 2,
+            ..loop_config(&ctx, 2, 10)
+        };
+
+        let wait = next_wait_duration(&ctx, "agents/codex", &config).unwrap();
+
+        assert!(wait <= Duration::from_secs(2));
+        assert!(wait >= Duration::from_millis(100));
     }
 
     #[test]
