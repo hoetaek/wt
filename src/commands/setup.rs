@@ -385,11 +385,12 @@ fn maybe_retarget_macos_bash_with_home(
     if options.yes || options.dry_run {
         return Ok(());
     }
-    if ctx
-        .ui
-        .confirm("Target ~/.bash_profile for this run instead?", false)?
-    {
-        target.rc_path = home.join(".bash_profile");
+    let bash_profile = home.join(".bash_profile");
+    if ctx.ui.confirm(
+        &format!("Target {} for this run instead?", bash_profile.display()),
+        false,
+    )? {
+        target.rc_path = bash_profile;
     }
     Ok(())
 }
@@ -489,7 +490,25 @@ enum InstallSource {
 }
 
 fn detect_wt_install_source(ctx: &MachineCtx<'_>) -> Result<InstallSource> {
-    let wt_path = current_wt_path(ctx)?;
+    detect_wt_install_source_with_current_exe(ctx, env::current_exe)
+}
+
+fn detect_wt_install_source_with_current_exe(
+    ctx: &MachineCtx<'_>,
+    current_exe: impl FnOnce() -> std::io::Result<PathBuf>,
+) -> Result<InstallSource> {
+    let wt_path = match current_exe() {
+        Ok(path) => path,
+        Err(err) => {
+            debug_install_source(
+                ctx,
+                &format!(
+                    "failed to resolve current wt executable: {err}; assuming non-Homebrew install source"
+                ),
+            );
+            return Ok(InstallSource::Other);
+        }
+    };
     let prefixes = homebrew_prefixes(ctx);
     if prefixes.iter().any(|prefix| wt_path.starts_with(prefix)) {
         Ok(InstallSource::Homebrew)
@@ -498,12 +517,9 @@ fn detect_wt_install_source(ctx: &MachineCtx<'_>) -> Result<InstallSource> {
     }
 }
 
-fn current_wt_path(ctx: &MachineCtx<'_>) -> Result<PathBuf> {
-    match ctx.runner.run("which", &["wt"], None) {
-        Ok(out) if out.success && !out.stdout.trim().is_empty() => {
-            absolute_path(PathBuf::from(out.stdout.trim()))
-        }
-        _ => env::current_exe().context("Failed to resolve current wt executable"),
+fn debug_install_source(ctx: &MachineCtx<'_>, message: &str) {
+    if ctx.verbosity > 0 && !ctx.quiet && !ctx.is_json() {
+        ctx.ui.print_dim(&format!("debug: {message}"));
     }
 }
 
@@ -559,6 +575,7 @@ fn print_summary(ctx: &MachineCtx<'_>, options: SetupOptions, summary: &SetupSum
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::MachineCtxOptions;
     use crate::context::mock::{MockRunner, MockUi};
     use tempfile::TempDir;
 
@@ -646,6 +663,70 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(target.rc_path, temp.path().join(".bash_profile"));
+        let bash_profile = temp.path().join(".bash_profile");
+        assert_eq!(target.rc_path, bash_profile);
+        assert_eq!(
+            ui.prompts.lock().unwrap().as_slice(),
+            [format!(
+                "confirm: Target {} for this run instead?",
+                bash_profile.display()
+            )]
+        );
+    }
+
+    #[test]
+    fn install_source_uses_current_exe_for_default_homebrew_prefixes() {
+        let runner = MockRunner::new();
+        let ui = MockUi::new();
+        let ctx = MachineCtx::new(&runner, &ui);
+
+        for path in [
+            "/opt/homebrew/bin/wt",
+            "/usr/local/bin/wt",
+            "/home/linuxbrew/.linuxbrew/bin/wt",
+        ] {
+            assert_eq!(
+                detect_wt_install_source_with_current_exe(&ctx, || Ok(PathBuf::from(path)))
+                    .unwrap(),
+                InstallSource::Homebrew,
+                "{path}"
+            );
+        }
+
+        assert_eq!(
+            detect_wt_install_source_with_current_exe(&ctx, || {
+                Ok(PathBuf::from("/Users/alice/.cargo/bin/wt"))
+            })
+            .unwrap(),
+            InstallSource::Other
+        );
+    }
+
+    #[test]
+    fn install_source_falls_back_to_other_when_current_exe_fails() {
+        let runner = MockRunner::new();
+        let ui = MockUi::new();
+        let ctx = MachineCtx::new_with_options(
+            &runner,
+            &ui,
+            MachineCtxOptions {
+                verbosity: 1,
+                ..MachineCtxOptions::default()
+            },
+        );
+
+        let source = detect_wt_install_source_with_current_exe(&ctx, || {
+            Err(std::io::Error::other("current_exe failed"))
+        })
+        .unwrap();
+
+        assert_eq!(source, InstallSource::Other);
+        assert!(
+            ui.dims
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.contains("failed to resolve current wt executable"))
+        );
     }
 }
