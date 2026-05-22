@@ -21,13 +21,31 @@ pub mod ui;
 pub mod workflow;
 pub mod worktree_naming;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use cli::{
     AgentCommand, AgentSupervisorCommand, Commands, ConfigCommand, MsgCommand, RunCommand,
     SessionCommand, TaskCommand, WorkflowCommand,
 };
 use commands::agent_runtime::KnownAgentCli;
-use context::Ctx;
+use context::{Ctx, MachineCtx};
+
+pub fn dispatch_machine(ctx: &MachineCtx<'_>, command: &Commands) -> Result<()> {
+    match command {
+        Commands::Setup {
+            yes,
+            dry_run,
+            remove,
+        } => commands::setup::run(
+            ctx,
+            commands::setup::SetupOptions {
+                yes: *yes,
+                dry_run: *dry_run,
+                remove: *remove,
+            },
+        ),
+        _ => bail!("command does not support per-machine context"),
+    }
+}
 
 pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
     match command {
@@ -200,6 +218,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     agent_id,
                     replace,
                     surface,
+                    kind,
                     cleanup_on_session_end,
                     stale_threshold,
                     poll_interval,
@@ -209,6 +228,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     commands::agent::supervisor::StartOptions {
                         replace: *replace,
                         surface: surface.clone(),
+                        kind: kind.clone(),
                         cleanup_on_session_end: *cleanup_on_session_end,
                         stale_threshold: stale_threshold.clone(),
                         poll_interval: poll_interval.clone(),
@@ -237,9 +257,12 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     agent_id,
                     foreground,
                     surface,
+                    kind,
                     cleanup_on_session_end,
                     stale_threshold_secs,
                     poll_interval_secs,
+                    cycle_cap,
+                    payload_cap,
                     log_path,
                 } => commands::agent::supervisor::run(
                     ctx,
@@ -247,9 +270,12 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                     commands::agent::supervisor::RunOptions {
                         foreground: *foreground,
                         surface: surface.clone(),
+                        kind: kind.clone(),
                         cleanup_on_session_end: *cleanup_on_session_end,
                         stale_threshold_secs: *stale_threshold_secs,
                         poll_interval_secs: *poll_interval_secs,
+                        cycle_cap: *cycle_cap,
+                        payload_cap: *payload_cap,
                         log_path: log_path.clone(),
                     },
                 ),
@@ -259,14 +285,17 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             yes,
             dry_run,
             remove,
-        } => commands::setup::run(
-            ctx,
-            commands::setup::SetupOptions {
-                yes: *yes,
-                dry_run: *dry_run,
-                remove: *remove,
-            },
-        ),
+        } => {
+            let machine_ctx = ctx.machine_ctx();
+            commands::setup::run(
+                &machine_ctx,
+                commands::setup::SetupOptions {
+                    yes: *yes,
+                    dry_run: *dry_run,
+                    remove: *remove,
+                },
+            )
+        }
         Commands::Codex { args } => {
             commands::agent_runtime::run_known(ctx, KnownAgentCli::Codex, args)
         }

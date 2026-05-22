@@ -3747,6 +3747,93 @@ fn setup_installs_completion_for_explicit_non_homebrew_wt_path() {
     assert!(zshrc.contains("eval \"$(wt completion zsh)\""));
 }
 
+#[cfg(unix)]
+#[test]
+fn setup_dry_run_succeeds_outside_git_repo() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let zdotdir = temp.path().join("zdot");
+
+    wt_command()
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("PATH", "")
+        .args(["setup", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Setup dry run complete: no files changed",
+        ));
+
+    assert!(!home.join(".claude/settings.json").exists());
+    assert!(!codex_home.exists());
+    assert!(!zdotdir.join(".zshrc").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_yes_succeeds_outside_git_repo() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let zdotdir = temp.path().join("zdot");
+
+    wt_command()
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("PATH", "")
+        .args(["setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Shell integration added"))
+        .stdout(predicate::str::contains("Shell completion added"))
+        .stdout(predicate::str::contains(
+            "Next: run `wt init` inside a git repo.",
+        ));
+
+    let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
+    assert!(zshrc.contains("eval \"$(wt shell-init zsh)\""));
+    assert!(zshrc.contains("eval \"$(wt completion zsh)\""));
+    assert!(!home.join(".claude/settings.json").exists());
+    assert!(!codex_home.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_remove_yes_succeeds_outside_git_repo() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let zdotdir = temp.path().join("zdot");
+
+    wt_command()
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("PATH", "")
+        .args(["setup", "--remove", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Claude hooks: already absent"))
+        .stdout(predicate::str::contains("Codex hooks: already absent"))
+        .stdout(predicate::str::contains(
+            "Shell integration: already absent",
+        ));
+
+    assert!(!home.join(".claude/settings.json").exists());
+    assert!(!codex_home.exists());
+    assert!(!zdotdir.join(".zshrc").exists());
+}
+
 #[test]
 fn removed_setup_surfaces_are_unrecognized() {
     assert_removed_surface_unrecognized(&["install"]);

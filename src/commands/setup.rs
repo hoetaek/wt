@@ -1,6 +1,6 @@
 use crate::cli::ShellInitShell;
 use crate::commands::agent_hook;
-use crate::context::Ctx;
+use crate::context::MachineCtx;
 use anyhow::{Context, Result};
 use std::env;
 use std::fs;
@@ -18,7 +18,7 @@ struct SetupSummary {
     changed: usize,
 }
 
-pub fn run(ctx: &Ctx, options: SetupOptions) -> Result<()> {
+pub fn run(ctx: &MachineCtx<'_>, options: SetupOptions) -> Result<()> {
     if !ctx.quiet {
         ctx.ui.print_step(if options.remove {
             "wt setup --remove"
@@ -36,7 +36,11 @@ pub fn run(ctx: &Ctx, options: SetupOptions) -> Result<()> {
     Ok(())
 }
 
-fn step_claude_hooks(ctx: &Ctx, options: SetupOptions, summary: &mut SetupSummary) -> Result<()> {
+fn step_claude_hooks(
+    ctx: &MachineCtx<'_>,
+    options: SetupOptions,
+    summary: &mut SetupSummary,
+) -> Result<()> {
     if options.remove {
         let installed = agent_hook::claude_dispatcher_installed()?;
         let settings_path = agent_hook::claude_settings_path(false)?;
@@ -95,7 +99,11 @@ fn step_claude_hooks(ctx: &Ctx, options: SetupOptions, summary: &mut SetupSummar
     Ok(())
 }
 
-fn step_codex_hooks(ctx: &Ctx, options: SetupOptions, summary: &mut SetupSummary) -> Result<()> {
+fn step_codex_hooks(
+    ctx: &MachineCtx<'_>,
+    options: SetupOptions,
+    summary: &mut SetupSummary,
+) -> Result<()> {
     if options.remove {
         let installed = agent_hook::codex_dispatcher_hook_present()?;
         let codex_home = agent_hook::codex_home_dir()?;
@@ -157,7 +165,7 @@ fn step_codex_hooks(ctx: &Ctx, options: SetupOptions, summary: &mut SetupSummary
 }
 
 fn step_shell_integration(
-    ctx: &Ctx,
+    ctx: &MachineCtx<'_>,
     options: SetupOptions,
     summary: &mut SetupSummary,
 ) -> Result<Option<ShellTarget>> {
@@ -184,7 +192,7 @@ fn step_shell_integration(
 }
 
 fn step_shell_completion(
-    ctx: &Ctx,
+    ctx: &MachineCtx<'_>,
     options: SetupOptions,
     shell_target: Option<&ShellTarget>,
     summary: &mut SetupSummary,
@@ -224,7 +232,7 @@ struct LineStep {
 }
 
 fn apply_line_step(
-    ctx: &Ctx,
+    ctx: &MachineCtx<'_>,
     options: SetupOptions,
     summary: &mut SetupSummary,
     step: LineStep,
@@ -306,7 +314,7 @@ fn line_remove_prompt(path: &Path, line: &str, _exists: bool) -> String {
     format!("Remove '{line}' from {}?", path.display())
 }
 
-fn should_apply(ctx: &Ctx, options: SetupOptions, prompt: &str) -> Result<bool> {
+fn should_apply(ctx: &MachineCtx<'_>, options: SetupOptions, prompt: &str) -> Result<bool> {
     if options.yes {
         return Ok(true);
     }
@@ -349,7 +357,7 @@ fn resolve_shell_target() -> Result<Option<ShellTarget>> {
 }
 
 fn maybe_retarget_macos_bash(
-    ctx: &Ctx,
+    ctx: &MachineCtx<'_>,
     options: SetupOptions,
     target: &mut ShellTarget,
 ) -> Result<()> {
@@ -357,7 +365,7 @@ fn maybe_retarget_macos_bash(
 }
 
 fn maybe_retarget_macos_bash_with_home(
-    ctx: &Ctx,
+    ctx: &MachineCtx<'_>,
     options: SetupOptions,
     target: &mut ShellTarget,
     home: &Path,
@@ -419,7 +427,7 @@ fn shell_name(shell: ShellInitShell) -> &'static str {
     }
 }
 
-fn print_manual_shell_instructions(ctx: &Ctx) {
+fn print_manual_shell_instructions(ctx: &MachineCtx<'_>) {
     ctx.ui.print_warning(
         "Supported login shell not detected. Add the wt shell integration eval line to your shell rc manually.",
     );
@@ -427,7 +435,7 @@ fn print_manual_shell_instructions(ctx: &Ctx) {
     ctx.ui.print_dim("  bash: eval \"$(wt shell-init bash)\"");
 }
 
-fn print_manual_completion_instructions(ctx: &Ctx) {
+fn print_manual_completion_instructions(ctx: &MachineCtx<'_>) {
     ctx.ui.print_warning(
         "Supported login shell not detected. Add the wt completion eval line to your shell rc manually if desired.",
     );
@@ -481,12 +489,12 @@ enum InstallSource {
     Other,
 }
 
-fn detect_wt_install_source(ctx: &Ctx) -> Result<InstallSource> {
+fn detect_wt_install_source(ctx: &MachineCtx<'_>) -> Result<InstallSource> {
     detect_wt_install_source_with_current_exe(ctx, env::current_exe)
 }
 
 fn detect_wt_install_source_with_current_exe(
-    ctx: &Ctx,
+    ctx: &MachineCtx<'_>,
     current_exe: impl FnOnce() -> std::io::Result<PathBuf>,
 ) -> Result<InstallSource> {
     let wt_path = match current_exe() {
@@ -509,13 +517,13 @@ fn detect_wt_install_source_with_current_exe(
     }
 }
 
-fn debug_install_source(ctx: &Ctx, message: &str) {
+fn debug_install_source(ctx: &MachineCtx<'_>, message: &str) {
     if ctx.verbosity > 0 && !ctx.quiet && !ctx.is_json() {
         ctx.ui.print_dim(&format!("debug: {message}"));
     }
 }
 
-fn homebrew_prefixes(ctx: &Ctx) -> Vec<PathBuf> {
+fn homebrew_prefixes(ctx: &MachineCtx<'_>) -> Vec<PathBuf> {
     let mut prefixes = Vec::new();
     if let Some(prefix) = env::var_os("HOMEBREW_PREFIX").filter(|prefix| !prefix.is_empty()) {
         prefixes.push(PathBuf::from(prefix));
@@ -539,7 +547,7 @@ fn is_macos_host() -> bool {
     cfg!(target_os = "macos") || env::var_os("WT_TEST_MACOS_HOST").is_some()
 }
 
-fn print_summary(ctx: &Ctx, options: SetupOptions, summary: &SetupSummary) {
+fn print_summary(ctx: &MachineCtx<'_>, options: SetupOptions, summary: &SetupSummary) {
     if ctx.quiet {
         return;
     }
@@ -567,40 +575,18 @@ fn print_summary(ctx: &Ctx, options: SetupOptions, summary: &SetupSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::context::CtxOptions;
+    use crate::context::MachineCtxOptions;
     use crate::context::mock::{MockRunner, MockUi};
-    use std::sync::Arc;
     use tempfile::TempDir;
-
-    fn test_ctx(ui: MockUi) -> Ctx {
-        Ctx::new(
-            PathBuf::from("/tmp/repo"),
-            PathBuf::from("/tmp/repo"),
-            Config::default(),
-            Box::new(MockRunner::new()),
-            Box::new(ui),
-        )
-    }
-
-    fn test_ctx_with_shared_ui(ui: Arc<MockUi>, options: CtxOptions) -> Ctx {
-        Ctx::new_with_options(
-            PathBuf::from("/tmp/repo"),
-            PathBuf::from("/tmp/repo"),
-            Config::default(),
-            Box::new(MockRunner::new()),
-            Box::new(ui),
-            options,
-        )
-    }
 
     #[test]
     fn missing_rc_file_is_created_only_when_prompt_is_accepted() {
         let temp = TempDir::new().unwrap();
         let rc_path = temp.path().join(".zshrc");
+        let runner = MockRunner::new();
         let mut ui = MockUi::new();
         ui.add_confirm(true);
-        let ctx = test_ctx(ui);
+        let ctx = MachineCtx::new(&runner, &ui);
         let mut summary = SetupSummary::default();
 
         apply_line_step(
@@ -627,9 +613,10 @@ mod tests {
         );
 
         let declined_path = temp.path().join(".bashrc");
+        let runner = MockRunner::new();
         let mut ui = MockUi::new();
         ui.add_confirm(false);
-        let ctx = test_ctx(ui);
+        let ctx = MachineCtx::new(&runner, &ui);
         apply_line_step(
             &ctx,
             SetupOptions {
@@ -658,10 +645,10 @@ mod tests {
             shell: ShellInitShell::Bash,
             rc_path: temp.path().join(".bashrc"),
         };
+        let runner = MockRunner::new();
         let mut ui = MockUi::new();
         ui.add_confirm(true);
-        let ui = Arc::new(ui);
-        let ctx = test_ctx_with_shared_ui(ui.clone(), CtxOptions::default());
+        let ctx = MachineCtx::new(&runner, &ui);
 
         maybe_retarget_macos_bash_with_home(
             &ctx,
@@ -689,7 +676,9 @@ mod tests {
 
     #[test]
     fn install_source_uses_current_exe_for_default_homebrew_prefixes() {
-        let ctx = test_ctx(MockUi::new());
+        let runner = MockRunner::new();
+        let ui = MockUi::new();
+        let ctx = MachineCtx::new(&runner, &ui);
 
         for path in [
             "/opt/homebrew/bin/wt",
@@ -715,12 +704,14 @@ mod tests {
 
     #[test]
     fn install_source_falls_back_to_other_when_current_exe_fails() {
-        let ui = Arc::new(MockUi::new());
-        let ctx = test_ctx_with_shared_ui(
-            ui.clone(),
-            CtxOptions {
+        let runner = MockRunner::new();
+        let ui = MockUi::new();
+        let ctx = MachineCtx::new_with_options(
+            &runner,
+            &ui,
+            MachineCtxOptions {
                 verbosity: 1,
-                ..CtxOptions::default()
+                ..MachineCtxOptions::default()
             },
         );
 
