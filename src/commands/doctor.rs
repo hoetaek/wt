@@ -2,6 +2,10 @@ use crate::commands::agent_hook;
 use crate::config::{AgentCli, Config, IssueProviderType, SiteProvider};
 use crate::context::Ctx;
 use crate::services::identity_locator::{self, AnchorKey, AnchorKind, Marker, MarkerLiveness};
+use crate::services::supervisor_registration::{
+    Registration, list_registrations, read_registration, registration_path, remove_registration,
+    supervisor_is_alive,
+};
 use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
 use std::fs;
@@ -50,6 +54,10 @@ pub fn run(ctx: &Ctx, profile: Option<&str>, prune_env_markers: Option<&str>) ->
     if let Err(err) = check_session_markers(ctx) {
         ctx.ui
             .print_warning(&format!("Session markers: scan failed ({err})"));
+    }
+    if let Err(err) = check_supervisors(ctx) {
+        ctx.ui
+            .print_warning(&format!("Supervisors: scan failed ({err})"));
     }
     Ok(())
 }
@@ -101,11 +109,27 @@ fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorRepo
             }
         }
     };
+    let supervisors = match scan_supervisors(ctx) {
+        Ok(scan) => scan.report,
+        Err(err) => {
+            checks.push(DoctorCheck::warning(
+                "supervisors",
+                format!("scan failed: {err}"),
+            ));
+            SupervisorReport {
+                scanned: 0,
+                alive: 0,
+                stale_cleaned: 0,
+                registrations: Vec::new(),
+            }
+        }
+    };
 
     DoctorReport {
         profile: profile.map(str::to_string),
         checks,
         session_markers,
+        supervisors,
     }
 }
 
@@ -143,6 +167,7 @@ struct DoctorReport {
     profile: Option<String>,
     checks: Vec<DoctorCheck>,
     session_markers: SessionMarkerReport,
+    supervisors: SupervisorReport,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -150,6 +175,23 @@ struct SessionMarkerReport {
     scanned: usize,
     stale_cleaned: usize,
     env_keyed_listed_for_review: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct SupervisorReport {
+    scanned: usize,
+    alive: usize,
+    stale_cleaned: usize,
+    registrations: Vec<SupervisorRegistrationReport>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct SupervisorRegistrationReport {
+    agent_id: String,
+    pid: u32,
+    status: &'static str,
+    registration_path: String,
+    log_path: String,
 }
 
 #[derive(Serialize)]
@@ -999,6 +1041,96 @@ fn check_session_markers(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+struct SupervisorScan {
+    report: SupervisorReport,
+}
+
+fn check_supervisors(ctx: &Ctx) -> Result<()> {
+    let scan = scan_supervisors(ctx)?;
+    ctx.ui.print_step(&format!(
+        "Supervisors: scanned={}, alive={}, stale_cleaned={}",
+        scan.report.scanned, scan.report.alive, scan.report.stale_cleaned
+    ));
+
+    for registration in scan.report.registrations {
+        ctx.ui.print_dim(&format!(
+            "  {}: {} pid={} registration={} log={}",
+            registration.status,
+            registration.agent_id,
+            registration.pid,
+            registration.registration_path,
+            registration.log_path
+        ));
+    }
+
+    Ok(())
+}
+
+fn scan_supervisors(ctx: &Ctx) -> Result<SupervisorScan> {
+    scan_supervisors_with(ctx, supervisor_is_alive)
+}
+
+fn scan_supervisors_with(
+    ctx: &Ctx,
+    is_alive: impl Fn(&Registration) -> Result<bool>,
+) -> Result<SupervisorScan> {
+    let registrations = list_registrations(ctx)?;
+    let scanned = registrations.len();
+    let mut alive = 0;
+    let mut stale_cleaned = 0;
+    let mut reports = Vec::new();
+
+    for registration in registrations {
+        let live = is_alive(&registration)?;
+        let status = if live {
+            alive += 1;
+            "alive"
+        } else if remove_scanned_supervisor_registration(ctx, &registration)? {
+            stale_cleaned += 1;
+            "stale_cleaned"
+        } else {
+            "stale_replaced"
+        };
+        reports.push(supervisor_registration_report(ctx, &registration, status));
+    }
+
+    Ok(SupervisorScan {
+        report: SupervisorReport {
+            scanned,
+            alive,
+            stale_cleaned,
+            registrations: reports,
+        },
+    })
+}
+
+fn remove_scanned_supervisor_registration(ctx: &Ctx, scanned: &Registration) -> Result<bool> {
+    let Some(current) = read_registration(ctx, &scanned.agent_id)? else {
+        return Ok(false);
+    };
+    if current.pid != scanned.pid || current.pid_start_time != scanned.pid_start_time {
+        return Ok(false);
+    }
+    remove_registration(ctx, &scanned.agent_id)
+}
+
+fn supervisor_registration_report(
+    ctx: &Ctx,
+    registration: &Registration,
+    status: &'static str,
+) -> SupervisorRegistrationReport {
+    SupervisorRegistrationReport {
+        agent_id: registration.agent_id.clone(),
+        pid: registration.pid,
+        status,
+        registration_path: registration_path(ctx, &registration.agent_id)
+            .display()
+            .to_string(),
+        log_path: registration.log_path.display().to_string(),
+    }
+}
+
 fn scan_session_markers(ctx: &Ctx) -> Result<SessionMarkerScan> {
     scan_session_markers_with(ctx, identity_locator::marker_is_live)
 }
@@ -1395,6 +1527,7 @@ mod tests {
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
@@ -1508,6 +1641,37 @@ mod tests {
         let path = identity_locator::marker_path(ctx, &key);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "not = [valid").unwrap();
+        path
+    }
+
+    fn supervisor_fixture(ctx: &Ctx, agent_id: &str, pid: u32) -> Registration {
+        Registration {
+            agent_id: agent_id.into(),
+            pid,
+            pid_start_time: "100.000000000".into(),
+            started_at: "2026-05-22T00:00:00Z".into(),
+            started_by: "agents/owner".into(),
+            cleanup_on_session_end: true,
+            target_surface_id: Some("surface:72".into()),
+            target_agent_kind: Some("codex".into()),
+            stale_threshold_secs: 900,
+            poll_interval_secs: 60,
+            log_path: ctx
+                .storage_root
+                .personal_root()
+                .join("supervisors")
+                .join(format!(
+                    "{}.log",
+                    crate::services::identity_locator::percent_encode(agent_id)
+                )),
+        }
+    }
+
+    fn write_supervisor_fixture(ctx: &Ctx, registration: &Registration) -> PathBuf {
+        let path = registration_path(ctx, &registration.agent_id);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&registration.log_path, "log stays\n").unwrap();
+        fs::write(&path, toml::to_string_pretty(registration).unwrap()).unwrap();
         path
     }
 
@@ -1831,6 +1995,121 @@ mod tests {
         assert_eq!(value["session_markers"]["scanned"], 0);
         assert_eq!(value["session_markers"]["stale_cleaned"], 0);
         assert_eq!(value["session_markers"]["env_keyed_listed_for_review"], 0);
+    }
+
+    #[test]
+    fn supervisor_scan_cleans_stale_registration_and_keeps_log() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        let registration = supervisor_fixture(&ctx, "agents/stale", 999_999);
+        let path = write_supervisor_fixture(&ctx, &registration);
+        let log_path = registration.log_path.clone();
+
+        let scan = scan_supervisors_with(&ctx, |_| Ok(false)).unwrap();
+
+        assert_eq!(scan.report.scanned, 1);
+        assert_eq!(scan.report.alive, 0);
+        assert_eq!(scan.report.stale_cleaned, 1);
+        assert_eq!(scan.report.registrations[0].status, "stale_cleaned");
+        assert!(!path.exists());
+        assert!(log_path.exists());
+    }
+
+    #[test]
+    fn supervisor_scan_preserves_live_registration() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        let registration = supervisor_fixture(&ctx, "agents/live", 42);
+        let path = write_supervisor_fixture(&ctx, &registration);
+
+        let scan = scan_supervisors_with(&ctx, |_| Ok(true)).unwrap();
+
+        assert_eq!(scan.report.scanned, 1);
+        assert_eq!(scan.report.alive, 1);
+        assert_eq!(scan.report.stale_cleaned, 0);
+        assert_eq!(scan.report.registrations[0].status, "alive");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn supervisor_scan_does_not_delete_replaced_registration() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        let old = supervisor_fixture(&ctx, "agents/replaced", 42);
+        let mut replacement = supervisor_fixture(&ctx, "agents/replaced", 77);
+        replacement.pid_start_time = "200.000000000".into();
+        let path = write_supervisor_fixture(&ctx, &old);
+
+        let scan = scan_supervisors_with(&ctx, |_| {
+            write_supervisor_fixture(&ctx, &replacement);
+            Ok(false)
+        })
+        .unwrap();
+
+        assert_eq!(scan.report.scanned, 1);
+        assert_eq!(scan.report.stale_cleaned, 0);
+        assert_eq!(scan.report.registrations[0].status, "stale_replaced");
+        assert!(path.exists());
+        let current = read_registration(&ctx, "agents/replaced").unwrap().unwrap();
+        assert_eq!(current.pid, 77);
+        assert_eq!(current.pid_start_time, "200.000000000");
+    }
+
+    #[test]
+    fn doctor_json_report_includes_supervisors() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Json, RecordingUi::new());
+        let registration = supervisor_fixture(&ctx, "agents/stale", 999_999);
+        write_supervisor_fixture(&ctx, &registration);
+
+        let report = build_report(&ctx, &ctx.config, None);
+        let value = serde_json::to_value(&report).unwrap();
+
+        assert_eq!(value["supervisors"]["scanned"], 1);
+        assert_eq!(value["supervisors"]["alive"], 0);
+        assert_eq!(value["supervisors"]["stale_cleaned"], 1);
+        assert_eq!(
+            value["supervisors"]["registrations"][0]["agent_id"],
+            "agents/stale"
+        );
+    }
+
+    #[test]
+    fn doctor_text_output_reports_supervisor_counts() {
+        let temp = TempDir::new().unwrap();
+        let ui = RecordingUi::new();
+        let steps = Arc::clone(&ui.steps);
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, ui);
+        let registration = supervisor_fixture(&ctx, "agents/stale", 999_999);
+        write_supervisor_fixture(&ctx, &registration);
+
+        run(&ctx, None, None).unwrap();
+
+        let steps = steps.lock().unwrap().join("\n");
+        assert!(steps.contains("Supervisors: scanned=1, alive=0, stale_cleaned=1"));
+    }
+
+    #[test]
+    fn supervisor_scan_reports_real_process_alive_then_stale_after_exit() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        let mut child = Command::new("sleep").arg("5").spawn().unwrap();
+        let mut registration = supervisor_fixture(&ctx, "agents/smoke", child.id());
+        registration.pid_start_time =
+            crate::services::identity_locator::process_start_time(child.id() as i32).unwrap();
+        let path = write_supervisor_fixture(&ctx, &registration);
+
+        let live = scan_supervisors(&ctx).unwrap();
+        assert_eq!(live.report.alive, 1);
+        assert!(path.exists());
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        let stale = scan_supervisors(&ctx).unwrap();
+        assert_eq!(stale.report.stale_cleaned, 1);
+        assert!(!path.exists());
+        assert!(registration.log_path.exists());
     }
 
     #[test]

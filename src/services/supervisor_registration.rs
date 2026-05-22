@@ -126,12 +126,9 @@ pub fn list_registrations(ctx: &Ctx) -> Result<Vec<Registration>> {
 pub fn supervisor_is_alive(registration: &Registration) -> Result<bool> {
     let pid = Pid::from_raw(registration.pid as i32);
     match signal::kill(pid, None) {
-        Ok(()) => match process_start_time(registration.pid as i32) {
-            Ok(start_time) => Ok(start_time == registration.pid_start_time),
-            Err(_) => Ok(false),
-        },
+        Ok(()) => pid_start_time_matches(registration),
         Err(Errno::ESRCH) => Ok(false),
-        Err(Errno::EPERM) => Ok(true),
+        Err(Errno::EPERM) => pid_start_time_matches(registration),
         Err(err) => Err(err).with_context(|| {
             format!(
                 "Failed to check supervisor PID {} for {}",
@@ -139,6 +136,34 @@ pub fn supervisor_is_alive(registration: &Registration) -> Result<bool> {
             )
         }),
     }
+}
+
+fn pid_start_time_matches(registration: &Registration) -> Result<bool> {
+    match process_start_time(registration.pid as i32) {
+        Ok(start_time) => Ok(start_time == registration.pid_start_time),
+        Err(err) => {
+            let pid = Pid::from_raw(registration.pid as i32);
+            if is_missing_process_start_time_error(&err)
+                || matches!(signal::kill(pid, None), Err(Errno::ESRCH))
+            {
+                Ok(false)
+            } else {
+                Err(err).with_context(|| {
+                    format!(
+                        "Failed to read supervisor PID {} start time for {}",
+                        registration.pid, registration.agent_id
+                    )
+                })
+            }
+        }
+    }
+}
+
+fn is_missing_process_start_time_error(err: &anyhow::Error) -> bool {
+    let message = err.to_string();
+    message.contains("proc_pidinfo returned 0")
+        || message.contains("No such file or directory")
+        || message.contains("os error 2")
 }
 
 fn read_registration_file(path: PathBuf) -> Result<Option<Registration>> {

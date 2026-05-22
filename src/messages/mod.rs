@@ -791,15 +791,23 @@ impl MessageStore {
     }
 
     pub fn list_new(&self, agent: &str) -> Result<Vec<MessageInspectionRecord>> {
+        self.list_state(agent, MessageDeliveryState::New)
+    }
+
+    pub fn list_retry(&self, agent: &str) -> Result<Vec<MessageInspectionRecord>> {
+        self.list_state(agent, MessageDeliveryState::Retry)
+    }
+
+    fn list_state(
+        &self,
+        agent: &str,
+        state: MessageDeliveryState,
+    ) -> Result<Vec<MessageInspectionRecord>> {
         let agent = AgentId::parse(agent)?;
-        let new_dir = agent.inbox_state_dir(&self.root, MessageDeliveryState::New);
+        let state_dir = agent.inbox_state_dir(&self.root, state);
         let mut records = Vec::new();
-        for path in message_paths(&new_dir)? {
-            records.push(inspect_message_record(
-                &agent,
-                MessageDeliveryState::New,
-                &path,
-            ));
+        for path in message_paths(&state_dir)? {
+            records.push(inspect_message_record(&agent, state, &path));
         }
         records.sort_by(|left, right| {
             let left_created = left
@@ -826,20 +834,42 @@ impl MessageStore {
         claimed_by: &str,
         lease: MessageLease,
     ) -> Result<Option<ClaimedMessage>> {
+        self.claim_state_path(agent, MessageDeliveryState::New, path, claimed_by, lease)
+    }
+
+    pub fn claim_retry_path(
+        &self,
+        agent: &str,
+        path: &Path,
+        claimed_by: &str,
+        lease: MessageLease,
+    ) -> Result<Option<ClaimedMessage>> {
+        self.claim_state_path(agent, MessageDeliveryState::Retry, path, claimed_by, lease)
+    }
+
+    fn claim_state_path(
+        &self,
+        agent: &str,
+        state: MessageDeliveryState,
+        path: &Path,
+        claimed_by: &str,
+        lease: MessageLease,
+    ) -> Result<Option<ClaimedMessage>> {
         let agent = AgentId::parse(agent)?;
-        self.ensure_state_path(&agent, MessageDeliveryState::New, path)?;
+        self.ensure_state_path(&agent, state, path)?;
         let claimed_by =
             AgentId::parse(claimed_by).context("Invalid delivery claimant agent id")?;
         let Some(message) = read_inbox_candidate_for_agent(&agent, path)? else {
             return Ok(None);
         };
-        if message.delivery.state != MessageDeliveryState::New {
+        if message.delivery.state != state {
             self.poison_message(
                 &agent,
                 path,
                 &format!(
-                    "Message {} is in inbox/new but delivery.state is `{}`",
+                    "Message {} is in inbox/{} but delivery.state is `{}`",
                     path.display(),
+                    state.directory_name(),
                     message.delivery.state
                 ),
             )?;
@@ -853,18 +883,36 @@ impl MessageStore {
         agent: &str,
         path: &Path,
     ) -> Result<Option<DeliveredMessage>> {
+        self.deliver_state_without_claim(agent, MessageDeliveryState::New, path)
+    }
+
+    pub fn deliver_retry_without_claim(
+        &self,
+        agent: &str,
+        path: &Path,
+    ) -> Result<Option<DeliveredMessage>> {
+        self.deliver_state_without_claim(agent, MessageDeliveryState::Retry, path)
+    }
+
+    fn deliver_state_without_claim(
+        &self,
+        agent: &str,
+        state: MessageDeliveryState,
+        path: &Path,
+    ) -> Result<Option<DeliveredMessage>> {
         let agent = AgentId::parse(agent)?;
-        self.ensure_state_path(&agent, MessageDeliveryState::New, path)?;
+        self.ensure_state_path(&agent, state, path)?;
         let Some(mut message) = read_inbox_candidate_for_agent(&agent, path)? else {
             return Ok(None);
         };
-        if message.delivery.state != MessageDeliveryState::New {
+        if message.delivery.state != state {
             self.poison_message(
                 &agent,
                 path,
                 &format!(
-                    "Message {} is in inbox/new but delivery.state is `{}`",
+                    "Message {} is in inbox/{} but delivery.state is `{}`",
                     path.display(),
+                    state.directory_name(),
                     message.delivery.state
                 ),
             )?;
@@ -897,8 +945,27 @@ impl MessageStore {
         path: &Path,
         error: &str,
     ) -> Result<Option<FailedMessage>> {
+        self.fail_state_path(agent, MessageDeliveryState::New, path, error)
+    }
+
+    pub fn fail_retry_path(
+        &self,
+        agent: &str,
+        path: &Path,
+        error: &str,
+    ) -> Result<Option<FailedMessage>> {
+        self.fail_state_path(agent, MessageDeliveryState::Retry, path, error)
+    }
+
+    fn fail_state_path(
+        &self,
+        agent: &str,
+        state: MessageDeliveryState,
+        path: &Path,
+        error: &str,
+    ) -> Result<Option<FailedMessage>> {
         let agent = AgentId::parse(agent)?;
-        self.ensure_state_path(&agent, MessageDeliveryState::New, path)?;
+        self.ensure_state_path(&agent, state, path)?;
         self.poison_message(&agent, path, error)
     }
 

@@ -1,5 +1,6 @@
 use crate::context::Ctx;
 use crate::messages::{AgentId, Message, MessageLease, MessageStore};
+use crate::messages::{MessageDeliveryState, MessageInspectionRecord};
 use crate::services::cmux_push::{CmuxPushService, DEFAULT_PAYLOAD_CAP_BYTES, PushKind};
 use crate::services::identity_locator::percent_encode;
 use crate::services::identity_locator::process_start_time;
@@ -191,6 +192,9 @@ pub fn stop(ctx: &Ctx, options: StopOptions) -> Result<()> {
         {
             continue;
         }
+        if owner.is_some() && !registration.cleanup_on_session_end {
+            continue;
+        }
         stop_registration(ctx, &registration)?;
         stopped += 1;
         if !ctx.quiet {
@@ -243,24 +247,19 @@ pub fn status(ctx: &Ctx, agent_id: Option<&str>) -> Result<()> {
 
 pub fn logs(ctx: &Ctx, agent_id: &str, options: LogsOptions) -> Result<()> {
     let agent_id = normalize_agent_id(agent_id)?;
-    let registration = read_registration(ctx, agent_id.as_str())?
-        .ok_or_else(|| anyhow!("No supervisor registration found for {}", agent_id.as_str()))?;
+    let log_path = read_registration(ctx, agent_id.as_str())?
+        .map(|registration| registration.log_path)
+        .unwrap_or_else(|| {
+            crate::services::supervisor_registration::log_path(ctx, agent_id.as_str())
+        });
     if options.follow {
-        follow_log(&registration.log_path)
+        follow_log(&log_path)
     } else {
-        let mut file = File::open(&registration.log_path).with_context(|| {
-            format!(
-                "Failed to open supervisor log {}",
-                registration.log_path.display()
-            )
-        })?;
+        let mut file = File::open(&log_path)
+            .with_context(|| format!("Failed to open supervisor log {}", log_path.display()))?;
         let mut content = String::new();
-        file.read_to_string(&mut content).with_context(|| {
-            format!(
-                "Failed to read supervisor log {}",
-                registration.log_path.display()
-            )
-        })?;
+        file.read_to_string(&mut content)
+            .with_context(|| format!("Failed to read supervisor log {}", log_path.display()))?;
         print!("{content}");
         Ok(())
     }
@@ -382,7 +381,24 @@ fn run_one_cycle(
 ) -> Result<()> {
     state.cycles_since_start = state.cycles_since_start.saturating_add(1);
     let store = MessageStore::new(ctx.storage_root.messages_dir());
-    let candidates = store.list_new(agent_id)?;
+    store.reclaim_expired_leases(agent_id, SystemTime::now())?;
+    let mut candidates = store.list_new(agent_id)?;
+    candidates.extend(store.list_retry(agent_id)?);
+    candidates.sort_by(|left, right| {
+        let left_created = left
+            .message
+            .as_ref()
+            .map(|message| message.meta.created_at.as_str())
+            .unwrap_or_default();
+        let right_created = right
+            .message
+            .as_ref()
+            .map(|message| message.meta.created_at.as_str())
+            .unwrap_or_default();
+        left_created
+            .cmp(right_created)
+            .then_with(|| left.path.cmp(&right.path))
+    });
     if candidates.is_empty() {
         return Ok(());
     }
@@ -392,8 +408,7 @@ fn run_one_cycle(
     for record in candidates {
         if !record.is_valid() {
             let error = record.error.as_deref().unwrap_or("invalid message");
-            if store
-                .fail_new_path(agent_id, &record.path, error)
+            if fail_candidate_path(&store, agent_id, &record, error)
                 .with_context(|| format!("Failed to quarantine invalid message {}", record.id))?
                 .is_some()
             {
@@ -409,8 +424,7 @@ fn run_one_cycle(
             continue;
         }
         let Some(message) = record.message.as_ref() else {
-            if store
-                .fail_new_path(agent_id, &record.path, "missing message payload")
+            if fail_candidate_path(&store, agent_id, &record, "missing message payload")
                 .with_context(|| format!("Failed to quarantine invalid message {}", record.id))?
                 .is_some()
             {
@@ -428,8 +442,7 @@ fn run_one_cycle(
                     "invalid meta.created_at `{}`: {err:#}",
                     message.meta.created_at
                 );
-                if store
-                    .fail_new_path(agent_id, &record.path, &error)
+                if fail_candidate_path(&store, agent_id, &record, &error)
                     .with_context(|| {
                         format!("Failed to quarantine invalid message {}", message.meta.id)
                     })?
@@ -475,8 +488,7 @@ fn run_one_cycle(
         processed_this_cycle += 1;
 
         if has_terminal_marker(message) {
-            if store
-                .deliver_new_without_claim(agent_id, &record.path)
+            if deliver_candidate_without_claim(&store, agent_id, &record)
                 .with_context(|| format!("Failed to deliver terminal message {}", message.meta.id))?
                 .is_some()
             {
@@ -498,7 +510,7 @@ fn run_one_cycle(
 
         let lease = MessageLease::new(Duration::from_secs(CLAIM_LEASE_SECS))?;
         let Some(claimed) =
-            store.claim_new_path(agent_id, &record.path, "agents/supervisor", lease)?
+            claim_candidate_path(&store, agent_id, &record, "agents/supervisor", lease)?
         else {
             continue;
         };
@@ -584,6 +596,61 @@ fn run_one_cycle(
         }
     }
     Ok(())
+}
+
+fn claim_candidate_path(
+    store: &MessageStore,
+    agent_id: &str,
+    record: &MessageInspectionRecord,
+    claimed_by: &str,
+    lease: MessageLease,
+) -> Result<Option<crate::messages::ClaimedMessage>> {
+    match record.state {
+        MessageDeliveryState::New => {
+            store.claim_new_path(agent_id, &record.path, claimed_by, lease)
+        }
+        MessageDeliveryState::Retry => {
+            store.claim_retry_path(agent_id, &record.path, claimed_by, lease)
+        }
+        other => bail!(
+            "Supervisor cannot claim message {} from inbox/{}",
+            record.path.display(),
+            other.as_str()
+        ),
+    }
+}
+
+fn deliver_candidate_without_claim(
+    store: &MessageStore,
+    agent_id: &str,
+    record: &MessageInspectionRecord,
+) -> Result<Option<crate::messages::DeliveredMessage>> {
+    match record.state {
+        MessageDeliveryState::New => store.deliver_new_without_claim(agent_id, &record.path),
+        MessageDeliveryState::Retry => store.deliver_retry_without_claim(agent_id, &record.path),
+        other => bail!(
+            "Supervisor cannot deliver message {} from inbox/{}",
+            record.path.display(),
+            other.as_str()
+        ),
+    }
+}
+
+fn fail_candidate_path(
+    store: &MessageStore,
+    agent_id: &str,
+    record: &MessageInspectionRecord,
+    error: &str,
+) -> Result<Option<crate::messages::FailedMessage>> {
+    match record.state {
+        MessageDeliveryState::New => store.fail_new_path(agent_id, &record.path, error),
+        MessageDeliveryState::Retry => store.fail_retry_path(agent_id, &record.path, error),
+        other => bail!(
+            "Supervisor cannot fail message {} from inbox/{}",
+            record.path.display(),
+            other.as_str()
+        ),
+    }
 }
 
 fn wait_for_next_cycle(
@@ -1382,6 +1449,81 @@ mod tests {
     }
 
     #[test]
+    fn retry_message_is_pushed_and_delivered_on_later_cycle() {
+        let dir = TempDir::new().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response(r#"{"surfaces":[]}"#, true);
+        runner.add_response_with_stderr(
+            "",
+            "Failed to write to socket (Broken pipe, errno 32)",
+            false,
+        );
+        runner.add_response(r#"{"surfaces":[]}"#, true);
+        runner.add_response("", true);
+        let ctx = test_ctx_with_runner(&dir, runner);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "retry later")
+            .unwrap();
+        rewrite_message_created_at(&sent.path, "1970-01-01T00:00:01Z");
+        let mut config = loop_config(&ctx, 900, 10);
+        config.fallback_kind = PushKind::Claude;
+        let mut state = SupervisorLoopState::default();
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "retry")).len(),
+            1
+        );
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "retry")).len(),
+            0
+        );
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "delivered")).len(),
+            1
+        );
+        assert_eq!(state.pushes_total, 1);
+    }
+
+    #[test]
+    fn expired_claim_is_reclaimed_and_processed() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(&dir);
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let sent = store
+            .send_from("agents/claude", "agents/codex", "[done] after lease")
+            .unwrap();
+        rewrite_message_created_at(&sent.path, "1970-01-01T00:00:01Z");
+        let lease = MessageLease::new(Duration::from_secs(CLAIM_LEASE_SECS)).unwrap();
+        let claimed = store
+            .claim_new_path("agents/codex", &sent.path, "agents/supervisor", lease)
+            .unwrap()
+            .unwrap();
+        rewrite_message_lease_expires_at(&claimed.claimed_path, "1970-01-01T00:00:02Z");
+        let config = loop_config(&ctx, 900, 10);
+        let mut state = SupervisorLoopState::default();
+
+        run_one_cycle(&ctx, "agents/codex", &config, &mut state).unwrap();
+
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "claimed")).len(),
+            0
+        );
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "retry")).len(),
+            0
+        );
+        assert_eq!(
+            toml_files(&inbox_state_dir(&ctx, "codex", "delivered")).len(),
+            1
+        );
+    }
+
+    #[test]
     fn push_failure_after_max_attempts_moves_to_failed() {
         let dir = TempDir::new().unwrap();
         let mut runner = MockRunner::new();
@@ -1506,6 +1648,13 @@ mod tests {
         let content = fs::read_to_string(path).unwrap();
         let mut value: toml::Value = toml::from_str(&content).unwrap();
         value["delivery"]["attempts"] = toml::Value::Integer(i64::from(attempts));
+        fs::write(path, toml::to_string_pretty(&value).unwrap()).unwrap();
+    }
+
+    fn rewrite_message_lease_expires_at(path: &Path, lease_expires_at: &str) {
+        let content = fs::read_to_string(path).unwrap();
+        let mut value: toml::Value = toml::from_str(&content).unwrap();
+        value["delivery"]["lease_expires_at"] = toml::Value::String(lease_expires_at.into());
         fs::write(path, toml::to_string_pretty(&value).unwrap()).unwrap();
     }
 

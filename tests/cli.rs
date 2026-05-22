@@ -26,6 +26,7 @@ const GIT_LOCAL_ENV_KEYS: &[&str] = &[
 ];
 
 const CLAUDE_INBOX_HOOK_COMMAND: &str = "wt msg check-inbox --silent # wt-agent-hook:claude-inbox";
+const CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND: &str = "if [ -n \"${WT_AGENT_ID:-}\" ]; then wt agent supervisor stop --owned-by \"$WT_AGENT_ID\"; fi # wt-agent-hook:claude-supervisor-session-end";
 const CODEX_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 const MANAGED_INBOX_HOOK_EVENTS: &[(&str, &str)] = &[
     ("UserPromptSubmit", "user_prompt_submit"),
@@ -312,6 +313,27 @@ fn write_supervisor_registration(
     stale_threshold_secs: u64,
     poll_interval_secs: u64,
 ) -> PathBuf {
+    write_supervisor_registration_with_cleanup(
+        root,
+        agent_id,
+        pid,
+        started_by,
+        started_by.starts_with("agents/"),
+        stale_threshold_secs,
+        poll_interval_secs,
+    )
+}
+
+#[cfg(unix)]
+fn write_supervisor_registration_with_cleanup(
+    root: &Path,
+    agent_id: &str,
+    pid: u32,
+    started_by: &str,
+    cleanup_on_session_end: bool,
+    stale_threshold_secs: u64,
+    poll_interval_secs: u64,
+) -> PathBuf {
     let dir = root.join(".git/wt/supervisors");
     std::fs::create_dir_all(&dir).unwrap();
     let encoded = percent_encode(agent_id);
@@ -326,7 +348,7 @@ pid = {pid}
 pid_start_time = "{pid_start_time}"
 started_at = "2026-05-22T00:00:00Z"
 started_by = "{started_by}"
-cleanup_on_session_end = false
+cleanup_on_session_end = {cleanup_on_session_end}
 stale_threshold_secs = {stale_threshold_secs}
 poll_interval_secs = {poll_interval_secs}
 log_path = "{}"
@@ -3453,6 +3475,11 @@ fn setup_installs_detected_claude_and_codex_hooks() {
                 .any(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
         );
     }
+    assert!(
+        claude_event_commands(&settings, "SessionEnd")
+            .iter()
+            .any(|command| command == CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND)
+    );
     assert!(!temp.path().join(".claude/settings.local.json").exists());
 
     let hooks = json_file(&codex_home.join("hooks.json"));
@@ -3559,6 +3586,7 @@ trusted_hash = "sha256:cmux"
             .any(|command| command == "echo user-claude-hook")
     );
     assert!(claude_managed_inbox_commands(&settings).is_empty());
+    assert!(claude_event_commands(&settings, "SessionEnd").is_empty());
 
     let hooks = json_file(&codex_home.join("hooks.json"));
     assert!(
@@ -3612,6 +3640,13 @@ fn setup_and_remove_are_idempotent() {
             1
         );
     }
+    assert_eq!(
+        claude_event_commands(&settings, "SessionEnd")
+            .iter()
+            .filter(|command| command.as_str() == CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND)
+            .count(),
+        1
+    );
     let hooks = json_file(&codex_home.join("hooks.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
         let commands = codex_event_commands(&hooks, event_name);
@@ -5421,16 +5456,55 @@ fn supervisor_status_json_includes_timing_fields() {
 
 #[cfg(unix)]
 #[test]
+fn supervisor_logs_reads_preserved_log_after_registration_cleanup() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let mut child = spawn_sleeping_child();
+    let registration_path =
+        write_supervisor_registration(temp.path(), "agents/codex", child.id(), "user", 300, 30);
+    let log_path = registration_path.with_extension("log");
+    std::fs::write(&log_path, "post-mortem log\n").unwrap();
+    std::fs::remove_file(&registration_path).unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "agent",
+            "supervisor",
+            "logs",
+            "agents/codex",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("post-mortem log"));
+
+    child.kill().unwrap();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+#[test]
 fn supervisor_stop_owned_by_filters_started_by() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     let mut owned = spawn_sleeping_child();
+    let mut cleanup_disabled = spawn_sleeping_child();
     let mut other = spawn_sleeping_child();
     write_supervisor_registration(
         temp.path(),
         "agents/owned",
         owned.id(),
         "agents/foo",
+        900,
+        60,
+    );
+    write_supervisor_registration_with_cleanup(
+        temp.path(),
+        "agents/cleanup-disabled",
+        cleanup_disabled.id(),
+        "agents/foo",
+        false,
         900,
         60,
     );
@@ -5465,9 +5539,16 @@ fn supervisor_stop_owned_by_filters_started_by() {
     );
     assert!(
         temp.path()
+            .join(".git/wt/supervisors/agents%2Fcleanup-disabled.toml")
+            .exists()
+    );
+    assert!(
+        temp.path()
             .join(".git/wt/supervisors/agents%2Fother.toml")
             .exists()
     );
+    cleanup_disabled.kill().unwrap();
+    let _ = cleanup_disabled.wait();
     other.kill().unwrap();
     let _ = other.wait();
 }
