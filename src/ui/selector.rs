@@ -11,6 +11,8 @@ use std::io::{self, Write};
 pub(crate) const DEFAULT_VISIBLE_ROWS: usize = 10;
 
 const PROMPT_START: &str = "◆";
+const PROMPT_SUBMIT: &str = "◇";
+const PROMPT_CANCEL: &str = "■";
 const BAR: &str = "│";
 const FOOTER: &str = "└";
 const CURSOR_ACTIVE: &str = "❯";
@@ -580,24 +582,62 @@ impl SelectorRenderOptions {
 }
 
 pub(crate) fn render_selector(state: &SelectorState, options: &SelectorRenderOptions) -> String {
-    let window = state.visible_window();
-    let hint_label_width = hint_label_width(state, &window);
+    render_selector_frame(state, options, SelectorRenderFrame::Active)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectorRenderFrame {
+    Active,
+    Submitted,
+    Cancelled,
+}
+
+fn render_selector_frame(
+    state: &SelectorState,
+    options: &SelectorRenderOptions,
+    frame: SelectorRenderFrame,
+) -> String {
     let mut lines = Vec::new();
 
+    let (prompt_symbol, prompt_style) = match frame {
+        SelectorRenderFrame::Active => (PROMPT_START, accent_style()),
+        SelectorRenderFrame::Submitted => (PROMPT_SUBMIT, selected_style()),
+        SelectorRenderFrame::Cancelled => (PROMPT_CANCEL, cancel_style()),
+    };
     lines.push(format!(
         "{} {}",
-        styled(PROMPT_START, accent_style(), options.decorated),
+        styled(prompt_symbol, prompt_style, options.decorated),
         options.prompt
     ));
-    if state.query().is_empty() && !window.has_hidden_context {
-        lines.push(styled(BAR, bar_style(), options.decorated));
-    } else if !state.query().is_empty() {
-        lines.push(format!(
-            "{} Filter: {}",
-            styled(BAR, bar_style(), options.decorated),
-            state.query()
-        ));
+
+    match frame {
+        SelectorRenderFrame::Submitted => {
+            lines.push(format!(
+                "{} Submitted",
+                styled(FOOTER, bar_style(), options.decorated)
+            ));
+            return format!("{}\n", lines.join("\n"));
+        }
+        SelectorRenderFrame::Cancelled => {
+            lines.push(format!(
+                "{} Cancelled",
+                styled(FOOTER, bar_style(), options.decorated)
+            ));
+            return format!("{}\n", lines.join("\n"));
+        }
+        SelectorRenderFrame::Active => {}
     }
+
+    let window = state.visible_window();
+    let hint_label_width = hint_label_width(state, &window);
+
+    lines.push(render_filter_line(state.query(), options.decorated));
+    lines.push(format!(
+        "{} {}",
+        styled(BAR, bar_style(), options.decorated),
+        styled(key_hint(state.mode), hint_style(), options.decorated)
+    ));
+    lines.push(styled(BAR, bar_style(), options.decorated));
 
     if window.hidden_before > 0 {
         lines.push(format!(
@@ -605,8 +645,6 @@ pub(crate) fn render_selector(state: &SelectorState, options: &SelectorRenderOpt
             styled(BAR, bar_style(), options.decorated),
             window.hidden_before
         ));
-    } else if window.has_hidden_context {
-        lines.push(styled(BAR, bar_style(), options.decorated));
     }
 
     let mut body_rows = 0;
@@ -722,8 +760,20 @@ impl<'a, W: Write> CrosstermSelectorTerminal<'a, W> {
                 SelectorTransition::Continue => {
                     self.draw(&render_selector(state, render_options))?
                 }
-                SelectorTransition::Submitted(submission) => return Ok(submission),
+                SelectorTransition::Submitted(submission) => {
+                    self.draw(&render_selector_frame(
+                        state,
+                        render_options,
+                        SelectorRenderFrame::Submitted,
+                    ))?;
+                    return Ok(submission);
+                }
                 SelectorTransition::Cancelled => {
+                    self.draw(&render_selector_frame(
+                        state,
+                        render_options,
+                        SelectorRenderFrame::Cancelled,
+                    ))?;
                     return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
                 }
             }
@@ -740,8 +790,34 @@ impl<'a, W: Write> CrosstermSelectorTerminal<'a, W> {
         }
         write!(self.writer, "{}", raw_terminal_output(rendered))?;
         self.writer.flush()?;
-        self.rendered_lines = rendered.lines().count().try_into().unwrap_or(u16::MAX);
+        self.rendered_lines = rendered_visual_rows(rendered, terminal_columns());
         Ok(())
+    }
+}
+
+fn terminal_columns() -> u16 {
+    terminal::size()
+        .map(|(columns, _)| columns)
+        .unwrap_or(80)
+        .max(1)
+}
+
+fn rendered_visual_rows(rendered: &str, columns: u16) -> u16 {
+    let columns = usize::from(columns.max(1));
+    let rows = rendered
+        .lines()
+        .map(|line| visual_rows_for_line(line, columns))
+        .sum::<usize>();
+    rows.try_into().unwrap_or(u16::MAX)
+}
+
+fn visual_rows_for_line(line: &str, columns: usize) -> usize {
+    let plain = console::strip_ansi_codes(line);
+    let width = measure_text_width(plain.as_ref());
+    if width == 0 {
+        1
+    } else {
+        ((width - 1) / columns) + 1
     }
 }
 
@@ -764,8 +840,25 @@ impl Drop for RawModeGuard {
     }
 }
 
+fn render_filter_line(query: &str, decorated: bool) -> String {
+    let value = if query.is_empty() {
+        styled("type to search", hint_style(), decorated)
+    } else {
+        query.to_string()
+    };
+    format!("{} Filter: {}", styled(BAR, bar_style(), decorated), value)
+}
+
+fn key_hint(mode: SelectorMode) -> &'static str {
+    match mode {
+        SelectorMode::Single => "↑↓ move, enter select, esc cancel",
+        SelectorMode::Multi => "↑↓ move, space toggle, enter submit, esc cancel",
+    }
+}
+
 fn render_section(section: &SelectorSection, decorated: bool) -> String {
-    let title = styled(&section.title, section_style(), decorated);
+    let title = sanitize_selector_text(&section.title);
+    let title = styled(&title, section_style(), decorated);
     let hint = metadata_text(section.hint.as_deref(), false);
     let hint = if hint.is_empty() {
         String::new()
@@ -801,8 +894,9 @@ fn render_option(
     } else {
         styled(RADIO_UNSELECTED, inactive_style(), decorated)
     };
+    let label_text = sanitize_selector_text(&option.label);
     let label = styled(
-        &option.label,
+        &label_text,
         option_label_style(active, selected, option.disabled),
         decorated,
     );
@@ -810,7 +904,7 @@ fn render_option(
     let hint = if metadata.is_empty() {
         String::new()
     } else {
-        let label_width = measure_text_width(&option.label);
+        let label_width = measure_text_width(&label_text);
         let padding = hint_label_width
             .map(|width| width.saturating_sub(label_width))
             .unwrap_or_default()
@@ -840,7 +934,7 @@ fn hint_label_width(state: &SelectorState, window: &SelectorWindow) -> Option<us
             SelectorRow::Option(option)
                 if !metadata_text(option.hint.as_deref(), option.disabled).is_empty() =>
             {
-                Some(measure_text_width(&option.label))
+                Some(measure_text_width(&sanitize_selector_text(&option.label)))
             }
             _ => None,
         })
@@ -857,7 +951,8 @@ fn selected_summary(state: &SelectorState, options: &SelectorRenderOptions) -> O
         .iter()
         .filter_map(|row| match row {
             SelectorRow::Option(option) if option.selected && !option.disabled => {
-                Some(option.label.clone())
+                let label = sanitize_selector_text(&option.label);
+                (!label.is_empty()).then_some(label)
             }
             _ => None,
         })
@@ -895,15 +990,130 @@ fn option_label_style(active: bool, selected: bool, disabled: bool) -> Style {
 fn metadata_text(hint: Option<&str>, disabled: bool) -> String {
     let mut parts = hint
         .into_iter()
-        .flat_map(|hint| hint.split('|'))
-        .map(str::trim)
+        .map(sanitize_selector_text)
+        .flat_map(|hint| {
+            hint.split('|')
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+                .into_iter()
+        })
+        .map(|part| part.trim().to_string())
         .filter(|part| !part.is_empty())
-        .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
     if disabled {
         parts.push("disabled".into());
     }
     parts.join(" · ")
+}
+
+fn sanitize_selector_text(value: &str) -> String {
+    collapse_selector_whitespace(&strip_terminal_sequences(value))
+}
+
+fn strip_terminal_sequences(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\x1b' => skip_escape_sequence(&mut chars),
+            '\u{0080}'..='\u{009f}' => {}
+            ch if is_unsafe_control(ch) => {}
+            ch => output.push(ch),
+        }
+    }
+
+    output
+}
+
+fn skip_escape_sequence<I>(chars: &mut std::iter::Peekable<I>)
+where
+    I: Iterator<Item = char>,
+{
+    match chars.peek().copied() {
+        Some('[') => {
+            chars.next();
+            skip_csi_sequence(chars);
+        }
+        Some(']') => {
+            chars.next();
+            skip_control_string(chars);
+        }
+        Some('P' | 'X' | '^' | '_') => {
+            chars.next();
+            skip_control_string(chars);
+        }
+        Some(ch) if is_ascii_escape_byte(ch) => {
+            chars.next();
+        }
+        _ => {}
+    }
+}
+
+fn skip_csi_sequence<I>(chars: &mut std::iter::Peekable<I>)
+where
+    I: Iterator<Item = char>,
+{
+    for ch in chars.by_ref() {
+        if is_csi_final_byte(ch) {
+            break;
+        }
+    }
+}
+
+fn skip_control_string<I>(chars: &mut std::iter::Peekable<I>)
+where
+    I: Iterator<Item = char>,
+{
+    while let Some(ch) = chars.next() {
+        if ch == '\x07' {
+            break;
+        }
+        if ch == '\x1b' && chars.peek() == Some(&'\\') {
+            chars.next();
+            break;
+        }
+    }
+}
+
+fn is_ascii_escape_byte(ch: char) -> bool {
+    ('\u{0020}'..='\u{007e}').contains(&ch)
+}
+
+fn is_csi_final_byte(ch: char) -> bool {
+    ('\u{0040}'..='\u{007e}').contains(&ch)
+}
+
+fn is_unsafe_control(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{0000}'..='\u{0008}'
+            | '\u{000b}'
+            | '\u{000c}'
+            | '\u{000d}'..='\u{001a}'
+            | '\u{001c}'..='\u{001f}'
+            | '\u{007f}'
+    )
+}
+
+fn collapse_selector_whitespace(value: &str) -> String {
+    let mut collapsed = String::with_capacity(value.len());
+    let mut pending_space = false;
+
+    for ch in value.chars() {
+        if ch == '\t' || ch == '\n' || ch == '\r' {
+            pending_space = true;
+            continue;
+        }
+
+        if pending_space && !collapsed.is_empty() && !ch.is_whitespace() {
+            collapsed.push(' ');
+        }
+        pending_space = false;
+        collapsed.push(ch);
+    }
+
+    collapsed.trim().to_string()
 }
 
 fn normalized_terms(query: &str) -> Vec<String> {
@@ -937,6 +1147,10 @@ fn accent_style() -> Style {
 
 fn selected_style() -> Style {
     Style::new().color256(114).bold()
+}
+
+fn cancel_style() -> Style {
+    Style::new().red().bold()
 }
 
 fn section_style() -> Style {
@@ -1082,6 +1296,8 @@ mod tests {
             rendered,
             "\
 ◆ Tasks to start
+│ Filter: type to search
+│ ↑↓ move, space toggle, enter submit, esc cancel
 │
 │ GitHub
 │ ❯ ●  Fix            GitHub #73
@@ -1112,11 +1328,64 @@ mod tests {
             rendered,
             "\
 ◆ Pick one
+│ Filter: type to search
+│ ↑↓ move, enter select, esc cancel
 │
 │ ❯ ●  Fix
 │   ○  Publish documentation
 └
 "
+        );
+    }
+
+    #[test]
+    fn initial_render_shows_filter_and_key_affordances_before_typing() {
+        let mut state = SelectorState::single(vec![SelectorRow::option(0, "Fix editor")]);
+        let rendered = render_plain(&state, selector_options("Pick one"));
+
+        assert!(rendered.contains("│ Filter: type to search"));
+        assert!(rendered.contains("│ ↑↓ move, enter select, esc cancel"));
+
+        type_text(&mut state, "fix");
+        let rendered = render_plain(&state, selector_options("Pick one"));
+        assert!(rendered.contains("│ Filter: fix"));
+    }
+
+    #[test]
+    fn rendering_sanitizes_untrusted_selector_text() {
+        let state = SelectorState::multi(vec![
+            SelectorRow::Section(SelectorSection::with_hint(
+                "Git\x1b[31mHub\x1b[0m\nIssues",
+                "remote\x1b]0;owned\x07 provider",
+            )),
+            SelectorRow::Option(
+                SelectorOption::with_hint(
+                    0,
+                    "Fix\x1b[2K editor\tissue\nnow\x07",
+                    "task | \x1b7save | PR\rtitle | \u{0090}c1",
+                )
+                .selected(true),
+            ),
+        ]);
+        let rendered = render_plain(&state, selector_options("Tasks").selected_summary(true));
+
+        assert!(rendered.contains("│ GitHub Issues  remote provider"));
+        assert!(rendered.contains("│ ❯ ●  Fix editor issue now  task · save · PRtitle · c1"));
+        assert!(rendered.contains("│ Selected: Fix editor issue now"));
+        assert!(!rendered.contains("owned"));
+        assert!(!rendered.contains('\x1b'));
+        assert!(!rendered.contains('\x07'));
+        assert!(!rendered.contains('\x08'));
+        assert!(!rendered.contains('\u{0090}'));
+    }
+
+    #[test]
+    fn selector_text_sanitization_strips_escape_families_and_collapses_lines() {
+        assert_eq!(
+            sanitize_selector_text(
+                " alpha\tbeta\n\x1b[31mred\x1b[0m\x1b]0;title\x07\x1b7\u{009b}\x08omega "
+            ),
+            "alpha beta redomega"
         );
     }
 
@@ -1238,6 +1507,52 @@ mod tests {
     }
 
     #[test]
+    fn final_frames_render_submit_and_cancel_without_changing_transitions() {
+        let mut state = SelectorState::single(vec![SelectorRow::option(7, "Fix editor")]);
+        assert_eq!(
+            state.apply_input(SelectorInput::Enter),
+            SelectorTransition::Submitted(SelectorSubmission::Single(7))
+        );
+        assert_eq!(
+            render_final_plain(
+                &state,
+                selector_options("Pick one"),
+                SelectorRenderFrame::Submitted
+            ),
+            "\
+◇ Pick one
+└ Submitted
+"
+        );
+
+        let mut state = SelectorState::single(vec![SelectorRow::option(7, "Fix editor")]);
+        assert_eq!(
+            state.apply_input(SelectorInput::Cancel),
+            SelectorTransition::Cancelled
+        );
+        assert_eq!(
+            render_final_plain(
+                &state,
+                selector_options("Pick one"),
+                SelectorRenderFrame::Cancelled
+            ),
+            "\
+■ Pick one
+└ Cancelled
+"
+        );
+    }
+
+    #[test]
+    fn visual_row_count_tracks_wrapped_ascii_cjk_emoji_and_ansi_lines() {
+        assert_eq!(visual_rows_for_line("abcdefghijk", 10), 2);
+        assert_eq!(visual_rows_for_line("인디위키보호", 10), 2);
+        assert_eq!(visual_rows_for_line("🙂🙂🙂🙂🙂🙂", 10), 2);
+        assert_eq!(visual_rows_for_line("\x1b[31mabcdefghijk\x1b[0m", 10), 2);
+        assert_eq!(rendered_visual_rows("abcdefghijk\nshort\n", 10), 3);
+    }
+
+    #[test]
     fn raw_terminal_output_returns_to_column_zero_after_each_line() {
         assert_eq!(raw_terminal_output("one\ntwo\n"), "one\r\ntwo\r\n");
     }
@@ -1258,5 +1573,13 @@ mod tests {
 
     fn render_plain(state: &SelectorState, options: SelectorRenderOptions) -> String {
         strip_ansi_codes(&render_selector(state, &options)).into_owned()
+    }
+
+    fn render_final_plain(
+        state: &SelectorState,
+        options: SelectorRenderOptions,
+        frame: SelectorRenderFrame,
+    ) -> String {
+        strip_ansi_codes(&render_selector_frame(state, &options, frame)).into_owned()
     }
 }
