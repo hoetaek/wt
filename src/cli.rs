@@ -135,7 +135,7 @@ pub enum Commands {
         /// Create <git-common-dir>/wt/ideas/<feature>.md
         #[arg(long)]
         idea: bool,
-        /// Create <git-common-dir>/wt/specs/<feature>/requirements.md and design.md
+        /// Create <git-common-dir>/wt/specs/<feature>/requirements.md, design.md, and tasks.md
         #[arg(long)]
         spec: bool,
         /// Create <git-common-dir>/wt/tasks/<feature>.toml
