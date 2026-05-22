@@ -8,6 +8,8 @@ description: "Use for the full wt loop by sequencing wt-ready, wt-start, wt-coor
 Use this skill when the user wants the whole wt operating loop handled for the
 given context, not just one lifecycle phase.
 
+각 단계에서 per-feature 문서(idea / spec / task / workflow / retrospect) 골격이 필요하면 `wt scaffold <slug> --<kind>` 로 시드한다.
+
 Apply these skills in order:
 
 1. `wt-ready`: gather evidence, settle scope and workflow policy, split work,
