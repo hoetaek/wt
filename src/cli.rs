@@ -1,11 +1,57 @@
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+const ROOT_HELP_TEMPLATE: &str = "\
+{about}
+
+{usage-heading} {usage}
+
+Workspaces:
+  run      Start workspace execution from issue, PR, branch text, task, or workflow
+  open     Open a workspace from an existing worktree or branch
+  list     Show worktree, branch, site, and setup state
+  inspect  Read a work dossier for a branch, worktree, or TaskRun
+  done     Remove worktrees, clean integrations, and delete local branches
+  ui       Start a read-only personal state web UI
+
+Prepared Work:
+  task      Manage local TaskDocuments
+  workflow  Prepare, inspect, edit, repair, archive, or complete workflow tasks
+  scaffold  Create blank skeleton documents for a feature
+
+Agents:
+  agent    Observe and watch task agent runtime state
+  codex    Launch Codex with the current worktree's wt agent identity
+  claude   Launch Claude with the current worktree's wt agent identity
+  as       Run any command with an explicit wt agent identity
+  msg      Send, deliver, and inspect file-based agent inbox messages
+  send     Send a message to a task agent's cmux surface
+  coord    Declare or clear the coordinator identity for the current shell
+  session  Declare, clear, or inspect the current session agent identity
+
+Setup & Config:
+  init        Start the workspace config wizard
+  setup       Set up or remove per-machine wt integration
+  doctor      Check configured providers and required local tools
+  config      Print, edit, or refactor wt config files
+  profile     List or manage named profile configs
+  site        Inspect and manage local site provider helpers
+  shell-init  Print shell integration source for ambient worker identity binding
+  completion  Generate shell completion script
+
+Metadata:
+  version  Print wt version
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+{options}{after-help}";
+
 #[derive(Parser, Debug)]
 #[command(
     name = "wt",
     version,
     about = "Worktree-based agent orchestration harness",
+    help_template = ROOT_HELP_TEMPLATE,
     after_help = "Start workspace execution with: wt run issue, wt run pr, wt run branch, wt run task, wt run workflow.\nUse wt open for existing branches or worktrees; use wt workflow for saved workflow files and lifecycle actions."
 )]
 pub struct Cli {
@@ -998,6 +1044,30 @@ mod tests {
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).unwrap()
+    }
+
+    fn root_help_section<'a>(help: &'a str, heading: &str, next_heading: &str) -> &'a str {
+        let start_marker = format!("{heading}:\n");
+        let start = help
+            .find(&start_marker)
+            .unwrap_or_else(|| panic!("missing heading {heading}"))
+            + start_marker.len();
+        let end_marker = format!("\n\n{next_heading}:\n");
+        let end = help[start..]
+            .find(&end_marker)
+            .unwrap_or_else(|| panic!("missing next heading {next_heading}"))
+            + start;
+        &help[start..end]
+    }
+
+    fn assert_section_contains_command(section: &str, command: &str) {
+        let prefix = format!("{command} ");
+        assert!(
+            section
+                .lines()
+                .any(|line| line.trim_start().starts_with(&prefix)),
+            "expected section to contain command {command:?}; section was:\n{section}"
+        );
     }
 
     #[test]
@@ -2209,6 +2279,57 @@ mod tests {
         assert!(help.contains("Create blank skeleton documents for a feature"));
         assert!(help.contains("Use wt open"));
         assert!(!help.contains("wt new"));
+    }
+
+    #[test]
+    fn root_help_groups_top_level_commands_into_five_sections() {
+        let help = Cli::command().render_long_help().to_string();
+
+        for heading in [
+            "Workspaces:",
+            "Prepared Work:",
+            "Agents:",
+            "Setup & Config:",
+            "Metadata:",
+        ] {
+            assert!(help.contains(heading), "missing heading {heading}");
+        }
+        assert!(!help.contains("\nCommands:\n"));
+
+        let workspaces = root_help_section(&help, "Workspaces", "Prepared Work");
+        for command in ["run", "open", "list", "inspect", "done", "ui"] {
+            assert_section_contains_command(workspaces, command);
+        }
+
+        let prepared_work = root_help_section(&help, "Prepared Work", "Agents");
+        for command in ["task", "workflow", "scaffold"] {
+            assert_section_contains_command(prepared_work, command);
+        }
+
+        let agents = root_help_section(&help, "Agents", "Setup & Config");
+        for command in [
+            "agent", "codex", "claude", "as", "msg", "send", "coord", "session",
+        ] {
+            assert_section_contains_command(agents, command);
+        }
+
+        let setup = root_help_section(&help, "Setup & Config", "Metadata");
+        for command in [
+            "init",
+            "setup",
+            "doctor",
+            "config",
+            "profile",
+            "site",
+            "shell-init",
+            "completion",
+        ] {
+            assert_section_contains_command(setup, command);
+        }
+
+        let metadata = root_help_section(&help, "Metadata", "Options");
+        assert_section_contains_command(metadata, "version");
+        assert_section_contains_command(metadata, "help");
     }
 
     #[test]
