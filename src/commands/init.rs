@@ -418,19 +418,43 @@ fn merge_allow_rules_into_settings(settings: &mut serde_json::Value) -> Result<(
         bail!("Cannot update Claude local settings: root value must be a JSON object.");
     };
 
-    if !root.contains_key("allowed") {
-        root.insert("allowed".into(), serde_json::Value::Array(Vec::new()));
-    }
-    let Some(allowed) = root
-        .get_mut("allowed")
-        .and_then(serde_json::Value::as_array_mut)
-    else {
-        bail!("Cannot update Claude local settings: `allowed` must be a JSON array.");
+    let permissions_value = root
+        .entry("permissions")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let Some(permissions) = permissions_value.as_object_mut() else {
+        bail!("Cannot update Claude local settings: `permissions` must be a JSON object.");
     };
+
+    if let Some(allow) = permissions.get("allow")
+        && !allow.is_array()
+    {
+        bail!("Cannot update Claude local settings: `permissions.allow` must be a JSON array.");
+    }
+    permissions
+        .entry("allow")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+
+    let legacy_allowed = match root.get("allowed") {
+        Some(serde_json::Value::Array(_)) => match root.remove("allowed") {
+            Some(serde_json::Value::Array(values)) => values,
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+
+    let permissions = root
+        .get_mut("permissions")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("permissions object was validated");
+    let allowed = permissions
+        .get_mut("allow")
+        .and_then(serde_json::Value::as_array_mut)
+        .expect("permissions.allow array was validated");
 
     let mut seen_wt_rules = std::collections::BTreeSet::new();
     let existing = std::mem::take(allowed);
-    let mut deduped = Vec::with_capacity(existing.len() + CLAUDE_ALLOW_RULES.len());
+    let mut deduped =
+        Vec::with_capacity(existing.len() + legacy_allowed.len() + CLAUDE_ALLOW_RULES.len());
     for item in existing {
         if let Some(rule) = item.as_str()
             && CLAUDE_ALLOW_RULES.contains(&rule)
@@ -441,6 +465,20 @@ fn merge_allow_rules_into_settings(settings: &mut serde_json::Value) -> Result<(
             continue;
         }
         deduped.push(item);
+    }
+
+    for item in legacy_allowed {
+        if let Some(rule) = item.as_str()
+            && CLAUDE_ALLOW_RULES.contains(&rule)
+        {
+            if seen_wt_rules.insert(rule.to_string()) {
+                deduped.push(serde_json::Value::String(rule.to_string()));
+            }
+            continue;
+        }
+        if !deduped.iter().any(|existing| existing == &item) {
+            deduped.push(item);
+        }
     }
 
     for rule in CLAUDE_ALLOW_RULES {
@@ -3711,6 +3749,69 @@ tabs = ["existing", "vim"]
             allow_rules(&settings),
             vec!["Edit(/.git/wt/**)", "Write(/.git/wt/**)"]
         );
+        assert!(settings.get("allowed").is_none());
+        assert_eq!(
+            settings,
+            serde_json::json!({
+                "permissions": {
+                    "allow": [
+                        "Edit(/.git/wt/**)",
+                        "Write(/.git/wt/**)"
+                    ]
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn init_accepting_claude_allow_rules_migrates_legacy_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{
+  "allowed": [
+    "Edit(/.git/wt/**)",
+    "Write(/.git/wt/**)",
+    "Bash(echo:*)"
+  ]
+}
+"#,
+        )
+        .unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_select(0); // use starter defaults
+        ui.add_confirm(true); // create config
+        ui.add_confirm(true); // add Claude allow rules
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                preset: Some(InitPreset::Minimal),
+                agent: Some(InitAgent::None),
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let settings = read_claude_local_settings(&settings_path).unwrap();
+        assert!(settings.get("allowed").is_none());
+        assert_eq!(
+            allow_rules(&settings),
+            vec!["Edit(/.git/wt/**)", "Write(/.git/wt/**)", "Bash(echo:*)"]
+        );
     }
 
     #[test]
@@ -3745,7 +3846,7 @@ tabs = ["existing", "vim"]
     }
 
     #[test]
-    fn claude_allow_rules_merge_preserves_user_entries_and_is_idempotent() {
+    fn claude_allow_rules_merge_migrates_legacy_allowed() {
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
         std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
@@ -3753,12 +3854,37 @@ tabs = ["existing", "vim"]
             &settings_path,
             r#"{
   "allowed": [
+    "Edit(/.git/wt/**)",
+    "Write(/.git/wt/**)",
     "Bash(echo:*)",
     "Edit(/.git/wt/**)"
-  ],
+  ]
+}
+"#,
+        )
+        .unwrap();
+
+        merge_claude_allow_rules(&settings_path).unwrap();
+        let settings = read_claude_local_settings(&settings_path).unwrap();
+
+        assert!(settings.get("allowed").is_none());
+        assert_eq!(
+            allow_rules(&settings),
+            vec!["Edit(/.git/wt/**)", "Write(/.git/wt/**)", "Bash(echo:*)"]
+        );
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_preserves_existing_permissions_allow_order_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{
   "permissions": {
     "allow": [
-      "Bash(git:*)"
+      "Bash(npm run *)"
     ]
   }
 }
@@ -3773,14 +3899,95 @@ tabs = ["existing", "vim"]
 
         assert_eq!(first, second);
         let settings: serde_json::Value = serde_json::from_str(&second).unwrap();
+        assert!(settings.get("allowed").is_none());
         assert_eq!(
             allow_rules(&settings),
-            vec!["Bash(echo:*)", "Edit(/.git/wt/**)", "Write(/.git/wt/**)"]
+            vec!["Bash(npm run *)", "Edit(/.git/wt/**)", "Write(/.git/wt/**)"]
         );
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_migrates_legacy_allowed_into_existing_permissions_allow() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{
+  "allowed": [
+    "Bash(echo:*)",
+    "Edit(/.git/wt/**)"
+  ],
+  "permissions": {
+    "allow": [
+      "Bash(git:*)",
+      "Edit(/.git/wt/**)"
+    ]
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        merge_claude_allow_rules(&settings_path).unwrap();
+        let settings = read_claude_local_settings(&settings_path).unwrap();
+
+        assert!(settings.get("allowed").is_none());
         assert_eq!(
-            settings["permissions"]["allow"][0].as_str(),
-            Some("Bash(git:*)")
+            allow_rules(&settings),
+            vec![
+                "Bash(git:*)",
+                "Edit(/.git/wt/**)",
+                "Bash(echo:*)",
+                "Write(/.git/wt/**)"
+            ]
         );
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_creates_fresh_schema_for_missing_and_empty_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_path = dir.path().join("missing").join(CLAUDE_LOCAL_SETTINGS_PATH);
+        merge_claude_allow_rules(&missing_path).unwrap();
+        assert_fresh_claude_allow_rules(&missing_path);
+
+        let empty_path = dir.path().join("empty").join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(empty_path.parent().unwrap()).unwrap();
+        std::fs::write(&empty_path, "\n").unwrap();
+        merge_claude_allow_rules(&empty_path).unwrap();
+        assert_fresh_claude_allow_rules(&empty_path);
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_rejects_non_object_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(&settings_path, r#"{"permissions":"not-an-object"}"#).unwrap();
+
+        let err = merge_claude_allow_rules(&settings_path)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("`permissions` must be a JSON object"));
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_rejects_non_array_permissions_allow() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"permissions":{"allow":"not-an-array"}}"#,
+        )
+        .unwrap();
+
+        let err = merge_claude_allow_rules(&settings_path)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("`permissions.allow` must be a JSON array"));
     }
 
     #[test]
@@ -3845,11 +4052,27 @@ tabs = ["existing", "vim"]
     }
 
     fn allow_rules(settings: &serde_json::Value) -> Vec<&str> {
-        settings["allowed"]
+        settings["permissions"]["allow"]
             .as_array()
             .unwrap()
             .iter()
             .map(|value| value.as_str().unwrap())
             .collect()
+    }
+
+    fn assert_fresh_claude_allow_rules(path: &std::path::Path) {
+        let settings = read_claude_local_settings(path).unwrap();
+        assert!(settings.get("allowed").is_none());
+        assert_eq!(
+            settings,
+            serde_json::json!({
+                "permissions": {
+                    "allow": [
+                        "Edit(/.git/wt/**)",
+                        "Write(/.git/wt/**)"
+                    ]
+                }
+            })
+        );
     }
 }

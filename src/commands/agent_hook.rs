@@ -1,4 +1,4 @@
-use crate::context::Ctx;
+use crate::context::MachineCtx;
 use crate::messages::AgentId;
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
@@ -19,7 +19,7 @@ pub(crate) const CODEX_HOOK_EVENTS: &[(&str, &str)] = &[
 const CODEX_DEFAULT_HOOK_TIMEOUT_SEC: u64 = 600;
 const WT_CODEX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 
-pub(crate) fn install_claude(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
+pub(crate) fn install_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result<()> {
     let target = ClaudeHookTarget::parse(agent)?;
     let settings_path = claude_settings_path(true)?;
 
@@ -40,7 +40,7 @@ pub(crate) fn install_claude(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn uninstall_claude(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
+pub(crate) fn uninstall_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result<()> {
     let target = ClaudeHookTarget::parse(agent)?;
     let settings_path = claude_settings_path(false)?;
     if !settings_path.exists() {
@@ -101,7 +101,7 @@ pub(crate) fn claude_dispatcher_installed() -> Result<bool> {
     ))
 }
 
-pub(crate) fn install_codex(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
+pub(crate) fn install_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result<()> {
     let target = CodexHookTarget::parse(agent)?;
     let paths = codex_hook_paths(true)?;
     let command = target.command();
@@ -138,7 +138,7 @@ pub(crate) fn install_codex(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn uninstall_codex(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
+pub(crate) fn uninstall_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result<()> {
     let target = CodexHookTarget::parse(agent)?;
     let paths = codex_hook_paths(false)?;
     if !paths.hooks_path.exists() && !paths.config_path.exists() {
