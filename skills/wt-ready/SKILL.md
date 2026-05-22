@@ -52,6 +52,18 @@ Useful evidence:
 Separate confirmed facts, experiment results, tradeoffs, and unresolved
 questions in your notes or response.
 
+## Work Sequence
+
+Before promoting an idea, writing specs, or preparing TaskDocuments, identify
+where the work currently sits in `references/work-sequence.md`. Do not treat
+the sequence as a waterfall; use it as a set of gates that prevent skipping
+from vague intent straight to runnable work.
+
+If a user enters `wt-ready` directly with implementation-shaped wording,
+reconstruct the missing raw intent and outcome first. If the outcome,
+requirements, design, or task graph cannot be stated clearly, stop at the
+matching earlier artifact instead of fabricating a TaskDocument.
+
 ## Questions
 
 Use this rule for non-spec moments: clarifying execution shape, workflow policy,
@@ -101,6 +113,19 @@ Planning:
 ```
 
 Prefer several narrow slices over one broad task.
+
+### Task and PR size budget
+
+When deciding whether one slice is reviewable, consult
+`references/task-pr-size-guidance.md`. Treat those thresholds as tripwires, not
+hard blockers: a slice may be larger when it is mechanically coupled,
+generated, deletion-heavy, or would leave the product in an invalid intermediate
+state if split.
+
+For each prepared slice, record the expected size class in the TaskDocument
+body: `small`, `medium`, or `large-justified`. For `large-justified`, also
+record why splitting would be worse and what checks or reviewer guidance reduce
+the risk.
 
 ## Choose Execution Shape
 
