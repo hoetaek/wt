@@ -117,6 +117,10 @@ is no `converted` status: promotion deletes the idea file and creates
 Store ideas in `<git-common-dir>/wt/ideas/<slug>.{md,toml}`. Use lowercase ASCII
 kebab-case slugs. Pick the extension by what fits the body best:
 
+To seed an empty Markdown skeleton, run `wt scaffold <slug> --idea`. It writes
+`<git-common-dir>/wt/ideas/<slug>.md` with the canonical section headings. To
+use `.toml` instead, write the file by hand using the schema below.
+
 - `.md` for free-form Markdown notes when prose, links, and loose structure
   serve the exploration best.
 - `.toml` when you want a few simple top-level fields plus a `body` string.

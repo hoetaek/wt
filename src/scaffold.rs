@@ -36,7 +36,11 @@ impl DocKind {
             Self::Idea => vec![storage.ideas_dir().join(format!("{slug}.md"))],
             Self::Spec => {
                 let dir = storage.specs_dir().join(slug);
-                vec![dir.join("requirements.md"), dir.join("design.md")]
+                vec![
+                    dir.join("requirements.md"),
+                    dir.join("design.md"),
+                    dir.join("tasks.md"),
+                ]
             }
             Self::Task => vec![storage.tasks_dir().join(format!("{slug}.toml"))],
             Self::Workflow => vec![storage.workflows_dir().join(format!("{slug}.toml"))],
@@ -55,6 +59,10 @@ impl DocKind {
                 (
                     PathBuf::from(format!("specs/{slug}/design.md")),
                     render_spec_design(),
+                ),
+                (
+                    PathBuf::from(format!("specs/{slug}/tasks.md")),
+                    render_spec_tasks(),
                 ),
             ],
             Self::Task => vec![(
@@ -125,6 +133,15 @@ fn render_spec_design() -> String {
         .to_string()
 }
 
+fn render_spec_tasks() -> String {
+    "## Tasks\n\n\
+Sequence atomic units of work. Mark dependencies (`[blocked by: T1]`) or parallel groups (`[parallel: T2, T3]`) explicitly so the execution shape can be derived.\n\n\
+- [ ] T1 — <short title>\n\
+- [ ] T2 — <short title>  [blocked by: T1]\n\
+- [ ] T3 — <short title>  [parallel: T2]\n"
+        .to_string()
+}
+
 fn render_retrospect(slug: &str) -> String {
     format!(
         "# {slug}\n\n\
@@ -156,7 +173,8 @@ mod tests {
             DocKind::Spec.paths(&storage, "foo"),
             vec![
                 dir.path().join(".git/wt/specs/foo/requirements.md"),
-                dir.path().join(".git/wt/specs/foo/design.md")
+                dir.path().join(".git/wt/specs/foo/design.md"),
+                dir.path().join(".git/wt/specs/foo/tasks.md")
             ]
         );
         assert_eq!(
@@ -183,5 +201,14 @@ mod tests {
         let workflow = DocKind::Workflow.render("foo");
         assert_eq!(workflow.len(), 1);
         assert!(workflow[0].1.contains("mode = \"single\""));
+    }
+
+    #[test]
+    fn spec_render_includes_tasks_skeleton() {
+        let spec = DocKind::Spec.render("foo");
+        assert_eq!(spec.len(), 3);
+        assert_eq!(spec[2].0, PathBuf::from("specs/foo/tasks.md"));
+        assert!(spec[2].1.contains("## Tasks"));
+        assert!(spec[2].1.contains("[blocked by:"));
     }
 }

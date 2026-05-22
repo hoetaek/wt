@@ -1,6 +1,6 @@
 ---
 name: wt-work
-description: "Use for the full wt loop by sequencing wt-ready, wt-start, wt-coordinate, wt-land, and wt-retrospect."
+description: "Use for the full wt loop by sequencing wt-ready, wt-start, wt-coordinate, wt-land, and a scaffolded retrospective."
 ---
 
 # WT Work
@@ -19,24 +19,26 @@ Apply these skills in order:
 4. `wt-land`: respect workflow landing policy, perform any applicable
    completion step, land branches in the right order, prove ancestry, and clean
    up with `wt done`.
-5. `wt-retrospect`: capture keep/problem/try lessons and action candidates as a
-   TOML retrospective under `<git-common-dir>/wt/retrospectives/` so future loops can learn
-   from this one. Skip only when no useful lesson emerged (a retrospect that
-   restates the diff is noise).
+5. Retrospect: capture keep/problem/try lessons and action candidates as a
+   Markdown retrospective under `<git-common-dir>/wt/retrospectives/`. Seed the
+   file with `wt scaffold <slug> --retrospect`, then fill in. For dated TOML
+   format with richer schema, invoke the `wt-retrospect` skill instead of this
+   scaffolded Markdown step. Skip only when no useful lesson emerged (a
+   retrospect that restates the diff is noise).
 
 Carry the user's original context through all five phases. Stop only when a
 phase's own guardrail blocks progress, such as unresolved HITL decisions, active
 agent work that still needs time, failed review, merge conflicts owned by the
 task agent, or unsafe cleanup conditions. When a phase blocks progress, still
-consider running `wt-retrospect` to record why — a blocked loop is also a
+consider writing a retrospective to record why — a blocked loop is also a
 lesson.
 
-When moving from one phase to the next, load and follow that phase's skill body
-instead of reimplementing its rules from memory. Keep lifecycle boundaries
-explicit: preparation is not launch, TaskRun completion is not landing,
-cleanup happens only after landing or discard intent is proven, and the
-retrospective is written after the work item is closed (landed or explicitly
-discarded), not in the middle of in-flight state.
+When moving from one skill phase to the next, load and follow that phase's skill
+body instead of reimplementing its rules from memory. Keep lifecycle boundaries
+explicit: preparation is not launch, TaskRun completion is not landing, cleanup
+happens only after landing or discard intent is proven, and the retrospective is
+written after the work item is closed (landed or explicitly discarded), not in
+the middle of in-flight state.
 
 Report the final lifecycle state: evidence checked, launch command and inspect
 target, review/check result, completion or merge proof, cleanup command, the
