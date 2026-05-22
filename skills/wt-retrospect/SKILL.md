@@ -1,6 +1,6 @@
 ---
 name: wt-retrospect
-description: "Use after wt work has landed (or been intentionally discarded) to capture keep/problem/try lessons and action candidates as a TOML retrospective under <git-common-dir>/wt/retrospectives. Triggers: 'retrospect', 'retrospective 작성', or end of a wt-work loop."
+description: "Use after wt work has landed or been intentionally discarded to capture keep/problem/try lessons and action candidates as a TOML retrospective. Triggers: 'retrospect', 'retrospective 작성', or end of a wt-work loop."
 ---
 
 # WT Retrospect
@@ -9,6 +9,8 @@ Use this skill to capture a completed work item as a structured retrospective
 that future planning, coordination, review, landing, or skill guidance can
 learn from. Do not use it to track in-flight state — that belongs in
 `<git-common-dir>/wt/tasks`, `<git-common-dir>/wt/task-runs`, and `<git-common-dir>/wt/workflows`.
+In the work-sequence model, this skill owns the final retrospect gate after
+landing or explicit discard.
 
 ## When to Use
 

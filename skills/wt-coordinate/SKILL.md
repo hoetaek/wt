@@ -14,7 +14,8 @@ passes and the remaining work is landing or cleanup.
 Keep these separate:
 
 - `coordinate`: inspect runtime state, unblock agents, and keep
-  `specs/<slug>/design.md` and `tasks.md` in sync with execution findings.
+  `specs/<slug>/design.md`, `tasks.md`, and `workflow.md` in sync with
+  execution findings.
 - `review`: read the diff, files, checks, parent branch, and agent report.
 - `complete`: for workflow-linked TaskRuns, mark reviewed running workflow
   tasks complete with `wt workflow complete`.
@@ -105,27 +106,30 @@ or validate a live surface, and first confirm the surface is the agent prompt.
 ## Sync the Spec During Coordination
 
 `wt-ready` produces a committed spec at
-`<git-common-dir>/wt/specs/<slug>/{requirements.md, design.md, tasks.md}`. That
-spec is not frozen at launch. While work runs, findings often invalidate an
-assumption in `design.md` or show that an item in `tasks.md` is too coarse,
-mis-scoped, or already obsolete.
+`<git-common-dir>/wt/specs/<slug>/{requirements.md, design.md, tasks.md}` plus
+optional `workflow.md`. That spec is not frozen at launch. While work runs,
+findings often invalidate an assumption in `design.md`, show that an item in
+`tasks.md` is too coarse, mis-scoped, or already obsolete, or prove that the
+chosen execution shape in `workflow.md` has drifted.
 
 wt-coordinate has the explicit power and responsibility to edit
-`specs/<slug>/design.md` and `specs/<slug>/tasks.md` in place during the run.
-The TaskDocument body at `<git-common-dir>/wt/tasks/<slug>.toml` remains the
-canonical launch context for the wt CLI and is not rewritten here; only the
-spec artifact moves. Treat `specs/<slug>/` as the long human/AI artifact that
-explains the work's intent and structure, and keep it true.
+`specs/<slug>/design.md`, `specs/<slug>/tasks.md`, and optional
+`specs/<slug>/workflow.md` in place during the run. The TaskDocument body at
+`<git-common-dir>/wt/tasks/<slug>.toml` remains the canonical launch context
+for the wt CLI and is not rewritten here; only the spec artifact moves. Treat
+`specs/<slug>/` as the long human/AI artifact that explains the work's intent
+and structure, and keep it true.
 
 Drift-resolution rule: when implementation and spec disagree, update the spec.
-Do not let the code silently diverge from `design.md` or `tasks.md`. If a
-decision changes mid-flight, the spec is the place that change lands.
+Do not let the code silently diverge from `design.md`, `tasks.md`, or
+`workflow.md`. If a decision changes mid-flight, the spec is the place that
+change lands.
 
 When you edit a spec file, make the rationale visible in coordination feedback
 so the task agent and user can see why the design or task list moved:
 
 ```bash
-wt send <target> "design.md / tasks.md를 업데이트했습니다. 변경: <무엇이 바뀌었나>. 이유: <왜 바뀌었나>. 이 업데이트된 spec 기준으로 진행해주세요."
+wt send <target> "design.md / tasks.md / workflow.md를 업데이트했습니다. 변경: <무엇이 바뀌었나>. 이유: <왜 바뀌었나>. 이 업데이트된 spec 기준으로 진행해주세요."
 ```
 
 `requirements.md` is the original intent from `wt-ready` and is not edited

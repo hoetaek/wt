@@ -113,33 +113,39 @@ TaskDocument는 `wt run task`와 `wt workflow`가 소비하는 실행 단위다.
 `specs/`를 직접 읽거나 쓰지 않는다. Spec 없이 TaskDocument TOML만 있는 pre-redesign task도
 valid local task로 남는다.
 
-`specs/<slug>/requirements.md`는 User Story line으로 시작한다.
+`wt scaffold`가 만드는 idea/spec/task/workflow/retrospect template의 사람이 읽는 제목과
+section heading은 한국어를 기본으로 한다. TOML field name(`title`, `branch`, `mode` 등)은
+schema contract이므로 영어로 유지하지만, 값과 body template은 한국어로 읽히게 한다.
+
+`specs/<slug>/requirements.md`는 한국어 사용자 스토리 line으로 시작한다.
 
 ```text
-As a [role], I want [feature] so that [benefit]
+사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.
 ```
 
-Functional requirement는 EARS statement로 쓴다.
+Functional requirement section heading은 한국어로 두되, requirement 문장은 EARS statement를
+유지한다.
 
 ```text
-WHEN <condition> THE SYSTEM SHALL <behavior>
-GIVEN <precondition> WHEN <trigger> THE SYSTEM SHALL <response>
+WHEN <조건> THE SYSTEM SHALL <관찰 가능한 동작>
+GIVEN <전제> WHEN <트리거> THE SYSTEM SHALL <응답>
 ```
 
-Non-functional section은 성능, 보안, 호환성, 또는 해당 작업에 적용되는 cross-cutting
-constraint를 명시적으로 이름 붙인다. Regression-sensitive work는 preserved behavior를 다음
-형태로 적는다.
+`requirements.md`는 목적 / 성공 기준, 원칙 / 제약, 기능 요구사항(EARS), 비기능 요구사항,
+회귀 보존 section을 둔다. 비기능 요구사항은 성능, 보안, 호환성, 또는 해당 작업에 적용되는
+cross-cutting constraint를 명시적으로 이름 붙인다. Regression-sensitive work는 preserved
+behavior를 다음 형태로 적는다.
 
 ```text
-WHEN <condition> THE SYSTEM SHALL CONTINUE TO <preserved behavior>
+WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>
 ```
 
-`specs/<slug>/design.md`는 architecture decision, affected component, constraint를 적는다.
+`specs/<slug>/design.md`는 결정사항, 영향받는 컴포넌트, 제약을 적는다.
 Brownfield work에서는 새 design 전에 Static Model section(Purpose, Components, Business
 Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw code dump가
 아니라 intent와 component responsibility 중심으로 설명한다.
 
-`specs/<slug>/tasks.md`는 sequenced atomic unit을 checkbox item으로 나열한다. 각 item은
+`specs/<slug>/tasks.md`는 작업 목록 section 아래에 sequenced atomic unit을 checkbox item으로 나열한다. 각 item은
 dependency를 적고, dependency가 없는 item은 parallel 가능하다고 표시할 수 있다.
 
 `specs/<slug>/workflow.md`는 `tasks.md`에서 드러난 slice graph를 어떤 execution shape로
@@ -149,8 +155,8 @@ Workflow로 묶거나, stack/matrix처럼 execution shape 선택 자체가 작�
 있다. 그래도 파일을 남기면 `mode = none`이라고 짧게 적고, saved Workflow TOML이 필요 없는
 이유를 한 문단으로 기록하는 정도면 충분하다.
 
-`workflow.md`에 권장되는 section은 Chosen mode, Why, Slices → TaskDocument mapping, Linked
-workflow TOML path, Risks다. 이 파일은 prose-only spec artifact이며 executable Workflow
+`workflow.md`에 권장되는 section은 선택한 모드, 이유, 슬라이스 → TaskDocument 매핑,
+연결된 workflow TOML, 리스크다. 이 파일은 prose-only spec artifact이며 executable Workflow
 TOML이 아니다. 실제 saved execution plan은 계속 `<git-common-dir>/wt/workflows/<id>.toml`에
 있고, wt CLI는 이 iteration에서 `specs/`나 `workflow.md`를 직접 읽거나 쓰지 않는다.
 

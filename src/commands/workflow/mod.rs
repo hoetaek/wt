@@ -590,6 +590,87 @@ cli = "none"
     }
 
     #[test]
+    fn task_generates_readable_default_workflow_title_from_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "add-schema",
+            "title = \"스키마 추가\"\nbranch = \"add-schema\"\n",
+        );
+        write_task(
+            dir.path(),
+            "wire-api",
+            "title = \"API 연결\"\nbranch = \"wire-api\"\n",
+        );
+        let ctx = ctx(dir.path());
+
+        super::task(
+            &ctx,
+            &["add-schema".into(), "wire-api".into()],
+            TaskOptions {
+                mode: WorkflowModeArg::Batch,
+                profile: None,
+                profiles: &[],
+                title: None,
+                body: None,
+                body_file: None,
+                origin_provider: None,
+                origin_id: None,
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(
+            record.workflow.title.as_deref(),
+            Some("스키마 추가 외 1개 작업")
+        );
+        let content = std::fs::read_to_string(&record.path).unwrap();
+        assert!(content.contains("title = \"스키마 추가 외 1개 작업\""));
+    }
+
+    #[test]
+    fn task_generates_readable_default_matrix_title_from_profiles() {
+        let dir = tempfile::tempdir().unwrap();
+        write_profile(dir.path(), "alpha");
+        write_profile(dir.path(), "beta");
+        write_task(
+            dir.path(),
+            "add-schema",
+            "title = \"스키마 추가\"\nbranch = \"add-schema\"\n",
+        );
+        let ctx = ctx(dir.path());
+
+        super::task(
+            &ctx,
+            &["add-schema".into()],
+            TaskOptions {
+                mode: WorkflowModeArg::Matrix,
+                profile: None,
+                profiles: &strings(&["alpha", "beta"]),
+                title: None,
+                body: None,
+                body_file: None,
+                origin_provider: None,
+                origin_id: None,
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap();
+
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        assert_eq!(
+            record.workflow.title.as_deref(),
+            Some("스키마 추가 (2개 프로필)")
+        );
+        let content = std::fs::read_to_string(&record.path).unwrap();
+        assert!(content.contains("title = \"스키마 추가 (2개 프로필)\""));
+    }
+
+    #[test]
     fn task_reads_workflow_body_from_file() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());

@@ -127,6 +127,8 @@ pub(crate) fn prepare_workflow(
         prepared_tasks,
         options.profiles,
     )?;
+    let default_title =
+        default_workflow_title(ctx, options.mode, &prepared.tasks, options.profiles);
 
     let mut metadata = WorkflowMetadata::new(
         workflow_mode(options.mode),
@@ -138,7 +140,7 @@ pub(crate) fn prepare_workflow(
     if options.mode == WorkflowModeArg::Matrix {
         metadata.profiles = options.profiles.to_vec();
     }
-    metadata.title = workflow_metadata.title;
+    metadata.title = workflow_metadata.title.or(default_title);
     metadata.body = workflow_metadata.body;
     metadata.origin = workflow_metadata.origin;
     metadata.policy = workflow_policy(default_policy, pull_request);
@@ -148,8 +150,11 @@ pub(crate) fn prepare_workflow(
         return Err(err);
     }
 
-    ctx.ui
-        .print_step(&prepared_workflow_message(ctx, &workflow_path));
+    ctx.ui.print_step(&prepared_workflow_message(
+        ctx,
+        &workflow_path,
+        metadata.title.as_deref(),
+    ));
     Ok(())
 }
 
@@ -509,6 +514,32 @@ fn matrix_profile_branch(branch: &str, profile: &str) -> Result<String> {
         bail!("matrix mode workflow task has no branch");
     };
     Ok(format!("{branch}-{profile}"))
+}
+
+fn default_workflow_title(
+    ctx: &Ctx,
+    mode: WorkflowModeArg,
+    tasks: &[WorkflowTask],
+    profiles: &[String],
+) -> Option<String> {
+    let first = tasks.first()?;
+    let first_title = match task_store::read_task_document(ctx, &first.task) {
+        Ok(document) => document.title_or_key(&first.task),
+        Err(_) => first.task.clone(),
+    };
+    let first_title = first_title.split_whitespace().collect::<Vec<_>>().join(" ");
+    if first_title.is_empty() {
+        return None;
+    }
+
+    let title = if mode == WorkflowModeArg::Matrix {
+        format!("{first_title} ({}개 프로필)", profiles.len())
+    } else if tasks.len() > 1 {
+        format!("{first_title} 외 {}개 작업", tasks.len() - 1)
+    } else {
+        first_title
+    };
+    Some(title)
 }
 
 fn validate_mode_options(mode: WorkflowModeArg, pr: Option<WorkflowPrModeArg>) -> Result<()> {

@@ -1,4 +1,4 @@
 interface:
   display_name: "WT Work"
   short_description: "Run the full wt work loop"
-  default_prompt: "Use $wt-work to run $wt-ready -> $wt-start -> $wt-coordinate -> $wt-land -> $wt-retrospect for the full wt loop."
+  default_prompt: "Use $wt-work to locate the current work-sequence gate, run $wt-idea when raw intent/reference exploration is still needed, then run $wt-ready -> $wt-start -> $wt-coordinate -> $wt-land -> $wt-retrospect."

@@ -197,7 +197,7 @@ Return here when:
 
 Owner: `wt-ready` prepares; `wt-start` launches.
 
-Artifact: TaskDocument body `Planning:` section, optional Workflow policy
+Artifact: TaskDocument body `계획 (Planning)` section, optional Workflow policy
 snapshot, and exact `wt-start` target.
 
 Gate to next step:

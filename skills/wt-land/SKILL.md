@@ -8,6 +8,10 @@ description: "Use after wt work is reviewed: respect workflow policy, complete w
 Use this skill after `wt-coordinate` review says the work is acceptable. Do not
 use it to monitor active agents or request fixes; use `wt-coordinate` for that.
 
+In the work-sequence model, this skill owns the land/close gate between
+review/sync and retrospect. It proves integration or discard, performs
+applicable completion, and cleans only after that closure is safe.
+
 ## Boundaries
 
 Keep lifecycle states separate:

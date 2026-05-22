@@ -8,6 +8,8 @@ description: "Use before wt-ready for vague ideas or future wt work: capture con
 Use this skill to capture and enrich ideas before they are ready for
 `wt-ready`. The goal is to preserve enough evidence and context that a later
 `wt-ready` pass can turn the idea into the best available task/workflow plan.
+In the work-sequence model, this skill owns raw intent and context/reference
+exploration before the work commits to a spec, TaskDocument, or workflow.
 
 Do not implement code, create TaskDocuments, create workflows, launch worktrees,
 or decide final scope from this skill. Use `wt-ready` for idea-to-task
@@ -40,6 +42,7 @@ git status --short --branch
 find . -maxdepth 2 -name AGENTS.md -o -name AGENTS.override.md
 common_dir="$(git rev-parse --git-common-dir)"
 find "$common_dir/wt/ideas" "$common_dir/wt/tasks" "$common_dir/wt/workflows" -maxdepth 1 -type f 2>/dev/null | sort
+find "$common_dir/wt/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
 wt config 2>/dev/null || true
 ```
 
@@ -51,7 +54,7 @@ create it only when saving a new idea.
 An idea is not a task. Capture it as a durable research artifact with:
 
 - the user's raw intent, preserving wording when useful
-- the user/customer problem or desired outcome
+- the user/customer purpose and success criteria, when they are visible
 - relevant local product/code/docs context
 - related existing ideas, tasks, workflows, issues, or docs
 - external best-practice references when the decision depends on current or
@@ -82,9 +85,14 @@ alone. Prefer primary or authoritative sources: official docs, established
 method writeups, source repositories, standards, and vendor docs. Record URLs in
 the idea body.
 
+Context/reference exploration is part of sharpening raw intent, not proof that
+the idea is already a task. Keep it bounded: gather enough examples to name
+2-4 plausible frames, record the tradeoff for each, and stop before choosing a
+final output form unless the user explicitly commits to prep.
+
 Useful discovery lenses:
 
-- Product discovery: outcome -> opportunity -> solution -> experiment.
+- Product discovery: purpose -> opportunity -> solution -> experiment.
 - Feedback synthesis: raw feedback -> insight -> related idea.
 - Triage inbox: review, dedupe, label, clarify, then accept/defer/archive.
 - Shape Up style shaping: problem, appetite, solution sketch, rabbit holes,
@@ -103,7 +111,8 @@ idea file; once `wt-ready` promotes the idea, the file itself is removed (see
 - `captured`: raw idea saved with minimal context.
 - `enriched`: local/external context and alternatives have been gathered.
 - `ready_for_wt_ready`: enough information exists for `wt-ready` to prepare
-  TaskDocuments/workflows.
+  specs, TaskDocuments, or workflows without rediscovering raw intent,
+  references, plausible frames, tradeoffs, and the next unresolved question.
 - `archived`: intentionally not pursuing now.
 
 Default to `enriched` when you performed meaningful research. Use
@@ -141,40 +150,42 @@ source = "user"
 tags = ["wiki", "product-discovery"]
 
 body = """
-Raw intent:
+원문 의도:
 - ...
 
-Outcome / problem:
+맥락 / 레퍼런스 탐색:
+- 로컬: ...
+- 외부: ...
+- 참고한 방향: ...
+
+목적 / 성공 기준:
 - ...
 
-Evidence:
-- Local: ...
-- External: ...
+선택지:
+- 선택지 A: ...
+- 선택지 B: ...
 
-Options:
-- Option A: ...
-- Option B: ...
-
-Tradeoffs:
+트레이드오프:
 - ...
 
-Risks / rabbit holes:
+리스크 / 함정:
 - ...
 
-Non-goals:
+비목표:
 - ...
 
-Open questions:
+열린 질문:
 - ...
 
-Next step:
+다음 단계:
 - Run wt-ready on this idea when ...
 """
 ```
 
 Markdown shape, when you choose `.md`. Keep front matter optional and lean,
-and put the same sections (raw intent, outcome, evidence, options, tradeoffs,
-risks, non-goals, open questions, next step) as plain headings or bullets.
+and put the same sections (원문 의도, 맥락 / 레퍼런스 탐색, 목적 / 성공 기준,
+선택지, 트레이드오프, 리스크 / 함정, 비목표, 열린 질문, 다음 단계) as plain
+Korean headings or bullets.
 
 Do not add nested TOML tables unless the local schema explicitly adopts them.
 Keep the file easy to read, diff, and later hand to `wt-ready`.
@@ -208,6 +219,7 @@ End with:
 - evidence checked
 - duplicates or related artifacts found
 - why it is or is not ready for `wt-ready`
+- the missing work-sequence gate when it is not ready
 - exact next skill invocation or target, for example:
 
 ```text

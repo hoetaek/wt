@@ -1,4 +1,4 @@
 interface:
   display_name: "WT Coordinate"
   short_description: "Coordinate running wt work"
-  default_prompt: "Use $wt-coordinate to inspect running wt work, read agent status/surfaces, send feedback with `wt send`, review diffs/checks, complete workflow tasks when needed, and hand accepted work to $wt-land."
+  default_prompt: "Use $wt-coordinate to inspect running wt work, send feedback, review diffs/checks, sync design.md/tasks.md/workflow.md with execution findings, complete workflow tasks when needed, and hand accepted work to $wt-land."

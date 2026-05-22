@@ -13,6 +13,12 @@ policy is still unsettled.
 Use `wt-coordinate` for monitoring, feedback, and review after work is running.
 Use `wt-land` for landing and cleanup after review passes.
 
+In the work-sequence model, this skill consumes the execution handoff from
+`wt-ready` and turns it into a concrete TaskRun/worktree/workflow plus an
+inspect target. Do not revise purpose, requirements, design, or task graph here
+unless launch reveals that the handoff is incomplete; in that case return to
+`wt-ready`.
+
 ## Current State
 
 Check the repo and runtime before choosing a command:
@@ -46,8 +52,8 @@ TaskRun.
 
 TaskDocuments and workflow tasks must carry a planning estimate before launch.
 Until the repo schema explicitly supports a machine field, the estimate belongs
-in the TaskDocument `body` under `Planning:` as `expected duration: <duration>`,
-not as a top-level TOML field.
+in the TaskDocument `body` under `계획 (Planning)` as a line containing
+`expected duration`, not as a top-level TOML field.
 
 ## Command Choice
 
@@ -82,16 +88,28 @@ wt workflow task --mode stack <task-a> <task-b> <task-c> --base <base-branch>
 wt run workflow
 ```
 
+Use `wt workflow task --mode matrix` when one local TaskDocument should run
+across explicit named profiles:
+
+```bash
+wt workflow task --mode matrix <task> --profiles <profile-a>,<profile-b> --base <base-branch>
+wt run workflow
+```
+
 For provider issues, use `wt workflow issue --mode <single|batch|stack> ...`
-when a saved workflow is useful.
+when a saved workflow is useful. Matrix mode is local-TaskDocument only; do not
+try to start provider issues as matrix workflows.
 
 ## Start Rules
 
 - Prefer explicit task keys in scripts; omit keys only for interactive selection.
 - Before launching, inspect the selected TaskDocument bodies or workflow task
-  prompts and confirm every task has `Planning: ... expected duration: ...`.
+  prompts and confirm every task has `계획 (Planning)` and `expected duration`.
   If any task is missing an expected duration, do not start it; return to
   `wt-ready` or update the TaskDocument body first.
+- Also confirm the handoff has acceptance checks, size class, output concept or
+  workflow rationale, and PR/landing policy source when relevant. If these are
+  missing, return to `wt-ready`; launch should not invent planning context.
 - Use `--base .` for current branch, `--base <branch>` for an explicit base,
   or bare `--base` for interactive base selection.
 - Direct TaskDocument execution is `wt run task`; use workflow commands only for saved workflow execution.

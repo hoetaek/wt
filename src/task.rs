@@ -88,9 +88,20 @@ impl TaskDocumentDisplay {
 impl TaskDocument {
     pub(crate) fn empty(slug: &str) -> Self {
         Self {
-            title: slug.to_string(),
+            title: format!("작업: {slug}"),
             branch: slug.to_string(),
-            body: String::new(),
+            body: "## 계획 (Planning)\n\n\
+- 유형 (type): AFK\n\
+- 예상 소요 (expected duration): \n\
+- 막힘 / 의존성 (blocked by): none\n\
+- 실행 형태 (execution shape): direct\n\
+- 크기 (size class): small\n\
+- 확인 방법 (acceptance checks): \n\n\
+## 맥락\n\n\
+- \n\n\
+## 완료 기준\n\n\
+- \n"
+                .to_string(),
             origin: None,
         }
     }

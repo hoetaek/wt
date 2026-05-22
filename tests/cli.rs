@@ -3397,8 +3397,9 @@ fn workflow_state_is_visible_from_linked_worktree() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Prepared workflow: <git-common-dir>/wt/workflows/",
-        ));
+            "Prepared workflow: linked-workflow-task",
+        ))
+        .stdout(predicate::str::contains("<git-common-dir>/wt/workflows/"));
 
     assert!(!repo.join(legacy_local_path("workflows")).exists());
     let workflows = std::fs::read_dir(repo.join(".git/wt/workflows"))

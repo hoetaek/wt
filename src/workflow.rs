@@ -138,7 +138,14 @@ pub struct WorkflowRecord {
 impl WorkflowMetadata {
     pub fn empty(slug: &str) -> Self {
         let mut metadata = Self::new(WorkflowMode::Single, "default", None, Vec::new());
-        metadata.title = Some(slug.to_string());
+        metadata.title = Some(format!("워크플로우: {slug}"));
+        metadata.body = Some(
+            "## 목적\n\n\
+- \n\n\
+## 실행 메모\n\n\
+- \n"
+                .to_string(),
+        );
         metadata
     }
 

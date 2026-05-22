@@ -52,6 +52,12 @@ Useful evidence:
 Separate confirmed facts, experiment results, tradeoffs, and unresolved
 questions in your notes or response.
 
+When raw intent is still soft, use bounded context/reference exploration before
+forcing purpose or requirements. Gather enough local or external examples to
+name 2-4 plausible frames, record why each fits or fails, and then either:
+continue to purpose/success criteria, return to `wt-idea`, or ask one HITL
+question that chooses the next exploration direction.
+
 ## Work Sequence
 
 Before promoting an idea, writing specs, or preparing TaskDocuments, identify
@@ -78,6 +84,28 @@ repo docs or code, point to the conflict and propose the canonical term.
 When authoring a spec file (`requirements.md`, `design.md`, `tasks.md`,
 `workflow.md`), use the **Grill The Spec** cycle instead.
 
+## Set Output Concept
+
+After purpose, requirements, and principles are clear, decide what kind of
+artifact this preparation should produce. Do this before design and task graph
+work so an implementation PR is not assumed by default.
+
+Record the output concept in the spec notes, TaskDocument `계획 (Planning)`
+section, or `workflow.md` rationale:
+
+- docs-only change
+- implementation PR
+- prototype or mockup
+- spike / experiment
+- direct local edit outside the wt-managed repo
+- TaskDocument
+- saved Workflow
+- mixed-lifecycle handoff
+
+If several output forms are plausible, split them or record the deferred form.
+Do not bundle a prototype, docs cleanup, and implementation branch into one
+task unless the dependency is real and review remains safe.
+
 ## Slice The Work
 
 When the work is bigger than one safe task, split it into thin vertical slices.
@@ -100,17 +128,19 @@ For each slice, record:
 Record this planning context in the TaskDocument `body` as a text section, not
 as top-level TOML fields (only canonical task fields are accepted). Every
 TaskDocument or workflow task must include an expected duration in its
-`Planning:` body section before `wt-start`.
+`계획 (Planning)` body section before `wt-start`. Prefer Korean human-facing
+labels with the stable English key in parentheses.
 
 Example body section:
 
 ```text
-Planning:
-- type: AFK
-- expected duration: 45m
-- blocked by: workflow-policy-contract-simplified
-- execution shape: stack child
-- acceptance checks: update docs, run cargo fmt --all --check
+## 계획 (Planning)
+- 유형 (type): AFK
+- 예상 소요 (expected duration): 45m
+- 막힘 / 의존성 (blocked by): workflow-policy-contract-simplified
+- 실행 형태 (execution shape): stack child
+- 크기 (size class): medium
+- 확인 방법 (acceptance checks): update docs, run cargo fmt --all --check
 ```
 
 Prefer several narrow slices over one broad task.
@@ -171,10 +201,14 @@ Canonical `tasks.md` → workflow mode mapping:
 
 Then act on the chosen mode:
 
-- `single` / `batch` / `stack` / `matrix` — create the workflow TOML via
+- `single` / `batch` / `stack` — create the workflow TOML via
   `wt workflow task --mode <mode> ...` at
   `<git-common-dir>/wt/workflows/<id>.toml`. Record its path in `workflow.md`
   under "Linked workflow TOML".
+- `matrix` — create the workflow TOML via
+  `wt workflow task --mode matrix <task> --profiles <profile-a>,<profile-b> ...`.
+  Matrix mode requires exactly one local TaskDocument and explicit named
+  profiles.
 - `none` — no workflow TOML. Slices launch as direct TaskDocuments
   (`wt run task <slug>`) or as direct local edits outside the wt-managed repo.
 
@@ -247,15 +281,20 @@ idea file existing first.
 
 `requirements.md`:
 
-- First line is the user story: `As a [role], I want [feature] so that [benefit]`.
+- First line is the user story in Korean:
+  `사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.`
+- Include `목적 / 성공 기준` so the work states why it matters before
+  describing behavior.
+- Include `원칙 / 제약` when review, compatibility, UX, security,
+  migration, or process rules should shape the output.
 - Functional requirements use EARS-style sentences:
-  `WHEN <condition> THE SYSTEM SHALL <behavior>`.
+  `WHEN <조건> THE SYSTEM SHALL <관찰 가능한 동작>`.
 - Compound triggers optionally use:
-  `GIVEN <precondition> AND <precondition> WHEN <trigger> THE SYSTEM SHALL <response>`.
+  `GIVEN <전제> AND <전제> WHEN <트리거> THE SYSTEM SHALL <응답>`.
 - Add a non-functional section for performance, security, compatibility, and
   similar concerns when they apply.
 - Regression-sensitive behavior is stated explicitly:
-  `WHEN <condition> THE SYSTEM SHALL CONTINUE TO <preserved behavior>`.
+  `WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>`.
 
 `design.md`:
 
@@ -288,14 +327,14 @@ idea file existing first.
   `tasks.md`. wt CLI does not read or write this file; it is for the human
   and the agent.
 - Recommended sections:
-  - **Chosen mode**: one of `single` / `batch` / `stack` / `matrix` / `none`.
-  - **Why**: dependency analysis from `tasks.md` (sequential vs independent,
+  - **선택한 모드**: one of `single` / `batch` / `stack` / `matrix` / `none`.
+  - **이유**: dependency analysis from `tasks.md` (sequential vs independent,
     shared base, lifecycle, parallel groups).
-  - **Slices → TaskDocument mapping**: how `tasks.md` slices became one or
+  - **슬라이스 → TaskDocument 매핑**: how `tasks.md` slices became one or
     more TaskDocuments (or direct local edits), with paths.
-  - **Linked workflow TOML**: `<git-common-dir>/wt/workflows/<id>.toml` when
+  - **연결된 workflow TOML**: `<git-common-dir>/wt/workflows/<id>.toml` when
     applicable; `none` otherwise.
-  - **Risks**: anything to watch when execution starts.
+  - **리스크**: anything to watch when execution starts.
 - When mode = `none`, `workflow.md` may be very brief (one paragraph plus the
   slice → TaskDocument mapping) or omitted entirely.
 - The executable workflow is still the TOML at
@@ -369,6 +408,10 @@ makes a file authoritative.
 
 `requirements.md`:
 
+- Whether the purpose/success criteria explain the desired effect rather than
+  only naming an artifact to produce.
+- Whether principles/constraints are specific enough to reject unsuitable
+  designs or output forms.
 - Edge cases the user story or EARS sentences silently skip (empty input,
   cancellation mid-flight, concurrent invocation, missing config).
 - Non-functional concerns that apply but are unwritten: performance budgets,
@@ -438,6 +481,7 @@ Report:
 
 - evidence checked
 - selected approach and rejected alternatives
+- output concept
 - slice list with dependencies and chosen execution shape
 - expected duration per slice (firm or conservative planning guess)
 - PR/landing policy source: `[workflow]` config, CLI/workflow override, or

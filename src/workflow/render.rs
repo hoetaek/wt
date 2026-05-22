@@ -302,11 +302,16 @@ pub(crate) fn no_tasks_selected_message() -> &'static str {
     "No tasks selected"
 }
 
-pub(crate) fn prepared_workflow_message(ctx: &Ctx, workflow_path: &Path) -> String {
-    format!(
-        "Prepared workflow: {}",
-        ctx.storage_root.display_path(workflow_path)
-    )
+pub(crate) fn prepared_workflow_message(
+    ctx: &Ctx,
+    workflow_path: &Path,
+    title: Option<&str>,
+) -> String {
+    let path = ctx.storage_root.display_path(workflow_path);
+    match title.map(str::trim).filter(|title| !title.is_empty()) {
+        Some(title) => format!("Prepared workflow: {title} ({path})"),
+        None => format!("Prepared workflow: {path}"),
+    }
 }
 
 pub(crate) fn no_runnable_workflow_tasks_message() -> &'static str {

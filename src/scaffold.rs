@@ -84,74 +84,79 @@ impl DocKind {
 fn render_idea(slug: &str) -> String {
     format!(
         "# {slug}\n\n\
-## Raw intent\n\
+## 원문 의도\n\
 - \n\n\
-## Outcome / problem\n\
+## 맥락 / 레퍼런스 탐색\n\
+- 로컬: \n\
+- 외부: \n\
+- 참고한 방향: \n\n\
+## 목적 / 성공 기준\n\
 - \n\n\
-## Evidence\n\
-- Local: \n\
-- External: \n\n\
-## Options\n\
-- Option A: \n\
-- Option B: \n\n\
-## Tradeoffs\n\
+## 선택지\n\
+- 선택지 A: \n\
+- 선택지 B: \n\n\
+## 트레이드오프\n\
 - \n\n\
-## Risks / rabbit holes\n\
+## 리스크 / 함정\n\
 - \n\n\
-## Non-goals\n\
+## 비목표\n\
 - \n\n\
-## Open questions\n\
+## 열린 질문\n\
 - \n\n\
-## Next step\n\
+## 다음 단계\n\
 - \n"
     )
 }
 
 fn render_spec_requirements() -> String {
-    "As a [role], I want [feature] so that [benefit]\n\n\
-## Functional requirements (EARS)\n\n\
-- WHEN <condition> THE SYSTEM SHALL <behavior>\n\
-- GIVEN <precondition> WHEN <trigger> THE SYSTEM SHALL <response>\n\n\
-## Non-functional\n\n\
+    "사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.\n\n\
+## 목적 / 성공 기준\n\n\
 - \n\n\
-## Regression-sensitive\n\n\
-- WHEN <condition> THE SYSTEM SHALL CONTINUE TO <preserved behavior>\n"
+## 원칙 / 제약\n\n\
+- \n\n\
+## 기능 요구사항 (EARS)\n\n\
+- WHEN <조건> THE SYSTEM SHALL <관찰 가능한 동작>\n\
+- GIVEN <전제> WHEN <트리거> THE SYSTEM SHALL <응답>\n\n\
+## 비기능 요구사항\n\n\
+- \n\n\
+## 회귀 보존\n\n\
+- WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>\n"
         .to_string()
 }
 
 fn render_spec_design() -> String {
-    "## Decisions\n\n\
+    "## 결정사항\n\n\
 - \n\n\
-## Affected components\n\n\
+## 영향받는 컴포넌트\n\n\
 - \n\n\
-## Constraints\n\n\
+## 제약\n\n\
 - \n\n\
-## Diagrams\n\n\
+## 다이어그램\n\n\
 ```text\n\
-[ASCII diagram placeholder]\n\
+[ASCII 다이어그램 자리]\n\
 ```\n"
         .to_string()
 }
 
 fn render_spec_tasks() -> String {
-    "## Tasks\n\n\
-Sequence atomic units of work. Mark dependencies (`[blocked by: T1]`) or parallel groups (`[parallel: T2, T3]`) explicitly so the execution shape can be derived.\n\n\
-- [ ] T1 — <short title>\n\
-- [ ] T2 — <short title>  [blocked by: T1]\n\
-- [ ] T3 — <short title>  [parallel: T2]\n"
+    "## 작업 목록\n\n\
+작고 검토 가능한 구현 단위로 나눈다. 의존성(`[blocked by: T1]`)과 병렬 가능성(`[parallel: T2, T3]`)을 명시해서 실행 형태를 고를 수 있게 한다.\n\n\
+- [ ] T1 — <짧은 제목>\n\
+- [ ] T2 — <짧은 제목>  [blocked by: T1]\n\
+- [ ] T3 — <짧은 제목>  [parallel: T2]\n"
         .to_string()
 }
 
 fn render_retrospect(slug: &str) -> String {
     format!(
         "# {slug}\n\n\
-## What worked\n\
+## 유지할 점\n\
 - \n\n\
-## What didn't\n\
+## 문제\n\
 - \n\n\
-## Surprises\n\
+## 시도할 점\n\
 - \n\n\
-## Decisions for next time\n\
+## 액션 후보\n\
 - \n"
     )
 }
@@ -195,11 +200,14 @@ mod tests {
     fn task_and_workflow_render_reuse_toml_renderers() {
         let task = DocKind::Task.render("foo");
         assert_eq!(task.len(), 1);
-        assert!(task[0].1.contains("title = \"foo\""));
+        assert!(task[0].1.contains("title = \"작업: foo\""));
         assert!(task[0].1.contains("branch = \"foo\""));
+        assert!(task[0].1.contains("## 계획 (Planning)"));
 
         let workflow = DocKind::Workflow.render("foo");
         assert_eq!(workflow.len(), 1);
+        assert!(workflow[0].1.contains("title = \"워크플로우: foo\""));
+        assert!(workflow[0].1.contains("## 목적"));
         assert!(workflow[0].1.contains("mode = \"single\""));
     }
 
@@ -208,7 +216,19 @@ mod tests {
         let spec = DocKind::Spec.render("foo");
         assert_eq!(spec.len(), 3);
         assert_eq!(spec[2].0, PathBuf::from("specs/foo/tasks.md"));
-        assert!(spec[2].1.contains("## Tasks"));
+        assert!(spec[0].1.contains("## 목적 / 성공 기준"));
+        assert!(spec[0].1.contains("## 원칙 / 제약"));
+        assert!(spec[2].1.contains("## 작업 목록"));
         assert!(spec[2].1.contains("[blocked by:"));
+    }
+
+    #[test]
+    fn idea_render_uses_korean_work_sequence_headings() {
+        let idea = DocKind::Idea.render("foo");
+        assert_eq!(idea.len(), 1);
+        assert!(idea[0].1.contains("## 원문 의도"));
+        assert!(idea[0].1.contains("## 맥락 / 레퍼런스 탐색"));
+        assert!(idea[0].1.contains("## 목적 / 성공 기준"));
+        assert!(!idea[0].1.contains("Outcome / problem"));
     }
 }

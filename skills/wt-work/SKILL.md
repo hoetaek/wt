@@ -1,6 +1,6 @@
 ---
 name: wt-work
-description: "Use for the full wt loop by sequencing wt-ready, wt-start, wt-coordinate, wt-land, and a scaffolded retrospective."
+description: "Use for the full wt loop by sequencing wt-idea when needed, wt-ready, wt-start, wt-coordinate, wt-land, and wt-retrospect."
 ---
 
 # WT Work
@@ -10,25 +10,34 @@ given context, not just one lifecycle phase.
 
 각 단계에서 per-feature 문서(idea / spec / task / workflow / retrospect) 골격이 필요하면 `wt scaffold <slug> --<kind>` 로 시드한다.
 
+## Work Sequence Reference
+
+Before starting the loop, read `references/work-sequence.md` and locate the
+current gate. The sequence is not a waterfall; it is a guardrail for deciding
+which lifecycle skill owns the next artifact. If raw intent or context is still
+too vague, run `wt-idea` before `wt-ready`. If the work is already committed to
+prep, use `wt-ready` to reconstruct any missing earlier gates instead of
+launching prematurely.
+
 Apply these skills in order:
 
-1. `wt-ready`: gather evidence, settle scope and workflow policy, split work,
+1. `wt-idea` when needed: preserve raw intent, explore references/options, and
+   stop before committed TaskDocuments or workflows.
+2. `wt-ready`: gather evidence, settle purpose/success criteria, requirements,
+   output concept, scope, and workflow policy; split work,
    and prepare TaskDocuments or a saved workflow when needed.
-2. `wt-start`: launch the prepared task or workflow and capture the inspect
+3. `wt-start`: launch the prepared task or workflow and capture the inspect
    target.
-3. `wt-coordinate`: monitor the run, inspect agent state, review code, run
-   checks, and send focused feedback until the work is acceptable.
-4. `wt-land`: respect workflow landing policy, perform any applicable
+4. `wt-coordinate`: monitor the run, inspect agent state, review code, run
+   checks, sync the living spec, and send focused feedback until the work is
+   acceptable.
+5. `wt-land`: respect workflow landing policy, perform any applicable
    completion step, land branches in the right order, prove ancestry, and clean
    up with `wt done`.
-5. Retrospect: capture keep/problem/try lessons and action candidates as a
-   Markdown retrospective under `<git-common-dir>/wt/retrospectives/`. Seed the
-   file with `wt scaffold <slug> --retrospect`, then fill in. For dated TOML
-   format with richer schema, invoke the `wt-retrospect` skill instead of this
-   scaffolded Markdown step. Skip only when no useful lesson emerged (a
-   retrospect that restates the diff is noise).
+6. `wt-retrospect`: capture keep/problem/try lessons, action candidates, and
+   harness-tuning records as a TOML retrospective when a useful lesson emerged.
 
-Carry the user's original context through all five phases. Stop only when a
+Carry the user's original context through every phase. Stop only when a
 phase's own guardrail blocks progress, such as unresolved HITL decisions, active
 agent work that still needs time, failed review, merge conflicts owned by the
 task agent, or unsafe cleanup conditions. When a phase blocks progress, still
