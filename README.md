@@ -171,6 +171,7 @@ Prepare local TaskDocuments without starting work:
 
 ```bash
 wt task list
+wt task list --all
 wt task import PROJ-123
 wt task import
 wt task publish add-profile-docs
@@ -237,9 +238,12 @@ merge.
 - `wt run workflow` starts runnable tasks from saved Workflow files. It does
   not list, edit, repair, or complete Workflow files.
 - `TaskDocument` files in `<git-common-dir>/wt/tasks/<task>.toml` define prepared local work.
-- `wt task list` is the canonical TaskDocument inventory. It lists all valid
-  local TaskDocument files, reports invalid task TOML files, and does not start
-  worktrees, branches, TaskRuns, Workflows, provider issues, or pull requests.
+- `wt task list` shows the actionable local TaskDocument working set: tasks
+  with no TaskRun, or whose latest TaskRun is prepared, failed, or skipped. It
+  hides done and running tasks with a count hint; use `wt task list --all` for
+  the full TaskDocument inventory. Both modes report invalid task TOML files
+  and do not start worktrees, branches, TaskRuns, Workflows, provider issues, or
+  pull requests.
 - `wt task import [<issue>...]` imports provider issues as TaskDocuments,
   records title, branch, body, and `[origin]`, and may materialize the provider
   issue branch first; it does not start worktrees, local branches, TaskRuns,
@@ -534,7 +538,7 @@ there for one named profile.
 | `wt run issue` | Start work from a provider issue |
 | `wt run pr` | Start worktrees from pull requests |
 | `wt run branch` | Start work from branch-name text |
-| `wt task list` | List saved local TaskDocuments |
+| `wt task list` | List actionable local TaskDocuments |
 | `wt task import` | Import provider issues as local TaskDocuments |
 | `wt run task` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |

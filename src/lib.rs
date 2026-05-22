@@ -92,7 +92,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             }
         },
         Commands::Task { command } => match command {
-            TaskCommand::List => commands::task_list::run(ctx),
+            TaskCommand::List { all } => commands::task_list::run(ctx, *all),
             TaskCommand::Import { issues } => commands::task::import(ctx, issues),
             TaskCommand::DeprecatedRun { .. } => {
                 deprecated_start_command_error("wt task run", "wt run task")

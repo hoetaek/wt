@@ -1,5 +1,6 @@
 use crate::context::Ctx;
 use crate::task::{self, TaskDocument};
+use crate::task_run;
 use anyhow::{Context, Result};
 use console::measure_text_width;
 use serde::Serialize;
@@ -16,8 +17,8 @@ const SOURCE_COLUMN_MAX: usize = 18;
 const TASK_COLUMN_MAX: usize = 34;
 const BRANCH_COLUMN_MAX: usize = 48;
 
-pub(crate) fn run(ctx: &Ctx) -> Result<()> {
-    let report = collect(ctx)?;
+pub(crate) fn run(ctx: &Ctx, all: bool) -> Result<()> {
+    let report = collect(ctx, all)?;
     if ctx.is_json() {
         write_json(&report)?;
     } else {
@@ -30,6 +31,10 @@ pub(crate) fn run(ctx: &Ctx) -> Result<()> {
 struct TaskListReport {
     tasks: Vec<TaskListRow>,
     invalid_tasks: Vec<InvalidTaskRow>,
+    #[serde(skip_serializing)]
+    hidden_task_count: usize,
+    #[serde(skip_serializing)]
+    full_inventory: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,15 +64,22 @@ struct InvalidTaskRow {
     error: String,
 }
 
-fn collect(ctx: &Ctx) -> Result<TaskListReport> {
+fn collect(ctx: &Ctx, all: bool) -> Result<TaskListReport> {
     let mut tasks = Vec::new();
     let mut invalid_tasks = Vec::new();
+    let mut hidden_task_count = 0;
 
     for path in task::task_document_paths(ctx)? {
         let key = task_key_from_path(&path).unwrap_or_default();
         let relative_path = task_relative_path(ctx, &path);
         match read_task_row(ctx, &path) {
-            Ok(row) => tasks.push(row),
+            Ok(row) => {
+                if all || task_run::task_is_selectable(ctx, &row.key)? {
+                    tasks.push(row);
+                } else {
+                    hidden_task_count += 1;
+                }
+            }
             Err(err) => invalid_tasks.push(InvalidTaskRow {
                 key,
                 path: relative_path,
@@ -79,6 +91,8 @@ fn collect(ctx: &Ctx) -> Result<TaskListReport> {
     Ok(TaskListReport {
         tasks,
         invalid_tasks,
+        hidden_task_count,
+        full_inventory: all,
     })
 }
 
@@ -159,10 +173,15 @@ fn one_line(value: &str) -> String {
 }
 
 fn print_text(ctx: &Ctx, report: &TaskListReport) {
-    if report.tasks.is_empty() && report.invalid_tasks.is_empty() {
+    if report.tasks.is_empty() && report.invalid_tasks.is_empty() && report.hidden_task_count == 0 {
         ctx.ui
             .print_plain("No tasks found in <git-common-dir>/wt/tasks");
         return;
+    }
+
+    if report.tasks.is_empty() && report.invalid_tasks.is_empty() && !report.full_inventory {
+        ctx.ui
+            .print_plain("No actionable tasks found in <git-common-dir>/wt/tasks");
     }
 
     for line in render_text_lines(report) {
@@ -204,8 +223,22 @@ fn render_text_lines(report: &TaskListReport) -> Vec<String> {
             ));
         }
     }
+    if report.hidden_task_count > 0 {
+        if emitted_group {
+            lines.push(BAR.to_string());
+        }
+        lines.push(format!(
+            "{BAR} {}",
+            hidden_task_count_hint(report.hidden_task_count)
+        ));
+    }
     lines.push(FOOTER.to_string());
     lines
+}
+
+fn hidden_task_count_hint(count: usize) -> String {
+    let noun = if count == 1 { "task" } else { "tasks" };
+    format!("{count} {noun} hidden; use wt task list --all to show the full inventory")
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -337,6 +370,7 @@ mod tests {
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions, OutputMode};
+    use crate::task_run;
 
     fn ctx(root: &Path, output_mode: OutputMode) -> Ctx {
         Ctx::new_with_options(
@@ -380,10 +414,12 @@ id = "PROJ-123"
         .unwrap();
         fs::write(tasks_dir.join("bad.toml"), "unknown = true\n").unwrap();
 
-        let report = collect(&ctx).unwrap();
+        let report = collect(&ctx, false).unwrap();
 
         assert_eq!(report.tasks.len(), 2);
         assert_eq!(report.invalid_tasks.len(), 1);
+        assert_eq!(report.hidden_task_count, 0);
+        assert!(!report.full_inventory);
         assert_eq!(report.tasks[0].key, "PROJ-123");
         assert_eq!(
             report.tasks[0].path,
@@ -417,10 +453,124 @@ branch = "feature/task-{idx}"
             .unwrap();
         }
 
-        let report = collect(&ctx).unwrap();
+        let report = collect(&ctx, false).unwrap();
 
         assert_eq!(report.tasks.len(), 11);
         assert_eq!(report.invalid_tasks.len(), 0);
         assert_eq!(report.tasks[10].key, "task-9");
+    }
+
+    #[test]
+    fn collect_default_uses_task_selectability_and_all_keeps_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".git/wt/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+
+        for key in [
+            "done",
+            "failed",
+            "latest-failed",
+            "no-run",
+            "prepared",
+            "running",
+            "skipped",
+        ] {
+            fs::write(
+                tasks_dir.join(format!("{key}.toml")),
+                format!(
+                    r#"title = "{key}"
+branch = "feature/{key}"
+"#
+                ),
+            )
+            .unwrap();
+        }
+
+        task_run::create(&ctx, "done", "feature/done", None, task_run::STATUS_DONE).unwrap();
+        task_run::create(
+            &ctx,
+            "failed",
+            "feature/failed",
+            None,
+            task_run::STATUS_FAILED,
+        )
+        .unwrap();
+        task_run::create(
+            &ctx,
+            "latest-failed",
+            "feature/latest-failed",
+            None,
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+        task_run::create(
+            &ctx,
+            "latest-failed",
+            "feature/latest-failed",
+            None,
+            task_run::STATUS_FAILED,
+        )
+        .unwrap();
+        task_run::create(
+            &ctx,
+            "prepared",
+            "feature/prepared",
+            None,
+            task_run::STATUS_PREPARED,
+        )
+        .unwrap();
+        task_run::create(
+            &ctx,
+            "running",
+            "feature/running",
+            None,
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+        task_run::create(
+            &ctx,
+            "skipped",
+            "feature/skipped",
+            None,
+            task_run::STATUS_SKIPPED,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, false).unwrap();
+
+        let keys = report
+            .tasks
+            .iter()
+            .map(|row| row.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            ["failed", "latest-failed", "no-run", "prepared", "skipped"]
+        );
+        assert_eq!(report.hidden_task_count, 2);
+        assert!(!report.full_inventory);
+
+        let all_report = collect(&ctx, true).unwrap();
+
+        let all_keys = all_report
+            .tasks
+            .iter()
+            .map(|row| row.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            all_keys,
+            [
+                "done",
+                "failed",
+                "latest-failed",
+                "no-run",
+                "prepared",
+                "running",
+                "skipped"
+            ]
+        );
+        assert_eq!(all_report.hidden_task_count, 0);
+        assert!(all_report.full_inventory);
     }
 }

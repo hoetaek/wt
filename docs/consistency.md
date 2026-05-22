@@ -937,15 +937,21 @@ TaskDocument는 작업이 무엇인지를 담는 실행 정의다. `<git-common-
 `<git-common-dir>/wt/specs/<slug>/`에 병렬로 존재할 수 있고, TaskDocument body는 그 경로를
 가리키는 launch summary로 남는다.
 
-`wt task list`는 `<git-common-dir>/wt/tasks/<task>.toml`에 저장된 TaskDocument file의 canonical
-read-only inventory다. `wt run task`의 runnable selector가 아니므로 이미 완료된
-TaskRun 때문에 selector에서 빠지는 TaskDocument도 보여주고, selector의 10-row visible
-cap을 적용하지 않는다. Text output은 selector와 같은 TaskDocument display order인
-title, origin/publish state, task key, branch를 bounded column으로 나눠 보여주고,
-`provider-origin`과 `local` source group 아래에 둔다. Inventory-only field인 source는 group으로 표현하고,
-path, raw origin, 짧은 body summary는 text에서 반복하지 않고 JSON output에 둔다. JSON output은 TaskDocument의
-key, path, title, branch, origin/publish state, local-vs-provider-origin source, 짧은
-body summary를 stable shape로 보여준다.
+`wt task list`는 `<git-common-dir>/wt/tasks/<task>.toml`에 저장된 TaskDocument file 중
+actionable working set을 보여주는 canonical read-only list다. Bare `wt task list`는
+`wt run task`의 selectable task semantics를 따른다. TaskRun이 없거나 latest TaskRun status가
+`prepared`, `failed`, `skipped`인 TaskDocument를 보여주고, latest status가 `done` 또는
+`running`인 TaskDocument는 숨긴다. 숨겨진 TaskDocument가 있으면 text output은 count와
+`wt task list --all` 안내를 보여주되 TaskDocument row를 dump하지 않는다. `wt task list --all`은
+full TaskDocument inventory mode이며 done/running TaskDocument까지 포함한다. 두 mode 모두
+selector의 10-row visible cap을 적용하지 않는다. Text output은 selector와 같은 TaskDocument
+display order인 title, origin/publish state, task key, branch를 bounded column으로 나눠
+보여주고, `provider-origin`과 `local` source group 아래에 둔다. Inventory-only field인 source는
+group으로 표현하고, path, raw origin, 짧은 body summary는 text에서 반복하지 않고 JSON output에
+둔다. JSON output은 두 mode 모두 `{ "tasks": [...], "invalid_tasks": [...] }` top-level shape를
+유지하며, TaskDocument의 key, path, title, branch, origin/publish state, local-vs-provider-origin
+source, 짧은 body summary를 stable shape로 보여준다. Bare JSON은 actionable working set만
+담고, `--all --json`은 full inventory를 담는다.
 TaskDocument TOML parse/validation failure는 조용히 숨기지 않고 text warning 또는 JSON
 `invalid_tasks`로 보고한다. `wt task list`는 worktree, local branch, TaskRun, Workflow,
 provider issue, pull request, agent setup을 만들거나 수정하지 않는다. Workflow inventory는

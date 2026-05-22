@@ -1231,14 +1231,20 @@ fn task_help_lists_list_import_and_publish() {
 }
 
 #[test]
-fn task_list_help_explains_canonical_inventory() {
+fn task_list_help_explains_actionable_default_and_full_inventory() {
     wt_command()
         .args(["task", "list", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("canonical read-only inventory"))
+        .stdout(predicate::str::contains("List actionable"))
         .stdout(predicate::str::contains(
-            "whether or not they are selectable by wt run task",
+            "same selectability rules as wt run task",
+        ))
+        .stdout(predicate::str::contains("prepared, failed, or skipped"))
+        .stdout(predicate::str::contains("done or running are hidden"))
+        .stdout(predicate::str::contains("--all"))
+        .stdout(predicate::str::contains(
+            "full read-only TaskDocument inventory",
         ))
         .stdout(predicate::str::contains(
             "reports invalid TaskDocument TOML files",
@@ -1252,16 +1258,45 @@ fn task_list_help_explains_canonical_inventory() {
 fn task_list_supports_json_and_reports_invalid_tasks() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    write_task_document(temp.path(), "completed", "feature/completed");
+    write_task_document(temp.path(), "done", "feature/done");
+    write_task_run_file(temp.path(), "run-done", "done", "feature/done", "done", "");
+    write_task_document(temp.path(), "running", "feature/running");
     write_task_run_file(
         temp.path(),
-        "run-completed",
-        "completed",
-        "feature/completed",
-        "done",
+        "run-running",
+        "running",
+        "feature/running",
+        "running",
         "",
     );
-    write_task_document(temp.path(), "local", "feature/local");
+    write_task_document(temp.path(), "prepared", "feature/prepared");
+    write_task_run_file(
+        temp.path(),
+        "run-prepared",
+        "prepared",
+        "feature/prepared",
+        "prepared",
+        "",
+    );
+    write_task_document(temp.path(), "failed", "feature/failed");
+    write_task_run_file(
+        temp.path(),
+        "run-failed",
+        "failed",
+        "feature/failed",
+        "failed",
+        "",
+    );
+    write_task_document(temp.path(), "skipped", "feature/skipped");
+    write_task_run_file(
+        temp.path(),
+        "run-skipped",
+        "skipped",
+        "feature/skipped",
+        "skipped",
+        "",
+    );
+    write_task_document(temp.path(), "no-run", "feature/no-run");
     std::fs::write(
         temp.path().join(".git/wt/tasks/provider.toml"),
         r#"title = "Provider task"
@@ -1297,21 +1332,28 @@ id = "PROJ-123"
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
     let tasks = value["tasks"].as_array().unwrap();
     let invalid = value["invalid_tasks"].as_array().unwrap();
-    assert_eq!(tasks.len(), 3);
+    assert_eq!(tasks.len(), 5);
     assert_eq!(invalid.len(), 1);
+    assert_eq!(value.as_object().unwrap().len(), 2);
 
-    let completed = tasks
+    assert!(tasks.iter().all(|row| row["key"] != "done"));
+    assert!(tasks.iter().all(|row| row["key"] != "running"));
+    for key in ["failed", "no-run", "prepared", "skipped"] {
+        assert!(
+            tasks.iter().any(|row| row["key"] == key),
+            "{key} should be listed by default"
+        );
+    }
+
+    let no_run = tasks
         .iter()
-        .find(|row| row["key"] == "completed")
-        .expect("completed task should be listed even after a done TaskRun");
-    assert_eq!(
-        completed["path"],
-        "<git-common-dir>/wt/tasks/completed.toml"
-    );
-    assert_eq!(completed["branch"], "feature/completed");
-    assert_eq!(completed["publish_state"], "local");
-    assert_eq!(completed["source"], "local");
-    assert!(completed["origin"].is_null());
+        .find(|row| row["key"] == "no-run")
+        .expect("task without a TaskRun should be listed");
+    assert_eq!(no_run["path"], "<git-common-dir>/wt/tasks/no-run.toml");
+    assert_eq!(no_run["branch"], "feature/no-run");
+    assert_eq!(no_run["publish_state"], "local");
+    assert_eq!(no_run["source"], "local");
+    assert!(no_run["origin"].is_null());
 
     let provider = tasks
         .iter()
@@ -1333,12 +1375,47 @@ id = "PROJ-123"
             .unwrap()
             .contains("Failed to parse task")
     );
+
+    let all_output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "--json",
+            "task",
+            "list",
+            "--all",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let all_value: serde_json::Value = serde_json::from_slice(&all_output).unwrap();
+    let all_tasks = all_value["tasks"].as_array().unwrap();
+    let all_invalid = all_value["invalid_tasks"].as_array().unwrap();
+    assert_eq!(all_tasks.len(), 7);
+    assert_eq!(all_invalid.len(), 1);
+    assert_eq!(all_value.as_object().unwrap().len(), 2);
+    assert!(all_tasks.iter().any(|row| row["key"] == "done"));
+    assert!(all_tasks.iter().any(|row| row["key"] == "running"));
 }
 
 #[test]
 fn task_list_text_includes_stable_task_fields_and_invalid_warning() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
+    write_task_document(temp.path(), "done", "feature/done");
+    write_task_run_file(temp.path(), "run-done", "done", "feature/done", "done", "");
+    write_task_document(temp.path(), "running", "feature/running");
+    write_task_run_file(
+        temp.path(),
+        "run-running",
+        "running",
+        "feature/running",
+        "running",
+        "",
+    );
     write_task_document(temp.path(), "local", "feature/local");
     std::fs::write(
         temp.path().join(".git/wt/tasks/provider.toml"),
@@ -1371,8 +1448,69 @@ id = "PROJ-123"
         .stdout(predicate::str::contains(
             "•  Provider task  Linear PROJ-123  task provider  branch alice/provider-task",
         ))
+        .stdout(predicate::str::contains(
+            "2 tasks hidden; use wt task list --all to show the full inventory",
+        ))
+        .stdout(predicate::str::contains("task done").not())
+        .stdout(predicate::str::contains("task running").not())
         .stdout(predicate::str::contains("Path:").not())
         .stdout(predicate::str::contains("Summary:").not())
+        .stderr(predicate::str::contains(
+            "Invalid task <git-common-dir>/wt/tasks/bad.toml",
+        ));
+}
+
+#[test]
+fn task_list_all_text_keeps_full_grouped_inventory() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_document(temp.path(), "done", "feature/done");
+    write_task_run_file(temp.path(), "run-done", "done", "feature/done", "done", "");
+    write_task_document(temp.path(), "running", "feature/running");
+    write_task_run_file(
+        temp.path(),
+        "run-running",
+        "running",
+        "feature/running",
+        "running",
+        "",
+    );
+    write_task_document(temp.path(), "local", "feature/local");
+    std::fs::write(
+        temp.path().join(".git/wt/tasks/provider.toml"),
+        r#"title = "Provider task"
+branch = "alice/provider-task"
+body = "Provider task body"
+
+[origin]
+provider = "linear"
+id = "PROJ-123"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join(".git/wt/tasks/bad.toml"),
+        "unknown = true\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "task", "list", "--all"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("◆ Tasks"))
+        .stdout(predicate::str::contains("│ provider-origin"))
+        .stdout(predicate::str::contains("│ local"))
+        .stdout(predicate::str::contains("task local"))
+        .stdout(predicate::str::contains("branch feature/local"))
+        .stdout(predicate::str::contains("task done"))
+        .stdout(predicate::str::contains("branch feature/done"))
+        .stdout(predicate::str::contains("task running"))
+        .stdout(predicate::str::contains("branch feature/running"))
+        .stdout(predicate::str::contains(
+            "•  Provider task  Linear PROJ-123  task provider  branch alice/provider-task",
+        ))
+        .stdout(predicate::str::contains("tasks hidden").not())
         .stderr(predicate::str::contains(
             "Invalid task <git-common-dir>/wt/tasks/bad.toml",
         ));

@@ -445,7 +445,7 @@ fn supports_json(command: &Commands) -> bool {
                     command: WorkflowCommand::Archive { .. },
                 }
                 | Commands::Task {
-                    command: TaskCommand::List,
+                    command: TaskCommand::List { .. },
                 }
                 | Commands::Agent {
                     command: AgentCommand::Status { .. },
