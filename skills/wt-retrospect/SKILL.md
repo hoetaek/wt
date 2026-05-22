@@ -1,28 +1,47 @@
 ---
 name: wt-retrospect
-description: "Use after wt work has landed or been intentionally discarded to capture keep/problem/try lessons and action candidates as a TOML retrospective. Triggers: 'retrospect', 'retrospective 작성', or end of a wt-work loop."
+description: "Use after wt work has landed, been intentionally discarded, or stopped at a reusable blocked gate to capture keep/problem/try lessons and action candidates as a TOML retrospective. Triggers: 'retrospect', 'retrospective 작성', or end of a wt-work loop."
 ---
 
 # WT Retrospect
 
-Use this skill to capture a completed work item as a structured retrospective
-that future planning, coordination, review, landing, or skill guidance can
-learn from. Do not use it to track in-flight state — that belongs in
-`<git-common-dir>/wt/tasks`, `<git-common-dir>/wt/task-runs`, and `<git-common-dir>/wt/workflows`.
+Use this skill to capture a closed work item, or a blocked `wt-work` lesson, as
+a structured retrospective that future planning, coordination, review, landing,
+or skill guidance can learn from. Do not use it to track in-flight state — that
+belongs in `<git-common-dir>/wt/tasks`, `<git-common-dir>/wt/task-runs`, and
+`<git-common-dir>/wt/workflows`.
 In the work-sequence model, this skill owns the final retrospect gate after
-landing or explicit discard.
+landing or explicit discard. It can also record a blocked-loop lesson when the
+loop stops at an earlier gate and the blocker itself is worth preserving.
 
 ## When to Use
 
 - After `wt-land` proves a branch landed and cleanup ran.
 - After an intentional discard with explicit user direction.
 - At the end of a `wt-work` loop, even when a phase blocked progress, if the
-  lesson is worth preserving for the next cycle.
+  blocker is a reusable lesson for the next cycle.
 - When the user explicitly says "retrospect", "retrospective 작성", or
   references `<git-common-dir>/wt/retrospectives/`.
 
 Skip this skill when no useful keep/problem/try emerged. A retrospect that
 restates the diff is noise.
+
+## Retrospect Types
+
+Choose the type before writing:
+
+- Closed retrospect: the work item is landed, explicitly discarded, or otherwise
+  closed after `wt-land` proved integration/discard and cleanup safety. Record
+  outcome, evidence, merge or discard proof, cleanup, and lessons.
+- Blocked lesson retrospect: the `wt-work` loop stopped at an earlier gate, such
+  as missing execution handoff, failed launch, unresolved review evidence,
+  landing conflict ownership, or unclear policy. Record the missing gate and the
+  reusable lesson only. Do not turn the retrospective into TaskRun, Workflow, or
+  branch state.
+
+If the work is merely waiting on an active agent, a check, or a normal review
+round, it is not a blocked lesson retrospect yet; continue with the matching
+lifecycle skill.
 
 ## Boundary
 
@@ -31,9 +50,9 @@ restates the diff is noise.
 - Keep future product ideas in `<git-common-dir>/wt/ideas/`; promote a retrospect action
   candidate into an idea or task only when the pattern is clear enough to act
   on.
-- Prefer one completed work item per file. If one run produced unrelated
-  lessons, split them into separate files and cross-link with the
-  `related_retrospective` field.
+- Prefer one closed work item or blocked gate lesson per file. If one run
+  produced unrelated lessons, split them into separate files and cross-link with
+  the `related_retrospective` field.
 
 ## Scope Choice
 
@@ -65,7 +84,7 @@ shape:
 ```toml
 title = "<concise title that names the work item>"
 date = "YYYY-MM-DD"
-kind = "<direct-task | workflow-batch | workflow-stack | matrix | multi-pr-cycle | fix-and-hotfix-sequence | discard>"
+kind = "<direct-task | workflow-batch | workflow-stack | matrix | multi-pr-cycle | fix-and-hotfix-sequence | discard | blocked-gate>"
 target = "<task key, workflow id, PR number(s), or topic>"
 outcome = "<landed | discarded | partial | blocked>"
 commit = "<merge commit oid(s)>"
@@ -79,6 +98,7 @@ related_retrospective = "<git-common-dir>/wt/retrospectives/<other-file>.toml"
 goal = """..."""
 scope = """..."""
 integration_branch = "develop"   # or actual branch
+blocked_gate = ""                 # required for outcome = "blocked"
 
 [metrics]
 # Numbers a future coordinator can compare against next time.
@@ -109,7 +129,7 @@ items = [
 
 [[action_candidates]]
 summary = "<one-line action this retrospective recommends>"
-owner = "<wt | wt-coordinate | wt-land | wt-ready | wt-start | coordinator | <user>>"
+owner = "<wt | wt-work | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>>"
 status = "candidate"               # or "addressed" / "promoted"
 promote_to = "<git-common-dir>/wt/ideas/"      # or a specific path when known
 done_when = "<observable criterion that closes this candidate>"
@@ -118,7 +138,7 @@ done_when = "<observable criterion that closes this candidate>"
 # One entry per lesson that warrants a permanent behavior change.
 # Skip this table entirely when no lesson rises to that bar.
 lesson = "<the mistake or friction this entry exists to prevent next time>"
-owner = "<wt | wt-coordinate | wt-land | wt-ready | wt-start | coordinator | <user>>"
+owner = "<wt | wt-work | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>>"
 target_file = "<absolute or repo-relative path of the file that must change>"
 target_section = "<heading, anchor, or line range inside target_file>"
 change = "<what the edit should say or constrain, in one or two sentences>"
@@ -135,6 +155,9 @@ status = "proposed"                # or "applied" / "rejected"
   problems are out of scope or already addressed elsewhere.
 - Make `try` items adoptable. If the change belongs in a skill body, say so;
   if it belongs in `wt` code, say so; if it is a coordinator habit, say so.
+- For `outcome = "blocked"`, name the missing gate using the work-sequence
+  vocabulary. Keep active execution details in TaskRun/Workflow state; the
+  retrospective should explain what should change next time.
 - Use `action_candidates` for items that should turn into work later. Each
   candidate gets a `done_when` so the future coordinator can recognize when
   the candidate is satisfied.
@@ -158,7 +181,7 @@ such that the agent never makes that mistake again.
   it. "Update CLAUDE.md somewhere" is not enough; "Add a bullet under
   `CLAUDE.md` > `## 문제 해결 원칙` after item 5" is.
 - Name the owner. Use the same vocabulary as `[[action_candidates]]`
-  (`wt | wt-coordinate | wt-land | wt-ready | wt-start | coordinator | <user>`)
+  (`wt | wt-work | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>`)
   so the reader knows who is responsible for applying the change.
 - Record each such change as one `[[harness_tuning]]` entry in the TOML. If no
   lesson rises to that bar, omit the table entirely rather than padding it.
@@ -181,21 +204,29 @@ requirements.md proved ambiguous; tighten the wt-ready template").
 
 ## Process
 
-1. Confirm the work item is closed (landed or explicitly discarded). If still
-   in flight, stop and let the matching lifecycle skill finish first.
+1. Classify the retrospect:
+   - Closed: confirm the work item is landed or explicitly discarded. If the
+     branch is still active and can continue normally, stop and let the matching
+     lifecycle skill finish first.
+   - Blocked lesson: confirm the `wt-work` loop is stopped at a named
+     work-sequence gate and the blocker is a reusable lesson. Do not write one
+     for ordinary waiting, active agent work, or a routine review round.
 2. Decide scope: one file or split + cross-link.
-3. Draft the TOML directly under `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`
+3. For `outcome = "blocked"`, set `kind = "blocked-gate"` unless a more
+   specific kind is still useful, and fill `context.blocked_gate` with the
+   work-sequence gate name.
+4. Draft the TOML directly under `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`
    using the shape above. Skip optional sections that have no content.
-4. Cross-check against `<git-common-dir>/wt/retrospectives/README.md` if conventions are
+5. Cross-check against `<git-common-dir>/wt/retrospectives/README.md` if conventions are
    uncertain.
-5. Re-read for adoptability: each `try` item should be something a future
+6. Re-read for adoptability: each `try` item should be something a future
    coordinator can actually do; each `action_candidate` should have a
    recognizable `done_when`.
-6. For every lesson that warrants a permanent behavior change, add a
+7. For every lesson that warrants a permanent behavior change, add a
    `[[harness_tuning]]` entry that names the exact target file and section,
    plus the owner who applies the change. If no lesson rises to that bar,
    leave the table out.
-7. Do not commit the file unless the user asks. Retrospectives are local
+8. Do not commit the file unless the user asks. Retrospectives are local
    learning artifacts by default.
 
 ## Report
