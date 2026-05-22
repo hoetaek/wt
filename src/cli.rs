@@ -520,7 +520,7 @@ pub enum AgentCommand {
     WaitStats,
     /// Manage opt-in supervisors for agent inbox stale-rescue
     #[command(
-        long_about = "Manage opt-in supervisors for agent inbox stale-rescue.\n\nA supervisor is default-off Layer 3 insurance for one agent identity. It records a local registration under <git-common-dir>/wt/supervisors/ and only intervenes after an inbox/new message has aged past --stale-threshold. Supervisors started with --surface run inside a hidden cmux workspace so cmux push delivery stays attached to cmux; supervisors without --surface use the detached process path. No wt verb starts a supervisor implicitly."
+        long_about = "Manage opt-in supervisors for agent inbox stale-rescue.\n\nA supervisor is default-off Layer 3 insurance for one agent identity. It records a local registration under <git-common-dir>/wt/supervisors/ and only intervenes after an inbox/new message has aged past --stale-threshold. Supervisors started with --surface run inside an unfocused cmux surface in the target pane so cmux push delivery stays attached to cmux without creating another workspace; supervisors without --surface use the detached process path. No wt verb starts a supervisor implicitly."
     )]
     Supervisor {
         #[command(subcommand)]

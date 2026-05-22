@@ -1655,6 +1655,8 @@ mod tests {
             target_surface_id: Some("surface:72".into()),
             target_agent_kind: Some("codex".into()),
             host_workspace_id: None,
+            host_pane_id: None,
+            host_surface_id: None,
             stale_threshold_secs: 900,
             poll_interval_secs: 60,
             log_path: ctx

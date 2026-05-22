@@ -138,6 +138,8 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
         target_surface_id: options.surface.clone(),
         target_agent_kind,
         host_workspace_id: launch.host_workspace_id.clone(),
+        host_pane_id: launch.host_pane_id.clone(),
+        host_surface_id: launch.host_surface_id.clone(),
         stale_threshold_secs,
         poll_interval_secs,
         log_path: log_path.clone(),
@@ -239,7 +241,7 @@ pub fn status(ctx: &Ctx, agent_id: Option<&str>) -> Result<()> {
                 report.pid,
                 report.stale_threshold,
                 report.poll_interval,
-                report.host_workspace_id.as_deref().unwrap_or("-"),
+                report.host_summary(),
                 report.log_path
             );
         }
@@ -379,6 +381,8 @@ struct SupervisorLoopState {
 struct SupervisorLaunch {
     pid: u32,
     host_workspace_id: Option<String>,
+    host_pane_id: Option<String>,
+    host_surface_id: Option<String>,
     child: Option<std::process::Child>,
 }
 
@@ -822,6 +826,8 @@ fn spawn_detached_run(
     Ok(SupervisorLaunch {
         pid: child.id(),
         host_workspace_id: None,
+        host_pane_id: None,
+        host_surface_id: None,
         child: Some(child),
     })
 }
@@ -837,10 +843,17 @@ fn spawn_cmux_hosted_run(
 ) -> Result<SupervisorLaunch> {
     let exe = std::env::current_exe().context("Failed to resolve current wt executable")?;
     let pid_path = log_path.with_extension("pid");
-    let cmux = CmuxService::new_with_workspace_focus(ctx.runner.as_ref(), false);
+    let cmux = CmuxService::new(ctx.runner.as_ref());
     if !cmux.is_available() {
         bail!("Surface-backed supervisors require cmux on PATH");
     }
+    let target_surface = options
+        .surface
+        .as_deref()
+        .ok_or_else(|| anyhow!("Surface-backed supervisor missing target surface"))?;
+    let host_location = cmux
+        .find_surface_location(target_surface)?
+        .ok_or_else(|| anyhow!("Target cmux surface not found: {target_surface}"))?;
 
     match fs::remove_file(&pid_path) {
         Ok(()) => {}
@@ -891,21 +904,36 @@ fn spawn_cmux_hosted_run(
             args.join(" ")
         ))
     );
-    let name = format!("wt supervisor {}", agent_id.trim_start_matches("agents/"));
-    let host_workspace_id = cmux
-        .new_workspace(&ctx.invocation_root, &name, &command)
-        .with_context(|| format!("Failed to start cmux-hosted supervisor for {agent_id}"))?;
+    let host_surface_id = cmux
+        .new_surface_with_focus(
+            &host_location.pane_handle,
+            &host_location.workspace_handle,
+            false,
+        )
+        .with_context(|| format!("Failed to create cmux supervisor surface for {agent_id}"))?;
+    if let Err(err) = cmux.send(
+        &host_surface_id,
+        &host_location.workspace_handle,
+        &format!("{command}\n"),
+    ) {
+        let _ = cmux.close_surface(&host_surface_id, Some(&host_location.workspace_handle));
+        return Err(err).with_context(|| {
+            format!("Failed to start supervisor command in cmux surface for {agent_id}")
+        });
+    }
     let pid = match wait_for_pid_file(&pid_path, Duration::from_secs(5)) {
         Ok(pid) => pid,
         Err(err) => {
-            let _ = cmux.close_workspace(&host_workspace_id);
+            let _ = cmux.close_surface(&host_surface_id, Some(&host_location.workspace_handle));
             return Err(err);
         }
     };
     let _ = fs::remove_file(&pid_path);
     Ok(SupervisorLaunch {
         pid,
-        host_workspace_id: Some(host_workspace_id),
+        host_workspace_id: Some(host_location.workspace_handle),
+        host_pane_id: Some(host_location.pane_handle),
+        host_surface_id: Some(host_surface_id),
         child: None,
     })
 }
@@ -932,7 +960,7 @@ fn wait_for_pid_file(path: &Path, timeout: Duration) -> Result<u32> {
         }
         if started.elapsed() >= timeout {
             bail!(
-                "Timed out waiting for cmux-hosted supervisor pid file {}",
+                "Timed out waiting for cmux surface-hosted supervisor pid file {}",
                 path.display()
             );
         }
@@ -942,9 +970,11 @@ fn wait_for_pid_file(path: &Path, timeout: Duration) -> Result<u32> {
 
 fn cleanup_failed_launch(ctx: &Ctx, mut launch: SupervisorLaunch) {
     let _ = signal::kill(Pid::from_raw(launch.pid as i32), Signal::SIGKILL);
-    if let Some(workspace) = launch.host_workspace_id.as_deref() {
-        let _ = CmuxService::new(ctx.runner.as_ref()).close_workspace(workspace);
-    }
+    close_cmux_host(
+        ctx,
+        launch.host_surface_id.as_deref(),
+        launch.host_workspace_id.as_deref(),
+    );
     if let Some(child) = launch.child.as_mut() {
         let _ = signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
         let _ = child.try_wait();
@@ -1037,16 +1067,16 @@ fn stop_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
         while start.elapsed() < STOP_GRACE {
             match read_registration(ctx, &registration.agent_id)? {
                 None => {
-                    close_host_workspace(ctx, registration);
+                    close_registered_cmux_host(ctx, registration);
                     return Ok(());
                 }
                 Some(current) if !same_registered_supervisor(&current, registration) => {
-                    close_host_workspace(ctx, registration);
+                    close_registered_cmux_host(ctx, registration);
                     return Ok(());
                 }
                 Some(_) if !supervisor_is_alive(registration)? => {
                     remove_registration(ctx, &registration.agent_id)?;
-                    close_host_workspace(ctx, registration);
+                    close_registered_cmux_host(ctx, registration);
                     return Ok(());
                 }
                 Some(_) => {}
@@ -1056,7 +1086,7 @@ fn stop_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
 
         if let Some(current) = read_registration(ctx, &registration.agent_id)? {
             if !same_registered_supervisor(&current, registration) {
-                close_host_workspace(ctx, registration);
+                close_registered_cmux_host(ctx, registration);
                 return Ok(());
             }
         }
@@ -1070,13 +1100,24 @@ fn stop_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
         }
     }
     remove_registration_if_current(ctx, registration)?;
-    close_host_workspace(ctx, registration);
+    close_registered_cmux_host(ctx, registration);
     Ok(())
 }
 
-fn close_host_workspace(ctx: &Ctx, registration: &Registration) {
-    if let Some(workspace) = registration.host_workspace_id.as_deref() {
-        let _ = CmuxService::new(ctx.runner.as_ref()).close_workspace(workspace);
+fn close_registered_cmux_host(ctx: &Ctx, registration: &Registration) {
+    close_cmux_host(
+        ctx,
+        registration.host_surface_id.as_deref(),
+        registration.host_workspace_id.as_deref(),
+    );
+}
+
+fn close_cmux_host(ctx: &Ctx, surface: Option<&str>, workspace: Option<&str>) {
+    let cmux = CmuxService::new(ctx.runner.as_ref());
+    if let Some(surface) = surface {
+        let _ = cmux.close_surface(surface, workspace);
+    } else if let Some(workspace) = workspace {
+        let _ = cmux.close_workspace(workspace);
     }
 }
 
@@ -1104,11 +1145,27 @@ struct StatusReport {
     target_surface_id: Option<String>,
     target_agent_kind: Option<String>,
     host_workspace_id: Option<String>,
+    host_pane_id: Option<String>,
+    host_surface_id: Option<String>,
     stale_threshold_secs: u64,
     poll_interval_secs: u64,
     stale_threshold: String,
     poll_interval: String,
     log_path: String,
+}
+
+impl StatusReport {
+    fn host_summary(&self) -> String {
+        match (
+            self.host_surface_id.as_deref(),
+            self.host_workspace_id.as_deref(),
+        ) {
+            (Some(surface), Some(workspace)) => format!("{surface}@{workspace}"),
+            (Some(surface), None) => surface.to_string(),
+            (None, Some(workspace)) => workspace.to_string(),
+            (None, None) => "-".into(),
+        }
+    }
 }
 
 fn status_report(ctx: &Ctx, registration: &Registration) -> Result<StatusReport> {
@@ -1127,6 +1184,8 @@ fn status_report(ctx: &Ctx, registration: &Registration) -> Result<StatusReport>
         target_surface_id: registration.target_surface_id.clone(),
         target_agent_kind: registration.target_agent_kind.clone(),
         host_workspace_id: registration.host_workspace_id.clone(),
+        host_pane_id: registration.host_pane_id.clone(),
+        host_surface_id: registration.host_surface_id.clone(),
         stale_threshold_secs: registration.stale_threshold_secs,
         poll_interval_secs: registration.poll_interval_secs,
         stale_threshold: format_duration(registration.stale_threshold_secs),
@@ -1378,6 +1437,8 @@ mod tests {
             target_surface_id: None,
             target_agent_kind: None,
             host_workspace_id: None,
+            host_pane_id: None,
+            host_surface_id: None,
             stale_threshold_secs: 900,
             poll_interval_secs: 60,
             log_path: PathBuf::from("/tmp/supervisor.log"),

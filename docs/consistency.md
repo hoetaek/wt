@@ -361,9 +361,9 @@ hidden inbox model.
 The agent supervisor is Layer 3 stale-rescue insurance. It is opt-in and default-off. It does not
 replace normal message delivery and it should push zero payloads during engaged operation: it only
 intervenes when a message remains in the recipient's `inbox/new/` longer than the registered
-`stale_threshold_secs`. A supervisor started with `--surface` is hosted inside a hidden cmux
-workspace because cmux push delivery fails from PPID 1 orphan processes; a supervisor without
-`--surface` may use the detached process path because it does not push to cmux.
+`stale_threshold_secs`. A supervisor started with `--surface` is hosted in an unfocused cmux surface
+inside the target surface's pane because cmux push delivery fails from PPID 1 orphan processes; a
+supervisor without `--surface` may use the detached process path because it does not push to cmux.
 
 The three message attention layers are:
 
@@ -375,7 +375,8 @@ The three message attention layers are:
 
 Supervisor registrations live at `<git-common-dir>/wt/supervisors/<encoded-agent-id>.toml`; logs
 live beside them as `<encoded-agent-id>.log`. Surface-backed supervisors also record the cmux
-workspace that hosts the supervisor process so `stop` can close it. Registration schema is:
+surface, pane, and workspace that host the supervisor process so `stop` can close the host surface.
+Registration schema is:
 
 ```toml
 agent_id = "agents/codex"
@@ -387,12 +388,15 @@ cleanup_on_session_end = true
 target_surface_id = "surface:72"
 target_agent_kind = "codex"
 host_workspace_id = "workspace:19"
+host_pane_id = "pane:3"
+host_surface_id = "surface:73"
 stale_threshold_secs = 900
 poll_interval_secs = 60
 log_path = "/repo/.git/wt/supervisors/agents%2Fcodex.log"
 ```
 
-`target_surface_id`, `target_agent_kind`, and `host_workspace_id` are optional.
+`target_surface_id`, `target_agent_kind`, `host_workspace_id`, `host_pane_id`, and
+`host_surface_id` are optional.
 `stale_threshold_secs` defaults to 900 seconds and `poll_interval_secs` defaults to 60 seconds when
 starting a supervisor.
 

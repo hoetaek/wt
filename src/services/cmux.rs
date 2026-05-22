@@ -25,6 +25,16 @@ pub struct CmuxPaneSelectedSurface {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmuxSurfaceLocation {
+    pub workspace_id: String,
+    pub workspace_handle: String,
+    pub pane_id: String,
+    pub pane_handle: String,
+    pub surface_id: String,
+    pub surface_handle: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CmuxStatusEntry {
     pub key: String,
     pub value: String,
@@ -131,6 +141,19 @@ impl<'a> CmuxService<'a> {
             bail!("cmux new-workspace failed: {}", command_error(&out));
         }
         extract_handle(&out.stdout, "workspace:", "new-workspace")
+    }
+
+    fn list_panes_with_surfaces(&self, workspace: &str) -> Result<Vec<RpcPane>> {
+        let params = json!({ "workspace_id": workspace }).to_string();
+        let out = self
+            .runner
+            .run("cmux", &["rpc", "pane.list", &params], None)?;
+        if !out.success {
+            bail!("cmux pane.list failed: {}", command_error(&out));
+        }
+
+        let response: PaneListResponse = serde_json::from_str(&out.stdout)?;
+        Ok(response.panes)
     }
 
     pub fn caller_context(&self) -> Option<CmuxCaller> {
@@ -262,17 +285,8 @@ impl<'a> CmuxService<'a> {
     }
 
     pub fn selected_surfaces(&self, workspace: &str) -> Result<Vec<CmuxPaneSelectedSurface>> {
-        let params = json!({ "workspace_id": workspace }).to_string();
-        let out = self
-            .runner
-            .run("cmux", &["rpc", "pane.list", &params], None)?;
-        if !out.success {
-            bail!("cmux pane.list failed: {}", command_error(&out));
-        }
-
-        let response: PaneListResponse = serde_json::from_str(&out.stdout)?;
-        Ok(response
-            .panes
+        Ok(self
+            .list_panes_with_surfaces(workspace)?
             .into_iter()
             .filter_map(|pane| {
                 let selected_surface_id = pane.selected_surface_id?;
@@ -311,6 +325,34 @@ impl<'a> CmuxService<'a> {
         Ok(surfaces)
     }
 
+    pub fn find_surface_location(&self, surface: &str) -> Result<Option<CmuxSurfaceLocation>> {
+        for workspace in self.list_workspaces()? {
+            for pane in self.list_panes_with_surfaces(&workspace.handle)? {
+                let surface_len = pane.surface_ids.len().max(pane.surface_refs.len());
+                for index in 0..surface_len {
+                    let surface_id = pane.surface_ids.get(index).cloned().unwrap_or_default();
+                    let surface_handle = pane
+                        .surface_refs
+                        .get(index)
+                        .cloned()
+                        .unwrap_or_else(|| surface_id.clone());
+                    if surface == surface_id || surface == surface_handle {
+                        return Ok(Some(CmuxSurfaceLocation {
+                            workspace_id: workspace.id,
+                            workspace_handle: workspace.handle,
+                            pane_id: pane.id,
+                            pane_handle: pane.handle,
+                            surface_id,
+                            surface_handle,
+                        }));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
     pub fn new_surface(&self, pane: &str, workspace: &str) -> Result<String> {
         let out = self.runner.run(
             "cmux",
@@ -321,6 +363,50 @@ impl<'a> CmuxService<'a> {
             bail!("cmux new-surface failed: {}", command_error(&out));
         }
         extract_handle(&out.stdout, "surface:", "new-surface")
+    }
+
+    pub fn new_surface_with_focus(
+        &self,
+        pane: &str,
+        workspace: &str,
+        focus: bool,
+    ) -> Result<String> {
+        let focus = focus.to_string();
+        let out = self.runner.run(
+            "cmux",
+            &[
+                "new-surface",
+                "--pane",
+                pane,
+                "--workspace",
+                workspace,
+                "--focus",
+                &focus,
+            ],
+            None,
+        )?;
+        if !out.success {
+            bail!("cmux new-surface failed: {}", command_error(&out));
+        }
+        extract_handle(&out.stdout, "surface:", "new-surface")
+    }
+
+    pub fn close_surface(&self, surface: &str, workspace: Option<&str>) -> Result<()> {
+        let mut args = vec![
+            "close-surface".to_string(),
+            "--surface".into(),
+            surface.into(),
+        ];
+        if let Some(workspace) = workspace {
+            args.extend(["--workspace".into(), workspace.into()]);
+        }
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+
+        let out = self.runner.run("cmux", &arg_refs, None)?;
+        if !out.success {
+            bail!("cmux close-surface failed: {}", command_error(&out));
+        }
+        Ok(())
     }
 
     pub fn send(&self, surface: &str, workspace: &str, text: &str) -> Result<()> {
@@ -598,6 +684,10 @@ struct RpcPane {
     handle: String,
     selected_surface_id: Option<String>,
     selected_surface_ref: Option<String>,
+    #[serde(default)]
+    surface_ids: Vec<String>,
+    #[serde(default)]
+    surface_refs: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1060,6 +1150,35 @@ mod tests {
     }
 
     #[test]
+    fn find_surface_location_scans_workspace_panes() {
+        let mut runner = MockRunner::new();
+        runner.add_response(r#"{"windows":[{"id":"uuid-window-1"}]}"#, true);
+        runner.add_response(
+            r#"{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{"id":"uuid-workspace-1","ref":"workspace:1","title":"repo","current_directory":"/tmp/repo"}]}"#,
+            true,
+        );
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-1","ref":"pane:1","surface_ids":["uuid-surface-1","uuid-surface-2"],"surface_refs":["surface:1","surface:2"]}]}"#,
+            true,
+        );
+
+        let svc = CmuxService::new(&runner);
+        let location = svc.find_surface_location("surface:2").unwrap().unwrap();
+
+        assert_eq!(
+            location,
+            CmuxSurfaceLocation {
+                workspace_id: "uuid-workspace-1".into(),
+                workspace_handle: "workspace:1".into(),
+                pane_id: "uuid-pane-1".into(),
+                pane_handle: "pane:1".into(),
+                surface_id: "uuid-surface-2".into(),
+                surface_handle: "surface:2".into(),
+            }
+        );
+    }
+
+    #[test]
     fn list_pane_surfaces_filters_surface_ids() {
         let mut runner = MockRunner::new();
         runner.add_response("surface:0 other surface:1 data", true);
@@ -1092,6 +1211,53 @@ mod tests {
         let svc = CmuxService::new(&runner);
         let surface = svc.new_surface("pane:3", "workspace:2").unwrap();
         assert_eq!(surface, "surface:4");
+    }
+
+    #[test]
+    fn new_surface_with_focus_passes_focus_flag() {
+        let mut runner = MockRunner::new();
+        runner.add_response("OK surface:4", true);
+
+        let svc = CmuxService::new(&runner);
+        let surface = svc
+            .new_surface_with_focus("pane:3", "workspace:2", false)
+            .unwrap();
+        assert_eq!(surface, "surface:4");
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "new-surface",
+                "--pane",
+                "pane:3",
+                "--workspace",
+                "workspace:2",
+                "--focus",
+                "false"
+            ]
+        );
+    }
+
+    #[test]
+    fn close_surface_passes_workspace_when_known() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+
+        let svc = CmuxService::new(&runner);
+        svc.close_surface("surface:4", Some("workspace:2")).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "close-surface",
+                "--surface",
+                "surface:4",
+                "--workspace",
+                "workspace:2"
+            ]
+        );
     }
 
     #[test]

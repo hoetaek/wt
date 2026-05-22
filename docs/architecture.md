@@ -153,11 +153,11 @@ The supervisor is a default-off Layer 3 stale-rescue process for one resolved
 agent identity. Registration and lifecycle state live under
 `<git-common-dir>/wt/supervisors/`; each `<encoded-agent-id>.toml` file records
 the registered PID, PID start time, owner (`started_by`), target cmux surface,
-agent kind, optional cmux host workspace, `stale_threshold_secs`,
+agent kind, optional cmux host surface/pane/workspace, `stale_threshold_secs`,
 `poll_interval_secs`, and log path. Logs remain beside registrations and are not
 deleted by hygiene scans. Supervisors that need cmux push delivery are hosted in
-a hidden cmux workspace; no-surface supervisors may use the detached process
-path.
+an unfocused cmux surface in the target pane; no-surface supervisors may use the
+detached process path.
 
 Supervisor runtime behavior belongs to `src/commands/agent/supervisor/` and
 cmux push helpers, not to identity markers or `agent.state`. `wt doctor` owns
