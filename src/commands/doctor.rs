@@ -3,7 +3,8 @@ use crate::config::{AgentCli, Config, IssueProviderType, SiteProvider};
 use crate::context::Ctx;
 use crate::services::identity_locator::{self, AnchorKey, AnchorKind, Marker, MarkerLiveness};
 use crate::services::supervisor_registration::{
-    Registration, list_registrations, registration_path, remove_registration, supervisor_is_alive,
+    Registration, list_registrations, read_registration, registration_path, remove_registration,
+    supervisor_is_alive,
 };
 use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
@@ -1085,10 +1086,11 @@ fn scan_supervisors_with(
         let status = if live {
             alive += 1;
             "alive"
-        } else {
-            remove_registration(ctx, &registration.agent_id)?;
+        } else if remove_scanned_supervisor_registration(ctx, &registration)? {
             stale_cleaned += 1;
             "stale_cleaned"
+        } else {
+            "stale_replaced"
         };
         reports.push(supervisor_registration_report(ctx, &registration, status));
     }
@@ -1101,6 +1103,16 @@ fn scan_supervisors_with(
             registrations: reports,
         },
     })
+}
+
+fn remove_scanned_supervisor_registration(ctx: &Ctx, scanned: &Registration) -> Result<bool> {
+    let Some(current) = read_registration(ctx, &scanned.agent_id)? else {
+        return Ok(false);
+    };
+    if current.pid != scanned.pid || current.pid_start_time != scanned.pid_start_time {
+        return Ok(false);
+    }
+    remove_registration(ctx, &scanned.agent_id)
 }
 
 fn supervisor_registration_report(
@@ -2017,6 +2029,30 @@ mod tests {
         assert_eq!(scan.report.stale_cleaned, 0);
         assert_eq!(scan.report.registrations[0].status, "alive");
         assert!(path.exists());
+    }
+
+    #[test]
+    fn supervisor_scan_does_not_delete_replaced_registration() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        let old = supervisor_fixture(&ctx, "agents/replaced", 42);
+        let mut replacement = supervisor_fixture(&ctx, "agents/replaced", 77);
+        replacement.pid_start_time = "200.000000000".into();
+        let path = write_supervisor_fixture(&ctx, &old);
+
+        let scan = scan_supervisors_with(&ctx, |_| {
+            write_supervisor_fixture(&ctx, &replacement);
+            Ok(false)
+        })
+        .unwrap();
+
+        assert_eq!(scan.report.scanned, 1);
+        assert_eq!(scan.report.stale_cleaned, 0);
+        assert_eq!(scan.report.registrations[0].status, "stale_replaced");
+        assert!(path.exists());
+        let current = read_registration(&ctx, "agents/replaced").unwrap().unwrap();
+        assert_eq!(current.pid, 77);
+        assert_eq!(current.pid_start_time, "200.000000000");
     }
 
     #[test]

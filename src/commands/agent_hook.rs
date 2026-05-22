@@ -28,7 +28,8 @@ pub(crate) fn install_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Resul
     let mut settings = read_settings(&settings_path)?;
     remove_managed_claude_hook(&mut settings, ClaudeRemoveTarget::AllWtManaged)?;
     let command = target.command();
-    install_managed_claude_hook(&mut settings, &command)?;
+    let session_end_command = target.session_end_command();
+    install_managed_claude_hook(&mut settings, &command, &session_end_command)?;
     write_settings(&settings_path, &settings)?;
 
     if !ctx.quiet {
@@ -60,7 +61,7 @@ pub(crate) fn uninstall_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Res
         ClaudeHookTarget::Dispatcher => ClaudeRemoveTarget::AllWtManaged,
         ClaudeHookTarget::Agent(agent) => ClaudeRemoveTarget::Commands(vec![
             managed_claude_hook_command(agent.as_str()),
-            managed_claude_supervisor_session_end_command(),
+            managed_claude_supervisor_session_end_command(Some(agent.as_str())),
         ]),
     };
     let removed = remove_managed_claude_hook(&mut settings, remove_target)?;
@@ -286,6 +287,15 @@ impl ClaudeHookTarget {
         match self {
             Self::Dispatcher => managed_claude_dispatcher_command(),
             Self::Agent(agent) => managed_claude_hook_command(agent.as_str()),
+        }
+    }
+
+    fn session_end_command(&self) -> String {
+        match self {
+            Self::Dispatcher => managed_claude_supervisor_session_end_command(None),
+            Self::Agent(agent) => {
+                managed_claude_supervisor_session_end_command(Some(agent.as_str()))
+            }
         }
     }
 
@@ -801,7 +811,11 @@ fn set_codex_trust_key(document: &mut DocumentMut, key: &str, trusted_hash: &str
     Ok(())
 }
 
-fn install_managed_claude_hook(settings: &mut Value, command: &str) -> Result<()> {
+fn install_managed_claude_hook(
+    settings: &mut Value,
+    command: &str,
+    session_end_command: &str,
+) -> Result<()> {
     let root = settings_object(settings)?;
     let hooks = object_entry(root, "hooks")?;
     for &event_name in CLAUDE_HOOK_EVENTS {
@@ -817,10 +831,10 @@ fn install_managed_claude_hook(settings: &mut Value, command: &str) -> Result<()
     }
     let session_end = array_entry(hooks, "SessionEnd")?;
     session_end.push(json!({
-        "hooks": [
+    "hooks": [
             {
                 "type": "command",
-                "command": managed_claude_supervisor_session_end_command()
+                "command": session_end_command
             }
         ]
     }));
@@ -967,10 +981,17 @@ fn managed_claude_dispatcher_command() -> String {
     format!("wt msg check-inbox --silent {WT_CLAUDE_HOOK_MARKER}")
 }
 
-fn managed_claude_supervisor_session_end_command() -> String {
-    format!(
-        "wt agent supervisor stop --owned-by \"$WT_AGENT_ID\" {WT_CLAUDE_SUPERVISOR_SESSION_END_MARKER}"
-    )
+fn managed_claude_supervisor_session_end_command(owner: Option<&str>) -> String {
+    match owner {
+        Some(owner) => {
+            format!(
+                "wt agent supervisor stop --owned-by {owner} {WT_CLAUDE_SUPERVISOR_SESSION_END_MARKER}"
+            )
+        }
+        None => format!(
+            "if [ -n \"${{WT_AGENT_ID:-}}\" ]; then wt agent supervisor stop --owned-by \"$WT_AGENT_ID\"; fi {WT_CLAUDE_SUPERVISOR_SESSION_END_MARKER}"
+        ),
+    }
 }
 
 fn managed_codex_hook_command(agent: &str) -> String {

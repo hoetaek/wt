@@ -144,7 +144,8 @@ cwd/TaskRun path used by `wt shell-init` and `wt env`.
 The detached-agent supervisor is a separate layer. It may use the same resolved
 identity model, but supervisor lifecycle, polling, and recovery policy belong
 to its own spec and must not turn marker files into process supervision state.
-Its spec is `.git/wt/specs/detached-agent-supervisor/`.
+Development spec: `.git/wt/specs/detached-agent-supervisor/`; runtime contract:
+the Supervisor section below and `docs/consistency.md` Supervisor Lifecycle.
 
 ## Supervisor
 
