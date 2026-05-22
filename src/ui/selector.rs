@@ -125,14 +125,14 @@ impl SelectorOption {
             return true;
         }
 
-        let mut haystack = self.label.to_lowercase();
+        let mut haystack = sanitize_selector_text(&self.label).to_lowercase();
         if let Some(hint) = self.hint.as_deref() {
             haystack.push(' ');
-            haystack.push_str(&hint.to_lowercase());
+            haystack.push_str(&sanitize_selector_text(hint).to_lowercase());
         }
         for text in &self.search_text {
             haystack.push(' ');
-            haystack.push_str(&text.to_lowercase());
+            haystack.push_str(&sanitize_selector_text(text).to_lowercase());
         }
 
         terms.iter().all(|term| haystack.contains(term))
@@ -1217,6 +1217,37 @@ mod tests {
             state.apply_input(SelectorInput::Backspace);
         }
         assert_eq!(state.active_index(), Some(0));
+    }
+
+    #[test]
+    fn filtering_uses_sanitized_text_not_hidden_terminal_payloads() {
+        let rows = vec![
+            SelectorRow::option_with_hint(
+                0,
+                "Fix\x1b]0;owned\x07 editor",
+                "Linear\x1b[2K PROJ-123",
+            ),
+            SelectorRow::Option(
+                SelectorOption::new(1, "Local cleanup")
+                    .search_text("branch\x1b]0;owned\x07 tmp-cleanup"),
+            ),
+        ];
+
+        let mut hidden_payload = SelectorState::single(rows.clone());
+        type_text(&mut hidden_payload, "owned");
+        assert_eq!(hidden_payload.active_index(), None);
+
+        let mut visible_label = SelectorState::single(rows.clone());
+        type_text(&mut visible_label, "fix editor");
+        assert_eq!(visible_label.active_index(), Some(0));
+
+        let mut visible_hint = SelectorState::single(rows.clone());
+        type_text(&mut visible_hint, "linear proj");
+        assert_eq!(visible_hint.active_index(), Some(0));
+
+        let mut visible_search_text = SelectorState::single(rows);
+        type_text(&mut visible_search_text, "branch tmp");
+        assert_eq!(visible_search_text.active_index(), Some(1));
     }
 
     #[test]
