@@ -50,6 +50,16 @@ fn wt_command() -> Command {
     command
 }
 
+fn wt_command_at(path: &Path) -> Command {
+    let mut command = Command::new(path);
+    for key in GIT_LOCAL_ENV_KEYS {
+        command.env_remove(key);
+    }
+    command.env_remove("WT_AGENT_ID");
+    command.env_remove("WT_COORDINATOR_AGENT_ID");
+    command
+}
+
 fn git_init(path: &Path) {
     let status = git_command()
         .arg("init")
@@ -198,22 +208,17 @@ fn write_fake_agent(_path: &Path, _name: &str) -> std::path::PathBuf {
 }
 
 #[cfg(unix)]
-fn write_fake_wt(path: &Path) -> std::path::PathBuf {
+fn copy_wt_binary(path: &Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let bin = path.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let wt = bin.join("wt");
-    std::fs::write(&wt, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::copy(assert_cmd::cargo::cargo_bin("wt"), &wt).unwrap();
     let mut permissions = std::fs::metadata(&wt).unwrap().permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&wt, permissions).unwrap();
-    bin
-}
-
-#[cfg(not(unix))]
-fn write_fake_wt(_path: &Path) -> std::path::PathBuf {
-    panic!("fake wt test helper is only implemented for Unix test environments")
+    wt
 }
 
 fn write_task_document(root: &Path, key: &str, branch: &str) {
@@ -3699,14 +3704,13 @@ fn setup_skips_completion_for_homebrew_install_source() {
     let home = temp.path().join("home");
     let zdotdir = temp.path().join("zdot");
     let homebrew = temp.path().join("homebrew");
-    let fake_wt_bin = write_fake_wt(&homebrew);
+    let wt = copy_wt_binary(&homebrew);
 
-    wt_command()
+    wt_command_at(&wt)
         .env("HOME", &home)
         .env("SHELL", "/bin/zsh")
         .env("ZDOTDIR", &zdotdir)
         .env("HOMEBREW_PREFIX", &homebrew)
-        .env("PATH", path_with_fake_bin(&fake_wt_bin))
         .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
         .assert()
         .success()
@@ -3719,22 +3723,45 @@ fn setup_skips_completion_for_homebrew_install_source() {
     assert!(!zshrc.contains("eval \"$(wt completion zsh)\""));
 }
 
+#[cfg(unix)]
+#[test]
+fn setup_installs_completion_for_explicit_non_homebrew_wt_path() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let home = temp.path().join("home");
+    let zdotdir = temp.path().join("zdot");
+    let cargo_home = home.join(".cargo");
+    let wt = copy_wt_binary(&cargo_home);
+
+    wt_command_at(&wt)
+        .env("HOME", &home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Shell completion added"));
+
+    let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
+    assert!(zshrc.contains("eval \"$(wt shell-init zsh)\""));
+    assert!(zshrc.contains("eval \"$(wt completion zsh)\""));
+}
+
 #[test]
 fn removed_setup_surfaces_are_unrecognized() {
-    wt_command()
-        .arg("install")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("unrecognized subcommand"));
+    assert_removed_surface_unrecognized(&["install"]);
+    assert_removed_surface_unrecognized(&["uninstall"]);
+    assert_removed_surface_unrecognized(&["hooks", "setup"]);
+    assert_removed_surface_unrecognized(&["hooks", "uninstall"]);
+    assert_removed_surface_unrecognized(&["hooks", "codex"]);
+    assert_removed_surface_unrecognized(&["hooks", "claude"]);
+    assert_removed_surface_unrecognized(&["agent", "hook", "install"]);
+    assert_removed_surface_unrecognized(&["agent", "hook", "uninstall"]);
+}
 
+fn assert_removed_surface_unrecognized(args: &[&str]) {
     wt_command()
-        .args(["hooks", "setup"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("unrecognized subcommand"));
-
-    wt_command()
-        .args(["agent", "hook", "install", "codex"])
+        .args(args)
         .assert()
         .failure()
         .stderr(predicate::str::contains("unrecognized subcommand"));
@@ -3742,30 +3769,137 @@ fn removed_setup_surfaces_are_unrecognized() {
 
 #[cfg(unix)]
 #[test]
-fn doctor_points_missing_setup_to_setup_and_init() {
+fn doctor_missing_claude_hooks_names_wt_setup() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    let config = temp.path().join("agent.toml");
-    std::fs::write(&config, "[agent]\ncli = \"codex\"\n").unwrap();
+    write_repo_agent_config(temp.path(), "claude");
+    write_wt_core_dirs(temp.path());
+    let home = temp.path().join("home");
+    let zdotdir = temp.path().join("zdot");
+    write_zsh_shell_integration(&zdotdir);
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+
+    wt_command()
+        .env("HOME", &home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "doctor"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Claude wt inbox hook: Run wt setup",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_missing_codex_hooks_names_wt_setup() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_repo_agent_config(temp.path(), "codex");
+    write_wt_core_dirs(temp.path());
+    let home = temp.path().join("home");
+    let zdotdir = temp.path().join("zdot");
+    let codex_home = temp.path().join("codex-home");
+    write_zsh_shell_integration(&zdotdir);
     let fake_bin = write_fake_agent(temp.path(), "codex");
 
     wt_command()
-        .env("HOME", temp.path().join("home"))
-        .env("CODEX_HOME", temp.path().join("codex-home"))
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
         .env("SHELL", "/bin/zsh")
-        .env("ZDOTDIR", temp.path().join("zdot"))
+        .env("ZDOTDIR", &zdotdir)
         .env("PATH", path_with_fake_bin(&fake_bin))
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "--config",
-            config.to_str().unwrap(),
-            "doctor",
-        ])
+        .args(["-C", temp.path().to_str().unwrap(), "doctor"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("Run wt setup"))
+        .stderr(predicate::str::contains(
+            "Codex wt inbox hook: missing hooks.json. Run wt setup",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_missing_shell_integration_names_wt_setup() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_repo_agent_config(temp.path(), "codex");
+    write_wt_core_dirs(temp.path());
+    let home = temp.path().join("home");
+    let zdotdir = temp.path().join("zdot");
+    let codex_home = temp.path().join("codex-home");
+    let fake_bin = write_fake_agent(temp.path(), "codex");
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "doctor"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Shell integration: missing"))
+        .stderr(predicate::str::contains("Run wt setup"));
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_missing_repo_config_names_wt_init() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_wt_core_dirs(temp.path());
+
+    wt_command()
+        .env("HOME", temp.path().join("home"))
+        .env("SHELL", "/bin/fish")
+        .args(["-C", temp.path().to_str().unwrap(), "doctor"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Repo config: missing"))
         .stderr(predicate::str::contains("Run wt init"));
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_missing_core_dirs_names_wt_init() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::write(temp.path().join(".wt.toml"), "").unwrap();
+
+    wt_command()
+        .env("HOME", temp.path().join("home"))
+        .env("SHELL", "/bin/fish")
+        .args(["-C", temp.path().to_str().unwrap(), "doctor"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Core dirs: missing"))
+        .stderr(predicate::str::contains("Run wt init"));
+}
+
+#[cfg(unix)]
+fn write_repo_agent_config(root: &Path, cli: &str) {
+    std::fs::write(root.join(".wt.toml"), format!("[agent]\ncli = \"{cli}\"\n")).unwrap();
+}
+
+#[cfg(unix)]
+fn write_wt_core_dirs(root: &Path) {
+    for path in [
+        root.join(".git/wt/tasks"),
+        root.join(".git/wt/messages"),
+        root.join(".git/wt/task-runs"),
+        root.join(".git/wt/agent.state"),
+        root.join(".git/wt/worktrees"),
+    ] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+}
+
+#[cfg(unix)]
+fn write_zsh_shell_integration(zdotdir: &Path) {
+    std::fs::create_dir_all(zdotdir).unwrap();
+    std::fs::write(zdotdir.join(".zshrc"), "eval \"$(wt shell-init zsh)\"\n").unwrap();
 }
 
 #[cfg(unix)]
