@@ -160,7 +160,7 @@ pub enum Commands {
     },
     /// Create blank skeleton documents for a feature
     #[command(
-        long_about = "Create blank skeleton documents for a feature under <git-common-dir>/wt ideas, numbered specs, tasks, workflows, and spec-local retrospects. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
+        long_about = "Create blank skeleton documents for a feature under <git-common-dir>/wt/ideas, numbered specs, tasks, workflows, and spec-local retrospects. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
     )]
     Scaffold {
         /// Feature slug to use for every generated path

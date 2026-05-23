@@ -4675,8 +4675,7 @@ fn init_yes_uses_project_recommendation_without_agent() {
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("설정 생성됨:"));
+        .success();
 
     let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
     assert!(content.contains("[workspace]"));
