@@ -4809,15 +4809,16 @@ fn init_dry_run_previews_plan_without_writing_config() {
         .success()
         .stdout(predicate::str::contains("init 계획"))
         .stdout(predicate::str::contains("==>").not())
-        .stdout(predicate::str::contains("대상 파일:"))
-        .stdout(predicate::str::contains("모드: 프로젝트 추천"))
+        .stdout(predicate::str::contains("저장할 파일:"))
+        .stdout(predicate::str::contains("저장 범위: 개인 설정"))
+        .stdout(predicate::str::contains("작업: 새 설정 생성"))
         .stdout(predicate::str::contains(
-            "선택된 sections: setup, test, workspace",
+            "저장될 설정: setup, test, workspace",
         ))
-        .stdout(predicate::str::contains("감지된 신호:"))
-        .stdout(predicate::str::contains("[ok] 감지됨: setup: npm install"))
-        .stdout(predicate::str::contains("setup: npm install"))
-        .stdout(predicate::str::contains("test: npm test"))
+        .stdout(predicate::str::contains("감지된 신호:").not())
+        .stdout(predicate::str::contains("[ok] 감지됨:").not())
+        .stdout(predicate::str::contains("run = \"npm install\""))
+        .stdout(predicate::str::contains("run = \"npm test\""))
         .stdout(predicate::str::contains("[setup]"))
         .stdout(predicate::str::contains("[test]"))
         .stdout(predicate::str::contains("# [workflow]").not())
@@ -4847,7 +4848,7 @@ fn init_no_color_uses_plain_plan_output() {
         .success()
         .stdout(predicate::str::starts_with("init 계획\n"))
         .stdout(predicate::str::contains("==>").not())
-        .stdout(predicate::str::contains("모드: 프로젝트 추천"));
+        .stdout(predicate::str::contains("저장될 설정: workspace"));
 }
 
 #[test]

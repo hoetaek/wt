@@ -906,29 +906,37 @@ Reference UI evidence for this contract:
 recommendation wizard다. Interactive TTY에서 bare `wt init`은 config target을 고른 뒤 repo를
 스캔해 추천 config plan을 만들고, setup deps, tests, workspace tabs, editor, agent runtime,
 issue provider, site provider 같은 항목을 필요한 만큼만 guided flow로 묻는다. 쓰기 전에는
-어떤 target file에 어떤 recommendation mode와 active config section이 생성될지 명확히
+어떤 target file에 어떤 작업으로 어떤 config section이 생성될지 명확히
 보여주고 확인을 받아야 한다.
 
 Wizard step label은 구현 단계명이 아니라 사용자가 지금 결정하는 의미를 말해야 한다.
 `wt init`의 사람이 읽는 설명과 prompt는 한국어를 기본으로 쓰되, command, option, config key,
 TOML value 같은 protocol literal은 영어 원문을 유지한다. Canonical flow는 `설정 파일 위치`,
-`외부 도구 연결`, `개발 환경 설정`, preview action(`생성 예정`/`덮어쓰기 예정`), `쓰기 확인` 순서다.
+`외부 도구 연결`, `개발 환경 설정`, `미리보기`, `쓰기 확인` 순서다.
 각 step 시작 전에는 빈 줄을 두고, step 설명은 prompt header와 구분되도록 들여써서 보여주며,
 작은 대비쌍은 bullet로 나눈다. 설명과 step 안의 질문 사이에도 빈 줄을 둔다. Step 안의 질문은
 새 `◆` header를 쓰지 않고 두 칸 들여쓴 field label과 selector frame으로 보여줘서 parent step에 속한 결정임을 드러낸다.
 Detected integration이 없어서 prompt가 생략되는 step도 “감지된 signal이 없어 section을 쓰지
 않는다”는 의미를 보여줘야 한다. 선택지가 작고 검색할 대상이 아닌 결정은 filter 없는 selector를 쓴다. Target 결정은
-`개인 설정 파일`과 `팀 공유 설정 (.wt.toml)`이라는 선택지로 보여주며, 예/아니오 prompt로
-두 개념을 숨기지 않는다.
-첫 화면에서는 `<git-common-dir>` 같은 git 내부 용어를 노출하지 말고, 실제 경로는 preview에서
-절대 경로로 보여준다. 개발 환경 설정 결정은 `감지한 개발 설정 저장`,
-`기존 개발 설정을 기준으로 만들기`, `개발 설정 직접 고르기`, `자동화 없이 최소 설정` 같은
+`개인 설정 파일`과 `팀 공유 설정`이라는 선택지로 보여주며, 예/아니오 prompt로 두 개념을 숨기지 않는다.
+소유 범위 설명만으로 모호하면 target hint에 실제 위치를 보여준다. 개인 설정 파일은
+`git common dir/wt/config.toml`, 팀 공유 설정은 `./.wt.toml`로 보여준다. 실제 절대 경로는 preview에서
+보여준다. 개발 환경 설정 결정은 `감지한 개발 설정 저장`,
+`현재 설정 유지하기`, `개발 설정 직접 고르기`, `자동화 없이 최소 설정` 같은
 선택지 중 하나로 고르게 한다. 선택 label만으로 결과가 분명하지 않으면 label 아래에 흐린 설명을
 한 줄 들여써서 보여주고, 설명이 붙은 선택지 블록 사이에는 빈 `│` 줄을 둔다. 선택되지 않은
 label도 설명보다 낮은 계층으로 보이지 않게 본문 색상으로 유지하고, marker와 설명만 보조색으로 둔다.
+Selector가 submit되면 단순 `Submitted`가 아니라 사용자가 고른 label과 필요하면 hint를 남겨서
+이전 결정이 wizard transcript에 보이게 한다.
+감지한 command를 저장할지 묻는 confirm은 먼저 실제 감지값을 한 줄 또는 bullet 목록으로 보여준다.
+`workspace tabs` 같은 config 개념은 prompt label로 그대로 노출하지 말고, `worktree 열 때 같이 띄울 명령`
+처럼 사용자가 보는 동작으로 말한다.
+`worktree.path`도 `기본 형제 폴더`처럼 구현 위치 관계를 줄여 말하지 말고,
+`현재 저장소 옆에 만들기`와 `../{{default_name}}`처럼 사용자가 예상할 수 있는 위치를 함께 보여준다.
 감지된 issue/site provider도 감지값을 첫 선택지로 올린 작은 selector에서 고르게 한다. Preview는
-detected signal과 실제로 쓸 active section을 분리해 보여주고, 팀 공유 설정 `.wt.toml`을 선택해서
-`.env` copy, local link, browser profile 같은 private helper가 빠질 때는 omission을 안내로 설명한다.
+저장할 파일, 저장 범위, 작업, 저장될 설정, 안내/경고, TOML만 보여준다. 감지된 signal 전체를
+debug log처럼 반복하거나 `[ok] 감지됨` row로 나열하지 않는다. 팀 공유 설정 `.wt.toml`을 선택해서
+`.env` copy, local link, browser profile 같은 private helper가 빠질 때만 omission을 안내로 설명한다.
 `cmux`가 감지되지 않으면 workspace tabs, `post_deps_tabs`, workspace browser 같은 cmux workspace
 자동화를 추천 config에 넣지 않는다. `lazygit`과 `nvim`은 `cmux`가 있고 해당 command도 있을 때만
 기본 workspace tab으로 추천한다. 자동화 없이 최소 설정은 `[workspace] tabs = []`만 저장한다.
@@ -946,7 +954,7 @@ DevTools browser 같은 local helper를 추천할 수 있지만 shared `.wt.toml
 쓰지 않는다.
 TTY가 아니면 `--yes` 또는 충분한 explicit flag 조합처럼 prompt 없이 끝낼 수 있는 입력이
 있어야 하며, 그렇지 않으면 interactive prompt를 시도하지 말고 명확한 에러로 실패한다.
-`wt init --dry-run`은 같은 validation을 거친 뒤 생성될 target, mode, section, detected signal,
+`wt init --dry-run`은 같은 validation을 거친 뒤 생성될 target, 작업, 저장될 설정, 안내/경고,
 TOML content를 preview하고 파일을 쓰지 않는다.
 
 Generated output은 여전히 사용자가 선택한 config 파일 하나에만 쓴다. `.wt.toml`과

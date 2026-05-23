@@ -691,8 +691,9 @@ fn render_selector_frame(
     match frame {
         SelectorRenderFrame::Submitted => {
             lines.push(format!(
-                "{} Submitted",
-                styled(FOOTER, bar_style(), options.decorated)
+                "{} {}",
+                styled(FOOTER, bar_style(), options.decorated),
+                submitted_summary(state, options)
             ));
             return render_selector_lines(lines, options);
         }
@@ -1092,6 +1093,69 @@ fn selected_summary(state: &SelectorState, options: &SelectorRenderOptions) -> O
         format!(" +{more} more")
     };
     Some(format!("Selected: {}{}", visible.join(", "), suffix))
+}
+
+fn submitted_summary(state: &SelectorState, options: &SelectorRenderOptions) -> String {
+    let labels = submitted_labels(state);
+    if labels.is_empty() {
+        return if options.nested {
+            "완료".to_string()
+        } else {
+            "Submitted".to_string()
+        };
+    }
+
+    let visible = labels
+        .iter()
+        .take(options.summary_label_limit)
+        .cloned()
+        .collect::<Vec<_>>();
+    let more = labels.len().saturating_sub(visible.len());
+    let suffix = if more == 0 {
+        String::new()
+    } else if options.nested {
+        format!(" 외 {more}개")
+    } else {
+        format!(" +{more} more")
+    };
+    let prefix = if options.nested { "선택" } else { "Selected" };
+    format!("{prefix}: {}{suffix}", visible.join(", "))
+}
+
+fn submitted_labels(state: &SelectorState) -> Vec<String> {
+    match state.mode {
+        SelectorMode::Single => state
+            .active_option()
+            .and_then(option_summary)
+            .into_iter()
+            .collect(),
+        SelectorMode::Multi => state
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                SelectorRow::Option(option) if option.selected && !option.disabled => {
+                    option_summary(option)
+                }
+                _ => None,
+            })
+            .collect(),
+    }
+}
+
+fn option_summary(option: &SelectorOption) -> Option<String> {
+    let label = sanitize_selector_text(&option.label);
+    let hint = option
+        .hint
+        .as_deref()
+        .map(sanitize_selector_text)
+        .filter(|hint| !hint.is_empty());
+
+    match (label.is_empty(), hint) {
+        (false, Some(hint)) => Some(format!("{label} ({hint})")),
+        (false, None) => Some(label),
+        (true, Some(hint)) => Some(hint),
+        (true, None) => None,
+    }
 }
 
 fn option_label_style(active: bool, selected: bool, disabled: bool) -> Style {
@@ -1570,7 +1634,7 @@ mod tests {
     fn nested_selector_renders_as_field_inside_parent_step() {
         let state = SelectorState::single(vec![
             SelectorRow::option(0, "개인 설정 파일"),
-            SelectorRow::option(1, "팀 공유 설정 (.wt.toml)"),
+            SelectorRow::option(1, "팀 공유 설정"),
         ]);
         let rendered = render_plain(
             &state,
@@ -1586,7 +1650,7 @@ mod tests {
   │ ↑↓ move, enter select, esc cancel
   │
   │ ❯ ●  개인 설정 파일
-  │   ○  팀 공유 설정 (.wt.toml)
+  │   ○  팀 공유 설정
   └
 "
         );
@@ -1762,7 +1826,7 @@ mod tests {
             ),
             "\
 ◇ Pick one
-└ Submitted
+└ Selected: Fix editor
 "
         );
 
@@ -1780,6 +1844,58 @@ mod tests {
             "\
 ■ Pick one
 └ Cancelled
+"
+        );
+    }
+
+    #[test]
+    fn nested_final_frame_renders_selected_label_and_hint() {
+        let mut state = SelectorState::single(vec![
+            SelectorRow::option_with_hint(0, "개인 설정 파일", "git common dir/wt/config.toml"),
+            SelectorRow::option_with_hint(1, "팀 공유 설정", "./.wt.toml"),
+        ]);
+
+        assert_eq!(
+            state.apply_input(SelectorInput::Enter),
+            SelectorTransition::Submitted(SelectorSubmission::Single(0))
+        );
+        assert_eq!(
+            render_final_plain(
+                &state,
+                selector_options("저장 위치")
+                    .filter_visible(false)
+                    .nested(true),
+                SelectorRenderFrame::Submitted
+            ),
+            "\n  저장 위치\n  └ 선택: 개인 설정 파일 (git common dir/wt/config.toml)\n"
+        );
+    }
+
+    #[test]
+    fn submitted_multiselect_summary_collapses_long_selections() {
+        let mut state = SelectorState::multi(
+            ["One", "Two", "Three", "Four"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, label)| {
+                    SelectorRow::Option(SelectorOption::new(index, label).selected(true))
+                })
+                .collect(),
+        );
+
+        assert_eq!(
+            state.apply_input(SelectorInput::Enter),
+            SelectorTransition::Submitted(SelectorSubmission::Multi(vec![0, 1, 2, 3]))
+        );
+        assert_eq!(
+            render_final_plain(
+                &state,
+                selector_options("Pick many").summary_label_limit(2),
+                SelectorRenderFrame::Submitted
+            ),
+            "\
+◇ Pick many
+└ Selected: One, Two +2 more
 "
         );
     }

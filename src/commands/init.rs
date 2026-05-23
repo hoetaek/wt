@@ -46,16 +46,11 @@ struct InitPlan {
     target_path: PathBuf,
     target_kind: InitTargetKind,
     target_exists: bool,
-    mode: InitMode,
     sections: Vec<InitSection>,
+    #[cfg(test)]
     detected_signals: Vec<String>,
     notices: Vec<InitNotice>,
     content: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InitMode {
-    ProjectRecommendation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +174,7 @@ impl DetectedRepo {
         }
     }
 
+    #[cfg(test)]
     fn signals(&self) -> Vec<String> {
         let mut signals = Vec::new();
         if self.has_env_file {
@@ -323,7 +319,7 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
             ctx,
             1,
             "설정 파일 위치",
-            "- 개인 설정 파일: 내 checkout 전용 값\n- 팀 공유 설정 (.wt.toml): commit해도 되는 팀 값",
+            "- 개인 설정 파일: git common dir/wt/config.toml\n- 팀 공유 설정: ./.wt.toml",
         );
     }
     let target = resolve_target(ctx, &options)?;
@@ -622,8 +618,8 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     }
 
     let items = vec![
-        PromptItem::with_hint("개인 설정 파일", "내 checkout 전용"),
-        PromptItem::with_hint("팀 공유 설정 (.wt.toml)", "commit 대상"),
+        PromptItem::with_hint("개인 설정 파일", "git common dir/wt/config.toml"),
+        PromptItem::with_hint("팀 공유 설정", "./.wt.toml"),
     ];
     match ctx
         .ui
@@ -746,8 +742,8 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         target_path: target.path,
         target_kind: target.kind,
         target_exists,
-        mode: InitMode::ProjectRecommendation,
         sections,
+        #[cfg(test)]
         detected_signals: detected.signals(),
         notices,
         content: s,
@@ -759,8 +755,8 @@ fn print_plan(ctx: &Ctx, plan: &InitPlan, interactive_wizard: bool) {
         print_wizard_step(
             ctx,
             4,
-            plan_action_label(plan),
-            "파일에 쓰기 전에 대상 경로, 선택된 section, 감지된 신호, 생성될 TOML을 확인합니다.",
+            "미리보기",
+            "파일에 쓰기 전에 어디에 무엇을 저장할지와 생성될 TOML을 확인합니다.",
         );
     } else {
         ctx.ui.print_step("init 계획");
@@ -775,7 +771,7 @@ fn print_plan(ctx: &Ctx, plan: &InitPlan, interactive_wizard: bool) {
 }
 
 fn render_plan_summary(plan: &InitPlan) -> Vec<String> {
-    let sections = if plan.sections.is_empty() {
+    let saved_settings = if plan.sections.is_empty() {
         "없음".to_string()
     } else {
         plan.sections
@@ -784,35 +780,18 @@ fn render_plan_summary(plan: &InitPlan) -> Vec<String> {
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let detected_signals = if plan.detected_signals.is_empty() {
-        "없음".to_string()
-    } else {
-        plan.detected_signals.join("; ")
-    };
     let planned_write = if plan.target_exists {
         "기존 설정 덮어쓰기"
     } else {
-        "설정 생성"
+        "새 설정 생성"
     };
 
     let mut lines = vec![
-        format!("대상 파일: {}", plan.target_path.display()),
-        format!("대상 종류: {}", target_kind_name(plan.target_kind)),
-        format!("예정 작업: {planned_write}"),
-        format!("모드: {}", init_mode_name(plan.mode)),
-        format!("선택된 sections: {sections}"),
-        format!("감지된 신호: {detected_signals}"),
+        format!("저장할 파일: {}", plan.target_path.display()),
+        format!("저장 범위: {}", target_kind_name(plan.target_kind)),
+        format!("작업: {planned_write}"),
+        format!("저장될 설정: {saved_settings}"),
     ];
-
-    if plan.detected_signals.is_empty() {
-        lines.push("[경고] 감지된 명령: 없음".to_string());
-    } else {
-        lines.extend(
-            plan.detected_signals
-                .iter()
-                .map(|signal| format!("[ok] 감지됨: {signal}")),
-        );
-    }
 
     lines.extend(
         plan.notices
@@ -821,14 +800,6 @@ fn render_plan_summary(plan: &InitPlan) -> Vec<String> {
     );
 
     lines
-}
-
-fn plan_action_label(plan: &InitPlan) -> &'static str {
-    if plan.target_exists {
-        "덮어쓰기 예정"
-    } else {
-        "생성 예정"
-    }
 }
 
 fn print_existing_target_warning(ctx: &Ctx, plan: &InitPlan, options: &InitOptions) {
@@ -1202,8 +1173,8 @@ fn resolve_common_config(
     );
     let recommended_item = if has_existing_defaults {
         PromptItem::with_description(
-            "기존 개발 설정을 기준으로 만들기",
-            "현재 설정값을 먼저 채우고 필요한 editor/browser만 확인합니다.",
+            "현재 설정 유지하기",
+            "저장된 worktree 위치, 파일, setup/test 명령, 탭을 유지하고 editor/browser만 확인합니다.",
         )
     } else if cmux_available(ctx) {
         PromptItem::with_description(
@@ -1323,8 +1294,9 @@ fn resolve_custom_common_config(
     if !detected.test_commands.is_empty() {
         ctx.ui
             .print_dim("test command는 반복해서 쓸 validation 명령으로 저장됩니다.");
+        print_detected_commands(ctx, "감지한 test command", &detected.test_commands);
         if ctx.ui.confirm(
-            "감지된 test command를 저장할까요?",
+            "위 test command를 저장할까요?",
             !config.test_commands.is_empty(),
         )? {
             config.test_commands = detected.test_commands.clone();
@@ -1360,6 +1332,7 @@ fn default_enabled_test_commands(detected: &DetectedRepo) -> Vec<InitCommand> {
         .collect()
 }
 
+#[cfg(test)]
 fn push_signal(signals: &mut Vec<String>, signal: String) {
     if !signals.contains(&signal) {
         signals.push(signal);
@@ -1401,9 +1374,15 @@ fn recommended_workspace_browser(
 
 fn resolve_worktree_path(ctx: &Ctx, default: Option<&str>) -> Result<Option<String>> {
     let mut options = vec![
-        ("기본 형제 폴더".to_string(), None),
         (
-            "$HOME/worktrees/{{default_name}}".to_string(),
+            PromptItem::with_hint("현재 저장소 옆에 만들기", "../{{default_name}}"),
+            None,
+        ),
+        (
+            PromptItem::with_hint(
+                "홈 worktrees 폴더에 만들기",
+                "$HOME/worktrees/{{default_name}}",
+            ),
             Some("$HOME/worktrees/{{default_name}}".to_string()),
         ),
     ];
@@ -1412,25 +1391,31 @@ fn resolve_worktree_path(ctx: &Ctx, default: Option<&str>) -> Result<Option<Stri
             .iter()
             .any(|(_, value)| value.as_deref() == Some(default))
     {
-        options.insert(0, (format!("현재값: {default}"), Some(default.to_string())));
+        options.insert(
+            0,
+            (
+                PromptItem::with_hint("현재 설정값 유지", default),
+                Some(default.to_string()),
+            ),
+        );
     }
-    options.push(("직접 입력".to_string(), None));
+    options.push((PromptItem::new("직접 입력"), None));
 
     let items = options
         .iter()
-        .map(|(label, _)| label.clone())
+        .map(|(item, _)| item.clone())
         .collect::<Vec<_>>();
     ctx.ui
-        .print_dim("worktree 폴더는 새 branch checkout이 만들어질 위치를 정합니다.");
+        .print_dim("새 branch checkout을 어느 폴더에 만들지 고릅니다.");
     let selection = ctx
         .ui
-        .select_nested_without_filter("worktree 폴더", &items)?;
+        .select_nested_items_without_filter("worktree 만들 위치", &items)?;
     if selection < options.len() - 1 {
         return Ok(options[selection].1.clone());
     }
 
     let input = ctx.ui.input(
-        "worktree 폴더 템플릿",
+        "worktree 만들 위치 템플릿",
         default.or(Some("$HOME/worktrees/{{default_name}}")),
     )?;
     let input = input.trim();
@@ -1492,9 +1477,9 @@ fn resolve_worktree_link(
 fn resolve_workspace_tabs(ctx: &Ctx, default_tabs: &[String]) -> Result<Vec<String>> {
     let default = default_tabs.join(", ");
     ctx.ui
-        .print_dim("workspace 탭은 각 worktree workspace에서 열 cmux 탭입니다.");
+        .print_dim("worktree를 열 때 cmux 안에 같이 띄울 명령입니다. 예: lazygit, nvim");
     let input = ctx.ui.input(
-        "기본 workspace 탭",
+        "worktree 열 때 같이 띄울 명령",
         Some(if default_tabs.is_empty() {
             ""
         } else {
@@ -1722,6 +1707,20 @@ fn resolve_node_install_command(ctx: &Ctx, command: &InitCommand) -> Result<Stri
 fn push_node_install_option(options: &mut Vec<(String, String)>, label: String, run: &str) {
     if !options.iter().any(|(_, existing)| existing == run) {
         options.push((label, run.to_string()));
+    }
+}
+
+fn print_detected_commands(ctx: &Ctx, title: &str, commands: &[InitCommand]) {
+    if commands.len() == 1 {
+        ctx.ui
+            .print_dim(&format!("{title}: {}", command_display(&commands[0])));
+        return;
+    }
+
+    ctx.ui.print_dim(&format!("{title}:"));
+    for command in commands {
+        ctx.ui
+            .print_dim(&format!("  - {}", command_display(command)));
     }
 }
 
@@ -2306,14 +2305,14 @@ fn issue_provider_choice_label(provider: &InitIssueProvider) -> String {
     match provider {
         InitIssueProvider::Github => "GitHub issues",
         InitIssueProvider::Linear => "Linear issues",
-        InitIssueProvider::None => "issue workflow 건너뛰기",
+        InitIssueProvider::None => "건너뛰기",
     }
     .into()
 }
 
 fn site_provider_choice_label(provider: &InitSiteProvider) -> String {
     match provider {
-        InitSiteProvider::None => "local site 없음",
+        InitSiteProvider::None => "건너뛰기",
         InitSiteProvider::Herd => "Herd",
         InitSiteProvider::Valet => "Valet",
         InitSiteProvider::DockerProxy => "Docker proxy",
@@ -2428,16 +2427,10 @@ fn agent_cli_name(agent: &AgentCli) -> &'static str {
     }
 }
 
-fn init_mode_name(mode: InitMode) -> &'static str {
-    match mode {
-        InitMode::ProjectRecommendation => "프로젝트 추천",
-    }
-}
-
 fn target_kind_name(kind: InitTargetKind) -> &'static str {
     match kind {
-        InitTargetKind::Local => "개인",
-        InitTargetKind::Shared => "팀 공유",
+        InitTargetKind::Local => "개인 설정",
+        InitTargetKind::Shared => "팀 공유 설정",
     }
 }
 
@@ -2574,11 +2567,10 @@ mod tests {
         .unwrap();
         let summary = render_plan_summary(&plan).join("\n");
 
-        assert!(summary.contains("예정 작업: 설정 생성"));
-        assert!(summary.contains("모드: 프로젝트 추천"));
-        assert!(summary.contains("선택된 sections: workspace"));
-        assert!(summary.contains("감지된 신호: 없음"));
-        assert!(summary.contains("[경고] 감지된 명령: 없음"));
+        assert!(summary.contains("작업: 새 설정 생성"));
+        assert!(summary.contains("저장될 설정: workspace"));
+        assert!(!summary.contains("감지된 신호"));
+        assert!(!summary.contains("감지된 명령"));
     }
 
     #[test]
@@ -2653,7 +2645,7 @@ mod tests {
         .unwrap();
         let summary = render_plan_summary(&plan).join("\n");
 
-        assert!(summary.contains("선택된 sections: issues, worktree.naming, workspace"));
+        assert!(summary.contains("저장될 설정: issues, worktree.naming, workspace"));
         assert!(summary.contains("[경고] gh CLI가 없습니다"));
         assert!(
             summary.contains(
@@ -3300,7 +3292,7 @@ mod tests {
     }
 
     #[test]
-    fn init_app_plan_summary_shows_detected_signals() {
+    fn init_app_plan_summary_keeps_preview_to_saved_settings() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("package.json"),
@@ -3320,14 +3312,19 @@ mod tests {
         .unwrap();
         let summary = render_plan_summary(&plan).join("\n");
 
-        assert!(summary.contains("모드: 프로젝트 추천"));
-        assert!(summary.contains("선택된 sections: setup, test, workspace"));
-        assert!(summary.contains("감지된 신호: setup: npm install"));
-        assert!(summary.contains("test: npm test"));
-        assert!(summary.contains("test: npm run lint"));
-        assert!(summary.contains("[ok] 감지됨: setup: npm install"));
-        assert!(summary.contains("[ok] 감지됨: test: npm test"));
-        assert!(summary.contains("[ok] 감지됨: test: npm run lint"));
+        assert!(summary.contains("저장될 설정: setup, test, workspace"));
+        assert!(
+            plan.detected_signals
+                .contains(&"test: npm test".to_string())
+        );
+        assert!(
+            plan.detected_signals
+                .contains(&"test: npm run lint".to_string())
+        );
+        assert!(!summary.contains("test: npm test"));
+        assert!(!summary.contains("test: npm run lint"));
+        assert!(!summary.contains("[ok] 감지됨"));
+        assert!(!summary.contains("감지된 신호"));
     }
 
     #[test]
@@ -3352,7 +3349,7 @@ mod tests {
         .unwrap();
         let summary = render_plan_summary(&plan).join("\n");
 
-        assert!(summary.contains("감지된 신호: env: .env; local link: .local"));
+        assert!(!summary.contains("감지된 신호"));
         assert!(summary.contains(
             "[안내] 팀 공유 설정에는 개인 helper를 쓰지 않습니다: .env copy, local links (.local), worktree.naming"
         ));
@@ -3688,7 +3685,7 @@ mod tests {
                 "단계 1/5: 설정 파일 위치".to_string(),
                 "단계 2/5: 외부 도구 연결".to_string(),
                 "단계 3/5: 개발 환경 설정".to_string(),
-                "단계 4/5: 생성 예정".to_string(),
+                "단계 4/5: 미리보기".to_string(),
                 "단계 5/5: 쓰기 확인".to_string(),
             ]
         );
@@ -3701,7 +3698,7 @@ mod tests {
         );
         assert!(
             dims.iter()
-                .any(|line| line.contains("  - 개인 설정 파일: 내 checkout 전용 값"))
+                .any(|line| line.contains("  - 개인 설정 파일: git common dir/wt/config.toml"))
         );
         assert!(dims.iter().any(|line| line.is_empty()));
         assert!(
@@ -3716,16 +3713,13 @@ mod tests {
         );
         assert!(
             dims.iter()
-                .any(|line| line.contains("대상 경로, 선택된 section"))
+                .any(|line| line.contains("어디에 무엇을 저장할지"))
         );
         assert!(
             dims.iter()
                 .any(|line| line.contains("지금 설정 파일에 쓸지 확인"))
         );
-        assert!(
-            dims.iter()
-                .any(|line| line.contains("[경고] 감지된 명령: 없음"))
-        );
+        assert!(!dims.iter().any(|line| line.contains("감지된 명령: 없음")));
 
         assert_eq!(
             *ui.prompts.lock().unwrap(),
@@ -3797,7 +3791,7 @@ mod tests {
 
         let mut ui = MockUi::new();
         ui.add_select(1); // customize frequently used settings
-        ui.add_select(1); // $HOME/worktrees/{{default_name}}
+        ui.add_select(1); // home worktrees folder
         ui.add_input("lazygit, nvim, pnpm run dev");
         ui.add_confirm(true); // add detected setup commands
         ui.add_select(0); // detected pnpm install
@@ -3806,13 +3800,14 @@ mod tests {
         ui.add_select(1); // nvim {{path}}
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
+        let ui = Arc::new(ui);
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
             Config::default(),
             Box::new(MockRunner::new()),
-            Box::new(ui),
+            Box::new(Arc::clone(&ui)),
         );
 
         run(
@@ -3869,6 +3864,11 @@ mod tests {
                 && command.working_dir.is_none()
                 && command.if_exists.is_none()
         }));
+
+        let dims = ui.dims.lock().unwrap().clone();
+        assert!(dims.iter().any(|line| line == "감지한 test command:"));
+        assert!(dims.iter().any(|line| line == "  - pnpm run test"));
+        assert!(dims.iter().any(|line| line == "  - pnpm run lint"));
     }
 
     #[test]
@@ -3885,7 +3885,7 @@ mod tests {
 
         let mut ui = MockUi::new();
         ui.add_select(1); // customize frequently used settings
-        ui.add_select(0); // default worktree path
+        ui.add_select(0); // next to current repository
         ui.add_input("lazygit, nvim");
         ui.add_confirm(true); // root npm install
         ui.add_select(0); // detected npm install
@@ -3958,7 +3958,7 @@ mod tests {
 
         let mut ui = MockUi::new();
         ui.add_select(1); // customize frequently used settings
-        ui.add_select(0); // default worktree path
+        ui.add_select(0); // next to current repository
         ui.add_input("lazygit, nvim");
         ui.add_confirm(true); // api uv sync
         ui.add_select(0); // default editor
@@ -4361,7 +4361,7 @@ tabs = ["existing", "vim"]
         .unwrap();
 
         let select_items = ui.select_items.lock().unwrap().clone();
-        assert_eq!(select_items[0][0], "기존 개발 설정을 기준으로 만들기");
+        assert_eq!(select_items[0][0], "현재 설정 유지하기");
         assert_eq!(select_items[1][0], "시스템 editor 사용");
         assert_eq!(select_items[2][0], "Claude");
         assert_eq!(select_items[3][0], "기존 args 유지: --model sonnet");
