@@ -60,6 +60,21 @@ Before moving to the next skill, answer the matching question:
   is there a reusable lesson worth preserving? When `mid-process-discoveries.md`
   exists, diagnose which Unknown surfacing category was missed.
 
+## Gate Loops Are Normal
+
+The gate chain is not a one-way pipeline. Mid-work it is normal to discover
+a new unknown, find that a prior assumption was wrong, or have a premise
+overturned by fresh evidence. When this happens, return to the matching
+earlier gate — usually Unknown surfacing or Context exploration — update the
+unknowns list, gather fresh material, separate verified facts from
+assumptions again, and only then resume the downstream gates that depended
+on what changed.
+
+This loop is normal, not a failure mode. Log each return to
+`<git-common-dir>/wt/specs/<slug>/mid-process-discoveries.md` so `wt-retrospect`
+can classify which surfacing category was missed and sharpen the next run's
+checklist.
+
 ## Practical Rule
 
 If the current step feels blocked, name the missing gate instead of skipping it.

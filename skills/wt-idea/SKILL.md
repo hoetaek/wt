@@ -120,19 +120,21 @@ retrospective can diagnose the missed category.
 
 ## Evidence Gathering
 
-Use the **Unknown Surfacing** list as the agenda. Start from the conversation
-and repository, searching existing local artifacts before creating a new one:
+Use the **Unknown Surfacing** list as the agenda. Work **inside-out**: ask
+the user direct clarifying questions and inventory user/team-held materials
+(existing notes, data, prior decisions, related artifacts, contacts) before
+reaching outward. Then search the repository before creating anything new:
 
 ```bash
 common_dir="$(git rev-parse --git-common-dir)"
 rg -n "<keyword>|<related term>" "$common_dir/wt/ideas" "$common_dir/wt/tasks" docs app resources tests 2>/dev/null
 ```
 
-Use external research when the user asks for best practices, the idea concerns
-current tooling/frameworks, or the best direction cannot be judged from the repo
-alone. Prefer primary or authoritative sources: official docs, established
-method writeups, source repositories, standards, and vendor docs. Record URLs in
-the idea body.
+Use external research only when the user asks for best practices, the idea
+concerns current tooling/frameworks, or the best direction cannot be judged
+from inside the repo. Prefer primary or authoritative sources: official docs,
+established method writeups, source repositories, standards, and vendor docs.
+Record URLs in the idea body.
 
 Context/reference exploration is part of sharpening raw intent, not proof that
 the idea is already a task. Keep it bounded: gather enough examples to name
@@ -148,8 +150,10 @@ Useful discovery lenses:
   no-gos.
 - Technical decision records: context, options, decision drivers, consequences.
 
-Separate confirmed facts, source-backed guidance, inference, and unresolved
-questions.
+In the output, label each item as **verified fact** (with source), **flagged
+assumption** (still to validate), or **inventoried material** (user/team
+already holds it). Do not let assumptions ride along as facts into the next
+gate.
 
 ## Status Model
 

@@ -42,9 +42,11 @@ concepts, standards/conventions, external facts, internal facts — and mark
 each unknown `blocking now` or `useful later`. The list becomes the agenda
 below.
 
-Work from the conversation, issue references, existing docs, current code, and
-current runtime behavior. If the user says how something works, verify it
-against the repo when it is cheap.
+Work **inside-out**: ask the user direct clarifying questions and inventory
+user/team-held materials (prior decisions, notes, related artifacts, contacts)
+before reaching outward. Then check the conversation, issue references,
+existing docs, current code, and current runtime behavior. If the user says
+how something works, verify it against the repo when it is cheap.
 
 Useful evidence:
 
@@ -56,8 +58,10 @@ Useful evidence:
 - external references only when the user asks or the decision depends on current
   best practice outside the repo
 
-Separate confirmed facts, experiment results, tradeoffs, and unresolved
-questions in your notes or response.
+Label items in your output as **verified fact** (with source — file:line,
+URL, command output), **flagged assumption** (still to validate), or
+**inventoried material** (user/team already holds it). Assumptions must not
+ride along as facts into the next gate.
 
 When raw intent is still soft, use bounded context/reference exploration before
 forcing purpose or requirements. Gather enough local or external examples to

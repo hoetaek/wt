@@ -67,7 +67,10 @@ git diff --check
 cargo test --locked --all-features
 ```
 
-Send focused feedback:
+Send focused feedback. Accumulate review findings across a single inspection
+pass and send them as **one consolidated message**, not one message per
+finding — bouncing the agent between micro-corrections wastes context and
+makes "what's left" hard to track:
 
 ```bash
 wt send <target> "검토 결과입니다. <파일/동작>에서 <문제>가 보입니다. <기대 수정 방향>으로 고치고, 완료 후 변경 파일/검증 결과/남은 리스크를 짧게 보고해줘."
