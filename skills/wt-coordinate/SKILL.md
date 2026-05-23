@@ -102,6 +102,21 @@ Make the rationale visible:
 wt send <target> "design.md / tasks.md / workflow.md를 업데이트했습니다. 변경: <무엇이 바뀌었나>. 이유: <왜 바뀌었나>. 이 업데이트된 spec 기준으로 진행해주세요."
 ```
 
+### Log Mid-Process Discoveries
+
+If unplanned research happens during the run — a domain term that needed a
+definition, a convention that was not surveyed, an external example that
+changed the approach, or an internal fact that was not inventoried — log it
+to `specs/<slug>/mid-process-discoveries.md` instead of silently absorbing
+it.
+
+Format: one entry per discovery, dated, with a category tag (`domain` /
+`standards` / `external` / `internal`) and a one-line note on what was
+researched and why it was not in the original Unknown surfacing list.
+`wt-retrospect` reads this file to diagnose which category was missed and
+strengthen the next run's surfacing checklist. If no unplanned research
+happens, do not create the file.
+
 ## Complete When Applicable
 
 Complete only after the worktree is clean and useful commits exist ahead of

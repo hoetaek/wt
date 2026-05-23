@@ -8,6 +8,7 @@ different kind of uncertainty before the work becomes runnable.
 
 ```text
 Raw intent <-> Context / reference exploration
+-> Unknown surfacing
 -> Purpose / success criteria
 -> Requirements / principles
 -> Output concept
@@ -78,7 +79,36 @@ Return here when:
 - The user needs examples before they can say what they want.
 - There are too many possible product/document/workflow shapes.
 
-## 3. Purpose / success criteria
+## 3. Unknown surfacing
+
+Owner: `wt-idea`, or `wt-ready` when entered directly without prior idea capture.
+
+Artifact: idea body section, or spec notes section, listing unknowns by
+category — domain concepts, standards/conventions, external facts, internal
+facts — with each item marked `blocking now` or `useful later`.
+
+Purpose: name what is missing before researching. Without this gate, context
+exploration becomes reactive and the same kinds of research keep surfacing
+mid-work as unplanned detours.
+
+Gate to next step:
+
+- Unknowns are grouped by category, not dumped as one flat list.
+- Each unknown is marked `blocking now` vs `useful later`.
+- The most expensive unknowns (the ones that would unravel later work if
+  unresolved) are identified.
+- The list becomes the agenda for the next exploration or evidence-gathering
+  pass.
+
+Return here when:
+
+- A new unknown surfaces mid-work and is researched on the spot — surfacing
+  was incomplete. Log it to `specs/<slug>/mid-process-discoveries.md` so
+  `wt-retrospect` can diagnose which category was missed next time.
+- Repeated unplanned research detours start interrupting drafting or
+  implementation.
+
+## 4. Purpose / success criteria
 
 Owner: `wt-idea` for exploration, `wt-ready` for committed prep.
 
@@ -96,7 +126,7 @@ Return here when:
 - The implementation is named but the benefit is unclear.
 - A task would need the agent to invent product intent.
 
-## 4. Requirements / principles
+## 5. Requirements / principles
 
 Owner: `wt-ready`.
 
@@ -120,7 +150,7 @@ Return here when:
   behavior.
 - Acceptance checks cannot be stated.
 
-## 5. Output concept
+## 6. Output concept
 
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
 show that the chosen artifact shape is wrong.
@@ -145,7 +175,7 @@ Return here when:
   prototype, docs change, or implementation PR is the right next artifact.
 - A broad idea has several output forms that should not be bundled together.
 
-## 6. Design
+## 7. Design
 
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
 invalidate assumptions.
@@ -167,7 +197,7 @@ Return here when:
 - The task would create a new user-facing model term without checking
   canonical docs.
 
-## 7. Task graph
+## 8. Task graph
 
 Owner: `wt-ready`.
 
@@ -193,7 +223,7 @@ Return here when:
 - A slice is too large to review or too small to justify its own branch.
 - The proposed stack is only a packaging choice, not a dependency claim.
 
-## 8. Execution handoff
+## 9. Execution handoff
 
 Owner: `wt-ready` prepares; `wt-start` launches.
 
@@ -212,12 +242,13 @@ Return here when:
 - The next command is ambiguous.
 - Required expected duration, policy, or acceptance checks are missing.
 
-## 9. Review / sync
+## 10. Review / sync
 
 Owner: `wt-coordinate`.
 
 Artifact: reviewed diff/check evidence, updated `design.md`, `tasks.md`, and
-`workflow.md` when execution reality changes the plan.
+`workflow.md` when execution reality changes the plan. Optional
+`mid-process-discoveries.md` when unplanned research surfaces mid-work.
 
 Gate to next step:
 
@@ -225,6 +256,8 @@ Gate to next step:
   report.
 - Checks are scaled to risk and recorded.
 - Spec drift is fixed in the spec instead of being left as a stale artifact.
+- Unplanned research is logged to `mid-process-discoveries.md` so the
+  retrospective can diagnose which Unknown surfacing category was missed.
 - Workflow-linked runs are completed only after review passes.
 
 Return here when:
@@ -232,7 +265,7 @@ Return here when:
 - Implementation reveals a requirement or design assumption was wrong.
 - The diff is too broad for the prepared task and needs re-slicing.
 
-## 10. Retrospect
+## 11. Retrospect
 
 Owner: `wt-retrospect`, normally called by `wt-work` after landing or explicit
 discard.
@@ -246,6 +279,10 @@ Gate to future work:
   skill/docs changes.
 - Harness tuning names the exact file and section to update when the lesson
   should permanently change agent behavior.
+- When `mid-process-discoveries.md` exists for this run, each discovery is
+  classified against the Unknown surfacing categories (domain / standards /
+  external / internal). The category that was missed becomes either a
+  `try` item or a `harness_tuning` entry for the next run's surfacing pass.
 
 Return here when:
 

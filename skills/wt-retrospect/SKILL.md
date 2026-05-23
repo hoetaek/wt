@@ -215,18 +215,29 @@ requirements.md proved ambiguous; tighten the wt-ready template").
 3. For `outcome = "blocked"`, set `kind = "blocked-gate"` unless a more
    specific kind is still useful, and fill `context.blocked_gate` with the
    work-sequence gate name.
-4. Draft the TOML directly under `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`
+4. Diagnose Unknown surfacing misses, if the spec has them:
+   - If `<git-common-dir>/wt/specs/<slug>/mid-process-discoveries.md` exists,
+     read it. Each entry is a research step that happened mid-work instead
+     of at the Unknown surfacing gate.
+   - Classify each discovery against the four surfacing categories: `domain`,
+     `standards`, `external`, `internal`.
+   - The category(ies) that recur are the ones the next run's surfacing pass
+     should explicitly cover. Record this either as a `try` item ("add X
+     category to the surfacing checklist for this kind of work") or, when
+     the lesson belongs in a skill body, as a `[[harness_tuning]]` entry
+     pointing at the relevant SKILL.md section.
+5. Draft the TOML directly under `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`
    using the shape above. Skip optional sections that have no content.
-5. Cross-check against `<git-common-dir>/wt/retrospectives/README.md` if conventions are
+6. Cross-check against `<git-common-dir>/wt/retrospectives/README.md` if conventions are
    uncertain.
-6. Re-read for adoptability: each `try` item should be something a future
+7. Re-read for adoptability: each `try` item should be something a future
    coordinator can actually do; each `action_candidate` should have a
    recognizable `done_when`.
-7. For every lesson that warrants a permanent behavior change, add a
+8. For every lesson that warrants a permanent behavior change, add a
    `[[harness_tuning]]` entry that names the exact target file and section,
    plus the owner who applies the change. If no lesson rises to that bar,
    leave the table out.
-8. Do not commit the file unless the user asks. Retrospectives are local
+9. Do not commit the file unless the user asks. Retrospectives are local
    learning artifacts by default.
 
 ## Report

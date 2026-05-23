@@ -69,10 +69,59 @@ An idea is not a task. Capture it as a durable research artifact with:
 Prefer information density over premature certainty. A good `wt-idea` output
 makes later decisions better; it does not force one solution too early.
 
+## Unknown Surfacing
+
+Before researching anything, list what is missing. Without this step,
+Evidence Gathering becomes reactive — the same kinds of research keep
+surfacing mid-work and become unplanned detours.
+
+Categorize unknowns:
+
+- **Domain concepts** — meaning of core terms in the user's wording, the
+  product domain, or the wt model (e.g., "what does the user mean by
+  'profile' here — `[profile]` config layer, matrix profile name, or
+  shell-side preset?").
+- **Standards / conventions** — accepted patterns, established practice for
+  the kind of change being proposed (e.g., "what is the wt convention for
+  CLI verb-noun pairs?", "what does `docs/consistency.md` say about this?").
+- **External facts** — comparable cases, prior art, authoritative sources,
+  recent changes in the relevant ecosystem.
+- **Internal facts** — what the repo already has (config shape, existing
+  state files, prior decisions, tests, related ideas/specs/tasks) that may
+  not have been inventoried yet.
+
+For each unknown, mark `blocking now` or `useful later`. The most expensive
+unknowns — the ones that would unravel later prep or execution if unresolved
+— get researched first in Evidence Gathering.
+
+Record the surfaced list in the idea body under a `미지 (Unknowns)` section
+so `wt-ready` (or a future `wt-idea` pass) can use it as the agenda. Example:
+
+```text
+미지 (Unknowns):
+
+Domain (blocking now):
+- "profile"이 가리키는 게 [profile] 레이어인가 matrix profile name인가?
+
+Standards (blocking now):
+- wt CLI 동사-명사 쌍 규칙(`docs/consistency.md`)이 이 케이스에 적용되나?
+
+External (useful later):
+- 같은 문제를 푼 다른 도구(예: jj, sapling)의 명령 모양.
+
+Internal (blocking now):
+- 현재 .wt.toml / config.toml에 비슷한 옵션이 이미 있는가?
+```
+
+When a new unknown surfaces *after* this step (during ready/start/coordinate),
+that is a signal Surfacing was incomplete; the runtime owner logs it to
+`<git-common-dir>/wt/specs/<slug>/mid-process-discoveries.md` so the
+retrospective can diagnose the missed category.
+
 ## Evidence Gathering
 
-Start from the conversation and repository. Search existing local artifacts
-before creating a new one:
+Use the **Unknown Surfacing** list as the agenda. Start from the conversation
+and repository, searching existing local artifacts before creating a new one:
 
 ```bash
 common_dir="$(git rev-parse --git-common-dir)"

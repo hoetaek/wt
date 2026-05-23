@@ -35,6 +35,13 @@ preparation. Implementation belongs in a wt task/workflow branch.
 
 ## Gather Evidence
 
+If raw intent and unknowns are not yet surfaced (e.g., the user skipped
+`wt-idea` and entered ready directly), run a brief Unknown Surfacing pass
+before evidence gathering. Use the four categories from `wt-idea` — domain
+concepts, standards/conventions, external facts, internal facts — and mark
+each unknown `blocking now` or `useful later`. The list becomes the agenda
+below.
+
 Work from the conversation, issue references, existing docs, current code, and
 current runtime behavior. If the user says how something works, verify it
 against the repo when it is cheap.
@@ -250,8 +257,10 @@ Prepared wt work lives in three state directories under `<git-common-dir>/wt/`:
 - `ideas/<slug>.{md,toml}` — kill-able exploration captured by `wt-idea`. Free-form
   Markdown or TOML. May be deleted at any time. No commitment.
 - `specs/<slug>/` — committed prep artifact. Holds `requirements.md`, `design.md`,
-  `tasks.md`, and optionally `workflow.md`. This is the canonical location for
-  prep work that has been promoted past exploration.
+  `tasks.md`, and optionally `workflow.md`. May also gain
+  `mid-process-discoveries.md` during execution when `wt-coordinate` logs
+  unplanned research (see that skill's Sync the Spec section). This is the
+  canonical location for prep work that has been promoted past exploration.
 - `tasks/<slug>.toml` — TaskDocument, the launch unit. Schema unchanged. The body
   may reference `specs/<slug>/` files by relative path.
 

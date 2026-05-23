@@ -9,6 +9,7 @@ pretending the work is ready for the next command.
 
 ```text
 Raw intent <-> Context / reference exploration
+-> Unknown surfacing
 -> Purpose / success criteria
 -> Requirements / principles
 -> Output concept
@@ -27,6 +28,7 @@ Raw intent <-> Context / reference exploration
 |---|---|---|
 | Raw intent | `wt-idea`, or first minutes of `wt-ready` | `ideas/<slug>.{md,toml}` or a raw-intent note |
 | Context / reference exploration | `wt-idea`, or `wt-ready` for bounded prep research | idea body, spec discovery notes |
+| Unknown surfacing | `wt-idea`, or `wt-ready` when entered directly | idea body or spec notes section listing unknowns by category with blocking-now markers |
 | Purpose / success criteria | `wt-ready` | `requirements.md` story/context |
 | Requirements / principles | `wt-ready` | `requirements.md` EARS/principles |
 | Output concept | `wt-ready` | spec notes, TaskDocument planning, `workflow.md` rationale |
@@ -34,26 +36,29 @@ Raw intent <-> Context / reference exploration
 | Task graph | `wt-ready` | `tasks.md`, optional `workflow.md`, TaskDocuments/workflow TOML |
 | Execution handoff | `wt-ready` | TaskDocument `계획 (Planning)` and exact `wt-start` target |
 | Execution launch | `wt-start` | TaskRun/worktree/workflow and inspect target |
-| Review / sync | `wt-coordinate` | reviewed diff/checks and updated `design.md`/`tasks.md`/`workflow.md` |
+| Review / sync | `wt-coordinate` | reviewed diff/checks and updated `design.md`/`tasks.md`/`workflow.md`; optional `mid-process-discoveries.md` for unplanned research |
 | Land / close | `wt-land` | landed branch proof, completion, cleanup |
-| Retrospect | `wt-retrospect` | `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml` |
+| Retrospect | `wt-retrospect` | `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`; diagnose `mid-process-discoveries.md` against Unknown surfacing categories |
 
 ## Audit Questions
 
 Before moving to the next skill, answer the matching question:
 
 - `wt-idea` -> `wt-ready`: Do we know enough to commit to prep, or are we still
-  collecting references and possible frames?
+  collecting references and possible frames? Have unknowns been surfaced by
+  category (domain / standards / external / internal) with blocking-now markers?
 - `wt-ready` -> `wt-start`: Are purpose, requirements, output concept, design,
   slice graph, expected duration, acceptance checks, size class, and policy
   explicit enough for an agent to start?
 - `wt-start` -> `wt-coordinate`: Is there a concrete inspect target and is
   runtime state visible through `wt inspect` / `wt agent status`?
 - `wt-coordinate` -> `wt-land`: Has the coordinator inspected the diff directly,
-  run checks scaled to risk, resolved spec drift, and completed workflow-linked
-  runs when applicable?
+  run checks scaled to risk, resolved spec drift, logged any unplanned
+  research to `mid-process-discoveries.md`, and completed workflow-linked runs
+  when applicable?
 - `wt-land` -> `wt-retrospect`: Is the work landed or explicitly discarded, and
-  is there a reusable lesson worth preserving?
+  is there a reusable lesson worth preserving? When `mid-process-discoveries.md`
+  exists, diagnose which Unknown surfacing category was missed.
 
 ## Practical Rule
 
