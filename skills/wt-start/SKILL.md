@@ -5,23 +5,14 @@ description: "Use when prepared wt work is ready to launch: run a direct task or
 
 # WT Start
 
-Use this skill to start prepared wt work. Stop after the run is launched and
-the inspect target is clear. Use `wt-ready` first when the task/workflow does
-not already exist or when scope, slice order, evidence, PR policy, or landing
-policy is still unsettled.
+Launch prepared wt work. Stop after the run is launched and the inspect target
+is captured. Do not revise purpose, requirements, design, or task graph here;
+return to `wt-ready` if launch reveals the handoff is incomplete.
 
-Use `wt-coordinate` for monitoring, feedback, and review after work is running.
-Use `wt-land` for landing and cleanup after review passes.
-
-In the work-sequence model, this skill consumes the execution handoff from
-`wt-ready` and turns it into a concrete TaskRun/worktree/workflow plus an
-inspect target. Do not revise purpose, requirements, design, or task graph here
-unless launch reveals that the handoff is incomplete; in that case return to
-`wt-ready`.
+Object model, planning-estimate requirement, and direct vs workflow-linked
+distinction: see `../wt-work/references/task-lifecycle.md`.
 
 ## Current State
-
-Check the repo and runtime before choosing a command:
 
 ```bash
 git status --short --branch
@@ -31,97 +22,52 @@ find "$common_dir/wt/tasks" "$common_dir/wt/task-runs" "$common_dir/wt/workflows
 wt doctor
 ```
 
-Confirm:
-
-- worktree cleanliness and existing task/workflow state
-- `Agent` is not `none` when agent work is expected
-- `cmux CLI` and `[workspace]` config are ready when workspace automation is expected
-- issue provider is configured before issue-based workflows
-
-## Task Model
-
-- `TaskDocument`: `<git-common-dir>/wt/tasks/<task>.toml`; defines the work.
-- `TaskRun`: `<git-common-dir>/wt/task-runs/<id>.toml`; records one execution attempt.
-- workflow file: saved orchestration for `single`, `batch`, or `stack` execution.
-
-TaskDocuments store intent, not runtime status. TaskRuns store status, branch,
-group, error, and timestamps. A missing `group` means direct execution; a
-`group` matching a workflow file stem plus that workflow's `[[tasks]].run`
-link makes the run workflow-linked. Workflow mode lives on the workflow, not on
-TaskRun.
-
-TaskDocuments and workflow tasks must carry a planning estimate before launch.
-Until the repo schema explicitly supports a machine field, the estimate belongs
-in the TaskDocument `body` under `계획 (Planning)` as a line containing
-`expected duration`, not as a top-level TOML field.
+Confirm: worktree cleanliness, existing task/workflow state, `Agent` is not
+`none` when agent work is expected, `cmux CLI` and `[workspace]` ready when
+workspace automation is expected, issue provider configured for issue
+workflows.
 
 ## Command Choice
 
-Use `wt run task` when each selected TaskDocument should get its own worktree now:
+Direct task — each TaskDocument gets its own worktree:
 
 ```bash
 wt run task <task-key> --base .
-wt run task
+wt run task                       # interactive selection
 ```
 
-Use `wt workflow task --mode single` when multiple TaskDocuments should share
-one saved workspace run:
+Saved workflow — multiple TaskDocuments in one saved run:
 
 ```bash
-wt workflow task --mode single <task-a> <task-b> --base .
+wt workflow task --mode <single|batch|stack|matrix> <tasks...> --base <branch>
 wt run workflow
 ```
 
-Use `wt workflow task --mode batch` when tasks are independent and may run from
-the same base:
+Mode selection:
 
-```bash
-wt workflow task --mode batch <task-a> <task-b> --base <base-branch>
-wt run workflow
-```
+- `single`: tasks share one saved workspace
+- `batch`: tasks independent from the same base
+- `stack`: each branch builds on the previous task branch (order matters)
+- `matrix`: one local TaskDocument across explicit named profiles
+  (`--profiles <a>,<b>`); local-TaskDocument only
 
-Use `wt workflow task --mode stack` when task order matters and each branch
-should build on the previous task branch:
-
-```bash
-wt workflow task --mode stack <task-a> <task-b> <task-c> --base <base-branch>
-wt run workflow
-```
-
-Use `wt workflow task --mode matrix` when one local TaskDocument should run
-across explicit named profiles:
-
-```bash
-wt workflow task --mode matrix <task> --profiles <profile-a>,<profile-b> --base <base-branch>
-wt run workflow
-```
-
-For provider issues, use `wt workflow issue --mode <single|batch|stack> ...`
-when a saved workflow is useful. Matrix mode is local-TaskDocument only; do not
-try to start provider issues as matrix workflows.
+For provider issues, use `wt workflow issue --mode <single|batch|stack> ...`.
 
 ## Start Rules
 
-- Prefer explicit task keys in scripts; omit keys only for interactive selection.
-- Before launching, inspect the selected TaskDocument bodies or workflow task
-  prompts and confirm every task has `계획 (Planning)` and `expected duration`.
-  If any task is missing an expected duration, do not start it; return to
-  `wt-ready` or update the TaskDocument body first.
-- Also confirm the handoff has acceptance checks, size class, output concept or
-  workflow rationale, and PR/landing policy source when relevant. If these are
-  missing, return to `wt-ready`; launch should not invent planning context.
-- Use `--base .` for current branch, `--base <branch>` for an explicit base,
-  or bare `--base` for interactive base selection.
-- Direct TaskDocument execution is `wt run task`; use workflow commands only for saved workflow execution.
+- Prefer explicit task keys in scripts; omit only for interactive selection.
+- Verify every selected task body has `계획 (Planning)` with `expected duration`. If missing, return to `wt-ready`.
+- Verify the handoff has acceptance checks, size class, output concept or workflow rationale, and PR/landing policy source. If missing, return to `wt-ready`.
+- `--base .` for current branch, `--base <branch>` for explicit base, bare `--base` for interactive base selection.
+- Direct execution is `wt run task`; workflow commands only for saved workflow execution.
 - Do not prepare a workflow when one direct worktree run is enough.
-- Do not use batch for parent-dependent tasks; use stack mode.
-- Do not decide PR or landing preferences here; use the prepared workflow policy
-  from `wt-ready` or the repository config.
+- Do not use batch for parent-dependent tasks — use stack.
+- Do not decide PR or landing preferences here; use prepared workflow policy or repo config.
 - Do not report TaskRun `running` as active agent work without `wt agent status`.
 
 ## After Launch
 
-Verify the run and capture the inspect target:
+Capture the inspect target:
 
 ```bash
 git worktree list
@@ -131,6 +77,6 @@ wt inspect <branch|worktree|task-run-id>
 wt agent status <branch|worktree|task-run-id>
 ```
 
-Report the command used, created branch/worktree or workflow, TaskRun id when
-available, and the next `wt inspect` target. If the agent is still running and
-you need to wait for a state transition, use `wt agent watch <target>`.
+Report: command used, created branch/worktree or workflow, TaskRun id when
+available, next `wt inspect` target. Use `wt agent watch <target>` if waiting
+for a state transition.

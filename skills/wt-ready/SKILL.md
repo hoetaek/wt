@@ -35,9 +35,18 @@ preparation. Implementation belongs in a wt task/workflow branch.
 
 ## Gather Evidence
 
-Work from the conversation, issue references, existing docs, current code, and
-current runtime behavior. If the user says how something works, verify it
-against the repo when it is cheap.
+If raw intent and unknowns are not yet surfaced (e.g., the user skipped
+`wt-idea` and entered ready directly), run a brief Unknown Surfacing pass
+before evidence gathering. Use the four categories from `wt-idea` — domain
+concepts, standards/conventions, external facts, internal facts — and mark
+each unknown `blocking now` or `useful later`. The list becomes the agenda
+below.
+
+Work **inside-out**: ask the user direct clarifying questions and inventory
+user/team-held materials (prior decisions, notes, related artifacts, contacts)
+before reaching outward. Then check the conversation, issue references,
+existing docs, current code, and current runtime behavior. If the user says
+how something works, verify it against the repo when it is cheap.
 
 Useful evidence:
 
@@ -49,8 +58,10 @@ Useful evidence:
 - external references only when the user asks or the decision depends on current
   best practice outside the repo
 
-Separate confirmed facts, experiment results, tradeoffs, and unresolved
-questions in your notes or response.
+Label items in your output as **verified fact** (with source — file:line,
+URL, command output), **flagged assumption** (still to validate), or
+**inventoried material** (user/team already holds it). Assumptions must not
+ride along as facts into the next gate.
 
 When raw intent is still soft, use bounded context/reference exploration before
 forcing purpose or requirements. Gather enough local or external examples to
@@ -81,8 +92,8 @@ focused question at a time and include your recommended answer.
 Resolve terminology as you go. If the user uses a term that conflicts with the
 repo docs or code, point to the conflict and propose the canonical term.
 
-When authoring a spec file (`requirements.md`, `design.md`, `tasks.md`,
-`workflow.md`), use the **Grill The Spec** cycle instead.
+When authoring a spec file (`04+05+06-requirements.md`, `07-design.md`,
+`08-tasks.md`, `09-execution.md`), use the **Grill The Spec** cycle instead.
 
 ## Set Output Concept
 
@@ -90,8 +101,8 @@ After purpose, requirements, and principles are clear, decide what kind of
 artifact this preparation should produce. Do this before design and task graph
 work so an implementation PR is not assumed by default.
 
-Record the output concept in the spec notes, TaskDocument `계획 (Planning)`
-section, or `workflow.md` rationale:
+Record the output concept in `04+05+06-requirements.md`,
+TaskDocument `계획 (Planning)` section, or `09-execution.md` rationale:
 
 - docs-only change
 - implementation PR
@@ -181,17 +192,17 @@ only because they came from the same conversation. A stack is a dependency
 claim. When unsure, explain the dependency assumption and prefer batch or
 separate workflows over a false parent chain.
 
-### Derive workflow mode from `tasks.md`
+### Derive workflow mode from `08-tasks.md`
 
 When a spec exists at `<git-common-dir>/wt/specs/<slug>/`, derive the execution
-shape from `tasks.md`. Read the slice graph (dependencies, parallel groups,
+shape from `08-tasks.md`. Read the slice graph (dependencies, parallel groups,
 shared base, lifecycle) and consult the canonical mapping below to pick a
 workflow mode. Then record the choice and the reasoning in
-`specs/<slug>/workflow.md` (see Spec Deliverables for authoring shape).
+`specs/<slug>/09-execution.md` (see Spec Deliverables for authoring shape).
 
-Canonical `tasks.md` → workflow mode mapping:
+Canonical `08-tasks.md` → workflow mode mapping:
 
-| `tasks.md` slice graph | Workflow mode |
+| `08-tasks.md` slice graph | Workflow mode |
 |---|---|
 | All sequential, single agent | `single` |
 | All independent, same base | `batch` |
@@ -203,7 +214,7 @@ Then act on the chosen mode:
 
 - `single` / `batch` / `stack` — create the workflow TOML via
   `wt workflow task --mode <mode> ...` at
-  `<git-common-dir>/wt/workflows/<id>.toml`. Record its path in `workflow.md`
+  `<git-common-dir>/wt/workflows/<id>.toml`. Record its path in `09-execution.md`
   under "Linked workflow TOML".
 - `matrix` — create the workflow TOML via
   `wt workflow task --mode matrix <task> --profiles <profile-a>,<profile-b> ...`.
@@ -249,15 +260,19 @@ Prepared wt work lives in three state directories under `<git-common-dir>/wt/`:
 
 - `ideas/<slug>.{md,toml}` — kill-able exploration captured by `wt-idea`. Free-form
   Markdown or TOML. May be deleted at any time. No commitment.
-- `specs/<slug>/` — committed prep artifact. Holds `requirements.md`, `design.md`,
-  `tasks.md`, and optionally `workflow.md`. This is the canonical location for
-  prep work that has been promoted past exploration.
+- `specs/<slug>/` — committed prep artifact. Holds numbered work-sequence files:
+  `01-intent.md`, `02-unknowns.md`, `03-context.md`,
+  `04+05+06-requirements.md`, `07-design.md`, `08-tasks.md`, lazy
+  `09-execution.md`, lazy `10-review.md`, and lazy `11-retrospect.md`.
+  This is the canonical location for prep work that has been promoted past
+  exploration and for spec-backed review/retrospect records.
 - `tasks/<slug>.toml` — TaskDocument, the launch unit. Schema unchanged. The body
   may reference `specs/<slug>/` files by relative path.
 
-The wt CLI does not read, parse, or manage `specs/` content. It can *seed* the
-three core files via `wt scaffold <slug> --spec`; after that, spec authoring
-stays a human/AI artifact. TaskDocument and TaskRun models are unchanged.
+The wt CLI does not parse or manage `specs/` as executable state. It can *seed*
+the six prep files (`01` through `08`) via `wt scaffold <slug> --spec`; after
+that, spec authoring stays a human/AI artifact. TaskDocument and TaskRun models
+are unchanged.
 
 ### Promotion (idea → spec)
 
@@ -266,11 +281,12 @@ existing idea file is promoted, not copied:
 
 - `rm <git-common-dir>/wt/ideas/<slug>.{md,toml}` — the visible commit gate
   that distinguishes exploration from committed prep.
-- `wt scaffold <slug> --spec` — seeds `requirements.md`, `design.md`, and
-  `tasks.md`.
-- If a mode decision is recorded at prep time, create `workflow.md` by hand.
-  Scaffold intentionally does not make `workflow.md` — it is a decision
-  artifact, not a skeleton.
+- `wt scaffold <slug> --spec` — seeds `01-intent.md`, `02-unknowns.md`,
+  `03-context.md`, `04+05+06-requirements.md`, `07-design.md`, and
+  `08-tasks.md`.
+- If a mode decision is recorded at prep time, create `09-execution.md` by
+  hand. Scaffold intentionally does not make `09-execution.md` — it is a
+  decision and handoff artifact, not a blank prep skeleton.
 
 The deletion plus spec directory creation is the visible commit gate that
 distinguishes exploration from committed prep. Work that the user requests
@@ -279,7 +295,28 @@ idea file existing first.
 
 ### Authoring conventions
 
-`requirements.md`:
+`01-intent.md`:
+
+- Preserve the user's raw wording and the coordinator's interpreted intent as
+  separate text.
+- Record whether this spec was promoted from an idea path or entered
+  `wt-ready` directly.
+
+`02-unknowns.md`:
+
+- Group unknowns by domain concepts, standards/conventions, external facts,
+  and internal facts.
+- Mark each unknown `blocking now` or `useful later`; blocking unknowns drive
+  evidence gathering.
+
+`03-context.md`:
+
+- Separate verified facts, inventoried materials, flagged assumptions,
+  references, options, and tradeoffs.
+- Do not record final design decisions here unless the decision has already
+  been approved downstream.
+
+`04+05+06-requirements.md`:
 
 - First line is the user story in Korean:
   `사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.`
@@ -296,14 +333,14 @@ idea file existing first.
 - Regression-sensitive behavior is stated explicitly:
   `WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>`.
 
-`design.md`:
+`07-design.md`:
 
 - Capture decisions, affected components, and constraints.
 - For brownfield work, optionally include a Static Model (Purpose, Components,
   Business Rules) and a Dynamic Model (workflow / behavior) section before the
   new design.
 - Prefer intent and component responsibility over raw code dumps.
-- **Embed ASCII diagrams inside design.md** where the static model, dynamic
+- **Embed ASCII diagrams inside `07-design.md`** where the static model, dynamic
   model, or layered relationship with sibling specs would benefit from a
   structural view. Diagrams that live only in chat evaporate; the durable
   artifact is the spec file. At minimum, when the design has non-trivial
@@ -315,39 +352,41 @@ idea file existing first.
   - **Layered or cross-spec relationships** — how this design depends on or is
     depended on by sibling specs (dependency direction, layer assignment).
 
-`tasks.md`:
+`08-tasks.md`:
 
 - Checkbox items, sequenced as atomic units of work.
 - Mark dependencies or parallelism explicitly so downstream steps can pick the
   right execution shape.
 
-`workflow.md` (OPTIONAL, 4th file under `specs/<slug>/`):
+`09-execution.md` (LAZY, only when launch handoff exists):
 
 - Prose record of the chosen execution shape and the reasoning derived from
-  `tasks.md`. wt CLI does not read or write this file; it is for the human
+  `08-tasks.md`. wt CLI does not read or write this file; it is for the human
   and the agent.
 - Recommended sections:
   - **선택한 모드**: one of `single` / `batch` / `stack` / `matrix` / `none`.
-  - **이유**: dependency analysis from `tasks.md` (sequential vs independent,
+  - **이유**: dependency analysis from `08-tasks.md` (sequential vs independent,
     shared base, lifecycle, parallel groups).
-  - **슬라이스 → TaskDocument 매핑**: how `tasks.md` slices became one or
+  - **슬라이스 → TaskDocument 매핑**: how `08-tasks.md` slices became one or
     more TaskDocuments (or direct local edits), with paths.
   - **연결된 workflow TOML**: `<git-common-dir>/wt/workflows/<id>.toml` when
     applicable; `none` otherwise.
+  - **wt-start target**: exact command or target for execution launch.
   - **리스크**: anything to watch when execution starts.
-- When mode = `none`, `workflow.md` may be very brief (one paragraph plus the
+- When mode = `none`, `09-execution.md` may be very brief (one paragraph plus the
   slice → TaskDocument mapping) or omitted entirely.
 - The executable workflow is still the TOML at
   `<git-common-dir>/wt/workflows/<id>.toml`, created via
-  `wt workflow task --mode ...`. `workflow.md` is prose only and never
+  `wt workflow task --mode ...`. `09-execution.md` is prose only and never
   replaces the TOML.
 
-Spec files are not frozen at handoff. `wt-coordinate` may update `design.md`,
-`tasks.md`, and `workflow.md` in place during execution to reflect findings;
-treat the spec as a living artifact that the running work writes back to. The
-two-way sync rule applies to `workflow.md` the same way it applies to
-`design.md` / `tasks.md` — when execution drifts from the chosen mode, update
-`workflow.md` rather than silently changing the workflow TOML.
+Spec files are not frozen at handoff. `wt-coordinate` may update
+`07-design.md`, `08-tasks.md`, `09-execution.md`, and `10-review.md` in place
+during execution to reflect findings; treat the spec as a living artifact that
+the running work writes back to. The two-way sync rule applies to
+`09-execution.md` the same way it applies to `07-design.md` / `08-tasks.md` —
+when execution drifts from the chosen mode, update `09-execution.md` rather
+than silently changing the workflow TOML.
 
 ## Grill The Spec
 
@@ -366,47 +405,16 @@ makes a file authoritative.
 3. **Revise** the draft inline based on the answer. Surface terminology
    conflicts against `docs/consistency.md` (or the project's CONTEXT.md when
    present) as they appear — ubiquitous-language drift is cheapest to fix here.
-4. **Display for review** — after every revision, surface what changed so
-   the user can confirm. Default to a **structured summary** in chat, not
-   the full file contents. Dumping the entire file duplicates bytes that
-   are already in context from the preceding Edit/Write and burns tokens
-   for no comprehension gain.
-
-   **Default: summarize, don't dump.**
-   - List what changed and where (file path + section heading + one-line
-     gist per change: "added", "moved", "rewrote", "removed").
-   - Quote only the 2-10 lines that carry the substantive decision or
-     wording the user must confirm — never the whole file.
-   - Goal: user verifies the substance of the revision in seconds, without
-     re-reading bytes they already approved.
-
-   **For end-to-end review, use a zero-token surface (in this order):**
-   1. **`wt config`-configured editor** — if `[editor].command` is set
-      (e.g., `code {{path}}`, `vi {{path}}`, `cursor {{path}}`), invoke
-      that command with the file path. Zero conversation tokens; full
-      editor tooling (folding, syntax highlight).
-   2. **cmux markdown pane** — if cmux is active, open the file in a pane
-      configured for markdown rendering. Zero conversation tokens; lets
-      the user keep the agent conversation visible while reviewing.
-   3. **`Ctrl+E` to expand existing tool output** — if you just ran
-      Read/Edit/Write, the file content is already in the Claude Code UI
-      (collapsed by default). Direct the user to press `Ctrl+E` to expand
-      it in place, instead of re-Reading and re-printing.
-
-   **Avoid** re-Reading a file solely to print it back into chat — Claude
-   Code collapses tool output by default, so the dump is invisible without
-   `Ctrl+E` anyway. Acceptable only for very short files (< 50 lines) when
-   no editor or cmux pane exists.
-
-   When in doubt, ask once which mechanism the user prefers and apply that
-   choice consistently for the rest of the wt-ready cycle.
+4. **Display for review** — surface what changed so the user can confirm.
+   See `references/spec-review-surfaces.md` for the default summarize-don't-
+   dump rule and the editor / cmux pane / `Ctrl+E` zero-token surfaces.
 5. **Confirm** with the user that the file is settled before moving to the
    next file. Until that confirmation, the draft is not authoritative and
    downstream derivation (workflow mode, TaskDocument prep) must not run.
 
 ### File-specific grill foci
 
-`requirements.md`:
+`04+05+06-requirements.md`:
 
 - Whether the purpose/success criteria explain the desired effect rather than
   only naming an artifact to produce.
@@ -421,7 +429,7 @@ makes a file authoritative.
 - Ambiguity inside EARS phrasing: does `WHEN` describe a trigger or a state?
   Is `THE SYSTEM` the CLI, the harness, or the agent?
 
-`design.md`:
+`07-design.md`:
 
 - Trade-offs and rejected alternatives. "Why not the simpler shape?" If no
   alternative was considered, that itself is the grill question.
@@ -433,7 +441,7 @@ makes a file authoritative.
 - Coupling and boundary questions: which module owns the new behavior, and
   does that match the file's stated component responsibility?
 
-`tasks.md`:
+`08-tasks.md`:
 
 - Slice granularity. Is a slice too coarse to review safely, or too fine to
   justify its own branch?
@@ -444,10 +452,10 @@ makes a file authoritative.
 - Whether each slice is independently demoable, and what the acceptance check
   actually proves.
 
-`workflow.md`:
+`09-execution.md`:
 
 - Mode-choice rationale. Walk the canonical mapping table from **Derive
-  workflow mode from `tasks.md`** and ask which row this spec sits on.
+  workflow mode from `08-tasks.md`** and ask which row this spec sits on.
 - Alternatives considered. Could this be `batch` instead of `stack`? `matrix`
   for variant exploration? If the answer is "I didn't consider them", grill
   there before recording the choice.

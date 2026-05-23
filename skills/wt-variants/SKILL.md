@@ -13,7 +13,8 @@ approach is uncertain and worth comparing through multiple agent runs.
 `variant` is skill shorthand only. Do not add a persisted `variant` concept to
 `wt` state.
 
-In `wt`, variants are represented as:
+Object model and TaskRun semantics: see
+`../wt-work/references/task-lifecycle.md`. Variants are represented as:
 
 - one shared local TaskDocument
 - one `mode = "matrix"` workflow
@@ -26,12 +27,13 @@ variant instructions live in `<git-common-dir>/wt/profiles/<name>/profile.toml` 
 
 ## Boundaries
 
-- Use `wt-idea` first if the problem is vague or still needs research.
-- Use this skill to prepare variants and a matrix workflow.
-- Use `wt-start` to launch the prepared workflow.
-- Use `wt-coordinate` to monitor, review PRs, collect bot feedback, and mark
-  reviewed workflow runs complete.
-- Use `wt-land` only after the selected branch is reviewed and ready to land.
+| Phase | Where |
+|---|---|
+| problem still vague | `wt-idea` |
+| prepare variants + matrix workflow | this skill |
+| launch | `wt-start` |
+| monitor, PR review, bot feedback, complete | `wt-coordinate` |
+| land selected branch | `wt-land` |
 
 Do not use variants for dependent slices. If tasks depend on each other, use a
 stack. If tasks are independent but not competing answers to the same question,

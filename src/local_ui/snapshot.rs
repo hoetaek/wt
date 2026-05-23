@@ -496,6 +496,8 @@ struct RetrospecCollection {
 struct RetrospecSummary {
     key: String,
     path: String,
+    scope: String,
+    spec: Option<String>,
     kind: String,
     title: String,
     outcome: Option<String>,
@@ -546,7 +548,8 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
                 .display_path(&ctx.storage_root.profiles_dir()),
             retrospecs: ctx
                 .storage_root
-                .display_path(&ctx.storage_root.retrospectives_dir()),
+                .display_path(&ctx.storage_root.retrospectives_dir())
+                + " + <git-common-dir>/wt/specs/*/11-retrospect.md",
             config_paths: config_source_paths(&ctx),
         },
         config: config_summary(&ctx),
@@ -1251,9 +1254,9 @@ fn collect_retrospecs(ctx: &Ctx) -> Result<RetrospecCollection> {
     }
 
     for path in retrospec_paths(ctx)? {
-        let key = file_stem(&path).unwrap_or_else(|| "retrospec".into());
+        let (key, scope, spec) = retrospec_identity(ctx, &path);
         let relative_path = relative_path(ctx, &path);
-        match read_retrospec(ctx, &path) {
+        match read_retrospec(ctx, &path, key.clone(), scope, spec) {
             Ok(summary) => items.push(summary),
             Err(err) => invalid.push(InvalidRecord {
                 key,
@@ -1268,46 +1271,98 @@ fn collect_retrospecs(ctx: &Ctx) -> Result<RetrospecCollection> {
 }
 
 fn retrospec_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
-    let retrospecs_dir = ctx.storage_root.retrospectives_dir();
-    if !retrospecs_dir.exists() {
-        return Ok(Vec::new());
-    }
-
     let mut paths = Vec::new();
-    let display = ctx.storage_root.display_path(&retrospecs_dir);
-    for entry in fs::read_dir(&retrospecs_dir)
-        .with_context(|| format!("Failed to read retrospec directory: {display}"))?
-    {
-        let path = entry?.path();
-        let ext = path.extension().and_then(|ext| ext.to_str());
-        if matches!(ext, Some("toml" | "md" | "markdown")) {
-            paths.push(path);
+
+    let retrospecs_dir = ctx.storage_root.retrospectives_dir();
+    if retrospecs_dir.exists() {
+        let display = ctx.storage_root.display_path(&retrospecs_dir);
+        for entry in fs::read_dir(&retrospecs_dir)
+            .with_context(|| format!("Failed to read retrospec directory: {display}"))?
+        {
+            let path = entry?.path();
+            let ext = path.extension().and_then(|ext| ext.to_str());
+            if matches!(ext, Some("toml" | "md" | "markdown")) {
+                paths.push(path);
+            }
         }
     }
+
+    let specs_dir = ctx.storage_root.specs_dir();
+    if specs_dir.exists() {
+        let display = ctx.storage_root.display_path(&specs_dir);
+        for entry in fs::read_dir(&specs_dir)
+            .with_context(|| format!("Failed to read specs directory: {display}"))?
+        {
+            let path = entry?.path();
+            if path.is_dir() {
+                let retrospec = path.join("11-retrospect.md");
+                if retrospec.exists() {
+                    paths.push(retrospec);
+                }
+            }
+        }
+    }
+
     paths.sort();
     Ok(paths)
 }
 
-fn read_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
+fn retrospec_identity(ctx: &Ctx, path: &Path) -> (String, String, Option<String>) {
+    let specs_dir = ctx.storage_root.specs_dir();
+    if let Ok(relative) = path.strip_prefix(&specs_dir) {
+        let mut components = relative.components();
+        if let Some(spec) = components
+            .next()
+            .and_then(|component| component.as_os_str().to_str())
+        {
+            return (
+                format!("{spec}/11-retrospect"),
+                "spec-local".into(),
+                Some(spec.to_string()),
+            );
+        }
+    }
+
+    (
+        file_stem(path).unwrap_or_else(|| "retrospec".into()),
+        "cross-work".into(),
+        None,
+    )
+}
+
+fn read_retrospec(
+    ctx: &Ctx,
+    path: &Path,
+    key: String,
+    scope: String,
+    spec: Option<String>,
+) -> Result<RetrospecSummary> {
     match path.extension().and_then(|ext| ext.to_str()) {
-        Some("toml") => read_toml_retrospec(ctx, path),
-        Some("md" | "markdown") => read_markdown_retrospec(ctx, path),
+        Some("toml") => read_toml_retrospec(ctx, path, key, scope, spec),
+        Some("md" | "markdown") => read_markdown_retrospec(ctx, path, key, scope, spec),
         _ => bail!("Unsupported retrospec file type: {}", path.display()),
     }
 }
 
-fn read_toml_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
+fn read_toml_retrospec(
+    ctx: &Ctx,
+    path: &Path,
+    key: String,
+    scope: String,
+    spec: Option<String>,
+) -> Result<RetrospecSummary> {
     let relative_path = relative_path(ctx, path);
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read retrospec: {relative_path}"))?;
     let value: toml::Value = toml::from_str(&content)
         .with_context(|| format!("Failed to parse retrospec: {relative_path}"))?;
-    let key = file_stem(path).unwrap_or_else(|| "retrospec".into());
     let title = toml_string(&value, "title").unwrap_or_else(|| key.clone());
     let body = retrospec_body(&value);
     Ok(RetrospecSummary {
         key,
         path: relative_path,
+        scope,
+        spec,
         kind: "toml".into(),
         title,
         outcome: toml_string(&value, "outcome"),
@@ -1320,11 +1375,16 @@ fn read_toml_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
     })
 }
 
-fn read_markdown_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
+fn read_markdown_retrospec(
+    ctx: &Ctx,
+    path: &Path,
+    key: String,
+    scope: String,
+    spec: Option<String>,
+) -> Result<RetrospecSummary> {
     let relative_path = relative_path(ctx, path);
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read retrospec: {relative_path}"))?;
-    let key = file_stem(path).unwrap_or_else(|| "retrospec".into());
     let title = content
         .lines()
         .find_map(|line| line.trim().strip_prefix("# ").map(str::trim))
@@ -1334,6 +1394,8 @@ fn read_markdown_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
     Ok(RetrospecSummary {
         key,
         path: relative_path,
+        scope,
+        spec,
         kind: "markdown".into(),
         title,
         outcome: None,
@@ -1833,6 +1895,8 @@ fn is_known_state_or_config_path(relative: &str) -> bool {
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
             ))
+        || (relative.starts_with("<git-common-dir>/wt/specs/")
+            && relative.ends_with("/11-retrospect.md"))
         || (relative.starts_with("<git-common-dir>/wt/tasks/") && relative.ends_with(".toml"))
         || (relative.starts_with("<git-common-dir>/wt/workflows/") && relative.ends_with(".toml"))
         || (relative.starts_with("<git-common-dir>/wt/task-runs/") && relative.ends_with(".toml"))
@@ -1976,6 +2040,11 @@ mod tests {
             "retro",
             "title = \"Retro\"\ndate = \"2026-05-18\"\noutcome = \"landed\"\ntarget = \"demo\"\ntags = [\"ui\"]\n\n[context]\ngoal = \"Retro goal\"\n\n[keep]\nitems = [\"Keep this\"]\n",
         );
+        write_spec_retrospect(
+            dir.path(),
+            "demo-spec",
+            "# Demo spec retro\n\n## 결과\n- result: landed\n\n## 유지할 점\n- Keep spec context\n",
+        );
         write_retrospec(dir.path(), "bad", "title = [\n");
         fs::write(
             dir.path().join(".wt.toml"),
@@ -2088,7 +2157,7 @@ mod tests {
         assert_eq!(snapshot.ideas.invalid.len(), 1);
         assert_eq!(snapshot.profiles.items.len(), 1);
         assert_eq!(snapshot.profiles.invalid.len(), 1);
-        assert_eq!(snapshot.retrospecs.items.len(), 1);
+        assert_eq!(snapshot.retrospecs.items.len(), 2);
         assert_eq!(snapshot.retrospecs.invalid.len(), 1);
         assert_eq!(snapshot.config.workflow.pull_request, "ready");
         assert_eq!(snapshot.config.workflow.landing, "auto");
@@ -2216,6 +2285,17 @@ mod tests {
         assert_eq!(
             snapshot.retrospecs.items[0].body.as_deref(),
             Some("Context\nGoal: Retro goal\n\nKeep\n- Keep this")
+        );
+        assert_eq!(snapshot.retrospecs.items[0].scope, "cross-work");
+        assert_eq!(snapshot.retrospecs.items[1].key, "demo-spec/11-retrospect");
+        assert_eq!(snapshot.retrospecs.items[1].scope, "spec-local");
+        assert_eq!(
+            snapshot.retrospecs.items[1].spec.as_deref(),
+            Some("demo-spec")
+        );
+        assert_eq!(
+            snapshot.retrospecs.items[1].path,
+            "<git-common-dir>/wt/specs/demo-spec/11-retrospect.md"
         );
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
@@ -2422,5 +2502,11 @@ mod tests {
         let dir = root.join(".git/wt/retrospectives");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
+    }
+
+    fn write_spec_retrospect(root: &Path, spec: &str, content: &str) {
+        let dir = root.join(".git/wt/specs").join(spec);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("11-retrospect.md"), content).unwrap();
     }
 }

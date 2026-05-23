@@ -20,8 +20,9 @@ loop stops at an earlier gate and the blocker itself is worth preserving.
 - After an intentional discard with explicit user direction.
 - At the end of a `wt-work` loop, even when a phase blocked progress, if the
   blocker is a reusable lesson for the next cycle.
-- When the user explicitly says "retrospect", "retrospective 작성", or
-  references `<git-common-dir>/wt/retrospectives/`.
+- When the user explicitly says "retrospect" or "retrospective 작성".
+- When the user references `specs/<slug>/11-retrospect.md` or cross-work
+  `<git-common-dir>/wt/retrospectives/`.
 
 Skip this skill when no useful keep/problem/try emerged. A retrospect that
 restates the diff is noise.
@@ -51,25 +52,30 @@ lifecycle skill.
   candidate into an idea or task only when the pattern is clear enough to act
   on.
 - Prefer one closed work item or blocked gate lesson per file. If one run
-  produced unrelated lessons, split them into separate files and cross-link with
-  the `related_retrospective` field.
+  produced unrelated lessons, keep the spec-backed work item lesson in
+  `11-retrospect.md` and promote cross-work lessons to `<git-common-dir>/wt/retrospectives/`
+  only when they are not owned by a single spec.
 
 ## Scope Choice
 
 Before writing, decide what "one work item" means for this cycle. A multi-PR
 sequence can be one item when the PRs share a single goal and the keep/problem
-lessons converge. Split when:
+lessons converge. Use the spec-local file when the lesson belongs to one
+`specs/<slug>/`; split to the global retrospectives directory only when:
 
 - Different goals produced disjoint lessons (e.g. a profile cockpit decision
   vs. a marker narrowing fix).
 - One lesson is about coordination and another is about substring traps in
   code — readers benefit from being able to find them separately.
 
-When you split, set `related_retrospective` on each file to the other path.
+When you split, cross-link the files in prose or with `related_retrospective`
+where the format supports it.
 
 ## Place and Name
 
-- Path: `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`.
+- Default path for spec-backed work: `<git-common-dir>/wt/specs/<slug>/11-retrospect.md`.
+- Cross-work/spec-less fallback path:
+  `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`.
 - Slug is the work item's canonical short name (branch, PR title topic, or the
   concept the lesson centers on). Avoid generic slugs like
   `2026-05-19-cleanup`.
@@ -78,8 +84,38 @@ When you split, set `related_retrospective` on each file to the other path.
 
 ## Format
 
-Use TOML. Match the conventions in `<git-common-dir>/wt/retrospectives/README.md`. Required
-shape:
+For spec-backed work, use Markdown in `11-retrospect.md` with these sections:
+
+```markdown
+# <title>
+
+## Outcome
+- target:
+- result:
+- proof:
+
+## Keep
+-
+
+## Problem
+-
+
+## Try
+-
+
+## Action candidates
+-
+
+## Harness tuning
+-
+
+## Unknown surfacing misses
+-
+```
+
+For cross-work/spec-less retrospectives, use TOML under
+`<git-common-dir>/wt/retrospectives/`. Match the conventions in
+`<git-common-dir>/wt/retrospectives/README.md`. Required shape:
 
 ```toml
 title = "<concise title that names the work item>"
@@ -197,10 +233,10 @@ Target files commonly include, but are not limited to:
 - Profile prompts under `<git-common-dir>/wt/profiles/<name>/prompts/`.
 
 When the finished work item had specs, `<git-common-dir>/wt/specs/<slug>/` may
-contain `requirements.md`, `design.md`, and `tasks.md` from `wt-ready`. Cite
-them in `evidence` or in the `rationale` of a `[[harness_tuning]]` entry when
-the lesson points at the spec template itself (e.g. "the EARS statement in
-requirements.md proved ambiguous; tighten the wt-ready template").
+contain numbered work-sequence files from `wt-ready`. Cite them in `evidence`
+or in the `rationale` of a `[[harness_tuning]]` entry when the lesson points at
+the spec template itself (e.g. "the EARS statement in
+04+05+06-requirements.md proved ambiguous; tighten the wt-ready template").
 
 ## Process
 
@@ -215,18 +251,31 @@ requirements.md proved ambiguous; tighten the wt-ready template").
 3. For `outcome = "blocked"`, set `kind = "blocked-gate"` unless a more
    specific kind is still useful, and fill `context.blocked_gate` with the
    work-sequence gate name.
-4. Draft the TOML directly under `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`
-   using the shape above. Skip optional sections that have no content.
-5. Cross-check against `<git-common-dir>/wt/retrospectives/README.md` if conventions are
-   uncertain.
-6. Re-read for adoptability: each `try` item should be something a future
+4. Diagnose Unknown surfacing misses, if the spec has them:
+   - If `<git-common-dir>/wt/specs/<slug>/10-review.md` has a
+     `## Mid-process discoveries` section, read it. Each entry is a research
+     step that happened mid-work instead of at the Unknown surfacing gate.
+   - Classify each discovery against the four surfacing categories: `domain`,
+     `standards`, `external`, `internal`.
+   - The category(ies) that recur are the ones the next run's surfacing pass
+     should explicitly cover. Record this either as a `try` item ("add X
+     category to the surfacing checklist for this kind of work") or, when
+     the lesson belongs in a skill body, as a `[[harness_tuning]]` entry
+     pointing at the relevant SKILL.md section.
+5. Draft `11-retrospect.md` under the spec for spec-backed work. Draft TOML
+   directly under `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`
+   only for cross-work/spec-less retrospectives. Skip optional sections that
+   have no content.
+6. Cross-check against `<git-common-dir>/wt/retrospectives/README.md` only for
+   global TOML retrospectives when conventions are uncertain.
+7. Re-read for adoptability: each `try` item should be something a future
    coordinator can actually do; each `action_candidate` should have a
    recognizable `done_when`.
-7. For every lesson that warrants a permanent behavior change, add a
+8. For every lesson that warrants a permanent behavior change, add a
    `[[harness_tuning]]` entry that names the exact target file and section,
    plus the owner who applies the change. If no lesson rises to that bar,
    leave the table out.
-8. Do not commit the file unless the user asks. Retrospectives are local
+9. Do not commit the file unless the user asks. Retrospectives are local
    learning artifacts by default.
 
 ## Report

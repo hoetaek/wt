@@ -12,23 +12,15 @@ In the work-sequence model, this skill owns the land/close gate between
 review/sync and retrospect. It proves integration or discard, performs
 applicable completion, and cleans only after that closure is safe.
 
+Object model, status boundaries, and completion vs cleanup commands: see
+`../wt-work/references/task-lifecycle.md`.
+
 ## Boundaries
 
-Keep lifecycle states separate:
-
-- `complete`: for workflow-linked runs, mark reviewed running workflow tasks
-  complete with `wt workflow complete`.
-- `land`: merge or otherwise integrate the reviewed branch.
-- `done`: remove the worktree and local branch after landing is proven; this
-  cleanup marks only matching running direct TaskRuns done.
-
-TaskRun `done` is not proof that a branch landed. A clean worktree is not proof
-that the branch is reviewed. Do not run cleanup before ancestry or explicit
-discard intent is clear.
-
-Coordinator landing must not absorb task-branch merge conflict ownership. A
-merge conflict during landing is a task-branch update problem until the user
-explicitly asks the coordinator to take it over.
+- Do not run cleanup before ancestry or explicit discard intent is clear.
+- Coordinator landing must not absorb task-branch merge conflict ownership. A
+  merge conflict during landing is a task-branch update problem until the user
+  explicitly asks the coordinator to take it over.
 
 ## Preflight
 
@@ -103,10 +95,9 @@ wait, omit `--run-next`:
 wt workflow complete <workflow> <task>
 ```
 
-For direct TaskRuns, do not invent a separate completion step. After landing or
-explicit discard proof, `wt done <branch-or-worktree>` cleans the worktree/local
-branch and marks matching running direct TaskRuns done. Do not use `wt done` as
-a substitute for workflow completion.
+For direct TaskRuns, no separate completion exists — `wt done` during cleanup
+also marks running direct TaskRuns done. See `task-lifecycle.md` for the full
+completion vs cleanup boundary.
 
 ## Land
 
@@ -233,7 +224,7 @@ gh pr create --base <integration-branch> --head land-<slug>-recover \
 
 The original PRs stay `MERGED` (just into the wrong base); the recovery PR is
 the one that actually lands the content. Document the recovery in the
-workflow's spec or workflow.md so future readers understand the history.
+workflow's spec or `09-execution.md` so future readers understand the history.
 
 The robust path is to prevent mis-targeting up front via the explicit
 re-target step above. Treat the recovery procedure as a fallback, not a

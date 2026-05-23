@@ -8,8 +8,9 @@ description: "Use before wt-ready for vague ideas or future wt work: capture con
 Use this skill to capture and enrich ideas before they are ready for
 `wt-ready`. The goal is to preserve enough evidence and context that a later
 `wt-ready` pass can turn the idea into the best available task/workflow plan.
-In the work-sequence model, this skill owns raw intent and context/reference
-exploration before the work commits to a spec, TaskDocument, or workflow.
+In the work-sequence model, this skill owns raw intent, unknown surfacing, and
+context/reference exploration before the work commits to a spec, TaskDocument,
+or workflow.
 
 Do not implement code, create TaskDocuments, create workflows, launch worktrees,
 or decide final scope from this skill. Use `wt-ready` for idea-to-task
@@ -27,8 +28,8 @@ An idea is exploration. It is allowed to die.
   idea file continuing to exist. Removing one is not breakage.
 - Do not promote prematurely. Do not create TaskDocuments, specs, or workflows
   from inside `wt-idea`. Promotion is `wt-ready`'s job: when the user commits
-  in `wt-ready`, the idea file is removed and a `specs/<slug>/` directory
-  (with `requirements.md`, `design.md`, `tasks.md`) takes its place. That
+  in `wt-ready`, the idea file is removed and a numbered `specs/<slug>/`
+  directory takes its place. That
   directory move is the visible commit gate, not anything `wt-idea` does.
 - Treat the idea body as scratch surface, not a contract. Optimise for honest
   exploration, including recording reasons to drop the idea entirely.
@@ -69,21 +70,72 @@ An idea is not a task. Capture it as a durable research artifact with:
 Prefer information density over premature certainty. A good `wt-idea` output
 makes later decisions better; it does not force one solution too early.
 
+## Unknown Surfacing
+
+Before researching anything, list what is missing. Without this step,
+Evidence Gathering becomes reactive — the same kinds of research keep
+surfacing mid-work and become unplanned detours.
+
+Categorize unknowns:
+
+- **Domain concepts** — meaning of core terms in the user's wording, the
+  product domain, or the wt model (e.g., "what does the user mean by
+  'profile' here — `[profile]` config layer, matrix profile name, or
+  shell-side preset?").
+- **Standards / conventions** — accepted patterns, established practice for
+  the kind of change being proposed (e.g., "what is the wt convention for
+  CLI verb-noun pairs?", "what does `docs/consistency.md` say about this?").
+- **External facts** — comparable cases, prior art, authoritative sources,
+  recent changes in the relevant ecosystem.
+- **Internal facts** — what the repo already has (config shape, existing
+  state files, prior decisions, tests, related ideas/specs/tasks) that may
+  not have been inventoried yet.
+
+For each unknown, mark `blocking now` or `useful later`. The most expensive
+unknowns — the ones that would unravel later prep or execution if unresolved
+— get researched first in Evidence Gathering.
+
+Record the surfaced list in the idea body under a `미지 (Unknowns)` section
+so `wt-ready` (or a future `wt-idea` pass) can use it as the agenda. Example:
+
+```text
+미지 (Unknowns):
+
+Domain (blocking now):
+- "profile"이 가리키는 게 [profile] 레이어인가 matrix profile name인가?
+
+Standards (blocking now):
+- wt CLI 동사-명사 쌍 규칙(`docs/consistency.md`)이 이 케이스에 적용되나?
+
+External (useful later):
+- 같은 문제를 푼 다른 도구(예: jj, sapling)의 명령 모양.
+
+Internal (blocking now):
+- 현재 .wt.toml / config.toml에 비슷한 옵션이 이미 있는가?
+```
+
+When a new unknown surfaces *after* this step (during ready/start/coordinate),
+that is a signal Surfacing was incomplete; the runtime owner logs it under
+`<git-common-dir>/wt/specs/<slug>/10-review.md` so the retrospective can
+diagnose the missed category.
+
 ## Evidence Gathering
 
-Start from the conversation and repository. Search existing local artifacts
-before creating a new one:
+Use the **Unknown Surfacing** list as the agenda. Work **inside-out**: ask
+the user direct clarifying questions and inventory user/team-held materials
+(existing notes, data, prior decisions, related artifacts, contacts) before
+reaching outward. Then search the repository before creating anything new:
 
 ```bash
 common_dir="$(git rev-parse --git-common-dir)"
 rg -n "<keyword>|<related term>" "$common_dir/wt/ideas" "$common_dir/wt/tasks" docs app resources tests 2>/dev/null
 ```
 
-Use external research when the user asks for best practices, the idea concerns
-current tooling/frameworks, or the best direction cannot be judged from the repo
-alone. Prefer primary or authoritative sources: official docs, established
-method writeups, source repositories, standards, and vendor docs. Record URLs in
-the idea body.
+Use external research only when the user asks for best practices, the idea
+concerns current tooling/frameworks, or the best direction cannot be judged
+from inside the repo. Prefer primary or authoritative sources: official docs,
+established method writeups, source repositories, standards, and vendor docs.
+Record URLs in the idea body.
 
 Context/reference exploration is part of sharpening raw intent, not proof that
 the idea is already a task. Keep it bounded: gather enough examples to name
@@ -99,8 +151,10 @@ Useful discovery lenses:
   no-gos.
 - Technical decision records: context, options, decision drivers, consequences.
 
-Separate confirmed facts, source-backed guidance, inference, and unresolved
-questions.
+In the output, label each item as **verified fact** (with source), **flagged
+assumption** (still to validate), or **inventoried material** (user/team
+already holds it). Do not let assumptions ride along as facts into the next
+gate.
 
 ## Status Model
 
@@ -201,7 +255,7 @@ WHEN <condition> THE SYSTEM SHALL <behavior>.
 
 This is optional. Do not force EARS phrasing in the idea stage; vague ideas
 should stay vague. When it is naturally there, it gives `wt-ready` a head start
-on `requirements.md`. When it is not, leave it out.
+on `04+05+06-requirements.md`. When it is not, leave it out.
 
 ## Questions
 
@@ -227,9 +281,9 @@ $wt-ready <git-common-dir>/wt/ideas/<slug>.md
 ```
 
 When `wt-ready` is later invoked on the idea and the user commits, `wt-ready`
-will remove this idea file and create `<git-common-dir>/wt/specs/<slug>/` with
-`requirements.md`, `design.md`, and `tasks.md`. That promotion is not done from
-inside `wt-idea`.
+will remove this idea file and create numbered prep artifacts under
+`<git-common-dir>/wt/specs/<slug>/`. That promotion is not done from inside
+`wt-idea`.
 
 If the user asked only for a list or review of ideas, do not write files unless
 they explicitly ask to register or update an idea.

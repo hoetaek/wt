@@ -634,7 +634,8 @@ fn no_args_prints_help_successfully() {
         .stdout(predicate::str::contains("wt run workflow"))
         .stdout(predicate::str::contains("new").not())
         .stdout(predicate::str::contains("agent"))
-        .stdout(predicate::str::contains("ui"));
+        .stdout(predicate::str::contains("wt help <cmd>"))
+        .stdout(predicate::str::contains("\n  ui").not());
 }
 
 #[test]
@@ -3306,10 +3307,14 @@ fn scaffold_supports_json_global_flag() {
     assert_eq!(value["feature"], "demo");
     assert_eq!(
         value["created"][0],
-        "<git-common-dir>/wt/retrospectives/demo.md"
+        "<git-common-dir>/wt/specs/demo/11-retrospect.md"
     );
     assert!(value["skipped"].as_array().unwrap().is_empty());
-    assert!(temp.path().join(".git/wt/retrospectives/demo.md").is_file());
+    assert!(
+        temp.path()
+            .join(".git/wt/specs/demo/11-retrospect.md")
+            .is_file()
+    );
 }
 
 #[test]

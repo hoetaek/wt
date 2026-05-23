@@ -6,42 +6,30 @@ const ROOT_HELP_TEMPLATE: &str = "\
 
 {usage-heading} {usage}
 
-Workspaces:
+Common:
   run      Start workspace execution from issue, PR, branch text, task, or workflow
-  open     Open a workspace from an existing worktree or branch
-  list     Show worktree, branch, site, and setup state
-  inspect  Read a work dossier for a branch, worktree, or TaskRun
-  done     Remove worktrees, clean integrations, and delete local branches
-  ui       Start a read-only personal state web UI
+  open     Open an existing worktree or branch
+  inspect  Read a work dossier
+  done     Clean completed work
+  list     Show current wt state
 
 Prepared Work:
   task      Manage local TaskDocuments
-  workflow  Prepare, inspect, edit, repair, archive, or complete workflow tasks
-  scaffold  Create blank skeleton documents for a feature
+  workflow  Prepare and coordinate saved workflow tasks
 
-Agents:
-  agent    Observe and watch task agent runtime state
-  codex    Launch Codex with the current worktree's wt agent identity
-  claude   Launch Claude with the current worktree's wt agent identity
-  as       Run any command with an explicit wt agent identity
-  msg      Send, deliver, and inspect file-based agent inbox messages
-  send     Send a message to a task agent's cmux surface
-  coord    Declare or clear the coordinator identity for the current shell
-  session  Declare, clear, or inspect the current session agent identity
+Setup:
+  init    이 저장소에 맞는 config 추천 wizard 시작
+  config  Print, edit, or refactor config
+  setup   Install or remove per-machine integration
+  doctor  Check config and local tools
 
-Setup & Config:
-  init        이 저장소에 맞는 config 추천 wizard 시작
-  setup       Set up or remove per-machine wt integration
-  doctor      Check configured providers and required local tools
-  config      Print, edit, or refactor wt config files
-  profile     List or manage named profile configs
-  site        Inspect and manage local site provider helpers
-  shell-init  Print shell integration source for ambient worker identity binding
-  completion  Generate shell completion script
-
-Metadata:
-  version  Print wt version
-  help     Print this message or the help of the given subcommand(s)
+Explore:
+  wt run -h        start surfaces
+  wt task -h       TaskDocument commands
+  wt workflow -h   workflow lifecycle
+  wt agent -h      agent observation
+  wt msg -h        agent inbox messages
+  wt help <cmd>    any other command
 
 Options:
 {options}{after-help}";
@@ -172,7 +160,7 @@ pub enum Commands {
     },
     /// Create blank skeleton documents for a feature
     #[command(
-        long_about = "Create blank skeleton documents for a feature under <git-common-dir>/wt ideas, specs, tasks, workflows, and retrospectives. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
+        long_about = "Create blank skeleton documents for a feature under <git-common-dir>/wt ideas, numbered specs, tasks, workflows, and spec-local retrospects. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
     )]
     Scaffold {
         /// Feature slug to use for every generated path
@@ -181,7 +169,7 @@ pub enum Commands {
         /// Create <git-common-dir>/wt/ideas/<feature>.md
         #[arg(long)]
         idea: bool,
-        /// Create <git-common-dir>/wt/specs/<feature>/requirements.md, design.md, and tasks.md
+        /// Create numbered prep files under <git-common-dir>/wt/specs/<feature>/
         #[arg(long)]
         spec: bool,
         /// Create <git-common-dir>/wt/tasks/<feature>.toml
@@ -190,7 +178,7 @@ pub enum Commands {
         /// Create <git-common-dir>/wt/workflows/<feature>.toml
         #[arg(long)]
         workflow: bool,
-        /// Create <git-common-dir>/wt/retrospectives/<feature>.md
+        /// Create <git-common-dir>/wt/specs/<feature>/11-retrospect.md
         #[arg(long)]
         retrospect: bool,
         /// Create all scaffold document kinds
@@ -300,7 +288,7 @@ pub enum Commands {
     },
     /// Start a read-only personal state web UI
     #[command(
-        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <git-common-dir>/wt ideas, retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
+        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <git-common-dir>/wt ideas, spec-local and cross-work retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
     )]
     Ui {
         /// Port to bind on 127.0.0.1; 0 selects an available port
@@ -2366,60 +2354,49 @@ mod tests {
         assert!(help.contains("wt run branch"));
         assert!(help.contains("wt run task"));
         assert!(help.contains("wt run workflow"));
-        assert!(help.contains("Create blank skeleton documents for a feature"));
-        assert!(help.contains("Use wt open"));
+        assert!(help.contains("wt run -h"));
+        assert!(help.contains("wt help <cmd>"));
         assert!(!help.contains("wt new"));
     }
 
     #[test]
-    fn root_help_groups_top_level_commands_into_five_sections() {
+    fn root_help_prioritizes_common_commands() {
         let help = Cli::command().render_long_help().to_string();
 
-        for heading in [
-            "Workspaces:",
-            "Prepared Work:",
-            "Agents:",
-            "Setup & Config:",
-            "Metadata:",
-        ] {
+        for heading in ["Common:", "Prepared Work:", "Setup:", "Explore:"] {
             assert!(help.contains(heading), "missing heading {heading}");
         }
         assert!(!help.contains("\nCommands:\n"));
 
-        let workspaces = root_help_section(&help, "Workspaces", "Prepared Work");
-        for command in ["run", "open", "list", "inspect", "done", "ui"] {
-            assert_section_contains_command(workspaces, command);
+        let common = root_help_section(&help, "Common", "Prepared Work");
+        for command in ["run", "open", "list", "inspect", "done"] {
+            assert_section_contains_command(common, command);
         }
+        assert!(!common.contains("\n  ui"));
 
-        let prepared_work = root_help_section(&help, "Prepared Work", "Agents");
-        for command in ["task", "workflow", "scaffold"] {
+        let prepared_work = root_help_section(&help, "Prepared Work", "Setup");
+        for command in ["task", "workflow"] {
             assert_section_contains_command(prepared_work, command);
         }
+        assert!(!prepared_work.contains("\n  scaffold"));
 
-        let agents = root_help_section(&help, "Agents", "Setup & Config");
-        for command in [
-            "agent", "codex", "claude", "as", "msg", "send", "coord", "session",
-        ] {
-            assert_section_contains_command(agents, command);
-        }
-
-        let setup = root_help_section(&help, "Setup & Config", "Metadata");
-        for command in [
-            "init",
-            "setup",
-            "doctor",
-            "config",
-            "profile",
-            "site",
-            "shell-init",
-            "completion",
-        ] {
+        let setup = root_help_section(&help, "Setup", "Explore");
+        for command in ["init", "config", "setup", "doctor"] {
             assert_section_contains_command(setup, command);
         }
+        assert!(!setup.contains("\n  profile"));
+        assert!(!setup.contains("\n  shell-init"));
 
-        let metadata = root_help_section(&help, "Metadata", "Options");
-        assert_section_contains_command(metadata, "version");
-        assert_section_contains_command(metadata, "help");
+        let explore = root_help_section(&help, "Explore", "Options");
+        for command in [
+            "wt run -h",
+            "wt task -h",
+            "wt workflow -h",
+            "wt agent -h",
+            "wt msg -h",
+        ] {
+            assert!(explore.contains(command), "missing explore hint {command}");
+        }
     }
 
     #[test]

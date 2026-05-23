@@ -67,13 +67,19 @@ Canonical personal storage layout:
 │   └── <slug>.{md,toml}
 ├── specs/
 │   └── <slug>/
-│       ├── requirements.md
-│       ├── design.md
-│       ├── tasks.md
-│       └── workflow.md   # optional, when execution shape is non-trivial
+│       ├── 01-intent.md
+│       ├── 02-unknowns.md
+│       ├── 03-context.md
+│       ├── 04+05+06-requirements.md
+│       ├── 07-design.md
+│       ├── 08-tasks.md
+│       ├── 09-execution.md    # lazy, when launch handoff exists
+│       ├── 10-review.md       # lazy, when review/sync evidence exists
+│       └── 11-retrospect.md   # lazy, for spec-backed work retrospectives
 ├── tasks/
 ├── workflows/
 ├── task-runs/
+├── retrospectives/       # cross-work/spec-less retrospectives only
 ├── messages/
 ├── agent.state/
 │   └── wait-observations.jsonl
@@ -100,24 +106,36 @@ Markdown이거나 TOML body일 수 있다. Idea는 committed-work status가 없�
 아니다.
 
 `wt-ready`가 idea를 받고 사용자가 실행에 commit하면 idea는 spec으로 promotion된다.
-Promotion은 `ideas/<slug>.{md,toml}`을 제거하고
-`specs/<slug>/{requirements.md,design.md,tasks.md}`와 필요할 때 optional `workflow.md`를
-만드는 동작이다. 이 directory location change가 visible commit gate다. `wt` state tree를
-읽는 사람은 `ideas/` 아래의 exploration과 `specs/<slug>/` 아래의 committed prep work를
-directory 위치만으로 구분할 수 있어야 한다.
+Promotion은 `ideas/<slug>.{md,toml}`을 제거하고 numbered work-sequence artifact를
+`specs/<slug>/` 아래에 만드는 동작이다. 이 directory location change가 visible commit
+gate다. `wt` state tree를 읽는 사람은 `ideas/` 아래의 exploration과 `specs/<slug>/` 아래의
+committed prep work를 directory 위치만으로 구분할 수 있어야 한다.
 
 TaskDocument는 계속 `<git-common-dir>/wt/tasks/<slug>.toml`에 있는 launch unit이다. 그
 body는 `specs/<slug>/` relative path를 참조할 수 있지만 TaskDocument schema는 바뀌지
-않는다. Spec은 requirements, design, tasks, optional workflow rationale을 담는 긴 human/AI artifact이고,
-TaskDocument는 `wt run task`와 `wt workflow`가 소비하는 실행 단위다. 이 contract에서 wt CLI는
-`specs/`를 직접 읽거나 쓰지 않는다. Spec 없이 TaskDocument TOML만 있는 pre-redesign task도
+않는다. Spec은 intent, unknowns, context, requirements, design, tasks, execution handoff,
+review/sync, retrospect를 담는 긴 human/AI artifact이고, TaskDocument는 `wt run task`와
+`wt workflow`가 소비하는 실행 단위다. Spec 없이 TaskDocument TOML만 있는 pre-redesign task도
 valid local task로 남는다.
 
 `wt scaffold`가 만드는 idea/spec/task/workflow/retrospect template의 사람이 읽는 제목과
 section heading은 한국어를 기본으로 한다. TOML field name(`title`, `branch`, `mode` 등)은
 schema contract이므로 영어로 유지하지만, 값과 body template은 한국어로 읽히게 한다.
 
-`specs/<slug>/requirements.md`는 한국어 사용자 스토리 line으로 시작한다.
+`specs/<slug>/01-intent.md`는 raw user wording, interpreted intent, and promotion note를
+preserve한다. 이 파일은 later agent가 "사용자가 실제로 무엇을 요청했는지"와 "coordinator가
+어떻게 해석했는지"를 구분할 수 있게 해야 한다.
+
+`specs/<slug>/02-unknowns.md`는 domain concepts, standards/conventions, external facts,
+internal facts를 구분하고 각 항목을 `blocking now` 또는 `useful later`로 표시한다. Evidence
+gathering은 이 unknown list를 agenda로 삼는다.
+
+`specs/<slug>/03-context.md`는 verified facts, inventoried user/team material, flagged
+assumptions, references/options/tradeoffs를 담는다. 이 파일은 결정문이 아니라 downstream gates가
+의존할 수 있는 fact inventory다.
+
+`specs/<slug>/04+05+06-requirements.md`는 purpose/success criteria, requirements/principles,
+output concept을 한 파일에 합친다. 첫 줄은 한국어 사용자 스토리 line으로 시작한다.
 
 ```text
 사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.
@@ -131,38 +149,32 @@ WHEN <조건> THE SYSTEM SHALL <관찰 가능한 동작>
 GIVEN <전제> WHEN <트리거> THE SYSTEM SHALL <응답>
 ```
 
-`requirements.md`는 목적 / 성공 기준, 원칙 / 제약, 기능 요구사항(EARS), 비기능 요구사항,
-회귀 보존 section을 둔다. 비기능 요구사항은 성능, 보안, 호환성, 또는 해당 작업에 적용되는
-cross-cutting constraint를 명시적으로 이름 붙인다. Regression-sensitive work는 preserved
-behavior를 다음 형태로 적는다.
+`04+05+06-requirements.md`는 목적 / 성공 기준, 원칙 / 제약, 출력 형태, 기능 요구사항(EARS),
+비기능 요구사항, 회귀 보존 section을 둔다. 비기능 요구사항은 성능, 보안, 호환성, 또는 해당
+작업에 적용되는 cross-cutting constraint를 명시적으로 이름 붙인다. Regression-sensitive work는
+preserved behavior를 다음 형태로 적는다.
 
 ```text
 WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>
 ```
 
-`specs/<slug>/design.md`는 결정사항, 영향받는 컴포넌트, 제약을 적는다.
+`specs/<slug>/07-design.md`는 결정사항, 영향받는 컴포넌트, 제약을 적는다.
 Brownfield work에서는 새 design 전에 Static Model section(Purpose, Components, Business
 Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 raw code dump가
 아니라 intent와 component responsibility 중심으로 설명한다.
 
-`specs/<slug>/tasks.md`는 작업 목록 section 아래에 sequenced atomic unit을 checkbox item으로 나열한다. 각 item은
+`specs/<slug>/08-tasks.md`는 작업 목록 section 아래에 sequenced atomic unit을 checkbox item으로 나열한다. 각 item은
 dependency를 적고, dependency가 없는 item은 parallel 가능하다고 표시할 수 있다.
 
-`specs/<slug>/workflow.md`는 `tasks.md`에서 드러난 slice graph를 어떤 execution shape로
-실행할지와 그 이유를 prose로 기록하는 optional prep artifact다. 여러 slice를 하나의 saved
-Workflow로 묶거나, stack/matrix처럼 execution shape 선택 자체가 작업 의미에 영향을 줄 때
-쓴다. 단일 sequential slice처럼 execution shape 결정이 없는 spec은 `workflow.md`를 생략할 수
-있다. 그래도 파일을 남기면 `mode = none`이라고 짧게 적고, saved Workflow TOML이 필요 없는
-이유를 한 문단으로 기록하는 정도면 충분하다.
+`specs/<slug>/09-execution.md`는 `08-tasks.md`에서 드러난 slice graph를 어떤 execution shape로
+실행할지와 그 이유, `wt-start` target, TaskDocument path, optional saved Workflow TOML path,
+PR/landing policy, acceptance checks를 prose로 기록하는 lazy prep/execution artifact다. 실제
+saved execution plan은 계속 `<git-common-dir>/wt/workflows/<id>.toml`에 있고,
+`09-execution.md`는 executable Workflow TOML이 아니다.
 
-`workflow.md`에 권장되는 section은 선택한 모드, 이유, 슬라이스 → TaskDocument 매핑,
-연결된 workflow TOML, 리스크다. 이 파일은 prose-only spec artifact이며 executable Workflow
-TOML이 아니다. 실제 saved execution plan은 계속 `<git-common-dir>/wt/workflows/<id>.toml`에
-있고, wt CLI는 이 iteration에서 `specs/`나 `workflow.md`를 직접 읽거나 쓰지 않는다.
+Canonical `08-tasks.md` slice graph → workflow mode mapping:
 
-Canonical `tasks.md` slice graph → workflow mode mapping:
-
-| tasks.md slice graph | Workflow mode |
+| 08-tasks.md slice graph | Workflow mode |
 | --- | --- |
 | All sequential, single agent | `single` |
 | All independent, same base | `batch` |
@@ -177,8 +189,14 @@ prep 판단이다. 이 값은 direct `wt run task`로 충분하거나, slice들�
 Spec은 `wt-ready` exit 시점에 frozen되지 않는다. Execution 중 `wt-coordinate` phase에서
 findings가 나오면 design, task list, execution shape rationale을 in place로 업데이트할 수
 있다. 선택한 mode가 더 이상 맞지 않거나 실제 Workflow TOML과 spec이 갈라지면
-`workflow.md`를 rationale과 함께 업데이트한다. Spec과 implementation이 drift하면 조용히
-갈라지게 두지 말고 spec을 업데이트해 다시 맞춘다.
+`09-execution.md`를 rationale과 함께 업데이트한다. Review/check evidence, spec drift, and
+mid-process discoveries는 `specs/<slug>/10-review.md`에 기록한다. Spec과 implementation이
+drift하면 조용히 갈라지게 두지 말고 spec을 업데이트해 다시 맞춘다.
+
+Spec-backed work의 retrospective는 기본적으로 `specs/<slug>/11-retrospect.md`에 둔다.
+`<git-common-dir>/wt/retrospectives/`는 여러 work item을 가로지르는 cross-work learning,
+spec이 없는 legacy/direct work, 또는 의도적으로 한 spec에 묶이지 않는 회고의 fallback이다.
+새 per-work retrospective를 전역 `retrospectives/` 아래에 만들지 않는다.
 
 ### Worktree Identity
 
