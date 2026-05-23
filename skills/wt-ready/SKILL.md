@@ -366,40 +366,9 @@ makes a file authoritative.
 3. **Revise** the draft inline based on the answer. Surface terminology
    conflicts against `docs/consistency.md` (or the project's CONTEXT.md when
    present) as they appear — ubiquitous-language drift is cheapest to fix here.
-4. **Display for review** — after every revision, surface what changed so
-   the user can confirm. Default to a **structured summary** in chat, not
-   the full file contents. Dumping the entire file duplicates bytes that
-   are already in context from the preceding Edit/Write and burns tokens
-   for no comprehension gain.
-
-   **Default: summarize, don't dump.**
-   - List what changed and where (file path + section heading + one-line
-     gist per change: "added", "moved", "rewrote", "removed").
-   - Quote only the 2-10 lines that carry the substantive decision or
-     wording the user must confirm — never the whole file.
-   - Goal: user verifies the substance of the revision in seconds, without
-     re-reading bytes they already approved.
-
-   **For end-to-end review, use a zero-token surface (in this order):**
-   1. **`wt config`-configured editor** — if `[editor].command` is set
-      (e.g., `code {{path}}`, `vi {{path}}`, `cursor {{path}}`), invoke
-      that command with the file path. Zero conversation tokens; full
-      editor tooling (folding, syntax highlight).
-   2. **cmux markdown pane** — if cmux is active, open the file in a pane
-      configured for markdown rendering. Zero conversation tokens; lets
-      the user keep the agent conversation visible while reviewing.
-   3. **`Ctrl+E` to expand existing tool output** — if you just ran
-      Read/Edit/Write, the file content is already in the Claude Code UI
-      (collapsed by default). Direct the user to press `Ctrl+E` to expand
-      it in place, instead of re-Reading and re-printing.
-
-   **Avoid** re-Reading a file solely to print it back into chat — Claude
-   Code collapses tool output by default, so the dump is invisible without
-   `Ctrl+E` anyway. Acceptable only for very short files (< 50 lines) when
-   no editor or cmux pane exists.
-
-   When in doubt, ask once which mechanism the user prefers and apply that
-   choice consistently for the rest of the wt-ready cycle.
+4. **Display for review** — surface what changed so the user can confirm.
+   See `references/spec-review-surfaces.md` for the default summarize-don't-
+   dump rule and the editor / cmux pane / `Ctrl+E` zero-token surfaces.
 5. **Confirm** with the user that the file is settled before moving to the
    next file. Until that confirmation, the draft is not authoritative and
    downstream derivation (workflow mode, TaskDocument prep) must not run.
