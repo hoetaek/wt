@@ -4671,7 +4671,7 @@ fn init_yes_uses_project_recommendation_without_agent() {
         .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Created config:"));
+        .stdout(predicate::str::contains("설정 생성됨:"));
 
     let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
     assert!(content.contains("[workspace]"));
@@ -4802,15 +4802,15 @@ fn init_dry_run_previews_plan_without_writing_config() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Init plan"))
+        .stdout(predicate::str::contains("init 계획"))
         .stdout(predicate::str::contains("==>").not())
-        .stdout(predicate::str::contains("target:"))
-        .stdout(predicate::str::contains("mode: project recommendation"))
+        .stdout(predicate::str::contains("대상 파일:"))
+        .stdout(predicate::str::contains("모드: 프로젝트 추천"))
         .stdout(predicate::str::contains(
-            "selected sections: setup, test, workspace",
+            "선택된 sections: setup, test, workspace",
         ))
-        .stdout(predicate::str::contains("detected signals:"))
-        .stdout(predicate::str::contains("[ok] detected setup: npm install"))
+        .stdout(predicate::str::contains("감지된 신호:"))
+        .stdout(predicate::str::contains("[ok] 감지됨: setup: npm install"))
         .stdout(predicate::str::contains("setup: npm install"))
         .stdout(predicate::str::contains("test: npm test"))
         .stdout(predicate::str::contains("[setup]"))
@@ -4840,9 +4840,9 @@ fn init_no_color_uses_plain_plan_output() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::starts_with("Init plan\n"))
+        .stdout(predicate::str::starts_with("init 계획\n"))
         .stdout(predicate::str::contains("==>").not())
-        .stdout(predicate::str::contains("mode: project recommendation"));
+        .stdout(predicate::str::contains("모드: 프로젝트 추천"));
 }
 
 #[test]
@@ -4941,8 +4941,8 @@ fn init_existing_config_requires_force_for_yes_and_force_overwrites() {
         .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Config already exists:"))
-        .stderr(predicate::str::contains("use --force to overwrite"));
+        .stderr(predicate::str::contains("설정 파일이 이미 있습니다:"))
+        .stderr(predicate::str::contains("--force로 덮어쓸 수 있습니다"));
 
     wt_command()
         .args([
@@ -4957,7 +4957,7 @@ fn init_existing_config_requires_force_for_yes_and_force_overwrites() {
         .assert()
         .success()
         .stderr(predicate::str::contains("WARNING:"))
-        .stdout(predicate::str::contains("Updated config:"));
+        .stdout(predicate::str::contains("설정 업데이트됨:"));
 
     let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
     assert!(content.contains("[profile.agent]"));

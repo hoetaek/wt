@@ -75,6 +75,7 @@ pub(crate) struct SelectorOption {
     pub(crate) index: usize,
     pub(crate) label: String,
     pub(crate) hint: Option<String>,
+    pub(crate) description: Option<String>,
     pub(crate) search_text: Vec<String>,
     pub(crate) selected: bool,
     pub(crate) disabled: bool,
@@ -86,6 +87,7 @@ impl SelectorOption {
             index,
             label: label.into(),
             hint: None,
+            description: None,
             search_text: Vec::new(),
             selected: false,
             disabled: false,
@@ -109,6 +111,11 @@ impl SelectorOption {
         self
     }
 
+    pub(crate) fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = non_empty(description.into());
+        self
+    }
+
     pub(crate) fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
@@ -129,6 +136,10 @@ impl SelectorOption {
         if let Some(hint) = self.hint.as_deref() {
             haystack.push(' ');
             haystack.push_str(&sanitize_selector_text(hint).to_lowercase());
+        }
+        if let Some(description) = self.description.as_deref() {
+            haystack.push(' ');
+            haystack.push_str(&sanitize_selector_text(description).to_lowercase());
         }
         for text in &self.search_text {
             haystack.push(' ');
@@ -233,7 +244,28 @@ impl SelectorState {
         state
     }
 
+    #[cfg(test)]
     pub(crate) fn apply_input(&mut self, input: SelectorInput) -> SelectorTransition {
+        self.apply_input_with_filter(input, true)
+    }
+
+    pub(crate) fn apply_input_with_filter(
+        &mut self,
+        input: SelectorInput,
+        filter_enabled: bool,
+    ) -> SelectorTransition {
+        if !filter_enabled {
+            match input {
+                SelectorInput::Char(_) | SelectorInput::Backspace => {
+                    return SelectorTransition::Continue;
+                }
+                SelectorInput::Space if self.mode == SelectorMode::Single => {
+                    return SelectorTransition::Continue;
+                }
+                _ => {}
+            }
+        }
+
         match input {
             SelectorInput::Up => {
                 self.move_active(-1);
@@ -424,6 +456,7 @@ impl SelectorState {
                     matching_options.push(MatchingOptionRow {
                         row_index,
                         section_index: current_section,
+                        body_rows: option_body_row_count(option),
                     });
                 }
                 SelectorRow::Option(_) => {}
@@ -504,6 +537,7 @@ pub(crate) struct SelectorWindow {
 struct MatchingOptionRow {
     row_index: usize,
     section_index: Option<usize>,
+    body_rows: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -543,13 +577,18 @@ fn option_body_rows(
         }
         _ => 0,
     };
-    section_rows + 1
+    section_rows + option.body_rows
+}
+
+fn option_body_row_count(option: &SelectorOption) -> usize {
+    1 + description_lines(option).len()
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct SelectorRenderOptions {
     prompt: String,
     decorated: bool,
+    filter_visible: bool,
     show_selected_summary: bool,
     summary_label_limit: usize,
 }
@@ -559,6 +598,7 @@ impl SelectorRenderOptions {
         Self {
             prompt: prompt.into(),
             decorated: true,
+            filter_visible: true,
             show_selected_summary: false,
             summary_label_limit: DEFAULT_SUMMARY_LABELS,
         }
@@ -571,6 +611,11 @@ impl SelectorRenderOptions {
 
     pub(crate) fn selected_summary(mut self, show_selected_summary: bool) -> Self {
         self.show_selected_summary = show_selected_summary;
+        self
+    }
+
+    pub(crate) fn filter_visible(mut self, filter_visible: bool) -> Self {
+        self.filter_visible = filter_visible;
         self
     }
 
@@ -631,7 +676,9 @@ fn render_selector_frame(
     let window = state.visible_window();
     let hint_label_width = hint_label_width(state, &window);
 
-    lines.push(render_filter_line(state.query(), options.decorated));
+    if options.filter_visible {
+        lines.push(render_filter_line(state.query(), options.decorated));
+    }
     lines.push(format!(
         "{} {}",
         styled(BAR, bar_style(), options.decorated),
@@ -666,14 +713,15 @@ fn render_selector_frame(
                     body_rows += 1;
                 }
                 SelectorRow::Option(option) => {
-                    lines.push(render_option(
+                    let option_lines = render_option(
                         state,
                         *row_index,
                         option,
                         hint_label_width,
                         options.decorated,
-                    ));
-                    body_rows += 1;
+                    );
+                    body_rows += option_lines.len();
+                    lines.extend(option_lines);
                 }
             }
         }
@@ -756,7 +804,7 @@ impl<'a, W: Write> CrosstermSelectorTerminal<'a, W> {
                 continue;
             };
 
-            match state.apply_input(input) {
+            match state.apply_input_with_filter(input, render_options.filter_visible) {
                 SelectorTransition::Continue => {
                     self.draw(&render_selector(state, render_options))?
                 }
@@ -878,7 +926,7 @@ fn render_option(
     option: &SelectorOption,
     hint_label_width: Option<usize>,
     decorated: bool,
-) -> String {
+) -> Vec<String> {
     let active = state.active_row == Some(row_index);
     let cursor = if active {
         styled(CURSOR_ACTIVE, accent_style(), decorated)
@@ -916,14 +964,27 @@ fn render_option(
         )
     };
 
-    format!(
+    let mut lines = vec![format!(
         "{} {} {}  {}{}",
         styled(BAR, bar_style(), decorated),
         cursor,
         marker,
         label,
         hint
-    )
+    )];
+
+    let description_indent =
+        measure_text_width(CURSOR_ACTIVE) + 1 + measure_text_width(RADIO_SELECTED) + 2;
+    for description in description_lines(option) {
+        lines.push(format!(
+            "{} {}{}",
+            styled(BAR, bar_style(), decorated),
+            " ".repeat(description_indent),
+            styled(&description, hint_style(), decorated)
+        ));
+    }
+
+    lines
 }
 
 fn hint_label_width(state: &SelectorState, window: &SelectorWindow) -> Option<usize> {
@@ -1004,6 +1065,17 @@ fn metadata_text(hint: Option<&str>, disabled: bool) -> String {
         parts.push("disabled".into());
     }
     parts.join(" · ")
+}
+
+fn description_lines(option: &SelectorOption) -> Vec<String> {
+    option
+        .description
+        .as_deref()
+        .into_iter()
+        .flat_map(str::lines)
+        .map(sanitize_selector_text)
+        .filter(|line| !line.is_empty())
+        .collect()
 }
 
 fn sanitize_selector_text(value: &str) -> String {
@@ -1370,6 +1442,35 @@ mod tests {
     }
 
     #[test]
+    fn option_descriptions_render_under_labels() {
+        let state = SelectorState::single(vec![
+            SelectorRow::Option(
+                SelectorOption::new(0, "감지한 개발 설정 저장")
+                    .description("감지한 setup/test 명령과 로컬 파일을 저장합니다."),
+            ),
+            SelectorRow::Option(
+                SelectorOption::new(1, "자동화 없이 최소 설정")
+                    .description("setup/test/editor/browser 없이 빈 workspace만 저장합니다."),
+            ),
+        ]);
+        let rendered = render_plain(
+            &state,
+            selector_options("개발 환경 설정을 어떻게 만들까요?").filter_visible(false),
+        );
+
+        assert!(rendered.contains("│ ❯ ●  감지한 개발 설정 저장"));
+        assert!(rendered.contains(&format!(
+            "│ {}감지한 setup/test 명령과 로컬 파일을 저장합니다.",
+            " ".repeat(5)
+        )));
+        assert!(rendered.contains("│   ○  자동화 없이 최소 설정"));
+        assert!(rendered.contains(&format!(
+            "│ {}setup/test/editor/browser 없이 빈 workspace만 저장합니다.",
+            " ".repeat(5)
+        )));
+    }
+
+    #[test]
     fn initial_render_shows_filter_and_key_affordances_before_typing() {
         let mut state = SelectorState::single(vec![SelectorRow::option(0, "Fix editor")]);
         let rendered = render_plain(&state, selector_options("Pick one"));
@@ -1380,6 +1481,28 @@ mod tests {
         type_text(&mut state, "fix");
         let rendered = render_plain(&state, selector_options("Pick one"));
         assert!(rendered.contains("│ Filter: fix"));
+    }
+
+    #[test]
+    fn filter_can_be_hidden_for_small_fixed_decisions() {
+        let mut state = SelectorState::single(vec![
+            SelectorRow::option(0, "Personal config"),
+            SelectorRow::option(1, "Shared config"),
+        ]);
+        let rendered = render_plain(
+            &state,
+            selector_options("Where should wt write config?").filter_visible(false),
+        );
+
+        assert!(!rendered.contains("Filter:"));
+        assert!(rendered.contains("│ ↑↓ move, enter select, esc cancel"));
+
+        assert_eq!(
+            state.apply_input_with_filter(SelectorInput::Char('s'), false),
+            SelectorTransition::Continue
+        );
+        assert_eq!(state.query(), "");
+        assert_eq!(state.active_index(), Some(0));
     }
 
     #[test]

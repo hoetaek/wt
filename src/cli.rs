@@ -30,7 +30,7 @@ Agents:
   session  Declare, clear, or inspect the current session agent identity
 
 Setup & Config:
-  init        Start the project-specific config recommendation wizard
+  init        이 저장소에 맞는 config 추천 wizard 시작
   setup       Set up or remove per-machine wt integration
   doctor      Check configured providers and required local tools
   config      Print, edit, or refactor wt config files
@@ -55,25 +55,25 @@ Options:
     after_help = "Start workspace execution with: wt run issue, wt run pr, wt run branch, wt run task, wt run workflow.\nUse wt open for existing branches or worktrees; use wt workflow for saved workflow files and lifecycle actions."
 )]
 pub struct Cli {
-    /// Run wt from DIR
+    /// DIR에서 wt 실행
     #[arg(short = 'C', long = "directory", global = true, value_name = "DIR")]
     pub directory: Option<PathBuf>,
-    /// Config file to load for commands that read wt config
+    /// wt config를 읽는 명령에서 사용할 config 파일
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
-    /// Increase diagnostic output (-v, -vv)
+    /// 진단 출력 자세히 보기 (-v, -vv)
     #[arg(short, long, action = ArgAction::Count, global = true, conflicts_with = "quiet")]
     pub verbose: u8,
-    /// Suppress normal status output
+    /// 일반 status 출력 숨기기
     #[arg(short, long, global = true)]
     pub quiet: bool,
-    /// When to use terminal colors
+    /// 터미널 색상 사용 시점
     #[arg(long, value_enum, default_value_t = ColorMode::Auto, global = true)]
     pub color: ColorMode,
-    /// Disable terminal colors
+    /// 터미널 색상 끄기
     #[arg(long = "no-color", global = true, conflicts_with = "color")]
     pub no_color: bool,
-    /// Emit machine-readable JSON for supported commands
+    /// 지원하는 명령에서 machine-readable JSON 출력
     #[arg(long, global = true)]
     pub json: bool,
     #[command(subcommand)]
@@ -360,39 +360,39 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<ProfileCommand>,
     },
-    /// Start the project-specific config recommendation wizard
+    /// 이 저장소에 맞는 config 추천 wizard 시작
     Init {
-        /// Write private config to <git-common-dir>/wt/config.toml
+        /// 개인 설정 파일에 쓰기
         #[arg(long, conflicts_with = "shared")]
         local: bool,
-        /// Write shared project config to .wt.toml
+        /// 팀 공유 설정을 .wt.toml에 쓰기
         #[arg(long)]
         shared: bool,
-        /// Agent runtime to write into [profile.agent]
+        /// [profile.agent]에 저장할 agent runtime
         #[arg(long, value_enum)]
         agent: Option<InitAgent>,
-        /// Extra argument for [profile.agent]
+        /// [profile.agent]에 추가할 실행 인자
         #[arg(long = "agent-arg", allow_hyphen_values = true)]
         agent_args: Vec<String>,
-        /// Override the agent launch command
+        /// agent 실행 command override
         #[arg(long)]
         agent_command: Option<String>,
-        /// Issue provider to configure
+        /// 설정할 issue provider
         #[arg(long, value_enum)]
         issue_provider: Option<InitIssueProvider>,
-        /// Local site provider to configure
+        /// 설정할 local site provider
         #[arg(long, value_enum)]
         site_provider: Option<InitSiteProvider>,
-        /// GitHub user for issue list filtering
+        /// issue 목록 필터링에 사용할 GitHub 사용자
         #[arg(long)]
         gh_user: Option<String>,
-        /// Skip interactive prompts, use defaults, and write unless target exists
+        /// interactive 질문을 건너뛰고 기본 추천값으로 쓰기
         #[arg(long)]
         yes: bool,
-        /// Preview target, recommendation mode, detected signals, and TOML without writing files
+        /// 파일을 쓰지 않고 대상, 추천 모드, 감지된 신호, TOML 미리보기
         #[arg(long)]
         dry_run: bool,
-        /// Overwrite an existing config file during non-interactive writes
+        /// non-interactive 쓰기에서 기존 설정 파일 덮어쓰기
         #[arg(long)]
         force: bool,
     },

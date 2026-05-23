@@ -42,6 +42,18 @@ pub trait UserInterface: Send + Sync {
         let rows = prompt_items_to_rows(items);
         self.select_rows(prompt, &rows)
     }
+    fn select_without_filter(&self, prompt: &str, items: &[String]) -> Result<usize> {
+        let items = items
+            .iter()
+            .cloned()
+            .map(PromptItem::new)
+            .collect::<Vec<_>>();
+        self.select_items_without_filter(prompt, &items)
+    }
+    fn select_items_without_filter(&self, prompt: &str, items: &[PromptItem]) -> Result<usize> {
+        let rows = prompt_items_to_rows(items);
+        self.select_rows_without_filter(prompt, &rows)
+    }
     fn multi_select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<Vec<usize>> {
         let rows = prompt_items_to_rows(items);
         self.multi_select_rows(prompt, &rows)
@@ -49,6 +61,9 @@ pub trait UserInterface: Send + Sync {
     fn select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
         let rendered = render_prompt_rows(rows);
         self.select(prompt, &rendered)
+    }
+    fn select_rows_without_filter(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+        self.select_rows(prompt, rows)
     }
     fn multi_select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<Vec<usize>> {
         let rendered = render_prompt_rows(rows);
@@ -69,6 +84,7 @@ pub trait UserInterface: Send + Sync {
 pub struct PromptItem {
     pub label: String,
     pub hint: Option<String>,
+    pub description: Option<String>,
 }
 
 impl PromptItem {
@@ -76,6 +92,7 @@ impl PromptItem {
         Self {
             label: label.into(),
             hint: None,
+            description: None,
         }
     }
 
@@ -84,11 +101,18 @@ impl PromptItem {
         Self {
             label: label.into(),
             hint: non_empty_hint(hint),
+            description: None,
         }
     }
 
     pub fn from_hint_parts(label: impl Into<String>, parts: Vec<String>) -> Self {
         Self::with_hint(label, join_prompt_hint(parts))
+    }
+
+    pub fn with_description(label: impl Into<String>, description: impl Into<String>) -> Self {
+        let mut item = Self::new(label);
+        item.description = non_empty_hint(description.into());
+        item
     }
 
     pub fn render_plain(&self) -> String {
@@ -103,6 +127,7 @@ impl PromptItem {
 pub struct PromptOption {
     pub label: String,
     pub hint: Option<String>,
+    pub description: Option<String>,
     pub search_text: Vec<String>,
     pub value_index: Option<usize>,
     pub selected: bool,
@@ -114,6 +139,7 @@ impl PromptOption {
         Self {
             label: label.into(),
             hint: None,
+            description: None,
             search_text: Vec::new(),
             value_index: None,
             selected: false,
@@ -126,6 +152,7 @@ impl PromptOption {
         Self {
             label: label.into(),
             hint: non_empty_hint(hint),
+            description: None,
             search_text: Vec::new(),
             value_index: None,
             selected: false,
@@ -135,6 +162,11 @@ impl PromptOption {
 
     pub fn from_hint_parts(label: impl Into<String>, parts: Vec<String>) -> Self {
         Self::with_hint(label, join_prompt_hint(parts))
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = non_empty_hint(description.into());
+        self
     }
 
     pub fn search_text(mut self, text: impl Into<String>) -> Self {
@@ -172,6 +204,7 @@ impl From<PromptItem> for PromptOption {
         Self {
             label: item.label,
             hint: item.hint,
+            description: item.description,
             search_text: Vec::new(),
             value_index: None,
             selected: false,
