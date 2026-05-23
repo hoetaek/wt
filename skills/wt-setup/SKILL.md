@@ -43,9 +43,13 @@ rg --files | rg '(^|/)(Cargo.toml|Cargo.lock|package.json|pnpm-lock.yaml|yarn.lo
 If this is the `wt` repo itself, also read `README.md`, `docs/consistency.md`,
 and `docs/north-star.md` before recommending user-facing model changes.
 
-Read the relevant manifests and CI workflows. Check local availability for
-tools that existing config or recommended commands depend on: agent CLIs, cmux,
-provider CLIs, test/lint/audit tools, browsers, and editors.
+Read the relevant manifests, project docs, and CI workflows. Check local
+availability for tools that existing config or recommended commands depend on:
+agent CLIs, cmux, provider CLIs, test/lint/audit tools, browsers, secret
+bootstrap tools, and editors.
+
+For env/secret bootstrap, inspect only file names and command availability.
+Never read or print secret file contents such as `.env`.
 
 ## Decide Ownership
 
@@ -86,6 +90,19 @@ Default recommendation rules:
 - Do not add cargo-audit, cargo-deny, browsers, or provider helpers to active
   config if the tool is not installed, unless the user explicitly wants a config
   that assumes it will be installed.
+- Do not add framework-habit setup commands just because they are common. Only
+  recommend commands proven by project docs, manifests, CI, existing config, or
+  the user's stated workflow. For example, do not add
+  `php artisan storage:link --force` to a Laravel project unless this repo uses
+  it.
+- Prefer per-worktree `.env` copy only in personal config when `.env` exists and
+  the repo needs local env state. If docs mention a secret bootstrap tool but
+  the tool is missing, recommend `.env` copy over a failing bootstrap command.
+- For `[editor]`, recommend exactly one active command. Useful concrete choices
+  include `vim {{path}}`, `code {{path}}`, `phpstorm {{path}}`, or
+  `pstorm {{path}}`, depending on what the user chose and what is installed.
+- Compact examples are allowed when they clarify a real project choice, but they
+  must be project-shaped alternatives, not a general config manual.
 
 ## Explain Omissions
 
@@ -119,7 +136,7 @@ Use this order:
 2. Recommended owner file.
 3. Recommended active TOML.
 4. Keep/add/omit rationale.
-5. Unresolved choices, only if needed.
+5. Unresolved choices or compact project-shaped alternatives, only if needed.
 6. Validation commands.
 
 Keep the answer concrete. Prefer a short active config block over a long field
