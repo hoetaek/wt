@@ -336,7 +336,12 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     let interactive_wizard = is_interactive_wizard(&options);
     if interactive_wizard {
         print_wizard_header(ctx);
-        print_wizard_step(ctx, 1, "Repository");
+        print_wizard_step(
+            ctx,
+            1,
+            "Config target",
+            "Choose the config file wt will write. Private config can include local machine helpers; shared .wt.toml should stay commit-safe.",
+        );
     }
     let target = resolve_target(ctx, &options)?;
     let plan = build_plan(ctx, &options, target)?;
@@ -366,7 +371,12 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     };
     let confirm_default = !plan.target_exists;
     if interactive_wizard {
-        print_wizard_step(ctx, 5, "Confirmation");
+        print_wizard_step(
+            ctx,
+            5,
+            "Write confirmation",
+            "Confirm the write now, or cancel to leave files unchanged.",
+        );
     }
     if !options.yes && !ctx.ui.confirm(confirm_prompt, confirm_default)? {
         return Err(WtError::Cancelled.into());
@@ -564,8 +574,36 @@ fn print_wizard_header(ctx: &Ctx) {
         .print_dim("Project-specific config recommendation for git worktree projects");
 }
 
-fn print_wizard_step(ctx: &Ctx, number: usize, title: &str) {
+fn print_wizard_step(ctx: &Ctx, number: usize, title: &str, description: impl AsRef<str>) {
     ctx.ui.print_step(&format!("Step {number}/5: {title}"));
+    let description = description.as_ref();
+    if !description.is_empty() {
+        ctx.ui.print_dim(description);
+    }
+}
+
+fn integration_step_description(
+    options: &InitOptions,
+    detected: &DetectedRepo,
+    defaults: &InitDefaults,
+) -> &'static str {
+    if explicit_issue_provider(options.issue_provider.as_ref()).is_some()
+        || explicit_site_provider(options.site_provider.as_ref()).is_some()
+        || matches!(options.issue_provider, Some(InitIssueProvider::None))
+        || matches!(options.site_provider, Some(InitSiteProvider::None))
+    {
+        return "Use explicitly selected issue or site integration flags; wt will not ask again for those choices.";
+    }
+
+    if detected.issue_provider.is_some()
+        || detected.site_provider.is_some()
+        || defaults.issue_provider.is_some()
+        || defaults.site_provider.is_some()
+    {
+        return "Review issue workflow and local-site integrations detected from this repo or existing config.";
+    }
+
+    "No issue workflow or local-site signal was detected, so wt will keep those integration sections out."
 }
 
 fn validate_options(options: &InitOptions) -> Result<()> {
@@ -601,6 +639,9 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
         "Private repo config (<git-common-dir>/wt/config.toml)".into(),
         "Shared project config (.wt.toml)".into(),
     ];
+    ctx.ui.print_dim(
+        "Private config is for your checkout; shared config is for settings safe to commit.",
+    );
     match ctx.ui.select("Repository config file", &items)? {
         0 => Ok(InitTarget {
             path: ctx.storage_root.config_toml(),
@@ -623,7 +664,12 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     };
     let detected = DetectedRepo::scan(&ctx.repo_root);
     if is_interactive_wizard(options) {
-        print_wizard_step(ctx, 2, "Integrations");
+        print_wizard_step(
+            ctx,
+            2,
+            "Detected integrations",
+            integration_step_description(options, &detected, &defaults),
+        );
     }
     let issue_provider = resolve_issue_provider(ctx, options, &detected, &defaults)?;
     let gh_user = if issue_provider == Some(InitIssueProvider::Github) {
@@ -633,7 +679,12 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     };
     let site_provider = resolve_site_provider(ctx, options, &detected, &defaults)?;
     if is_interactive_wizard(options) {
-        print_wizard_step(ctx, 3, "Project recommendation");
+        print_wizard_step(
+            ctx,
+            3,
+            "Recommended defaults",
+            "Choose how much active config to save: setup commands, tests, workspace tabs, editor, browser, and local helpers.",
+        );
     }
     let common = resolve_common_config(
         ctx,
@@ -697,10 +748,11 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
     toml::from_str::<Config>(&s)?;
     let notices = build_plan_notices(
         ctx,
-        InitMode::ProjectRecommendation,
         profile.as_ref(),
         issue_provider.as_ref(),
         site_provider.as_ref(),
+        target.kind,
+        &detected,
         &common,
     );
 
@@ -718,7 +770,12 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
 
 fn print_plan(ctx: &Ctx, plan: &InitPlan, interactive_wizard: bool) {
     if interactive_wizard {
-        print_wizard_step(ctx, 4, plan_action_label(plan));
+        print_wizard_step(
+            ctx,
+            4,
+            plan_action_label(plan),
+            "Review the exact target path, selected sections, detected signals, and TOML before anything is written.",
+        );
     } else {
         ctx.ui.print_step("Init plan");
     }
@@ -806,13 +863,22 @@ fn print_existing_target_warning(ctx: &Ctx, plan: &InitPlan, options: &InitOptio
 
 fn build_plan_notices(
     ctx: &Ctx,
-    _mode: InitMode,
     profile: Option<&InitProfile>,
     issue_provider: Option<&InitIssueProvider>,
     site_provider: Option<&InitSiteProvider>,
+    target_kind: InitTargetKind,
+    detected: &DetectedRepo,
     common: &InitCommonConfig,
 ) -> Vec<InitNotice> {
     let mut notices = Vec::new();
+
+    push_shared_target_omission_notice(
+        &mut notices,
+        target_kind,
+        detected,
+        issue_provider,
+        site_provider,
+    );
 
     if let Some(profile) = profile {
         push_agent_tool_notice(ctx, &mut notices, &profile.agent);
@@ -912,6 +978,43 @@ fn build_plan_notices(
     }
 
     notices
+}
+
+fn push_shared_target_omission_notice(
+    notices: &mut Vec<InitNotice>,
+    target_kind: InitTargetKind,
+    detected: &DetectedRepo,
+    issue_provider: Option<&InitIssueProvider>,
+    site_provider: Option<&InitSiteProvider>,
+) {
+    if target_kind != InitTargetKind::Shared {
+        return;
+    }
+
+    let mut omitted = Vec::new();
+    if detected.has_env_file {
+        omitted.push(".env copy".to_string());
+    }
+    if !detected.local_links.is_empty() {
+        omitted.push(format!("local links ({})", detected.local_links.join(", ")));
+    }
+    if issue_provider.is_some() {
+        omitted.push("worktree.naming".to_string());
+    }
+    if site_provider.is_some() {
+        omitted.push("workspace browser profile".to_string());
+    }
+
+    if !omitted.is_empty() {
+        push_notice(
+            notices,
+            InitNoticeLevel::Hint,
+            format!(
+                "shared target omits private helpers: {}; choose private repo config to save machine-specific setup",
+                omitted.join(", ")
+            ),
+        );
+    }
 }
 
 fn push_agent_tool_notice(ctx: &Ctx, notices: &mut Vec<InitNotice>, agent: &AgentConfig) {
@@ -1117,6 +1220,9 @@ fn resolve_common_config(
         "Customize commands and tabs".into(),
         "Minimal workspace only".into(),
     ];
+    ctx.ui.print_dim(
+        "Generated TOML contains selected active settings only, not commented examples.",
+    );
     match ctx.ui.select("Project config recommendation", &items)? {
         0 => resolve_recommended_common_config(ctx, target_kind, config, site_provider),
         1 => resolve_custom_common_config(ctx, target_kind, config, detected, site_provider),
@@ -1187,6 +1293,8 @@ fn resolve_custom_common_config(
     config.setup_deps = resolve_setup_deps(ctx, detected, &config.setup_deps)?;
 
     if !detected.post_deps_tabs.is_empty() {
+        ctx.ui
+            .print_dim("Dev tabs start long-running commands after dependency setup.");
         if ctx.ui.confirm(
             "Start detected dev server after setup?",
             !config.post_deps_tabs.is_empty(),
@@ -1198,6 +1306,8 @@ fn resolve_custom_common_config(
     }
 
     if !detected.test_commands.is_empty() {
+        ctx.ui
+            .print_dim("Test commands are saved as reusable validation commands.");
         if ctx.ui.confirm(
             "Save detected test commands?",
             !config.test_commands.is_empty(),
@@ -1283,6 +1393,8 @@ fn resolve_worktree_path(ctx: &Ctx, default: Option<&str>) -> Result<Option<Stri
         .iter()
         .map(|(label, _)| label.clone())
         .collect::<Vec<_>>();
+    ctx.ui
+        .print_dim("Worktree folder controls where new branch checkouts are created.");
     let selection = ctx.ui.select("Worktree folder", &items)?;
     if selection < options.len() - 1 {
         return Ok(options[selection].1.clone());
@@ -1350,6 +1462,8 @@ fn resolve_worktree_link(
 
 fn resolve_workspace_tabs(ctx: &Ctx, default_tabs: &[String]) -> Result<Vec<String>> {
     let default = default_tabs.join(", ");
+    ctx.ui
+        .print_dim("Workspace tabs are cmux tabs opened for each worktree workspace.");
     let input = ctx.ui.input(
         "Default workspace tabs",
         Some(if default_tabs.is_empty() {
@@ -1399,6 +1513,8 @@ fn resolve_editor_command(ctx: &Ctx, default: Option<&str>) -> Result<Option<Str
         .iter()
         .map(|(label, _)| label.clone())
         .collect::<Vec<_>>();
+    ctx.ui
+        .print_dim("Editor command opens wt-managed config files; {{path}} becomes the file path.");
     let selection = ctx.ui.select("Config editor command", &items)?;
     if selection < options.len() - 1 {
         return Ok(options[selection].1.clone());
@@ -1450,6 +1566,9 @@ fn resolve_workspace_browser(
         .iter()
         .map(|(label, _)| label.clone())
         .collect::<Vec<_>>();
+    ctx.ui.print_dim(
+        "Workspace browser controls which browser surface opens a local site from the workspace.",
+    );
     Ok(options[ctx.ui.select("Workspace browser", &items)?]
         .1
         .clone())
@@ -1503,6 +1622,10 @@ fn resolve_setup_deps(
     current: &[InitCommand],
 ) -> Result<Vec<InitCommand>> {
     let mut selected = Vec::new();
+    if !detected.setup_deps.is_empty() {
+        ctx.ui
+            .print_dim("Setup commands run after wt creates a new worktree.");
+    }
     for mut command in detected.setup_deps.clone() {
         if let Some(existing) = current.iter().find(|existing| {
             existing.working_dir == command.working_dir
@@ -3054,6 +3177,36 @@ mod tests {
     }
 
     #[test]
+    fn init_shared_plan_explains_omitted_private_helpers() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "APP_KEY=test").unwrap();
+        std::fs::write(dir.path().join(".local"), "local").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                issue_provider: Some(InitIssueProvider::Linear),
+                yes: true,
+                ..InitOptions::default()
+            },
+            InitTarget {
+                path: dir.path().join(".wt.toml"),
+                kind: InitTargetKind::Shared,
+            },
+        )
+        .unwrap();
+        let summary = render_plan_summary(&plan).join("\n");
+
+        assert!(summary.contains("detected signals: env: .env; local link: .local"));
+        assert!(summary.contains(
+            "[hint] shared target omits private helpers: .env copy, local links (.local), worktree.naming"
+        ));
+        assert!(!plan.content.contains("[worktree]"));
+        assert!(!plan.content.contains("[worktree.naming]"));
+    }
+
+    #[test]
     fn init_local_codex_yes_creates_parseable_config() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::new(
@@ -3378,11 +3531,11 @@ mod tests {
             &steps[..6],
             &[
                 "wt init".to_string(),
-                "Step 1/5: Repository".to_string(),
-                "Step 2/5: Integrations".to_string(),
-                "Step 3/5: Project recommendation".to_string(),
+                "Step 1/5: Config target".to_string(),
+                "Step 2/5: Detected integrations".to_string(),
+                "Step 3/5: Recommended defaults".to_string(),
                 "Step 4/5: Will create".to_string(),
-                "Step 5/5: Confirmation".to_string(),
+                "Step 5/5: Write confirmation".to_string(),
             ]
         );
         assert!(steps[6].starts_with("Created config:"));
@@ -3391,6 +3544,26 @@ mod tests {
         assert!(dims.iter().any(|line| {
             line.contains("Project-specific config recommendation for git worktree projects")
         }));
+        assert!(
+            dims.iter()
+                .any(|line| line.contains("Choose the config file wt will write"))
+        );
+        assert!(
+            dims.iter().any(|line| {
+                line.contains("No issue workflow or local-site signal was detected")
+            })
+        );
+        assert!(dims.iter().any(|line| {
+            line.contains("Generated TOML contains selected active settings only")
+        }));
+        assert!(
+            dims.iter()
+                .any(|line| line.contains("Review the exact target path"))
+        );
+        assert!(
+            dims.iter()
+                .any(|line| line.contains("Confirm the write now"))
+        );
         assert!(
             dims.iter()
                 .any(|line| line.contains("[warn] detected commands: none"))

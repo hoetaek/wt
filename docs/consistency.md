@@ -891,6 +891,14 @@ issue provider, site provider 같은 항목을 필요한 만큼만 guided flow�
 어떤 target file에 어떤 recommendation mode와 active config section이 생성될지 명확히
 보여주고 확인을 받아야 한다.
 
+Wizard step label은 구현 단계명이 아니라 사용자가 지금 결정하는 의미를 말해야 한다.
+Canonical flow는 `Config target`, `Detected integrations`, `Recommended defaults`, preview
+action(`Will create`/`Will overwrite`), `Write confirmation` 순서다. 각 step은 한 줄 설명으로
+왜 이 선택이 필요한지 말하고, detected integration이 없어서 prompt가 생략되는 step도
+“감지된 signal이 없어 section을 쓰지 않는다”는 의미를 보여줘야 한다. Preview는 detected
+signal과 실제로 쓸 active section을 분리해 보여주고, shared `.wt.toml`을 선택해서 `.env`
+copy, local link, browser profile 같은 private helper가 빠질 때는 omission을 hint로 설명한다.
+
 Public starter preset은 canonical surface가 아니다. `minimal`, `agent`, `issue`, `app` 같은
 bundle 이름을 고르게 하지 않는다. `--preset`과 `--minimal`은 primary help surface에 남기지
 않고, 새 parser surface에서는 legacy 입력으로 실패한다.
