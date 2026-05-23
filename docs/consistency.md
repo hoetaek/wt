@@ -651,12 +651,12 @@ Provider integration은 external system capability별로 나눈다. Issue, PullR
 
 다른 개념은 명령, 옵션, config, 상태 저장에서도 분리한다.
 
-`init`은 이 repo가 어떤 starter shape로 시작할지에 대한 개념이다. Starter shape는
-worktree-only 최소 설정인지, agent를 붙일지, issue workflow를 붙일지, app repo용
-setup/site/test/workspace 기본값까지 잡을지를 고르는 선택이다.
+`init`은 이 repo에 맞는 project-specific config recommendation을 만드는 개념이다. 먼저
+repo manifests, CI, docs, 기존 config, local tool availability를 보고, 개발에 필요한 active
+section과 명시적으로 선택한 integration만 하나의 config plan으로 만든다.
 
-`profile`은 어떻게 실행할지에 대한 개념이다. `init`이 starter shape 안에서
-`[profile.agent]`를 쓸 수는 있지만, agent runtime을 구조화하고 재사용하는 책임은 계속
+`profile`은 어떻게 실행할지에 대한 개념이다. `init`이 명시 선택된 단순 agent runtime을
+`[profile.agent]`로 쓸 수는 있지만, agent runtime을 구조화하고 재사용하는 책임은 계속
 `profile`에 둔다.
 
 `workflow`는 `<git-common-dir>/wt/workflows` 아래에 저장되는 prepared execution plan이다.
@@ -715,7 +715,9 @@ Workflow run은 필요한 경우 TaskDocument setup을 거치더라도 최종 vi
 저장된 `workflow.color`를 적용한다. `[workspace].colors` key를 생략하면 내장 기본값
 `task = "blue"`, `issue = "blue"`, `branch = "green"`, `pr = "magenta"`를 쓴다.
 `wt config`는 이 effective 색상값을 출력하므로 사용자가 수정할 기준은 `wt config` 출력이다.
-`wt init`은 이 기본값을 active config로 쓰지 않고 commented override 예시로만 보여준다.
+`wt init`은 이 기본값을 active config로 쓰지 않고, generated config에 commented override
+예시도 쓰지 않는다. 색상을 바꾸려면 `wt config` 출력에서 필요한 line만 복사해 명시적으로
+override한다.
 Active `colors = { ... }`는 사용자가 기본값과 다른 색을 고정하려는 의도일 때만 둔다. 색을
 아예 쓰지 않을 kind는 `task = ""`처럼 빈 문자열로 override한다.
 
@@ -882,48 +884,40 @@ Reference UI evidence for this contract:
 이때 중요한 것은 두 경로가 다른 개념처럼 보이지 않는 것이다. 단순한 형태와 복잡한
 형태는 같은 profile 모델의 두 표현이어야 한다.
 
-`wt init`은 단순히 작은 config 파일을 쓰는 명령이 아니라 workspace starter wizard다.
-Interactive TTY에서 bare `wt init`은 starter shape, config target, agent runtime, issue
-provider, site provider, workspace tabs, setup deps, tests, editor 같은 질문을 guided flow로
-묻는다. 쓰기 전에는 어떤 target file에 어떤 starter preset과 config section이 생성될지
-명확히 보여주고 확인을 받아야 한다.
+`wt init`은 단순히 작은 config 파일을 쓰는 명령이 아니라 project-specific config
+recommendation wizard다. Interactive TTY에서 bare `wt init`은 config target을 고른 뒤 repo를
+스캔해 추천 config plan을 만들고, setup deps, tests, workspace tabs, editor, agent runtime,
+issue provider, site provider 같은 항목을 필요한 만큼만 guided flow로 묻는다. 쓰기 전에는
+어떤 target file에 어떤 recommendation mode와 active config section이 생성될지 명확히
+보여주고 확인을 받아야 한다.
 
-Canonical starter preset 이름은 `minimal`, `agent`, `issue`, `app`이다.
+Public starter preset은 canonical surface가 아니다. `minimal`, `agent`, `issue`, `app` 같은
+bundle 이름을 고르게 하지 않는다. `--preset`과 `--minimal`은 primary help surface에 남기지
+않고, 새 parser surface에서는 legacy 입력으로 실패한다.
 
-- `minimal`은 가장 작은 유용한 config다. Worktree를 만들 수 있는 기본값만 두고 agent,
-  issue provider, site provider, setup deps, tests, editor 설정은 명시적으로 선택하지
-  않는 한 쓰지 않는다. `wt init --minimal`은 이 canonical preset의 짧은 경로다.
-- `agent`는 `minimal`에 inline `[profile.agent]` runtime을 더한 starter다. `--yes`에서는
-  명시적 `--agent`가 없으면 `codex`를 default agent로 사용하되, 자세한 prompt/scaffold
-  파일은 만들지 않는다.
-- `issue`는 provider issue에서 workspace를 시작하기 위한 starter다. `--yes`에서는
-  명시적 `--issue-provider`가 없으면 `github`를 default provider로 사용한다. Provider를
-  repo 상태에서 추론하지 않는다.
-- `app`은 local app repo에서 반복 실행할 setup deps, tests, site, workspace tabs를 잡는
-  starter다. Detected command는 사용자가 선택했거나 non-interactive default로 안전하게
-  설명할 수 있을 때만 active config로 쓴다.
-
-preset을 명시하지 않은 `wt init --yes`는 non-interactive default를 받아들이는 자동화 경로이며
-`minimal` preset을 선택한다. TTY가 아니면 `--yes`, `--minimal`, 또는
-`--preset <name>`처럼 prompt 없이 끝낼 수 있는 starter 선택이 있어야 하며, 그렇지 않으면
-interactive prompt를 시도하지 말고 명확한 에러로 실패한다.
-`wt init --preset <name> --yes`는 반복 가능한 automation 표면이므로 같은 repo 상태와 같은
-flag 조합에서 같은 config content를 만들어야 한다. `app` starter는 repo manifest를 scan해
-setup command, dev tab, test command 후보를 plan에 반영한다. `wt init --dry-run`은 같은
-validation을 거친 뒤 생성될 target, preset, section, detected signal, TOML content를
-preview하고 파일을 쓰지 않는다.
+`wt init --yes`는 non-interactive project recommendation을 받아들이는 자동화 경로다. Repo
+manifest를 scan해 setup command, dev tab, test command 후보를 active config에 반영한다.
+Issue/site integration은 explicit flag 또는 `.linear.toml`, Laravel app처럼 concrete repo
+signal이 있을 때만 active config에 쓴다. Agent runtime은 explicit flag나 기존 config default가
+있을 때만 쓴다. 개인 local target에서는 `.env` copy, known local links, `worktree.naming`, Chrome
+DevTools browser 같은 local helper를 추천할 수 있지만 shared `.wt.toml`에는 private helper를
+쓰지 않는다.
+TTY가 아니면 `--yes` 또는 충분한 explicit flag 조합처럼 prompt 없이 끝낼 수 있는 입력이
+있어야 하며, 그렇지 않으면 interactive prompt를 시도하지 말고 명확한 에러로 실패한다.
+`wt init --dry-run`은 같은 validation을 거친 뒤 생성될 target, mode, section, detected signal,
+TOML content를 preview하고 파일을 쓰지 않는다.
 
 Generated output은 여전히 사용자가 선택한 config 파일 하나에만 쓴다. `.wt.toml`과
 `<git-common-dir>/wt/config.toml` 중 하나를 선택하고, 답한 설정은 그 파일에만 쓴다. 다른 config 파일,
 named profile directory, prompt/scaffold 파일은 `wt init`의 부수 효과로 만들지 않는다.
-그런 구조가 필요하면 `wt config extract`나 `wt profile create`로 드러낸다. 나중에 starter
-scaffold generation을 추가하더라도 별도의 명시적 starter choice로 다뤄야 한다.
+그런 구조가 필요하면 `wt config extract`나 `wt profile create`로 드러낸다. 나중에 scaffold
+generation을 추가하더라도 별도의 명시적 choice로 다뤄야 한다.
 
 `wt init --help` contract도 이 모델을 따라야 한다. Subcommand 설명은 “start a
-workspace config wizard”를 말해야 하고, `--minimal`, `--preset <minimal|agent|issue|app>`,
-`--yes`, `--dry-run`, `--local`, `--shared`는 starter shape, automation, preview, target
-file 선택을 설명해야 한다. Help text는 named profile directory나 prompt/scaffold file을
-자동 생성한다고 암시하면 안 된다.
+project-specific config recommendation wizard”를 말해야 하고, `--yes`, `--dry-run`, `--local`,
+`--shared`, explicit integration flags는 recommendation automation, preview, target file,
+selected integration을 설명해야 한다. Help text는 named profile directory, prompt/scaffold
+file, commented tutorial scaffold를 자동 생성한다고 암시하면 안 된다.
 
 Prompt도 같은 원칙을 따른다. `common`은 별도 실행 mode가 아니라 기존
 `[agent.prompt]` / `[agent.prompt.append]` 모델 안의 공통 scope다. Config layer와
@@ -1169,10 +1163,10 @@ Explicit workflow preparation flags override the config for one run while keepin
 same value names and failing early for conflicting forms instead of introducing aliases.
 `wt config` shows the effective `[workflow]` policy, including built-in defaults, so
 scripts and humans can inspect the actual policy that new workflow preparation will use.
-`wt init` may include a commented optional `[workflow]` block for discoverability, but
-generated config must not actively enable pull-request creation or automatic landing by
-default. `wt workflow show` displays the prepared policy snapshot from the workflow file,
-not the current `.wt.toml` value.
+`wt init` does not write a commented optional `[workflow]` tutorial block; generated config
+only includes workflow policy when the user explicitly chooses to override the default.
+`wt workflow show` displays the prepared policy snapshot from the workflow file, not the
+current `.wt.toml` value.
 
 This model changes both `.wt.toml` config shape and `<git-common-dir>/wt/workflows` state shape, so
 implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Replacing

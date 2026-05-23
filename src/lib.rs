@@ -355,8 +355,6 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Init {
             local,
             shared,
-            preset,
-            minimal,
             agent,
             agent_args,
             agent_command,
@@ -371,8 +369,6 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             commands::init::InitOptions {
                 local: *local,
                 shared: *shared,
-                preset: *preset,
-                minimal: *minimal,
                 agent: agent.clone(),
                 agent_args: agent_args.clone(),
                 agent_command: agent_command.clone(),

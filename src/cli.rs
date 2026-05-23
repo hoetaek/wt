@@ -30,7 +30,7 @@ Agents:
   session  Declare, clear, or inspect the current session agent identity
 
 Setup & Config:
-  init        Start the workspace config wizard
+  init        Start the project-specific config recommendation wizard
   setup       Set up or remove per-machine wt integration
   doctor      Check configured providers and required local tools
   config      Print, edit, or refactor wt config files
@@ -360,7 +360,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<ProfileCommand>,
     },
-    /// Start the workspace config wizard
+    /// Start the project-specific config recommendation wizard
     Init {
         /// Write private config to <git-common-dir>/wt/config.toml
         #[arg(long, conflicts_with = "shared")]
@@ -368,12 +368,6 @@ pub enum Commands {
         /// Write shared project config to .wt.toml
         #[arg(long)]
         shared: bool,
-        /// Starter preset to generate
-        #[arg(long, value_enum, value_name = "PRESET", conflicts_with = "minimal")]
-        preset: Option<InitPreset>,
-        /// Generate the minimal starter preset
-        #[arg(long, conflicts_with = "preset")]
-        minimal: bool,
         /// Agent runtime to write into [profile.agent]
         #[arg(long, value_enum)]
         agent: Option<InitAgent>,
@@ -395,7 +389,7 @@ pub enum Commands {
         /// Skip interactive prompts, use defaults, and write unless target exists
         #[arg(long)]
         yes: bool,
-        /// Preview target, preset, detected signals, and TOML without writing files
+        /// Preview target, recommendation mode, detected signals, and TOML without writing files
         #[arg(long)]
         dry_run: bool,
         /// Overwrite an existing config file during non-interactive writes
@@ -776,14 +770,6 @@ pub enum InitAgent {
     Claude,
     Gemini,
     None,
-}
-
-#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InitPreset {
-    Minimal,
-    Agent,
-    Issue,
-    App,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, PartialEq)]
@@ -2689,40 +2675,23 @@ mod tests {
     }
 
     #[test]
-    fn init_parses_preset() {
-        let cli = parse(&["wt", "init", "--preset", "agent", "--dry-run"]);
+    fn init_parses_recommendation_dry_run() {
+        let cli = parse(&["wt", "init", "--dry-run"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Init {
-                preset: Some(InitPreset::Agent),
-                dry_run: true,
-                ..
-            })
+            Some(Commands::Init { dry_run: true, .. })
         ));
     }
 
     #[test]
-    fn init_parses_minimal_shortcut() {
-        let cli = parse(&["wt", "init", "--minimal"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Init {
-                minimal: true,
-                preset: None,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn init_rejects_conflicting_preset_and_minimal() {
-        let result = Cli::try_parse_from(["wt", "init", "--preset", "minimal", "--minimal"]);
+    fn init_rejects_legacy_preset_flag() {
+        let result = Cli::try_parse_from(["wt", "init", "--preset", "agent"]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn init_rejects_unknown_preset_alias() {
-        let result = Cli::try_parse_from(["wt", "init", "--preset", "full"]);
+    fn init_rejects_legacy_minimal_flag() {
+        let result = Cli::try_parse_from(["wt", "init", "--minimal"]);
         assert!(result.is_err());
     }
 

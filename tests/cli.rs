@@ -4663,7 +4663,7 @@ fn inspect_pr_json_nests_pull_request_review_without_top_level_status() {
 }
 
 #[test]
-fn init_yes_uses_minimal_preset_without_agent() {
+fn init_yes_uses_project_recommendation_without_agent() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -4743,7 +4743,7 @@ fn init_rerun_preserves_user_created_workflow_file() {
 }
 
 #[test]
-fn init_preset_agent_yes_writes_agent() {
+fn init_explicit_agent_yes_writes_agent() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -4752,8 +4752,8 @@ fn init_preset_agent_yes_writes_agent() {
             "-C",
             temp.path().to_str().unwrap(),
             "init",
-            "--preset",
-            "agent",
+            "--agent",
+            "codex",
             "--yes",
         ])
         .assert()
@@ -4765,7 +4765,7 @@ fn init_preset_agent_yes_writes_agent() {
 }
 
 #[test]
-fn init_minimal_shortcut_writes_minimal_config() {
+fn init_rejects_legacy_minimal_shortcut() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -4778,11 +4778,8 @@ fn init_minimal_shortcut_writes_minimal_config() {
             "--yes",
         ])
         .assert()
-        .success();
-
-    let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
-    assert!(content.contains("[workspace]"));
-    assert!(!content.contains("[profile.agent]"));
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument"));
 }
 
 #[test]
@@ -4800,8 +4797,6 @@ fn init_dry_run_previews_plan_without_writing_config() {
             "-C",
             temp.path().to_str().unwrap(),
             "init",
-            "--preset",
-            "app",
             "--yes",
             "--dry-run",
         ])
@@ -4810,7 +4805,7 @@ fn init_dry_run_previews_plan_without_writing_config() {
         .stdout(predicate::str::contains("Init plan"))
         .stdout(predicate::str::contains("==>").not())
         .stdout(predicate::str::contains("target:"))
-        .stdout(predicate::str::contains("preset: app"))
+        .stdout(predicate::str::contains("mode: project recommendation"))
         .stdout(predicate::str::contains(
             "selected sections: setup, test, workspace",
         ))
@@ -4820,9 +4815,7 @@ fn init_dry_run_previews_plan_without_writing_config() {
         .stdout(predicate::str::contains("test: npm test"))
         .stdout(predicate::str::contains("[setup]"))
         .stdout(predicate::str::contains("[test]"))
-        .stdout(predicate::str::contains("# [workflow]"))
-        .stdout(predicate::str::contains("# pull_request = \"none\""))
-        .stdout(predicate::str::contains("# landing = \"manual\""))
+        .stdout(predicate::str::contains("# [workflow]").not())
         .stdout(predicate::str::contains("\n    [workflow]\n").not());
 
     assert!(!temp.path().join(".wt.toml").exists());
@@ -4842,7 +4835,6 @@ fn init_no_color_uses_plain_plan_output() {
             temp.path().to_str().unwrap(),
             "--no-color",
             "init",
-            "--minimal",
             "--yes",
             "--dry-run",
         ])
@@ -4850,7 +4842,7 @@ fn init_no_color_uses_plain_plan_output() {
         .success()
         .stdout(predicate::str::starts_with("Init plan\n"))
         .stdout(predicate::str::contains("==>").not())
-        .stdout(predicate::str::contains("preset: minimal"));
+        .stdout(predicate::str::contains("mode: project recommendation"));
 }
 
 #[test]
@@ -4864,7 +4856,6 @@ fn init_quiet_suppresses_status_output_but_still_writes_config() {
             temp.path().to_str().unwrap(),
             "--quiet",
             "init",
-            "--minimal",
             "--yes",
         ])
         .assert()
@@ -4878,7 +4869,7 @@ fn init_quiet_suppresses_status_output_but_still_writes_config() {
 #[test]
 fn init_json_flag_rejects_init_without_status_decoration() {
     wt_command()
-        .args(["--json", "init", "--minimal", "--yes", "--dry-run"])
+        .args(["--json", "init", "--yes", "--dry-run"])
         .assert()
         .failure()
         .stdout("")
@@ -4958,8 +4949,8 @@ fn init_existing_config_requires_force_for_yes_and_force_overwrites() {
             "-C",
             temp.path().to_str().unwrap(),
             "init",
-            "--preset",
-            "agent",
+            "--agent",
+            "codex",
             "--yes",
             "--force",
         ])
@@ -4973,14 +4964,12 @@ fn init_existing_config_requires_force_for_yes_and_force_overwrites() {
 }
 
 #[test]
-fn init_rejects_conflicting_preset_and_minimal() {
+fn init_rejects_legacy_preset_flag() {
     wt_command()
-        .args(["init", "--preset", "minimal", "--minimal"])
+        .args(["init", "--preset", "minimal"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "'--preset <PRESET>' cannot be used with '--minimal'",
-        ));
+        .stderr(predicate::str::contains("unexpected argument"));
 }
 
 #[test]

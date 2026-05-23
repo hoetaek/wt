@@ -149,8 +149,8 @@ Create or preview config in a target repository:
 
 ```bash
 wt init
-wt init --preset app --dry-run
-wt init --shared --preset issue --issue-provider github --yes
+wt init --dry-run
+wt init --shared --issue-provider github --yes
 wt doctor
 wt doctor --profile codex
 ```
@@ -412,9 +412,8 @@ bypassing dirty-worktree, check, pull-request review, review-thread, or ancestry
 safety gates.
 
 `wt config` prints the effective `[workflow]` policy, including the built-in
-defaults above. `wt init` may include a commented optional `[workflow]` block so
-the policy is discoverable, but generated config does not actively enable PR
-creation or automatic landing by default.
+defaults above. `wt init` keeps workflow policy out of generated config unless
+the user explicitly chooses to override the default.
 
 When `[workspace]` is configured, `wt config` also prints effective workspace
 colors, including built-in defaults. To change or disable a color, copy that
