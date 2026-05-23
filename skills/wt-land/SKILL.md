@@ -224,7 +224,7 @@ gh pr create --base <integration-branch> --head land-<slug>-recover \
 
 The original PRs stay `MERGED` (just into the wrong base); the recovery PR is
 the one that actually lands the content. Document the recovery in the
-workflow's spec or workflow.md so future readers understand the history.
+workflow's spec or `09-execution.md` so future readers understand the history.
 
 The robust path is to prevent mis-targeting up front via the explicit
 re-target step above. Treat the recovery procedure as a fallback, not a

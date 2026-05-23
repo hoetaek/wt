@@ -7,8 +7,9 @@ different kind of uncertainty before the work becomes runnable.
 ## Summary
 
 ```text
-Raw intent <-> Context / reference exploration
+Raw intent
 -> Unknown surfacing
+-> Context / reference exploration
 -> Purpose / success criteria
 -> Requirements / principles
 -> Output concept
@@ -19,13 +20,14 @@ Raw intent <-> Context / reference exploration
 -> Retrospect
 ```
 
-Kiro's spec-driven workflow maps to `requirements.md -> design.md -> tasks.md`.
+Kiro's spec-driven workflow maps to
+`04+05+06-requirements.md -> 07-design.md -> 08-tasks.md`.
 AI-DLC maps more broadly to `Inception -> Construction -> Operations`. For wt,
 the operational mapping is:
 
 ```text
 ideas/<slug>.{md,toml}
--> specs/<slug>/{requirements.md,design.md,tasks.md,workflow.md?}
+-> specs/<slug>/{01-intent.md,02-unknowns.md,03-context.md,04+05+06-requirements.md,07-design.md,08-tasks.md,09-execution.md?,10-review.md?,11-retrospect.md?}
 -> tasks/<slug>.toml and/or workflows/<id>.toml
 -> task-runs/<id>.toml
 -> review, land, retrospect
@@ -36,8 +38,8 @@ ideas/<slug>.{md,toml}
 Owner: `wt-idea`, or the first minutes of `wt-ready` when the user skips idea
 capture.
 
-Artifact: `ideas/<slug>.{md,toml}` when the thought is exploratory; otherwise a
-short raw-intent note in the spec draft or TaskDocument body.
+Artifact: `ideas/<slug>.{md,toml}` when the thought is exploratory; otherwise
+`specs/<slug>/01-intent.md` or a short raw-intent note in the TaskDocument body.
 
 Gate to next step:
 
@@ -52,39 +54,12 @@ Return here when:
 - The request is only a symptom, preference, or implementation hunch.
 - Multiple unrelated ideas are mixed together.
 
-## 2. Context / reference exploration
-
-Owner: `wt-idea` for exploratory research, `wt-ready` when reference gathering
-is needed before committed prep.
-
-Artifact: idea body sections for references/options/tradeoffs, or a short
-discovery section in the spec draft.
-
-Purpose: sharpen raw intent before forcing purpose, requirements, or output
-form. This is where contextual research, reference benchmarking, prior art,
-related tasks, product examples, and possible solution frames belong when the
-user cannot yet picture the desired result.
-
-Gate to next step:
-
-- The discovery set is bounded enough for the current decision.
-- 2-4 plausible directions or frames are named.
-- Each direction has a tradeoff or reason to accept/reject.
-- The user/coordinator can now state clearer purpose/success criteria or choose
-  the next exploration question.
-
-Return here when:
-
-- The purpose feels invented from the first idea instead of discovered.
-- The user needs examples before they can say what they want.
-- There are too many possible product/document/workflow shapes.
-
-## 3. Unknown surfacing
+## 2. Unknown surfacing
 
 Owner: `wt-idea`, or `wt-ready` when entered directly without prior idea capture.
 
-Artifact: idea body section, or spec notes section, listing unknowns by
-category — domain concepts, standards/conventions, external facts, internal
+Artifact: idea body section, or `specs/<slug>/02-unknowns.md`, listing unknowns
+by category — domain concepts, standards/conventions, external facts, internal
 facts — with each item marked `blocking now` or `useful later`.
 
 Purpose: name what is missing before researching. Without this gate, context
@@ -103,16 +78,47 @@ Gate to next step:
 Return here when:
 
 - A new unknown surfaces mid-work and is researched on the spot — surfacing
-  was incomplete. Log it to `specs/<slug>/mid-process-discoveries.md` so
+  was incomplete. Log it under `specs/<slug>/10-review.md` so
   `wt-retrospect` can diagnose which category was missed next time.
 - Repeated unplanned research detours start interrupting drafting or
   implementation.
+
+## 3. Context / reference exploration
+
+Owner: `wt-idea` for exploratory research, `wt-ready` when reference gathering
+is needed before committed prep.
+
+Artifact: idea body sections for references/options/tradeoffs, or
+`specs/<slug>/03-context.md`.
+
+Purpose: use the Unknown surfacing list as the research agenda, then sharpen
+raw intent before forcing purpose, requirements, or output form. This is where
+contextual research, reference benchmarking, prior art, related tasks, product
+examples, and possible solution frames belong when the user cannot yet picture
+the desired result.
+
+Gate to next step:
+
+- Blocking unknowns from gate 2 are resolved, explicitly deferred, or turned
+  into HITL/spike work.
+- The discovery set is bounded enough for the current decision.
+- 2-4 plausible directions or frames are named.
+- Each direction has a tradeoff or reason to accept/reject.
+- The user/coordinator can now state clearer purpose/success criteria or choose
+  the next exploration question.
+
+Return here when:
+
+- The purpose feels invented from the first idea instead of discovered.
+- The user needs examples before they can say what they want.
+- There are too many possible product/document/workflow shapes.
 
 ## 4. Purpose / success criteria
 
 Owner: `wt-idea` for exploration, `wt-ready` for committed prep.
 
-Artifact: idea body, then `requirements.md` user story and problem context.
+Artifact: idea body, then `specs/<slug>/04+05+06-requirements.md` user story
+and problem context.
 
 Gate to next step:
 
@@ -130,7 +136,7 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: `specs/<slug>/requirements.md`.
+Artifact: `specs/<slug>/04+05+06-requirements.md`.
 
 Gate to next step:
 
@@ -155,8 +161,8 @@ Return here when:
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
 show that the chosen artifact shape is wrong.
 
-Artifact: `workflow.md` rationale, TaskDocument body planning summary, or spec
-notes that state the output form.
+Artifact: `04+05+06-requirements.md`, `09-execution.md` rationale,
+TaskDocument body planning summary, or spec notes that state the output form.
 
 Purpose: choose what kind of artifact should be produced after requirements and
 principles are clear.
@@ -180,7 +186,7 @@ Return here when:
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
 invalidate assumptions.
 
-Artifact: `specs/<slug>/design.md`.
+Artifact: `specs/<slug>/07-design.md`.
 
 Gate to next step:
 
@@ -201,8 +207,8 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: `specs/<slug>/tasks.md`, optional `workflow.md`, TaskDocuments, and
-saved Workflow TOML when needed.
+Artifact: `specs/<slug>/08-tasks.md`, optional `09-execution.md`,
+TaskDocuments, and saved Workflow TOML when needed.
 
 Gate to next step:
 
@@ -227,8 +233,8 @@ Return here when:
 
 Owner: `wt-ready` prepares; `wt-start` launches.
 
-Artifact: TaskDocument body `계획 (Planning)` section, optional Workflow policy
-snapshot, and exact `wt-start` target.
+Artifact: `09-execution.md`, TaskDocument body `계획 (Planning)` section,
+optional Workflow policy snapshot, and exact `wt-start` target.
 
 Gate to next step:
 
@@ -246,9 +252,9 @@ Return here when:
 
 Owner: `wt-coordinate`.
 
-Artifact: reviewed diff/check evidence, updated `design.md`, `tasks.md`, and
-`workflow.md` when execution reality changes the plan. Optional
-`mid-process-discoveries.md` when unplanned research surfaces mid-work.
+Artifact: reviewed diff/check evidence, updated `07-design.md`,
+`08-tasks.md`, `09-execution.md`, and `10-review.md` when execution reality
+changes the plan.
 
 Gate to next step:
 
@@ -256,7 +262,7 @@ Gate to next step:
   report.
 - Checks are scaled to risk and recorded.
 - Spec drift is fixed in the spec instead of being left as a stale artifact.
-- Unplanned research is logged to `mid-process-discoveries.md` so the
+- Unplanned research is logged to `10-review.md` so the
   retrospective can diagnose which Unknown surfacing category was missed.
 - Workflow-linked runs are completed only after review passes.
 
@@ -270,7 +276,9 @@ Return here when:
 Owner: `wt-retrospect`, normally called by `wt-work` after landing or explicit
 discard.
 
-Artifact: `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`.
+Artifact: `specs/<slug>/11-retrospect.md` for spec-backed work, or
+`<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml` for cross-work or
+spec-less retrospectives.
 
 Gate to future work:
 
@@ -279,7 +287,7 @@ Gate to future work:
   skill/docs changes.
 - Harness tuning names the exact file and section to update when the lesson
   should permanently change agent behavior.
-- When `mid-process-discoveries.md` exists for this run, each discovery is
+- When `10-review.md` records mid-process discoveries for this run, each discovery is
   classified against the Unknown surfacing categories (domain / standards /
   external / internal). The category that was missed becomes either a
   `try` item or a `harness_tuning` entry for the next run's surfacing pass.
@@ -295,11 +303,14 @@ When a step is missing, produce the artifact for that step instead of pretending
 the work is ready for the next one. Examples:
 
 - Missing purpose/success criteria: capture or enrich an idea.
-- Missing examples or direction: run bounded discovery/reference benchmarking.
-- Missing observable behavior: write or grill `requirements.md`.
+- Missing unknown list: surface domain, standards/conventions, external, and
+  internal unknowns before researching.
+- Missing examples or direction: use the unknowns list to run bounded
+  discovery/reference benchmarking.
+- Missing observable behavior: write or grill `04+05+06-requirements.md`.
 - Missing output form: choose whether the next artifact is spec, prototype,
   docs change, TaskDocument, workflow, or spike.
-- Missing ownership/boundary decision: write or grill `design.md`.
-- Missing dependency graph: write or grill `tasks.md` / `workflow.md`.
+- Missing ownership/boundary decision: write or grill `07-design.md`.
+- Missing dependency graph: write or grill `08-tasks.md` / `09-execution.md`.
 - Missing reviewable size: split the task graph.
 - Missing execution target: stop with unresolved `wt-start` handoff.

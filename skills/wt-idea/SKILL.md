@@ -8,8 +8,9 @@ description: "Use before wt-ready for vague ideas or future wt work: capture con
 Use this skill to capture and enrich ideas before they are ready for
 `wt-ready`. The goal is to preserve enough evidence and context that a later
 `wt-ready` pass can turn the idea into the best available task/workflow plan.
-In the work-sequence model, this skill owns raw intent and context/reference
-exploration before the work commits to a spec, TaskDocument, or workflow.
+In the work-sequence model, this skill owns raw intent, unknown surfacing, and
+context/reference exploration before the work commits to a spec, TaskDocument,
+or workflow.
 
 Do not implement code, create TaskDocuments, create workflows, launch worktrees,
 or decide final scope from this skill. Use `wt-ready` for idea-to-task
@@ -27,8 +28,8 @@ An idea is exploration. It is allowed to die.
   idea file continuing to exist. Removing one is not breakage.
 - Do not promote prematurely. Do not create TaskDocuments, specs, or workflows
   from inside `wt-idea`. Promotion is `wt-ready`'s job: when the user commits
-  in `wt-ready`, the idea file is removed and a `specs/<slug>/` directory
-  (with `requirements.md`, `design.md`, `tasks.md`) takes its place. That
+  in `wt-ready`, the idea file is removed and a numbered `specs/<slug>/`
+  directory takes its place. That
   directory move is the visible commit gate, not anything `wt-idea` does.
 - Treat the idea body as scratch surface, not a contract. Optimise for honest
   exploration, including recording reasons to drop the idea entirely.
@@ -114,9 +115,9 @@ Internal (blocking now):
 ```
 
 When a new unknown surfaces *after* this step (during ready/start/coordinate),
-that is a signal Surfacing was incomplete; the runtime owner logs it to
-`<git-common-dir>/wt/specs/<slug>/mid-process-discoveries.md` so the
-retrospective can diagnose the missed category.
+that is a signal Surfacing was incomplete; the runtime owner logs it under
+`<git-common-dir>/wt/specs/<slug>/10-review.md` so the retrospective can
+diagnose the missed category.
 
 ## Evidence Gathering
 
@@ -254,7 +255,7 @@ WHEN <condition> THE SYSTEM SHALL <behavior>.
 
 This is optional. Do not force EARS phrasing in the idea stage; vague ideas
 should stay vague. When it is naturally there, it gives `wt-ready` a head start
-on `requirements.md`. When it is not, leave it out.
+on `04+05+06-requirements.md`. When it is not, leave it out.
 
 ## Questions
 
@@ -280,9 +281,9 @@ $wt-ready <git-common-dir>/wt/ideas/<slug>.md
 ```
 
 When `wt-ready` is later invoked on the idea and the user commits, `wt-ready`
-will remove this idea file and create `<git-common-dir>/wt/specs/<slug>/` with
-`requirements.md`, `design.md`, and `tasks.md`. That promotion is not done from
-inside `wt-idea`.
+will remove this idea file and create numbered prep artifacts under
+`<git-common-dir>/wt/specs/<slug>/`. That promotion is not done from inside
+`wt-idea`.
 
 If the user asked only for a list or review of ideas, do not write files unless
 they explicitly ask to register or update an idea.

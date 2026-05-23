@@ -160,7 +160,7 @@ pub enum Commands {
     },
     /// Create blank skeleton documents for a feature
     #[command(
-        long_about = "Create blank skeleton documents for a feature under <git-common-dir>/wt ideas, specs, tasks, workflows, and retrospectives. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
+        long_about = "Create blank skeleton documents for a feature under <git-common-dir>/wt ideas, numbered specs, tasks, workflows, and spec-local retrospects. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
     )]
     Scaffold {
         /// Feature slug to use for every generated path
@@ -169,7 +169,7 @@ pub enum Commands {
         /// Create <git-common-dir>/wt/ideas/<feature>.md
         #[arg(long)]
         idea: bool,
-        /// Create <git-common-dir>/wt/specs/<feature>/requirements.md, design.md, and tasks.md
+        /// Create numbered prep files under <git-common-dir>/wt/specs/<feature>/
         #[arg(long)]
         spec: bool,
         /// Create <git-common-dir>/wt/tasks/<feature>.toml
@@ -178,7 +178,7 @@ pub enum Commands {
         /// Create <git-common-dir>/wt/workflows/<feature>.toml
         #[arg(long)]
         workflow: bool,
-        /// Create <git-common-dir>/wt/retrospectives/<feature>.md
+        /// Create <git-common-dir>/wt/specs/<feature>/11-retrospect.md
         #[arg(long)]
         retrospect: bool,
         /// Create all scaffold document kinds
@@ -288,7 +288,7 @@ pub enum Commands {
     },
     /// Start a read-only personal state web UI
     #[command(
-        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <git-common-dir>/wt ideas, retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
+        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <git-common-dir>/wt ideas, spec-local and cross-work retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
     )]
     Ui {
         /// Port to bind on 127.0.0.1; 0 selects an available port

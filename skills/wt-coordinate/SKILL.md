@@ -81,28 +81,28 @@ or validate a live surface; confirm the surface is the agent prompt first.
 
 ## Sync the Spec
 
-`wt-ready` produces a committed spec at
-`<git-common-dir>/wt/specs/<slug>/{requirements.md, design.md, tasks.md}` plus
-optional `workflow.md`. The spec is not frozen at launch. Findings often
-invalidate an assumption in `design.md`, prove an item in `tasks.md` is too
-coarse or mis-scoped, or show that the chosen execution shape in `workflow.md`
-has drifted.
+`wt-ready` produces a committed numbered spec at
+`<git-common-dir>/wt/specs/<slug>/`. The spec is not frozen at launch. Findings
+often invalidate an assumption in `07-design.md`, prove an item in
+`08-tasks.md` is too coarse or mis-scoped, or show that the chosen execution
+shape in `09-execution.md` has drifted.
 
-Edit `design.md`, `tasks.md`, and `workflow.md` in place during the run. The
-TaskDocument at `<git-common-dir>/wt/tasks/<slug>.toml` is the canonical launch
-context for the wt CLI and is not rewritten here; only the spec artifact
-moves.
+Edit `07-design.md`, `08-tasks.md`, `09-execution.md`, and `10-review.md` in
+place during the run. The TaskDocument at `<git-common-dir>/wt/tasks/<slug>.toml`
+is the canonical launch context for the wt CLI and is not rewritten here; only
+the spec artifact moves.
 
 Drift-resolution rule: when implementation and spec disagree, update the spec.
 Do not let code silently diverge. If a decision changes mid-flight, the spec
-is where it lands. `requirements.md` is the original intent — surface needed
-changes to the user rather than rewriting it silently. wt CLI does not read or
-write `specs/`, so spec edits are coordinator-driven file edits.
+is where it lands. `04+05+06-requirements.md` carries the approved purpose and
+requirements — surface needed changes to the user rather than rewriting it
+silently. wt CLI does not treat `specs/` as executable state, so spec edits are
+coordinator-driven file edits.
 
 Make the rationale visible:
 
 ```bash
-wt send <target> "design.md / tasks.md / workflow.md를 업데이트했습니다. 변경: <무엇이 바뀌었나>. 이유: <왜 바뀌었나>. 이 업데이트된 spec 기준으로 진행해주세요."
+wt send <target> "07-design.md / 08-tasks.md / 09-execution.md / 10-review.md를 업데이트했습니다. 변경: <무엇이 바뀌었나>. 이유: <왜 바뀌었나>. 이 업데이트된 spec 기준으로 진행해주세요."
 ```
 
 ### Log Mid-Process Discoveries
@@ -110,15 +110,15 @@ wt send <target> "design.md / tasks.md / workflow.md를 업데이트했습니다
 If unplanned research happens during the run — a domain term that needed a
 definition, a convention that was not surveyed, an external example that
 changed the approach, or an internal fact that was not inventoried — log it
-to `specs/<slug>/mid-process-discoveries.md` instead of silently absorbing
-it.
+under a `## Mid-process discoveries` section in `specs/<slug>/10-review.md`
+instead of silently absorbing it.
 
 Format: one entry per discovery, dated, with a category tag (`domain` /
 `standards` / `external` / `internal`) and a one-line note on what was
 researched and why it was not in the original Unknown surfacing list.
-`wt-retrospect` reads this file to diagnose which category was missed and
+`wt-retrospect` reads this section to diagnose which category was missed and
 strengthen the next run's surfacing checklist. If no unplanned research
-happens, do not create the file.
+happens, do not create `10-review.md` only for an empty section.
 
 ## Complete When Applicable
 
