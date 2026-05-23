@@ -54,6 +54,22 @@ pub trait UserInterface: Send + Sync {
         let rows = prompt_items_to_rows(items);
         self.select_rows_without_filter(prompt, &rows)
     }
+    fn select_nested_without_filter(&self, prompt: &str, items: &[String]) -> Result<usize> {
+        let items = items
+            .iter()
+            .cloned()
+            .map(PromptItem::new)
+            .collect::<Vec<_>>();
+        self.select_nested_items_without_filter(prompt, &items)
+    }
+    fn select_nested_items_without_filter(
+        &self,
+        prompt: &str,
+        items: &[PromptItem],
+    ) -> Result<usize> {
+        let rows = prompt_items_to_rows(items);
+        self.select_nested_rows_without_filter(prompt, &rows)
+    }
     fn multi_select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<Vec<usize>> {
         let rows = prompt_items_to_rows(items);
         self.multi_select_rows(prompt, &rows)
@@ -64,6 +80,9 @@ pub trait UserInterface: Send + Sync {
     }
     fn select_rows_without_filter(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
         self.select_rows(prompt, rows)
+    }
+    fn select_nested_rows_without_filter(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+        self.select_rows_without_filter(prompt, rows)
     }
     fn multi_select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<Vec<usize>> {
         let rendered = render_prompt_rows(rows);

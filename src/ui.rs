@@ -92,6 +92,24 @@ impl UserInterface for TerminalUi {
         }
     }
 
+    fn select_nested_rows_without_filter(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+        ensure_selectable_rows(prompt, rows)?;
+        prompt_result(prompt, require_prompt_terminal())?;
+
+        let mut state = SelectorState::single(selector_rows(rows));
+        let options = selector_options(prompt, self.decorated)
+            .filter_visible(false)
+            .nested(true);
+        let mut stderr = io::stderr().lock();
+        match prompt_result(
+            prompt,
+            run_selector_prompt(&mut stderr, &mut state, &options),
+        )? {
+            SelectorSubmission::Single(index) => Ok(index),
+            SelectorSubmission::Multi(_) => bail!("prompt '{prompt}' returned multiselect output"),
+        }
+    }
+
     fn multi_select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<Vec<usize>> {
         ensure_option_rows(prompt, rows)?;
         prompt_result(prompt, require_prompt_terminal())?;

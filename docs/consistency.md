@@ -895,17 +895,19 @@ Wizard step label은 구현 단계명이 아니라 사용자가 지금 결정하
 `wt init`의 사람이 읽는 설명과 prompt는 한국어를 기본으로 쓰되, command, option, config key,
 TOML value 같은 protocol literal은 영어 원문을 유지한다. Canonical flow는 `설정 파일 위치`,
 `외부 도구 연결`, `개발 환경 설정`, preview action(`생성 예정`/`덮어쓰기 예정`), `쓰기 확인` 순서다.
-각 step 설명은 prompt header와 구분되도록 들여써서 보여주고, 작은 대비쌍은 bullet로 나눈다.
-설명과 다음 prompt 사이에는 빈 줄을 둔다. Detected integration이 없어서 prompt가 생략되는
-step도 “감지된 signal이 없어 section을 쓰지 않는다”는 의미를 보여줘야 한다.
-선택지가 작고 검색할 대상이 아닌 결정은 filter 없는 selector를 쓴다. Target 결정은
+각 step 시작 전에는 빈 줄을 두고, step 설명은 prompt header와 구분되도록 들여써서 보여주며,
+작은 대비쌍은 bullet로 나눈다. 설명과 step 안의 질문 사이에도 빈 줄을 둔다. Step 안의 질문은
+새 `◆` header를 쓰지 않고 두 칸 들여쓴 field label과 selector frame으로 보여줘서 parent step에 속한 결정임을 드러낸다.
+Detected integration이 없어서 prompt가 생략되는 step도 “감지된 signal이 없어 section을 쓰지
+않는다”는 의미를 보여줘야 한다. 선택지가 작고 검색할 대상이 아닌 결정은 filter 없는 selector를 쓴다. Target 결정은
 `개인 설정 파일`과 `팀 공유 설정 (.wt.toml)`이라는 선택지로 보여주며, 예/아니오 prompt로
 두 개념을 숨기지 않는다.
 첫 화면에서는 `<git-common-dir>` 같은 git 내부 용어를 노출하지 말고, 실제 경로는 preview에서
 절대 경로로 보여준다. 개발 환경 설정 결정은 `감지한 개발 설정 저장`,
 `기존 개발 설정을 기준으로 만들기`, `개발 설정 직접 고르기`, `자동화 없이 최소 설정` 같은
 선택지 중 하나로 고르게 한다. 선택 label만으로 결과가 분명하지 않으면 label 아래에 흐린 설명을
-한 줄 들여써서 보여준다.
+한 줄 들여써서 보여주고, 설명이 붙은 선택지 블록 사이에는 빈 `│` 줄을 둔다. 선택되지 않은
+label도 설명보다 낮은 계층으로 보이지 않게 본문 색상으로 유지하고, marker와 설명만 보조색으로 둔다.
 감지된 issue/site provider도 감지값을 첫 선택지로 올린 작은 selector에서 고르게 한다. Preview는
 detected signal과 실제로 쓸 active section을 분리해 보여주고, 팀 공유 설정 `.wt.toml`을 선택해서
 `.env` copy, local link, browser profile 같은 private helper가 빠질 때는 omission을 안내로 설명한다.

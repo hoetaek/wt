@@ -558,13 +558,13 @@ fn print_wizard_header(ctx: &Ctx) {
 }
 
 fn print_wizard_step(ctx: &Ctx, number: usize, title: &str, description: impl AsRef<str>) {
+    ctx.ui.print_dim("");
     ctx.ui.print_step(&format!("단계 {number}/5: {title}"));
     let description = description.as_ref();
     if !description.is_empty() {
         for line in description.lines() {
             ctx.ui.print_dim(&format!("  {line}"));
         }
-        ctx.ui.print_dim("");
     }
 }
 
@@ -627,7 +627,7 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     ];
     match ctx
         .ui
-        .select_items_without_filter("어디에 저장할까요?", &items)?
+        .select_nested_items_without_filter("저장 위치", &items)?
     {
         0 => Ok(InitTarget {
             path: ctx.storage_root.config_toml(),
@@ -1229,7 +1229,7 @@ fn resolve_common_config(
     ];
     match ctx
         .ui
-        .select_items_without_filter("개발 환경 설정을 어떻게 만들까요?", &items)?
+        .select_nested_items_without_filter("개발 환경 설정을 어떻게 만들까요?", &items)?
     {
         0 => resolve_recommended_common_config(ctx, target_kind, config, site_provider),
         1 => resolve_custom_common_config(ctx, target_kind, config, detected, site_provider),
@@ -1422,7 +1422,9 @@ fn resolve_worktree_path(ctx: &Ctx, default: Option<&str>) -> Result<Option<Stri
         .collect::<Vec<_>>();
     ctx.ui
         .print_dim("worktree 폴더는 새 branch checkout이 만들어질 위치를 정합니다.");
-    let selection = ctx.ui.select_without_filter("worktree 폴더", &items)?;
+    let selection = ctx
+        .ui
+        .select_nested_without_filter("worktree 폴더", &items)?;
     if selection < options.len() - 1 {
         return Ok(options[selection].1.clone());
     }
@@ -1542,7 +1544,7 @@ fn resolve_editor_command(ctx: &Ctx, default: Option<&str>) -> Result<Option<Str
     );
     let selection = ctx
         .ui
-        .select_without_filter("설정 editor command", &items)?;
+        .select_nested_without_filter("설정 editor command", &items)?;
     if selection < options.len() - 1 {
         return Ok(options[selection].1.clone());
     }
@@ -1595,11 +1597,11 @@ fn resolve_workspace_browser(
         .collect::<Vec<_>>();
     ctx.ui
         .print_dim("workspace browser는 workspace에서 local site를 열 browser surface를 정합니다.");
-    Ok(
-        options[ctx.ui.select_without_filter("workspace browser", &items)?]
-            .1
-            .clone(),
-    )
+    Ok(options[ctx
+        .ui
+        .select_nested_without_filter("workspace browser", &items)?]
+    .1
+    .clone())
 }
 
 fn push_browser_option(
@@ -1703,7 +1705,7 @@ fn resolve_node_install_command(ctx: &Ctx, command: &InitCommand) -> Result<Stri
         || "패키지 설치 명령".to_string(),
         |working_dir| format!("패키지 설치 명령 ({working_dir})"),
     );
-    let selection = ctx.ui.select_without_filter(&prompt, &items)?;
+    let selection = ctx.ui.select_nested_without_filter(&prompt, &items)?;
     if selection < options.len() {
         return Ok(options[selection].1.clone());
     }
@@ -2076,7 +2078,7 @@ fn resolve_agent(ctx: &Ctx, options: &InitOptions, defaults: &InitDefaults) -> R
         .map(|agent| init_agent_from_cli(&agent.cli));
     let choices = ordered_agents(default_agent);
     let items = choices.iter().map(agent_choice_label).collect::<Vec<_>>();
-    Ok(choices[ctx.ui.select_without_filter("코딩 agent", &items)?].clone())
+    Ok(choices[ctx.ui.select_nested_without_filter("코딩 agent", &items)?].clone())
 }
 
 fn resolve_agent_command(
@@ -2123,7 +2125,9 @@ fn resolve_agent_args(
     items.push("추가 args 없음".into());
     items.push("args 직접 입력".into());
 
-    let selection = ctx.ui.select_without_filter("agent 실행 args", &items)?;
+    let selection = ctx
+        .ui
+        .select_nested_without_filter("agent 실행 args", &items)?;
     if !default_args.is_empty() && selection == 0 {
         return Ok(default_args);
     }
@@ -2169,7 +2173,7 @@ fn resolve_issue_provider(
         .iter()
         .map(issue_provider_choice_label)
         .collect::<Vec<_>>();
-    let provider = choices[ctx.ui.select_without_filter("issue 도구", &items)?].clone();
+    let provider = choices[ctx.ui.select_nested_without_filter("issue 도구", &items)?].clone();
     if provider == InitIssueProvider::None {
         Ok(None)
     } else {
@@ -2205,7 +2209,10 @@ fn resolve_site_provider(
         .iter()
         .map(site_provider_choice_label)
         .collect::<Vec<_>>();
-    let provider = choices[ctx.ui.select_without_filter("local site 설정", &items)?].clone();
+    let provider = choices[ctx
+        .ui
+        .select_nested_without_filter("local site 설정", &items)?]
+    .clone();
     if provider == InitSiteProvider::None {
         Ok(None)
     } else {
@@ -3723,7 +3730,7 @@ mod tests {
         assert_eq!(
             *ui.prompts.lock().unwrap(),
             vec![
-                "select: 어디에 저장할까요?".to_string(),
+                "select: 저장 위치".to_string(),
                 "select: 개발 환경 설정을 어떻게 만들까요?".to_string(),
                 "select: 설정 editor command".to_string(),
                 "select: agent 실행 args".to_string(),

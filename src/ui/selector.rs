@@ -457,6 +457,7 @@ impl SelectorState {
                         row_index,
                         section_index: current_section,
                         body_rows: option_body_row_count(option),
+                        has_description: !description_lines(option).is_empty(),
                     });
                 }
                 SelectorRow::Option(_) => {}
@@ -474,9 +475,15 @@ impl SelectorState {
         let mut visible_options = 0;
         let mut body_rows = 0;
         let mut emitted_section = None;
+        let mut previous_option_had_description = false;
 
         for option in matching_options.iter().skip(start) {
-            let next_rows = option_body_rows(*option, emitted_section, body_rows > 0);
+            let next_rows = option_body_rows(
+                *option,
+                emitted_section,
+                body_rows > 0,
+                previous_option_had_description,
+            );
             if visible_options > 0 && body_rows + next_rows > self.max_visible_rows {
                 break;
             }
@@ -489,6 +496,7 @@ impl SelectorState {
             }
             row_indices.push(option.row_index);
             body_rows += next_rows;
+            previous_option_had_description = option.has_description;
             visible_options += 1;
         }
 
@@ -538,6 +546,7 @@ struct MatchingOptionRow {
     row_index: usize,
     section_index: Option<usize>,
     body_rows: usize,
+    has_description: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,11 +566,18 @@ impl BuiltSelectorWindow {
 fn matching_body_rows(matching_options: &[MatchingOptionRow]) -> usize {
     let mut body_rows = 0;
     let mut emitted_section = None;
+    let mut previous_option_had_description = false;
     for option in matching_options {
-        body_rows += option_body_rows(*option, emitted_section, body_rows > 0);
+        body_rows += option_body_rows(
+            *option,
+            emitted_section,
+            body_rows > 0,
+            previous_option_had_description,
+        );
         if option.section_index.is_some() {
             emitted_section = option.section_index;
         }
+        previous_option_had_description = option.has_description;
     }
     body_rows
 }
@@ -570,6 +586,7 @@ fn option_body_rows(
     option: MatchingOptionRow,
     emitted_section: Option<usize>,
     has_previous_rows: bool,
+    previous_option_had_description: bool,
 ) -> usize {
     let section_rows = match option.section_index {
         Some(section_index) if emitted_section != Some(section_index) => {
@@ -577,7 +594,12 @@ fn option_body_rows(
         }
         _ => 0,
     };
-    section_rows + option.body_rows
+    let option_gap_rows = usize::from(
+        section_rows == 0
+            && has_previous_rows
+            && (previous_option_had_description || option.has_description),
+    );
+    section_rows + option_gap_rows + option.body_rows
 }
 
 fn option_body_row_count(option: &SelectorOption) -> usize {
@@ -589,6 +611,7 @@ pub(crate) struct SelectorRenderOptions {
     prompt: String,
     decorated: bool,
     filter_visible: bool,
+    nested: bool,
     show_selected_summary: bool,
     summary_label_limit: usize,
 }
@@ -599,6 +622,7 @@ impl SelectorRenderOptions {
             prompt: prompt.into(),
             decorated: true,
             filter_visible: true,
+            nested: false,
             show_selected_summary: false,
             summary_label_limit: DEFAULT_SUMMARY_LABELS,
         }
@@ -616,6 +640,11 @@ impl SelectorRenderOptions {
 
     pub(crate) fn filter_visible(mut self, filter_visible: bool) -> Self {
         self.filter_visible = filter_visible;
+        self
+    }
+
+    pub(crate) fn nested(mut self, nested: bool) -> Self {
+        self.nested = nested;
         self
     }
 
@@ -644,16 +673,20 @@ fn render_selector_frame(
 ) -> String {
     let mut lines = Vec::new();
 
-    let (prompt_symbol, prompt_style) = match frame {
-        SelectorRenderFrame::Active => (PROMPT_START, accent_style()),
-        SelectorRenderFrame::Submitted => (PROMPT_SUBMIT, selected_style()),
-        SelectorRenderFrame::Cancelled => (PROMPT_CANCEL, cancel_style()),
-    };
-    lines.push(format!(
-        "{} {}",
-        styled(prompt_symbol, prompt_style, options.decorated),
-        options.prompt
-    ));
+    if options.nested {
+        lines.push(options.prompt.clone());
+    } else {
+        let (prompt_symbol, prompt_style) = match frame {
+            SelectorRenderFrame::Active => (PROMPT_START, accent_style()),
+            SelectorRenderFrame::Submitted => (PROMPT_SUBMIT, selected_style()),
+            SelectorRenderFrame::Cancelled => (PROMPT_CANCEL, cancel_style()),
+        };
+        lines.push(format!(
+            "{} {}",
+            styled(prompt_symbol, prompt_style, options.decorated),
+            options.prompt
+        ));
+    }
 
     match frame {
         SelectorRenderFrame::Submitted => {
@@ -661,14 +694,14 @@ fn render_selector_frame(
                 "{} Submitted",
                 styled(FOOTER, bar_style(), options.decorated)
             ));
-            return format!("{}\n", lines.join("\n"));
+            return render_selector_lines(lines, options);
         }
         SelectorRenderFrame::Cancelled => {
             lines.push(format!(
                 "{} Cancelled",
                 styled(FOOTER, bar_style(), options.decorated)
             ));
-            return format!("{}\n", lines.join("\n"));
+            return render_selector_lines(lines, options);
         }
         SelectorRenderFrame::Active => {}
     }
@@ -695,6 +728,8 @@ fn render_selector_frame(
     }
 
     let mut body_rows = 0;
+    let mut previous_row_was_option = false;
+    let mut previous_option_had_description = false;
     if window.row_indices.is_empty() {
         lines.push(format!(
             "{} No matches",
@@ -711,8 +746,17 @@ fn render_selector_frame(
                     }
                     lines.push(render_section(section, options.decorated));
                     body_rows += 1;
+                    previous_row_was_option = false;
+                    previous_option_had_description = false;
                 }
                 SelectorRow::Option(option) => {
+                    let has_description = !description_lines(option).is_empty();
+                    if previous_row_was_option
+                        && (previous_option_had_description || has_description)
+                    {
+                        lines.push(styled(BAR, bar_style(), options.decorated));
+                        body_rows += 1;
+                    }
                     let option_lines = render_option(
                         state,
                         *row_index,
@@ -722,6 +766,8 @@ fn render_selector_frame(
                     );
                     body_rows += option_lines.len();
                     lines.extend(option_lines);
+                    previous_row_was_option = true;
+                    previous_option_had_description = has_description;
                 }
             }
         }
@@ -751,7 +797,19 @@ fn render_selector_frame(
     }
 
     lines.push(styled(FOOTER, bar_style(), options.decorated));
-    format!("{}\n", lines.join("\n"))
+    render_selector_lines(lines, options)
+}
+
+fn render_selector_lines(lines: Vec<String>, options: &SelectorRenderOptions) -> String {
+    if !options.nested {
+        return format!("{}\n", lines.join("\n"));
+    }
+    let rendered = lines
+        .into_iter()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("\n{rendered}\n")
 }
 
 pub(crate) fn run_selector_prompt<W: Write>(
@@ -1044,7 +1102,7 @@ fn option_label_style(active: bool, selected: bool, disabled: bool) -> Style {
     } else if selected {
         selected_style()
     } else {
-        inactive_style()
+        Style::new()
     }
 }
 
@@ -1463,6 +1521,9 @@ mod tests {
             "│ {}감지한 setup/test 명령과 로컬 파일을 저장합니다.",
             " ".repeat(5)
         )));
+        assert!(rendered.contains(
+            "│      감지한 setup/test 명령과 로컬 파일을 저장합니다.\n│\n│   ○  자동화 없이 최소 설정"
+        ));
         assert!(rendered.contains("│   ○  자동화 없이 최소 설정"));
         assert!(rendered.contains(&format!(
             "│ {}setup/test/editor/browser 없이 빈 workspace만 저장합니다.",
@@ -1503,6 +1564,32 @@ mod tests {
         );
         assert_eq!(state.query(), "");
         assert_eq!(state.active_index(), Some(0));
+    }
+
+    #[test]
+    fn nested_selector_renders_as_field_inside_parent_step() {
+        let state = SelectorState::single(vec![
+            SelectorRow::option(0, "개인 설정 파일"),
+            SelectorRow::option(1, "팀 공유 설정 (.wt.toml)"),
+        ]);
+        let rendered = render_plain(
+            &state,
+            selector_options("저장 위치")
+                .filter_visible(false)
+                .nested(true),
+        );
+
+        assert_eq!(
+            rendered,
+            "
+  저장 위치
+  │ ↑↓ move, enter select, esc cancel
+  │
+  │ ❯ ●  개인 설정 파일
+  │   ○  팀 공유 설정 (.wt.toml)
+  └
+"
+        );
     }
 
     #[test]
