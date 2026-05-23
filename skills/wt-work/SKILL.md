@@ -13,7 +13,9 @@ given context, not just one lifecycle phase.
 ## Work Sequence Reference
 
 Before starting the loop, read `references/work-sequence.md` and locate the
-current gate. The sequence is not a waterfall; it is a guardrail for deciding
+current gate. For lifecycle invariants (TaskDocument/TaskRun/workflow object
+model, status boundaries, completion vs cleanup), see
+`references/task-lifecycle.md`. The sequence is not a waterfall; it is a guardrail for deciding
 which lifecycle skill owns the next artifact. If raw intent or context is still
 too vague, run `wt-idea` before `wt-ready`. If the work is already committed to
 prep, use `wt-ready` to reconstruct any missing earlier gates instead of
