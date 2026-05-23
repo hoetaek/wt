@@ -319,7 +319,7 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
             ctx,
             1,
             "설정 파일 위치",
-            "- 개인 설정 파일: git common dir/wt/config.toml\n- 팀 공유 설정: ./.wt.toml",
+            "- 개인 설정 파일: <git-common-dir>/wt/config.toml (보통 .git/wt/config.toml)\n- 팀 공유 설정: ./.wt.toml",
         );
     }
     let target = resolve_target(ctx, &options)?;
@@ -618,7 +618,7 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     }
 
     let items = vec![
-        PromptItem::with_hint("개인 설정 파일", "git common dir/wt/config.toml"),
+        PromptItem::with_hint("개인 설정 파일", "보통 .git/wt/config.toml"),
         PromptItem::with_hint("팀 공유 설정", "./.wt.toml"),
     ];
     match ctx
@@ -1173,8 +1173,8 @@ fn resolve_common_config(
     );
     let recommended_item = if has_existing_defaults {
         PromptItem::with_description(
-            "현재 설정 유지하기",
-            "저장된 worktree 위치, 파일, setup/test 명령, 탭을 유지하고 editor/browser만 확인합니다.",
+            "기존 설정 파일 값 유지하기",
+            "1단계에서 고른 설정 파일에 저장된 값을 유지하고 editor/browser만 확인합니다.",
         )
     } else if cmux_available(ctx) {
         PromptItem::with_description(
@@ -3698,7 +3698,7 @@ mod tests {
         );
         assert!(
             dims.iter()
-                .any(|line| line.contains("  - 개인 설정 파일: git common dir/wt/config.toml"))
+                .any(|line| line.contains("  - 개인 설정 파일: <git-common-dir>/wt/config.toml"))
         );
         assert!(dims.iter().any(|line| line.is_empty()));
         assert!(
@@ -4361,7 +4361,7 @@ tabs = ["existing", "vim"]
         .unwrap();
 
         let select_items = ui.select_items.lock().unwrap().clone();
-        assert_eq!(select_items[0][0], "현재 설정 유지하기");
+        assert_eq!(select_items[0][0], "기존 설정 파일 값 유지하기");
         assert_eq!(select_items[1][0], "시스템 editor 사용");
         assert_eq!(select_items[2][0], "Claude");
         assert_eq!(select_items[3][0], "기존 args 유지: --model sonnet");

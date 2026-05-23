@@ -1851,7 +1851,7 @@ mod tests {
     #[test]
     fn nested_final_frame_renders_selected_label_and_hint() {
         let mut state = SelectorState::single(vec![
-            SelectorRow::option_with_hint(0, "개인 설정 파일", "git common dir/wt/config.toml"),
+            SelectorRow::option_with_hint(0, "개인 설정 파일", "보통 .git/wt/config.toml"),
             SelectorRow::option_with_hint(1, "팀 공유 설정", "./.wt.toml"),
         ]);
 
@@ -1867,7 +1867,7 @@ mod tests {
                     .nested(true),
                 SelectorRenderFrame::Submitted
             ),
-            "\n  저장 위치\n  └ 선택: 개인 설정 파일 (git common dir/wt/config.toml)\n"
+            "\n  저장 위치\n  └ 선택: 개인 설정 파일 (보통 .git/wt/config.toml)\n"
         );
     }
 
