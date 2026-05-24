@@ -42,7 +42,7 @@ fn step_claude_hooks(
     summary: &mut SetupSummary,
 ) -> Result<()> {
     if options.remove {
-        let installed = agent_hook::claude_dispatcher_installed()?;
+        let installed = agent_hook::claude_wt_managed_hook_present()?;
         let settings_path = agent_hook::claude_settings_path(false)?;
         if !installed {
             ctx.ui.print_step("Claude hooks: already absent");
@@ -60,8 +60,9 @@ fn step_claude_hooks(
             settings_path.display()
         );
         if should_apply(ctx, options, &prompt)? {
-            agent_hook::uninstall_claude(ctx, None)?;
-            summary.changed += 1;
+            if agent_hook::uninstall_claude(ctx, None)? {
+                summary.changed += 1;
+            }
         } else {
             ctx.ui.print_step("Claude hooks: skipped");
         }
@@ -105,7 +106,7 @@ fn step_codex_hooks(
     summary: &mut SetupSummary,
 ) -> Result<()> {
     if options.remove {
-        let installed = agent_hook::codex_dispatcher_hook_present()?;
+        let installed = agent_hook::codex_wt_managed_hook_present()?;
         let codex_home = agent_hook::codex_home_dir()?;
         let hooks_path = codex_home.join("hooks.json");
         if !installed {
@@ -124,8 +125,9 @@ fn step_codex_hooks(
             hooks_path.display()
         );
         if should_apply(ctx, options, &prompt)? {
-            agent_hook::uninstall_codex(ctx, None)?;
-            summary.changed += 1;
+            if agent_hook::uninstall_codex(ctx, None)? {
+                summary.changed += 1;
+            }
         } else {
             ctx.ui.print_step("Codex hooks: skipped");
         }
@@ -170,7 +172,12 @@ fn step_shell_integration(
     summary: &mut SetupSummary,
 ) -> Result<Option<ShellTarget>> {
     let Some(mut target) = resolve_shell_target()? else {
-        print_manual_shell_instructions(ctx);
+        if options.remove {
+            ctx.ui
+                .print_step("Shell integration: supported shell not detected; no rc file target");
+        } else {
+            print_manual_shell_instructions(ctx);
+        }
         return Ok(None);
     };
     maybe_retarget_macos_bash(ctx, options, &mut target)?;
@@ -198,14 +205,19 @@ fn step_shell_completion(
     summary: &mut SetupSummary,
 ) -> Result<()> {
     let source = detect_wt_install_source(ctx)?;
-    if source == InstallSource::Homebrew {
+    if source == InstallSource::Homebrew && !options.remove {
         ctx.ui
             .print_step("wt installed via Homebrew; completion provided by formula. Skipping.");
         return Ok(());
     }
 
     let Some(target) = shell_target else {
-        print_manual_completion_instructions(ctx);
+        if options.remove {
+            ctx.ui
+                .print_step("Shell completion: supported shell not detected; no rc file target");
+        } else {
+            print_manual_completion_instructions(ctx);
+        }
         return Ok(());
     };
 

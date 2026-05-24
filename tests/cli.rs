@@ -3833,6 +3833,166 @@ fn setup_and_remove_are_idempotent() {
 
 #[cfg(unix)]
 #[test]
+fn setup_remove_cleans_partial_wt_managed_hooks() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let claude_home = home.join(".claude");
+    std::fs::create_dir_all(&claude_home).unwrap();
+    std::fs::create_dir_all(&codex_home).unwrap();
+
+    std::fs::write(
+        claude_home.join("settings.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hooks": {
+                "SessionEnd": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND
+                    }]
+                }]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        codex_home.join("hooks.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": codex_dispatcher_command()
+                    }]
+                }]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    wt_command()
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .args(["setup", "--remove", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Claude hook uninstalled"))
+        .stdout(predicate::str::contains("Codex hook uninstalled"));
+
+    assert!(!claude_home.join("settings.json").exists());
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    assert!(codex_managed_inbox_commands(&hooks).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_remove_preserves_codex_user_trust_after_index_shift() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    let hooks_path = codex_home.join("hooks.json");
+
+    std::fs::write(
+        &hooks_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": codex_dispatcher_command()
+                        },
+                        {
+                            "type": "command",
+                            "command": "echo user-prompt"
+                        }
+                    ]
+                }],
+                "PostToolUse": [
+                    {
+                        "hooks": [{
+                            "type": "command",
+                            "command": codex_dispatcher_command()
+                        }]
+                    },
+                    {
+                        "hooks": [{
+                            "type": "command",
+                            "command": "echo post-tool"
+                        }]
+                    }
+                ]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let user_prompt_old = format!("{}:user_prompt_submit:0:1", hooks_path.display());
+    let user_prompt_new = format!("{}:user_prompt_submit:0:0", hooks_path.display());
+    let post_tool_old = format!("{}:post_tool_use:1:0", hooks_path.display());
+    let post_tool_new = format!("{}:post_tool_use:0:0", hooks_path.display());
+    std::fs::write(
+        codex_home.join("config.toml"),
+        format!(
+            r#"[hooks.state."{}:user_prompt_submit:0:0"]
+trusted_hash = "sha256:wt-prompt"
+
+[hooks.state."{user_prompt_old}"]
+trusted_hash = "sha256:user-prompt"
+
+[hooks.state."{}:post_tool_use:0:0"]
+trusted_hash = "sha256:wt-post"
+
+[hooks.state."{post_tool_old}"]
+trusted_hash = "sha256:user-post"
+"#,
+            hooks_path.display(),
+            hooks_path.display(),
+        ),
+    )
+    .unwrap();
+
+    wt_command()
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .args(["setup", "--remove", "--yes"])
+        .assert()
+        .success();
+
+    let hooks = json_file(&hooks_path);
+    assert_eq!(
+        codex_event_commands(&hooks, "UserPromptSubmit"),
+        vec!["echo user-prompt".to_string()]
+    );
+    assert_eq!(
+        codex_event_commands(&hooks, "PostToolUse"),
+        vec!["echo post-tool".to_string()]
+    );
+
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml")).unwrap()).unwrap();
+    let state = config["hooks"]["state"].as_table().unwrap();
+    assert_eq!(
+        state[&user_prompt_new]["trusted_hash"].as_str(),
+        Some("sha256:user-prompt")
+    );
+    assert_eq!(
+        state[&post_tool_new]["trusted_hash"].as_str(),
+        Some("sha256:user-post")
+    );
+    assert!(!state.contains_key(&user_prompt_old));
+    assert!(!state.contains_key(&post_tool_old));
+}
+
+#[cfg(unix)]
+#[test]
 fn setup_dry_run_writes_nothing() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -3906,6 +4066,44 @@ fn setup_skips_completion_for_homebrew_install_source() {
 
     let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
     assert!(zshrc.contains("eval \"$(wt shell-init zsh)\""));
+    assert!(!zshrc.contains("eval \"$(wt completion zsh)\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_remove_removes_completion_for_homebrew_install_source() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let home = temp.path().join("home");
+    let zdotdir = temp.path().join("zdot");
+    let homebrew = temp.path().join("homebrew");
+    let wt = copy_wt_binary(&homebrew);
+    std::fs::create_dir_all(&zdotdir).unwrap();
+    std::fs::write(
+        zdotdir.join(".zshrc"),
+        "eval \"$(wt shell-init zsh)\"\neval \"$(wt completion zsh)\"\n",
+    )
+    .unwrap();
+
+    wt_command_at(&wt)
+        .env("HOME", &home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("HOMEBREW_PREFIX", &homebrew)
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "setup",
+            "--remove",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Shell integration removed"))
+        .stdout(predicate::str::contains("Shell completion removed"));
+
+    let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
+    assert!(!zshrc.contains("eval \"$(wt shell-init zsh)\""));
     assert!(!zshrc.contains("eval \"$(wt completion zsh)\""));
 }
 

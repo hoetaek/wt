@@ -43,7 +43,7 @@ pub(crate) fn install_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Resul
     Ok(())
 }
 
-pub(crate) fn uninstall_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result<()> {
+pub(crate) fn uninstall_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result<bool> {
     let target = ClaudeHookTarget::parse(agent)?;
     let settings_path = claude_settings_path(false)?;
     if !settings_path.exists() {
@@ -53,7 +53,7 @@ pub(crate) fn uninstall_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Res
             ctx.ui
                 .print_dim(&format!("  Settings: {}", settings_path.display()));
         }
-        return Ok(());
+        return Ok(false);
     }
 
     let mut settings = read_settings(&settings_path)?;
@@ -90,7 +90,7 @@ pub(crate) fn uninstall_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Res
             .print_dim(&format!("  Settings: {}", settings_path.display()));
     }
 
-    Ok(())
+    Ok(removed > 0)
 }
 
 pub(crate) fn claude_dispatcher_installed() -> Result<bool> {
@@ -105,6 +105,18 @@ pub(crate) fn claude_dispatcher_installed() -> Result<bool> {
     ))
 }
 
+pub(crate) fn claude_wt_managed_hook_present() -> Result<bool> {
+    let settings_path = claude_settings_path(false)?;
+    if !settings_path.exists() {
+        return Ok(false);
+    }
+    let settings = read_settings(&settings_path)?;
+    Ok(claude_any_command_matches(
+        &settings,
+        is_wt_managed_claude_command,
+    ))
+}
+
 pub(crate) fn install_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result<()> {
     let target = CodexHookTarget::parse(agent)?;
     let paths = codex_hook_paths(true)?;
@@ -115,7 +127,7 @@ pub(crate) fn install_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result
         CodexHookTarget::Dispatcher => CodexRemoveTarget::AllWtManaged,
         CodexHookTarget::Agent(_) => CodexRemoveTarget::Command(command.clone()),
     };
-    let stale_trust_keys = remove_managed_codex_hook(&mut hooks, &paths, remove_target)?;
+    let stale_trust = remove_managed_codex_hook(&mut hooks, &paths, remove_target)?;
     install_managed_codex_hook(&mut hooks, &command)?;
     let trust_installs = find_managed_codex_hook_trust_installs(&hooks, &paths, &command)?;
 
@@ -124,7 +136,8 @@ pub(crate) fn install_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result
     write_codex_config_trust(
         &paths.config_path,
         CodexTrustUpdate {
-            remove_keys: stale_trust_keys,
+            remove_keys: stale_trust.remove_keys,
+            move_keys: stale_trust.move_keys,
             install: trust_installs,
         },
     )?;
@@ -142,7 +155,7 @@ pub(crate) fn install_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result
     Ok(())
 }
 
-pub(crate) fn uninstall_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result<()> {
+pub(crate) fn uninstall_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result<bool> {
     let target = CodexHookTarget::parse(agent)?;
     let paths = codex_hook_paths(false)?;
     if !paths.hooks_path.exists() && !paths.config_path.exists() {
@@ -154,7 +167,7 @@ pub(crate) fn uninstall_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Resu
             ctx.ui
                 .print_dim(&format!("  Config: {}", paths.config_path.display()));
         }
-        return Ok(());
+        return Ok(false);
     }
 
     let mut hooks = read_codex_hooks(&paths.hooks_path)?;
@@ -164,20 +177,21 @@ pub(crate) fn uninstall_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Resu
             CodexRemoveTarget::Command(managed_codex_hook_command(agent.as_str()))
         }
     };
-    let trust_keys = remove_managed_codex_hook(&mut hooks, &paths, remove_target)?;
+    let trust_update = remove_managed_codex_hook(&mut hooks, &paths, remove_target)?;
     write_codex_hooks(&paths.hooks_path, &hooks)?;
     if paths.config_path.exists() {
         write_codex_config_trust(
             &paths.config_path,
             CodexTrustUpdate {
-                remove_keys: trust_keys.clone(),
+                remove_keys: trust_update.remove_keys.clone(),
+                move_keys: trust_update.move_keys.clone(),
                 install: Vec::new(),
             },
         )?;
     }
 
     if !ctx.quiet {
-        let status = if trust_keys.is_empty() {
+        let status = if trust_update.remove_keys.is_empty() {
             "not installed"
         } else {
             "uninstalled"
@@ -190,7 +204,7 @@ pub(crate) fn uninstall_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Resu
             .print_dim(&format!("  Config: {}", paths.config_path.display()));
     }
 
-    Ok(())
+    Ok(!trust_update.remove_keys.is_empty())
 }
 
 pub(crate) fn codex_dispatcher_installed() -> Result<bool> {
@@ -237,15 +251,15 @@ pub(crate) fn codex_dispatcher_installed() -> Result<bool> {
     }))
 }
 
-pub(crate) fn codex_dispatcher_hook_present() -> Result<bool> {
+pub(crate) fn codex_wt_managed_hook_present() -> Result<bool> {
     let paths = codex_hook_paths(false)?;
     if !paths.hooks_path.exists() {
         return Ok(false);
     }
     let hooks = read_codex_hooks(&paths.hooks_path)?;
-    Ok(codex_has_command_for_all_events(
+    Ok(codex_any_command_matches(
         &hooks,
-        &managed_codex_dispatcher_command(),
+        is_wt_managed_codex_command,
     ))
 }
 
@@ -259,8 +273,20 @@ struct CodexTrustInstall {
     trusted_hash: String,
 }
 
+#[derive(Clone)]
+struct CodexTrustMove {
+    from: String,
+    to: String,
+}
+
+struct CodexTrustRemoval {
+    remove_keys: Vec<String>,
+    move_keys: Vec<CodexTrustMove>,
+}
+
 struct CodexTrustUpdate {
     remove_keys: Vec<String>,
+    move_keys: Vec<CodexTrustMove>,
     install: Vec<CodexTrustInstall>,
 }
 
@@ -505,23 +531,23 @@ fn install_managed_codex_hook(hooks: &mut Value, command: &str) -> Result<()> {
     Ok(())
 }
 
-fn codex_has_command_for_all_events(hooks: &Value, command: &str) -> bool {
-    CODEX_HOOK_EVENTS.iter().all(|(event_name, _)| {
-        hooks
-            .get("hooks")
-            .and_then(|hooks| hooks.get(*event_name))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|entry| {
-                entry
-                    .get("hooks")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .any(|hook| is_managed_command(hook, command))
-            })
-    })
+fn codex_any_command_matches(hooks: &Value, predicate: fn(&str) -> bool) -> bool {
+    hooks
+        .get("hooks")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|events| events.values())
+        .filter_map(Value::as_array)
+        .flatten()
+        .flat_map(|entry| {
+            entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(|hook| hook.get("command").and_then(Value::as_str))
+        .any(predicate)
 }
 
 fn codex_remove_target_matches(target: &CodexRemoveTarget, hook: &Value) -> bool {
@@ -538,16 +564,22 @@ fn remove_managed_codex_hook(
     hooks: &mut Value,
     paths: &CodexHookPaths,
     target: CodexRemoveTarget,
-) -> Result<Vec<String>> {
+) -> Result<CodexTrustRemoval> {
     let root = codex_hooks_object(hooks)?;
     let Some(events_value) = root.get_mut("hooks") else {
-        return Ok(Vec::new());
+        return Ok(CodexTrustRemoval {
+            remove_keys: Vec::new(),
+            move_keys: Vec::new(),
+        });
     };
     let Some(events) = events_value.as_object_mut() else {
         bail!("Cannot update Codex hooks file: `hooks` must be a JSON object.");
     };
 
-    let mut removed_keys = Vec::new();
+    let mut trust = CodexTrustRemoval {
+        remove_keys: Vec::new(),
+        move_keys: Vec::new(),
+    };
     let mut empty_events = Vec::new();
     for &(event_name, event_key) in CODEX_HOOK_EVENTS {
         let Some(event_value) = events.get_mut(event_name) else {
@@ -559,13 +591,15 @@ fn remove_managed_codex_hook(
 
         let mut kept = Vec::with_capacity(event_entries.len());
         for (group_index, mut entry) in std::mem::take(event_entries).into_iter().enumerate() {
+            let next_group_index = kept.len();
             let removed = remove_codex_command_from_event_entry(
                 &mut entry,
                 paths,
                 event_key,
                 &target,
                 group_index,
-                &mut removed_keys,
+                next_group_index,
+                &mut trust,
             )?;
             if !(removed > 0 && event_entry_has_no_hooks(&entry)) {
                 kept.push(entry);
@@ -585,7 +619,7 @@ fn remove_managed_codex_hook(
         root.remove("hooks");
     }
 
-    Ok(removed_keys)
+    Ok(trust)
 }
 
 fn remove_codex_command_from_event_entry(
@@ -594,7 +628,8 @@ fn remove_codex_command_from_event_entry(
     event_key: &str,
     target: &CodexRemoveTarget,
     group_index: usize,
-    removed_keys: &mut Vec<String>,
+    next_group_index: usize,
+    trust: &mut CodexTrustRemoval,
 ) -> Result<usize> {
     let Some(entry) = entry.as_object_mut() else {
         bail!("Cannot update Codex hooks file: hook event entries must be JSON objects.");
@@ -609,15 +644,19 @@ fn remove_codex_command_from_event_entry(
     let mut removed = 0;
     let mut kept = Vec::with_capacity(hooks.len());
     for (handler_index, hook) in std::mem::take(hooks).into_iter().enumerate() {
+        let old_key = codex_trust_key(paths, event_key, group_index, handler_index);
         if codex_remove_target_matches(target, &hook) {
             removed += 1;
-            removed_keys.push(codex_trust_key(
-                paths,
-                event_key,
-                group_index,
-                handler_index,
-            ));
+            trust.remove_keys.push(old_key);
         } else {
+            let next_handler_index = kept.len();
+            let new_key = codex_trust_key(paths, event_key, next_group_index, next_handler_index);
+            if old_key != new_key {
+                trust.move_keys.push(CodexTrustMove {
+                    from: old_key,
+                    to: new_key,
+                });
+            }
             kept.push(hook);
         }
     }
@@ -709,6 +748,9 @@ fn write_codex_config_trust(path: &Path, update: CodexTrustUpdate) -> Result<()>
     for key in &update.remove_keys {
         remove_codex_trust_key(&mut document, key);
     }
+    for move_key in &update.move_keys {
+        move_codex_trust_key(&mut document, &move_key.from, &move_key.to);
+    }
 
     if !update.install.is_empty() {
         ensure_codex_hooks_feature(&mut document)?;
@@ -790,6 +832,24 @@ fn remove_codex_trust_key(document: &mut DocumentMut, key: &str) {
     state.remove(key);
 }
 
+fn move_codex_trust_key(document: &mut DocumentMut, from: &str, to: &str) {
+    if from == to {
+        return;
+    }
+    let Some(hooks) = document.get_mut("hooks").and_then(Item::as_table_like_mut) else {
+        return;
+    };
+    let Some(state) = hooks.get_mut("state").and_then(Item::as_table_like_mut) else {
+        return;
+    };
+    let Some(item) = state.remove(from) else {
+        return;
+    };
+    if state.get(to).is_none() {
+        state.insert(to, item);
+    }
+}
+
 fn set_codex_trust_key(document: &mut DocumentMut, key: &str, trusted_hash: &str) -> Result<()> {
     let Some(hooks) = document["hooks"].as_table_like_mut() else {
         bail!("Cannot update Codex config: `hooks` must be a TOML table.");
@@ -858,6 +918,25 @@ fn claude_has_command_for_all_events(settings: &Value, command: &str) -> bool {
                     .any(|hook| is_managed_command(hook, command))
             })
     })
+}
+
+fn claude_any_command_matches(settings: &Value, predicate: fn(&str) -> bool) -> bool {
+    settings
+        .get("hooks")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|events| events.values())
+        .filter_map(Value::as_array)
+        .flatten()
+        .flat_map(|entry| {
+            entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(|hook| hook.get("command").and_then(Value::as_str))
+        .any(predicate)
 }
 
 fn remove_managed_claude_hook(settings: &mut Value, target: ClaudeRemoveTarget) -> Result<usize> {
