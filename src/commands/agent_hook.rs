@@ -809,7 +809,7 @@ fn write_codex_config_trust(path: &Path, update: CodexTrustUpdate) -> Result<()>
         .with_context(|| format!("Failed to write Codex config: {}", path.display()))
 }
 
-fn validate_codex_config_for_trust(path: &Path) -> Result<()> {
+pub(crate) fn validate_codex_config_for_trust(path: &Path) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }

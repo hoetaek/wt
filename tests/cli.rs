@@ -4813,10 +4813,47 @@ fn setup_dry_run_writes_nothing() {
         .args(["-C", temp.path().to_str().unwrap(), "setup", "--dry-run"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("Setup plan"))
+        .stdout(predicate::str::contains("Target files:"))
+        .stdout(predicate::str::contains("Planned actions:"))
+        .stdout(predicate::str::contains(
+            "Summary: dry run only; no files will be changed.",
+        ))
         .stdout(predicate::str::contains("dry run complete"));
 
     assert!(!home.join(".claude/settings.json").exists());
     assert!(!codex_home.exists());
+    assert!(!zdotdir.join(".zshrc").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_malformed_codex_config_fails_before_writing_any_step() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let zdotdir = temp.path().join("zdot");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(codex_home.join("config.toml"), "[hooks.state.\n").unwrap();
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+    write_fake_agent(temp.path(), "codex");
+
+    wt_command()
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["setup", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Failed to parse Codex config TOML",
+        ));
+
+    assert!(!home.join(".claude/settings.json").exists());
+    assert!(!codex_home.join("hooks.json").exists());
     assert!(!zdotdir.join(".zshrc").exists());
 }
 
@@ -4863,7 +4900,7 @@ fn setup_skips_completion_for_homebrew_install_source() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Homebrew-managed wt detected; completion provided by formula. Skipping.",
+            "Shell completion: skip - Homebrew-managed wt detected; completion provided by formula",
         ));
 
     let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
@@ -4901,8 +4938,11 @@ fn setup_remove_removes_completion_for_homebrew_install_source() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Shell integration removed"))
-        .stdout(predicate::str::contains("Shell completion removed"));
+        .stdout(predicate::str::contains(
+            "Setup removal complete: 2 step(s) changed",
+        ))
+        .stdout(predicate::str::contains("- Shell integration"))
+        .stdout(predicate::str::contains("- Shell completion"));
 
     let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
     assert!(!zshrc.contains("eval \"$(wt shell-init zsh)\""));
@@ -4926,7 +4966,11 @@ fn setup_installs_completion_for_explicit_non_homebrew_wt_path() {
         .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Shell completion added"));
+        .stdout(predicate::str::contains("Shell completion: install"))
+        .stdout(predicate::str::contains(
+            "Setup complete: 4 step(s) changed",
+        ))
+        .stdout(predicate::str::contains("- Shell completion"));
 
     let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
     assert!(zshrc.contains("eval \"$(wt shell-init zsh)\""));
@@ -4951,6 +4995,9 @@ fn setup_dry_run_succeeds_outside_git_repo() {
         .args(["setup", "--dry-run"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("Setup plan"))
+        .stdout(predicate::str::contains("Target files:"))
+        .stdout(predicate::str::contains("Planned actions:"))
         .stdout(predicate::str::contains(
             "Setup dry run complete: no files changed",
         ));
@@ -4978,8 +5025,11 @@ fn setup_yes_succeeds_outside_git_repo() {
         .args(["setup", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Shell integration added"))
-        .stdout(predicate::str::contains("Shell completion added"))
+        .stdout(predicate::str::contains("Shell integration: install"))
+        .stdout(predicate::str::contains("Shell completion: install"))
+        .stdout(predicate::str::contains(
+            "Setup complete: 2 step(s) changed",
+        ))
         .stdout(predicate::str::contains(
             "Next: run `wt init` inside a git repo.",
         ));
@@ -5009,10 +5059,14 @@ fn setup_remove_yes_succeeds_outside_git_repo() {
         .args(["setup", "--remove", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Claude hooks: already absent"))
-        .stdout(predicate::str::contains("Codex hooks: already absent"))
         .stdout(predicate::str::contains(
-            "Shell integration: already absent",
+            "Claude hooks: none - already absent",
+        ))
+        .stdout(predicate::str::contains(
+            "Codex hooks: none - already absent",
+        ))
+        .stdout(predicate::str::contains(
+            "Shell integration: none - already absent",
         ));
 
     assert!(!home.join(".claude/settings.json").exists());

@@ -2,6 +2,7 @@ use crate::cli::ShellInitShell;
 use crate::commands::agent_hook;
 use crate::context::MachineCtx;
 use anyhow::{Context, Result};
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,88 @@ pub struct SetupOptions {
 
 #[derive(Default)]
 struct SetupSummary {
-    changed: usize,
+    changed_steps: Vec<String>,
+    skipped_steps: Vec<String>,
+}
+
+struct SetupPlan {
+    mode: SetupMode,
+    steps: Vec<SetupStepPlan>,
+    notices: Vec<SetupNotice>,
+}
+
+#[derive(Clone, Copy)]
+enum SetupMode {
+    Install,
+    Remove,
+}
+
+impl SetupMode {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+struct SetupStepPlan {
+    label: &'static str,
+    targets: Vec<PathBuf>,
+    action: SetupAction,
+    status: String,
+    notices: Vec<SetupNotice>,
+    prompt: Option<String>,
+    operation: SetupOperation,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SetupAction {
+    Install,
+    Remove,
+    Repair,
+    Skip,
+    None,
+}
+
+impl SetupAction {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Remove => "remove",
+            Self::Repair => "repair",
+            Self::Skip => "skip",
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SetupNotice {
+    level: SetupNoticeLevel,
+    message: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SetupNoticeLevel {
+    Notice,
+    Warning,
+}
+
+enum SetupOperation {
+    InstallClaudeHooks,
+    RemoveClaudeHooks,
+    InstallCodexHooks,
+    RemoveCodexHooks,
+    AddLine { path: PathBuf, line: String },
+    RemoveLine { path: PathBuf, line: String },
+    Noop,
+}
+
+impl SetupOperation {
+    fn is_applyable(&self) -> bool {
+        !matches!(self, Self::Noop)
+    }
 }
 
 pub fn run(ctx: &MachineCtx<'_>, options: SetupOptions) -> Result<()> {
@@ -27,204 +109,290 @@ pub fn run(ctx: &MachineCtx<'_>, options: SetupOptions) -> Result<()> {
         });
     }
 
-    let mut summary = SetupSummary::default();
-    step_claude_hooks(ctx, options, &mut summary)?;
-    step_codex_hooks(ctx, options, &mut summary)?;
-    let shell_target = step_shell_integration(ctx, options, &mut summary)?;
-    step_shell_completion(ctx, options, shell_target.as_ref(), &mut summary)?;
+    let plan = build_setup_plan(ctx, options)?;
+    print_setup_plan(ctx, options, &plan);
+
+    if options.dry_run {
+        print_summary(ctx, options, &SetupSummary::default());
+        return Ok(());
+    }
+
+    let summary = apply_setup_plan(ctx, options, &plan)?;
     print_summary(ctx, options, &summary);
     Ok(())
 }
 
-fn step_claude_hooks(
-    ctx: &MachineCtx<'_>,
-    options: SetupOptions,
-    summary: &mut SetupSummary,
-) -> Result<()> {
-    if options.remove {
-        let installed = agent_hook::claude_wt_managed_hook_present()?;
-        let settings_path = agent_hook::claude_settings_path(false)?;
-        if !installed {
-            ctx.ui.print_step("Claude hooks: already absent");
-            return Ok(());
-        }
-        if options.dry_run {
-            ctx.ui.print_step(&format!(
-                "Claude hooks: would remove wt-managed entries from {}",
-                settings_path.display()
-            ));
-            return Ok(());
-        }
-        let prompt = format!(
-            "Remove wt-managed Claude hooks from {}?",
-            settings_path.display()
-        );
-        if should_apply(ctx, options, &prompt)? {
-            if agent_hook::uninstall_claude(ctx, None)? {
-                summary.changed += 1;
-            }
+fn build_setup_plan(ctx: &MachineCtx<'_>, options: SetupOptions) -> Result<SetupPlan> {
+    let mut notices = Vec::new();
+    let mut steps = Vec::new();
+
+    steps.push(plan_claude_hooks(ctx, options)?);
+    steps.push(plan_codex_hooks(ctx, options)?);
+    let shell_target = plan_shell_target(ctx, options, &mut notices)?;
+    steps.push(plan_shell_integration(options, shell_target.as_ref())?);
+    steps.push(plan_shell_completion(ctx, options, shell_target.as_ref())?);
+
+    Ok(SetupPlan {
+        mode: if options.remove {
+            SetupMode::Remove
         } else {
-            ctx.ui.print_step("Claude hooks: skipped");
+            SetupMode::Install
+        },
+        steps,
+        notices,
+    })
+}
+
+fn plan_claude_hooks(ctx: &MachineCtx<'_>, options: SetupOptions) -> Result<SetupStepPlan> {
+    if options.remove {
+        let settings_path = agent_hook::claude_settings_path(false)?;
+        let installed = agent_hook::claude_wt_managed_hook_present()?;
+        if !installed {
+            return Ok(noop_step(
+                "Claude hooks",
+                vec![settings_path],
+                "already absent",
+            ));
         }
-        return Ok(());
+        return Ok(SetupStepPlan {
+            label: "Claude hooks",
+            targets: vec![settings_path.clone()],
+            action: SetupAction::Remove,
+            status: "remove wt-managed hook entries".into(),
+            notices: Vec::new(),
+            prompt: Some(format!(
+                "Remove wt-managed Claude hooks from {}?",
+                settings_path.display()
+            )),
+            operation: SetupOperation::RemoveClaudeHooks,
+        });
     }
 
     if !ctx.runner.has_command("claude") {
-        ctx.ui
-            .print_dim("Claude hooks: claude CLI not found on PATH; skipping.");
-        return Ok(());
+        return Ok(SetupStepPlan {
+            label: "Claude hooks",
+            targets: Vec::new(),
+            action: SetupAction::Skip,
+            status: "claude CLI not found on PATH".into(),
+            notices: Vec::new(),
+            prompt: None,
+            operation: SetupOperation::Noop,
+        });
     }
-    let installed = agent_hook::claude_dispatcher_installed()?;
+
     let settings_path = agent_hook::claude_settings_path(false)?;
-    if installed {
-        ctx.ui.print_step("Claude hooks: already installed");
-        return Ok(());
-    }
-    if options.dry_run {
-        ctx.ui.print_step(&format!(
-            "Claude hooks: would install wt-managed entries in {}",
-            settings_path.display()
+    if agent_hook::claude_dispatcher_installed()? {
+        return Ok(noop_step(
+            "Claude hooks",
+            vec![settings_path],
+            "already installed",
         ));
-        return Ok(());
     }
-    let prompt = format!(
-        "Install wt-managed Claude hooks in {}?",
-        settings_path.display()
-    );
-    if should_apply(ctx, options, &prompt)? {
-        agent_hook::install_claude(ctx, None)?;
-        summary.changed += 1;
+
+    let action = if agent_hook::claude_wt_managed_hook_present()? {
+        SetupAction::Repair
     } else {
-        ctx.ui.print_step("Claude hooks: skipped");
-    }
-    Ok(())
+        SetupAction::Install
+    };
+    let status = if action == SetupAction::Repair {
+        "replace partial/stale wt-managed hook entries"
+    } else {
+        "install wt-managed inbox hooks"
+    };
+
+    Ok(SetupStepPlan {
+        label: "Claude hooks",
+        targets: vec![settings_path.clone()],
+        action,
+        status: status.into(),
+        notices: Vec::new(),
+        prompt: Some(format!(
+            "Install wt-managed Claude hooks in {}?",
+            settings_path.display()
+        )),
+        operation: SetupOperation::InstallClaudeHooks,
+    })
 }
 
-fn step_codex_hooks(
-    ctx: &MachineCtx<'_>,
-    options: SetupOptions,
-    summary: &mut SetupSummary,
-) -> Result<()> {
+fn plan_codex_hooks(ctx: &MachineCtx<'_>, options: SetupOptions) -> Result<SetupStepPlan> {
     if options.remove {
-        let installed = agent_hook::codex_wt_managed_hook_or_trust_present()?;
         let codex_home = agent_hook::codex_home_dir()?;
         let hooks_path = codex_home.join("hooks.json");
+        let config_path = codex_home.join("config.toml");
+        let installed = agent_hook::codex_wt_managed_hook_or_trust_present()?;
         if !installed {
-            ctx.ui.print_step("Codex hooks: already absent");
-            return Ok(());
-        }
-        if options.dry_run {
-            ctx.ui.print_step(&format!(
-                "Codex hooks: would remove wt-managed entries from {}",
-                hooks_path.display()
+            return Ok(noop_step(
+                "Codex hooks",
+                vec![hooks_path, config_path],
+                "already absent",
             ));
-            return Ok(());
         }
-        let prompt = format!(
-            "Remove wt-managed Codex hooks from {}?",
-            hooks_path.display()
-        );
-        if should_apply(ctx, options, &prompt)? {
-            if agent_hook::uninstall_codex(ctx, None)? {
-                summary.changed += 1;
-            }
-        } else {
-            ctx.ui.print_step("Codex hooks: skipped");
-        }
-        return Ok(());
+        agent_hook::validate_codex_config_for_trust(&config_path)?;
+        return Ok(SetupStepPlan {
+            label: "Codex hooks",
+            targets: vec![hooks_path.clone(), config_path],
+            action: SetupAction::Remove,
+            status: "remove wt-managed hook entries and trust state".into(),
+            notices: Vec::new(),
+            prompt: Some(format!(
+                "Remove wt-managed Codex hooks from {}?",
+                hooks_path.display()
+            )),
+            operation: SetupOperation::RemoveCodexHooks,
+        });
     }
 
     if !ctx.runner.has_command("codex") {
-        ctx.ui
-            .print_dim("Codex hooks: codex CLI not found on PATH; skipping.");
-        return Ok(());
+        return Ok(SetupStepPlan {
+            label: "Codex hooks",
+            targets: Vec::new(),
+            action: SetupAction::Skip,
+            status: "codex CLI not found on PATH".into(),
+            notices: Vec::new(),
+            prompt: None,
+            operation: SetupOperation::Noop,
+        });
     }
-    let installed = agent_hook::codex_dispatcher_installed()?;
+
     let codex_home = agent_hook::codex_home_dir()?;
     let hooks_path = codex_home.join("hooks.json");
-    if installed {
-        ctx.ui.print_step("Codex hooks: already installed");
-        return Ok(());
-    }
-    if options.dry_run {
-        ctx.ui.print_step(&format!(
-            "Codex hooks: would install wt-managed entries in {}",
-            hooks_path.display()
+    let config_path = codex_home.join("config.toml");
+    agent_hook::validate_codex_config_for_trust(&config_path)?;
+    if agent_hook::codex_dispatcher_installed()? {
+        return Ok(noop_step(
+            "Codex hooks",
+            vec![hooks_path, config_path],
+            "already installed",
         ));
-        return Ok(());
     }
-    let prompt = format!(
-        "Install wt-managed Codex hooks in {}?",
-        hooks_path.display()
-    );
-    if should_apply(ctx, options, &prompt)? {
-        agent_hook::install_codex(ctx, None)?;
-        summary.changed += 1;
+
+    let action = if agent_hook::codex_wt_managed_hook_or_trust_present()? {
+        SetupAction::Repair
     } else {
-        ctx.ui.print_step("Codex hooks: skipped");
-    }
-    Ok(())
+        SetupAction::Install
+    };
+    let status = if action == SetupAction::Repair {
+        "replace partial/stale wt-managed hooks and trust state"
+    } else {
+        "install wt-managed inbox hooks and trust state"
+    };
+
+    Ok(SetupStepPlan {
+        label: "Codex hooks",
+        targets: vec![hooks_path.clone(), config_path],
+        action,
+        status: status.into(),
+        notices: Vec::new(),
+        prompt: Some(format!(
+            "Install wt-managed Codex hooks in {}?",
+            hooks_path.display()
+        )),
+        operation: SetupOperation::InstallCodexHooks,
+    })
 }
 
-fn step_shell_integration(
+fn plan_shell_target(
     ctx: &MachineCtx<'_>,
     options: SetupOptions,
-    summary: &mut SetupSummary,
+    notices: &mut Vec<SetupNotice>,
 ) -> Result<Option<ShellTarget>> {
     let Some(mut target) = resolve_shell_target()? else {
-        if options.remove {
-            ctx.ui
-                .print_step("Shell integration: supported shell not detected; no rc file target");
-        } else {
-            print_manual_shell_instructions(ctx);
-        }
         return Ok(None);
     };
-    maybe_retarget_macos_bash(ctx, options, &mut target)?;
-
-    let line = shell_integration_line(target.shell);
-    apply_line_step(
-        ctx,
-        options,
-        summary,
-        LineStep {
-            label: "Shell integration",
-            path: target.rc_path.clone(),
-            line,
-            add_prompt: line_add_prompt,
-            remove_prompt: line_remove_prompt,
-        },
-    )?;
+    notices.extend(maybe_retarget_macos_bash(ctx, options, &mut target)?);
     Ok(Some(target))
 }
 
-fn step_shell_completion(
+fn plan_shell_integration(
+    options: SetupOptions,
+    shell_target: Option<&ShellTarget>,
+) -> Result<SetupStepPlan> {
+    let Some(target) = shell_target else {
+        if options.remove {
+            return Ok(noop_step(
+                "Shell integration",
+                Vec::new(),
+                "supported shell not detected; no rc file target",
+            ));
+        }
+        return Ok(SetupStepPlan {
+            label: "Shell integration",
+            targets: Vec::new(),
+            action: SetupAction::Skip,
+            status: "supported shell not detected; add the eval line manually".into(),
+            notices: vec![
+                warning(
+                    "Supported login shell not detected. Add the wt shell integration eval line to your shell rc manually.",
+                ),
+                notice("zsh:  eval \"$(wt shell-init zsh)\""),
+                notice("bash: eval \"$(wt shell-init bash)\""),
+            ],
+            prompt: None,
+            operation: SetupOperation::Noop,
+        });
+    };
+
+    plan_line_step(
+        LineStep {
+            label: "Shell integration",
+            path: target.rc_path.clone(),
+            line: shell_integration_line(target.shell),
+            add_prompt: line_add_prompt,
+            remove_prompt: line_remove_prompt,
+        },
+        options,
+    )
+}
+
+fn plan_shell_completion(
     ctx: &MachineCtx<'_>,
     options: SetupOptions,
     shell_target: Option<&ShellTarget>,
-    summary: &mut SetupSummary,
-) -> Result<()> {
+) -> Result<SetupStepPlan> {
     let source = detect_wt_install_source(ctx)?;
     if source == InstallSource::Homebrew && !options.remove {
-        ctx.ui
-            .print_step("Homebrew-managed wt detected; completion provided by formula. Skipping.");
-        return Ok(());
+        let targets = shell_target
+            .map(|target| vec![target.rc_path.clone()])
+            .unwrap_or_default();
+        return Ok(SetupStepPlan {
+            label: "Shell completion",
+            targets,
+            action: SetupAction::Skip,
+            status: "Homebrew-managed wt detected; completion provided by formula".into(),
+            notices: Vec::new(),
+            prompt: None,
+            operation: SetupOperation::Noop,
+        });
     }
 
     let Some(target) = shell_target else {
         if options.remove {
-            ctx.ui
-                .print_step("Shell completion: supported shell not detected; no rc file target");
-        } else {
-            print_manual_completion_instructions(ctx);
+            return Ok(noop_step(
+                "Shell completion",
+                Vec::new(),
+                "supported shell not detected; no rc file target",
+            ));
         }
-        return Ok(());
+        return Ok(SetupStepPlan {
+            label: "Shell completion",
+            targets: Vec::new(),
+            action: SetupAction::Skip,
+            status:
+                "supported shell not detected; add the completion eval line manually if desired"
+                    .into(),
+            notices: vec![
+                warning(
+                    "Supported login shell not detected. Add the wt completion eval line to your shell rc manually if desired.",
+                ),
+                notice("zsh:  eval \"$(wt completion zsh)\""),
+                notice("bash: eval \"$(wt completion bash)\""),
+            ],
+            prompt: None,
+            operation: SetupOperation::Noop,
+        });
     };
 
-    apply_line_step(
-        ctx,
-        options,
-        summary,
+    plan_line_step(
         LineStep {
             label: "Shell completion",
             path: target.rc_path.clone(),
@@ -232,6 +400,7 @@ fn step_shell_completion(
             add_prompt: completion_add_prompt,
             remove_prompt: line_remove_prompt,
         },
+        options,
     )
 }
 
@@ -243,67 +412,229 @@ struct LineStep {
     remove_prompt: fn(&Path, &str, bool) -> String,
 }
 
-fn apply_line_step(
-    ctx: &MachineCtx<'_>,
-    options: SetupOptions,
-    summary: &mut SetupSummary,
-    step: LineStep,
-) -> Result<()> {
+fn plan_line_step(step: LineStep, options: SetupOptions) -> Result<SetupStepPlan> {
     let exists = step.path.exists();
     let present = line_present(&step.path, &step.line)?;
 
     if options.remove {
         if !present {
-            ctx.ui
-                .print_step(&format!("{}: already absent", step.label));
-            return Ok(());
+            return Ok(noop_step(step.label, vec![step.path], "already absent"));
         }
-        if options.dry_run {
-            ctx.ui.print_step(&format!(
-                "{}: would remove `{}` from {}",
-                step.label,
-                step.line,
-                step.path.display()
-            ));
-            return Ok(());
-        }
-        let prompt = (step.remove_prompt)(&step.path, &step.line, exists);
-        if should_apply(ctx, options, &prompt)? {
-            remove_exact_line(&step.path, &step.line)?;
-            ctx.ui
-                .print_step(&format!("{} removed: {}", step.label, step.path.display()));
-            summary.changed += 1;
-        } else {
-            ctx.ui.print_step(&format!("{}: skipped", step.label));
-        }
-        return Ok(());
+        return Ok(SetupStepPlan {
+            label: step.label,
+            targets: vec![step.path.clone()],
+            action: SetupAction::Remove,
+            status: format!("remove `{}`", step.line),
+            notices: Vec::new(),
+            prompt: Some((step.remove_prompt)(&step.path, &step.line, exists)),
+            operation: SetupOperation::RemoveLine {
+                path: step.path,
+                line: step.line,
+            },
+        });
     }
 
     if present {
-        ctx.ui
-            .print_step(&format!("{}: already installed", step.label));
-        return Ok(());
+        return Ok(noop_step(step.label, vec![step.path], "already installed"));
     }
-    if options.dry_run {
-        let action = if exists { "would add" } else { "would create" };
-        ctx.ui.print_step(&format!(
-            "{}: {action} `{}` in {}",
-            step.label,
-            step.line,
-            step.path.display()
-        ));
-        return Ok(());
-    }
-    let prompt = (step.add_prompt)(&step.path, &step.line, exists);
-    if should_apply(ctx, options, &prompt)? {
-        append_exact_line(&step.path, &step.line)?;
-        ctx.ui
-            .print_step(&format!("{} added: {}", step.label, step.path.display()));
-        summary.changed += 1;
+
+    let status = if exists {
+        format!("add `{}`", step.line)
     } else {
-        ctx.ui.print_step(&format!("{}: skipped", step.label));
+        format!("create file and add `{}`", step.line)
+    };
+    Ok(SetupStepPlan {
+        label: step.label,
+        targets: vec![step.path.clone()],
+        action: SetupAction::Install,
+        status,
+        notices: Vec::new(),
+        prompt: Some((step.add_prompt)(&step.path, &step.line, exists)),
+        operation: SetupOperation::AddLine {
+            path: step.path,
+            line: step.line,
+        },
+    })
+}
+
+fn noop_step(
+    label: &'static str,
+    targets: Vec<PathBuf>,
+    status: impl Into<String>,
+) -> SetupStepPlan {
+    SetupStepPlan {
+        label,
+        targets,
+        action: SetupAction::None,
+        status: status.into(),
+        notices: Vec::new(),
+        prompt: None,
+        operation: SetupOperation::Noop,
     }
-    Ok(())
+}
+
+fn notice(message: impl Into<String>) -> SetupNotice {
+    SetupNotice {
+        level: SetupNoticeLevel::Notice,
+        message: message.into(),
+    }
+}
+
+fn warning(message: impl Into<String>) -> SetupNotice {
+    SetupNotice {
+        level: SetupNoticeLevel::Warning,
+        message: message.into(),
+    }
+}
+
+fn print_setup_plan(ctx: &MachineCtx<'_>, options: SetupOptions, plan: &SetupPlan) {
+    if ctx.quiet {
+        return;
+    }
+
+    ctx.ui.print_step("Setup plan");
+    for line in render_setup_plan(options, plan) {
+        ctx.ui.print_dim(&format!("  {line}"));
+    }
+}
+
+fn render_setup_plan(options: SetupOptions, plan: &SetupPlan) -> Vec<String> {
+    let mut lines = vec![
+        format!("Mode: {}", plan.mode.name()),
+        "Target files:".into(),
+    ];
+
+    let target_files = target_files(plan);
+    if target_files.is_empty() {
+        lines.push("  - none detected".into());
+    } else {
+        lines.extend(
+            target_files
+                .into_iter()
+                .map(|target| format!("  - {}", target.display())),
+        );
+    }
+
+    lines.push(String::new());
+    lines.push("Planned actions:".into());
+    for step in &plan.steps {
+        lines.push(format!(
+            "  - {}: {} - {}",
+            step.label,
+            step.action.name(),
+            step.status
+        ));
+        for target in &step.targets {
+            lines.push(format!("    target: {}", target.display()));
+        }
+    }
+
+    let notices = all_notices(plan, SetupNoticeLevel::Notice);
+    let warnings = all_notices(plan, SetupNoticeLevel::Warning);
+    if !notices.is_empty() {
+        lines.push(String::new());
+        lines.push("Notices:".into());
+        lines.extend(notices.into_iter().map(|message| format!("  - {message}")));
+    }
+    if !warnings.is_empty() {
+        lines.push(String::new());
+        lines.push("Warnings:".into());
+        lines.extend(warnings.into_iter().map(|message| format!("  - {message}")));
+    }
+
+    lines.push(String::new());
+    if options.dry_run {
+        lines.push("Summary: dry run only; no files will be changed.".into());
+    } else if options.yes {
+        lines.push("Summary: planned write steps will be applied without prompts.".into());
+    } else {
+        lines.push("Summary: write steps will ask before changing files; default is No.".into());
+    }
+
+    lines
+}
+
+fn target_files(plan: &SetupPlan) -> Vec<PathBuf> {
+    let mut seen = BTreeSet::new();
+    let mut targets = Vec::new();
+    for step in &plan.steps {
+        for target in &step.targets {
+            let key = target.display().to_string();
+            if seen.insert(key) {
+                targets.push(target.clone());
+            }
+        }
+    }
+    targets
+}
+
+fn all_notices(plan: &SetupPlan, level: SetupNoticeLevel) -> Vec<String> {
+    plan.notices
+        .iter()
+        .chain(plan.steps.iter().flat_map(|step| step.notices.iter()))
+        .filter(|notice| notice.level == level)
+        .map(|notice| notice.message.clone())
+        .collect()
+}
+
+fn apply_setup_plan(
+    ctx: &MachineCtx<'_>,
+    options: SetupOptions,
+    plan: &SetupPlan,
+) -> Result<SetupSummary> {
+    let mut summary = SetupSummary::default();
+    for step in &plan.steps {
+        if !step.operation.is_applyable() {
+            continue;
+        }
+
+        let apply = if options.yes {
+            true
+        } else {
+            let prompt = step.prompt.as_deref().unwrap_or(step.label);
+            ctx.ui.confirm(prompt, false)?
+        };
+        if !apply {
+            summary.skipped_steps.push(step.label.to_string());
+            continue;
+        }
+
+        if apply_setup_operation(ctx, &step.operation)? {
+            summary.changed_steps.push(step.label.to_string());
+        }
+    }
+
+    Ok(summary)
+}
+
+fn apply_setup_operation(ctx: &MachineCtx<'_>, operation: &SetupOperation) -> Result<bool> {
+    match operation {
+        SetupOperation::InstallClaudeHooks => {
+            agent_hook::install_claude(ctx, None)?;
+            Ok(true)
+        }
+        SetupOperation::RemoveClaudeHooks => agent_hook::uninstall_claude(ctx, None),
+        SetupOperation::InstallCodexHooks => {
+            agent_hook::install_codex(ctx, None)?;
+            Ok(true)
+        }
+        SetupOperation::RemoveCodexHooks => agent_hook::uninstall_codex(ctx, None),
+        SetupOperation::AddLine { path, line } => {
+            if line_present(path, line)? {
+                return Ok(false);
+            }
+            append_exact_line(path, line)?;
+            Ok(true)
+        }
+        SetupOperation::RemoveLine { path, line } => {
+            if !line_present(path, line)? {
+                return Ok(false);
+            }
+            remove_exact_line(path, line)?;
+            Ok(true)
+        }
+        SetupOperation::Noop => Ok(false),
+    }
 }
 
 fn line_add_prompt(path: &Path, line: &str, exists: bool) -> String {
@@ -324,13 +655,6 @@ fn completion_add_prompt(path: &Path, line: &str, exists: bool) -> String {
 
 fn line_remove_prompt(path: &Path, line: &str, _exists: bool) -> String {
     format!("Remove '{line}' from {}?", path.display())
-}
-
-fn should_apply(ctx: &MachineCtx<'_>, options: SetupOptions, prompt: &str) -> Result<bool> {
-    if options.yes {
-        return Ok(true);
-    }
-    ctx.ui.confirm(prompt, false)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -372,7 +696,7 @@ fn maybe_retarget_macos_bash(
     ctx: &MachineCtx<'_>,
     options: SetupOptions,
     target: &mut ShellTarget,
-) -> Result<()> {
+) -> Result<Vec<SetupNotice>> {
     maybe_retarget_macos_bash_with_home(ctx, options, target, &home_dir()?, is_macos_host())
 }
 
@@ -382,21 +706,22 @@ fn maybe_retarget_macos_bash_with_home(
     target: &mut ShellTarget,
     home: &Path,
     is_macos: bool,
-) -> Result<()> {
+) -> Result<Vec<SetupNotice>> {
     if target.shell != ShellInitShell::Bash || !is_macos {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let bashrc = home.join(".bashrc");
     if target.rc_path != bashrc {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
-    ctx.ui.print_warning(
+    let notices = vec![warning(
         "macOS Terminal.app opens login shells that read ~/.bash_profile, not ~/.bashrc.",
-    );
+    )];
     if options.yes || options.dry_run {
-        return Ok(());
+        return Ok(notices);
     }
+
     let bash_profile = home.join(".bash_profile");
     if ctx.ui.confirm(
         &format!("Target {} for this run instead?", bash_profile.display()),
@@ -404,7 +729,7 @@ fn maybe_retarget_macos_bash_with_home(
     )? {
         target.rc_path = bash_profile;
     }
-    Ok(())
+    Ok(notices)
 }
 
 fn home_dir() -> Result<PathBuf> {
@@ -437,22 +762,6 @@ fn shell_name(shell: ShellInitShell) -> &'static str {
         ShellInitShell::Zsh => "zsh",
         ShellInitShell::Bash => "bash",
     }
-}
-
-fn print_manual_shell_instructions(ctx: &MachineCtx<'_>) {
-    ctx.ui.print_warning(
-        "Supported login shell not detected. Add the wt shell integration eval line to your shell rc manually.",
-    );
-    ctx.ui.print_dim("  zsh:  eval \"$(wt shell-init zsh)\"");
-    ctx.ui.print_dim("  bash: eval \"$(wt shell-init bash)\"");
-}
-
-fn print_manual_completion_instructions(ctx: &MachineCtx<'_>) {
-    ctx.ui.print_warning(
-        "Supported login shell not detected. Add the wt completion eval line to your shell rc manually if desired.",
-    );
-    ctx.ui.print_dim("  zsh:  eval \"$(wt completion zsh)\"");
-    ctx.ui.print_dim("  bash: eval \"$(wt completion bash)\"");
 }
 
 fn line_present(path: &Path, line: &str) -> Result<bool> {
@@ -566,18 +875,30 @@ fn print_summary(ctx: &MachineCtx<'_>, options: SetupOptions, summary: &SetupSum
     if options.dry_run {
         ctx.ui
             .print_step("Setup dry run complete: no files changed");
-    } else if summary.changed == 0 {
+    } else if summary.changed_steps.is_empty() {
         ctx.ui.print_step("Setup complete: no changes");
     } else if options.remove {
         ctx.ui.print_step(&format!(
             "Setup removal complete: {} step(s) changed",
-            summary.changed
+            summary.changed_steps.len()
         ));
     } else {
         ctx.ui.print_step(&format!(
             "Setup complete: {} step(s) changed",
-            summary.changed
+            summary.changed_steps.len()
         ));
+    }
+
+    if !options.dry_run && !summary.changed_steps.is_empty() {
+        for step in &summary.changed_steps {
+            ctx.ui.print_dim(&format!("  - {step}"));
+        }
+    }
+    if !options.dry_run && !summary.skipped_steps.is_empty() {
+        ctx.ui.print_dim("  Skipped:");
+        for step in &summary.skipped_steps {
+            ctx.ui.print_dim(&format!("  - {step}"));
+        }
     }
     if !options.remove {
         ctx.ui.print_step("Next: run `wt init` inside a git repo.");
@@ -599,22 +920,33 @@ mod tests {
         let mut ui = MockUi::new();
         ui.add_confirm(true);
         let ctx = MachineCtx::new(&runner, &ui);
-        let mut summary = SetupSummary::default();
 
-        apply_line_step(
-            &ctx,
-            SetupOptions {
-                yes: false,
-                dry_run: false,
-                remove: false,
-            },
-            &mut summary,
+        let step = plan_line_step(
             LineStep {
                 label: "Shell integration",
                 path: rc_path.clone(),
                 line: shell_integration_line(ShellInitShell::Zsh),
                 add_prompt: line_add_prompt,
                 remove_prompt: line_remove_prompt,
+            },
+            SetupOptions {
+                yes: false,
+                dry_run: false,
+                remove: false,
+            },
+        )
+        .unwrap();
+        apply_setup_plan(
+            &ctx,
+            SetupOptions {
+                yes: false,
+                dry_run: false,
+                remove: false,
+            },
+            &SetupPlan {
+                mode: SetupMode::Install,
+                steps: vec![step],
+                notices: Vec::new(),
             },
         )
         .unwrap();
@@ -629,14 +961,7 @@ mod tests {
         let mut ui = MockUi::new();
         ui.add_confirm(false);
         let ctx = MachineCtx::new(&runner, &ui);
-        apply_line_step(
-            &ctx,
-            SetupOptions {
-                yes: false,
-                dry_run: false,
-                remove: false,
-            },
-            &mut SetupSummary::default(),
+        let step = plan_line_step(
             LineStep {
                 label: "Shell integration",
                 path: declined_path.clone(),
@@ -644,10 +969,64 @@ mod tests {
                 add_prompt: line_add_prompt,
                 remove_prompt: line_remove_prompt,
             },
+            SetupOptions {
+                yes: false,
+                dry_run: false,
+                remove: false,
+            },
+        )
+        .unwrap();
+        apply_setup_plan(
+            &ctx,
+            SetupOptions {
+                yes: false,
+                dry_run: false,
+                remove: false,
+            },
+            &SetupPlan {
+                mode: SetupMode::Install,
+                steps: vec![step],
+                notices: Vec::new(),
+            },
         )
         .unwrap();
 
         assert!(!declined_path.exists());
+    }
+
+    #[test]
+    fn render_plan_summary_lists_targets_actions_and_dry_run_summary() {
+        let plan = SetupPlan {
+            mode: SetupMode::Install,
+            steps: vec![SetupStepPlan {
+                label: "Shell integration",
+                targets: vec![PathBuf::from("/tmp/.zshrc")],
+                action: SetupAction::Install,
+                status: "add `eval \"$(wt shell-init zsh)\"`".into(),
+                notices: vec![notice("example notice")],
+                prompt: None,
+                operation: SetupOperation::Noop,
+            }],
+            notices: vec![warning("example warning")],
+        };
+
+        let summary = render_setup_plan(
+            SetupOptions {
+                yes: false,
+                dry_run: true,
+                remove: false,
+            },
+            &plan,
+        )
+        .join("\n");
+
+        assert!(summary.contains("Target files:"));
+        assert!(summary.contains("/tmp/.zshrc"));
+        assert!(summary.contains("Planned actions:"));
+        assert!(summary.contains("Shell integration: install"));
+        assert!(summary.contains("Notices:"));
+        assert!(summary.contains("Warnings:"));
+        assert!(summary.contains("dry run only; no files will be changed"));
     }
 
     #[test]
@@ -662,7 +1041,7 @@ mod tests {
         ui.add_confirm(true);
         let ctx = MachineCtx::new(&runner, &ui);
 
-        maybe_retarget_macos_bash_with_home(
+        let notices = maybe_retarget_macos_bash_with_home(
             &ctx,
             SetupOptions {
                 yes: false,
@@ -677,6 +1056,7 @@ mod tests {
 
         let bash_profile = temp.path().join(".bash_profile");
         assert_eq!(target.rc_path, bash_profile);
+        assert_eq!(notices.len(), 1);
         assert_eq!(
             ui.prompts.lock().unwrap().as_slice(),
             [format!(
