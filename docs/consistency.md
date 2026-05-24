@@ -954,6 +954,8 @@ Issue/site integration은 explicit flag 또는 `.linear.toml`, Laravel app처럼
 signal이 있을 때만 active config에 쓴다. Agent runtime은 explicit flag나 기존 config default가
 있을 때만 쓴다. Interactive wizard에서는 agent runtime도 작은 selector로 물으며, agent를 선택하면
 같은 target file 안의 inline `[profile.agent]`와 `[profile.agent.prompt]`에 starter prompt를 같이 쓴다.
+이 starter prompt block은 active key의 의미를 짧은 TOML comment로 설명할 수 있지만, 비활성 section이나
+대체 scaffold를 commented-out 예시로 생성하지 않는다.
 이 inline prompt는 나중에 `wt config extract`나 `wt profile create`로 더 구조화된 profile/prompt file로
 옮길 수 있는 같은 profile model의 단순 형태다. 개인 local target에서는 `.env` copy, 기본
 `inject_local_context`, known local links, `worktree.naming`, Chrome DevTools browser 같은 local helper를

@@ -2537,23 +2537,27 @@ fn append_profile_selection(s: &mut String, profile: &InitProfile) {
 
 fn append_inline_agent_section(s: &mut String, agent: &AgentConfig, include_prompt: bool) {
     s.push_str("[profile.agent]\n");
+    s.push_str("# 이 프로필로 실행할 coding agent CLI입니다.\n");
     s.push_str(&format!(
         "cli = {}\n",
         toml_quote(agent_cli_name(&agent.cli))
     ));
     if !agent.args.is_empty() {
+        s.push_str("# agent를 실행할 때 항상 추가할 CLI args입니다.\n");
         s.push_str(&format!("args = {}\n", toml_array(&agent.args)));
     }
     if let Some(command) = agent.command.as_deref() {
+        s.push_str("# cli 이름만으로 부족할 때 사용할 전체 실행 command입니다.\n");
         s.push_str(&format!("command = {}\n", toml_quote(command)));
     }
-    s.push_str(&format!(
-        "timeout = {}\nsend_after = {}\n",
-        agent.timeout, agent.send_after
-    ));
+    s.push_str("# timeout은 agent 준비 신호를 기다릴 최대 시간(초)입니다.\n");
+    s.push_str(&format!("timeout = {}\n", agent.timeout));
+    s.push_str("# send_after는 prompt를 보낸 뒤 submit하기 전 대기 시간(초)입니다.\n");
+    s.push_str(&format!("send_after = {}\n", agent.send_after));
     if include_prompt && !agent.prompt.is_empty() {
         s.push('\n');
         s.push_str("[profile.agent.prompt]\n");
+        s.push_str("# wt가 기본 launch prompt 뒤에 덧붙이는 profile prompt입니다.\n");
         append_agent_prompts(s, &agent.prompt);
     }
 }
@@ -2567,11 +2571,40 @@ fn append_agent_prompts(s: &mut String, prompts: &std::collections::HashMap<Stri
 }
 
 fn append_prompt_array(s: &mut String, mode: &str, prompt_blocks: &[String]) {
+    if let Some(comment) = prompt_mode_comment(mode) {
+        s.push_str(comment);
+    }
     s.push_str(&format!("{mode} = [\n"));
     for block in prompt_blocks {
         s.push_str(&format!("    {},\n", toml_quote(block)));
     }
     s.push_str("]\n");
+}
+
+fn prompt_mode_comment(mode: &str) -> Option<&'static str> {
+    match mode {
+        "common" => Some(
+            "# common은 issue/branch/pr prompt 앞에 공통으로 붙습니다.\n\
+             # 모든 작업에 반복되는 보고 방식, 검증 기준, 범위 제한을 넣기 좋습니다.\n",
+        ),
+        "issue" => Some(
+            "# issue는 provider issue에서 시작하는 `wt run issue` 작업에 붙습니다.\n\
+             # GitHub/Linear issue의 문제, 수용 기준, 댓글 맥락을 우선 확인하게 할 때 씁니다.\n",
+        ),
+        "branch" => Some(
+            "# branch는 branch-name text로 시작하는 `wt run branch` 작업에 붙습니다.\n\
+             # 현재 branch 이름, task context, 기존 diff에서 작업 범위를 추론하게 할 때 씁니다.\n",
+        ),
+        "pr" => Some(
+            "# pr은 pull request branch를 여는 `wt run pr` 작업에 붙습니다.\n\
+             # review comment, 실패한 check, PR diff를 우선순위로 다루게 할 때 씁니다.\n",
+        ),
+        "workflow" => Some(
+            "# workflow는 `wt run workflow`로 시작한 workflow task에만 붙습니다.\n\
+             # issue/branch setup prompt와 함께 추가되는 workflow 전용 지침입니다.\n",
+        ),
+        _ => None,
+    }
 }
 
 fn prompt_mode_order(mode: &str) -> (usize, &str) {
@@ -2590,19 +2623,19 @@ fn default_agent_prompts() -> std::collections::HashMap<String, Vec<String>> {
     [
         (
             "common",
-            "Read AGENTS.md and project instructions before editing. Keep changes scoped, preserve user changes, run relevant checks, and report changed files, checks, and risks.",
+            "Before editing, identify the intended outcome, the smallest coherent change, and the checks that should prove it.",
         ),
         (
             "issue",
-            "For issue work, inspect the provider issue and local context before coding. Make a short plan, then implement and validate the focused change.",
+            "Use the linked issue as the contract: extract the user-visible problem, acceptance criteria, constraints, and comments that change scope before coding.",
         ),
         (
             "branch",
-            "For branch work, infer the requested change from the branch or task context, then keep the implementation focused and validated.",
+            "Use the current branch and local task context as the contract: inspect recent commits and existing diff, then continue only the requested line of work.",
         ),
         (
             "pr",
-            "For PR work, inspect review comments, failing checks, and the diff first. Prioritize correctness, regressions, tests, security, and UX consistency.",
+            "Use review comments, CI failures, and the PR diff as the contract: fix correctness and regressions first, and explain any non-code decisions.",
         ),
     ]
     .into_iter()
@@ -2879,6 +2912,28 @@ mod tests {
         assert!(plan.content.contains("issue = ["));
         assert!(plan.content.contains("branch = ["));
         assert!(plan.content.contains("pr = ["));
+        assert!(
+            plan.content
+                .contains("# 이 프로필로 실행할 coding agent CLI입니다.")
+        );
+        assert!(
+            plan.content
+                .contains("# common은 issue/branch/pr prompt 앞에 공통으로 붙습니다.")
+        );
+        assert!(
+            plan.content
+                .contains("# issue는 provider issue에서 시작하는 `wt run issue` 작업에 붙습니다.")
+        );
+        assert!(
+            plan.content.contains(
+                "# branch는 branch-name text로 시작하는 `wt run branch` 작업에 붙습니다."
+            )
+        );
+        assert!(
+            plan.content
+                .contains("# pr은 pull request branch를 여는 `wt run pr` 작업에 붙습니다.")
+        );
+        assert!(!plan.content.contains("Read AGENTS.md"));
         assert!(!plan.content.contains("[issues]"));
     }
 
