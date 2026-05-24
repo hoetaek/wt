@@ -1,5 +1,9 @@
 use crate::cli::{InitAgent, InitIssueProvider, InitSiteProvider};
-use crate::config::{AgentCli, AgentConfig, Config, ReadyMode, SubmitMode, WorkspaceBrowserMode};
+use crate::config::{
+    AgentCli, AgentConfig, Config, CopyAsEntry, ReadyMode, SubmitMode, WORKSPACE_DEFAULT_COLORS,
+    WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
+    WorkspaceBrowserMode,
+};
 use crate::context::{Ctx, PromptItem};
 use crate::error::WtError;
 use crate::storage::StorageRoot;
@@ -8,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 const CLAUDE_LOCAL_SETTINGS_PATH: &str = ".claude/settings.local.json";
 const CLAUDE_ALLOW_RULES: [&str; 2] = ["Edit(/.git/wt/**)", "Write(/.git/wt/**)"];
+const DEFAULT_INJECT_LOCAL_CONTEXT: &str = "## Local context\n- site: {{site_url}}\n- worktree: {{worktree_path}}\n- parent: {{parent_branch}}\n";
 
 #[derive(Debug, Default)]
 pub struct InitOptions {
@@ -69,7 +74,9 @@ enum InitNoticeLevel {
 enum InitSection {
     Issues,
     Site,
+    Workflow,
     ProfileAgent,
+    ProfileAgentPrompt,
     Worktree,
     WorktreeNaming,
     Setup,
@@ -84,7 +91,9 @@ impl InitSection {
         match self {
             InitSection::Issues => "issues",
             InitSection::Site => "site",
+            InitSection::Workflow => "workflow",
             InitSection::ProfileAgent => "profile.agent",
+            InitSection::ProfileAgentPrompt => "profile.agent.prompt",
             InitSection::Worktree => "worktree",
             InitSection::WorktreeNaming => "worktree.naming",
             InitSection::Setup => "setup",
@@ -100,13 +109,16 @@ impl InitSection {
 struct InitCommonConfig {
     worktree_path: Option<String>,
     worktree_copy: Vec<String>,
+    worktree_copy_as: Vec<CopyAsEntry>,
     worktree_link: Vec<String>,
+    inject_local_context: Option<String>,
     worktree_naming: bool,
     setup_deps: Vec<InitCommand>,
     editor_command: Option<String>,
     test_commands: Vec<InitCommand>,
     workspace_tabs: Vec<String>,
     post_deps_tabs: Vec<String>,
+    workspace_colors: Vec<(String, String)>,
     workspace_browser: Option<InitWorkspaceBrowser>,
 }
 
@@ -128,6 +140,7 @@ enum InitWorkspaceBrowserMode {
 struct InitDefaults {
     from_existing_config: bool,
     agent: Option<AgentConfig>,
+    workflow_policy: Option<WorkflowDefaultPolicy>,
     issue_provider: Option<InitIssueProvider>,
     gh_user: Option<String>,
     site_provider: Option<InitSiteProvider>,
@@ -213,7 +226,9 @@ impl InitCommonConfig {
         let mut common = InitCommonConfig {
             worktree_path: config.worktree.path.clone(),
             worktree_copy: config.worktree.copy.clone(),
+            worktree_copy_as: config.worktree.copy_as.clone(),
             worktree_link: config.worktree.link.clone(),
+            inject_local_context: config.worktree.inject_local_context.clone(),
             worktree_naming: config.worktree.naming.is_some(),
             setup_deps: config
                 .setup
@@ -252,6 +267,11 @@ impl InitCommonConfig {
         if let Some(workspace) = config.workspace.as_ref() {
             common.workspace_tabs = workspace.tabs.clone();
             common.post_deps_tabs = workspace.post_deps_tabs.clone();
+            common.workspace_colors = workspace
+                .effective_colors()
+                .into_iter()
+                .map(|(kind, color)| (kind.to_string(), color.to_string()))
+                .collect();
             common.workspace_browser = workspace.browser.as_ref().and_then(|browser| {
                 let mode = match browser.mode {
                     WorkspaceBrowserMode::None => return None,
@@ -278,6 +298,9 @@ impl InitCommonConfig {
 
 impl InitDefaults {
     fn from_config(config: Config) -> Self {
+        let workflow_policy = (config.workflow.pull_request.is_some()
+            || config.workflow.landing.is_some())
+        .then(|| config.workflow_default_policy());
         let agent = config
             .profile
             .as_ref()
@@ -302,6 +325,7 @@ impl InitDefaults {
         Self {
             from_existing_config: true,
             agent,
+            workflow_policy,
             issue_provider,
             gh_user,
             site_provider,
@@ -324,7 +348,7 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     }
     let target = resolve_target(ctx, &options)?;
     let plan = build_plan(ctx, &options, target)?;
-    if plan.target_exists {
+    if plan.target_exists && options.yes && !options.dry_run {
         print_existing_target_warning(ctx, &plan, &options);
     }
 
@@ -660,6 +684,9 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         None
     };
     let site_provider = resolve_site_provider(ctx, options, &detected, &defaults)?;
+    let workflow_policy = defaults
+        .workflow_policy
+        .unwrap_or_else(default_workflow_policy);
     if is_interactive_wizard(options) {
         print_wizard_step(
             ctx,
@@ -720,15 +747,20 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         s.push('\n');
     }
 
+    append_workflow_policy(&mut s, workflow_policy, &mut sections);
+
     if let Some(profile) = &profile {
         sections.push(InitSection::ProfileAgent);
+        if !profile.agent.prompt.is_empty() {
+            sections.push(InitSection::ProfileAgentPrompt);
+        }
         append_profile_selection(&mut s, profile);
     }
 
     append_active_common_config(&mut s, &common, &mut sections);
 
     toml::from_str::<Config>(&s)?;
-    let notices = build_plan_notices(
+    let mut notices = build_plan_notices(
         ctx,
         profile.as_ref(),
         issue_provider.as_ref(),
@@ -737,6 +769,12 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         &detected,
         &common,
     );
+    if target_exists && (!options.yes || options.dry_run) {
+        notices.push(InitNotice {
+            level: InitNoticeLevel::Warn,
+            message: existing_target_warning_message(&target.path, options),
+        });
+    }
 
     Ok(InitPlan {
         target_path: target.path,
@@ -764,10 +802,13 @@ fn print_plan(ctx: &Ctx, plan: &InitPlan, interactive_wizard: bool) {
     for line in render_plan_summary(plan) {
         ctx.ui.print_dim(&format!("  {line}"));
     }
-    ctx.ui.print_dim("  toml:");
+    ctx.ui.print_dim("");
+    ctx.ui.print_dim("  생성될 TOML:");
+    ctx.ui.print_dim("    ---");
     for line in plan.content.lines() {
         ctx.ui.print_dim(&format!("    {line}"));
     }
+    ctx.ui.print_dim("    ---");
 }
 
 fn render_plan_summary(plan: &InitPlan) -> Vec<String> {
@@ -787,22 +828,48 @@ fn render_plan_summary(plan: &InitPlan) -> Vec<String> {
     };
 
     let mut lines = vec![
-        format!("저장할 파일: {}", plan.target_path.display()),
-        format!("저장 범위: {}", target_kind_name(plan.target_kind)),
-        format!("작업: {planned_write}"),
-        format!("저장될 설정: {saved_settings}"),
+        "저장 대상".to_string(),
+        format!("  저장할 파일: {}", plan.target_path.display()),
+        format!("  저장 범위: {}", target_kind_name(plan.target_kind)),
+        format!("  작업: {planned_write}"),
+        format!("  저장될 설정: {saved_settings}"),
     ];
 
-    lines.extend(
-        plan.notices
-            .iter()
-            .map(|notice| format!("[{}] {}", notice_level_name(notice.level), notice.message)),
-    );
+    let hints = plan
+        .notices
+        .iter()
+        .filter(|notice| notice.level == InitNoticeLevel::Hint)
+        .collect::<Vec<_>>();
+    let warnings = plan
+        .notices
+        .iter()
+        .filter(|notice| notice.level == InitNoticeLevel::Warn)
+        .collect::<Vec<_>>();
+
+    if !hints.is_empty() {
+        lines.push("".to_string());
+        lines.push("안내".to_string());
+        lines.extend(hints.iter().map(|notice| format!("  - {}", notice.message)));
+    }
+    if !warnings.is_empty() {
+        lines.push("".to_string());
+        lines.push("경고".to_string());
+        lines.extend(
+            warnings
+                .iter()
+                .map(|notice| format!("  - {}", notice.message)),
+        );
+    }
 
     lines
 }
 
 fn print_existing_target_warning(ctx: &Ctx, plan: &InitPlan, options: &InitOptions) {
+    ctx.ui
+        .print_warning(&existing_target_warning_message(&plan.target_path, options));
+}
+
+fn existing_target_warning_message(path: &Path, options: &InitOptions) -> String {
     let suffix = if options.dry_run {
         "dry run이라 덮어쓰지 않음"
     } else if options.force {
@@ -812,10 +879,7 @@ fn print_existing_target_warning(ctx: &Ctx, plan: &InitPlan, options: &InitOptio
     } else {
         "계속하려면 덮어쓰기 확인 필요"
     };
-    ctx.ui.print_warning(&format!(
-        "설정 파일이 이미 있습니다: {} ({suffix})",
-        plan.target_path.display()
-    ));
+    format!("설정 파일이 이미 있습니다: {} ({suffix})", path.display())
 }
 
 fn build_plan_notices(
@@ -1036,7 +1100,9 @@ fn append_active_common_config(
 ) {
     if common.worktree_path.is_some()
         || !common.worktree_copy.is_empty()
+        || !common.worktree_copy_as.is_empty()
         || !common.worktree_link.is_empty()
+        || common.inject_local_context.is_some()
     {
         sections.push(InitSection::Worktree);
         s.push_str("[worktree]\n");
@@ -1046,8 +1112,22 @@ fn append_active_common_config(
         if !common.worktree_copy.is_empty() {
             s.push_str(&format!("copy = {}\n", toml_array(&common.worktree_copy)));
         }
+        if !common.worktree_copy_as.is_empty() {
+            s.push_str("copy_as = [\n");
+            for entry in &common.worktree_copy_as {
+                s.push_str(&format!(
+                    "    {{ from = {}, to = {} }},\n",
+                    toml_quote(&entry.from),
+                    toml_quote(&entry.to)
+                ));
+            }
+            s.push_str("]\n");
+        }
         if !common.worktree_link.is_empty() {
             s.push_str(&format!("link = {}\n", toml_array(&common.worktree_link)));
+        }
+        if let Some(context) = common.inject_local_context.as_deref() {
+            append_multiline_string(s, "inject_local_context", context);
         }
         s.push('\n');
     }
@@ -1095,6 +1175,10 @@ fn append_active_common_config(
             toml_array(&common.post_deps_tabs)
         ));
     }
+    s.push_str(&format!(
+        "colors = {}\n",
+        toml_inline_string_entries(&workspace_colors(common))
+    ));
     s.push('\n');
 
     if let Some(browser) = common.workspace_browser.as_ref() {
@@ -1128,6 +1212,23 @@ fn append_active_common_config(
     }
 }
 
+fn append_workflow_policy(
+    s: &mut String,
+    policy: WorkflowDefaultPolicy,
+    sections: &mut Vec<InitSection>,
+) {
+    sections.push(InitSection::Workflow);
+    s.push_str("[workflow]\n");
+    s.push_str(&format!(
+        "pull_request = {}\n",
+        toml_quote(workflow_pull_request_name(policy.pull_request))
+    ));
+    s.push_str(&format!(
+        "landing = {}\n\n",
+        toml_quote(workflow_landing_name(policy.landing))
+    ));
+}
+
 fn append_command_entry(s: &mut String, command: &InitCommand) {
     s.push_str("    { ");
     if let Some(label) = command.label.as_deref() {
@@ -1141,6 +1242,51 @@ fn append_command_entry(s: &mut String, command: &InitCommand) {
         s.push_str(&format!(", if_exists = {}", toml_quote(if_exists)));
     }
     s.push_str(" },\n");
+}
+
+fn workspace_colors(common: &InitCommonConfig) -> Vec<(String, String)> {
+    if common.workspace_colors.is_empty() {
+        return default_workspace_colors();
+    }
+    common.workspace_colors.clone()
+}
+
+fn default_workspace_colors() -> Vec<(String, String)> {
+    WORKSPACE_DEFAULT_COLORS
+        .iter()
+        .map(|(kind, color)| (kind.to_string(), color.to_string()))
+        .collect()
+}
+
+fn toml_inline_string_entries(entries: &[(String, String)]) -> String {
+    let rendered = entries
+        .iter()
+        .map(|(key, value)| format!("{} = {}", toml_key(key), toml_quote(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{ {rendered} }}")
+}
+
+fn toml_key(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        value.into()
+    } else {
+        toml_quote(value)
+    }
+}
+
+fn append_multiline_string(s: &mut String, key: &str, value: &str) {
+    s.push_str(key);
+    s.push_str(" = \"\"\"\n");
+    s.push_str(value);
+    if !value.ends_with('\n') {
+        s.push('\n');
+    }
+    s.push_str("\"\"\"\n");
 }
 
 fn resolve_common_config(
@@ -1217,17 +1363,20 @@ fn detected_project_common_config(
 ) -> InitCommonConfig {
     let local_target = target_kind == InitTargetKind::Local;
     let workspace_automation = cmux_available(ctx);
+    let worktree_copy = if local_target && detected.has_env_file {
+        vec![".env".into()]
+    } else {
+        Vec::new()
+    };
     InitCommonConfig {
-        worktree_copy: if local_target && detected.has_env_file {
-            vec![".env".into()]
-        } else {
-            Vec::new()
-        },
+        worktree_copy,
+        worktree_copy_as: Vec::new(),
         worktree_link: if local_target {
             detected.local_links.clone()
         } else {
             Vec::new()
         },
+        inject_local_context: local_target.then(|| DEFAULT_INJECT_LOCAL_CONTEXT.into()),
         worktree_naming: local_target && issue_provider.is_some(),
         setup_deps: default_enabled_setup_deps(detected),
         post_deps_tabs: if workspace_automation {
@@ -1279,12 +1428,12 @@ fn resolve_custom_common_config(
     config.setup_deps = resolve_setup_deps(ctx, detected, &config.setup_deps)?;
 
     if !detected.post_deps_tabs.is_empty() {
-        ctx.ui
-            .print_dim("dev 탭은 dependency setup 후 오래 실행되는 명령을 시작합니다.");
-        if ctx.ui.confirm(
-            "setup 후 감지된 dev server를 시작할까요?",
-            !config.post_deps_tabs.is_empty(),
-        )? {
+        ctx.ui.print_dim(
+            "dev 탭은 dependency setup이 끝난 뒤 개발 서버 command를 별도 탭에서 시작합니다.",
+        );
+        print_detected_dev_server_commands(ctx, &detected.post_deps_tabs);
+        let prompt = dev_server_confirm_prompt(&detected.post_deps_tabs);
+        if ctx.ui.confirm(&prompt, !config.post_deps_tabs.is_empty())? {
             config.post_deps_tabs = detected.post_deps_tabs.clone();
         } else {
             config.post_deps_tabs.clear();
@@ -1724,6 +1873,26 @@ fn print_detected_commands(ctx: &Ctx, title: &str, commands: &[InitCommand]) {
     }
 }
 
+fn print_detected_dev_server_commands(ctx: &Ctx, commands: &[String]) {
+    if commands.len() == 1 {
+        ctx.ui
+            .print_dim(&format!("감지한 dev server command: {}", commands[0]));
+        return;
+    }
+
+    ctx.ui.print_dim("감지한 dev server commands:");
+    for command in commands {
+        ctx.ui.print_dim(&format!("  - {command}"));
+    }
+}
+
+fn dev_server_confirm_prompt(commands: &[String]) -> String {
+    if commands.len() == 1 {
+        return format!("setup 후 {}를 dev 탭에서 시작할까요?", commands[0]);
+    }
+    "setup 후 감지한 dev server 명령들을 dev 탭에서 시작할까요?".into()
+}
+
 fn detect_setup_deps(repo_root: &Path) -> Vec<InitCommand> {
     let mut commands = Vec::new();
     for rel_dir in detect_manifest_dirs(
@@ -2044,7 +2213,10 @@ fn resolve_profile(
     options: &InitOptions,
     defaults: &InitDefaults,
 ) -> Result<Option<InitProfile>> {
-    if !explicit_agent_requested(options) && defaults.agent.is_none() {
+    if !explicit_agent_requested(options)
+        && defaults.agent.is_none()
+        && (options.yes || options.dry_run)
+    {
         return Ok(None);
     }
 
@@ -2060,7 +2232,7 @@ fn resolve_profile(
         return Ok(None);
     }
     let args = resolve_agent_args(ctx, &agent, options, defaults)?;
-    Ok(build_profile(&agent, args, command))
+    Ok(build_profile(&agent, args, command, defaults))
 }
 
 fn resolve_agent(ctx: &Ctx, options: &InitOptions, defaults: &InitDefaults) -> Result<InitAgent> {
@@ -2344,7 +2516,13 @@ fn build_profile(
     agent: &InitAgent,
     args: Vec<String>,
     command: Option<String>,
+    defaults: &InitDefaults,
 ) -> Option<InitProfile> {
+    let prompt = matching_default_agent(defaults, agent)
+        .map(|agent| agent.prompt.clone())
+        .filter(|prompt| !prompt.is_empty())
+        .unwrap_or_else(default_agent_prompts);
+
     (*agent != InitAgent::None).then(|| InitProfile {
         agent: AgentConfig {
             cli: init_agent_cli(agent),
@@ -2354,18 +2532,18 @@ fn build_profile(
             submit: SubmitMode::Auto,
             timeout: 30,
             send_after: 2,
-            prompt: Default::default(),
+            prompt,
             ..AgentConfig::default()
         },
     })
 }
 
 fn append_profile_selection(s: &mut String, profile: &InitProfile) {
-    append_inline_agent_section(s, &profile.agent);
+    append_inline_agent_section(s, &profile.agent, true);
     s.push('\n');
 }
 
-fn append_inline_agent_section(s: &mut String, agent: &AgentConfig) {
+fn append_inline_agent_section(s: &mut String, agent: &AgentConfig, include_prompt: bool) {
     s.push_str("[profile.agent]\n");
     s.push_str(&format!(
         "cli = {}\n",
@@ -2381,6 +2559,63 @@ fn append_inline_agent_section(s: &mut String, agent: &AgentConfig) {
         "timeout = {}\nsend_after = {}\n",
         agent.timeout, agent.send_after
     ));
+    if include_prompt && !agent.prompt.is_empty() {
+        s.push('\n');
+        s.push_str("[profile.agent.prompt]\n");
+        append_agent_prompts(s, &agent.prompt);
+    }
+}
+
+fn append_agent_prompts(s: &mut String, prompts: &std::collections::HashMap<String, Vec<String>>) {
+    let mut entries = prompts.iter().collect::<Vec<_>>();
+    entries.sort_by(|(left, _), (right, _)| prompt_mode_order(left).cmp(&prompt_mode_order(right)));
+    for (mode, prompt_blocks) in entries {
+        append_prompt_array(s, mode, prompt_blocks);
+    }
+}
+
+fn append_prompt_array(s: &mut String, mode: &str, prompt_blocks: &[String]) {
+    s.push_str(&format!("{mode} = [\n"));
+    for block in prompt_blocks {
+        s.push_str(&format!("    {},\n", toml_quote(block)));
+    }
+    s.push_str("]\n");
+}
+
+fn prompt_mode_order(mode: &str) -> (usize, &str) {
+    let order = match mode {
+        "common" => 0,
+        "issue" => 1,
+        "branch" => 2,
+        "pr" => 3,
+        "workflow" => 4,
+        _ => 5,
+    };
+    (order, mode)
+}
+
+fn default_agent_prompts() -> std::collections::HashMap<String, Vec<String>> {
+    [
+        (
+            "common",
+            "Read AGENTS.md and project instructions before editing. Keep changes scoped, preserve user changes, run relevant checks, and report changed files, checks, and risks.",
+        ),
+        (
+            "issue",
+            "For issue work, inspect the provider issue and local context before coding. Make a short plan, then implement and validate the focused change.",
+        ),
+        (
+            "branch",
+            "For branch work, infer the requested change from the branch or task context, then keep the implementation focused and validated.",
+        ),
+        (
+            "pr",
+            "For PR work, inspect review comments, failing checks, and the diff first. Prioritize correctness, regressions, tests, security, and UX consistency.",
+        ),
+    ]
+    .into_iter()
+    .map(|(mode, prompt)| (mode.to_string(), vec![prompt.to_string()]))
+    .collect()
 }
 
 fn init_agent_cli(agent: &InitAgent) -> AgentCli {
@@ -2434,10 +2669,25 @@ fn target_kind_name(kind: InitTargetKind) -> &'static str {
     }
 }
 
-fn notice_level_name(level: InitNoticeLevel) -> &'static str {
-    match level {
-        InitNoticeLevel::Hint => "안내",
-        InitNoticeLevel::Warn => "경고",
+fn default_workflow_policy() -> WorkflowDefaultPolicy {
+    WorkflowDefaultPolicy {
+        pull_request: WorkflowDefaultPullRequestMode::None,
+        landing: WorkflowDefaultLandingPolicy::Manual,
+    }
+}
+
+fn workflow_pull_request_name(mode: WorkflowDefaultPullRequestMode) -> &'static str {
+    match mode {
+        WorkflowDefaultPullRequestMode::None => "none",
+        WorkflowDefaultPullRequestMode::Draft => "draft",
+        WorkflowDefaultPullRequestMode::Ready => "ready",
+    }
+}
+
+fn workflow_landing_name(policy: WorkflowDefaultLandingPolicy) -> &'static str {
+    match policy {
+        WorkflowDefaultLandingPolicy::Manual => "manual",
+        WorkflowDefaultLandingPolicy::Auto => "auto",
     }
 }
 
@@ -2540,12 +2790,43 @@ mod tests {
             local_target(&dir),
         )
         .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
 
         assert_eq!(plan.target_path, dir.path().join(".git/wt/config.toml"));
         assert_eq!(plan.target_kind, InitTargetKind::Local);
         assert!(!plan.target_exists);
-        assert_eq!(plan.sections, vec![InitSection::Workspace]);
+        assert_eq!(
+            plan.sections,
+            vec![
+                InitSection::Workflow,
+                InitSection::Worktree,
+                InitSection::Workspace
+            ]
+        );
         assert!(plan.detected_signals.is_empty());
+        assert!(plan.content.contains("[workflow]"));
+        assert!(plan.content.contains("pull_request = \"none\""));
+        assert!(plan.content.contains("landing = \"manual\""));
+        assert!(plan.content.contains(
+            "colors = { task = \"blue\", issue = \"blue\", branch = \"green\", pr = \"magenta\" }"
+        ));
+        let workspace = config.workspace.unwrap();
+        assert_eq!(
+            workspace.colors.get("task").map(String::as_str),
+            Some("blue")
+        );
+        assert_eq!(
+            workspace.colors.get("issue").map(String::as_str),
+            Some("blue")
+        );
+        assert_eq!(
+            workspace.colors.get("branch").map(String::as_str),
+            Some("green")
+        );
+        assert_eq!(
+            workspace.colors.get("pr").map(String::as_str),
+            Some("magenta")
+        );
         assert!(!plan.content.contains("[profile.agent]"));
         assert!(!plan.content.contains("[issues]"));
         assert!(!plan.content.contains("[site]"));
@@ -2568,7 +2849,7 @@ mod tests {
         let summary = render_plan_summary(&plan).join("\n");
 
         assert!(summary.contains("작업: 새 설정 생성"));
-        assert!(summary.contains("저장될 설정: workspace"));
+        assert!(summary.contains("저장될 설정: workflow, worktree, workspace"));
         assert!(!summary.contains("감지된 신호"));
         assert!(!summary.contains("감지된 명령"));
     }
@@ -2591,10 +2872,21 @@ mod tests {
 
         assert_eq!(
             plan.sections,
-            vec![InitSection::ProfileAgent, InitSection::Workspace]
+            vec![
+                InitSection::Workflow,
+                InitSection::ProfileAgent,
+                InitSection::ProfileAgentPrompt,
+                InitSection::Worktree,
+                InitSection::Workspace
+            ]
         );
         assert!(plan.content.contains("[profile.agent]"));
+        assert!(plan.content.contains("[profile.agent.prompt]"));
         assert!(plan.content.contains("cli = \"codex\""));
+        assert!(plan.content.contains("common = ["));
+        assert!(plan.content.contains("issue = ["));
+        assert!(plan.content.contains("branch = ["));
+        assert!(plan.content.contains("pr = ["));
         assert!(!plan.content.contains("[issues]"));
     }
 
@@ -2618,6 +2910,8 @@ mod tests {
             plan.sections,
             vec![
                 InitSection::Issues,
+                InitSection::Workflow,
+                InitSection::Worktree,
                 InitSection::WorktreeNaming,
                 InitSection::Workspace
             ]
@@ -2645,11 +2939,13 @@ mod tests {
         .unwrap();
         let summary = render_plan_summary(&plan).join("\n");
 
-        assert!(summary.contains("저장될 설정: issues, worktree.naming, workspace"));
-        assert!(summary.contains("[경고] gh CLI가 없습니다"));
+        assert!(
+            summary.contains("저장될 설정: issues, workflow, worktree, worktree.naming, workspace")
+        );
+        assert!(summary.contains("경고\n  - gh CLI가 없습니다"));
         assert!(
             summary.contains(
-                "[안내] issue agent prompt: 선택된 agent runtime이 없습니다. issue 작업에서 agent를 바로 실행하려면 --agent <name>"
+                "안내\n  - issue agent prompt: 선택된 agent runtime이 없습니다. issue 작업에서 agent를 바로 실행하려면 --agent <name>"
             )
         );
         assert!(!plan.content.contains("[profile.agent]"));
@@ -2675,7 +2971,8 @@ mod tests {
 
         assert!(plan.content.contains("[issues]"));
         assert!(plan.content.contains("[profile.agent]"));
-        assert!(summary.contains("[안내] issue agent prompt: codex로 실행 준비됨"));
+        assert!(plan.content.contains("[profile.agent.prompt]"));
+        assert!(summary.contains("안내\n  - issue agent prompt: codex로 실행 준비됨"));
     }
 
     #[test]
@@ -2701,6 +2998,8 @@ mod tests {
         assert_eq!(
             plan.sections,
             vec![
+                InitSection::Workflow,
+                InitSection::Worktree,
                 InitSection::Setup,
                 InitSection::Test,
                 InitSection::Workspace
@@ -2803,6 +3102,15 @@ mod tests {
 
         assert!(plan.content.contains("[worktree]\n"));
         assert_eq!(config.worktree.copy, vec![".env"]);
+        assert!(config.worktree.copy_as.is_empty());
+        assert_eq!(
+            config.worktree.inject_local_context.as_deref(),
+            Some(DEFAULT_INJECT_LOCAL_CONTEXT)
+        );
+        assert!(plan.content.contains("inject_local_context = \"\"\""));
+        assert!(plan.content.contains("- site: {{site_url}}"));
+        assert!(plan.content.contains("- worktree: {{worktree_path}}"));
+        assert!(plan.content.contains("- parent: {{parent_branch}}"));
         assert_eq!(
             config.worktree.link,
             vec![".local", ".linear.toml", "CLAUDE.local.md"]
@@ -2891,7 +3199,12 @@ mod tests {
         );
         assert_eq!(
             plan.sections,
-            vec![InitSection::Test, InitSection::Workspace]
+            vec![
+                InitSection::Workflow,
+                InitSection::Worktree,
+                InitSection::Test,
+                InitSection::Workspace
+            ]
         );
         assert!(config.setup.deps.is_empty());
         let test = config.test.unwrap();
@@ -3123,6 +3436,8 @@ mod tests {
         assert_eq!(
             plan.sections,
             vec![
+                InitSection::Workflow,
+                InitSection::Worktree,
                 InitSection::Setup,
                 InitSection::Test,
                 InitSection::Workspace
@@ -3312,7 +3627,7 @@ mod tests {
         .unwrap();
         let summary = render_plan_summary(&plan).join("\n");
 
-        assert!(summary.contains("저장될 설정: setup, test, workspace"));
+        assert!(summary.contains("저장될 설정: workflow, worktree, setup, test, workspace"));
         assert!(
             plan.detected_signals
                 .contains(&"test: npm test".to_string())
@@ -3351,7 +3666,7 @@ mod tests {
 
         assert!(!summary.contains("감지된 신호"));
         assert!(summary.contains(
-            "[안내] 팀 공유 설정에는 개인 helper를 쓰지 않습니다: .env copy, local links (.local), worktree.naming"
+            "안내\n  - 팀 공유 설정에는 개인 helper를 쓰지 않습니다: .env copy, local links (.local), worktree.naming"
         ));
         assert!(!plan.content.contains("[worktree]"));
         assert!(!plan.content.contains("[worktree.naming]"));
@@ -3780,6 +4095,59 @@ mod tests {
     }
 
     #[test]
+    fn init_interactive_flow_prompts_for_agent_and_writes_prompt_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_select(1); // Codex agent
+        ui.add_select(0); // no agent args
+        ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
+        let ui = Arc::new(ui);
+
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: false,
+                shared: false,
+                agent: None,
+                agent_args: Vec::new(),
+                agent_command: None,
+                issue_provider: None,
+                site_provider: None,
+                gh_user: None,
+                yes: false,
+                force: false,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let prompts = ui.prompts.lock().unwrap().clone();
+        assert!(prompts.contains(&"select: 코딩 agent".to_string()));
+
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        let agent = config.profile.unwrap().agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Codex);
+        assert!(content.contains("[profile.agent.prompt]"));
+        assert!(agent.prompt.contains_key("common"));
+        assert!(agent.prompt.contains_key("issue"));
+        assert!(agent.prompt.contains_key("branch"));
+        assert!(agent.prompt.contains_key("pr"));
+    }
+
+    #[test]
     fn init_interactive_custom_common_config_writes_selected_settings() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -3866,9 +4234,21 @@ mod tests {
         }));
 
         let dims = ui.dims.lock().unwrap().clone();
+        assert!(dims.iter().any(|line| line
+            == "dev 탭은 dependency setup이 끝난 뒤 개발 서버 command를 별도 탭에서 시작합니다."));
+        assert!(
+            dims.iter()
+                .any(|line| line == "감지한 dev server command: pnpm run dev")
+        );
         assert!(dims.iter().any(|line| line == "감지한 test command:"));
         assert!(dims.iter().any(|line| line == "  - pnpm run test"));
         assert!(dims.iter().any(|line| line == "  - pnpm run lint"));
+        assert!(
+            ui.prompts
+                .lock()
+                .unwrap()
+                .contains(&"confirm: setup 후 pnpm run dev를 dev 탭에서 시작할까요?".to_string())
+        );
     }
 
     #[test]
@@ -4328,8 +4708,13 @@ command = "claude --resume"
 timeout = 45
 send_after = 4
 
+[workflow]
+pull_request = "draft"
+landing = "auto"
+
 [workspace]
 tabs = ["existing", "vim"]
+colors = { task = "", issue = "cyan" }
 "#,
         )
         .unwrap();
@@ -4368,13 +4753,30 @@ tabs = ["existing", "vim"]
 
         let content = std::fs::read_to_string(local.join("config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
+        let policy = config.workflow_default_policy();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Claude);
         assert_eq!(agent.args, vec!["--model", "sonnet"]);
         assert_eq!(agent.command.as_deref(), Some("claude --resume"));
+        assert_eq!(policy.pull_request, WorkflowDefaultPullRequestMode::Draft);
+        assert_eq!(policy.landing, WorkflowDefaultLandingPolicy::Auto);
+        let workspace = config.workspace.unwrap();
         assert_eq!(
-            config.workspace.unwrap().tabs,
+            workspace.tabs,
             vec!["existing".to_string(), "vim".to_string()]
+        );
+        assert_eq!(workspace.colors.get("task").map(String::as_str), Some(""));
+        assert_eq!(
+            workspace.colors.get("issue").map(String::as_str),
+            Some("cyan")
+        );
+        assert_eq!(
+            workspace.colors.get("branch").map(String::as_str),
+            Some("green")
+        );
+        assert_eq!(
+            workspace.colors.get("pr").map(String::as_str),
+            Some("magenta")
         );
     }
 

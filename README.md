@@ -412,12 +412,13 @@ bypassing dirty-worktree, check, pull-request review, review-thread, or ancestry
 safety gates.
 
 `wt config` prints the effective `[workflow]` policy, including the built-in
-defaults above. `wt init` keeps workflow policy out of generated config unless
-the user explicitly chooses to override the default.
+defaults above. `wt init` writes an explicit starter `[workflow]` policy so the
+PR and landing behavior for newly prepared workflows is visible in the generated
+config.
 
 When `[workspace]` is configured, `wt config` also prints effective workspace
-colors, including built-in defaults. To change or disable a color, copy that
-line into the owning config file and override the value there.
+colors, including built-in defaults. `wt init` writes the starter color map;
+edit that line to change or disable a color.
 When `[workspace.browser]` is configured with `mode = "system"` or
 `mode = "chrome_devtools"`, `wt config` prints the effective browser launch URL.
 For Chrome DevTools mode, `wt config` also prints the effective Chrome user data
@@ -457,17 +458,20 @@ Small private agent config can stay inline:
 cli = "codex"
 args = ["--model", "gpt-5.5"]
 
+[profile.agent.prompt]
+common = ["Read AGENTS.md and project instructions before editing."]
+
 [workspace]
 tabs = ["lazygit", "nvim"]
-# Workspace colors have built-in defaults; set this only to override.
-# Use "" to disable a color kind.
-# colors = { task = "blue", issue = "blue", branch = "green", pr = "magenta" }
+colors = { task = "blue", issue = "blue", branch = "green", pr = "magenta" }
 ```
 
-Agent prompt scopes stay under `[agent.prompt]`. `common` is prepended to
-`issue`, `branch`, and `pr` prompts. `workflow` is a separate workflow-started
-task scope: `wt run workflow` sends it after the built-in workflow handoff and
-TaskDocument snapshot, before the existing `issue` or `branch` setup-mode prompts.
+Agent prompt scopes stay under `[agent.prompt]` in normal config or
+`[profile.agent.prompt]` when a small inline profile is used. `common` is
+prepended to `issue`, `branch`, and `pr` prompts. `workflow` is a separate
+workflow-started task scope: `wt run workflow` sends it after the built-in
+workflow handoff and TaskDocument snapshot, before the existing `issue` or
+`branch` setup-mode prompts.
 It does not apply to direct `wt run task`, `wt run issue`, `wt run branch`, or `wt run pr`.
 
 ```toml

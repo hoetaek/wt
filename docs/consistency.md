@@ -733,11 +733,9 @@ Workflow run은 필요한 경우 TaskDocument setup을 거치더라도 최종 vi
 저장된 `workflow.color`를 적용한다. `[workspace].colors` key를 생략하면 내장 기본값
 `task = "blue"`, `issue = "blue"`, `branch = "green"`, `pr = "magenta"`를 쓴다.
 `wt config`는 이 effective 색상값을 출력하므로 사용자가 수정할 기준은 `wt config` 출력이다.
-`wt init`은 이 기본값을 active config로 쓰지 않고, generated config에 commented override
-예시도 쓰지 않는다. 색상을 바꾸려면 `wt config` 출력에서 필요한 line만 복사해 명시적으로
-override한다.
-Active `colors = { ... }`는 사용자가 기본값과 다른 색을 고정하려는 의도일 때만 둔다. 색을
-아예 쓰지 않을 kind는 `task = ""`처럼 빈 문자열로 override한다.
+`wt init`은 generated config의 active `[workspace]`에 이 기본 `colors = { ... }` map을 명시한다.
+기존 설정을 다시 init할 때는 기존 color override를 effective 값으로 보존한다. 색을 아예 쓰지 않을
+kind는 `task = ""`처럼 빈 문자열로 override한다.
 
 `matrix`는 하나의 local TaskDocument를 명시한 named profile 목록으로 확장하는 saved
 Workflow mode다. Current `mode = "matrix"` contract는 exactly one task x many named profiles만
@@ -904,8 +902,9 @@ Reference UI evidence for this contract:
 
 `wt init`은 단순히 작은 config 파일을 쓰는 명령이 아니라 project-specific config
 recommendation wizard다. Interactive TTY에서 bare `wt init`은 config target을 고른 뒤 repo를
-스캔해 추천 config plan을 만들고, setup deps, tests, workspace tabs, editor, agent runtime,
-issue provider, site provider 같은 항목을 필요한 만큼만 guided flow로 묻는다. 쓰기 전에는
+스캔해 추천 config plan을 만들고, workflow PR/landing policy를 starter config에 반영하며,
+setup deps, tests, workspace tabs, editor, agent runtime, agent prompt, issue provider, site provider
+같은 항목을 필요한 만큼만 guided flow로 묻는다. 쓰기 전에는
 어떤 target file에 어떤 작업으로 어떤 config section이 생성될지 명확히
 보여주고 확인을 받아야 한다.
 
@@ -938,6 +937,9 @@ Selector가 submit되면 단순 `Submitted`가 아니라 사용자가 고른 lab
 저장할 파일, 저장 범위, 작업, 저장될 설정, 안내/경고, TOML만 보여준다. 감지된 signal 전체를
 debug log처럼 반복하거나 `[ok] 감지됨` row로 나열하지 않는다. 팀 공유 설정 `.wt.toml`을 선택해서
 `.env` copy, local link, browser profile 같은 private helper가 빠질 때만 omission을 안내로 설명한다.
+Preview는 `저장 대상`, `안내`, `경고`, `생성될 TOML`처럼 사람이 구분해서 스캔할 수 있는 블록으로
+나눠 보여준다. TOML block과 설명 block은 빈 줄과 경계선으로 분리해서 안내 문장이 config 내용처럼
+보이지 않게 한다.
 `cmux`가 감지되지 않으면 workspace tabs, `post_deps_tabs`, workspace browser 같은 cmux workspace
 자동화를 추천 config에 넣지 않는다. `lazygit`과 `nvim`은 `cmux`가 있고 해당 command도 있을 때만
 기본 workspace tab으로 추천한다. 자동화 없이 최소 설정은 `[workspace] tabs = []`만 저장한다.
@@ -950,9 +952,12 @@ bundle 이름을 고르게 하지 않는다. `--preset`과 `--minimal`은 primar
 manifest를 scan해 setup command, dev tab, test command 후보를 active config에 반영한다.
 Issue/site integration은 explicit flag 또는 `.linear.toml`, Laravel app처럼 concrete repo
 signal이 있을 때만 active config에 쓴다. Agent runtime은 explicit flag나 기존 config default가
-있을 때만 쓴다. 개인 local target에서는 `.env` copy, known local links, `worktree.naming`, Chrome
-DevTools browser 같은 local helper를 추천할 수 있지만 shared `.wt.toml`에는 private helper를
-쓰지 않는다.
+있을 때만 쓴다. Interactive wizard에서는 agent runtime도 작은 selector로 물으며, agent를 선택하면
+같은 target file 안의 inline `[profile.agent]`와 `[profile.agent.prompt]`에 starter prompt를 같이 쓴다.
+이 inline prompt는 나중에 `wt config extract`나 `wt profile create`로 더 구조화된 profile/prompt file로
+옮길 수 있는 같은 profile model의 단순 형태다. 개인 local target에서는 `.env` copy, 기본
+`inject_local_context`, known local links, `worktree.naming`, Chrome DevTools browser 같은 local helper를
+추천할 수 있지만 shared `.wt.toml`에는 private helper를 쓰지 않는다.
 TTY가 아니면 `--yes` 또는 충분한 explicit flag 조합처럼 prompt 없이 끝낼 수 있는 입력이
 있어야 하며, 그렇지 않으면 interactive prompt를 시도하지 말고 명확한 에러로 실패한다.
 `wt init --dry-run`은 같은 validation을 거친 뒤 생성될 target, 작업, 저장될 설정, 안내/경고,
@@ -1215,7 +1220,8 @@ same value names and failing early for conflicting forms instead of introducing 
 `wt config` shows the effective `[workflow]` policy, including built-in defaults, so
 scripts and humans can inspect the actual policy that new workflow preparation will use.
 `wt init` does not write a commented optional `[workflow]` tutorial block; generated config
-only includes workflow policy when the user explicitly chooses to override the default.
+writes an explicit starter `[workflow]` policy with `pull_request = "none"` and `landing = "manual"`
+unless it is preserving an existing explicit workflow policy from the target config.
 `wt workflow show` displays the prepared policy snapshot from the workflow file, not the
 current `.wt.toml` value.
 

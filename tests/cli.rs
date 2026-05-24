@@ -4812,16 +4812,22 @@ fn init_dry_run_previews_plan_without_writing_config() {
         .stdout(predicate::str::contains("저장 범위: 개인 설정"))
         .stdout(predicate::str::contains("작업: 새 설정 생성"))
         .stdout(predicate::str::contains(
-            "저장될 설정: setup, test, workspace",
+            "저장될 설정: workflow, worktree, setup, test, workspace",
         ))
         .stdout(predicate::str::contains("감지된 신호:").not())
         .stdout(predicate::str::contains("[ok] 감지됨:").not())
+        .stdout(predicate::str::contains("[workflow]"))
+        .stdout(predicate::str::contains("pull_request = \"none\""))
+        .stdout(predicate::str::contains("landing = \"manual\""))
+        .stdout(predicate::str::contains("[worktree]"))
+        .stdout(predicate::str::contains("inject_local_context = \"\"\""))
+        .stdout(predicate::str::contains(
+            "colors = { task = \"blue\", issue = \"blue\", branch = \"green\", pr = \"magenta\" }",
+        ))
         .stdout(predicate::str::contains("run = \"npm install\""))
         .stdout(predicate::str::contains("run = \"npm test\""))
         .stdout(predicate::str::contains("[setup]"))
-        .stdout(predicate::str::contains("[test]"))
-        .stdout(predicate::str::contains("# [workflow]").not())
-        .stdout(predicate::str::contains("\n    [workflow]\n").not());
+        .stdout(predicate::str::contains("[test]"));
 
     assert!(!temp.path().join(".wt.toml").exists());
     assert!(!temp.path().join(".git/wt/config.toml").exists());
@@ -4847,7 +4853,9 @@ fn init_no_color_uses_plain_plan_output() {
         .success()
         .stdout(predicate::str::starts_with("init 계획\n"))
         .stdout(predicate::str::contains("==>").not())
-        .stdout(predicate::str::contains("저장될 설정: workspace"));
+        .stdout(predicate::str::contains(
+            "저장될 설정: workflow, worktree, workspace",
+        ));
 }
 
 #[test]
