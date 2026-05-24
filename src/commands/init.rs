@@ -2413,15 +2413,7 @@ fn resolve_gh_user(
 }
 
 fn ordered_agents(default: Option<InitAgent>) -> Vec<InitAgent> {
-    ordered_values(
-        &[
-            InitAgent::None,
-            InitAgent::Codex,
-            InitAgent::Claude,
-            InitAgent::Gemini,
-        ],
-        default.as_ref(),
-    )
+    ordered_values(&[InitAgent::Codex, InitAgent::Claude], default.as_ref())
 }
 
 fn ordered_issue_providers(default: Option<&InitIssueProvider>) -> Vec<InitIssueProvider> {
@@ -4126,7 +4118,7 @@ mod tests {
         ui.add_select(0); // .git/wt/config.toml
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
-        ui.add_select(1); // Codex agent
+        ui.add_select(0); // Codex agent
         ui.add_select(0); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
@@ -4160,6 +4152,8 @@ mod tests {
 
         let prompts = ui.prompts.lock().unwrap().clone();
         assert!(prompts.contains(&"select: 코딩 agent".to_string()));
+        let select_items = ui.select_items.lock().unwrap().clone();
+        assert_eq!(select_items[3], vec!["Codex", "Claude"]);
 
         let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
@@ -4688,6 +4682,8 @@ mod tests {
         ui.add_select(0); // .git/wt/config.toml
         ui.add_select(0); // project recommendation
         ui.add_select(0); // use system editor
+        ui.add_select(0); // Codex agent
+        ui.add_select(0); // no agent args
         ui.add_confirm(false); // do not create config
 
         let ctx = Ctx::new(
