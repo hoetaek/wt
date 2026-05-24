@@ -740,7 +740,7 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         }
         if matches!(
             *provider,
-            InitSiteProvider::Herd | InitSiteProvider::Valet | InitSiteProvider::Traefik
+            InitSiteProvider::Valet | InitSiteProvider::Traefik
         ) {
             s.push_str("secure = true\n");
         }
@@ -3858,6 +3858,31 @@ mod tests {
         assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
         assert_eq!(site.secure, Some(true));
         assert!(!content.contains("[herd]"));
+    }
+
+    #[test]
+    fn init_with_herd_site_provider_omits_default_secure() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                yes: true,
+                site_provider: Some(InitSiteProvider::Herd),
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+        let site = config.site.unwrap();
+
+        assert_eq!(site.provider, SiteProvider::Herd);
+        assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
+        assert!(site.secure.is_none());
+        assert!(site.effective_secure());
+        assert!(!plan.content.contains("secure = true"));
     }
 
     #[test]
