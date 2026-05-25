@@ -16,9 +16,6 @@ minor version instead of moving to `x.0.0`.
 - Extended wt-managed Claude and Codex inbox hooks to register `wt msg
   check-inbox` on both `UserPromptSubmit` and `PostToolUse`, so long
   tool-running turns can receive pending file inbox messages after tool calls.
-- Bumped the package version to `0.43.0` because the managed agent hook
-  delivery contract now covers an additional provider event while `wt` is still
-  pre-1.0.
 
 - Added explicit scoped sends for `wt msg send` with `--scope workflow:<id>`,
   `--scope task_run:<id>`, `--scope repo`, and `--scope direct`. Workflow
@@ -47,16 +44,16 @@ minor version instead of moving to `x.0.0`.
   unavailable.
 
 - Added automated cmux-free cross-agent hook roundtrip coverage. The smoke uses
-  linked worktrees, `wt install`, `wt as`, `wt msg send`, and the installed
+  linked worktrees, `wt setup`, `wt as`, `wt msg send`, and the installed
   Claude/Codex dispatcher hooks to prove `CLAUDE_SENT` and
   `CODEX_SENT REALWT_PONG_SEEN` delivery through the file inbox.
 
-- Added `wt install` and `wt uninstall` as the short setup surface for wt-managed
-  agent inbox hooks. `wt install` detects supported agent CLIs on PATH and
-  installs the matching Claude/Codex `WT_AGENT_ID` dispatcher hooks, while
-  `wt uninstall` removes only wt-managed hook entries.
-- Bumped the package version to `0.38.0` because the unified install/uninstall
-  commands extend the user-facing CLI surface.
+- Extended `wt setup` as the setup/removal surface for wt-managed agent inbox
+  hooks. `wt setup` detects supported agent CLIs on PATH and installs the
+  matching Claude/Codex `WT_AGENT_ID` dispatcher hooks, while `wt setup --remove`
+  removes only wt-managed hook entries.
+- Bumped the package version to `0.38.0` because the unified setup/removal
+  surface extends the user-facing CLI surface.
 
 - Added short agent runtime wrappers: `wt codex`, `wt claude`, and
   `wt as <agent-id> -- <command...>`. The known-agent wrappers derive
@@ -73,10 +70,10 @@ minor version instead of moving to `x.0.0`.
   separates hook installation from per-run agent identity binding.
 
 - Added the `coordinator` message target for task and workflow handoffs. Task
-  agents now receive `WT_COORDINATOR_AGENT_ID=agents/coordinator` when wt
-  launches their agent command, and generated handoff prompts include the
-  `wt msg send --to coordinator ...` route alongside the existing cmux send
-  coordinates.
+  agents launched with coordinator context receive
+  `WT_COORDINATOR_AGENT_ID=<coordinator-agent-id>`, and generated handoff
+  prompts include the `wt msg send --to coordinator ...` route alongside the
+  existing cmux send coordinates.
 - Bumped the package version to `0.36.2` because coordinator inbox routing
   changes the user-facing task/workflow handoff contract.
 

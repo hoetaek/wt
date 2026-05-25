@@ -1007,8 +1007,7 @@ fn render_payload(message: &Message, cap_bytes: usize) -> String {
     let content = ascii_words(&message.text_content());
     let reply_target = ascii_words(&message.meta.from);
     let mut payload = format!(
-        "from {}: {}. {} respond via: wt msg send --to {}",
-        reply_target, summary, content, reply_target
+        "from {reply_target}: {summary}. {content} respond via: wt msg send --to {reply_target}"
     );
     payload = compact_spaces(&payload);
     if payload.len() <= cap_bytes {

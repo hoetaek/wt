@@ -291,11 +291,12 @@ merge.
   and `--remove` to remove wt-managed per-machine entries while preserving
   user-managed hooks, cmux hooks, and unrelated trust state.
 - `wt codex` and `wt claude` launch those agent CLIs with
-  `WT_AGENT_ID=agents/<branch_slug>` and
-  `WT_COORDINATOR_AGENT_ID=agents/coordinator`. In the same worktree, pass a
-  leading role such as `wt codex @planner` or `wt claude @reviewer` to use a
-  separate inbox like `agents/<branch_slug>-planner`; role launches never
-  consume the default worktree inbox.
+  `WT_AGENT_ID=agents/<branch_slug>` and set `WT_COORDINATOR_AGENT_ID` from
+  the launch context when a coordinator identity is available. In the same
+  worktree, pass a leading role such as `wt codex @planner` or
+  `wt claude @reviewer` to use a separate inbox like
+  `agents/<branch_slug>-planner`; role launches never consume the default
+  worktree inbox.
 - `wt as <agent-id> -- <command...>` is the low-level escape hatch for unusual
   agent commands or scripts that need an explicit inbox identity.
 - `wt msg send --to <agent> <message>` writes a scoped file inbox message under

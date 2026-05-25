@@ -207,7 +207,7 @@ fn step_shell_completion(
     let source = detect_wt_install_source(ctx)?;
     if source == InstallSource::Homebrew && !options.remove {
         ctx.ui
-            .print_step("wt installed via Homebrew; completion provided by formula. Skipping.");
+            .print_step("Homebrew-managed wt detected; completion provided by formula. Skipping.");
         return Ok(());
     }
 

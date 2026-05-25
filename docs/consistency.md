@@ -332,7 +332,7 @@ written by `wt session set`, then the cwd/TaskRun identity path used by `wt shel
 are absent or invalid, the command must fail with setup guidance such as `wt session set <id>`,
 `wt coord use <id>`, or `eval "$(wt shell-init zsh)"`. Existing
 `messages/agents/coordinator/...` state remains ordinary inbox state and is active only for shells
-that explicitly set `WT_COORDINATOR_AGENT_ID=agents/coordinator`.
+that explicitly set `WT_COORDINATOR_AGENT_ID` to `agents/coordinator`.
 
 Canonical hook compatibility delivery:
 

@@ -4061,7 +4061,7 @@ fn setup_skips_completion_for_homebrew_install_source() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "wt installed via Homebrew; completion provided by formula. Skipping.",
+            "Homebrew-managed wt detected; completion provided by formula. Skipping.",
         ));
 
     let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
