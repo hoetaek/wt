@@ -584,7 +584,7 @@ run = "run-2026-05-18-001-schema"
 "#,
         );
         fs::write(
-            dir.path().join(".git/wt/workflows/bad.toml"),
+            dir.path().join(".git/wt/execution/workflows/bad.toml"),
             "mode = \"batch\"\n",
         )
         .unwrap();
@@ -705,7 +705,9 @@ run = "run-2026-05-18-003-done"
             "│  •  done-task  id 2026-05-18-003 · mode single · runs 1 done · profile codex · policy none/manual"
         ));
         assert!(!rendered.contains("body Keep search work coordinated."));
-        assert!(!rendered.contains("file <git-common-dir>/wt/workflows/2026-05-18-001.toml"));
+        assert!(
+            !rendered.contains("file <git-common-dir>/wt/execution/workflows/2026-05-18-001.toml")
+        );
         assert!(!rendered.contains("stack_has_running_task_run"));
         assert!(!rendered.contains("runnable no"));
         assert!(!rendered.contains("updated 2026-05-18T00:00:00Z"));
@@ -776,11 +778,9 @@ run = "run-{workflow_id}-2"
         assert!(row.contains("profiles 3"));
         assert!(row.contains("none/manual"));
         assert!(!row.contains("devtools-port-with-extra-long-label-alpha"));
-        assert!(
-            !steps
-                .iter()
-                .any(|line| line.contains("<git-common-dir>/wt/workflows/2026-05-18-002.toml"))
-        );
+        assert!(!steps.iter().any(|line| {
+            line.contains("<git-common-dir>/wt/execution/workflows/2026-05-18-002.toml")
+        }));
     }
 
     #[test]
@@ -837,12 +837,12 @@ run = "run-2026-05-18-099-schema"
         print_text(&ctx, &report);
         let warnings = ui.warnings.lock().unwrap();
         assert!(warnings.iter().any(|warning| {
-            warning == "2026-05-18-099  file <git-common-dir>/wt/workflows/2026-05-18-099.toml  uses removed `objective`; edit the workflow file to use top-level `title`, `body`, and optional `[origin]`"
+            warning == "2026-05-18-099  file <git-common-dir>/wt/execution/workflows/2026-05-18-099.toml  uses removed `objective`; edit the workflow file to use top-level `title`, `body`, and optional `[origin]`"
         }));
     }
 
     fn write_task(root: &Path, key: &str, branch: &str) {
-        let dir = root.join(".git/wt/tasks");
+        let dir = root.join(".git/wt/execution/tasks");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join(format!("{key}.toml")),
@@ -857,7 +857,7 @@ body = "Task body"
     }
 
     fn write_task_run(root: &Path, id: &str, task: &str, branch: &str, status: &str, group: &str) {
-        let dir = root.join(".git/wt/task-runs");
+        let dir = root.join(".git/wt/execution/task-runs");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join(format!("{id}.toml")),
@@ -876,7 +876,7 @@ updated_at = "2026-05-18T00:00:00.000000000Z"
     }
 
     fn write_workflow(root: &Path, id: &str, mode: &str, extra: &str, tasks: &str) {
-        let dir = root.join(".git/wt/workflows");
+        let dir = root.join(".git/wt/execution/workflows");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join(format!("{id}.toml")),

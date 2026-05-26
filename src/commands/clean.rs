@@ -604,7 +604,7 @@ mod tests {
     fn clean_branch_target_ignores_unrelated_malformed_task_run_during_resolution() {
         let repo = tempfile::tempdir().unwrap();
         let worktree = repo.path().with_file_name("test-repo-add-schema");
-        let task_runs_dir = repo.path().join(".git/wt/task-runs");
+        let task_runs_dir = repo.path().join(".git/wt/execution/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
         std::fs::write(
             task_runs_dir.join("unrelated-broken.toml"),
@@ -703,7 +703,9 @@ updated_at = "2026-05-18T00:00:00Z"
             task_run::STATUS_RUNNING,
         )
         .unwrap();
-        let workflow_path = repo.path().join(".git/wt/workflows/2026-05-16-001.toml");
+        let workflow_path = repo
+            .path()
+            .join(".git/wt/execution/workflows/2026-05-16-001.toml");
         let mut workflow = crate::workflow::WorkflowMetadata::new(
             crate::workflow::WorkflowMode::Batch,
             "branch",
@@ -1069,7 +1071,7 @@ updated_at = "2026-05-18T00:00:00Z"
     fn clean_uses_matching_profile_config_for_site_unlink() {
         let repo = tempfile::tempdir().unwrap();
         let worktree = repo.path().with_file_name("repo-cms-codex");
-        let profile_dir = repo.path().join(".git/wt/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),

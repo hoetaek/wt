@@ -1330,7 +1330,7 @@ mod tests {
     }
 
     fn write_empty_profile(root: &Path, name: &str) {
-        let profile_dir = root.join(".git/wt/profiles").join(name);
+        let profile_dir = root.join(".git/wt/config/profiles").join(name);
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
     }
@@ -1550,7 +1550,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: "<git-common-dir>/wt/tasks/add-schema.toml",
+            path: "<git-common-dir>/wt/execution/tasks/add-schema.toml",
             content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
         };
 
@@ -1583,7 +1583,7 @@ mod tests {
         assert!(
             prompts[0].find("Workflow origin").unwrap()
                 < prompts[0]
-                    .find("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
+                    .find("Task path: `<git-common-dir>/wt/execution/tasks/add-schema.toml`")
                     .unwrap()
         );
         assert!(
@@ -1619,7 +1619,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: "<git-common-dir>/wt/tasks/add-schema.toml",
+            path: "<git-common-dir>/wt/execution/tasks/add-schema.toml",
             content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
         };
 
@@ -1638,14 +1638,16 @@ mod tests {
         assert_eq!(prompts.len(), 1);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
         assert!(prompts[0].contains("Workflow body"));
-        assert!(prompts[0].contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
+        assert!(
+            prompts[0].contains("Task path: `<git-common-dir>/wt/execution/tasks/add-schema.toml`")
+        );
         assert!(prompts[0].contains("Workflow prompt"));
         assert!(prompts[0].contains("Workflow follow-up"));
         assert!(prompts[0].contains("Common prompt"));
         assert!(prompts[0].contains("Branch prompt"));
         assert!(
             prompts[0]
-                .find("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
+                .find("Task path: `<git-common-dir>/wt/execution/tasks/add-schema.toml`")
                 .unwrap()
                 < prompts[0].find("Workflow prompt").unwrap()
         );
@@ -1690,7 +1692,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: "<git-common-dir>/wt/tasks/add-schema.toml",
+            path: "<git-common-dir>/wt/execution/tasks/add-schema.toml",
             content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
         };
 
@@ -1708,12 +1710,14 @@ mod tests {
         let prompts = agent.prompt.remove("branch").unwrap();
         assert_eq!(prompts.len(), 1);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
-        assert!(prompts[0].contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
+        assert!(
+            prompts[0].contains("Task path: `<git-common-dir>/wt/execution/tasks/add-schema.toml`")
+        );
         assert!(prompts[0].contains("Common prompt"));
         assert!(prompts[0].contains("Branch prompt"));
         assert!(
             prompts[0]
-                .find("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
+                .find("Task path: `<git-common-dir>/wt/execution/tasks/add-schema.toml`")
                 .unwrap()
                 < prompts[0].find("Common prompt").unwrap()
         );
@@ -1752,7 +1756,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: "<git-common-dir>/wt/tasks/add-schema.toml",
+            path: "<git-common-dir>/wt/execution/tasks/add-schema.toml",
             content: "# Add schema\n\nbranch = \"add-schema\"",
         };
 
@@ -1771,7 +1775,8 @@ mod tests {
         assert_eq!(branch_prompts.len(), 1);
         assert!(branch_prompts[0].contains("Use this task before changing code."));
         assert!(
-            branch_prompts[0].contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
+            branch_prompts[0]
+                .contains("Task path: `<git-common-dir>/wt/execution/tasks/add-schema.toml`")
         );
         assert!(branch_prompts[0].contains("# Add schema"));
         assert!(branch_prompts[0].contains("Changed files"));
@@ -1782,7 +1787,7 @@ mod tests {
     #[test]
     fn issue_profile_existing_branch_without_worktree_reuses_branch() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".git/wt/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
 
@@ -1831,7 +1836,7 @@ mod tests {
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",
-                    path: "<git-common-dir>/wt/tasks/add-schema.toml",
+                    path: "<git-common-dir>/wt/execution/tasks/add-schema.toml",
                     content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
                 },
             },
@@ -1862,7 +1867,7 @@ mod tests {
     #[test]
     fn issue_profile_existing_branch_non_interactive_fails_without_prompt_or_delete() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".git/wt/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
 
@@ -1901,7 +1906,7 @@ mod tests {
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",
-                    path: "<git-common-dir>/wt/tasks/add-schema.toml",
+                    path: "<git-common-dir>/wt/execution/tasks/add-schema.toml",
                     content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
                 },
             },

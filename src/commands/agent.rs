@@ -854,9 +854,11 @@ mod tests {
     #[test]
     fn status_branch_target_warns_about_unrelated_invalid_task_run() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-broken.toml"),
+            fixture
+                .repo
+                .join(".git/wt/execution/task-runs/run-broken.toml"),
             "task = \"broken\"\nbranch = \"unrelated\"\nstatus = \"started\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1119,9 +1121,9 @@ mod tests {
     #[test]
     fn task_run_target_adds_task_run_metadata() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1149,14 +1151,16 @@ mod tests {
     #[test]
     fn status_without_target_selects_interactive_work_target() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-broken.toml"),
+            fixture
+                .repo
+                .join(".git/wt/execution/task-runs/run-broken.toml"),
             "task = \"broken\"\nbranch = \"unrelated\"\nstatus = \"started\"\ncreated_at = \"2026-05-16T00:00:01Z\"\nupdated_at = \"2026-05-16T00:00:01Z\"\n",
         )
         .unwrap();
@@ -1354,9 +1358,9 @@ mod tests {
     #[test]
     fn watch_heartbeat_prints_unchanged_running_observation() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1404,9 +1408,9 @@ mod tests {
     #[test]
     fn watch_recording_heartbeat_appends_one_non_idle_wait_observation() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();

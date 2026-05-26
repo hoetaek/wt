@@ -2,6 +2,7 @@ use crate::config::{AGENT_PROMPT_WORKFLOW_SCOPE, Config};
 use crate::config_render::render_effective_config;
 use crate::context::Ctx;
 use crate::error::WtError;
+use crate::storage::normalize_path_lexically;
 use anyhow::{Context, Result, anyhow, bail};
 use std::borrow::Cow;
 use std::fs;
@@ -65,7 +66,11 @@ pub fn edit(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Result<(
     }
 
     let path = match source {
-        Some(source) => resolve_source_path(ctx, source)?,
+        Some(source) => {
+            let path = resolve_source_path(ctx, source)?;
+            reject_legacy_profile_source(ctx, &path)?;
+            path
+        }
         None => select_edit_source(ctx)?,
     };
     crate::commands::editor::open_file(ctx, &path)
@@ -641,6 +646,7 @@ fn analyze_source(ctx: &Ctx, path: &Path) -> Result<SourceSummary> {
 
     let path = path.to_path_buf();
     let display = relative_display(ctx, &path);
+    reject_legacy_profile_source(ctx, &path)?;
     let content = fs::read_to_string(&path)?;
 
     if same_existing_path(&path, &ctx.repo_root.join(".wt.toml")) {
@@ -651,7 +657,7 @@ fn analyze_source(ctx: &Ctx, path: &Path) -> Result<SourceSummary> {
         analyze_profile_config(ctx, path, display, &content, profile_name)
     } else {
         bail!(
-            "Unsupported config source: {display}. Use .wt.toml, <git-common-dir>/wt/config.toml, or <git-common-dir>/wt/profiles/<name>/profile.toml"
+            "Unsupported config source: {display}. Use .wt.toml, <git-common-dir>/wt/config/local.toml, or <git-common-dir>/wt/config/profiles/<name>/profile.toml"
         );
     }
 }
@@ -717,7 +723,7 @@ fn analyze_local_config(
         if has_profile_sections {
             candidates.push(ExtractCandidate {
                 name: "[profile.*]".into(),
-                target: "<git-common-dir>/wt/profiles/<name>/profile.toml".into(),
+                target: "<git-common-dir>/wt/config/profiles/<name>/profile.toml".into(),
                 blocked: None,
                 kind: ExtractKind::InlineProfileToNamed,
             });
@@ -811,6 +817,8 @@ fn analyze_inline_source(ctx: &Ctx, path: &Path) -> Result<InlineSummary> {
         return analyze_inline_local_config(ctx, path, display);
     }
 
+    reject_legacy_profile_source(ctx, &path)?;
+
     if let Some(file_name) = path.file_name().and_then(|name| name.to_str())
         && matches!(file_name, "new.md" | "new.append.md")
     {
@@ -841,7 +849,7 @@ fn analyze_inline_source(ctx: &Ctx, path: &Path) -> Result<InlineSummary> {
     }
 
     bail!(
-        "Unsupported inline source: {display}. Use <git-common-dir>/wt/config.toml, <git-common-dir>/wt/profiles/<name>/profile.toml, or <git-common-dir>/wt/profiles/<name>/prompts/<mode>.md"
+        "Unsupported inline source: {display}. Use <git-common-dir>/wt/config/local.toml, <git-common-dir>/wt/config/profiles/<name>/profile.toml, or <git-common-dir>/wt/config/profiles/<name>/prompts/<mode>.md"
     );
 }
 
@@ -1325,6 +1333,23 @@ fn prompt_source_for_path(ctx: &Ctx, path: &Path) -> Option<PromptSource> {
         profile_dir: canonical_profiles_dir.join(&profile_name),
         profile_name,
     })
+}
+
+fn reject_legacy_profile_source(ctx: &Ctx, path: &Path) -> Result<()> {
+    let Some(legacy) = ctx.storage_root.detect_legacy_profiles(&ctx.repo_root) else {
+        return Ok(());
+    };
+    if path_is_under_existing(path, legacy.path()) {
+        bail!("{}", legacy.error_message_for("profile storage"));
+    }
+    Ok(())
+}
+
+fn path_is_under_existing(path: &Path, dir: &Path) -> bool {
+    match (path.canonicalize(), dir.canonicalize()) {
+        (Ok(path), Ok(dir)) => path.starts_with(dir),
+        _ => normalize_path_lexically(path).starts_with(normalize_path_lexically(dir)),
+    }
 }
 
 fn prompt_file_specs() -> Vec<PromptFileSpec> {
@@ -1838,9 +1863,9 @@ mod tests {
     #[test]
     fn extract_inline_profile_creates_named_profile() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/wt/config")).unwrap();
         std::fs::write(
-            dir.path().join(".git/wt/config.toml"),
+            dir.path().join(".git/wt/config/local.toml"),
             r#"
 [workspace]
 tabs = ["lazygit"]
@@ -1861,17 +1886,19 @@ issue = ["Handle issue\n"]
         ui.add_confirm(true);
         let ctx = ctx_with_ui(dir.path(), ui);
 
-        extract(&ctx, None, Some(Path::new(".git/wt/config.toml"))).unwrap();
+        extract(&ctx, None, Some(Path::new(".git/wt/config/local.toml"))).unwrap();
 
-        let local = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let local = std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         assert!(local.contains("[workspace]"));
         assert!(local.contains("[profile]"));
         assert!(local.contains("name = \"codex\""));
         assert!(!local.contains("[profile.agent]"));
 
-        let profile =
-            std::fs::read_to_string(dir.path().join(".git/wt/profiles/codex/profile.toml"))
-                .unwrap();
+        let profile = std::fs::read_to_string(
+            dir.path()
+                .join(".git/wt/config/profiles/codex/profile.toml"),
+        )
+        .unwrap();
         assert!(profile.contains("[agent]"));
         assert!(profile.contains("cli = \"codex\""));
         assert!(profile.contains("[agent.prompt]"));
@@ -1890,7 +1917,7 @@ issue = ["Handle issue\n"]
     #[test]
     fn extract_profile_prompt_creates_convention_file() {
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".git/wt/profiles/codex");
+        let profile_dir = dir.path().join(".git/wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),
@@ -1913,7 +1940,7 @@ branch = ["Handle branch\n"]
         extract(
             &ctx,
             None,
-            Some(Path::new(".git/wt/profiles/codex/profile.toml")),
+            Some(Path::new(".git/wt/config/profiles/codex/profile.toml")),
         )
         .unwrap();
 
@@ -1944,7 +1971,7 @@ branch = ["Handle branch\n"]
     #[test]
     fn inline_profile_prompt_files_moves_conventions_into_profile_toml() {
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".git/wt/profiles/codex");
+        let profile_dir = dir.path().join(".git/wt/config/profiles/codex");
         let prompts_dir = profile_dir.join("prompts");
         std::fs::create_dir_all(&prompts_dir).unwrap();
         std::fs::write(
@@ -1979,7 +2006,7 @@ tabs = ["pnpm dev"]
         inline(
             &ctx,
             None,
-            Some(Path::new(".git/wt/profiles/codex/profile.toml")),
+            Some(Path::new(".git/wt/config/profiles/codex/profile.toml")),
         )
         .unwrap();
 
@@ -2005,16 +2032,16 @@ tabs = ["pnpm dev"]
     #[test]
     fn inline_selected_named_profile_moves_profile_toml_into_local_config() {
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".git/wt/profiles/codex");
+        let profile_dir = dir.path().join(".git/wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             dir.path().join(".wt.toml"),
             "[issues]\nprovider = \"github\"\n",
         )
         .unwrap();
-        std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/wt/config")).unwrap();
         std::fs::write(
-            dir.path().join(".git/wt/config.toml"),
+            dir.path().join(".git/wt/config/local.toml"),
             r#"
 [worktree]
 copy = [".env"]
@@ -2050,7 +2077,7 @@ tabs = ["pnpm dev"]
         inline(&ctx, None, None).unwrap();
 
         assert!(!profile_dir.join("profile.toml").exists());
-        let local = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let local = std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         assert!(local.contains("[profile.agent]"));
         assert!(local.contains("cli = \"codex\""));
         assert!(local.contains("[profile.agent.prompt]"));
@@ -2064,12 +2091,12 @@ tabs = ["pnpm dev"]
     #[test]
     fn inline_selected_named_profile_blocks_when_profile_has_convention_files() {
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".git/wt/profiles/codex");
+        let profile_dir = dir.path().join(".git/wt/config/profiles/codex");
         let prompts_dir = profile_dir.join("prompts");
         std::fs::create_dir_all(&prompts_dir).unwrap();
-        std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/wt/config")).unwrap();
         std::fs::write(
-            dir.path().join(".git/wt/config.toml"),
+            dir.path().join(".git/wt/config/local.toml"),
             "[profile]\nname = \"codex\"\n",
         )
         .unwrap();
@@ -2082,11 +2109,11 @@ tabs = ["pnpm dev"]
 
         let ctx = ctx_with_ui(dir.path(), MockUi::new());
 
-        inline(&ctx, None, Some(Path::new(".git/wt/config.toml"))).unwrap();
+        inline(&ctx, None, Some(Path::new(".git/wt/config/local.toml"))).unwrap();
 
         assert!(profile_dir.join("profile.toml").exists());
         assert!(prompts_dir.join("issue.md").exists());
-        let local = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let local = std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         assert!(local.contains("name = \"codex\""));
         assert!(!local.contains("[profile.agent]"));
     }
@@ -2094,7 +2121,7 @@ tabs = ["pnpm dev"]
     #[test]
     fn inline_profile_prompt_file_blocks_existing_prompt_key() {
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".git/wt/profiles/codex");
+        let profile_dir = dir.path().join(".git/wt/config/profiles/codex");
         let prompts_dir = profile_dir.join("prompts");
         std::fs::create_dir_all(&prompts_dir).unwrap();
         std::fs::write(
@@ -2118,7 +2145,7 @@ issue = ["Existing issue\n"]
         let err = inline(
             &ctx,
             None,
-            Some(Path::new(".git/wt/profiles/codex/profile.toml")),
+            Some(Path::new(".git/wt/config/profiles/codex/profile.toml")),
         )
         .unwrap_err();
 
@@ -2131,7 +2158,7 @@ issue = ["Existing issue\n"]
     #[test]
     fn inline_accepts_direct_prompt_file_source() {
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".git/wt/profiles/codex");
+        let profile_dir = dir.path().join(".git/wt/config/profiles/codex");
         let prompts_dir = profile_dir.join("prompts");
         std::fs::create_dir_all(&prompts_dir).unwrap();
         std::fs::write(
@@ -2152,7 +2179,9 @@ cli = "codex"
         inline(
             &ctx,
             None,
-            Some(Path::new(".git/wt/profiles/codex/prompts/pr.append.md")),
+            Some(Path::new(
+                ".git/wt/config/profiles/codex/prompts/pr.append.md",
+            )),
         )
         .unwrap();
 
@@ -2170,7 +2199,7 @@ cli = "codex"
     #[test]
     fn inline_profile_prompt_file_blocks_when_convention_file_is_ineffective() {
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".git/wt/profiles/codex");
+        let profile_dir = dir.path().join(".git/wt/config/profiles/codex");
         let prompts_dir = profile_dir.join("prompts");
         std::fs::create_dir_all(&prompts_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
@@ -2180,7 +2209,7 @@ cli = "codex"
         inline(
             &ctx,
             None,
-            Some(Path::new(".git/wt/profiles/codex/profile.toml")),
+            Some(Path::new(".git/wt/config/profiles/codex/profile.toml")),
         )
         .unwrap();
 
@@ -2189,6 +2218,38 @@ cli = "codex"
             std::fs::read_to_string(profile_dir.join("profile.toml")).unwrap(),
             ""
         );
+    }
+
+    #[test]
+    fn legacy_profile_sources_are_rejected_for_extract_edit_and_inline() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".git/wt/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            "[agent]\ncli = \"codex\"\n",
+        )
+        .unwrap();
+
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+        let source = Path::new(".git/wt/profiles/codex/profile.toml");
+
+        for error in [
+            extract(&ctx, None, Some(source)).unwrap_err(),
+            edit(&ctx, None, Some(source)).unwrap_err(),
+            inline(&ctx, None, Some(source)).unwrap_err(),
+            edit(
+                &ctx,
+                None,
+                Some(Path::new(".git/wt/profiles/codex/../new/profile.toml")),
+            )
+            .unwrap_err(),
+        ] {
+            let report = format!("{error:#}");
+            assert!(report.contains("Found legacy wt personal profile storage"));
+            assert!(report.contains(".git/wt/profiles"));
+            assert!(report.contains(".git/wt/config/profiles"));
+        }
     }
 
     #[test]
@@ -2216,7 +2277,7 @@ cli = "codex"
         let shared = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
         assert!(shared.contains("[issues]"));
         assert!(!shared.contains("[agent]"));
-        let local = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let local = std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         assert!(local.contains("[agent]"));
         assert!(local.contains("cli = \"codex\""));
 
@@ -2246,7 +2307,7 @@ command = "vi {{path}}"
 
         let shared = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
         assert!(!shared.contains("[editor]"));
-        let local = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let local = std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         assert!(local.contains("[editor]"));
         assert!(local.contains("command = \"vi {{path}}\""));
     }
@@ -2254,31 +2315,36 @@ command = "vi {{path}}"
     #[test]
     fn selected_named_profile_suggests_profile_toml_without_extracting() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/wt/config")).unwrap();
         std::fs::write(
-            dir.path().join(".git/wt/config.toml"),
+            dir.path().join(".git/wt/config/local.toml"),
             "[profile]\nname = \"codex\"\n",
         )
         .unwrap();
 
         let ctx = ctx_with_ui(dir.path(), MockUi::new());
-        extract(&ctx, None, Some(Path::new(".git/wt/config.toml"))).unwrap();
+        extract(&ctx, None, Some(Path::new(".git/wt/config/local.toml"))).unwrap();
     }
 
     #[test]
     fn select_edit_source_lists_known_config_files() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".git/wt/profiles/codex")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/wt/config/profiles/codex")).unwrap();
         std::fs::write(dir.path().join(".wt.toml"), "").unwrap();
-        std::fs::write(dir.path().join(".git/wt/config.toml"), "").unwrap();
-        std::fs::write(dir.path().join(".git/wt/profiles/codex/profile.toml"), "").unwrap();
+        std::fs::write(dir.path().join(".git/wt/config/local.toml"), "").unwrap();
+        std::fs::write(
+            dir.path()
+                .join(".git/wt/config/profiles/codex/profile.toml"),
+            "",
+        )
+        .unwrap();
         let mut ui = MockUi::new();
         ui.add_select(1);
         let ctx = ctx_with_ui(dir.path(), ui);
 
         let selected = select_edit_source(&ctx).unwrap();
 
-        assert!(selected.ends_with(".git/wt/config.toml"));
+        assert!(selected.ends_with(".git/wt/config/local.toml"));
     }
 
     #[test]
@@ -2288,7 +2354,7 @@ command = "vi {{path}}"
 
         let selected = select_edit_source(&ctx).unwrap();
 
-        assert!(selected.ends_with(".git/wt/config.toml"));
+        assert!(selected.ends_with(".git/wt/config/local.toml"));
         assert!(dir.path().join(".git/wt").is_dir());
     }
 }
