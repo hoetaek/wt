@@ -23,6 +23,7 @@ fn run_with_actor(
 ) -> Result<()> {
     let text = review_message(status, message)?;
     let record = resolve_review_task_run(ctx, task_run_id)?;
+    validate_review_sender(&record, from)?;
     let to = required_task_agent_id(&record)?;
     let scope = MessageScope::task_run(record.id.clone())?;
 
@@ -60,6 +61,34 @@ fn required_task_agent_id(record: &TaskRunRecord) -> Result<AgentId> {
     };
     AgentId::parse(agent_id)
         .with_context(|| format!("TaskRun {} has invalid agent_id: {agent_id}", record.id))
+}
+
+fn required_coordinator_id(record: &TaskRunRecord) -> Result<AgentId> {
+    let Some(coordinator_id) = record.run.coordinator_id.as_deref() else {
+        bail!(
+            "TaskRun {} is missing coordinator_id; it is a legacy or incomplete TaskRun and cannot send review feedback through `wt task review`.",
+            record.id
+        );
+    };
+    AgentId::parse(coordinator_id).with_context(|| {
+        format!(
+            "TaskRun {} has invalid coordinator_id: {coordinator_id}",
+            record.id
+        )
+    })
+}
+
+fn validate_review_sender(record: &TaskRunRecord, from: &AgentId) -> Result<()> {
+    let expected = required_coordinator_id(record)?;
+    if from.as_str() != expected.as_str() {
+        bail!(
+            "Current actor id {} does not match TaskRun {} coordinator_id {}; review feedback must be sent by the TaskRun coordinator route.",
+            from.as_str(),
+            record.id,
+            expected.as_str()
+        );
+    }
+    Ok(())
 }
 
 fn review_message(status: TaskReviewStatus, message: &[String]) -> Result<String> {
@@ -146,7 +175,16 @@ mod tests {
     fn review_rejects_legacy_task_run_without_agent_id() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let record = task_run::create(&ctx, "legacy", "legacy", None, STATUS_RUNNING).unwrap();
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "legacy",
+            "legacy",
+            "agents/coord-a",
+            None,
+            STATUS_RUNNING,
+        )
+        .unwrap();
+        remove_task_run_line(&record.path, "agent_id");
         let from = AgentId::parse("agents/coord-a").unwrap();
 
         let err = run_with_actor(
@@ -161,5 +199,139 @@ mod tests {
         let message = format!("{err:#}");
         assert!(message.contains("missing agent_id"));
         assert!(message.contains("wt task review"));
+    }
+
+    #[test]
+    fn review_rejects_task_run_without_coordinator_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            None,
+            STATUS_RUNNING,
+        )
+        .unwrap();
+        remove_task_run_line(&record.path, "coordinator_id");
+        let from = AgentId::parse("agents/coord-a").unwrap();
+
+        let err = run_with_actor(
+            &ctx,
+            &record.id,
+            task_run::REVIEW_REJECTED,
+            &["needs changes".into()],
+            &from,
+        )
+        .unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(message.contains("missing coordinator_id"));
+        assert!(message.contains("wt task review"));
+    }
+
+    #[test]
+    fn review_rejects_task_run_with_invalid_coordinator_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            None,
+            STATUS_RUNNING,
+        )
+        .unwrap();
+        replace_task_run_line(
+            &record.path,
+            "coordinator_id",
+            "coordinator_id = \"agents/team/coord\"",
+        );
+        let from = AgentId::parse("agents/coord-a").unwrap();
+
+        let err = run_with_actor(
+            &ctx,
+            &record.id,
+            task_run::REVIEW_REJECTED,
+            &["needs changes".into()],
+            &from,
+        )
+        .unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(message.contains("invalid coordinator_id"));
+        assert!(message.contains("agents/team/coord"));
+    }
+
+    #[test]
+    fn review_rejects_actor_mismatch_with_task_run_coordinator_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            None,
+            STATUS_RUNNING,
+        )
+        .unwrap();
+        let from = AgentId::parse("agents/coord-b").unwrap();
+
+        let err = run_with_actor(
+            &ctx,
+            &record.id,
+            task_run::REVIEW_REJECTED,
+            &["needs changes".into()],
+            &from,
+        )
+        .unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(message.contains("does not match TaskRun"));
+        assert!(message.contains("agents/coord-b"));
+        assert!(message.contains("coordinator_id agents/coord-a"));
+        assert!(
+            task_run::read(&record.path)
+                .unwrap()
+                .last_review_message_id
+                .is_none()
+        );
+        assert!(
+            !ctx.storage_root
+                .messages_dir()
+                .join("agents/run-1-add-schema/inbox/new")
+                .exists()
+        );
+    }
+
+    fn remove_task_run_line(path: &std::path::Path, key: &str) {
+        let content = std::fs::read_to_string(path).unwrap();
+        let prefix = format!("{key} = ");
+        let content = content
+            .lines()
+            .filter(|line| !line.starts_with(&prefix))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(path, format!("{content}\n")).unwrap();
+    }
+
+    fn replace_task_run_line(path: &std::path::Path, key: &str, replacement: &str) {
+        let content = std::fs::read_to_string(path).unwrap();
+        let prefix = format!("{key} = ");
+        let content = content
+            .lines()
+            .map(|line| {
+                if line.starts_with(&prefix) {
+                    replacement
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(path, format!("{content}\n")).unwrap();
     }
 }
