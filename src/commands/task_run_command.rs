@@ -118,6 +118,7 @@ fn run_selected_task(
         Some(&coordinator_label),
         task_run::STATUS_PREPARED,
     )?;
+    task_run::update(ctx, &run.id, task_run::STATUS_RUNNING, None, None)?;
 
     let result = run_prepared_task_snapshot(
         ctx,
@@ -345,6 +346,41 @@ mod tests {
             args: &[&str],
             cwd: Option<&Path>,
         ) -> Result<crate::context::CmdOutput> {
+            self.inner.run(cmd, args, cwd)
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            self.inner.has_command(cmd)
+        }
+    }
+
+    struct PromptStatusRunner {
+        inner: Arc<MockRunner>,
+        repo_root: std::path::PathBuf,
+        observed_statuses: Arc<std::sync::Mutex<Vec<task_run::TaskRunStatus>>>,
+    }
+
+    impl CommandRunner for PromptStatusRunner {
+        fn run(
+            &self,
+            cmd: &str,
+            args: &[&str],
+            cwd: Option<&Path>,
+        ) -> Result<crate::context::CmdOutput> {
+            if cmd == "cmux" && args.first().is_some_and(|arg| *arg == "send") {
+                let ctx = Ctx::new(
+                    self.repo_root.clone(),
+                    self.repo_root.clone(),
+                    Config::default(),
+                    Box::new(MockRunner::new()),
+                    Box::new(MockUi::new()),
+                );
+                let statuses = task_run::list(&ctx)?
+                    .into_iter()
+                    .map(|record| record.run.status)
+                    .collect::<Vec<_>>();
+                self.observed_statuses.lock().unwrap().extend(statuses);
+            }
             self.inner.run(cmd, args, cwd)
         }
 
@@ -764,7 +800,10 @@ id = "PROJ-123"
                     submit: SubmitMode::None,
                     timeout: 1,
                     send_after: 0,
-                    prompt: HashMap::from([("branch".into(), vec!["Existing prompt".into()])]),
+                    prompt: HashMap::from([(
+                        "branch".into(),
+                        vec!["Common prompt".into(), "Existing prompt".into()],
+                    )]),
                     ..AgentConfig::default()
                 }),
                 ..Config::default()
@@ -802,6 +841,7 @@ id = "PROJ-123"
         assert!(prompt.contains("If `wt task report` fails"));
         assert!(prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
         assert!(prompt.contains("Create the schema first."));
+        assert!(prompt.contains("Common prompt"));
         assert!(prompt.contains("Existing prompt"));
         assert!(!prompt.contains("wt workflow complete"));
         assert!(
@@ -809,6 +849,87 @@ id = "PROJ-123"
                 < prompt
                     .find("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
                     .unwrap()
+        );
+        assert!(
+            prompt
+                .find("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
+                .unwrap()
+                < prompt.find("Common prompt").unwrap()
+        );
+        assert!(prompt.find("Common prompt").unwrap() < prompt.find("Existing prompt").unwrap());
+    }
+
+    #[test]
+    fn task_run_is_running_before_first_prompt_is_sent() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".git/wt/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/main\n\n",
+                repo.path().display()
+            ),
+            true,
+        );
+        runner.add_response("", true);
+        runner.add_response("", false);
+        runner.add_response("", false);
+        runner.add_response("main", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response(
+            r#"{"caller":{"workspace_ref":"workspace:34","surface_ref":"surface:103"}}"#,
+            true,
+        );
+        runner.add_response("workspace:200 workspace:200", true);
+        runner.add_response("", true);
+        runner.add_response("pane:1", true);
+        runner.add_response("pane:1", true);
+        runner.add_response("surface:999", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+        let observed_statuses = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config {
+                workspace: Some(WorkspaceConfig::default()),
+                agent: Some(AgentConfig {
+                    cli: AgentCli::None,
+                    args: Vec::new(),
+                    command: None,
+                    ready: ReadyMode::Auto,
+                    submit: SubmitMode::None,
+                    timeout: 1,
+                    send_after: 0,
+                    prompt: HashMap::from([("branch".into(), vec!["Existing prompt".into()])]),
+                    ..AgentConfig::default()
+                }),
+                ..Config::default()
+            },
+            Box::new(PromptStatusRunner {
+                inner: Arc::clone(&runner),
+                repo_root: repo.path().to_path_buf(),
+                observed_statuses: Arc::clone(&observed_statuses),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, &["add-schema".into()], &None, None, &[], false).unwrap();
+
+        assert_eq!(
+            *observed_statuses.lock().unwrap(),
+            vec![task_run::STATUS_RUNNING]
         );
     }
 
