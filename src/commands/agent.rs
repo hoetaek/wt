@@ -490,9 +490,7 @@ fn wait_observation_agent_id(ctx: &Ctx, work: &work::Work) -> Result<Option<Agen
         .as_ref()
         .and_then(|record| record.run.agent_id.as_deref())
     {
-        return AgentId::parse(agent_id)
-            .with_context(|| format!("Invalid TaskRun agent_id for wait observation: {agent_id}"))
-            .map(Some);
+        return Ok(AgentId::parse(agent_id).ok());
     }
 
     let Some(surface_id) = work
@@ -509,9 +507,7 @@ fn wait_observation_agent_id(ctx: &Ctx, work: &work::Work) -> Result<Option<Agen
     let Some(marker) = identity_locator::read_marker(ctx, &key)? else {
         return Ok(None);
     };
-    AgentId::parse(&marker.id)
-        .with_context(|| format!("Invalid live surface marker agent id: {}", marker.id))
-        .map(Some)
+    Ok(AgentId::parse(&marker.id).ok())
 }
 
 fn wait_observation_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {

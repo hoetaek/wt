@@ -241,12 +241,39 @@ pub fn write_marker(
 
 pub fn read_marker(ctx: &Ctx, key: &AnchorKey) -> Result<Option<Marker>> {
     let mut matching = Vec::new();
+    let mut first_error: Option<anyhow::Error> = None;
     for path in marker_paths_for_key(ctx, key)? {
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read marker: {}", path.display()))?;
-        let marker = toml::from_str::<Marker>(&content)
-            .with_context(|| format!("Failed to parse marker: {}", path.display()))?;
-        if marker_matches_key(&marker, key) && marker_path_matches_owner(ctx, &path, &marker)? {
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(err) => {
+                first_error.get_or_insert_with(|| {
+                    anyhow::Error::new(err)
+                        .context(format!("Failed to read marker: {}", path.display()))
+                });
+                continue;
+            }
+        };
+        let marker = match toml::from_str::<Marker>(&content) {
+            Ok(marker) => marker,
+            Err(err) => {
+                first_error.get_or_insert_with(|| {
+                    anyhow::Error::new(err)
+                        .context(format!("Failed to parse marker: {}", path.display()))
+                });
+                continue;
+            }
+        };
+        match marker_path_matches_owner(ctx, &path, &marker) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(err) => {
+                first_error.get_or_insert_with(|| {
+                    err.context(format!("Invalid marker owner: {}", path.display()))
+                });
+                continue;
+            }
+        }
+        if marker_matches_key(&marker, key) {
             matching.push((path, marker));
         }
     }
@@ -257,7 +284,13 @@ pub fn read_marker(ctx: &Ctx, key: &AnchorKey) -> Result<Option<Marker>> {
             .cmp(&left.1.updated_at)
             .then_with(|| left.0.cmp(&right.0))
     });
-    Ok(matching.into_iter().next().map(|(_, marker)| marker))
+    if let Some((_, marker)) = matching.into_iter().next() {
+        return Ok(Some(marker));
+    }
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+    Ok(None)
 }
 
 pub fn remove_marker(ctx: &Ctx, key: &AnchorKey) -> Result<bool> {
