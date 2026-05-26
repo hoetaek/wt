@@ -2436,6 +2436,36 @@ fn msg_check_inbox_requires_runtime_task_run_binding_for_review_scope() {
 }
 
 #[test]
+fn msg_check_inbox_rejects_invalid_runtime_agent_env() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-review",
+        "review",
+        "review",
+        "running",
+        "",
+        (Some("agents/run-1-review"), Some("agents/coord-a")),
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/run-1-review",
+        ])
+        .env("WT_AGENT_ID", "agents/team/coord")
+        .env("WT_TASK_RUN_ID", "run-review")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid WT_AGENT_ID"));
+}
+
+#[test]
 fn msg_check_inbox_non_coordinator_leaves_workflow_scoped_messages_new() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());

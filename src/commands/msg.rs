@@ -6,7 +6,7 @@ use crate::messages::{
 };
 use crate::services::inbox_wake;
 use crate::services::inbox_watcher::InboxWatcher;
-use crate::task_run::{self, TaskRunContext};
+use crate::task_run;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::env;
@@ -150,17 +150,16 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
 
 fn authorized_inbox_scopes(ctx: &Ctx, agent: &str) -> Result<Vec<MessageScope>> {
     let agent = AgentId::parse(agent)?;
-    let runtime_agent = env_agent_id("WT_AGENT_ID").unwrap_or(None);
-    let runtime_task_run_id = env_task_run_id().unwrap_or(None);
+    let runtime_agent = env_agent_id("WT_AGENT_ID")?;
+    let runtime_task_run_id = env_task_run_id()?;
     let mut scopes = Vec::new();
     for record in task_run::list(ctx)? {
         if let Some(coordinator_id) = record.run.coordinator_id.as_deref()
             && let Ok(coordinator) = AgentId::parse(coordinator_id)
             && coordinator.as_str() == agent.as_str()
-            && let TaskRunContext::WorkflowLinked(context) =
-                task_run::resolve_context(ctx, &record)?
+            && let Some(workflow_id) = task_run::workflow_scope_id(&record)
         {
-            push_unique_scope(&mut scopes, MessageScope::workflow(context.workflow_id)?);
+            push_unique_scope(&mut scopes, MessageScope::workflow(workflow_id)?);
         }
         if task_run_scope_is_owned_by_runtime_agent(
             &record,
@@ -621,7 +620,6 @@ mod tests {
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CtxOptions, OutputMode};
     use crate::storage::StorageRoot;
-    use crate::workflow::{self as workflow_store, WorkflowMetadata, WorkflowMode, WorkflowTask};
     use tempfile::TempDir;
 
     #[test]
@@ -638,7 +636,7 @@ mod tests {
     fn authorized_inbox_scopes_include_recorded_workflow_coordinator() {
         let temp = TempDir::new().unwrap();
         let ctx = test_ctx(temp.path());
-        let record = task_run::create_workflow_routed(
+        task_run::create_workflow_routed(
             &ctx,
             "add-schema",
             "add-schema",
@@ -648,14 +646,6 @@ mod tests {
             task_run::STATUS_RUNNING,
         )
         .unwrap();
-        let workflow_path = ctx.storage_root.workflows_dir().join("workflow-1.toml");
-        let mut workflow = WorkflowMetadata::new(
-            WorkflowMode::Batch,
-            "explicit",
-            Some("main".into()),
-            vec![WorkflowTask::new("add-schema", record.id)],
-        );
-        workflow_store::write(&ctx, &workflow_path, &mut workflow).unwrap();
 
         let scopes = authorized_inbox_scopes(&ctx, "agents/coord-a").unwrap();
         let other_scopes = authorized_inbox_scopes(&ctx, "agents/other").unwrap();

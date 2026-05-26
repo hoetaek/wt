@@ -342,10 +342,10 @@ message command:
 wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>"
 ```
 
-For a direct TaskRun, `wt task report` sends direct scope. For a workflow-linked TaskRun, it derives
-`workflow:<id>` from the TaskRun's workflow context and sends from the TaskRun `agent_id` to the
-stored `coordinator_id`. Workflow task prompts must therefore not ask agents to manually compose raw
-message scope and recipient arguments themselves.
+For a direct running TaskRun, `wt task report` sends direct scope. For a workflow-linked running
+TaskRun, it derives `workflow:<id>` from persisted TaskRun state and sends from the TaskRun
+`agent_id` to the stored `coordinator_id`. Workflow task prompts must therefore not ask agents to
+manually compose raw message scope and recipient arguments themselves.
 
 There is no dynamic `coordinator` recipient alias. Bare `coordinator` is accepted only because
 `AgentId` accepts bare `NAME` and normalizes it to `agents/NAME`; it has the same meaning as the
@@ -368,10 +368,10 @@ lifecycle.
 
 For ordinary agent recipients, `check-inbox` claims direct-scope messages. Non-direct scope delivery
 requires explicit ownership evidence. For workflow reports, the ownership evidence is recorded
-TaskRun state: if a TaskRun's `coordinator_id` is the resolved inbox agent and that TaskRun resolves
-to workflow `<id>`, the agent may claim `workflow:<id>` messages. Hook context includes a `scope:`
-line for non-direct messages so the coordinator can distinguish workflow reports from standalone
-direct messages.
+TaskRun state: if a TaskRun's `coordinator_id` is the resolved inbox agent and that TaskRun records
+workflow `<id>`, the agent may claim `workflow:<id>` messages without loading the live workflow
+file. Hook context includes a `scope:` line for non-direct messages so the coordinator can
+distinguish workflow reports from standalone direct messages.
 
 For coordinator review feedback, the canonical path is:
 

@@ -349,9 +349,10 @@ fn create_with_routes(
     let now = current_utc_timestamp();
     let creation_order = next_creation_order(ctx)?;
     let task_key = task::safe_task_key(task);
+    let coordinator_id = routes.coordinator_id.and_then(optional_string);
     let agent_id = match routes.agent_id.and_then(optional_string) {
         Some(agent_id) => Some(agent_id),
-        None if routes.coordinator_id.is_some() => {
+        None if coordinator_id.is_some() => {
             Some(generated_task_agent_id(creation_order, &task_key)?)
         }
         None => None,
@@ -364,7 +365,7 @@ fn create_with_routes(
         error: None,
         creation_order: Some(creation_order),
         agent_id,
-        coordinator_id: routes.coordinator_id.and_then(optional_string),
+        coordinator_id,
         coordinator_label: routes.coordinator_label.and_then(optional_string),
         last_report_message_id: None,
         last_reported_at: None,
@@ -388,6 +389,15 @@ pub(crate) fn launch_template_vars_for(id: &str, run: &TaskRun) -> HashMap<Strin
         vars.insert("wt_agent_id".into(), agent_id.to_string());
     }
     vars
+}
+
+pub(crate) fn workflow_scope_id(record: &TaskRunRecord) -> Option<&str> {
+    record
+        .run
+        .group
+        .as_deref()
+        .map(str::trim)
+        .filter(|group| !group.is_empty())
 }
 
 pub(crate) fn ensure_workflow_routes(
@@ -1128,6 +1138,26 @@ mod tests {
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("coordinator_id = \"agents/coord-a\""));
         assert!(content.contains("agent_id = \"agents/run-1-add-schema\""));
+    }
+
+    #[test]
+    fn blank_coordinator_id_does_not_generate_agent_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        let record = create_with_coordinator_id(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            None,
+            Some("   "),
+            STATUS_RUNNING,
+        )
+        .unwrap();
+
+        let parsed = read(&record.path).unwrap();
+        assert!(parsed.coordinator_id.is_none());
+        assert!(parsed.agent_id.is_none());
     }
 
     #[test]

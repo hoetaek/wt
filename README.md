@@ -341,10 +341,10 @@ handoff instructions. The normal report route is:
 wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>"
 ```
 
-`wt task report` uses the current TaskRun's stored coordinator route and applies
-direct or workflow scope automatically. Prompts also include fallback cmux
-coordinates with a `cmux send --workspace ... --surface ...` report command and
-a matching `cmux send-key ... enter` command.
+`wt task report` uses the current running TaskRun's stored coordinator route and
+applies direct or workflow scope from TaskRun state automatically. Prompts also
+include fallback cmux coordinates with a `cmux send --workspace ... --surface ...`
+report command and a matching `cmux send-key ... enter` command.
 
 Low-level `wt msg send --to agents/<id> ...` remains an explicit file-inbox
 escape hatch. Workflow ownership belongs in message scope or TaskRun routing
