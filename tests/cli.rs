@@ -25,7 +25,8 @@ const GIT_LOCAL_ENV_KEYS: &[&str] = &[
     "GIT_COMMON_DIR",
 ];
 
-const CLAUDE_INBOX_HOOK_COMMAND: &str = "wt msg check-inbox --silent # wt-agent-hook:claude-inbox";
+const CLAUDE_INBOX_HOOK_COMMAND: &str =
+    "wt msg check-inbox --silent 2>/dev/null || true # wt-agent-hook:claude-inbox";
 const CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND: &str = "if [ -n \"${WT_AGENT_ID:-}\" ]; then wt agent supervisor stop --owned-by \"$WT_AGENT_ID\"; fi # wt-agent-hook:claude-supervisor-session-end";
 const CODEX_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 const MANAGED_INBOX_HOOK_EVENTS: &[(&str, &str)] = &[
@@ -612,7 +613,7 @@ fn codex_managed_inbox_commands(hooks: &serde_json::Value) -> Vec<String> {
 }
 
 fn codex_dispatcher_command() -> String {
-    format!("wt msg check-inbox --silent {CODEX_INBOX_HOOK_MARKER}")
+    format!("wt msg check-inbox --silent 2>/dev/null || true {CODEX_INBOX_HOOK_MARKER}")
 }
 
 #[test]
@@ -1604,7 +1605,8 @@ fn msg_help_explains_agent_inbox_contract() {
         .success()
         .stdout(predicate::str::contains("hook JSON"))
         .stdout(predicate::str::contains("Explicit single agent id"))
-        .stdout(predicate::str::contains("WT_AGENT_ID"));
+        .stdout(predicate::str::contains("WT_AGENT_ID"))
+        .stdout(predicate::str::contains("current live session marker"));
 
     wt_command()
         .args(["msg", "list", "--help"])
@@ -2263,6 +2265,75 @@ run = "run-2026-05-20-001-workflow-report"
 }
 
 #[test]
+fn task_report_workflow_scope_delivers_to_current_marker_coordinator_inbox() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-marker-workflow",
+        "marker-workflow",
+        "marker-workflow",
+        "running",
+        "2026-05-20-marker",
+        (Some("agents/run-marker"), Some("agents/marker-coord")),
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-marker-workflow")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "task",
+            "report",
+            "Agent Completion Report: Summary=workflow done; Changed files=src/lib.rs; Checks run=cargo test; PR=none; Risks or follow-ups=none",
+        ])
+        .env("WT_AGENT_ID", "agents/run-marker")
+        .env("WT_TASK_RUN_ID", "run-marker-workflow")
+        .assert()
+        .success();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--silent",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-marker-workflow")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/marker-coord: 1 new message"));
+    assert!(context.contains("scope: workflow:2026-05-20-marker"));
+    assert!(context.contains("Agent Completion Report: Summary=workflow done"));
+
+    let inbox = temp
+        .path()
+        .join(".git/wt/messages/agents/marker-coord/inbox");
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert_eq!(toml_files(&inbox.join("delivered")).len(), 1);
+}
+
+#[test]
 fn task_report_review_smoke_delivers_accepted_feedback_to_matching_task_agent() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -2726,15 +2797,19 @@ fn msg_check_empty_inbox_exits_quietly() {
 }
 
 #[test]
-fn msg_check_inbox_without_agent_and_no_env_exits_quietly() {
+fn msg_check_inbox_without_agent_and_no_marker_exits_quietly_without_creating_marker() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .env("CMUX_SURFACE_ID", "surface-empty")
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
+
+    let sessions = temp.path().join(".git/wt/sessions");
+    assert!(!sessions.exists() || toml_files(&sessions).is_empty());
 }
 
 #[test]
@@ -2771,6 +2846,181 @@ fn msg_check_inbox_without_agent_uses_wt_agent_id_env() {
         .unwrap();
     assert!(context.contains("WT INBOX for agents/codex: 1 new message"));
     assert!(context.contains("runtime env"));
+}
+
+#[test]
+fn msg_check_inbox_without_agent_uses_current_live_session_marker() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-marker")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/marker-coord",
+            "marker",
+            "delivery",
+        ])
+        .assert()
+        .success();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--silent",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-marker")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/marker-coord: 1 new message"));
+    assert!(context.contains("marker delivery"));
+
+    let inbox = temp
+        .path()
+        .join(".git/wt/messages/agents/marker-coord/inbox");
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert_eq!(toml_files(&inbox.join("delivered")).len(), 1);
+}
+
+#[test]
+fn msg_check_inbox_without_agent_ignores_non_current_session_marker() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-original")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/marker-coord",
+            "other",
+            "surface",
+        ])
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--silent",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-other")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let inbox = temp
+        .path()
+        .join(".git/wt/messages/agents/marker-coord/inbox");
+    assert_eq!(toml_files(&inbox.join("new")).len(), 1);
+    assert!(!inbox.join("delivered").exists());
+}
+
+#[test]
+fn msg_check_inbox_without_agent_prefers_wt_agent_id_over_session_marker() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-precedence")
+        .assert()
+        .success();
+
+    for (agent, message) in [
+        ("agents/codex", "runtime message"),
+        ("agents/marker-coord", "marker message"),
+    ] {
+        wt_command()
+            .args([
+                "-C",
+                temp.path().to_str().unwrap(),
+                "msg",
+                "send",
+                "--to",
+                agent,
+                message,
+            ])
+            .assert()
+            .success();
+    }
+
+    let output = wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .env("WT_AGENT_ID", "agents/codex")
+        .env("CMUX_SURFACE_ID", "surface-precedence")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/codex: 1 new message"));
+    assert!(context.contains("runtime message"));
+    assert!(!context.contains("marker message"));
+
+    let messages_root = temp.path().join(".git/wt/messages/agents");
+    assert_eq!(
+        toml_files(&messages_root.join("codex/inbox/delivered")).len(),
+        1
+    );
+    assert_eq!(
+        toml_files(&messages_root.join("marker-coord/inbox/new")).len(),
+        1
+    );
 }
 
 #[test]
@@ -2902,6 +3152,29 @@ fn msg_check_inbox_explicit_agent_ignores_runtime_env_ids() {
             .assert()
             .success();
     }
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-explicit")
+        .assert()
+        .success();
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/marker-coord",
+            "marker fallback",
+        ])
+        .assert()
+        .success();
 
     let output = wt_command()
         .args([
@@ -2913,6 +3186,7 @@ fn msg_check_inbox_explicit_agent_ignores_runtime_env_ids() {
             "agents/manual",
         ])
         .env("WT_AGENT_ID", "agents/codex")
+        .env("CMUX_SURFACE_ID", "surface-explicit")
         .assert()
         .success()
         .get_output()
@@ -2927,6 +3201,7 @@ fn msg_check_inbox_explicit_agent_ignores_runtime_env_ids() {
     assert!(context.contains("manual override"));
     assert!(!context.contains("runtime env"));
     assert!(!context.contains("ordinary coordinator message"));
+    assert!(!context.contains("marker fallback"));
 
     let messages_root = temp.path().join(".git/wt/messages/agents");
     assert_eq!(
@@ -2936,6 +3211,10 @@ fn msg_check_inbox_explicit_agent_ignores_runtime_env_ids() {
     assert_eq!(toml_files(&messages_root.join("codex/inbox/new")).len(), 1);
     assert_eq!(
         toml_files(&messages_root.join("coordinator/inbox/new")).len(),
+        1
+    );
+    assert_eq!(
+        toml_files(&messages_root.join("marker-coord/inbox/new")).len(),
         1
     );
 }

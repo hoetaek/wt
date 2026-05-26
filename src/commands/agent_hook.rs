@@ -61,6 +61,7 @@ pub(crate) fn uninstall_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Res
         ClaudeHookTarget::Dispatcher => ClaudeRemoveTarget::AllWtManaged,
         ClaudeHookTarget::Agent(agent) => ClaudeRemoveTarget::Commands(vec![
             managed_claude_hook_command(agent.as_str()),
+            legacy_managed_claude_hook_command(agent.as_str()),
             managed_claude_supervisor_session_end_command(Some(agent.as_str())),
         ]),
     };
@@ -127,7 +128,10 @@ pub(crate) fn install_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result
     let mut hooks = read_codex_hooks(&paths.hooks_path)?;
     let remove_target = match &target {
         CodexHookTarget::Dispatcher => CodexRemoveTarget::AllWtManaged,
-        CodexHookTarget::Agent(_) => CodexRemoveTarget::Command(command.clone()),
+        CodexHookTarget::Agent(agent) => CodexRemoveTarget::Commands(vec![
+            command.clone(),
+            legacy_managed_codex_hook_command(agent.as_str()),
+        ]),
     };
     let stale_trust = remove_managed_codex_hook(&mut hooks, &paths, remove_target)?;
     install_managed_codex_hook(&mut hooks, &command)?;
@@ -175,9 +179,10 @@ pub(crate) fn uninstall_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Resu
     let mut hooks = read_codex_hooks(&paths.hooks_path)?;
     let remove_target = match &target {
         CodexHookTarget::Dispatcher => CodexRemoveTarget::AllWtManaged,
-        CodexHookTarget::Agent(agent) => {
-            CodexRemoveTarget::Command(managed_codex_hook_command(agent.as_str()))
-        }
+        CodexHookTarget::Agent(agent) => CodexRemoveTarget::Commands(vec![
+            managed_codex_hook_command(agent.as_str()),
+            legacy_managed_codex_hook_command(agent.as_str()),
+        ]),
     };
     let stale_trust_command = match &target {
         CodexHookTarget::Dispatcher => managed_codex_dispatcher_command(),
@@ -373,7 +378,7 @@ impl CodexHookTarget {
 
 enum CodexRemoveTarget {
     AllWtManaged,
-    Command(String),
+    Commands(Vec<String>),
 }
 
 enum ClaudeRemoveTarget {
@@ -570,7 +575,9 @@ fn codex_remove_target_matches(target: &CodexRemoveTarget, hook: &Value) -> bool
             .get("command")
             .and_then(Value::as_str)
             .is_some_and(is_wt_managed_codex_command),
-        CodexRemoveTarget::Command(command) => is_managed_command(hook, command),
+        CodexRemoveTarget::Commands(commands) => commands
+            .iter()
+            .any(|command| is_managed_command(hook, command)),
     }
 }
 
@@ -1143,11 +1150,17 @@ fn array_entry<'a>(object: &'a mut Map<String, Value>, key: &str) -> Result<&'a 
 }
 
 fn managed_claude_hook_command(agent: &str) -> String {
-    format!("wt msg check-inbox --agent {agent} --silent {WT_CLAUDE_HOOK_MARKER}")
+    format!(
+        "wt msg check-inbox --agent {agent} --silent 2>/dev/null || true {WT_CLAUDE_HOOK_MARKER}"
+    )
 }
 
 fn managed_claude_dispatcher_command() -> String {
-    format!("wt msg check-inbox --silent {WT_CLAUDE_HOOK_MARKER}")
+    format!("wt msg check-inbox --silent 2>/dev/null || true {WT_CLAUDE_HOOK_MARKER}")
+}
+
+fn legacy_managed_claude_hook_command(agent: &str) -> String {
+    format!("wt msg check-inbox --agent {agent} --silent {WT_CLAUDE_HOOK_MARKER}")
 }
 
 fn managed_claude_supervisor_session_end_command(owner: Option<&str>) -> String {
@@ -1164,11 +1177,17 @@ fn managed_claude_supervisor_session_end_command(owner: Option<&str>) -> String 
 }
 
 fn managed_codex_hook_command(agent: &str) -> String {
-    format!("wt msg check-inbox --agent {agent} --silent {WT_CODEX_HOOK_MARKER}")
+    format!(
+        "wt msg check-inbox --agent {agent} --silent 2>/dev/null || true {WT_CODEX_HOOK_MARKER}"
+    )
 }
 
 fn managed_codex_dispatcher_command() -> String {
-    format!("wt msg check-inbox --silent {WT_CODEX_HOOK_MARKER}")
+    format!("wt msg check-inbox --silent 2>/dev/null || true {WT_CODEX_HOOK_MARKER}")
+}
+
+fn legacy_managed_codex_hook_command(agent: &str) -> String {
+    format!("wt msg check-inbox --agent {agent} --silent {WT_CODEX_HOOK_MARKER}")
 }
 
 fn codex_trust_key(
