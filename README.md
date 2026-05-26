@@ -239,7 +239,7 @@ merge.
   under `wt workflow`.
 - `wt run workflow` starts runnable tasks from saved Workflow files. It does
   not list, edit, repair, or complete Workflow files.
-- `TaskDocument` files in `<git-common-dir>/wt/tasks/<task>.toml` define prepared local work.
+- `TaskDocument` files in `<git-common-dir>/wt/execution/tasks/<task>.toml` define prepared local work.
 - `wt task list` shows the actionable local TaskDocument working set: tasks
   with no TaskRun, or whose latest TaskRun is prepared, failed, or skipped. It
   hides done and running tasks with a count hint; use `wt task list --all` for
@@ -254,7 +254,7 @@ merge.
 - `wt task publish [<task>...]` creates provider issues from TaskDocuments,
   rewrites `branch` to the created issue key plus the existing branch slug, and
   records `[origin]`; it does not start worktrees, local branches, or TaskRuns.
-- `Workflow` files in `<git-common-dir>/wt/workflows/<id>.toml` save coordinated execution.
+- `Workflow` files in `<git-common-dir>/wt/execution/workflows/<id>.toml` save coordinated execution.
   Optional top-level `title`, `body`, and `[origin]` record the larger human
   context for the saved plan. Workflow `[origin]` belongs to the large
   issue-like unit represented by the Workflow; TaskDocument `[origin]` belongs
@@ -266,10 +266,10 @@ merge.
   TOML files instead of hiding parse failures.
 - `wt workflow archive <workflow>` moves a completed Workflow plus linked
   done/skipped TaskRuns and uniquely-owned TaskDocuments into
-  `<git-common-dir>/wt/archive/workflows/<workflow-id>/`. Archive is
+  `<git-common-dir>/wt/execution/archive/workflows/<workflow-id>/`. Archive is
   visibility and retention only; it is not a substitute for landing,
   `wt workflow complete`, or `wt done`.
-- `TaskRun` files in `<git-common-dir>/wt/task-runs/<id>.toml` record execution attempts.
+- `TaskRun` files in `<git-common-dir>/wt/execution/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
 - `wt ui [--port <port>]` starts a read-only loopback web UI for personal `wt`
   ideas, TaskDocuments, Workflows, TaskRuns, profile summaries, and effective
@@ -283,8 +283,9 @@ merge.
   `wt agent watch [<target>]` polls it. `wt agent watch` prints state
   transitions by default; `--timeout <seconds>` bounds the wait, and
   `--heartbeat <seconds>` opts into unchanged running reports. Non-idle
-  heartbeat and timeout samples are recorded under local `agent.state`, which
-  stays separate from `TaskRun.status`.
+  heartbeat and timeout samples are recorded under
+  `<git-common-dir>/wt/runtime/agents/<name>/observations`, which stays separate from
+  `TaskRun.status`.
 - `wt setup` configures per-machine wt integration. It detects supported agent
   CLIs, prompts before installing wt-managed Claude and Codex inbox hooks, and
   can add shell integration and completion eval lines to the resolved shell rc
@@ -302,7 +303,7 @@ merge.
   agent commands or scripts that need an explicit inbox identity; it applies the
   same legacy coordinator env cleanup as the known-agent wrappers.
 - `wt msg send --to <agent> <message>` writes a scoped file inbox message under
-  `<git-common-dir>/wt/messages/agents/<agent>/inbox/new/`. The default CLI
+  `<git-common-dir>/wt/runtime/agents/<name>/inbox/new/`. The default CLI
   send scope is `direct`; use `--scope workflow:<id>` for workflow-owned
   coordinator reports, `--scope task_run:<id>` for TaskRun-owned delivery, and
   `--scope repo` for repo-local singleton delivery. Workflow and TaskRun
@@ -403,7 +404,7 @@ threads, comments, and checks. Examples:
 
 1. `--config <path>`
 2. `.wt.toml` as shared project config
-3. `<git-common-dir>/wt/config.toml` as personal repo config
+3. `<git-common-dir>/wt/config/local.toml` as personal repo config
 
 Inspect the effective config:
 
@@ -456,7 +457,7 @@ When `[editor]` is configured, `wt config` prints the effective editor
 placement default, `cmux_surface`, unless it is overridden.
 
 `wt workflow task` and `wt workflow issue` snapshot the effective workflow
-policy into `<git-common-dir>/wt/workflows/<id>.toml` for the prepared workflow.
+policy into `<git-common-dir>/wt/execution/workflows/<id>.toml` for the prepared workflow.
 `wt workflow show` reads that prepared policy from the workflow file, not from
 the current `.wt.toml`, so later config edits do not rewrite the meaning of
 existing workflow files. An explicit `--pr none|draft|ready` overrides the
@@ -539,8 +540,8 @@ bundles are needed:
 
 ```bash
 wt profile create codex
-wt config extract "$(git rev-parse --git-common-dir)/wt/config.toml"
-wt config inline "$(git rev-parse --git-common-dir)/wt/profiles/codex/profile.toml"
+wt config extract "$(git rev-parse --git-common-dir)/wt/config/local.toml"
+wt config inline "$(git rev-parse --git-common-dir)/wt/config/profiles/codex/profile.toml"
 ```
 
 Named profile `profile.toml` is an override layer: omitted `[agent]` fields
