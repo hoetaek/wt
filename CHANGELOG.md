@@ -8,6 +8,12 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Changed the canonical file inbox storage from
+  `<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>` to
+  `<git-common-dir>/wt/runtime/agents/<agent>/inbox/<state>`. The old
+  top-level `messages/` root is now reported as legacy state instead of being
+  silently consumed.
+
 ## 0.42.0 - 2026-05-26
 
 - Changed `wt msg check-inbox --agent coordinator` to claim coordinator inbox

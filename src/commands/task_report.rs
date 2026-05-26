@@ -1,5 +1,6 @@
+use crate::commands::msg::runtime_message_store;
 use crate::context::Ctx;
-use crate::messages::{AgentId, MessageScope, MessageStore};
+use crate::messages::{AgentId, MessageScope};
 use crate::services::git::GitService;
 use crate::services::inbox_wake;
 use crate::task_run::{self, TaskRunRecord};
@@ -29,7 +30,7 @@ pub(super) fn run_with_env(
     let to = required_coordinator_id(&record)?;
     validate_runtime_agent(runtime_agent_id, &record, &from)?;
 
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     let sent = store.send_scoped_from(from.as_str(), to.as_str(), scope, &text)?;
     task_run::update_report_metadata(&record, &sent.id)?;
     let _wake_result = inbox_wake::wake_sent_message_recipient(ctx, &sent);
@@ -161,6 +162,7 @@ mod tests {
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
+    use crate::messages::MessageStore;
     use crate::task_run::{STATUS_FAILED, STATUS_PASSED, STATUS_RUNNING};
     use anyhow::Result;
     use std::path::Path;
@@ -222,7 +224,7 @@ mod tests {
         let message_id = updated.last_report_message_id.unwrap();
         assert!(updated.last_reported_at.is_some());
 
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let message = store
             .read_for_inspection("agents/coord-a", &message_id)
             .unwrap()
@@ -264,7 +266,7 @@ mod tests {
         let message_id = updated.last_report_message_id.unwrap();
         assert!(updated.last_reported_at.is_some());
 
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let message = store
             .read_for_inspection("agents/coord-a", &message_id)
             .unwrap()
@@ -308,7 +310,7 @@ mod tests {
         assert!(updated.last_reported_at.is_some());
         assert_eq!(updated.status, STATUS_PASSED);
 
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let message = store
             .read_for_inspection("agents/coord-a", &message_id)
             .unwrap()

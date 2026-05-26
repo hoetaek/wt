@@ -1,5 +1,6 @@
+use crate::commands::msg::runtime_message_store;
 use crate::context::Ctx;
-use crate::messages::{AgentId, MessageScope, MessageStore};
+use crate::messages::{AgentId, MessageScope};
 use crate::services::current_actor;
 use crate::services::inbox_wake;
 use crate::task_run::{self, TaskReviewStatus, TaskRunRecord};
@@ -28,7 +29,7 @@ pub(super) fn run_with_actor(
     let to = required_task_agent_id(&record)?;
     let scope = MessageScope::task_run(record.id.clone())?;
 
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     let sent = store.send_scoped_from(from.as_str(), to.as_str(), scope, &text)?;
     task_run::update_review_metadata(&record, status, &sent.id)?;
     let _wake_result = inbox_wake::wake_sent_message_recipient(ctx, &sent);
@@ -111,6 +112,7 @@ mod tests {
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions};
+    use crate::messages::MessageStore;
     use crate::storage::StorageRoot;
     use crate::task_run::{STATUS_PASSED, STATUS_RUNNING};
 
@@ -158,7 +160,7 @@ mod tests {
         assert_eq!(updated.last_review_status, Some(task_run::REVIEW_ACCEPTED));
         assert!(updated.last_reviewed_at.is_some());
 
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let message = store
             .read_for_inspection("agents/run-1-add-schema", &message_id)
             .unwrap()
@@ -320,7 +322,7 @@ mod tests {
         assert_eq!(updated.last_review_status, Some(task_run::REVIEW_REJECTED));
         assert!(updated.last_reported_at.is_some());
 
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let message = store
             .read_for_inspection("agents/coord-a", &message_id)
             .unwrap()
@@ -464,7 +466,7 @@ mod tests {
         );
         assert!(
             !ctx.storage_root
-                .messages_dir()
+                .runtime_dir()
                 .join("agents/run-1-add-schema/inbox/new")
                 .exists()
         );

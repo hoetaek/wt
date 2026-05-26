@@ -884,12 +884,10 @@ fn msg_send_to_agents_coordinator_uses_ordinary_explicit_inbox() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/coordinator/inbox/new/",
+            "<git-common-dir>/wt/runtime/agents/coordinator/inbox/new/",
         ));
 
-    let inbox = temp
-        .path()
-        .join(".git/wt/messages/agents/coordinator/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/coordinator/inbox");
     let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 }
@@ -1663,7 +1661,7 @@ fn msg_help_explains_agent_inbox_contract() {
         .success()
         .stdout(predicate::str::contains("file-based agent inbox"))
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>",
+            "<git-common-dir>/wt/runtime/agents/<agent>/inbox/<state>",
         ))
         .stdout(predicate::str::contains("wt msg send --to agents/<agent>"))
         .stdout(predicate::str::contains("wt task report <message>"))
@@ -1719,6 +1717,30 @@ fn msg_help_explains_agent_inbox_contract() {
 }
 
 #[test]
+fn msg_commands_reject_legacy_messages_storage() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".git/wt/messages/agents/codex/inbox/new")).unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "list",
+            "--agent",
+            "codex",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Found legacy wt personal message storage",
+        ))
+        .stderr(predicate::str::contains("runtime/agents"))
+        .stderr(predicate::str::contains("does not silently fall back"));
+}
+
+#[test]
 fn msg_send_writes_to_agent_inbox_and_normalizes_agent_id() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -1736,10 +1758,10 @@ fn msg_send_writes_to_agent_inbox_and_normalizes_agent_id() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/codex/inbox/new/",
+            "<git-common-dir>/wt/runtime/agents/codex/inbox/new/",
         ));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/codex/inbox");
     let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
@@ -1780,12 +1802,10 @@ fn msg_send_to_bare_coordinator_writes_to_ordinary_coordinator_inbox() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/coordinator/inbox/new/",
+            "<git-common-dir>/wt/runtime/agents/coordinator/inbox/new/",
         ));
 
-    let inbox = temp
-        .path()
-        .join(".git/wt/messages/agents/coordinator/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/coordinator/inbox");
     let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
@@ -1823,10 +1843,10 @@ fn msg_send_accepts_explicit_workflow_scope() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/coord-a/inbox/new/",
+            "<git-common-dir>/wt/runtime/agents/coord-a/inbox/new/",
         ));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/coord-a/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/coord-a/inbox");
     let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
@@ -1902,12 +1922,12 @@ fn msg_send_to_derived_agent_id_targets_runtime_identity_inbox() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/issue-1-test/inbox/new/",
+            "<git-common-dir>/wt/runtime/agents/issue-1-test/inbox/new/",
         ));
 
     let inbox = temp
         .path()
-        .join(".git/wt/messages/agents/issue-1-test/inbox");
+        .join(".git/wt/runtime/agents/issue-1-test/inbox");
     let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
@@ -1971,9 +1991,7 @@ fn msg_list_summarizes_lifecycle_states_without_mutating_messages() {
             .success();
     }
 
-    let inbox = temp
-        .path()
-        .join(".git/wt/messages/agents/coordinator/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/coordinator/inbox");
     let new_dir = inbox.join("new");
     let claimed_path = claim_message_file(
         &message_path_with_summary(&new_dir, "claimed summary"),
@@ -2054,7 +2072,7 @@ fn msg_list_json_uses_stable_lifecycle_inventory_shape() {
         ])
         .assert()
         .success();
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/codex/inbox");
     claim_message_file(
         &message_path_with_summary(&inbox.join("new"), "json new"),
         "agents/supervisor",
@@ -2118,7 +2136,7 @@ fn msg_read_shows_claim_and_body_without_changing_state() {
         ])
         .assert()
         .success();
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/codex/inbox");
     let claimed_path = claim_message_file(
         &message_path_with_summary(&inbox.join("new"), "claimed body"),
         "agents/supervisor",
@@ -2170,7 +2188,7 @@ fn msg_read_json_includes_full_message_payload() {
         ])
         .assert()
         .success();
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/codex/inbox");
     let path = message_path_with_summary(&inbox.join("new"), "json read");
     let message_id = path.file_stem().unwrap().to_str().unwrap();
 
@@ -2272,7 +2290,7 @@ fn msg_check_inbox_emits_hook_json_and_acknowledges_claimed_messages() {
     assert!(context.contains("hello from claude"));
     assert!(context.contains("wt msg send --to <agent> <message>"));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/codex/inbox");
     assert!(toml_files(&inbox.join("new")).is_empty());
     assert!(toml_files(&inbox.join("claimed")).is_empty());
     let delivered = toml_files(&inbox.join("delivered"));
@@ -2391,7 +2409,7 @@ run = "run-2026-05-20-001-workflow-report"
     assert!(context.contains("scope: workflow:2026-05-20-001"));
     assert!(context.contains("workflow done"));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/coord-a/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/coord-a/inbox");
     assert!(toml_files(&inbox.join("new")).is_empty());
     assert!(toml_files(&inbox.join("claimed")).is_empty());
     let delivered = toml_files(&inbox.join("delivered"));
@@ -2466,7 +2484,7 @@ fn task_report_workflow_scope_delivers_to_current_marker_coordinator_inbox() {
 
     let inbox = temp
         .path()
-        .join(".git/wt/messages/agents/marker-coord/inbox");
+        .join(".git/wt/runtime/agents/marker-coord/inbox");
     assert!(toml_files(&inbox.join("new")).is_empty());
     assert_eq!(toml_files(&inbox.join("delivered")).len(), 1);
 }
@@ -2563,9 +2581,7 @@ fn task_report_review_smoke_delivers_accepted_feedback_to_matching_task_agent() 
             .contains("Coordinator Review: Status=accepted; Message=accepted for landing")
     );
 
-    let task_inbox = temp
-        .path()
-        .join(".git/wt/messages/agents/run-1-smoke/inbox");
+    let task_inbox = temp.path().join(".git/wt/runtime/agents/run-1-smoke/inbox");
     assert!(toml_files(&task_inbox.join("new")).is_empty());
     assert_eq!(toml_files(&task_inbox.join("delivered")).len(), 1);
 }
@@ -2616,7 +2632,7 @@ fn msg_check_inbox_requires_runtime_task_run_binding_for_review_scope() {
 
     let inbox = temp
         .path()
-        .join(".git/wt/messages/agents/run-1-review/inbox");
+        .join(".git/wt/runtime/agents/run-1-review/inbox");
     assert_eq!(toml_files(&inbox.join("new")).len(), 1);
     assert!(!inbox.join("delivered").exists());
 
@@ -2710,7 +2726,7 @@ fn msg_check_inbox_non_coordinator_leaves_workflow_scoped_messages_new() {
         .success()
         .stdout(predicate::str::is_empty());
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/codex/inbox");
     let new = toml_files(&inbox.join("new"));
     assert_eq!(new.len(), 1);
     assert!(!inbox.join("claimed").exists());
@@ -2740,7 +2756,7 @@ fn msg_check_inbox_does_not_steal_active_claims() {
         .assert()
         .success();
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/codex/inbox");
     let new = toml_files(&inbox.join("new"));
     let claimed_path = claim_message_file(&new[0], "agents/supervisor", "2099-01-01T00:00:00Z");
 
@@ -2787,7 +2803,7 @@ fn msg_check_inbox_reclaims_expired_claims_and_delivers_them() {
         .assert()
         .success();
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/codex/inbox");
     let new = toml_files(&inbox.join("new"));
     claim_message_file(&new[0], "agents/supervisor", "1970-01-01T00:00:01Z");
 
@@ -2845,7 +2861,7 @@ fn msg_check_inbox_keeps_hook_stdout_json_when_acknowledge_fails() {
         .assert()
         .success();
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/codex/inbox");
     let new = toml_files(&inbox.join("new"));
     let delivered_conflict = write_conflicting_delivered_message(&new[0]);
 
@@ -3043,7 +3059,7 @@ fn msg_check_inbox_without_agent_uses_current_live_session_marker() {
 
     let inbox = temp
         .path()
-        .join(".git/wt/messages/agents/marker-coord/inbox");
+        .join(".git/wt/runtime/agents/marker-coord/inbox");
     assert!(toml_files(&inbox.join("new")).is_empty());
     assert_eq!(toml_files(&inbox.join("delivered")).len(), 1);
 }
@@ -3094,7 +3110,7 @@ fn msg_check_inbox_without_agent_ignores_non_current_session_marker() {
 
     let inbox = temp
         .path()
-        .join(".git/wt/messages/agents/marker-coord/inbox");
+        .join(".git/wt/runtime/agents/marker-coord/inbox");
     assert_eq!(toml_files(&inbox.join("new")).len(), 1);
     assert!(!inbox.join("delivered").exists());
 }
@@ -3152,13 +3168,13 @@ fn msg_check_inbox_without_agent_prefers_wt_agent_id_over_session_marker() {
     assert!(context.contains("runtime message"));
     assert!(!context.contains("marker message"));
 
-    let messages_root = temp.path().join(".git/wt/messages/agents");
+    let runtime_agents_root = temp.path().join(".git/wt/runtime/agents");
     assert_eq!(
-        toml_files(&messages_root.join("codex/inbox/delivered")).len(),
+        toml_files(&runtime_agents_root.join("codex/inbox/delivered")).len(),
         1
     );
     assert_eq!(
-        toml_files(&messages_root.join("marker-coord/inbox/new")).len(),
+        toml_files(&runtime_agents_root.join("marker-coord/inbox/new")).len(),
         1
     );
 }
@@ -3217,13 +3233,13 @@ fn msg_check_inbox_without_agent_uses_only_runtime_agent_id() {
     assert!(context.contains("runtime message"));
     assert!(!context.contains("coordinator message"));
 
-    let messages_root = temp.path().join(".git/wt/messages/agents");
+    let runtime_agents_root = temp.path().join(".git/wt/runtime/agents");
     assert_eq!(
-        toml_files(&messages_root.join("codex/inbox/delivered")).len(),
+        toml_files(&runtime_agents_root.join("codex/inbox/delivered")).len(),
         1
     );
     assert_eq!(
-        toml_files(&messages_root.join("coordinator/inbox/new")).len(),
+        toml_files(&runtime_agents_root.join("coordinator/inbox/new")).len(),
         1
     );
 }
@@ -3343,18 +3359,21 @@ fn msg_check_inbox_explicit_agent_ignores_runtime_env_ids() {
     assert!(!context.contains("ordinary coordinator message"));
     assert!(!context.contains("marker fallback"));
 
-    let messages_root = temp.path().join(".git/wt/messages/agents");
+    let runtime_agents_root = temp.path().join(".git/wt/runtime/agents");
     assert_eq!(
-        toml_files(&messages_root.join("manual/inbox/delivered")).len(),
-        1
-    );
-    assert_eq!(toml_files(&messages_root.join("codex/inbox/new")).len(), 1);
-    assert_eq!(
-        toml_files(&messages_root.join("coordinator/inbox/new")).len(),
+        toml_files(&runtime_agents_root.join("manual/inbox/delivered")).len(),
         1
     );
     assert_eq!(
-        toml_files(&messages_root.join("marker-coord/inbox/new")).len(),
+        toml_files(&runtime_agents_root.join("codex/inbox/new")).len(),
+        1
+    );
+    assert_eq!(
+        toml_files(&runtime_agents_root.join("coordinator/inbox/new")).len(),
+        1
+    );
+    assert_eq!(
+        toml_files(&runtime_agents_root.join("marker-coord/inbox/new")).len(),
         1
     );
 }
@@ -3466,7 +3485,7 @@ fn msg_check_inbox_silent_still_delivers_when_context_healthy() {
     assert!(context.contains("WT INBOX for agents/codex: 1 new message"));
     assert!(context.contains("silent delivery"));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/codex/inbox");
     assert!(toml_files(&inbox.join("new")).is_empty());
     let delivered = toml_files(&inbox.join("delivered"));
     assert_eq!(delivered.len(), 1);
@@ -3509,7 +3528,7 @@ fn msg_rejects_invalid_or_ambiguous_agent_ids() {
 }
 
 #[test]
-fn msg_uses_git_common_messages_from_linked_worktree() {
+fn msg_uses_git_common_runtime_inbox_from_linked_worktree() {
     let temp = TempDir::new().unwrap();
     let repo = temp.path().join("repo");
     let linked = temp.path().join("linked");
@@ -3544,9 +3563,9 @@ fn msg_uses_git_common_messages_from_linked_worktree() {
         .assert()
         .success();
 
-    let common_inbox = repo.join(".git/wt/messages/agents/codex/inbox");
+    let common_inbox = repo.join(".git/wt/runtime/agents/codex/inbox");
     assert_eq!(toml_files(&common_inbox.join("new")).len(), 1);
-    assert!(!linked.join(".git/wt/messages").exists());
+    assert!(!linked.join(".git/wt/runtime").exists());
 
     let output = wt_command()
         .args([
@@ -5137,7 +5156,7 @@ fn write_repo_agent_config(root: &Path, cli: &str) {
 fn write_wt_core_dirs(root: &Path) {
     for path in [
         root.join(".git/wt/execution/tasks"),
-        root.join(".git/wt/messages"),
+        root.join(".git/wt/runtime/agents"),
         root.join(".git/wt/execution/task-runs"),
         root.join(".git/wt/agent.state"),
         root.join(".git/wt/worktrees"),
@@ -5740,8 +5759,8 @@ fn init_yes_bootstraps_only_core_state_dirs() {
             "agent.state".to_string(),
             "config".to_string(),
             "execution".to_string(),
-            "messages".to_string(),
             "planning".to_string(),
+            "runtime".to_string(),
             "worktrees".to_string(),
         ]
     );
@@ -5764,6 +5783,7 @@ fn init_yes_bootstraps_only_core_state_dirs() {
         "execution/workflows",
         "execution/task-runs",
         "execution/archive",
+        "runtime/agents",
     ] {
         assert!(temp.path().join(".git/wt").join(canonical).exists());
     }

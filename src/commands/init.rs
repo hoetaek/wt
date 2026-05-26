@@ -461,6 +461,7 @@ fn ensure_no_legacy_bootstrap_roots(ctx: &Ctx) -> Result<()> {
             "Workflow archive storage",
             ctx.storage_root.detect_legacy_archive(&ctx.repo_root),
         ),
+        ("message storage", ctx.storage_root.detect_legacy_messages()),
     ];
     for (state_name, legacy) in legacy_roots {
         if let Some(legacy) = legacy {
@@ -486,7 +487,8 @@ fn core_state_dirs(storage_root: &StorageRoot) -> Vec<PathBuf> {
         storage_root.workflows_dir(),
         storage_root.task_runs_dir(),
         storage_root.archive_dir(),
-        storage_root.messages_dir(),
+        storage_root.runtime_dir(),
+        storage_root.runtime_agents_dir(),
         storage_root.agent_state_dir(),
         storage_root.worktrees_dir(),
     ]

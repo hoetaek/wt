@@ -183,7 +183,7 @@ fn msg_watch_skips_message_that_is_claimed_by_a_racing_reader() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     send_message(temp.path(), "codex", "raced");
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".git/wt/runtime/agents/codex/inbox");
     let claimed = inbox.join("claimed");
     std::fs::create_dir_all(&claimed).unwrap();
 
