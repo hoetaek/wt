@@ -52,7 +52,7 @@ pub fn write_registration(ctx: &Ctx, registration: &Registration) -> Result<()> 
             path.display()
         )
     })?;
-    fs::create_dir_all(&dir).with_context(|| {
+    fs::create_dir_all(dir).with_context(|| {
         format!(
             "Failed to create supervisor registration directory {}",
             dir.display()
