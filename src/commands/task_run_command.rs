@@ -782,36 +782,34 @@ id = "PROJ-123"
             .iter()
             .filter(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|arg| arg == "send"))
             .collect::<Vec<_>>();
-        assert_eq!(send_calls.len(), 2);
+        assert_eq!(send_calls.len(), 1);
 
-        let handoff_prompt = send_calls[0].1.last().unwrap();
-        assert!(handoff_prompt.contains("## Task Run Coordinator Handoff"));
+        let prompt = send_calls[0].1.last().unwrap();
+        assert!(prompt.contains("## Task Run Coordinator Handoff"));
         assert!(
-            handoff_prompt.find("wt task report").unwrap()
-                < handoff_prompt.find("fallback cmux surface").unwrap()
+            prompt.find("wt task report").unwrap() < prompt.find("fallback cmux surface").unwrap()
         );
         assert!(
-            handoff_prompt.find("cmux send --workspace").unwrap()
-                < handoff_prompt
-                    .find("This immediate TaskDocument run")
+            prompt.find("cmux send --workspace").unwrap()
+                < prompt.find("This immediate TaskDocument run").unwrap()
+        );
+        assert!(prompt.contains("cmux send --workspace workspace:34 --surface surface:103 \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
+        assert!(
+            prompt.contains("cmux send-key --workspace workspace:34 --surface surface:103 enter")
+        );
+        assert!(prompt.contains("wt task report \"Agent Completion Report"));
+        assert!(prompt.contains("If the file inbox route is unavailable"));
+        assert!(prompt.contains("If `wt task report` fails"));
+        assert!(prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
+        assert!(prompt.contains("Create the schema first."));
+        assert!(prompt.contains("Existing prompt"));
+        assert!(!prompt.contains("wt workflow complete"));
+        assert!(
+            prompt.find("## Task Run Coordinator Handoff").unwrap()
+                < prompt
+                    .find("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
                     .unwrap()
         );
-        assert!(handoff_prompt.contains("cmux send --workspace workspace:34 --surface surface:103 \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
-        assert!(
-            handoff_prompt
-                .contains("cmux send-key --workspace workspace:34 --surface surface:103 enter")
-        );
-        assert!(handoff_prompt.contains("wt task report \"Agent Completion Report"));
-        assert!(handoff_prompt.contains("If the file inbox route is unavailable"));
-        assert!(handoff_prompt.contains("If `wt task report` fails"));
-        assert!(!handoff_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
-        assert!(!handoff_prompt.contains("Create the schema first."));
-        assert!(!handoff_prompt.contains("wt workflow complete"));
-
-        let task_prompt = send_calls[1].1.last().unwrap();
-        assert!(task_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
-        assert!(task_prompt.contains("Create the schema first."));
-        assert!(task_prompt.contains("Existing prompt"));
     }
 
     #[test]
@@ -850,9 +848,7 @@ id = "PROJ-123"
         runner.add_response("pane:1", true);
         runner.add_response("pane:1", true);
         runner.add_response("surface:999", true);
-        runner.add_response("", true);
-        runner.add_response("same screen", true);
-        runner.add_response("same screen", true);
+        runner.add_response("", false);
         let runner = Arc::new(runner);
 
         let ctx = Ctx::new(
@@ -883,8 +879,7 @@ id = "PROJ-123"
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("Agent prompt 2/2 failed"));
-        assert!(err.contains("unchanged screen"));
+        assert!(err.contains("cmux send failed"));
         let runs = task_run::list(&ctx).unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].run.status, task_run::STATUS_FAILED);
@@ -894,7 +889,7 @@ id = "PROJ-123"
                 .error
                 .as_deref()
                 .unwrap_or_default()
-                .contains("Agent prompt 2/2 failed")
+                .contains("cmux send failed")
         );
     }
 
