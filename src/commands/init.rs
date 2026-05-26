@@ -462,6 +462,14 @@ fn ensure_no_legacy_bootstrap_roots(ctx: &Ctx) -> Result<()> {
             ctx.storage_root.detect_legacy_archive(&ctx.repo_root),
         ),
         ("message storage", ctx.storage_root.detect_legacy_messages()),
+        (
+            "runtime observation storage",
+            ctx.storage_root.detect_legacy_agent_state(),
+        ),
+        (
+            "session anchor storage",
+            ctx.storage_root.detect_legacy_sessions(),
+        ),
     ];
     for (state_name, legacy) in legacy_roots {
         if let Some(legacy) = legacy {
@@ -489,8 +497,6 @@ fn core_state_dirs(storage_root: &StorageRoot) -> Vec<PathBuf> {
         storage_root.archive_dir(),
         storage_root.runtime_dir(),
         storage_root.runtime_agents_dir(),
-        storage_root.agent_state_dir(),
-        storage_root.worktrees_dir(),
     ]
 }
 
@@ -2886,6 +2892,56 @@ mod tests {
         assert!(report.contains(".git/wt/tasks"));
         assert!(report.contains(".git/wt/execution/tasks"));
         assert!(!dir.path().join(".git/wt/execution").exists());
+        assert!(!dir.path().join(".git/wt/config/local.toml").exists());
+    }
+
+    #[test]
+    fn init_rejects_legacy_runtime_observation_root_before_bootstrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_agent_state = dir.path().join(".git/wt/agent.state");
+        std::fs::create_dir_all(&legacy_agent_state).unwrap();
+        std::fs::write(legacy_agent_state.join("wait-observations.jsonl"), "").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let error = run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("Found legacy wt personal runtime observation storage"));
+        assert!(report.contains(".git/wt/agent.state"));
+        assert!(report.contains(".git/wt/runtime/agents"));
+        assert!(!dir.path().join(".git/wt/runtime/agents").exists());
+        assert!(!dir.path().join(".git/wt/config/local.toml").exists());
+    }
+
+    #[test]
+    fn init_rejects_legacy_session_anchor_root_before_bootstrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_sessions = dir.path().join(".git/wt/sessions");
+        std::fs::create_dir_all(&legacy_sessions).unwrap();
+        std::fs::write(legacy_sessions.join("surface%3Aold.toml"), "").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let error = run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("Found legacy wt personal session anchor storage"));
+        assert!(report.contains(".git/wt/sessions"));
+        assert!(report.contains(".git/wt/runtime/agents"));
+        assert!(!dir.path().join(".git/wt/runtime/agents").exists());
         assert!(!dir.path().join(".git/wt/config/local.toml").exists());
     }
 

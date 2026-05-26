@@ -109,9 +109,9 @@ impl WaitObservationGroupSummary {
 }
 
 impl WaitObservationSummary {
-    fn empty(path: &Path) -> Self {
+    pub(crate) fn empty_with_path(path: impl Into<String>) -> Self {
         Self {
-            path: path.display().to_string(),
+            path: path.into(),
             count: 0,
             sum_seconds: 0,
             min_seconds: None,
@@ -181,7 +181,7 @@ impl WaitObservationStore {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!(
-                    "Failed to create agent state directory: {}",
+                    "Failed to create wait observation directory: {}",
                     parent.display()
                 )
             })?;
@@ -205,38 +205,48 @@ impl WaitObservationStore {
         Ok(())
     }
 
-    pub(crate) fn summary(&self) -> Result<WaitObservationSummary> {
-        let content = match fs::read_to_string(&self.path) {
-            Ok(content) => content,
-            Err(err) if err.kind() == ErrorKind::NotFound => {
-                return Ok(WaitObservationSummary::empty(&self.path));
-            }
-            Err(err) => {
-                return Err(err).with_context(|| {
-                    format!(
-                        "Failed to read wait observations file: {}",
-                        self.path.display()
-                    )
-                });
-            }
-        };
-
-        let mut summary = WaitObservationSummary::empty(&self.path);
-        for (index, line) in content.lines().enumerate() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let observation = serde_json::from_str::<WaitObservation>(line).with_context(|| {
-                format!(
-                    "Failed to parse wait observation line {} in {}",
-                    index + 1,
-                    self.path.display()
-                )
-            })?;
-            summary.record(&observation);
+    pub(crate) fn summary_all(
+        paths: &[PathBuf],
+        display_path: impl Into<String>,
+    ) -> Result<WaitObservationSummary> {
+        let mut summary = WaitObservationSummary::empty_with_path(display_path);
+        for path in paths {
+            record_wait_observations_from_path(path, &mut summary)?;
         }
         Ok(summary)
     }
+}
+
+fn record_wait_observations_from_path(
+    path: &Path,
+    summary: &mut WaitObservationSummary,
+) -> Result<()> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            return Ok(());
+        }
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("Failed to read wait observations file: {}", path.display())
+            });
+        }
+    };
+
+    for (index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let observation = serde_json::from_str::<WaitObservation>(line).with_context(|| {
+            format!(
+                "Failed to parse wait observation line {} in {}",
+                index + 1,
+                path.display()
+            )
+        })?;
+        summary.record(&observation);
+    }
+    Ok(())
 }
 
 fn bucket_for(seconds: u64) -> &'static str {

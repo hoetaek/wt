@@ -198,7 +198,12 @@ pub fn current_agent_kind() -> Option<String> {
 }
 
 pub fn marker_path(ctx: &Ctx, key: &AnchorKey) -> PathBuf {
-    sessions_dir(ctx).join(format!("{}.toml", key.encode()))
+    anchor_search_path(ctx, key)
+}
+
+pub fn marker_path_for_id(ctx: &Ctx, id: &str, key: &AnchorKey) -> Result<PathBuf> {
+    let agent = AgentId::parse(id)?;
+    Ok(marker_path_for_agent(ctx, &agent, key))
 }
 
 pub fn write_marker(
@@ -207,9 +212,11 @@ pub fn write_marker(
     id: &str,
     agent_kind: Option<&str>,
 ) -> Result<Marker> {
-    let id = AgentId::parse(id)?.as_str().to_string();
-    let path = marker_path(ctx, key);
+    let agent = AgentId::parse(id)?;
+    let id = agent.as_str().to_string();
+    let path = marker_path_for_agent(ctx, &agent, key);
     let existing = read_marker(ctx, key)?;
+    remove_marker_files_for_key(ctx, key, Some(&path))?;
     let now = current_timestamp();
     let (liveness_pid, liveness_start_time) = match key.shell_sid_parts()? {
         Some((pid, start_time)) => (Some(pid), Some(start_time)),
@@ -233,54 +240,43 @@ pub fn write_marker(
 }
 
 pub fn read_marker(ctx: &Ctx, key: &AnchorKey) -> Result<Option<Marker>> {
-    let path = marker_path(ctx, key);
-    match fs::read_to_string(&path) {
-        Ok(content) => {
-            let marker = toml::from_str::<Marker>(&content)
-                .with_context(|| format!("Failed to parse marker: {}", path.display()))?;
-            if marker_matches_key(&marker, key) {
-                Ok(Some(marker))
-            } else {
-                Ok(None)
-            }
+    let mut matching = Vec::new();
+    for path in marker_paths_for_key(ctx, key)? {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read marker: {}", path.display()))?;
+        let marker = toml::from_str::<Marker>(&content)
+            .with_context(|| format!("Failed to parse marker: {}", path.display()))?;
+        if marker_matches_key(&marker, key) && marker_path_matches_owner(ctx, &path, &marker)? {
+            matching.push((path, marker));
         }
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err).with_context(|| format!("Failed to read marker: {}", path.display())),
     }
+    matching.sort_by(|left, right| {
+        right
+            .1
+            .updated_at
+            .cmp(&left.1.updated_at)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    Ok(matching.into_iter().next().map(|(_, marker)| marker))
 }
 
 pub fn remove_marker(ctx: &Ctx, key: &AnchorKey) -> Result<bool> {
-    let path = marker_path(ctx, key);
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(true),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
-        Err(err) => {
-            Err(err).with_context(|| format!("Failed to remove marker: {}", path.display()))
-        }
-    }
+    remove_marker_files_for_key(ctx, key, None)
 }
 
 pub fn list_markers(ctx: &Ctx) -> Result<Vec<Marker>> {
-    let dir = sessions_dir(ctx);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err).with_context(|| format!("Failed to read {}", dir.display())),
-    };
-    let mut markers = Vec::new();
-    for entry in entries {
-        let entry = entry.with_context(|| format!("Failed to read entry in {}", dir.display()))?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
-            continue;
-        }
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read marker: {}", path.display()))?;
-        markers.push(
-            toml::from_str::<Marker>(&content)
-                .with_context(|| format!("Failed to parse marker: {}", path.display()))?,
+    let (entries, warnings) = list_markers_with_warnings(ctx)?;
+    if let Some(warning) = warnings.into_iter().next() {
+        bail!(
+            "Failed to scan marker {}: {}",
+            warning.path.display(),
+            warning.message
         );
     }
+    let mut markers = entries
+        .into_iter()
+        .map(|entry| entry.marker)
+        .collect::<Vec<_>>();
     markers.sort_by(|left, right| {
         let left_key = marker_anchor_key(left).display();
         let right_key = marker_anchor_key(right).display();
@@ -290,20 +286,9 @@ pub fn list_markers(ctx: &Ctx) -> Result<Vec<Marker>> {
 }
 
 pub fn list_markers_with_warnings(ctx: &Ctx) -> Result<(Vec<MarkerEntry>, Vec<MarkerScanWarning>)> {
-    let dir = sessions_dir(ctx);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((Vec::new(), Vec::new())),
-        Err(err) => return Err(err).with_context(|| format!("Failed to read {}", dir.display())),
-    };
     let mut markers = Vec::new();
     let mut warnings = Vec::new();
-    for entry in entries {
-        let entry = entry.with_context(|| format!("Failed to read entry in {}", dir.display()))?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
-            continue;
-        }
+    for path in all_anchor_marker_paths(ctx)? {
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
             Err(err) => {
@@ -324,6 +309,23 @@ pub fn list_markers_with_warnings(ctx: &Ctx) -> Result<(Vec<MarkerEntry>, Vec<Ma
                 continue;
             }
         };
+        match marker_path_matches_owner(ctx, &path, &marker) {
+            Ok(true) => {}
+            Ok(false) => {
+                warnings.push(MarkerScanWarning {
+                    path,
+                    message: "Marker id does not match owning runtime agent directory".into(),
+                });
+                continue;
+            }
+            Err(err) => {
+                warnings.push(MarkerScanWarning {
+                    path,
+                    message: format!("Invalid marker owner: {err:#}"),
+                });
+                continue;
+            }
+        }
         markers.push(MarkerEntry { path, marker });
     }
     markers.sort_by(|left, right| {
@@ -426,8 +428,99 @@ fn resolve_identity_with(
     }
 }
 
-fn sessions_dir(ctx: &Ctx) -> PathBuf {
-    ctx.storage_root.personal_root().join("sessions")
+fn anchor_search_path(ctx: &Ctx, key: &AnchorKey) -> PathBuf {
+    ctx.storage_root
+        .runtime_agents_dir()
+        .join("*")
+        .join("anchors")
+        .join(marker_file_name(key))
+}
+
+fn marker_path_for_agent(ctx: &Ctx, agent: &AgentId, key: &AnchorKey) -> PathBuf {
+    ctx.storage_root
+        .runtime_agent_anchors_dir(agent)
+        .join(marker_file_name(key))
+}
+
+fn marker_file_name(key: &AnchorKey) -> String {
+    format!("{}.toml", key.encode())
+}
+
+fn marker_paths_for_key(ctx: &Ctx, key: &AnchorKey) -> Result<Vec<PathBuf>> {
+    let file_name = marker_file_name(key);
+    let mut paths = all_anchor_marker_paths(ctx)?
+        .into_iter()
+        .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some(file_name.as_str()))
+        .collect::<Vec<_>>();
+    paths.sort();
+    Ok(paths)
+}
+
+fn all_anchor_marker_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
+    let agents_dir = ctx.storage_root.runtime_agents_dir();
+    let entries = match fs::read_dir(&agents_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(err).with_context(|| format!("Failed to read {}", agents_dir.display()));
+        }
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.with_context(|| format!("Failed to read entry in {}", agents_dir.display()))?;
+        let agent_dir = entry.path();
+        if !entry
+            .file_type()
+            .with_context(|| format!("Failed to inspect {}", agent_dir.display()))?
+            .is_dir()
+        {
+            continue;
+        }
+        let anchors_dir = agent_dir.join("anchors");
+        let anchors = match fs::read_dir(&anchors_dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("Failed to read {}", anchors_dir.display()));
+            }
+        };
+        for anchor in anchors {
+            let anchor = anchor
+                .with_context(|| format!("Failed to read entry in {}", anchors_dir.display()))?;
+            let path = anchor.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("toml") {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn marker_path_matches_owner(ctx: &Ctx, path: &Path, marker: &Marker) -> Result<bool> {
+    let agent = AgentId::parse(&marker.id)?;
+    let expected_dir = ctx.storage_root.runtime_agent_anchors_dir(&agent);
+    Ok(path.parent() == Some(expected_dir.as_path()))
+}
+
+fn remove_marker_files_for_key(ctx: &Ctx, key: &AnchorKey, except: Option<&Path>) -> Result<bool> {
+    let mut removed = false;
+    for path in marker_paths_for_key(ctx, key)? {
+        if except.is_some_and(|except| except == path.as_path()) {
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => removed = true,
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("Failed to remove marker: {}", path.display()));
+            }
+        }
+    }
+    Ok(removed)
 }
 
 fn marker_anchor_key(marker: &Marker) -> AnchorKey {
@@ -447,7 +540,7 @@ fn write_marker_atomically(path: &Path, marker: &Marker) -> Result<()> {
         .with_context(|| format!("Marker path has no parent: {}", path.display()))?;
     fs::create_dir_all(dir).with_context(|| {
         format!(
-            "Failed to create session marker directory: {}",
+            "Failed to create identity anchor directory: {}",
             dir.display()
         )
     })?;
@@ -456,19 +549,19 @@ fn write_marker_atomically(path: &Path, marker: &Marker) -> Result<()> {
     let result = (|| -> Result<()> {
         file.write_all(content.as_bytes()).with_context(|| {
             format!(
-                "Failed to write temporary session marker: {}",
+                "Failed to write temporary identity anchor marker: {}",
                 temp_path.display()
             )
         })?;
         file.sync_all().with_context(|| {
             format!(
-                "Failed to sync temporary session marker: {}",
+                "Failed to sync temporary identity anchor marker: {}",
                 temp_path.display()
             )
         })?;
         drop(file);
         fs::rename(&temp_path, path)
-            .with_context(|| format!("Failed to replace session marker: {}", path.display()))?;
+            .with_context(|| format!("Failed to replace identity anchor: {}", path.display()))?;
         Ok(())
     })();
     if result.is_err() {
@@ -480,14 +573,14 @@ fn write_marker_atomically(path: &Path, marker: &Marker) -> Result<()> {
 fn create_temp_file_with_retry(dir: &Path) -> Result<(PathBuf, fs::File)> {
     let pid = std::process::id();
     for attempt in 0..100 {
-        let path = dir.join(format!(".wt-session-marker-{pid}-{attempt}.tmp"));
+        let path = dir.join(format!(".wt-anchor-marker-{pid}-{attempt}.tmp"));
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => return Ok((path, file)),
             Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
             Err(err) => {
                 return Err(err).with_context(|| {
                     format!(
-                        "Failed to create temporary session marker: {}",
+                        "Failed to create temporary identity anchor marker: {}",
                         path.display()
                     )
                 });
@@ -495,7 +588,7 @@ fn create_temp_file_with_retry(dir: &Path) -> Result<(PathBuf, fs::File)> {
         }
     }
     bail!(
-        "Failed to allocate temporary session marker path in {}",
+        "Failed to allocate temporary identity anchor marker path in {}",
         dir.display()
     )
 }
@@ -807,7 +900,7 @@ mod tests {
         };
         let mut marker = marker_fixture(AnchorKind::Surface, "surface-2", None, None);
         marker.id = "agents/coord-b".into();
-        let path = marker_path(&fixture.ctx, &key);
+        let path = marker_path_for_id(&fixture.ctx, "agents/coord-b", &key).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, toml::to_string_pretty(&marker).unwrap()).unwrap();
 
@@ -875,6 +968,11 @@ mod tests {
         };
         let marker = write_marker(&fixture.ctx, &key, "agents/coord-a", Some("claude")).unwrap();
         assert_eq!(marker.id, "agents/coord-a");
+        assert!(
+            marker_path_for_id(&fixture.ctx, "agents/coord-a", &key)
+                .unwrap()
+                .ends_with("runtime/agents/coord-a/anchors/surface%3Asurface-1.toml")
+        );
         assert_eq!(
             read_marker(&fixture.ctx, &key).unwrap().unwrap().id,
             marker.id
@@ -893,7 +991,7 @@ mod tests {
             value: "surface-1".into(),
         };
         let marker = marker_fixture(AnchorKind::Surface, "surface-2", None, None);
-        let path = marker_path(&fixture.ctx, &key);
+        let path = marker_path_for_id(&fixture.ctx, "agents/coord-a", &key).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, toml::to_string_pretty(&marker).unwrap()).unwrap();
 
@@ -907,11 +1005,15 @@ mod tests {
             kind: AnchorKind::Surface,
             value: "surface-1".into(),
         };
-        let sessions_dir = sessions_dir(&fixture.ctx);
-        fs::create_dir_all(&sessions_dir).unwrap();
+        let anchors_dir = marker_path_for_id(&fixture.ctx, "agents/coord-a", &key)
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        fs::create_dir_all(&anchors_dir).unwrap();
         let pid = std::process::id();
         fs::write(
-            sessions_dir.join(format!(".wt-session-marker-{pid}-0.tmp")),
+            anchors_dir.join(format!(".wt-anchor-marker-{pid}-0.tmp")),
             "occupied",
         )
         .unwrap();

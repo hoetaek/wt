@@ -8,6 +8,12 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+- Changed remaining agent runtime state to live under the owning
+  `<git-common-dir>/wt/runtime/agents/<agent>/` directory: wait observations now
+  aggregate from per-agent `observations/wait-observations.jsonl` files,
+  identity locator markers live under `anchors/`, and supervisor registration,
+  log, and stop state live beside the owning agent runtime.
+
 - Changed the canonical file inbox storage from
   `<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>` to
   `<git-common-dir>/wt/runtime/agents/<agent>/inbox/<state>`. The old

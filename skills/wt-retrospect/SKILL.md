@@ -8,8 +8,9 @@ description: "Use after wt work has landed, been intentionally discarded, or sto
 Use this skill to capture a closed work item, or a blocked `wt-work` lesson, as
 a structured retrospective that future planning, coordination, review, landing,
 or skill guidance can learn from. Do not use it to track in-flight state — that
-belongs in `<git-common-dir>/wt/tasks`, `<git-common-dir>/wt/task-runs`, and
-`<git-common-dir>/wt/workflows`.
+belongs in `<git-common-dir>/wt/execution/tasks`,
+`<git-common-dir>/wt/execution/task-runs`, and
+`<git-common-dir>/wt/execution/workflows`.
 In the work-sequence model, this skill owns the final retrospect gate after
 landing or explicit discard. It can also record a blocked-loop lesson when the
 loop stops at an earlier gate and the blocker itself is worth preserving.
@@ -21,8 +22,8 @@ loop stops at an earlier gate and the blocker itself is worth preserving.
 - At the end of a `wt-work` loop, even when a phase blocked progress, if the
   blocker is a reusable lesson for the next cycle.
 - When the user explicitly says "retrospect" or "retrospective 작성".
-- When the user references `specs/<slug>/11-retrospect.md` or cross-work
-  `<git-common-dir>/wt/retrospectives/`.
+- When the user references `planning/specs/<slug>/11-retrospect.md` or
+  cross-work `<git-common-dir>/wt/planning/retrospectives/`.
 
 Write a timing entry for every closed work item, even when no broader
 keep/problem/try lesson emerged. If no useful keep/problem/try emerged, keep
@@ -49,20 +50,21 @@ lifecycle skill.
 
 - Retrospectives are learning artifacts, not execution state.
 - Never write TaskDocument/TaskRun/Workflow status into a retrospect file.
-- Keep future product ideas in `<git-common-dir>/wt/ideas/`; promote a retrospect action
-  candidate into an idea or task only when the pattern is clear enough to act
-  on.
+- Keep future product ideas in `<git-common-dir>/wt/planning/ideas/`; promote a
+  retrospect action candidate into an idea or task only when the pattern is
+  clear enough to act on.
 - Prefer one closed work item or blocked gate lesson per file. If one run
   produced unrelated lessons, keep the spec-backed work item lesson in
-  `11-retrospect.md` and promote cross-work lessons to `<git-common-dir>/wt/retrospectives/`
-  only when they are not owned by a single spec.
+  `11-retrospect.md` and promote cross-work lessons to
+  `<git-common-dir>/wt/planning/retrospectives/` only when they are not owned by
+  a single spec.
 
 ## Scope Choice
 
 Before writing, decide what "one work item" means for this cycle. A multi-PR
 sequence can be one item when the PRs share a single goal and the keep/problem
 lessons converge. Use the spec-local file when the lesson belongs to one
-`specs/<slug>/`; split to the global retrospectives directory only when:
+`planning/specs/<slug>/`; split to the global retrospectives directory only when:
 
 - Different goals produced disjoint lessons (e.g. a profile cockpit decision
   vs. a marker narrowing fix).
@@ -74,9 +76,10 @@ where the format supports it.
 
 ## Place and Name
 
-- Default path for spec-backed work: `<git-common-dir>/wt/specs/<slug>/11-retrospect.md`.
+- Default path for spec-backed work:
+  `<git-common-dir>/wt/planning/specs/<slug>/11-retrospect.md`.
 - Cross-work/spec-less fallback path:
-  `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`.
+  `<git-common-dir>/wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml`.
 - Slug is the work item's canonical short name (branch, PR title topic, or the
   concept the lesson centers on). Avoid generic slugs like
   `2026-05-19-cleanup`.
@@ -130,8 +133,8 @@ For spec-backed work, use Markdown in `11-retrospect.md` with these sections:
 ```
 
 For cross-work/spec-less retrospectives, use TOML under
-`<git-common-dir>/wt/retrospectives/`. Match the conventions in
-`<git-common-dir>/wt/retrospectives/README.md`. Required shape:
+`<git-common-dir>/wt/planning/retrospectives/`. Match the conventions in
+`<git-common-dir>/wt/planning/retrospectives/README.md`. Required shape:
 
 ```toml
 title = "<concise title that names the work item>"
@@ -144,7 +147,7 @@ skills = ["wt-work", "wt-ready", ...]   # skills actually used in this loop
 tags = ["..."]                          # searchable topic tags
 
 # Optional when split into multiple files
-related_retrospective = "<git-common-dir>/wt/retrospectives/<other-file>.toml"
+related_retrospective = "<git-common-dir>/wt/planning/retrospectives/<other-file>.toml"
 
 [context]
 goal = """..."""
@@ -192,7 +195,7 @@ items = [
 summary = "<one-line action this retrospective recommends>"
 owner = "<wt | wt-work | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>>"
 status = "candidate"               # or "addressed" / "promoted"
-promote_to = "<git-common-dir>/wt/ideas/"      # or a specific path when known
+promote_to = "<git-common-dir>/wt/planning/ideas/"      # or a specific path when known
 done_when = "<observable criterion that closes this candidate>"
 
 [[harness_tuning]]
@@ -221,12 +224,12 @@ Read enough local evidence to avoid inventing timing:
 - git commit range and first/last commit timestamps when useful
 - checks run and final result
 - `wt agent wait-stats` and, only when necessary, the raw
-  `<git-common-dir>/wt/agent.state/wait-observations.jsonl`
+  `<git-common-dir>/wt/runtime/agents/<agent>/observations/wait-observations.jsonl`
 
-`agent.state` is supporting evidence for wait/watch behavior, not the source of
-truth for actual task duration. It records non-idle samples only when
-`wt agent watch` emits a heartbeat or timeout sample. If no watch sample exists,
-write that explicitly instead of backfilling from memory.
+Runtime wait observations are supporting evidence for wait/watch behavior, not
+the source of truth for actual task duration. They record non-idle samples only
+when `wt agent watch` emits a heartbeat or timeout sample. If no watch sample
+exists, write that explicitly instead of backfilling from memory.
 
 Separate launch validation from stuck detection. A short post-launch poll such
 as a 45-second status/watch check proves that the run started; it does not prove
@@ -240,7 +243,7 @@ After each task timing entry, update the cross-work timing baseline when the
 result teaches anything about future estimates or watch cadence:
 
 ```bash
-<git-common-dir>/wt/retrospectives/timing.md
+<git-common-dir>/wt/planning/retrospectives/timing.md
 ```
 
 This file is a rolling calibration note, not a replacement for per-work
@@ -297,15 +300,16 @@ Target files commonly include, but are not limited to:
   `~/.claude/`.
 - Steering files such as `.kiro/steering/*` and equivalents in other dotfile
   setups.
-- Workflow rules and config: `.wt.toml`, `<git-common-dir>/wt/config.toml`.
+- Workflow rules and config: `.wt.toml`, `<git-common-dir>/wt/config/local.toml`.
 - SKILL.md bodies under `~/.agents/skills/wt-*/SKILL.md` (including this one).
-- Profile prompts under `<git-common-dir>/wt/profiles/<name>/prompts/`.
+- Profile prompts under `<git-common-dir>/wt/config/profiles/<name>/prompts/`.
 
-When the finished work item had specs, `<git-common-dir>/wt/specs/<slug>/` may
-contain numbered work-sequence files from `wt-ready`. Cite them in `evidence`
-or in the `rationale` of a `[[harness_tuning]]` entry when the lesson points at
-the spec template itself (e.g. "the EARS statement in
-04+05+06-requirements.md proved ambiguous; tighten the wt-ready template").
+When the finished work item had specs,
+`<git-common-dir>/wt/planning/specs/<slug>/` may contain numbered work-sequence
+files from `wt-ready`. Cite them in `evidence` or in the `rationale` of a
+`[[harness_tuning]]` entry when the lesson points at the spec template itself
+(e.g. "the EARS statement in 04+05+06-requirements.md proved ambiguous; tighten
+the wt-ready template").
 
 ## Process
 
@@ -321,7 +325,7 @@ the spec template itself (e.g. "the EARS statement in
    specific kind is still useful, and fill `context.blocked_gate` with the
    work-sequence gate name.
 4. Diagnose Unknown surfacing misses, if the spec has them:
-   - If `<git-common-dir>/wt/specs/<slug>/10-review.md` has a
+   - If `<git-common-dir>/wt/planning/specs/<slug>/10-review.md` has a
      `## Mid-process discoveries` section, read it. Each entry is a research
      step that happened mid-work instead of at the Unknown surfacing gate.
    - Classify each discovery against the four surfacing categories: `domain`,
@@ -332,11 +336,12 @@ the spec template itself (e.g. "the EARS statement in
      the lesson belongs in a skill body, as a `[[harness_tuning]]` entry
      pointing at the relevant SKILL.md section.
 5. Draft `11-retrospect.md` under the spec for spec-backed work. Draft TOML
-   directly under `<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml`
-   only for cross-work/spec-less retrospectives. Skip optional sections that
-   have no content.
-6. Cross-check against `<git-common-dir>/wt/retrospectives/README.md` only for
-   global TOML retrospectives when conventions are uncertain.
+   directly under
+   `<git-common-dir>/wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` only for
+   cross-work/spec-less retrospectives. Skip optional sections that have no
+   content.
+6. Cross-check against `<git-common-dir>/wt/planning/retrospectives/README.md`
+   only for global TOML retrospectives when conventions are uncertain.
 7. Re-read for adoptability: each `try` item should be something a future
    coordinator can actually do; each `action_candidate` should have a
    recognizable `done_when`.
@@ -354,6 +359,6 @@ After writing, report:
 - The created file path(s).
 - A short list of the most adoptable `try` items.
 - The highest-leverage `action_candidate` if any, and whether it should be
-  promoted to `<git-common-dir>/wt/ideas/` or a TaskDocument next.
+  promoted to `<git-common-dir>/wt/planning/ideas/` or a TaskDocument next.
 - Any `[[harness_tuning]]` entries, each with the target file and section, so
   the user can decide whether to apply them now.

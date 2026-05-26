@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command as StdCommand};
 use std::time::{Duration, Instant};
 #[cfg(unix)]
-use wt::services::identity_locator::{percent_encode, process_start_time};
+use wt::services::identity_locator::process_start_time;
 
 const GIT_LOCAL_ENV_KEYS: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -364,11 +364,11 @@ fn write_supervisor_registration_with_cleanup(
     stale_threshold_secs: u64,
     poll_interval_secs: u64,
 ) -> PathBuf {
-    let dir = root.join(".git/wt/supervisors");
+    let agent_name = agent_id.trim_start_matches("agents/");
+    let dir = root.join(format!(".git/wt/runtime/agents/{agent_name}"));
     std::fs::create_dir_all(&dir).unwrap();
-    let encoded = percent_encode(agent_id);
-    let path = dir.join(format!("{encoded}.toml"));
-    let log_path = dir.join(format!("{encoded}.log"));
+    let path = dir.join("supervisor.toml");
+    let log_path = dir.join("supervisor.log");
     let pid_start_time = process_start_time(pid as i32).unwrap();
     std::fs::write(
         &path,
@@ -391,9 +391,13 @@ log_path = "{}"
 }
 
 fn write_wait_observations(root: &Path, content: &str) {
-    let dir = root.join(".git/wt/agent.state");
+    let dir = root.join(".git/wt/runtime/agents/codex/observations");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("wait-observations.jsonl"), content).unwrap();
+}
+
+fn anchor_dir(root: &Path, agent_name: &str) -> PathBuf {
+    root.join(format!(".git/wt/runtime/agents/{agent_name}/anchors"))
 }
 
 fn write_workflow_file(root: &Path, id: &str, mode: &str, extra: &str, tasks: &str) {
@@ -693,7 +697,7 @@ fn session_set_writes_marker_and_prints_exports() {
         .stdout("export WT_AGENT_ID=agents/my-coord;\n")
         .stderr("");
 
-    let files = toml_files(&temp.path().join(".git/wt/sessions"));
+    let files = toml_files(&anchor_dir(temp.path(), "my-coord"));
     assert_eq!(files.len(), 1);
     let content = std::fs::read_to_string(&files[0]).unwrap();
     let marker: toml::Value = toml::from_str(&content).unwrap();
@@ -786,7 +790,7 @@ fn session_whoami_reports_marker_and_json() {
         value["marker_path"]
             .as_str()
             .unwrap()
-            .contains(".git/wt/sessions")
+            .contains(".git/wt/runtime/agents/my-coord/anchors")
     );
 }
 
@@ -815,7 +819,7 @@ fn session_unset_removes_marker_and_whoami_reports_none() {
         .stdout("unset WT_AGENT_ID;\n")
         .stderr("");
 
-    assert!(toml_files(&temp.path().join(".git/wt/sessions")).is_empty());
+    assert!(toml_files(&anchor_dir(temp.path(), "my-coord")).is_empty());
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "session", "whoami"])
@@ -843,7 +847,7 @@ fn session_whoami_reports_corrupt_marker_but_unset_can_recover() {
         .assert()
         .success();
 
-    let files = toml_files(&temp.path().join(".git/wt/sessions"));
+    let files = toml_files(&anchor_dir(temp.path(), "my-coord"));
     assert_eq!(files.len(), 1);
     std::fs::write(&files[0], "not valid toml = [").unwrap();
 
@@ -863,7 +867,7 @@ fn session_whoami_reports_corrupt_marker_but_unset_can_recover() {
         .stdout("unset WT_AGENT_ID;\n")
         .stderr("");
 
-    assert!(toml_files(&temp.path().join(".git/wt/sessions")).is_empty());
+    assert!(toml_files(&anchor_dir(temp.path(), "my-coord")).is_empty());
 }
 
 #[test]
@@ -2964,8 +2968,8 @@ fn msg_check_inbox_without_agent_and_no_marker_exits_quietly_without_creating_ma
         .success()
         .stdout(predicate::str::is_empty());
 
-    let sessions = temp.path().join(".git/wt/sessions");
-    assert!(!sessions.exists() || toml_files(&sessions).is_empty());
+    let agents = temp.path().join(".git/wt/runtime/agents");
+    assert!(!agents.exists());
 }
 
 #[test]
@@ -4084,7 +4088,7 @@ fn agent_watch_help_explains_polling_target() {
         .stdout(predicate::str::contains("--heartbeat"))
         .stdout(predicate::str::contains("--record-wait-observations").not())
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
+            "<git-common-dir>/wt/runtime/agents/<agent>/observations/wait-observations.jsonl",
         ))
         .stdout(predicate::str::contains(
             "When --timeout or --heartbeat emits a non-idle sample",
@@ -4106,7 +4110,7 @@ fn agent_wait_stats_help_explains_read_only_summary() {
         .stdout(predicate::str::contains("average"))
         .stdout(predicate::str::contains("low-cardinality group data"))
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
+            "<git-common-dir>/wt/runtime/agents/<agent>/observations/wait-observations.jsonl",
         ))
         .stdout(predicate::str::contains("does not observe agents"))
         .stdout(predicate::str::contains("mutate TaskRuns"));
@@ -4130,7 +4134,7 @@ fn agent_wait_stats_reports_sample_jsonl_summary() {
         .success()
         .stdout(predicate::str::contains("Agent wait stats"))
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
+            "<git-common-dir>/wt/runtime/agents/*/observations/wait-observations.jsonl",
         ))
         .stdout(predicate::str::contains("Count: 3"))
         .stdout(predicate::str::contains("Sum seconds: 480"))
@@ -5155,11 +5159,15 @@ fn write_repo_agent_config(root: &Path, cli: &str) {
 #[cfg(unix)]
 fn write_wt_core_dirs(root: &Path) {
     for path in [
+        root.join(".git/wt/config/profiles"),
+        root.join(".git/wt/planning/ideas"),
+        root.join(".git/wt/planning/specs"),
+        root.join(".git/wt/planning/retrospectives"),
         root.join(".git/wt/execution/tasks"),
-        root.join(".git/wt/runtime/agents"),
+        root.join(".git/wt/execution/workflows"),
         root.join(".git/wt/execution/task-runs"),
-        root.join(".git/wt/agent.state"),
-        root.join(".git/wt/worktrees"),
+        root.join(".git/wt/execution/archive"),
+        root.join(".git/wt/runtime/agents"),
     ] {
         std::fs::create_dir_all(path).unwrap();
     }
@@ -5756,12 +5764,10 @@ fn init_yes_bootstraps_only_core_state_dirs() {
     assert_eq!(
         wt_state_dir_names(temp.path()),
         vec![
-            "agent.state".to_string(),
             "config".to_string(),
             "execution".to_string(),
             "planning".to_string(),
             "runtime".to_string(),
-            "worktrees".to_string(),
         ]
     );
     for legacy_flat in [
@@ -5770,6 +5776,9 @@ fn init_yes_bootstraps_only_core_state_dirs() {
         "ideas",
         "retrospectives",
         "profiles",
+        "worktrees",
+        "agent.state",
+        "sessions",
     ] {
         assert!(!temp.path().join(".git/wt").join(legacy_flat).exists());
     }
@@ -6598,9 +6607,11 @@ fn supervisor_start_records_threshold_and_poll_interval() {
         .success()
         .stdout(predicate::str::contains("Supervisor started"));
 
-    let content =
-        std::fs::read_to_string(temp.path().join(".git/wt/supervisors/agents%2Fcodex.toml"))
-            .unwrap();
+    let content = std::fs::read_to_string(
+        temp.path()
+            .join(".git/wt/runtime/agents/codex/supervisor.toml"),
+    )
+    .unwrap();
     assert!(content.contains("agent_id = \"agents/codex\""));
     assert!(content.contains("stale_threshold_secs = 300"));
     assert!(content.contains("poll_interval_secs = 30"));
@@ -6642,9 +6653,12 @@ fn supervisor_start_refuses_live_duplicate_and_replace_succeeds() {
 
     let _ = child.wait();
     assert!(
-        !std::fs::read_to_string(temp.path().join(".git/wt/supervisors/agents%2Fcodex.toml"))
-            .unwrap()
-            .contains(&format!("pid = {}", child.id()))
+        !std::fs::read_to_string(
+            temp.path()
+                .join(".git/wt/runtime/agents/codex/supervisor.toml")
+        )
+        .unwrap()
+        .contains(&format!("pid = {}", child.id()))
     );
 }
 
@@ -6760,17 +6774,17 @@ fn supervisor_stop_owned_by_filters_started_by() {
     assert!(
         !temp
             .path()
-            .join(".git/wt/supervisors/agents%2Fowned.toml")
+            .join(".git/wt/runtime/agents/owned/supervisor.toml")
             .exists()
     );
     assert!(
         temp.path()
-            .join(".git/wt/supervisors/agents%2Fcleanup-disabled.toml")
+            .join(".git/wt/runtime/agents/cleanup-disabled/supervisor.toml")
             .exists()
     );
     assert!(
         temp.path()
-            .join(".git/wt/supervisors/agents%2Fother.toml")
+            .join(".git/wt/runtime/agents/other/supervisor.toml")
             .exists()
     );
     cleanup_disabled.kill().unwrap();
@@ -6805,7 +6819,7 @@ fn supervisor_stop_escalates_sigkill_after_timeout() {
     assert!(
         !temp
             .path()
-            .join(".git/wt/supervisors/agents%2Fstubborn.toml")
+            .join(".git/wt/runtime/agents/stubborn/supervisor.toml")
             .exists()
     );
 }

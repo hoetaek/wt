@@ -34,8 +34,8 @@ effects.
 All personal state lives under `<git-common-dir>/wt/` in four canonical buckets:
 `config/`, `planning/`, `execution/`, and `runtime/`. Architecture ownership
 should name the domain owner inside those buckets rather than adding new
-top-level roots. Legacy flat roots such as `messages/`, `agent.state/`, and
-`worktrees/` are not architecture ownership points.
+top-level roots. Legacy flat roots such as `messages/`, `agent.state/`,
+`sessions/`, and `worktrees/` are not architecture ownership points.
 
 New code must not read from or write to those legacy flat roots during normal
 operation. The only acceptable access is an explicit migration, import, or
@@ -129,7 +129,7 @@ old shell state from leaking into the current worker identity model.
 The identity locator owns post-hoc binding from the current terminal or agent
 session to a flat `AgentId`. Its source-of-truth module is
 `src/services/identity_locator/`, and its durable marker location is
-`<git-common-dir>/wt/runtime/agents/<name>/sessions/<encoded-anchor-key>.toml`.
+`<git-common-dir>/wt/runtime/agents/<name>/anchors/<encoded-anchor-key>.toml`.
 
 Anchor keys are derived in priority order:
 
@@ -186,7 +186,7 @@ SessionEnd hook surface.
 Runtime observation is the local agent observation state owner. Its
 source-of-truth module is `src/agent_state.rs`, and its first durable location is
 `<git-common-dir>/wt/runtime/agents/<name>/observations/wait-observations.jsonl`. It owns append-only
-non-idle wait samples recorded by explicit `wt agent watch` flags and read-only
+non-idle wait samples recorded by `wt agent watch` heartbeat/timeout bounds and read-only
 summary aggregation for `wt agent wait-stats`. It does not own `TaskRun.status`,
 Workflow or TaskDocument lifecycle, cmux workspace/surface transport state,
 agent hook installation, or inferred default policy.

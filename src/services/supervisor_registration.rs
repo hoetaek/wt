@@ -1,5 +1,6 @@
 use crate::context::Ctx;
-use crate::services::identity_locator::{percent_encode, process_start_time};
+use crate::messages::AgentId;
+use crate::services::identity_locator::process_start_time;
 use anyhow::{Context, Result};
 use nix::errno::Errno;
 use nix::sys::signal;
@@ -35,17 +36,22 @@ pub struct Registration {
     pub log_path: PathBuf,
 }
 
-pub fn registration_path(ctx: &Ctx, agent_id: &str) -> PathBuf {
-    registrations_dir(ctx).join(format!("{}.toml", encoded_agent_id(agent_id)))
+pub fn registration_path(ctx: &Ctx, agent_id: &str) -> Result<PathBuf> {
+    Ok(agent_runtime_dir(ctx, agent_id)?.join("supervisor.toml"))
 }
 
-pub fn log_path(ctx: &Ctx, agent_id: &str) -> PathBuf {
-    registrations_dir(ctx).join(format!("{}.log", encoded_agent_id(agent_id)))
+pub fn log_path(ctx: &Ctx, agent_id: &str) -> Result<PathBuf> {
+    Ok(agent_runtime_dir(ctx, agent_id)?.join("supervisor.log"))
 }
 
 pub fn write_registration(ctx: &Ctx, registration: &Registration) -> Result<()> {
-    let path = registration_path(ctx, &registration.agent_id);
-    let dir = registrations_dir(ctx);
+    let path = registration_path(ctx, &registration.agent_id)?;
+    let dir = path.parent().with_context(|| {
+        format!(
+            "Supervisor registration path has no parent: {}",
+            path.display()
+        )
+    })?;
     fs::create_dir_all(&dir).with_context(|| {
         format!(
             "Failed to create supervisor registration directory {}",
@@ -55,8 +61,7 @@ pub fn write_registration(ctx: &Ctx, registration: &Registration) -> Result<()> 
     let rendered = toml::to_string_pretty(registration)
         .context("Failed to serialize supervisor registration")?;
     let temp_path = dir.join(format!(
-        ".{}.{}.{}.tmp",
-        encoded_agent_id(&registration.agent_id),
+        ".supervisor.{}.{}.tmp",
         std::process::id(),
         TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
@@ -76,12 +81,12 @@ pub fn write_registration(ctx: &Ctx, registration: &Registration) -> Result<()> 
 }
 
 pub fn read_registration(ctx: &Ctx, agent_id: &str) -> Result<Option<Registration>> {
-    let path = registration_path(ctx, agent_id);
+    let path = registration_path(ctx, agent_id)?;
     read_registration_file(path)
 }
 
 pub fn remove_registration(ctx: &Ctx, agent_id: &str) -> Result<bool> {
-    let path = registration_path(ctx, agent_id);
+    let path = registration_path(ctx, agent_id)?;
     match fs::remove_file(&path) {
         Ok(()) => Ok(true),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -95,7 +100,7 @@ pub fn remove_registration(ctx: &Ctx, agent_id: &str) -> Result<bool> {
 }
 
 pub fn list_registrations(ctx: &Ctx) -> Result<Vec<Registration>> {
-    let dir = registrations_dir(ctx);
+    let dir = ctx.storage_root.runtime_agents_dir();
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -117,10 +122,15 @@ pub fn list_registrations(ctx: &Ctx) -> Result<Vec<Registration>> {
                 dir.display()
             )
         })?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+        let agent_dir = entry.path();
+        if !entry
+            .file_type()
+            .with_context(|| format!("Failed to inspect {}", agent_dir.display()))?
+            .is_dir()
+        {
             continue;
         }
+        let path = agent_dir.join("supervisor.toml");
         if let Some(registration) = read_registration_file(path)? {
             registrations.push(registration);
         }
@@ -187,12 +197,10 @@ fn read_registration_file(path: PathBuf) -> Result<Option<Registration>> {
         .map(Some)
 }
 
-fn registrations_dir(ctx: &Ctx) -> PathBuf {
-    ctx.storage_root.personal_root().join("supervisors")
-}
-
-fn encoded_agent_id(agent_id: &str) -> String {
-    percent_encode(agent_id)
+fn agent_runtime_dir(ctx: &Ctx, agent_id: &str) -> Result<PathBuf> {
+    let agent = AgentId::parse(agent_id)
+        .with_context(|| format!("Invalid supervisor agent id: {agent_id}"))?;
+    Ok(ctx.storage_root.runtime_agent_dir(&agent))
 }
 
 #[cfg(test)]
@@ -253,16 +261,20 @@ mod tests {
         write_registration(&ctx, &reg).unwrap();
 
         assert_eq!(read_registration(&ctx, "agents/codex").unwrap(), Some(reg));
-        assert!(registration_path(&ctx, "agents/codex").ends_with("agents%2Fcodex.toml"));
+        assert!(
+            registration_path(&ctx, "agents/codex")
+                .unwrap()
+                .ends_with("runtime/agents/codex/supervisor.toml")
+        );
     }
 
     #[test]
-    fn registration_paths_do_not_collide_for_slashes_and_underscores() {
+    fn registration_paths_use_agent_id_filesystem_segment() {
         let dir = TempDir::new().unwrap();
         let ctx = test_ctx(&dir);
-        assert_ne!(
-            registration_path(&ctx, "foo/bar"),
-            registration_path(&ctx, "foo__bar")
+        assert_eq!(
+            registration_path(&ctx, "codex").unwrap(),
+            registration_path(&ctx, "agents/codex").unwrap()
         );
     }
 
@@ -279,7 +291,7 @@ mod tests {
 
         write_registration(&ctx, &reg).unwrap();
 
-        let content = fs::read_to_string(registration_path(&ctx, "agents/plain")).unwrap();
+        let content = fs::read_to_string(registration_path(&ctx, "agents/plain").unwrap()).unwrap();
         assert!(!content.contains("target_surface_id"));
         assert!(!content.contains("target_agent_kind"));
         assert!(!content.contains("host_workspace_id"));
