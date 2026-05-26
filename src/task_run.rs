@@ -332,7 +332,6 @@ pub(crate) fn launch_template_vars_for(id: &str, run: &TaskRun) -> HashMap<Strin
     if let Some(agent_id) = run.agent_id.as_deref() {
         vars.insert("wt_agent_id".into(), agent_id.to_string());
     }
-    vars.insert("wt_coordinator_agent_id".into(), String::new());
     vars
 }
 

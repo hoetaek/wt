@@ -35,9 +35,8 @@ minor version instead of moving to `x.0.0`.
   emits hook JSON on stdout, and acknowledges successful output into
   `inbox/delivered` without stealing active claims.
 - Changed generated task and workflow coordinator handoff prompts to present
-  `wt msg send --to coordinator ...` as the default report route, with cmux
-  send coordinates retained as the fallback route when the file inbox is
-  unavailable.
+  `wt task report ...` as the default report route, with cmux send coordinates
+  retained as the fallback route when the file inbox is unavailable.
 
 - Added automated cmux-free cross-agent hook roundtrip coverage. The smoke uses
   linked worktrees, `wt setup`, `wt as`, `wt msg send`, and the installed
@@ -53,17 +52,18 @@ minor version instead of moving to `x.0.0`.
   `wt as <agent-id> -- <command...>`. The known-agent wrappers derive
   `WT_AGENT_ID=agents/<branch_slug>` from the current worktree and support
   same-worktree role identities such as `wt codex @planner`, which uses
-  `agents/<branch_slug>-planner` instead of consuming the default inbox.
+  `agents/<branch_slug>-planner` instead of consuming the default inbox. All
+  wrappers clear removed legacy coordinator routing env before launching the
+  child process.
 
 - Refactored `wt agent hook install claude` to install a worktree-local
   `WT_AGENT_ID` dispatcher hook by default, matching the Codex runtime identity
   model while preserving `--agent <agent>` as a manual/test override.
 
-- Added the `coordinator` message target for task and workflow handoffs. Task
-  agents launched with coordinator context receive
-  `WT_COORDINATOR_AGENT_ID=<coordinator-agent-id>`, and generated handoff
-  prompts include the `wt msg send --to coordinator ...` route alongside the
-  existing cmux send coordinates.
+- Added TaskRun-owned report routing for task and workflow handoffs. Task
+  agents launched by wt receive their own `WT_AGENT_ID` and `WT_TASK_RUN_ID`,
+  and generated handoff prompts use `wt task report ...` alongside the existing
+  cmux send coordinates.
 
 - Bound wt-launched agent workspace commands to the file-inbox runtime identity
   by injecting `WT_AGENT_ID=agents/<branch_slug>` into the cmux

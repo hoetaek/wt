@@ -1,8 +1,8 @@
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::messages::{
-    AgentId, COORDINATOR_AGENT_ALIAS, HookOutput, Message, MessageDeliveryState,
-    MessageInspectionRecord, MessageInventory, MessageInventoryCounts, MessageScope, MessageStore,
+    AgentId, HookOutput, Message, MessageDeliveryState, MessageInspectionRecord, MessageInventory,
+    MessageInventoryCounts, MessageScope, MessageStore,
 };
 use crate::services::inbox_watcher::InboxWatcher;
 use crate::task_run::{self, TaskRunContext};
@@ -224,25 +224,8 @@ pub(crate) fn watch(ctx: &Ctx, agent: Option<&str>, timeout: Duration, json: boo
     }
 }
 
-fn resolve_agent_arg(ctx: &Ctx, input: &str) -> Result<AgentId> {
-    if input.trim() == COORDINATOR_AGENT_ALIAS {
-        return coordinator_agent_from_context(ctx);
-    }
+fn resolve_agent_arg(_ctx: &Ctx, input: &str) -> Result<AgentId> {
     AgentId::parse(input)
-}
-
-fn coordinator_agent_from_context(ctx: &Ctx) -> Result<AgentId> {
-    let Some(value) = ctx.coordinator_agent_id.as_deref() else {
-        bail!(coordinator_alias_error());
-    };
-    if value.trim().is_empty() {
-        bail!(coordinator_alias_error());
-    }
-    AgentId::parse(value).map_err(|err| anyhow::anyhow!("Invalid WT_COORDINATOR_AGENT_ID: {err:#}"))
-}
-
-fn coordinator_alias_error() -> &'static str {
-    "The `coordinator` alias requires WT_COORDINATOR_AGENT_ID. Run `wt coord use <id>` in the coordinator shell, bind the current session with `eval \"$(wt session set <id>)\"`, or enable ambient binding with `eval \"$(wt shell-init zsh)\"`."
 }
 
 fn inbox_agents_from_context(_ctx: &Ctx) -> Result<Vec<String>> {
@@ -264,15 +247,12 @@ fn resolve_watch_agent(ctx: &Ctx, agent: Option<&str>) -> Result<AgentId> {
         return resolve_agent_arg(ctx, agent).context("Invalid agent id");
     }
 
-    if let Some(agent) = env_agent_id("WT_COORDINATOR_AGENT_ID")? {
-        return Ok(agent);
-    }
     if let Some(agent) = env_agent_id("WT_AGENT_ID")? {
         return Ok(agent);
     }
 
     bail!(
-        "wt msg watch could not resolve an agent id. Tried explicit --agent, WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Pass --agent <agent>, run `wt coord use <id>`, bind the session with `eval \"$(wt session set <id>)\"`, or launch through `wt as`, `wt codex`, or `wt claude`."
+        "wt msg watch could not resolve an agent id. Pass --agent <agent>, set WT_AGENT_ID, or launch through `wt as`, `wt codex`, or `wt claude`."
     )
 }
 
@@ -613,34 +593,19 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn coordinator_alias_resolves_from_runtime_env() {
+    fn bare_coordinator_is_ordinary_agent_name() {
         let temp = TempDir::new().unwrap();
-        let ctx = test_ctx(temp.path(), Some("agents/foo".into()));
+        let ctx = test_ctx(temp.path());
 
         let agent = resolve_agent_arg(&ctx, "coordinator").unwrap();
 
-        assert_eq!(agent.as_str(), "agents/foo");
-    }
-
-    #[test]
-    fn coordinator_alias_without_runtime_env_errors_with_setup_hint() {
-        let temp = TempDir::new().unwrap();
-        let ctx = test_ctx(temp.path(), None);
-
-        let err = resolve_agent_arg(&ctx, "coordinator")
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains("WT_COORDINATOR_AGENT_ID"));
-        assert!(err.contains("wt coord use <id>"));
-        assert!(err.contains("wt session set <id>"));
-        assert!(err.contains("wt shell-init zsh"));
+        assert_eq!(agent.as_str(), "agents/coordinator");
     }
 
     #[test]
     fn authorized_inbox_scopes_include_recorded_workflow_coordinator() {
         let temp = TempDir::new().unwrap();
-        let ctx = test_ctx(temp.path(), None);
+        let ctx = test_ctx(temp.path());
         let record = task_run::create_workflow_routed(
             &ctx,
             "add-schema",
@@ -667,7 +632,7 @@ mod tests {
         assert!(other_scopes.is_empty());
     }
 
-    fn test_ctx(root: &std::path::Path, coordinator_agent_id: Option<String>) -> Ctx {
+    fn test_ctx(root: &std::path::Path) -> Ctx {
         Ctx::new_with_options(
             root.to_path_buf(),
             root.to_path_buf(),
@@ -677,7 +642,6 @@ mod tests {
             CtxOptions {
                 storage_root: Some(StorageRoot::from_git_common_dir(root.join(".git"))),
                 output_mode: OutputMode::Text,
-                coordinator_agent_id,
                 ..CtxOptions::default()
             },
         )

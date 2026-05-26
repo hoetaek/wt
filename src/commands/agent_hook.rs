@@ -341,7 +341,7 @@ impl ClaudeHookTarget {
 
     fn label(&self) -> String {
         match self {
-            Self::Dispatcher => "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher".into(),
+            Self::Dispatcher => "WT_AGENT_ID dispatcher".into(),
             Self::Agent(agent) => format!("manual override {}", agent.as_str()),
         }
     }
@@ -365,7 +365,7 @@ impl CodexHookTarget {
 
     fn label(&self) -> String {
         match self {
-            Self::Dispatcher => "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher".into(),
+            Self::Dispatcher => "WT_AGENT_ID dispatcher".into(),
             Self::Agent(agent) => format!("manual override {}", agent.as_str()),
         }
     }

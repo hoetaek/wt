@@ -802,8 +802,6 @@ id = "PROJ-123"
                 .contains("cmux send-key --workspace workspace:34 --surface surface:103 enter")
         );
         assert!(handoff_prompt.contains("wt task report \"Agent Completion Report"));
-        assert!(!handoff_prompt.contains("wt msg send --to coordinator"));
-        assert!(!handoff_prompt.contains("WT_COORDINATOR_AGENT_ID"));
         assert!(handoff_prompt.contains("If the file inbox route is unavailable"));
         assert!(handoff_prompt.contains("If `wt task report` fails"));
         assert!(!handoff_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));

@@ -37,7 +37,6 @@ fn wt_command() -> Command {
         command.env_remove(key);
     }
     command.env_remove("WT_AGENT_ID");
-    command.env_remove("WT_COORDINATOR_AGENT_ID");
     command
 }
 
@@ -47,7 +46,6 @@ fn wt_std_command() -> StdCommand {
         command.env_remove(key);
     }
     command.env_remove("WT_AGENT_ID");
-    command.env_remove("WT_COORDINATOR_AGENT_ID");
     command
 }
 
@@ -225,7 +223,7 @@ fn msg_watch_skips_message_that_is_claimed_by_a_racing_reader() {
 }
 
 #[test]
-fn msg_watch_resolves_omitted_agent_from_coordinator_env() {
+fn msg_watch_resolves_omitted_agent_from_wt_agent_id() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     send_message(temp.path(), "coord-a", "env identity");
@@ -239,7 +237,7 @@ fn msg_watch_resolves_omitted_agent_from_coordinator_env() {
             "--timeout",
             "1",
         ])
-        .env("WT_COORDINATOR_AGENT_ID", "agents/coord-a")
+        .env("WT_AGENT_ID", "agents/coord-a")
         .assert()
         .success()
         .stdout(predicate::str::contains("summary=\"env identity\""));
@@ -261,8 +259,7 @@ fn msg_watch_without_identity_errors_with_resolution_chain() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("explicit --agent"))
-        .stderr(predicate::str::contains("WT_COORDINATOR_AGENT_ID"))
+        .stderr(predicate::str::contains("Pass --agent <agent>"))
         .stderr(predicate::str::contains("WT_AGENT_ID"));
 }
 
