@@ -19,13 +19,25 @@ use std::time::{Duration, Instant};
 const DEFAULT_CHECK_INBOX_HOOK_EVENT_NAME: &str = "UserPromptSubmit";
 const CHECK_INBOX_HOOK_EVENT_NAMES: &[&str] = &["UserPromptSubmit", "PostToolUse"];
 
+pub(crate) fn runtime_message_store(ctx: &Ctx) -> Result<MessageStore> {
+    ensure_no_legacy_message_storage(ctx)?;
+    Ok(MessageStore::new(ctx.storage_root.runtime_dir()))
+}
+
+pub(crate) fn ensure_no_legacy_message_storage(ctx: &Ctx) -> Result<()> {
+    if let Some(legacy) = ctx.storage_root.detect_legacy_messages() {
+        bail!("{}", legacy.error_message_for("message storage"));
+    }
+    Ok(())
+}
+
 pub(crate) fn send(ctx: &Ctx, to: &str, scope: Option<&str>, message: &[String]) -> Result<()> {
     let text = message.join(" ");
     if text.trim().is_empty() {
         bail!("Message cannot be empty");
     }
 
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     let scope = scope.map(parse_scope_arg).transpose()?;
     let to = resolve_agent_arg(ctx, to).context("Invalid target agent id")?;
     let sent = match scope {
@@ -75,7 +87,7 @@ fn parse_scope_arg(scope: &str) -> Result<MessageScope> {
 }
 
 pub(crate) fn list(ctx: &Ctx, agent: &str) -> Result<()> {
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     let agent = resolve_agent_arg(ctx, agent).context("Invalid agent id")?;
     let inventory = store.list(agent.as_str())?;
     let report = MessageListReport::from_inventory(ctx, inventory);
@@ -92,7 +104,7 @@ pub(crate) fn list(ctx: &Ctx, agent: &str) -> Result<()> {
 pub(crate) fn read(ctx: &Ctx, agent: &str, message_id: &str) -> Result<()> {
     let message_id = canonical_read_message_id(message_id)?;
     let agent = resolve_agent_arg(ctx, agent).context("Invalid agent id")?;
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     let record = store.read_for_inspection(agent.as_str(), message_id)?;
     let row = MessageRow::from_record(ctx, record);
     let report = MessageReadReport {
@@ -137,7 +149,7 @@ pub(crate) fn check_inbox(
         return Ok(());
     }
 
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     for agent in agents {
         let authorized_scopes = authorized_inbox_scopes(ctx, &agent)?;
         let delivery = store.check_inbox(&agent, &authorized_scopes)?;
@@ -223,18 +235,15 @@ pub(crate) fn watch(ctx: &Ctx, agent: Option<&str>, timeout: Duration, json: boo
 
     let signal_state = WatchSignalState::install()?;
     let agent = resolve_watch_agent(ctx, agent)?;
-    let inbox_new = ctx
-        .storage_root
-        .messages_dir()
-        .join(agent.as_str())
-        .join("inbox")
-        .join("new");
+    ensure_no_legacy_message_storage(ctx)?;
+    let inbox_new =
+        agent.inbox_state_dir(&ctx.storage_root.runtime_dir(), MessageDeliveryState::New);
     fs::create_dir_all(&inbox_new)
         .with_context(|| format!("Failed to create inbox: {}", inbox_new.display()))?;
 
     let mut watcher = InboxWatcher::new(&inbox_new)?;
     signal_state.exit_if_signaled()?;
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 

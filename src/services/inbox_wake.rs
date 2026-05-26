@@ -215,7 +215,7 @@ mod tests {
             task_run::STATUS_RUNNING,
         )
         .unwrap();
-        let sent = MessageStore::new(ctx.storage_root.messages_dir())
+        let sent = MessageStore::new(ctx.storage_root.runtime_dir())
             .send_scoped_from(
                 "agents/coord-a",
                 "agents/run-1-add-schema",
@@ -249,7 +249,7 @@ mod tests {
             Some("codex"),
         )
         .unwrap();
-        let sent = MessageStore::new(ctx.storage_root.messages_dir())
+        let sent = MessageStore::new(ctx.storage_root.runtime_dir())
             .send_from("agents/worker", "agents/coord-a", "direct message")
             .unwrap();
 
@@ -276,7 +276,7 @@ mod tests {
             task_run::STATUS_RUNNING,
         )
         .unwrap();
-        let sent = MessageStore::new(ctx.storage_root.messages_dir())
+        let sent = MessageStore::new(ctx.storage_root.runtime_dir())
             .send_scoped_from(
                 "agents/coord-a",
                 "agents/run-1-add-schema",

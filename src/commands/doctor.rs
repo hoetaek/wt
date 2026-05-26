@@ -549,7 +549,8 @@ fn collect_repo_setup_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
         ctx.storage_root.workflows_dir(),
         ctx.storage_root.task_runs_dir(),
         ctx.storage_root.archive_dir(),
-        ctx.storage_root.messages_dir(),
+        ctx.storage_root.runtime_dir(),
+        ctx.storage_root.runtime_agents_dir(),
         ctx.storage_root.agent_state_dir(),
         ctx.storage_root.worktrees_dir(),
     ];

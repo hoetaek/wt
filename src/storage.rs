@@ -93,6 +93,14 @@ impl StorageRoot {
         self.archive_dir().join("workflows")
     }
 
+    pub fn runtime_dir(&self) -> PathBuf {
+        self.personal_root.join("runtime")
+    }
+
+    pub fn runtime_agents_dir(&self) -> PathBuf {
+        self.runtime_dir().join("agents")
+    }
+
     pub fn workflow_archive_dir(&self, id: impl AsRef<str>) -> PathBuf {
         self.archive_workflows_dir().join(id.as_ref())
     }
@@ -119,7 +127,7 @@ impl StorageRoot {
         self.task_runs_dir().join(file_name)
     }
 
-    pub fn messages_dir(&self) -> PathBuf {
+    pub fn legacy_messages_dir(&self) -> PathBuf {
         self.personal_root.join("messages")
     }
 
@@ -204,6 +212,15 @@ impl StorageRoot {
 
     pub fn detect_legacy_archive(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
         self.detect_legacy_child(repo_root, "archive", self.archive_dir())
+    }
+
+    pub fn detect_legacy_messages(&self) -> Option<LegacyLocalStorage> {
+        self.legacy_messages_dir()
+            .is_dir()
+            .then_some(LegacyLocalStorage {
+                path: self.legacy_messages_dir(),
+                canonical_root: self.runtime_agents_dir(),
+            })
     }
 
     fn detect_legacy_child(
@@ -428,8 +445,12 @@ mod tests {
             PathBuf::from("/repo/.git/wt/execution/archive")
         );
         assert_eq!(
-            storage.messages_dir(),
-            PathBuf::from("/repo/.git/wt/messages")
+            storage.runtime_dir(),
+            PathBuf::from("/repo/.git/wt/runtime")
+        );
+        assert_eq!(
+            storage.runtime_agents_dir(),
+            PathBuf::from("/repo/.git/wt/runtime/agents")
         );
         assert_eq!(
             storage.agent_state_dir(),
@@ -540,6 +561,27 @@ mod tests {
         assert!(
             legacy
                 .error_message_for("TaskDocument storage")
+                .contains("does not silently fall back")
+        );
+    }
+
+    #[test]
+    fn detects_legacy_message_storage_without_fallback() {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(repo.join(".git/wt/messages/agents/codex/inbox/new")).unwrap();
+        let storage = StorageRoot::from_git_common_dir(repo.join(".git"));
+
+        let legacy = storage.detect_legacy_messages().unwrap();
+
+        assert_eq!(legacy.path(), repo.join(".git/wt/messages").as_path());
+        assert_eq!(
+            legacy.canonical_root(),
+            repo.join(".git/wt/runtime/agents").as_path()
+        );
+        assert!(
+            legacy
+                .error_message_for("message storage")
                 .contains("does not silently fall back")
         );
     }
