@@ -622,6 +622,9 @@ pub enum MsgCommand {
         /// Explicit single agent id as NAME or agents/NAME; omitted uses WT_AGENT_ID, then the current live session marker
         #[arg(long)]
         agent: Option<String>,
+        /// Internal hook event name supplied by wt-managed hook templates; omitted preserves the compatible UserPromptSubmit default
+        #[arg(long, hide = true)]
+        hook_event_name: Option<String>,
         /// Hook mode: exit 0 silently when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup). Intended for agent hooks installed globally; direct CLI use should omit this flag.
         #[arg(long)]
         silent: bool,

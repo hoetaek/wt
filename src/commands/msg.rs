@@ -16,6 +16,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+const DEFAULT_CHECK_INBOX_HOOK_EVENT_NAME: &str = "UserPromptSubmit";
+const CHECK_INBOX_HOOK_EVENT_NAMES: &[&str] = &["UserPromptSubmit", "PostToolUse"];
+
 pub(crate) fn send(ctx: &Ctx, to: &str, scope: Option<&str>, message: &[String]) -> Result<()> {
     let text = message.join(" ");
     if text.trim().is_empty() {
@@ -115,7 +118,12 @@ fn canonical_read_message_id(message_id: &str) -> Result<&str> {
     Ok(id)
 }
 
-pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
+pub(crate) fn check_inbox(
+    ctx: &Ctx,
+    agent: Option<&str>,
+    hook_event_name: Option<&str>,
+) -> Result<()> {
+    let hook_event_name = check_inbox_hook_event_name(hook_event_name)?;
     let agents = match agent {
         Some(agent) => vec![
             resolve_agent_arg(ctx, agent)
@@ -137,7 +145,7 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
             continue;
         }
 
-        let output = HookOutput::new("UserPromptSubmit", delivery.additional_context());
+        let output = HookOutput::new(hook_event_name, delivery.additional_context());
         let stdout = std::io::stdout();
         let mut handle = stdout.lock();
         serde_json::to_writer(&mut handle, &output)?;
@@ -146,6 +154,19 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
         store.acknowledge_inbox_delivery(&delivery)?;
     }
     Ok(())
+}
+
+fn check_inbox_hook_event_name(hook_event_name: Option<&str>) -> Result<&str> {
+    let Some(hook_event_name) = hook_event_name else {
+        return Ok(DEFAULT_CHECK_INBOX_HOOK_EVENT_NAME);
+    };
+    if CHECK_INBOX_HOOK_EVENT_NAMES.contains(&hook_event_name) {
+        return Ok(hook_event_name);
+    }
+    bail!(
+        "Unsupported check-inbox hook event `{hook_event_name}`; expected one of: {}",
+        CHECK_INBOX_HOOK_EVENT_NAMES.join(", ")
+    )
 }
 
 fn authorized_inbox_scopes(ctx: &Ctx, agent: &str) -> Result<Vec<MessageScope>> {

@@ -1752,7 +1752,6 @@ mod tests {
     fn write_wt_codex_inbox_hook(home: &Path, include_trust: bool) {
         fs::create_dir_all(home).unwrap();
         let hooks_path = home.join("hooks.json");
-        let command = "wt msg check-inbox --silent # wt-agent-hook:codex-inbox";
         fs::write(
             &hooks_path,
             serde_json::to_string_pretty(&json!({
@@ -1760,13 +1759,13 @@ mod tests {
                     "UserPromptSubmit": [{
                         "hooks": [{
                             "type": "command",
-                            "command": command,
+                            "command": "wt msg check-inbox --hook-event-name UserPromptSubmit --silent # wt-agent-hook:codex-inbox",
                         }],
                     }],
                     "PostToolUse": [{
                         "hooks": [{
                             "type": "command",
-                            "command": command,
+                            "command": "wt msg check-inbox --hook-event-name PostToolUse --silent # wt-agent-hook:codex-inbox",
                         }],
                     }],
                 },
@@ -1777,11 +1776,14 @@ mod tests {
 
         let mut content = String::from("[features]\nhooks = true\n");
         if include_trust {
-            for &(_, event_key) in crate::commands::agent_hook::CODEX_HOOK_EVENTS {
+            for &(event_name, event_key) in crate::commands::agent_hook::CODEX_HOOK_EVENTS {
+                let command = format!(
+                    "wt msg check-inbox --hook-event-name {event_name} --silent # wt-agent-hook:codex-inbox"
+                );
                 content.push_str(&format!(
                     "\n[hooks.state.\"{}:{event_key}:0:0\"]\nenabled = true\ntrusted_hash = \"{}\"\n",
                     hooks_path.display(),
-                    crate::commands::agent_hook::codex_command_hook_hash(command, event_key)
+                    crate::commands::agent_hook::codex_command_hook_hash(&command, event_key)
                 ));
             }
         }
