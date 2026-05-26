@@ -490,7 +490,7 @@ mod tests {
     }
 
     fn write_task(root: &std::path::Path, key: &str, content: &str) {
-        let tasks_dir = root.join(".git/wt/tasks");
+        let tasks_dir = root.join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
     }
@@ -527,7 +527,8 @@ mod tests {
         assert_eq!(tasks[0].key, "PROJ-123");
         assert_eq!(tasks[0].branch, "alice/proj-123-fix-editor");
         let content =
-            std::fs::read_to_string(dir.path().join(".git/wt/tasks/PROJ-123.toml")).unwrap();
+            std::fs::read_to_string(dir.path().join(".git/wt/execution/tasks/PROJ-123.toml"))
+                .unwrap();
         assert!(content.contains("title = \"Fix editor\""));
         assert!(content.contains("branch = \"alice/proj-123-fix-editor\""));
         assert!(content.contains("body = \"\"\""));
@@ -566,7 +567,7 @@ mod tests {
         let origin = document.origin.unwrap();
         assert_eq!(origin.provider, "linear");
         assert_eq!(origin.id, "PROJ-123");
-        assert!(!dir.path().join(".git/wt/task-runs").exists());
+        assert!(!dir.path().join(".git/wt/execution/task-runs").exists());
     }
 
     #[test]
@@ -600,7 +601,7 @@ mod tests {
         let origin = document.origin.unwrap();
         assert_eq!(origin.provider, "github");
         assert_eq!(origin.id, "#52");
-        assert!(!dir.path().join(".git/wt/task-runs").exists());
+        assert!(!dir.path().join(".git/wt/execution/task-runs").exists());
 
         let calls = runner.calls.lock().unwrap();
         assert!(calls.iter().any(|(cmd, args, _)| {
@@ -700,7 +701,11 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("No branch name"));
-        assert!(!dir.path().join(".git/wt/tasks/PROJ-123.toml").exists());
+        assert!(
+            !dir.path()
+                .join(".git/wt/execution/tasks/PROJ-123.toml")
+                .exists()
+        );
     }
 
     #[test]
@@ -734,7 +739,7 @@ mod tests {
 
         assert!(err.to_string().contains("Duplicate issue id: PROJ-123"));
         assert!(provider.fetched_ids().is_empty());
-        assert!(!dir.path().join(".git/wt/tasks").exists());
+        assert!(!dir.path().join(".git/wt/execution/tasks").exists());
     }
 
     #[test]
@@ -758,7 +763,8 @@ mod tests {
 
         assert!(err.to_string().contains("TaskDocument already exists"));
         let content =
-            std::fs::read_to_string(dir.path().join(".git/wt/tasks/PROJ-123.toml")).unwrap();
+            std::fs::read_to_string(dir.path().join(".git/wt/execution/tasks/PROJ-123.toml"))
+                .unwrap();
         assert!(content.contains("title = \"Local edits\""));
         assert!(!content.contains("Provider title"));
     }
@@ -797,11 +803,16 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("<git-common-dir>/wt/tasks/PROJ-2.toml")
+                .contains("<git-common-dir>/wt/execution/tasks/PROJ-2.toml")
         );
-        assert!(!dir.path().join(".git/wt/tasks/PROJ-1.toml").exists());
+        assert!(
+            !dir.path()
+                .join(".git/wt/execution/tasks/PROJ-1.toml")
+                .exists()
+        );
         let content =
-            std::fs::read_to_string(dir.path().join(".git/wt/tasks/PROJ-2.toml")).unwrap();
+            std::fs::read_to_string(dir.path().join(".git/wt/execution/tasks/PROJ-2.toml"))
+                .unwrap();
         assert!(content.contains("title = \"Existing\""));
     }
 
@@ -826,8 +837,16 @@ mod tests {
 
         assert_eq!(selected, vec!["PROJ-2".to_string()]);
         assert_eq!(imported[0].key, "PROJ-2");
-        assert!(dir.path().join(".git/wt/tasks/PROJ-2.toml").exists());
-        assert!(!dir.path().join(".git/wt/tasks/PROJ-1.toml").exists());
+        assert!(
+            dir.path()
+                .join(".git/wt/execution/tasks/PROJ-2.toml")
+                .exists()
+        );
+        assert!(
+            !dir.path()
+                .join(".git/wt/execution/tasks/PROJ-1.toml")
+                .exists()
+        );
         assert_eq!(
             ui.multi_select_items.lock().unwrap().as_slice(),
             [vec![
@@ -862,7 +881,8 @@ mod tests {
 
         assert!(err.to_string().contains("TaskDocument already exists"));
         let content =
-            std::fs::read_to_string(dir.path().join(".git/wt/tasks/PROJ-123.toml")).unwrap();
+            std::fs::read_to_string(dir.path().join(".git/wt/execution/tasks/PROJ-123.toml"))
+                .unwrap();
         assert!(content.contains("title = \"Local edits\""));
         assert!(!content.contains("Provider title"));
     }
