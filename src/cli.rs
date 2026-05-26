@@ -788,7 +788,7 @@ pub enum TaskCommand {
     },
     /// Publish local TaskDocuments as provider issues
     #[command(
-        long_about = "Create provider issues from selected <git-common-dir>/wt/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+        long_about = "Create provider issues from selected <git-common-dir>/wt/tasks/<task>.toml files, then rewrite branch to a provider-keyed branch and write [origin] with the configured provider and created issue id. This command does not start workspaces, create local branches, create TaskRuns, or run workflow work.\n\nAfter branch and [origin] are written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, the task has an empty title, or rewriting the old branch would be unsafe because it already has a TaskRun, checked-out worktree, local branch, or remote branch."
     )]
     Publish {
         /// Local task keys from <git-common-dir>/wt/tasks/<task>.toml
@@ -1745,7 +1745,9 @@ mod tests {
 
         assert!(help.contains("provider issue"));
         assert!(help.contains("write [origin]"));
+        assert!(help.contains("rewrite branch to a provider-keyed branch"));
         assert!(help.contains("does not start workspaces"));
+        assert!(help.contains("create local branches"));
         assert!(help.contains("later wt run task and wt run workflow"));
         assert!(help.contains("Omit task keys to choose unprocessed local TaskDocuments"));
         assert!(help.contains("tasks that already have [origin] are excluded"));
@@ -1753,6 +1755,7 @@ mod tests {
         assert!(!help.contains("--batch <BATCH>"));
         assert!(help.contains("no issue provider"));
         assert!(help.contains("already has origin"));
+        assert!(help.contains("checked-out worktree"));
     }
 
     #[test]

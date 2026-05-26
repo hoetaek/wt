@@ -1098,10 +1098,11 @@ TaskDocument publish는 local task 정의를 configured issue provider의 issue�
 side effect다. Canonical command shape는 `wt task publish` 또는
 `wt task publish <task>...`다. Bare `wt task publish`는 아직 `[origin]`이 없는 local
 TaskDocument를 multi-select로 고르게 하고, 명시 task key는 scriptable path로 남긴다.
-`publish`는 각 task의 provider issue 생성과 `<git-common-dir>/wt/tasks/<task>.toml`의 `origin`
-업데이트가 모두 끝났을 때만 해당 task를 성공으로 보고한다. 둘 중 하나만 끝난 상태를
-성공으로 보고하지 않는다. `origin`은 external issue와의 durable link이지, 아직
-publish해야 한다는 pending request가 아니다.
+`publish`는 각 task의 provider issue 생성, provider-keyed `branch` rewrite, 그리고
+`<git-common-dir>/wt/tasks/<task>.toml`의 `origin` 업데이트가 모두 끝났을 때만 해당 task를
+성공으로 보고한다. 일부만 끝난 상태를 성공으로 보고하지 않는다. `origin`은 external issue와의
+durable link이지, 아직 publish해야 한다는 pending request가 아니다. 성공 output은 생성된
+provider issue와 함께 old branch와 new branch를 보여줘야 한다.
 
 `wt run issue`는 이미 존재하는 provider issue에서 worktree를 시작하는 명령으로 남긴다. Bare
 `wt run issue`는 provider issue를 multi-select로 고르게 하고, 명시 issue key 목록은
@@ -1120,7 +1121,12 @@ Publish는 TaskDocument의 schema를 넓히지 않는다. TaskDocument에는 계
 body, optional origin만 둔다. TaskRun, workflow, profile, retry status, pending
 publish state는 TaskDocument에 저장하지 않는다. Publish selector는 어떤 local
 TaskDocument를 고를지에만 관여하고, provider issue link는 선택된 각 TaskDocument의
-`origin`에만 기록한다.
+`origin`에 기록한다. 동시에 `branch`는 생성된 provider issue key와 기존 branch의 final path
+segment slug를 조합한 provider-keyed branch로 rewrite한다. 기본 형태는
+`{{branch_prefix}}{{issue_key_lower}}-{{existing_branch_slug}}`다. `existing_branch_slug`는
+기존 TaskDocument `branch`의 마지막 path segment를 branch-name sanitizer로 정리한 값이며,
+이미 같은 issue key prefix가 있으면 중복하지 않는다. `branch_prefix`는 provider create/fetch
+결과가 suggested branch prefix를 제공할 때만 사용하고, 없으면 빈 값이다.
 
 Publish ambiguity는 provider side effect 전에 실패해야 한다. Explicit task keys,
 bare selector 외에 workflow alias 같은 두 번째 task source를 만들면 안 된다.
@@ -1132,15 +1138,21 @@ publish된 task는 `--skip-existing` 같은 명시적 옵션이 있을 때만 sk
 Provider issue title로 쓸 `title`은 필요하므로 비어 있으면 실패한다. `body`는 없거나
 비어 있어도 empty issue body로 publish한다.
 
+Publish branch rewrite가 기존 local state와 충돌할 수 있으면 provider side effect 전에
+실패해야 한다. 선택된 TaskDocument가 이미 TaskRun을 가지고 있거나, 기존 `branch`에 대한
+checked-out worktree, local branch, remote branch가 있으면 provider issue를 만들기 전에
+명확한 에러로 중단한다. Publish는 worktree, local branch, TaskRun, Workflow, PR, agent setup을
+만들지 않으며, 기존 branch state를 rename하거나 cleanup하지 않는다.
+
 Dry-run은 첫 write-path의 필수 표면이 아니다. 추가한다면 실제 publish와 같은 validation을
 거친 뒤 생성될 provider, title, body, branch metadata, 업데이트될 `origin` 위치를 보여주는
 plan이어야 하고, TaskDocument에 pending state를 저장해서 dry-run 결과를 표현하지 않는다.
 
 `wt task publish --help`는 이 side effect를 그대로 설명해야 한다. 즉 provider issue를
-생성하고 local TaskDocument origin을 기록한다는 점, 이미 origin이 있거나 provider가
-불명확하면 실패한다는 점, bare publish는 아직 origin이 없는 TaskDocument를 고른다는 점을
-보여줘야 한다. Worktree 시작, TaskRun 생성, workflow 실행, branch landing처럼 다른
-lifecycle을 publish 도움말에 섞지 않는다.
+생성하고 local TaskDocument branch rewrite와 origin 기록을 수행한다는 점, 이미 origin이
+있거나 provider가 불명확하거나 old branch state가 있으면 실패한다는 점, bare publish는 아직
+origin이 없는 TaskDocument를 고른다는 점을 보여줘야 한다. Worktree 시작, TaskRun 생성,
+workflow 실행, branch landing처럼 다른 lifecycle을 publish 도움말에 섞지 않는다.
 
 `wt task import --help`는 import가 provider issue에서 TaskDocument로 향하는
 non-executing 흐름임을 그대로 설명해야 한다. 즉 explicit issue id와 bare provider issue

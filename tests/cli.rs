@@ -1538,14 +1538,19 @@ fn task_publish_help_explains_behavior() {
         .assert()
         .success()
         .stdout(predicate::str::contains("provider issue"))
+        .stdout(predicate::str::contains(
+            "rewrite branch to a provider-keyed branch",
+        ))
         .stdout(predicate::str::contains("write [origin]"))
         .stdout(predicate::str::contains("does not start workspaces"))
+        .stdout(predicate::str::contains("create local branches"))
         .stdout(predicate::str::contains("wt run task and wt run workflow"))
         .stdout(predicate::str::contains("Omit task keys"))
         .stdout(predicate::str::contains(
             "already have [origin] are excluded",
         ))
-        .stdout(predicate::str::contains("already has origin"));
+        .stdout(predicate::str::contains("already has origin"))
+        .stdout(predicate::str::contains("checked-out worktree"));
 }
 
 #[test]

@@ -251,8 +251,9 @@ merge.
   issue branch first; it does not start worktrees, local branches, TaskRuns,
   Workflows, or pull requests.
 - `wt run task [<task>...]` starts one worktree per selected TaskDocument.
-- `wt task publish [<task>...]` creates provider issues from TaskDocuments and
-  records `[origin]`; it does not start worktrees.
+- `wt task publish [<task>...]` creates provider issues from TaskDocuments,
+  rewrites `branch` to the created issue key plus the existing branch slug, and
+  records `[origin]`; it does not start worktrees, local branches, or TaskRuns.
 - `Workflow` files in `<git-common-dir>/wt/workflows/<id>.toml` save coordinated execution.
   Optional top-level `title`, `body`, and `[origin]` record the larger human
   context for the saved plan. Workflow `[origin]` belongs to the large
