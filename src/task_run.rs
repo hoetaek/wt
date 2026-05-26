@@ -770,10 +770,9 @@ fn validate_run(run: &TaskRun) -> Result<()> {
 fn latest_path(ctx: &Ctx) -> Result<PathBuf> {
     let mut records = list(ctx)?;
     records.sort_by(compare_task_run_records);
-    records
-        .pop()
-        .map(|record| record.path)
-        .ok_or_else(|| anyhow::anyhow!("No task run files found in <git-common-dir>/wt/task-runs"))
+    records.pop().map(|record| record.path).ok_or_else(|| {
+        anyhow::anyhow!("No task run files found in <git-common-dir>/wt/execution/task-runs")
+    })
 }
 
 pub(crate) fn compare_task_run_records(left: &TaskRunRecord, right: &TaskRunRecord) -> Ordering {
@@ -833,7 +832,7 @@ pub(crate) fn task_run_display_path(ctx: &Ctx, path: &Path) -> String {
 fn ensure_no_legacy_task_runs(ctx: &Ctx) -> Result<()> {
     if let Some(legacy) = ctx.storage_root.detect_legacy_task_runs(&ctx.repo_root) {
         bail!(
-            "Found legacy TaskRun storage at {}. Canonical TaskRun storage is {}. wt does not silently read .local/task-runs; import or repair legacy state explicitly before using this command.",
+            "Found legacy TaskRun storage at {}. Canonical TaskRun storage is {}. wt does not silently read legacy TaskRun storage; import or repair legacy state explicitly before using this command.",
             legacy.path().display(),
             ctx.storage_root.display_path(legacy.canonical_root())
         );
@@ -1079,7 +1078,7 @@ mod tests {
         assert_eq!(record.id, "run-2026-05-16-001-add-schema");
         assert_eq!(
             task_run_display_path(&ctx, &record.path),
-            "<git-common-dir>/wt/task-runs/run-2026-05-16-001-add-schema.toml"
+            "<git-common-dir>/wt/execution/task-runs/run-2026-05-16-001-add-schema.toml"
         );
         let parsed = read(&record.path).unwrap();
         assert_eq!(parsed.task, "add-schema");
@@ -1206,7 +1205,7 @@ mod tests {
     #[test]
     fn ensure_workflow_routes_repairs_legacy_run_without_overwriting_coordinator() {
         let dir = tempfile::tempdir().unwrap();
-        let task_runs_dir = dir.path().join(".git/wt/task-runs");
+        let task_runs_dir = dir.path().join(".git/wt/execution/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
         let path = task_runs_dir.join("run-workflow-legacy.toml");
         let run = TaskRun {
@@ -1315,14 +1314,17 @@ updated_at = "2026-05-16T00:00:00Z"
         let selected = task::select_local_task_by_key(&linked_ctx, "shared").unwrap();
         let records = list(&linked_ctx).unwrap();
 
-        assert_eq!(selected.path, "<git-common-dir>/wt/tasks/shared.toml");
+        assert_eq!(
+            selected.path,
+            "<git-common-dir>/wt/execution/tasks/shared.toml"
+        );
         assert_eq!(selected.document.title, "Shared task");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, run.id);
         assert_eq!(records[0].path, run.path);
         assert_eq!(
             task_run_display_path(&linked_ctx, &records[0].path),
-            "<git-common-dir>/wt/task-runs/run-shared.toml"
+            "<git-common-dir>/wt/execution/task-runs/run-shared.toml"
         );
     }
 
@@ -1347,7 +1349,7 @@ updated_at = "2026-05-16T00:00:00Z"
 
         assert!(err.contains("Found legacy TaskRun storage"));
         assert!(err.contains(".local/task-runs"));
-        assert!(err.contains("<git-common-dir>/wt/task-runs"));
+        assert!(err.contains("<git-common-dir>/wt/execution/task-runs"));
     }
 
     #[test]
@@ -1466,7 +1468,7 @@ updated_at = "2026-05-16T00:00:00Z"
     fn running_cleanup_matches_skips_unreadable_workflow_contexts() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        std::fs::create_dir_all(dir.path().join(".git/wt/workflows")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/wt/execution/workflows")).unwrap();
 
         let direct = create(&ctx, "direct-task", "feature", None, STATUS_RUNNING).unwrap();
         create(
@@ -1478,7 +1480,8 @@ updated_at = "2026-05-16T00:00:00Z"
         )
         .unwrap();
         std::fs::write(
-            dir.path().join(".git/wt/workflows/broken-workflow.toml"),
+            dir.path()
+                .join(".git/wt/execution/workflows/broken-workflow.toml"),
             "mode = [",
         )
         .unwrap();
@@ -1493,7 +1496,7 @@ updated_at = "2026-05-16T00:00:00Z"
     fn latest_for_task_uses_creation_order_when_created_at_ties() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let task_runs_dir = dir.path().join(".git/wt/task-runs");
+        let task_runs_dir = dir.path().join(".git/wt/execution/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
 
         write(
@@ -1517,7 +1520,7 @@ updated_at = "2026-05-16T00:00:00Z"
     fn latest_for_task_sorts_fractional_timestamps_after_previous_seconds() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let task_runs_dir = dir.path().join(".git/wt/task-runs");
+        let task_runs_dir = dir.path().join(".git/wt/execution/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
 
         write(
@@ -1546,7 +1549,7 @@ updated_at = "2026-05-16T00:00:00Z"
     fn latest_for_task_orders_mixed_previous_and_ordered_records_totally() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let task_runs_dir = dir.path().join(".git/wt/task-runs");
+        let task_runs_dir = dir.path().join(".git/wt/execution/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
 
         write(

@@ -343,7 +343,7 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
             ctx,
             1,
             "설정 파일 위치",
-            "- 개인 설정 파일: <git-common-dir>/wt/config.toml (보통 .git/wt/config.toml)\n- 팀 공유 설정: ./.wt.toml",
+            "- 개인 설정 파일: <git-common-dir>/wt/config/local.toml (보통 .git/wt/config/local.toml)\n- 팀 공유 설정: ./.wt.toml",
         );
     }
     let target = resolve_target(ctx, &options)?;
@@ -423,9 +423,18 @@ fn bootstrap_core_dirs(storage_root: &StorageRoot) -> Result<()> {
 
 fn core_state_dirs(storage_root: &StorageRoot) -> Vec<PathBuf> {
     vec![
+        storage_root.config_dir(),
+        storage_root.profiles_dir(),
+        storage_root.planning_dir(),
+        storage_root.ideas_dir(),
+        storage_root.specs_dir(),
+        storage_root.retrospectives_dir(),
+        storage_root.execution_dir(),
         storage_root.tasks_dir(),
-        storage_root.messages_dir(),
+        storage_root.workflows_dir(),
         storage_root.task_runs_dir(),
+        storage_root.archive_dir(),
+        storage_root.messages_dir(),
         storage_root.agent_state_dir(),
         storage_root.worktrees_dir(),
     ]
@@ -642,7 +651,7 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     }
 
     let items = vec![
-        PromptItem::with_hint("개인 설정 파일", "보통 .git/wt/config.toml"),
+        PromptItem::with_hint("개인 설정 파일", "보통 .git/wt/config/local.toml"),
         PromptItem::with_hint("팀 공유 설정", "./.wt.toml"),
     ];
     match ctx
@@ -2778,7 +2787,7 @@ mod tests {
 
     fn local_target(dir: &tempfile::TempDir) -> InitTarget {
         InitTarget {
-            path: dir.path().join(".git/wt/config.toml"),
+            path: dir.path().join(".git/wt/config/local.toml"),
             kind: InitTargetKind::Local,
         }
     }
@@ -2817,7 +2826,10 @@ mod tests {
         .unwrap();
         let config: Config = toml::from_str(&plan.content).unwrap();
 
-        assert_eq!(plan.target_path, dir.path().join(".git/wt/config.toml"));
+        assert_eq!(
+            plan.target_path,
+            dir.path().join(".git/wt/config/local.toml")
+        );
         assert_eq!(plan.target_kind, InitTargetKind::Local);
         assert!(!plan.target_exists);
         assert_eq!(
@@ -3578,7 +3590,8 @@ mod tests {
             ]
         );
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].run, "npm install");
@@ -3647,7 +3660,8 @@ mod tests {
                 .any(|prompt| prompt == "confirm: Herd local site를 설정할까요?")
         );
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.issues.unwrap().provider, IssueProviderType::Linear);
         assert_eq!(config.site.unwrap().provider, SiteProvider::Herd);
@@ -3748,7 +3762,8 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert!(!content.contains("# [worktree.naming]"));
         assert!(!content.contains("# [setup.env]"));
@@ -3767,7 +3782,7 @@ mod tests {
         assert!(!content.contains("args ="));
         assert!(
             !dir.path()
-                .join(".git/wt/profiles/codex/profile.toml")
+                .join(".git/wt/config/profiles/codex/profile.toml")
                 .exists()
         );
         assert!(!content.contains("현재 GitHub 이슈"));
@@ -3817,10 +3832,10 @@ mod tests {
         assert_eq!(issues.gh_user.as_deref(), Some("alice"));
         assert!(!content.contains("[worktree.naming]"));
 
-        assert!(!dir.path().join(".git/wt/config.toml").exists());
+        assert!(!dir.path().join(".git/wt/config/local.toml").exists());
         assert!(
             !dir.path()
-                .join(".git/wt/profiles/gemini/profile.toml")
+                .join(".git/wt/config/profiles/gemini/profile.toml")
                 .exists()
         );
     }
@@ -3854,7 +3869,8 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let issues = config.issues.unwrap();
         assert_eq!(issues.provider, IssueProviderType::Github);
@@ -3898,7 +3914,8 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let site = config.site.unwrap();
         assert_eq!(site.provider, SiteProvider::Valet);
@@ -3968,7 +3985,8 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let site = config.site.unwrap();
         assert_eq!(site.provider, SiteProvider::Traefik);
@@ -4022,7 +4040,7 @@ mod tests {
         assert!(config.agent.is_none());
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
-        assert!(!dir.path().join(".git/wt/config.toml").exists());
+        assert!(!dir.path().join(".git/wt/config/local.toml").exists());
         assert!(config.issues.is_none());
     }
 
@@ -4083,10 +4101,9 @@ mod tests {
             dims.iter()
                 .any(|line| line.contains("이 저장소에 맞는 git worktree 프로젝트 설정"))
         );
-        assert!(
-            dims.iter()
-                .any(|line| line.contains("  - 개인 설정 파일: <git-common-dir>/wt/config.toml"))
-        );
+        assert!(dims.iter().any(|line| {
+            line.contains("  - 개인 설정 파일: <git-common-dir>/wt/config/local.toml")
+        }));
         assert!(dims.iter().any(|line| line.is_empty()));
         assert!(
             dims.iter().any(|line| {
@@ -4125,7 +4142,7 @@ mod tests {
     fn init_interactive_flow_accepts_manual_agent_args() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // .git/wt/config/local.toml
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(1); // enter agent args
@@ -4159,7 +4176,8 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
@@ -4170,7 +4188,7 @@ mod tests {
     fn init_interactive_flow_prompts_for_agent_and_writes_prompt_scope() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // .git/wt/config/local.toml
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // Codex agent
@@ -4210,7 +4228,8 @@ mod tests {
         let select_items = ui.select_items.lock().unwrap().clone();
         assert_eq!(select_items[3], vec!["Codex", "Claude"]);
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
@@ -4270,7 +4289,8 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(
             config.worktree.path.as_deref(),
@@ -4377,7 +4397,8 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 3);
         assert!(
@@ -4445,7 +4466,8 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].working_dir.as_deref(), Some("api"));
@@ -4541,7 +4563,7 @@ mod tests {
     fn init_interactive_codex_none_agent_args_omits_args() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // .git/wt/config/local.toml
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // no agent args
@@ -4574,7 +4596,8 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
@@ -4611,7 +4634,8 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join(".git/wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
@@ -4690,7 +4714,7 @@ mod tests {
         let content = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.profile.unwrap().agent.unwrap().cli, AgentCli::Codex);
-        assert!(!dir.path().join(".git/wt/config.toml").exists());
+        assert!(!dir.path().join(".git/wt/config/local.toml").exists());
     }
 
     #[test]
@@ -4734,7 +4758,7 @@ mod tests {
     fn init_interactive_flow_respects_create_confirmation() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // .git/wt/config/local.toml
         ui.add_select(0); // project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // Codex agent
@@ -4767,16 +4791,16 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(!dir.path().join(".git/wt/config.toml").exists());
+        assert!(!dir.path().join(".git/wt/config/local.toml").exists());
     }
 
     #[test]
     fn init_interactive_rerun_prefills_existing_config_defaults() {
         let dir = tempfile::tempdir().unwrap();
-        let local = dir.path().join(".git/wt");
+        let local = dir.path().join(".git/wt/config");
         std::fs::create_dir_all(&local).unwrap();
         std::fs::write(
-            local.join("config.toml"),
+            local.join("local.toml"),
             r#"[profile.agent]
 cli = "claude"
 args = ["--model", "sonnet"]
@@ -4827,7 +4851,7 @@ colors = { task = "", issue = "cyan" }
         assert_eq!(select_items[2][0], "Claude");
         assert_eq!(select_items[3][0], "기존 args 유지: --model sonnet");
 
-        let content = std::fs::read_to_string(local.join("config.toml")).unwrap();
+        let content = std::fs::read_to_string(local.join("local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let policy = config.workflow_default_policy();
         let agent = config.profile.unwrap().agent.unwrap();
@@ -5134,9 +5158,9 @@ colors = { task = "", issue = "cyan" }
     #[test]
     fn init_refuses_existing_file_without_force_and_overwrites_with_force() {
         let dir = tempfile::tempdir().unwrap();
-        let local = dir.path().join(".git/wt");
+        let local = dir.path().join(".git/wt/config");
         std::fs::create_dir_all(&local).unwrap();
-        std::fs::write(local.join("config.toml"), "[workspace]\ntabs = []\n").unwrap();
+        std::fs::write(local.join("local.toml"), "[workspace]\ntabs = []\n").unwrap();
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -5182,12 +5206,12 @@ colors = { task = "", issue = "cyan" }
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(local.join("config.toml")).unwrap();
+        let content = std::fs::read_to_string(local.join("local.toml")).unwrap();
         let config = toml::from_str::<Config>(&content).unwrap();
         assert_eq!(config.profile.unwrap().agent.unwrap().cli, AgentCli::Claude);
         assert!(
             !dir.path()
-                .join(".git/wt/profiles/claude/profile.toml")
+                .join(".git/wt/config/profiles/claude/profile.toml")
                 .exists()
         );
     }
