@@ -25,8 +25,9 @@ wt agent status <branch|worktree|task-run-id>
 ```
 
 Capture TaskRun id/status/context/workflow/branch/parent, worktree path and
-dirty state, commits and diff against parent, cmux workspace/surface and
-runtime status. Scripts: `wt --json agent status <target>`.
+dirty state, commits and diff against parent, coordinator id when recorded,
+default worker inbox identity when it can be derived, cmux workspace/surface,
+and runtime status. Scripts: `wt --json agent status <target>`.
 
 If status is `running`, let the agent work unless clearly stuck. Separate
 launch validation from steady monitoring. A short post-launch poll is fine to
@@ -77,12 +78,91 @@ basis, launch-validation command, steady heartbeat/interval/timeout, first
 meaningful signal time, state transitions, reports, and any nudges sent because
 the cadence looked wrong.
 
+## Message Route
+
+Use file inbox messages as the default coordination route. `wt send` is a live
+cmux prompt transport, not the canonical message record.
+
+Before relying on inbox reports, verify coordinator identity and the TaskRun
+route:
+
+```bash
+eval "$(wt session set <coordinator-agent-id>)"   # when starting a coordinator shell
+echo "${WT_AGENT_ID:-}"
+wt inspect <target>
+```
+
+`wt session set <id>` prints shell exports; use
+`eval "$(wt session set <id>)"` so the current coordinator shell receives
+`WT_AGENT_ID` and writes a session marker for later resolution. A launched
+TaskRun should record `agent_id` and `coordinator_id`; `wt task report` and
+`wt task review` use those TaskRun-owned routes instead of a dynamic
+`coordinator` alias or ambient coordinator env fallback.
+
+Monitor coordinator inbox reports with:
+
+```bash
+wt msg watch --timeout 300
+wt msg list --agent <coordinator-agent-id>
+wt msg read --agent <coordinator-agent-id> <message-id>
+```
+
+For coordinator review feedback, prefer the canonical TaskRun review route:
+
+```bash
+wt task review <task-run-id> --accept "<검토 통과 메시지>"
+wt task review <task-run-id> --reject "<수정 요청>"
+wt task review <task-run-id> --block "<외부 입력 또는 충돌 대기 사유>"
+```
+
+For task-specific instructions that should not update review metadata, use the
+low-level durable inbox route with explicit TaskRun scope:
+
+```bash
+wt msg send \
+  --to <task-agent-id> \
+  --scope task_run:<task-run-id> \
+  "<작업 지시>"
+```
+
+`<task-agent-id>` comes from `wt inspect` TaskRun route. It is not necessarily
+`agents/<branch_slug>`; workflow runs may use generated ids such as
+`agents/run-900025-<task>`. If the worker uses a role identity, `wt as`, or
+another explicit agent id, use that exact id. Until wt has a target-addressed
+inbox send, do not pretend branch/worktree/TaskRun selectors are accepted by
+`wt msg send`.
+
+After sending a TaskRun-scoped inbox message, trust the automatic idle wake
+path first. If the agent was idle, observe the same target before using live
+cmux:
+
+```bash
+wt agent status <target>
+wt agent watch <target> --interval 5 --timeout 30 --heartbeat 30
+```
+
+Idle is not by itself a reason to use `wt send`: a correctly routed inbox
+message should wake an idle live TaskRun agent. Use `wt send <target> ...` only
+after the inbox route has been tried and one of these is true:
+
+- the agent remains idle after the short wake-observation window
+- the worker is `needs_input` and hooks are not delivering
+- the TaskRun `agent_id` or delivery route is missing, invalid, or ambiguous
+- immediate prompt-level attention is explicitly more important than preserving
+  the canonical message path
+
+If neither inbox nor `wt send` can validate the target surface, use raw cmux
+only after confirming the surface is the agent prompt.
+
 ## Review
 
 Ask for a report only as input, not as proof:
 
 ```bash
-wt send <target> "현재 상태를 Agent Completion Report 형식으로 짧게 보고해줘. 코드 변경이나 명령 실행은 하지 말고 상태/변경 파일/검증/리스크만 알려줘."
+wt msg send \
+  --to <task-agent-id> \
+  --scope task_run:<task-run-id> \
+  "현재 상태를 Agent Completion Report 형식으로 짧게 보고해줘. 코드 변경이나 명령 실행은 하지 말고 상태/변경 파일/검증/리스크만 알려줘."
 ```
 
 Then inspect directly:
@@ -108,6 +188,17 @@ Send focused feedback. Accumulate review findings across a single inspection
 pass and send them as **one consolidated message**, not one message per
 finding — bouncing the agent between micro-corrections wastes context and
 makes "what's left" hard to track:
+
+```bash
+wt task review <task-run-id> --reject "검토 결과입니다. <파일/동작>에서 <문제>가 보입니다. <기대 수정 방향>으로 고치고, 완료 후 변경 파일/검증 결과/남은 리스크를 짧게 보고해줘."
+```
+
+If the feedback is task-specific but should not overwrite review metadata, use
+`wt msg send --scope task_run:<task-run-id>` instead. In both cases, observe the
+automatic inbox wake before falling back to cmux.
+
+If the worker is `needs_input`, hooks are not delivering after a scoped inbox
+send, or the worker inbox identity is unclear, use the cmux fallback:
 
 ```bash
 wt send <target> "검토 결과입니다. <파일/동작>에서 <문제>가 보입니다. <기대 수정 방향>으로 고치고, 완료 후 변경 파일/검증 결과/남은 리스크를 짧게 보고해줘."
@@ -139,8 +230,15 @@ coordinator-driven file edits.
 Make the rationale visible:
 
 ```bash
-wt send <target> "07-design.md / 08-tasks.md / 09-execution.md / 10-review.md를 업데이트했습니다. 변경: <무엇이 바뀌었나>. 이유: <왜 바뀌었나>. 이 업데이트된 spec 기준으로 진행해주세요."
+wt msg send \
+  --to <task-agent-id> \
+  --scope task_run:<task-run-id> \
+  "07-design.md / 08-tasks.md / 09-execution.md / 10-review.md를 업데이트했습니다. 변경: <무엇이 바뀌었나>. 이유: <왜 바뀌었나>. 이 업데이트된 spec 기준으로 진행해주세요."
 ```
+
+After sending, observe the automatic inbox wake. Use `wt send <target> ...` for
+this notice only when the worker still does not wake, needs immediate
+prompt-level attention, or the inbox route is not reliable for this run.
 
 ### Log Mid-Process Discoveries
 
@@ -190,7 +288,10 @@ re-discovery:
 - checks run and known gaps
 - expected duration, chosen watch cadence, first meaningful signal, and actual
   elapsed time when known
+- coordinator id and worker agent id used for inbox messages, when known
+- feedback route used (`wt task review`, TaskRun-scoped `wt msg`, or `wt send`
+  fallback) and why
 - stack completion command already run, if any
 
 Report coordinated branches, feedback sent, completion command, final review
-result, checks run, and the exact `wt-land` target.
+result, checks run, message route, and the exact `wt-land` target.

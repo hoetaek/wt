@@ -127,6 +127,36 @@ task agent. The task agent owns updating its branch against the latest
 integration branch, resolving conflicts in its own worktree, committing the
 resolution, and rerunning checks.
 
+Return the branch through the canonical inbox route first. For workflow-linked
+TaskRuns, prefer review feedback because the conflict blocks landing:
+
+```bash
+eval "$(wt session set <coordinator-agent-id>)"
+wt task review <task-run-id> --block "Landing blocked: <branch> conflicts with <integration-branch> after <event>. Update the task branch in its worktree, resolve conflicts, rerun checks, push, and report."
+```
+
+If the message is not review feedback, use an explicit TaskRun-scoped inbox
+message:
+
+```bash
+wt msg send \
+  --to <task-agent-id> \
+  --scope task_run:<task-run-id> \
+  "Landing blocked: <branch> conflicts with <integration-branch>. Update the branch, resolve conflicts, rerun checks, push, and report."
+```
+
+Then observe the automatic idle wake before using live cmux:
+
+```bash
+wt agent status <target>
+wt agent watch <target> --interval 5 --timeout 30 --heartbeat 30
+```
+
+Do not use `wt send` merely because the target agent is idle. A correctly scoped
+inbox message should wake an idle live TaskRun agent. Use `wt send` only if the
+scoped inbox route cannot be trusted, hooks do not deliver after the short wake
+window, or the TaskRun route is missing, invalid, or ambiguous.
+
 Only resolve conflicts in the coordinator checkout when the user explicitly
 instructs the coordinator to take over after the conflict is known. If you
 already entered a conflicted merge state, stop, report it, and abort the merge
