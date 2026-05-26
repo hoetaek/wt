@@ -1040,16 +1040,14 @@ fn profile_config_with_issue_snapshot(
             .unwrap_or_default();
         let prompts = agent.prompt.entry(mode.into()).or_default();
         if let Some(completion_section) = completion_section {
-            let handoff_prompt = format!(
-                "{completion_section}\n\nThe TaskDocument prompt follows next. Do not start work until it arrives."
-            );
-            let snapshot_prompt = prepared_snapshot_prompt(
+            let task_context = prepared_snapshot_prompt(
                 pre_snapshot_context,
                 prompt_intro,
                 snapshot.path_label,
                 snapshot.path,
                 snapshot.content,
             );
+            let snapshot_prompt = format!("{completion_section}\n\n{task_context}");
             if additional_prompts.is_empty() {
                 if let Some(first_prompt) = prompts.first_mut() {
                     *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
@@ -1062,7 +1060,6 @@ fn profile_config_with_issue_snapshot(
                 prompts.extend(additional_prompts);
                 prompts.extend(mode_prompts);
             }
-            prompts.insert(0, handoff_prompt);
         } else {
             let snapshot_prompt = format!(
                 "{}\n\n{}: `{}`\n\n{}\n\n{}",
@@ -1576,25 +1573,27 @@ mod tests {
 
         let mut agent = config.agent.unwrap();
         let prompts = agent.prompt.remove("branch").unwrap();
-        assert_eq!(prompts.len(), 2);
+        assert_eq!(prompts.len(), 1);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
-        assert!(prompts[0].contains("TaskDocument prompt follows next"));
-        assert!(!prompts[0].contains("Workflow title"));
         assert!(
-            prompts[1].find("Workflow title").unwrap() < prompts[1].find("Workflow body").unwrap()
+            prompts[0].find("## Workflow Coordinator Handoff").unwrap()
+                < prompts[0].find("Workflow title").unwrap()
         );
         assert!(
-            prompts[1].find("Workflow body").unwrap() < prompts[1].find("Workflow origin").unwrap()
+            prompts[0].find("Workflow title").unwrap() < prompts[0].find("Workflow body").unwrap()
         );
         assert!(
-            prompts[1].find("Workflow origin").unwrap()
-                < prompts[1]
+            prompts[0].find("Workflow body").unwrap() < prompts[0].find("Workflow origin").unwrap()
+        );
+        assert!(
+            prompts[0].find("Workflow origin").unwrap()
+                < prompts[0]
                     .find("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
                     .unwrap()
         );
         assert!(
-            prompts[1].find("Workflow body").unwrap()
-                < prompts[1].find("title = \"Add schema\"").unwrap()
+            prompts[0].find("Workflow body").unwrap()
+                < prompts[0].find("title = \"Add schema\"").unwrap()
         );
     }
 
@@ -1638,13 +1637,13 @@ mod tests {
 
         let mut agent = config.agent.unwrap();
         let prompts = agent.prompt.remove("branch").unwrap();
-        assert_eq!(prompts.len(), 5);
+        assert_eq!(prompts.len(), 4);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
-        assert!(prompts[1].contains("Workflow body"));
-        assert!(prompts[1].contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
-        assert_eq!(prompts[2], "Workflow prompt");
-        assert_eq!(prompts[3], "Workflow follow-up");
-        assert_eq!(prompts[4], "Branch prompt");
+        assert!(prompts[0].contains("Workflow body"));
+        assert!(prompts[0].contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
+        assert_eq!(prompts[1], "Workflow prompt");
+        assert_eq!(prompts[2], "Workflow follow-up");
+        assert_eq!(prompts[3], "Branch prompt");
         assert!(!agent.prompt.contains_key(AGENT_PROMPT_WORKFLOW_SCOPE));
     }
 
@@ -1688,8 +1687,10 @@ mod tests {
 
         let mut agent = config.agent.unwrap();
         let prompts = agent.prompt.remove("branch").unwrap();
-        assert_eq!(prompts.len(), 2);
-        assert!(prompts[1].contains("Branch prompt"));
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
+        assert!(prompts[0].contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
+        assert!(prompts[0].contains("Branch prompt"));
         assert!(
             !prompts
                 .iter()
