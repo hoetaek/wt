@@ -2,6 +2,7 @@ use crate::config::{AGENT_PROMPT_WORKFLOW_SCOPE, Config};
 use crate::config_render::render_effective_config;
 use crate::context::Ctx;
 use crate::error::WtError;
+use crate::storage::normalize_path_lexically;
 use anyhow::{Context, Result, anyhow, bail};
 use std::borrow::Cow;
 use std::fs;
@@ -1347,7 +1348,7 @@ fn reject_legacy_profile_source(ctx: &Ctx, path: &Path) -> Result<()> {
 fn path_is_under_existing(path: &Path, dir: &Path) -> bool {
     match (path.canonicalize(), dir.canonicalize()) {
         (Ok(path), Ok(dir)) => path.starts_with(dir),
-        _ => path.starts_with(dir),
+        _ => normalize_path_lexically(path).starts_with(normalize_path_lexically(dir)),
     }
 }
 
@@ -2237,6 +2238,12 @@ cli = "codex"
             extract(&ctx, None, Some(source)).unwrap_err(),
             edit(&ctx, None, Some(source)).unwrap_err(),
             inline(&ctx, None, Some(source)).unwrap_err(),
+            edit(
+                &ctx,
+                None,
+                Some(Path::new(".git/wt/profiles/codex/../new/profile.toml")),
+            )
+            .unwrap_err(),
         ] {
             let report = format!("{error:#}");
             assert!(report.contains("Found legacy wt personal profile storage"));

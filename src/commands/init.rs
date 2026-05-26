@@ -336,6 +336,7 @@ impl InitDefaults {
 
 pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     validate_options(&options)?;
+    ensure_no_legacy_bootstrap_roots(ctx)?;
     let interactive_wizard = is_interactive_wizard(&options);
     if interactive_wizard {
         print_wizard_header(ctx);
@@ -417,6 +418,57 @@ fn bootstrap_core_dirs(storage_root: &StorageRoot) -> Result<()> {
     for dir in core_state_dirs(storage_root) {
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("Failed to create wt core state dir: {}", dir.display()))?;
+    }
+    Ok(())
+}
+
+fn ensure_no_legacy_bootstrap_roots(ctx: &Ctx) -> Result<()> {
+    let legacy_roots = [
+        (
+            "config",
+            ctx.storage_root.detect_legacy_config(&ctx.repo_root),
+        ),
+        (
+            "profile storage",
+            ctx.storage_root.detect_legacy_profiles(&ctx.repo_root),
+        ),
+        (
+            "idea storage",
+            ctx.storage_root.detect_legacy_ideas(&ctx.repo_root),
+        ),
+        (
+            "spec storage",
+            ctx.storage_root.detect_legacy_specs(&ctx.repo_root),
+        ),
+        (
+            "retrospective storage",
+            ctx.storage_root
+                .detect_legacy_retrospectives(&ctx.repo_root),
+        ),
+        (
+            "TaskDocument storage",
+            ctx.storage_root.detect_legacy_tasks(&ctx.repo_root),
+        ),
+        (
+            "Workflow storage",
+            ctx.storage_root.detect_legacy_workflows(&ctx.repo_root),
+        ),
+        (
+            "TaskRun storage",
+            ctx.storage_root.detect_legacy_task_runs(&ctx.repo_root),
+        ),
+        (
+            "Workflow archive storage",
+            ctx.storage_root.detect_legacy_archive(&ctx.repo_root),
+        ),
+    ];
+    for (state_name, legacy) in legacy_roots {
+        if let Some(legacy) = legacy {
+            bail!("{}", legacy.error_message_for(state_name));
+        }
+    }
+    if let Some(legacy) = ctx.storage_root.detect_legacy_local(&ctx.repo_root) {
+        bail!("{}", legacy.error_message());
     }
     Ok(())
 }
@@ -2808,6 +2860,31 @@ mod tests {
             Box::new(runner),
             Box::new(MockUi::new()),
         )
+    }
+
+    #[test]
+    fn init_rejects_legacy_flat_roots_before_bootstrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_tasks = dir.path().join(".git/wt/tasks");
+        std::fs::create_dir_all(&legacy_tasks).unwrap();
+        std::fs::write(legacy_tasks.join("old.toml"), "").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let error = run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("Found legacy wt personal TaskDocument storage"));
+        assert!(report.contains(".git/wt/tasks"));
+        assert!(report.contains(".git/wt/execution/tasks"));
+        assert!(!dir.path().join(".git/wt/execution").exists());
+        assert!(!dir.path().join(".git/wt/config/local.toml").exists());
     }
 
     #[test]

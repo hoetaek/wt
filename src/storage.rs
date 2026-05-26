@@ -1,6 +1,6 @@
 use crate::context::CommandRunner;
 use anyhow::{Context, Result, bail};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 const GIT_COMMON_DIR_ARGS: &[&str] = &["rev-parse", "--path-format=absolute", "--git-common-dir"];
 
@@ -287,6 +287,27 @@ impl LegacyLocalStorage {
     }
 }
 
+pub(crate) fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                normalized.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => match normalized.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    normalized.pop();
+                }
+                Some(Component::Prefix(_)) | Some(Component::RootDir) => {}
+                _ => normalized.push(component.as_os_str()),
+            },
+            Component::Normal(value) => normalized.push(value),
+        }
+    }
+    normalized
+}
+
 fn command_error(stdout: &str, stderr: &str) -> String {
     if stderr.trim().is_empty() {
         stdout.trim().to_string()
@@ -469,6 +490,18 @@ mod tests {
         let storage = StorageRoot::from_git_common_dir(repo.join(".git"));
 
         assert_eq!(storage.detect_legacy_local(&repo), None);
+    }
+
+    #[test]
+    fn normalizes_paths_lexically_for_legacy_prefix_checks() {
+        assert_eq!(
+            normalize_path_lexically(Path::new("a/./b/../c")),
+            PathBuf::from("a/c")
+        );
+        assert_eq!(
+            normalize_path_lexically(Path::new("/repo/.git/wt/execution/../workflows/new.toml")),
+            PathBuf::from("/repo/.git/wt/workflows/new.toml")
+        );
     }
 
     #[test]
