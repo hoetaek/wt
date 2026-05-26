@@ -201,6 +201,10 @@ fn run_single_workflow(
     }
 
     let base = workflow_base_raw(metadata)?;
+    for state in &states {
+        task_run::update(ctx, &state.row.run, STATUS_RUNNING, None, None)?;
+    }
+
     let result = if states.len() == 1 {
         run_single_workflow_task(
             workflow_path,
