@@ -33,7 +33,7 @@ pub fn run(ctx: &Ctx, target: Option<&str>, options: InspectOptions) -> Result<(
         None => None,
     };
     let task_runs = task_runs_for_target(ctx, target)?;
-    let workflows = workflows_for_task_runs(ctx, &task_runs)?;
+    let workflows = workflows_for_task_runs(ctx, &task_runs.records)?;
     let pull_request_review = if options.pr {
         Some(
             GithubReviewService::new(ctx.runner.as_ref(), Some(&ctx.repo_root))
@@ -57,7 +57,8 @@ pub fn run(ctx: &Ctx, target: Option<&str>, options: InspectOptions) -> Result<(
     }
 
     ctx.ui.print_step(&format!("Inspect: {}", target.label));
-    print_work_section(ctx, target, &task_runs, &workflows)?;
+    print_work_section(ctx, target, &task_runs.records, &workflows)?;
+    print_target_warnings(ctx, target);
     print_git_section(ctx, status.as_deref(), parent.as_deref(), &target.branch)?;
     print_agent_section(ctx, &work);
     print_cmux_section(ctx, &work);
@@ -84,17 +85,31 @@ fn select_inspect_target(ctx: &Ctx) -> Result<InspectTarget> {
         "wt inspect requires TARGET when it cannot open an interactive selector. Pass a branch, worktree path/name, or TaskRun id; or run `wt inspect` in an interactive terminal to choose a work target.",
     )
 }
-fn task_runs_for_target(ctx: &Ctx, target: &InspectTarget) -> Result<Vec<task_run::TaskRunRecord>> {
+#[derive(Clone, Debug, Default)]
+struct TargetTaskRunInventory {
+    records: Vec<task_run::TaskRunRecord>,
+    invalid: Vec<task_run::InvalidTaskRunRecord>,
+}
+
+fn task_runs_for_target(ctx: &Ctx, target: &InspectTarget) -> Result<TargetTaskRunInventory> {
     if let Some(record) = target.task_run.clone() {
-        return Ok(vec![record]);
+        return Ok(TargetTaskRunInventory {
+            records: vec![record],
+            invalid: Vec::new(),
+        });
     }
 
-    let mut records = task_run::list(ctx)?
+    let inventory = task_run::list_lossy(ctx)?;
+    let mut records = inventory
+        .records
         .into_iter()
         .filter(|record| record.run.branch == target.branch)
         .collect::<Vec<_>>();
     records.sort_by(task_run::compare_task_run_records);
-    Ok(records)
+    Ok(TargetTaskRunInventory {
+        records,
+        invalid: inventory.invalid,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -217,6 +232,7 @@ struct InspectReport {
     target: InspectTargetReport,
     git: InspectGitReport,
     task_runs: Vec<InspectTaskRunReport>,
+    invalid_task_runs: Vec<InspectInvalidTaskRunReport>,
     workflows: Vec<InspectWorkflowReport>,
     agent: InspectAgentReport,
     cmux: InspectCmuxReport,
@@ -253,6 +269,13 @@ struct InspectTaskRunReport {
     review: InspectTaskRunReviewState,
     task_path: String,
     task_title: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectInvalidTaskRunReport {
+    id: String,
+    path: String,
+    error: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -332,7 +355,7 @@ fn inspect_report(
     work: &work::Work,
     status: Option<&str>,
     parent: Option<&str>,
-    records: &[task_run::TaskRunRecord],
+    task_runs: &TargetTaskRunInventory,
     workflows: &[WorkflowMatch],
     pull_request_review: Option<PullRequestReviewEvidence>,
 ) -> Result<InspectReport> {
@@ -347,10 +370,20 @@ fn inspect_report(
                 .map(|path| path.display().to_string()),
         },
         git: inspect_git_report(ctx, status, parent),
-        task_runs: records
+        task_runs: task_runs
+            .records
             .iter()
             .map(|record| inspect_task_run_report(ctx, record))
             .collect::<Result<Vec<_>>>()?,
+        invalid_task_runs: task_runs
+            .invalid
+            .iter()
+            .map(|record| InspectInvalidTaskRunReport {
+                id: record.id.clone(),
+                path: ctx.storage_root.display_path(&record.path),
+                error: record.error.clone(),
+            })
+            .collect(),
         workflows: workflows
             .iter()
             .map(|workflow| InspectWorkflowReport {
@@ -518,6 +551,12 @@ fn print_work_section(
     print_task_runs(ctx, records)?;
     print_workflows(ctx, workflows);
     Ok(())
+}
+
+fn print_target_warnings(ctx: &Ctx, target: &InspectTarget) {
+    for warning in &target.warnings {
+        ctx.ui.print_warning(warning);
+    }
 }
 
 fn print_task_runs(ctx: &Ctx, records: &[task_run::TaskRunRecord]) -> Result<()> {
@@ -1276,6 +1315,7 @@ run = "run-unrelated"
             branch: "feature".into(),
             worktree: None,
             task_run: None,
+            warnings: Vec::new(),
         };
         let workflow = WorkflowMatch {
             id: "2026-05-17-001".into(),
@@ -1322,6 +1362,11 @@ run = "run-unrelated"
             "task = \"publish-issues\"\nbranch = \"team-run\"\nstatus = \"running\"\ncreation_order = 2\ncreated_at = \"2026-05-16T00:00:01Z\"\nupdated_at = \"2026-05-16T00:00:01Z\"\n",
         )
         .unwrap();
+        std::fs::write(
+            repo.join(".git/wt/task-runs/run-broken.toml"),
+            "task = \"broken\"\nbranch = \"unrelated\"\nstatus = \"started\"\ncreated_at = \"2026-05-16T00:00:02Z\"\nupdated_at = \"2026-05-16T00:00:02Z\"\n",
+        )
+        .unwrap();
 
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -1357,6 +1402,9 @@ run = "run-unrelated"
         assert!(
             dims.contains("Task: <git-common-dir>/wt/tasks/publish-issues.toml (Publish issues)")
         );
+        let warnings = ui.warnings.lock().unwrap().join("\n");
+        assert!(warnings.contains("TaskRun inventory skipped invalid record"));
+        assert!(warnings.contains("run-broken.toml"));
     }
 
     #[test]

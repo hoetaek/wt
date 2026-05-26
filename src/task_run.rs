@@ -227,6 +227,19 @@ pub(crate) struct TaskRunRecord {
     pub(crate) run: TaskRun,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TaskRunInventory {
+    pub(crate) records: Vec<TaskRunRecord>,
+    pub(crate) invalid: Vec<InvalidTaskRunRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InvalidTaskRunRecord {
+    pub(crate) id: String,
+    pub(crate) path: PathBuf,
+    pub(crate) error: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TaskRunContext {
     Direct,
@@ -466,6 +479,41 @@ pub(crate) fn list(ctx: &Ctx) -> Result<Vec<TaskRunRecord>> {
         .collect()
 }
 
+pub(crate) fn list_lossy(ctx: &Ctx) -> Result<TaskRunInventory> {
+    let mut records = Vec::new();
+    let mut invalid = Vec::new();
+
+    for path in task_run_paths(ctx)? {
+        let id = id_from_path(&path).unwrap_or_else(|_| "task-run".into());
+        match read(&path) {
+            Ok(run) => records.push(TaskRunRecord { id, path, run }),
+            Err(err) => invalid.push(InvalidTaskRunRecord {
+                id,
+                path,
+                error: format!("{err:#}"),
+            }),
+        }
+    }
+
+    Ok(TaskRunInventory { records, invalid })
+}
+
+pub(crate) fn invalid_inventory_warnings(
+    ctx: &Ctx,
+    invalid: &[InvalidTaskRunRecord],
+) -> Vec<String> {
+    invalid
+        .iter()
+        .map(|record| {
+            format!(
+                "TaskRun inventory skipped invalid record {}: {}",
+                ctx.storage_root.display_path(&record.path),
+                record.error
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn task_run_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
     ensure_no_legacy_task_runs(ctx)?;
     let task_runs_dir = ctx.storage_root.task_runs_dir();
@@ -627,6 +675,7 @@ pub(crate) fn task_is_selectable(ctx: &Ctx, task: &str) -> Result<bool> {
     Ok(record.run.status.is_task_selectable())
 }
 
+#[cfg(test)]
 pub(crate) fn running_cleanup_matches(ctx: &Ctx, branch: &str) -> Result<Vec<TaskRunRecord>> {
     let mut records = Vec::new();
     for record in list(ctx)? {
@@ -638,6 +687,23 @@ pub(crate) fn running_cleanup_matches(ctx: &Ctx, branch: &str) -> Result<Vec<Tas
         }
     }
     Ok(records)
+}
+
+pub(crate) fn running_cleanup_matches_lossy(ctx: &Ctx, branch: &str) -> Result<TaskRunInventory> {
+    let inventory = list_lossy(ctx)?;
+    let mut records = Vec::new();
+    for record in inventory.records {
+        if record.run.branch != branch || !record.run.status.is_cleanup_completable() {
+            continue;
+        }
+        if matches!(resolve_context(ctx, &record), Ok(TaskRunContext::Direct)) {
+            records.push(record);
+        }
+    }
+    Ok(TaskRunInventory {
+        records,
+        invalid: inventory.invalid,
+    })
 }
 
 pub(crate) fn resolve_context(ctx: &Ctx, record: &TaskRunRecord) -> Result<TaskRunContext> {
@@ -1430,6 +1496,47 @@ updated_at = "2026-05-16T00:00:00Z"
     }
 
     #[test]
+    fn list_lossy_keeps_valid_task_runs_and_reports_invalid_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let task_runs_dir = dir.path().join(".git/wt/task-runs");
+        std::fs::create_dir_all(&task_runs_dir).unwrap();
+        write(
+            &task_runs_dir.join("run-valid.toml"),
+            &run_with_order(
+                "add-schema",
+                STATUS_RUNNING,
+                Some(1),
+                "2026-05-16T00:00:00Z",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            task_runs_dir.join("run-broken.toml"),
+            r#"task = "broken"
+branch = "broken"
+status = "started"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let inventory = list_lossy(&ctx).unwrap();
+
+        assert_eq!(inventory.records.len(), 1);
+        assert_eq!(inventory.records[0].id, "run-valid");
+        assert_eq!(inventory.invalid.len(), 1);
+        assert_eq!(inventory.invalid[0].id, "run-broken");
+        assert!(
+            inventory.invalid[0]
+                .error
+                .contains("Unknown task run status")
+        );
+        assert!(list(&ctx).unwrap_err().to_string().contains("status"));
+    }
+
+    #[test]
     fn create_uses_next_id_without_clobbering_existing_run() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
@@ -1487,6 +1594,31 @@ updated_at = "2026-05-16T00:00:00Z"
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, direct.id);
+    }
+
+    #[test]
+    fn running_cleanup_matches_lossy_keeps_matching_direct_runs_with_unrelated_invalid_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let direct = create(&ctx, "direct-task", "feature", None, STATUS_RUNNING).unwrap();
+        std::fs::write(
+            dir.path().join(".git/wt/task-runs/run-broken.toml"),
+            r#"task = "broken"
+branch = "other"
+status = "started"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let inventory = running_cleanup_matches_lossy(&ctx, "feature").unwrap();
+
+        assert_eq!(inventory.records.len(), 1);
+        assert_eq!(inventory.records[0].id, direct.id);
+        assert_eq!(inventory.invalid.len(), 1);
+        assert_eq!(inventory.invalid[0].id, "run-broken");
+        assert!(running_cleanup_matches(&ctx, "feature").is_err());
     }
 
     #[test]

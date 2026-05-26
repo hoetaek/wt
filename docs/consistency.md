@@ -1178,6 +1178,11 @@ TaskRun 출력에는 쓰지 않는다. `creation_order`는 같은 task의 최신
 previous끼리는 `created_at`과 id를 fallback으로 쓴다.
 status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이다. 알 수 없는
 status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서 실패시킨다.
+다만 branch/worktree 중심의 read-only surface는 unrelated malformed TaskRun 하나 때문에
+valid branch/worktree dossier를 잃지 않도록 partial TaskRun inventory를 사용할 수 있다. 이때
+invalid TaskRun file은 warning이나 JSON invalid-record field로 명시해야 하며, malformed
+TaskRun id를 직접 target으로 지정한 경우에는 여전히 그 파일의 parse/validation error로
+실패해야 한다.
 
 통합 실행 상태 모델은 TaskDocument, Workflow, TaskRun의 책임을 나누는 데서 시작한다.
 TaskDocument는 무엇을 할지에 대한 재사용 가능한 slice-level 설명이고, Workflow는

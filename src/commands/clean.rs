@@ -139,15 +139,19 @@ fn remove_worktree(ctx: &Ctx, git: &GitService<'_>, wt_path: &Path) -> Result<bo
 }
 
 fn mark_matching_task_runs_done(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) {
-    let runs = match task_run::running_cleanup_matches(ctx, &entry.branch) {
-        Ok(runs) => runs,
+    let inventory = match task_run::running_cleanup_matches_lossy(ctx, &entry.branch) {
+        Ok(inventory) => inventory,
         Err(err) => {
             ctx.ui.print_warning(&format!("  TaskRun lookup: {err}"));
             return;
         }
     };
 
-    for record in runs {
+    for warning in task_run::invalid_inventory_warnings(ctx, &inventory.invalid) {
+        ctx.ui.print_warning(&format!("  {warning}"));
+    }
+
+    for record in inventory.records {
         match task_run::update(ctx, &record.id, task_run::STATUS_DONE, None, None) {
             Ok(_) => ctx
                 .ui
@@ -639,17 +643,34 @@ updated_at = "2026-05-18T00:00:00Z"
             Box::new(runner),
             Box::new(Arc::clone(&ui)),
         );
+        let run = task_run::create(
+            &ctx,
+            "add-schema",
+            "alice/add-schema",
+            None,
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
 
         run_with_targets(&ctx, &["alice/add-schema".into()]).unwrap();
 
+        assert_eq!(
+            task_run::read(&run.path).unwrap().status,
+            task_run::STATUS_DONE
+        );
         let steps = ui.steps.lock().unwrap();
         assert!(steps.contains(&"  Branch deleted".into()));
+        assert!(
+            steps
+                .iter()
+                .any(|step| step.contains("TaskRun marked done"))
+        );
         drop(steps);
         let warnings = ui.warnings.lock().unwrap();
         assert!(
             warnings
                 .iter()
-                .any(|warning| warning.contains("TaskRun lookup:"))
+                .any(|warning| warning.contains("TaskRun inventory skipped invalid record"))
         );
     }
 
