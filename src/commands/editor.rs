@@ -174,6 +174,7 @@ mod tests {
                 "surface:4",
                 "--workspace",
                 "workspace:2",
+                "--",
                 "vi '/tmp/batch.toml'\n"
             ]
         );

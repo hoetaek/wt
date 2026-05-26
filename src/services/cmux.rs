@@ -86,6 +86,20 @@ pub struct CmuxService<'a> {
     focus_new_workspace: bool,
 }
 
+pub(crate) fn cmux_send_args<'a>(
+    command: &'a str,
+    surface: &'a str,
+    workspace: Option<&'a str>,
+    payload: &'a str,
+) -> Vec<&'a str> {
+    let mut args = vec![command, "--surface", surface];
+    if let Some(workspace) = workspace {
+        args.extend(["--workspace", workspace]);
+    }
+    args.extend(["--", payload]);
+    args
+}
+
 impl<'a> CmuxService<'a> {
     pub fn new(runner: &'a dyn CommandRunner) -> Self {
         Self {
@@ -410,11 +424,8 @@ impl<'a> CmuxService<'a> {
     }
 
     pub fn send(&self, surface: &str, workspace: &str, text: &str) -> Result<()> {
-        let out = self.runner.run(
-            "cmux",
-            &["send", "--surface", surface, "--workspace", workspace, text],
-            None,
-        )?;
+        let args = cmux_send_args("send", surface, Some(workspace), text);
+        let out = self.runner.run("cmux", &args, None)?;
         if !out.success {
             bail!("cmux send failed: {}", command_error(&out));
         }
@@ -422,18 +433,8 @@ impl<'a> CmuxService<'a> {
     }
 
     pub fn send_key(&self, surface: &str, workspace: &str, key: &str) -> Result<()> {
-        let out = self.runner.run(
-            "cmux",
-            &[
-                "send-key",
-                "--surface",
-                surface,
-                "--workspace",
-                workspace,
-                key,
-            ],
-            None,
-        )?;
+        let args = cmux_send_args("send-key", surface, Some(workspace), key);
+        let out = self.runner.run("cmux", &args, None)?;
         if !out.success {
             bail!("cmux send-key failed: {}", command_error(&out));
         }
@@ -1323,6 +1324,7 @@ mod tests {
                 "surface:4",
                 "--workspace",
                 "workspace:2",
+                "--",
                 "vi file.toml\n"
             ]
         );
@@ -1337,7 +1339,18 @@ mod tests {
         svc.send("surface:0", "workspace:1", "lazygit\n").unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls[0].1[5], "lazygit\n");
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "send",
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1",
+                "--",
+                "lazygit\n"
+            ]
+        );
     }
 
     #[test]
@@ -1357,6 +1370,7 @@ mod tests {
                 "surface:0",
                 "--workspace",
                 "workspace:1",
+                "--",
                 "enter"
             ]
         );
