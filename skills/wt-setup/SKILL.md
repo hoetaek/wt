@@ -127,17 +127,64 @@ The omission rationale should be practical, for example: "CLI repo, no dev
 server", "tool missing locally", "built-in default already covers this", or
 "shared config would leak a personal path".
 
+## Diagnose Existing Setup Against Intent
+
+Before recommending changes, reconcile three views: what files declare, what
+`wt config` actually resolves, and what the user intends. Many setups fail
+silently because the resolved effective config diverges from the written intent.
+
+Run this triangulation pass:
+
+1. **Read every config file that exists.** `.wt.toml`, `<git-common-dir>/wt/config/local.toml`,
+   and every `<git-common-dir>/wt/config/profiles/*/profile.toml`. Also list
+   `<git-common-dir>/wt/config/profiles/*/scaffold/` and `prompts/` to see what
+   the profile expects to inject.
+2. **Read the user's intent.** What did the user just paste, ask for, or
+   describe? If unclear, ask one targeted question — do not guess.
+3. **Run `wt config` and compare.** The effective output is the source of truth
+   for what wt will actually apply. Diff it against the user's intent.
+
+For every divergence, propose a concrete fix. Common divergences to check
+explicitly:
+
+- **Profile dormancy.** `<git-common-dir>/wt/config/profiles/<name>/` exists
+  (with `profile.toml`, `scaffold/`, or `prompts/`) but `wt config` shows no
+  `copy_as` pointing into that scaffold and no prompts from
+  `profile.toml`/`prompts/*.md`. Cause: `.wt.toml`/`local.toml` is missing
+  `[profile] name = "<name>"`, and no command passes `--profile <name>`. Fix:
+  add `[profile] name = "<name>"` to the owner file, or remove the profile
+  directory if it is unused.
+- **Named profile + inline `[profile.agent.*]` collision.** When `[profile]` has
+  both `name = "<name>"` and inline settings like `[profile.agent.prompt]`,
+  `wt config` fails with a hard parse error (schema validation rejects the
+  combination). Fix: pick one — drop `name` to use inline, or move the inline
+  prompts into the named profile's `prompts/*.md` (or its own `profile.toml`'s
+  `[agent.prompt]`) and delete the inline block.
+- **Scaffold drift.** `[profile] name = "<name>"` is set and `wt config` shows
+  the `copy_as` scaffold entry, but `scaffold/` is empty or missing the files
+  the user expects. Fix: populate `<git-common-dir>/wt/config/profiles/<name>/scaffold/`
+  with the actual files the worktree should receive, then re-run `wt config`.
+- **Effective ≠ files in another way.** Any setting the user clearly intended
+  (a prompt, a tab, a command) is absent from `wt config`. Trace which file
+  owns it and why the merge dropped it (wrong section, wrong owner file,
+  shadowed by profile, etc.).
+
+If divergence is detected, lead the response with the divergence and the fix,
+not with a generic recommendation.
+
 ## Response Shape
 
 Use this order:
 
 1. Observed facts: project type, CI checks, detected commands, existing
    effective config, available/missing tools.
-2. Recommended owner file.
-3. Recommended active TOML.
-4. Keep/add/omit rationale.
-5. Unresolved choices or compact project-shaped alternatives, only if needed.
-6. Validation commands.
+2. Divergences between files, intent, and `wt config` — with concrete fixes
+   (skip this item only when there is no existing setup).
+3. Recommended owner file.
+4. Recommended active TOML.
+5. Keep/add/omit rationale.
+6. Unresolved choices or compact project-shaped alternatives, only if needed.
+7. Validation commands.
 
 Keep the answer concrete. Prefer a short active config block over a long field
 catalog.
@@ -155,6 +202,7 @@ If the recommendation includes named profiles, also run:
 
 ```bash
 wt config --profile <name>
+wt config | grep -E 'copy_as|\[agent' # named profile actually merged into effective?
 ```
 
 If this skill file or wt init behavior changes inside the `wt` repo, validate
