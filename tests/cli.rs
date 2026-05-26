@@ -957,6 +957,45 @@ fn env_prints_worker_binding_for_matching_task_run_without_extra_route() {
 }
 
 #[test]
+fn env_rejects_legacy_task_run_storage() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let status = git_command()
+        .args(["checkout", "-b", "feat-env"])
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let legacy_dir = temp.path().join(".git/wt/task-runs");
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+    std::fs::write(
+        legacy_dir.join("run-feat-env.toml"),
+        r#"task = "feat-env"
+branch = "feat-env"
+status = "running"
+creation_order = 1
+created_at = "2026-05-18T00:00:00.000000000Z"
+updated_at = "2026-05-18T00:00:00.000000000Z"
+"#,
+    )
+    .unwrap();
+
+    wt_command()
+        .current_dir(temp.path())
+        .args(["env"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(
+            predicate::str::contains("Found legacy wt personal TaskRun storage")
+                .and(predicate::str::contains(".git/wt/task-runs"))
+                .and(predicate::str::contains(".git/wt/execution/task-runs")),
+        );
+}
+
+#[test]
 fn env_unsets_identity_without_matching_task_run() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());

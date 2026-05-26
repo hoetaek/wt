@@ -1,7 +1,7 @@
 use crate::names::WorktreeNames;
 use crate::storage::StorageRoot;
 use crate::task_run::{self, TaskRunRecord};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -38,6 +38,12 @@ fn resolve_binding(cwd: &Path) -> Result<Option<EnvBinding>> {
     }
 
     let storage_root = StorageRoot::from_git_common_dir(git_common_dir);
+    let repo_root = git_output(cwd, &["rev-parse", "--show-toplevel"])?
+        .map(PathBuf::from)
+        .unwrap_or_else(|| cwd.to_path_buf());
+    if let Some(legacy) = storage_root.detect_legacy_task_runs(&repo_root) {
+        bail!("{}", legacy.error_message_for("TaskRun storage"));
+    }
     let Some(record) = latest_task_run_for_branch(storage_root.task_runs_dir(), &branch)? else {
         return Ok(None);
     };

@@ -65,7 +65,11 @@ pub fn edit(ctx: &Ctx, profile: Option<&str>, source: Option<&Path>) -> Result<(
     }
 
     let path = match source {
-        Some(source) => resolve_source_path(ctx, source)?,
+        Some(source) => {
+            let path = resolve_source_path(ctx, source)?;
+            reject_legacy_profile_source(ctx, &path)?;
+            path
+        }
         None => select_edit_source(ctx)?,
     };
     crate::commands::editor::open_file(ctx, &path)
@@ -641,6 +645,7 @@ fn analyze_source(ctx: &Ctx, path: &Path) -> Result<SourceSummary> {
 
     let path = path.to_path_buf();
     let display = relative_display(ctx, &path);
+    reject_legacy_profile_source(ctx, &path)?;
     let content = fs::read_to_string(&path)?;
 
     if same_existing_path(&path, &ctx.repo_root.join(".wt.toml")) {
@@ -810,6 +815,8 @@ fn analyze_inline_source(ctx: &Ctx, path: &Path) -> Result<InlineSummary> {
     if same_existing_path(&path, &ctx.storage_root.config_toml()) {
         return analyze_inline_local_config(ctx, path, display);
     }
+
+    reject_legacy_profile_source(ctx, &path)?;
 
     if let Some(file_name) = path.file_name().and_then(|name| name.to_str())
         && matches!(file_name, "new.md" | "new.append.md")
@@ -1325,6 +1332,23 @@ fn prompt_source_for_path(ctx: &Ctx, path: &Path) -> Option<PromptSource> {
         profile_dir: canonical_profiles_dir.join(&profile_name),
         profile_name,
     })
+}
+
+fn reject_legacy_profile_source(ctx: &Ctx, path: &Path) -> Result<()> {
+    let Some(legacy) = ctx.storage_root.detect_legacy_profiles(&ctx.repo_root) else {
+        return Ok(());
+    };
+    if path_is_under_existing(path, legacy.path()) {
+        bail!("{}", legacy.error_message_for("profile storage"));
+    }
+    Ok(())
+}
+
+fn path_is_under_existing(path: &Path, dir: &Path) -> bool {
+    match (path.canonicalize(), dir.canonicalize()) {
+        (Ok(path), Ok(dir)) => path.starts_with(dir),
+        _ => path.starts_with(dir),
+    }
 }
 
 fn prompt_file_specs() -> Vec<PromptFileSpec> {
@@ -2193,6 +2217,32 @@ cli = "codex"
             std::fs::read_to_string(profile_dir.join("profile.toml")).unwrap(),
             ""
         );
+    }
+
+    #[test]
+    fn legacy_profile_sources_are_rejected_for_extract_edit_and_inline() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join(".git/wt/profiles/codex");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(
+            profile_dir.join("profile.toml"),
+            "[agent]\ncli = \"codex\"\n",
+        )
+        .unwrap();
+
+        let ctx = ctx_with_ui(dir.path(), MockUi::new());
+        let source = Path::new(".git/wt/profiles/codex/profile.toml");
+
+        for error in [
+            extract(&ctx, None, Some(source)).unwrap_err(),
+            edit(&ctx, None, Some(source)).unwrap_err(),
+            inline(&ctx, None, Some(source)).unwrap_err(),
+        ] {
+            let report = format!("{error:#}");
+            assert!(report.contains("Found legacy wt personal profile storage"));
+            assert!(report.contains(".git/wt/profiles"));
+            assert!(report.contains(".git/wt/config/profiles"));
+        }
     }
 
     #[test]

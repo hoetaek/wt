@@ -74,6 +74,9 @@ fn plan_archive(ctx: &Ctx, workflow: &str) -> Result<ArchivePlan> {
     if let Some(legacy) = ctx.storage_root.detect_legacy_archive(&ctx.repo_root) {
         bail!("{}", legacy.error_message_for("Workflow archive storage"));
     }
+    if let Some(legacy) = ctx.storage_root.detect_legacy_tasks(&ctx.repo_root) {
+        bail!("{}", legacy.error_message_for("TaskDocument storage"));
+    }
 
     let workflow_source = resolve_archive_workflow_key(ctx, workflow)?;
     let workflow_id = workflow_store::id_from_path(&workflow_source)?;
@@ -634,6 +637,39 @@ updated_at = "2026-05-20T00:00:00Z"
         assert!(
             dir.path()
                 .join(".git/wt/execution/workflows/wf.toml")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn archive_rejects_legacy_task_storage_before_marking_tasks_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        write_task_run(dir.path(), "run-legacy", "legacy-task", "done", "wf");
+        write_workflow(
+            dir.path(),
+            "wf",
+            vec![WorkflowTask::new("legacy-task", "run-legacy")],
+        );
+        let legacy_tasks = dir.path().join(".git/wt/tasks");
+        fs::create_dir_all(&legacy_tasks).unwrap();
+        fs::write(
+            legacy_tasks.join("legacy-task.toml"),
+            r#"title = "legacy-task"
+branch = "legacy-task"
+body = "Task body"
+"#,
+        )
+        .unwrap();
+
+        let error = run(&ctx, "wf").unwrap_err();
+        let report = format!("{error:#}");
+        assert!(report.contains("Found legacy wt personal TaskDocument storage"));
+        assert!(report.contains(".git/wt/tasks"));
+        assert!(report.contains(".git/wt/execution/tasks"));
+        assert!(
+            !dir.path()
+                .join(".git/wt/execution/archive/workflows/wf")
                 .exists()
         );
     }
