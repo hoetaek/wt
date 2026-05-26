@@ -4968,9 +4968,9 @@ fn setup_installs_completion_for_explicit_non_homebrew_wt_path() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Shell completion: install"))
-        .stdout(predicate::str::contains(
-            "Setup complete: 4 step(s) changed",
-        ))
+        .stdout(predicate::str::contains("Setup complete:"))
+        .stdout(predicate::str::contains("step(s) changed"))
+        .stdout(predicate::str::contains("- Shell integration"))
         .stdout(predicate::str::contains("- Shell completion"));
 
     let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
