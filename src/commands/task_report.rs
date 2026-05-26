@@ -1,5 +1,5 @@
 use crate::context::Ctx;
-use crate::messages::{AgentId, MessageStore};
+use crate::messages::{AgentId, MessageScope, MessageStore};
 use crate::services::git::GitService;
 use crate::task_run::{self, TaskRunContext, TaskRunRecord};
 use anyhow::{Context, Result, bail};
@@ -23,13 +23,13 @@ fn run_with_env(
     }
 
     let record = resolve_report_task_run(ctx, task_run_id)?;
-    ensure_direct_task_run(ctx, &record)?;
+    let scope = report_scope(ctx, &record)?;
     let from = required_agent_id(&record, "agent_id")?;
     let to = required_coordinator_id(&record)?;
     validate_runtime_agent(runtime_agent_id, &record, &from)?;
 
     let store = MessageStore::new(ctx.storage_root.messages_dir());
-    let sent = store.send_from(from.as_str(), to.as_str(), &text)?;
+    let sent = store.send_scoped_from(from.as_str(), to.as_str(), scope, &text)?;
     task_run::update_report_metadata(&record, &sent.id)?;
 
     if !ctx.quiet {
@@ -78,13 +78,13 @@ fn resolve_report_task_run(ctx: &Ctx, task_run_id: Option<&str>) -> Result<TaskR
     }
 }
 
-fn ensure_direct_task_run(ctx: &Ctx, record: &TaskRunRecord) -> Result<()> {
+fn report_scope(ctx: &Ctx, record: &TaskRunRecord) -> Result<MessageScope> {
     match task_run::resolve_context(ctx, record)? {
-        TaskRunContext::Direct => Ok(()),
-        other => bail!(
-            "wt task report currently supports direct TaskRuns only; TaskRun {} is {}",
-            record.id,
-            other.label()
+        TaskRunContext::Direct => Ok(MessageScope::direct()),
+        TaskRunContext::WorkflowLinked(context) => MessageScope::workflow(context.workflow_id),
+        TaskRunContext::UnresolvedWorkflowGroup { group } => bail!(
+            "wt task report could not determine workflow scope for TaskRun {}. It references workflow group `{group}`, but no matching workflow links this TaskRun.",
+            record.id
         ),
     }
 }
@@ -153,6 +153,7 @@ mod tests {
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
     use crate::task_run::STATUS_RUNNING;
+    use crate::workflow::{self as workflow_store, WorkflowMetadata, WorkflowMode, WorkflowTask};
     use anyhow::Result;
     use std::path::Path;
     use std::sync::Arc;
@@ -226,6 +227,58 @@ mod tests {
             "Agent Completion Report: Summary=done"
         );
         assert_eq!(message.scope.kind.as_str(), "direct");
+    }
+
+    #[test]
+    fn report_sends_workflow_scoped_message_from_task_run_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = Arc::new(MockRunner::new());
+        let ctx = ctx(dir.path(), runner);
+        let record = task_run::create_workflow_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "workflow-1",
+            "agents/coord-a",
+            Some("Coordinator for workflow \"API\""),
+            STATUS_RUNNING,
+        )
+        .unwrap();
+        let workflow_path = ctx.storage_root.workflows_dir().join("workflow-1.toml");
+        let mut workflow = WorkflowMetadata::new(
+            WorkflowMode::Batch,
+            "explicit",
+            Some("main".into()),
+            vec![WorkflowTask::new("add-schema", record.id.clone())],
+        );
+        workflow_store::write(&ctx, &workflow_path, &mut workflow).unwrap();
+
+        run_with_env(
+            &ctx,
+            &["Agent Completion Report: Summary=workflow done".into()],
+            Some(&record.id),
+            Some("agents/run-1-add-schema"),
+        )
+        .unwrap();
+
+        let updated = task_run::read(&record.path).unwrap();
+        let message_id = updated.last_report_message_id.unwrap();
+        assert!(updated.last_reported_at.is_some());
+
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let message = store
+            .read_for_inspection("agents/coord-a", &message_id)
+            .unwrap()
+            .message
+            .unwrap();
+        assert_eq!(message.meta.from, "agents/run-1-add-schema");
+        assert_eq!(message.meta.to, "agents/coord-a");
+        assert_eq!(message.scope.kind.as_str(), "workflow");
+        assert_eq!(message.scope.id.as_deref(), Some("workflow-1"));
+        assert_eq!(
+            message.text_content(),
+            "Agent Completion Report: Summary=workflow done"
+        );
     }
 
     #[test]

@@ -741,7 +741,7 @@ pub enum RunCommand {
     },
     /// Start runnable tasks from a saved workflow
     #[command(
-        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts. In non-interactive shells, pass WORKFLOW explicitly.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with a scoped coordinator inbox target using `wt msg send --scope workflow:<id> --to coordinator` and fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
+        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts. In non-interactive shells, pass WORKFLOW explicitly.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff using `wt task report \"Agent Completion Report: ...\"` with workflow scope derived from the TaskRun, plus fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
     )]
     Workflow {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -818,7 +818,7 @@ pub enum TaskCommand {
     },
     /// Send the current TaskRun completion report to its recorded coordinator
     #[command(
-        long_about = "Send a report from the current direct TaskRun to the coordinator recorded on that TaskRun.\n\nThe normal task-agent path is `wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\"`. When WT_TASK_RUN_ID is set, wt uses that exact TaskRun. Without WT_TASK_RUN_ID, wt may fall back to the current branch only when exactly one running TaskRun matches. Reports are sent through the file inbox and update TaskRun report metadata."
+        long_about = "Send a report from the current TaskRun to the coordinator recorded on that TaskRun.\n\nThe normal task-agent path is `wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\"`. When WT_TASK_RUN_ID is set, wt uses that exact TaskRun. Without WT_TASK_RUN_ID, wt may fall back to the current branch only when exactly one running TaskRun matches. Workflow-linked TaskRuns use their workflow scope automatically. Reports are sent through the file inbox and update TaskRun report metadata."
     )]
     Report {
         /// Report message to send
@@ -2156,8 +2156,8 @@ mod tests {
         assert!(help.contains("saved workflow"));
         assert!(help.contains("does not list, edit, repair, or complete workflow files"));
         assert!(help.contains("Workflow Coordinator Handoff"));
-        assert!(help.contains("scoped coordinator inbox target"));
-        assert!(help.contains("wt msg send --scope workflow:<id> --to coordinator"));
+        assert!(help.contains("wt task report"));
+        assert!(help.contains("workflow scope derived from the TaskRun"));
         assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("prepared [policy].pull_request"));
         assert!(help.contains("wt workflow complete"));

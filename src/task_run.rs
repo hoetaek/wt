@@ -5,6 +5,7 @@ use crate::workflow::{self, WorkflowMode};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -218,6 +219,7 @@ pub(crate) fn create(
     create_with_coordinator_id(ctx, task, branch, group, None, status)
 }
 
+#[cfg(test)]
 pub(crate) fn create_with_coordinator_id(
     ctx: &Ctx,
     task: &str,
@@ -261,6 +263,29 @@ pub(crate) fn create_direct_routed(
     )
 }
 
+pub(crate) fn create_workflow_routed(
+    ctx: &Ctx,
+    task: &str,
+    branch: &str,
+    group: &str,
+    coordinator_id: &str,
+    coordinator_label: Option<&str>,
+    status: TaskRunStatus,
+) -> Result<TaskRunRecord> {
+    create_with_routes(
+        ctx,
+        task,
+        branch,
+        Some(group),
+        TaskRunRoutes {
+            coordinator_id: Some(coordinator_id),
+            coordinator_label,
+            ..TaskRunRoutes::default()
+        },
+        status,
+    )
+}
+
 fn create_with_routes(
     ctx: &Ctx,
     task: &str,
@@ -274,7 +299,7 @@ fn create_with_routes(
     let task_key = task::safe_task_key(task);
     let agent_id = match routes.agent_id.and_then(optional_string) {
         Some(agent_id) => Some(agent_id),
-        None if routes.coordinator_id.is_some() && group.is_none() => {
+        None if routes.coordinator_id.is_some() => {
             Some(generated_task_agent_id(creation_order, &task_key)?)
         }
         None => None,
@@ -297,8 +322,18 @@ fn create_with_routes(
     write_new(ctx, &run)
 }
 
-pub(crate) fn launcher_coordinator_id(ctx: &Ctx) -> Option<&str> {
-    ctx.launcher_coordinator_id.as_deref()
+pub(crate) fn launch_template_vars(record: &TaskRunRecord) -> HashMap<String, String> {
+    launch_template_vars_for(&record.id, &record.run)
+}
+
+pub(crate) fn launch_template_vars_for(id: &str, run: &TaskRun) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    vars.insert("wt_task_run_id".into(), id.to_string());
+    if let Some(agent_id) = run.agent_id.as_deref() {
+        vars.insert("wt_agent_id".into(), agent_id.to_string());
+    }
+    vars.insert("wt_coordinator_agent_id".into(), String::new());
+    vars
 }
 
 pub(crate) fn read(path: &Path) -> Result<TaskRun> {

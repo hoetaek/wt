@@ -260,6 +260,20 @@ mod tests {
         )
     }
 
+    fn ctx_with_launcher(root: &Path, launcher: &str) -> Ctx {
+        Ctx::new_with_options(
+            root.to_path_buf(),
+            root.to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+            crate::context::CtxOptions {
+                launcher_coordinator_id: Some(launcher.into()),
+                ..crate::context::CtxOptions::default()
+            },
+        )
+    }
+
     fn ctx_with_config(root: &Path, config: Config) -> Ctx {
         Ctx::new(
             root.to_path_buf(),
@@ -419,19 +433,37 @@ cli = "none"
             .collect()
     }
 
+    fn assert_workflow_runs_have_routes(ctx: &Ctx, expected: usize) {
+        let runs = task_run::list(ctx).unwrap();
+        assert_eq!(runs.len(), expected);
+        assert!(runs.iter().all(|record| {
+            record.run.coordinator_id.as_deref() == Some("agents/coord-workflow")
+        }));
+        assert!(runs.iter().all(|record| {
+            record.run.coordinator_label.as_deref()
+                == Some("Coordinator for workflow \"Workflow routing\"")
+        }));
+        assert!(runs.iter().all(
+            |record| record.run.agent_id.as_deref().is_some_and(|agent| {
+                agent.starts_with("agents/run-") && agent.contains(&record.run.task)
+            })
+        ));
+    }
+
     fn assert_report_only_workflow_handoff(content: &str) {
         assert!(content.contains("## Workflow Coordinator Handoff"));
         assert!(content.contains("Workflow policy sets `pull_request = \"none\"`"));
         assert!(content.contains("PR=none"));
-        assert!(content.contains("coordinator inbox"));
-        assert!(content.contains("wt msg send --scope workflow:test --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
-        assert!(content.contains("resolves from `WT_COORDINATOR_AGENT_ID`"));
-        assert!(content.contains("explicit workflow scope `workflow:test`"));
-        assert!(content.contains("Workflow supervisors may claim resolved coordinator inbox messages only when this explicit workflow scope matches."));
+        assert!(content.contains("TaskRun report route"));
+        assert!(content.contains("wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("stored coordinator route and workflow scope"));
+        assert!(!content.contains("wt msg send --scope workflow:"));
+        assert!(!content.contains("--to coordinator"));
+        assert!(!content.contains("WT_COORDINATOR_AGENT_ID"));
         assert!(content.contains("If the file inbox route is unavailable"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
-        assert!(content.contains("If neither coordinator route is available"));
+        assert!(content.contains("If `wt task report` fails"));
         assert_inbox_route_precedes_cmux_fallback(content);
         assert!(content.contains("wt workflow complete"));
         assert!(!content.contains("--run-next"));
@@ -445,14 +477,14 @@ cli = "none"
 
     fn assert_inbox_route_precedes_cmux_fallback(content: &str) {
         assert!(
-            content.find("wt msg send --scope workflow:").unwrap()
+            content.find("wt task report").unwrap()
                 < content.find("fallback cmux surface").unwrap()
         );
     }
 
     fn assert_workflow_inbox_command_precedes_policy(content: &str) {
         assert!(
-            content.find("wt msg send --scope workflow:").unwrap()
+            content.find("wt task report").unwrap()
                 < content
                     .find("Workflow policy sets")
                     .unwrap_or(content.len())
@@ -488,26 +520,16 @@ cli = "none"
     }
 
     #[test]
-    fn task_prepares_workflow_task_runs_with_launcher_coordinator_id() {
+    fn task_prepares_workflow_task_runs_with_launcher_routes() {
         let dir = tempfile::tempdir().unwrap();
-        let ctx = Ctx::new_with_options(
-            dir.path().to_path_buf(),
-            dir.path().to_path_buf(),
-            Config::default(),
-            Box::new(MockRunner::new()),
-            Box::new(MockUi::new()),
-            crate::context::CtxOptions {
-                launcher_coordinator_id: Some("agents/coord-workflow".into()),
-                ..crate::context::CtxOptions::default()
-            },
-        );
+        let ctx = ctx_with_launcher(dir.path(), "agents/coord-workflow");
 
         task(
             &ctx,
             &["workflow docs".into(), "workflow state".into()],
             WorkflowModeArg::Batch,
             None,
-            None,
+            Some("Workflow migration"),
             &Some("main".into()),
             None,
         )
@@ -518,10 +540,19 @@ cli = "none"
         assert!(runs.iter().all(|record| {
             record.run.coordinator_id.as_deref() == Some("agents/coord-workflow")
         }));
+        assert!(runs.iter().all(|record| {
+            record.run.coordinator_label.as_deref()
+                == Some("Coordinator for workflow \"Workflow migration\"")
+        }));
+        assert!(runs.iter().all(
+            |record| record.run.agent_id.as_deref().is_some_and(|agent| {
+                agent.starts_with("agents/run-") && agent.contains(&record.run.task)
+            })
+        ));
     }
 
     #[test]
-    fn task_prepares_workflow_task_runs_without_coordinator_id_when_unset() {
+    fn task_prepares_workflow_task_runs_with_auto_created_coordinator_when_unset() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
 
@@ -538,7 +569,70 @@ cli = "none"
 
         let runs = task_run::list(&ctx).unwrap();
         assert_eq!(runs.len(), 1);
-        assert!(runs[0].run.coordinator_id.is_none());
+        assert!(runs[0].run.coordinator_id.as_deref().is_some_and(|agent| {
+            agent.starts_with("agents/surface-")
+                || agent.starts_with("agents/claude-")
+                || agent.starts_with("agents/codex-")
+                || agent.starts_with("agents/shell-")
+        }));
+        assert_eq!(
+            runs[0].run.coordinator_label.as_deref(),
+            Some("Coordinator for workflow \"workflow docs\"")
+        );
+        assert_eq!(
+            runs[0].run.agent_id.as_deref(),
+            Some("agents/run-1-workflow-docs")
+        );
+    }
+
+    #[test]
+    fn task_prepares_routes_for_single_stack_and_matrix_modes() {
+        for mode in [WorkflowModeArg::Single, WorkflowModeArg::Stack] {
+            let dir = tempfile::tempdir().unwrap();
+            let ctx = ctx_with_launcher(dir.path(), "agents/coord-workflow");
+            let tasks = match mode {
+                WorkflowModeArg::Single => vec!["workflow docs".into()],
+                WorkflowModeArg::Stack => vec!["workflow docs".into(), "workflow state".into()],
+                WorkflowModeArg::Batch | WorkflowModeArg::Matrix => unreachable!(),
+            };
+
+            task(
+                &ctx,
+                &tasks,
+                mode,
+                None,
+                Some("Workflow routing"),
+                &Some("main".into()),
+                None,
+            )
+            .unwrap();
+
+            assert_workflow_runs_have_routes(&ctx, tasks.len());
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        write_profile(dir.path(), "alpha");
+        write_profile(dir.path(), "beta");
+        let ctx = ctx_with_launcher(dir.path(), "agents/coord-workflow");
+        super::task(
+            &ctx,
+            &["workflow docs".into()],
+            TaskOptions {
+                mode: WorkflowModeArg::Matrix,
+                profile: None,
+                profiles: &["alpha".into(), "beta".into()],
+                title: Some("Workflow routing"),
+                body: None,
+                body_file: None,
+                origin_provider: None,
+                origin_id: None,
+                base: &Some("main".into()),
+                pr: None,
+            },
+        )
+        .unwrap();
+
+        assert_workflow_runs_have_routes(&ctx, 2);
     }
 
     #[test]
@@ -2033,7 +2127,9 @@ landing = "auto"
         assert!(content.contains("update the pull request body if it became stale"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
-        assert!(content.contains("wt msg send --scope workflow:2026-05-16-001 --to coordinator \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
+        assert!(content.contains("wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
+        assert!(!content.contains("wt msg send --scope workflow:"));
+        assert!(!content.contains("--to coordinator"));
         assert!(content.contains(
             "wt workflow complete /repo/.git/wt/workflows/2026-05-16-001.toml PROJ-2 --run-next"
         ));
@@ -2139,12 +2235,7 @@ landing = "auto"
 
         assert_report_only_workflow_handoff(&content);
         assert_workflow_handoff_precedes_task_body(&content, "title = \"API\"");
-        assert!(
-            content
-                .find("wt msg send --scope workflow:test --to coordinator")
-                .unwrap()
-                < content.find("title = \"API\"").unwrap()
-        );
+        assert!(content.find("wt task report").unwrap() < content.find("title = \"API\"").unwrap());
     }
 
     #[test]
@@ -2227,7 +2318,9 @@ landing = "auto"
         );
 
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}}"));
-        assert!(content.contains("wt msg send --scope workflow:2026-05-17-002 --to coordinator"));
+        assert!(content.contains("wt task report \"Agent Completion Report"));
+        assert!(!content.contains("wt msg send --scope workflow:"));
+        assert!(!content.contains("--to coordinator"));
         assert!(content.contains(
             "workflow complete /repo/.git/wt/workflows/2026-05-17-002.toml matrix-task:alpha"
         ));
