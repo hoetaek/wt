@@ -4,8 +4,9 @@ use crate::messages::{
     AgentId, HookOutput, Message, MessageDeliveryState, MessageInspectionRecord, MessageInventory,
     MessageInventoryCounts, MessageScope, MessageStore,
 };
+use crate::services::inbox_wake;
 use crate::services::inbox_watcher::InboxWatcher;
-use crate::task_run::{self, TaskRunContext};
+use crate::task_run;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::env;
@@ -28,6 +29,7 @@ pub(crate) fn send(ctx: &Ctx, to: &str, scope: Option<&str>, message: &[String])
         Some(scope) => store.send_scoped(to.as_str(), scope, &text)?,
         None => store.send(to.as_str(), &text)?,
     };
+    let _wake_result = inbox_wake::wake_sent_message_recipient(ctx, &sent);
 
     if !ctx.quiet {
         println!("{}", ctx.storage_root.display_path(&sent.path));
@@ -148,22 +150,43 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
 
 fn authorized_inbox_scopes(ctx: &Ctx, agent: &str) -> Result<Vec<MessageScope>> {
     let agent = AgentId::parse(agent)?;
+    let runtime_agent = env_agent_id("WT_AGENT_ID")?;
+    let runtime_task_run_id = env_task_run_id()?;
     let mut scopes = Vec::new();
     for record in task_run::list(ctx)? {
-        let Some(coordinator_id) = record.run.coordinator_id.as_deref() else {
-            continue;
-        };
-        let Ok(coordinator) = AgentId::parse(coordinator_id) else {
-            continue;
-        };
-        if coordinator.as_str() != agent.as_str() {
-            continue;
+        if let Some(coordinator_id) = record.run.coordinator_id.as_deref()
+            && let Ok(coordinator) = AgentId::parse(coordinator_id)
+            && coordinator.as_str() == agent.as_str()
+            && let Some(workflow_id) = task_run::workflow_scope_id(&record)
+        {
+            push_unique_scope(&mut scopes, MessageScope::workflow(workflow_id)?);
         }
-        if let TaskRunContext::WorkflowLinked(context) = task_run::resolve_context(ctx, &record)? {
-            push_unique_scope(&mut scopes, MessageScope::workflow(context.workflow_id)?);
+        if task_run_scope_is_owned_by_runtime_agent(
+            &record,
+            &agent,
+            runtime_agent.as_ref(),
+            runtime_task_run_id.as_deref(),
+        ) {
+            push_unique_scope(&mut scopes, MessageScope::task_run(record.id.clone())?);
         }
     }
     Ok(scopes)
+}
+
+fn task_run_scope_is_owned_by_runtime_agent(
+    record: &task_run::TaskRunRecord,
+    inbox_agent: &AgentId,
+    runtime_agent: Option<&AgentId>,
+    runtime_task_run_id: Option<&str>,
+) -> bool {
+    runtime_agent.map(AgentId::as_str) == Some(inbox_agent.as_str())
+        && runtime_task_run_id == Some(record.id.as_str())
+        && record
+            .run
+            .agent_id
+            .as_deref()
+            .and_then(|id| AgentId::parse(id).ok())
+            .is_some_and(|task_agent| task_agent.as_str() == inbox_agent.as_str())
 }
 
 fn push_unique_scope(scopes: &mut Vec<MessageScope>, scope: MessageScope) {
@@ -270,6 +293,14 @@ fn env_agent_id(name: &str) -> Result<Option<AgentId>> {
         }
         Err(env::VarError::NotPresent) => Ok(None),
         Err(env::VarError::NotUnicode(_)) => bail!("Invalid {name}: value is not Unicode"),
+    }
+}
+
+fn env_task_run_id() -> Result<Option<String>> {
+    match env::var("WT_TASK_RUN_ID") {
+        Ok(value) => Ok((!value.trim().is_empty()).then(|| value.trim().to_string())),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => bail!("Invalid WT_TASK_RUN_ID: value is not Unicode"),
     }
 }
 
@@ -589,7 +620,6 @@ mod tests {
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CtxOptions, OutputMode};
     use crate::storage::StorageRoot;
-    use crate::workflow::{self as workflow_store, WorkflowMetadata, WorkflowMode, WorkflowTask};
     use tempfile::TempDir;
 
     #[test]
@@ -606,7 +636,7 @@ mod tests {
     fn authorized_inbox_scopes_include_recorded_workflow_coordinator() {
         let temp = TempDir::new().unwrap();
         let ctx = test_ctx(temp.path());
-        let record = task_run::create_workflow_routed(
+        task_run::create_workflow_routed(
             &ctx,
             "add-schema",
             "add-schema",
@@ -616,14 +646,6 @@ mod tests {
             task_run::STATUS_RUNNING,
         )
         .unwrap();
-        let workflow_path = ctx.storage_root.workflows_dir().join("workflow-1.toml");
-        let mut workflow = WorkflowMetadata::new(
-            WorkflowMode::Batch,
-            "explicit",
-            Some("main".into()),
-            vec![WorkflowTask::new("add-schema", record.id)],
-        );
-        workflow_store::write(&ctx, &workflow_path, &mut workflow).unwrap();
 
         let scopes = authorized_inbox_scopes(&ctx, "agents/coord-a").unwrap();
         let other_scopes = authorized_inbox_scopes(&ctx, "agents/other").unwrap();

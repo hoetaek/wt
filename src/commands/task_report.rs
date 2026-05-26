@@ -1,7 +1,8 @@
 use crate::context::Ctx;
 use crate::messages::{AgentId, MessageScope, MessageStore};
 use crate::services::git::GitService;
-use crate::task_run::{self, TaskRunContext, TaskRunRecord};
+use crate::services::inbox_wake;
+use crate::task_run::{self, TaskRunRecord};
 use anyhow::{Context, Result, bail};
 use std::env;
 
@@ -23,7 +24,7 @@ fn run_with_env(
     }
 
     let record = resolve_report_task_run(ctx, task_run_id)?;
-    let scope = report_scope(ctx, &record)?;
+    let scope = report_scope(&record)?;
     let from = required_agent_id(&record, "agent_id")?;
     let to = required_coordinator_id(&record)?;
     validate_runtime_agent(runtime_agent_id, &record, &from)?;
@@ -31,6 +32,7 @@ fn run_with_env(
     let store = MessageStore::new(ctx.storage_root.messages_dir());
     let sent = store.send_scoped_from(from.as_str(), to.as_str(), scope, &text)?;
     task_run::update_report_metadata(&record, &sent.id)?;
+    let _wake_result = inbox_wake::wake_sent_message_recipient(ctx, &sent);
 
     if !ctx.quiet {
         println!("{}", ctx.storage_root.display_path(&sent.path));
@@ -43,11 +45,13 @@ fn resolve_report_task_run(ctx: &Ctx, task_run_id: Option<&str>) -> Result<TaskR
     if let Some(id) = task_run_id.map(str::trim).filter(|id| !id.is_empty()) {
         let path = task_run::resolve(ctx, id)?;
         let run = task_run::read(&path)?;
-        return Ok(TaskRunRecord {
+        let record = TaskRunRecord {
             id: task_run::id_from_path(&path)?,
             path,
             run,
-        });
+        };
+        ensure_reportable_status(&record)?;
+        return Ok(record);
     }
 
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
@@ -78,14 +82,21 @@ fn resolve_report_task_run(ctx: &Ctx, task_run_id: Option<&str>) -> Result<TaskR
     }
 }
 
-fn report_scope(ctx: &Ctx, record: &TaskRunRecord) -> Result<MessageScope> {
-    match task_run::resolve_context(ctx, record)? {
-        TaskRunContext::Direct => Ok(MessageScope::direct()),
-        TaskRunContext::WorkflowLinked(context) => MessageScope::workflow(context.workflow_id),
-        TaskRunContext::UnresolvedWorkflowGroup { group } => bail!(
-            "wt task report could not determine workflow scope for TaskRun {}. It references workflow group `{group}`, but no matching workflow links this TaskRun.",
-            record.id
-        ),
+fn ensure_reportable_status(record: &TaskRunRecord) -> Result<()> {
+    if record.run.status != task_run::STATUS_RUNNING {
+        bail!(
+            "wt task report requires a running TaskRun. TaskRun {} is {}.",
+            record.id,
+            record.run.status
+        );
+    }
+    Ok(())
+}
+
+fn report_scope(record: &TaskRunRecord) -> Result<MessageScope> {
+    match task_run::workflow_scope_id(record) {
+        Some(workflow_id) => MessageScope::workflow(workflow_id),
+        None => Ok(MessageScope::direct()),
     }
 }
 
@@ -152,8 +163,7 @@ mod tests {
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
-    use crate::task_run::STATUS_RUNNING;
-    use crate::workflow::{self as workflow_store, WorkflowMetadata, WorkflowMode, WorkflowTask};
+    use crate::task_run::{STATUS_DONE, STATUS_RUNNING};
     use anyhow::Result;
     use std::path::Path;
     use std::sync::Arc;
@@ -244,15 +254,6 @@ mod tests {
             STATUS_RUNNING,
         )
         .unwrap();
-        let workflow_path = ctx.storage_root.workflows_dir().join("workflow-1.toml");
-        let mut workflow = WorkflowMetadata::new(
-            WorkflowMode::Batch,
-            "explicit",
-            Some("main".into()),
-            vec![WorkflowTask::new("add-schema", record.id.clone())],
-        );
-        workflow_store::write(&ctx, &workflow_path, &mut workflow).unwrap();
-
         run_with_env(
             &ctx,
             &["Agent Completion Report: Summary=workflow done".into()],
@@ -279,6 +280,34 @@ mod tests {
             message.text_content(),
             "Agent Completion Report: Summary=workflow done"
         );
+    }
+
+    #[test]
+    fn report_rejects_explicit_non_running_task_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = Arc::new(MockRunner::new());
+        let ctx = ctx(dir.path(), runner);
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            None,
+            STATUS_DONE,
+        )
+        .unwrap();
+
+        let err = run_with_env(
+            &ctx,
+            &["Agent Completion Report: Summary=done".into()],
+            Some(&record.id),
+            Some("agents/run-1-add-schema"),
+        )
+        .unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(message.contains("requires a running TaskRun"));
+        assert!(message.contains("is done"));
     }
 
     #[test]

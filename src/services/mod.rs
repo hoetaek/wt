@@ -6,6 +6,7 @@ pub mod github;
 pub mod github_review;
 pub mod herd;
 pub mod identity_locator;
+pub mod inbox_wake;
 pub mod inbox_watcher;
 pub mod issues;
 pub mod linear;

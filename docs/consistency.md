@@ -342,10 +342,10 @@ message command:
 wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>"
 ```
 
-For a direct TaskRun, `wt task report` sends direct scope. For a workflow-linked TaskRun, it derives
-`workflow:<id>` from the TaskRun's workflow context and sends from the TaskRun `agent_id` to the
-stored `coordinator_id`. Workflow task prompts must therefore not ask agents to manually compose raw
-message scope and recipient arguments themselves.
+For a direct running TaskRun, `wt task report` sends direct scope. For a workflow-linked running
+TaskRun, it derives `workflow:<id>` from persisted TaskRun state and sends from the TaskRun
+`agent_id` to the stored `coordinator_id`. Workflow task prompts must therefore not ask agents to
+manually compose raw message scope and recipient arguments themselves.
 
 There is no dynamic `coordinator` recipient alias. Bare `coordinator` is accepted only because
 `AgentId` accepts bare `NAME` and normalizes it to `agents/NAME`; it has the same meaning as the
@@ -368,10 +368,31 @@ lifecycle.
 
 For ordinary agent recipients, `check-inbox` claims direct-scope messages. Non-direct scope delivery
 requires explicit ownership evidence. For workflow reports, the ownership evidence is recorded
-TaskRun state: if a TaskRun's `coordinator_id` is the resolved inbox agent and that TaskRun resolves
-to workflow `<id>`, the agent may claim `workflow:<id>` messages. Hook context includes a `scope:`
-line for non-direct messages so the coordinator can distinguish workflow reports from standalone
-direct messages.
+TaskRun state: if a TaskRun's `coordinator_id` is the resolved inbox agent and that TaskRun records
+workflow `<id>`, the agent may claim `workflow:<id>` messages without loading the live workflow
+file. Hook context includes a `scope:` line for non-direct messages so the coordinator can
+distinguish workflow reports from standalone direct messages.
+
+For coordinator review feedback, the canonical path is:
+
+```bash
+wt task review <task-run-id> --accept|--reject|--block "<message>"
+```
+
+`wt task review` sends from the current actor id to the TaskRun's stored `agent_id` using
+`task_run:<task-run-id>` scope. It records `last_review_status`, `last_review_message_id`,
+`last_reviewed_at`, and `updated_at` on the TaskRun. Task-agent hooks may claim
+`task_run:<id>` messages only when both `WT_AGENT_ID` matches `TaskRun.agent_id` and
+`WT_TASK_RUN_ID` matches the scoped TaskRun id. Passing `--agent` to the low-level hook consumer is
+not by itself task-run ownership evidence.
+
+After a file-inbox sender durably writes a message, `wt` may best-effort wake the recipient when it
+can prove a live idle runtime target from canonical state. Task-run-scoped messages wake only when
+the scoped TaskRun's recorded `agent_id` matches `meta.to`; direct messages may wake when exactly
+one running TaskRun owns `meta.to` or when `meta.to` has a live surface session marker. Wake attempts
+are internal delivery help: they do not create another message, do not change message delivery
+state, do not add a user-facing command, and must not make a successful inbox write fail merely
+because cmux/runtime observation is unavailable.
 
 General workflow-supervisor ownership beyond TaskRun-recorded workflow scopes is not implemented
 yet. Future supervisor identities must define explicit scope ownership before claiming shared
@@ -1124,7 +1145,8 @@ setup은 만들지 않는다는 점, duplicate ids나 existing TaskDocument coll
 실패한다는 점을 보여줘야 한다.
 
 TaskRun은 그 작업을 한 번 실행한 인스턴스다. `<git-common-dir>/wt/task-runs/<id>.toml` 아래에
-task, branch, status, group, error, creation_order, created_at, updated_at을 저장한다.
+task, branch, status, group, error, creation_order, route fields, report/review metadata,
+created_at, updated_at을 저장한다.
 `group`은 Workflow file stem과 맞는 workflow-linked run을 식별하는 link이고, 직접
 `wt run task`로 만든 TaskRun은 group을 저장하지 않는다. Legacy TaskRun TOML의
 source 값 `new`, `batch`, `stack`은 읽기 전용 migration compatibility로만 받으며 새
@@ -1420,9 +1442,13 @@ Workflow-level `[origin]`은 child PR의 closing keyword source가 아니다. �
 `gh pr create --body-file <pr-body-file>` 경로로 PR을 생성한다.
 Agent Completion Report는 coordinator transport/report 형식이며 PR 본문으로 복사하지 않는다.
 이것은 PR 자체나 review 상태가 아니라 다음 실행자에게 전달할 작업 계약이다. 보고 전송은
-transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow에 포함된다. Pull request
-review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한 check를 다시 돌린 뒤
-commit/push하고 PR 본문이 stale해졌을 때만 PR 본문과 Agent Completion Report를 갱신한다.
+transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow에 포함된다. Coordinator가
+task agent에게 전달하는 canonical feedback은
+`wt task review <task-run-id> --accept|--reject|--block "<message>"`이며, 이 명령은
+TaskRun의 `agent_id`로 `task_run:<id>` scope 메시지를 보내고 TaskRun review metadata를
+갱신한다. Pull request review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한
+check를 다시 돌린 뒤 commit/push하고 PR 본문이 stale해졌을 때만 PR 본문과 Agent Completion
+Report를 갱신한다.
 실행자나 coordinator가 `wt inspect`, 필요한 경우 pull request, 보고를 확인한 뒤 workflow
 completion command를 실행할 때 TaskRun 상태가 전이된다. Pull request가 있으면 coordinator는
 workflow completion이나 landing 전에 pull-request review gate를 통과했는지 별도로 확인한다.

@@ -47,7 +47,7 @@ fn wt_command() -> Command {
         command.env_remove(key);
     }
     command.env_remove("WT_AGENT_ID");
-    command.env_remove("WT_COORDINATOR_AGENT_ID");
+    command.env_remove("WT_TASK_RUN_ID");
     command
 }
 
@@ -57,7 +57,7 @@ fn wt_command_at(path: &Path) -> Command {
         command.env_remove(key);
     }
     command.env_remove("WT_AGENT_ID");
-    command.env_remove("WT_COORDINATOR_AGENT_ID");
+    command.env_remove("WT_TASK_RUN_ID");
     command
 }
 
@@ -267,20 +267,48 @@ fn write_task_run_file_with_coordinator(
     group: &str,
     coordinator_id: Option<&str>,
 ) {
+    write_task_run_file_with_routes(
+        root,
+        id,
+        task,
+        branch,
+        status,
+        group,
+        (None, coordinator_id),
+    );
+}
+
+fn write_task_run_file_with_routes(
+    root: &Path,
+    id: &str,
+    task: &str,
+    branch: &str,
+    status: &str,
+    group: &str,
+    routes: (Option<&str>, Option<&str>),
+) {
     let dir = root.join(".git/wt/task-runs");
     std::fs::create_dir_all(&dir).unwrap();
+    let (agent_id, coordinator_id) = routes;
+    let agent = agent_id
+        .map(|id| format!("agent_id = \"{id}\"\n"))
+        .unwrap_or_default();
     let coordinator = coordinator_id
         .map(|id| format!("coordinator_id = \"{id}\"\n"))
         .unwrap_or_default();
+    let group = if group.is_empty() {
+        String::new()
+    } else {
+        format!("group = \"{group}\"\n")
+    };
     std::fs::write(
         dir.join(format!("{id}.toml")),
         format!(
             r#"task = "{task}"
 branch = "{branch}"
 status = "{status}"
-group = "{group}"
-creation_order = 1
-{coordinator}created_at = "2026-05-18T00:00:00.000000000Z"
+{group}creation_order = 1
+{agent}{coordinator}created_at = "2026-05-18T00:00:00.000000000Z"
 updated_at = "2026-05-18T00:00:00.000000000Z"
 "#
         ),
@@ -1520,6 +1548,20 @@ fn task_publish_help_explains_behavior() {
 }
 
 #[test]
+fn task_review_help_explains_behavior() {
+    wt_command()
+        .args(["task", "review", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("coordinator review feedback"))
+        .stdout(predicate::str::contains("TaskRun.agent_id"))
+        .stdout(predicate::str::contains("task_run:<id>"))
+        .stdout(predicate::str::contains("--accept"))
+        .stdout(predicate::str::contains("--reject"))
+        .stdout(predicate::str::contains("--block"));
+}
+
+#[test]
 fn msg_help_explains_agent_inbox_contract() {
     wt_command()
         .args(["msg", "--help"])
@@ -1531,6 +1573,7 @@ fn msg_help_explains_agent_inbox_contract() {
         ))
         .stdout(predicate::str::contains("wt msg send --to agents/<agent>"))
         .stdout(predicate::str::contains("wt task report <message>"))
+        .stdout(predicate::str::contains("wt task review <task-run-id>"))
         .stdout(predicate::str::contains("wt msg list --agent <agent>"))
         .stdout(predicate::str::contains(
             "wt msg read --agent <agent> <message-id>",
@@ -1552,6 +1595,7 @@ fn msg_help_explains_agent_inbox_contract() {
         .stdout(predicate::str::contains(
             "Prefer `wt task report <message>`",
         ))
+        .stdout(predicate::str::contains("wt task review <task-run-id>"))
         .stdout(predicate::str::contains("Message text"));
 
     wt_command()
@@ -2216,6 +2260,209 @@ run = "run-2026-05-20-001-workflow-report"
     let message: toml::Value = toml::from_str(&content).unwrap();
     assert_eq!(message["scope"]["kind"].as_str(), Some("workflow"));
     assert_eq!(message["delivery"]["state"].as_str(), Some("delivered"));
+}
+
+#[test]
+fn task_report_review_smoke_delivers_accepted_feedback_to_matching_task_agent() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-smoke",
+        "smoke",
+        "smoke",
+        "running",
+        "",
+        (Some("agents/run-1-smoke"), Some("agents/coord-a")),
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "task",
+            "report",
+            "Agent Completion Report: Summary=done; Changed files=src/lib.rs; Checks run=cargo test; PR=none; Risks or follow-ups=none",
+        ])
+        .env("WT_AGENT_ID", "agents/run-1-smoke")
+        .env("WT_TASK_RUN_ID", "run-smoke")
+        .assert()
+        .success();
+
+    let task_run_path = temp.path().join(".git/wt/task-runs/run-smoke.toml");
+    let task_run: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&task_run_path).unwrap()).unwrap();
+    assert!(task_run["last_report_message_id"].as_str().is_some());
+    assert!(task_run["last_reported_at"].as_str().is_some());
+
+    let coordinator_output = wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .env("WT_AGENT_ID", "agents/coord-a")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let coordinator_json: serde_json::Value = serde_json::from_slice(&coordinator_output).unwrap();
+    let coordinator_context = coordinator_json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(coordinator_context.contains("WT INBOX for agents/coord-a: 1 new message"));
+    assert!(coordinator_context.contains("Agent Completion Report: Summary=done"));
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "task",
+            "review",
+            "run-smoke",
+            "--accept",
+            "accepted",
+            "for",
+            "landing",
+        ])
+        .env("WT_AGENT_ID", "agents/coord-a")
+        .assert()
+        .success();
+
+    let task_run: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&task_run_path).unwrap()).unwrap();
+    assert_eq!(task_run["last_review_status"].as_str(), Some("accepted"));
+    assert!(task_run["last_review_message_id"].as_str().is_some());
+    assert!(task_run["last_reviewed_at"].as_str().is_some());
+
+    let task_agent_output = wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .env("WT_AGENT_ID", "agents/run-1-smoke")
+        .env("WT_TASK_RUN_ID", "run-smoke")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task_agent_json: serde_json::Value = serde_json::from_slice(&task_agent_output).unwrap();
+    let task_agent_context = task_agent_json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(task_agent_context.contains("WT INBOX for agents/run-1-smoke: 1 new message"));
+    assert!(task_agent_context.contains("scope: task_run:run-smoke"));
+    assert!(
+        task_agent_context
+            .contains("Coordinator Review: Status=accepted; Message=accepted for landing")
+    );
+
+    let task_inbox = temp
+        .path()
+        .join(".git/wt/messages/agents/run-1-smoke/inbox");
+    assert!(toml_files(&task_inbox.join("new")).is_empty());
+    assert_eq!(toml_files(&task_inbox.join("delivered")).len(), 1);
+}
+
+#[test]
+fn msg_check_inbox_requires_runtime_task_run_binding_for_review_scope() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-review",
+        "review",
+        "review",
+        "running",
+        "",
+        (Some("agents/run-1-review"), Some("agents/coord-a")),
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "task",
+            "review",
+            "run-review",
+            "--block",
+            "waiting",
+            "on",
+            "approval",
+        ])
+        .env("WT_AGENT_ID", "agents/coord-a")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/run-1-review",
+        ])
+        .env("WT_TASK_RUN_ID", "run-review")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let inbox = temp
+        .path()
+        .join(".git/wt/messages/agents/run-1-review/inbox");
+    assert_eq!(toml_files(&inbox.join("new")).len(), 1);
+    assert!(!inbox.join("delivered").exists());
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/run-1-review",
+        ])
+        .env("WT_AGENT_ID", "agents/run-1-review")
+        .env("WT_TASK_RUN_ID", "run-review")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("scope: task_run:run-review"));
+    assert!(context.contains("Coordinator Review: Status=blocked; Message=waiting on approval"));
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert_eq!(toml_files(&inbox.join("delivered")).len(), 1);
+}
+
+#[test]
+fn msg_check_inbox_rejects_invalid_runtime_agent_env() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-review",
+        "review",
+        "review",
+        "running",
+        "",
+        (Some("agents/run-1-review"), Some("agents/coord-a")),
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/run-1-review",
+        ])
+        .env("WT_AGENT_ID", "agents/team/coord")
+        .env("WT_TASK_RUN_ID", "run-review")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid WT_AGENT_ID"));
 }
 
 #[test]
@@ -4855,6 +5102,55 @@ fn inspect_explicit_branch_prints_dossier_without_cmux_contact() {
         .stdout(predicate::str::contains("Expected report"))
         .stdout(predicate::str::contains("PR=<pr>"))
         .stderr(predicate::str::contains("Cmux:"));
+}
+
+#[test]
+fn inspect_prints_task_run_route_report_and_review_state() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let branch = current_branch(temp.path());
+    let tasks_dir = temp.path().join(".git/wt/tasks");
+    std::fs::create_dir_all(&tasks_dir).unwrap();
+    std::fs::write(
+        tasks_dir.join("inspect.toml"),
+        format!("title = \"Inspect\"\nbranch = \"{branch}\"\n"),
+    )
+    .unwrap();
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-inspect",
+        "inspect",
+        &branch,
+        "running",
+        "",
+        (Some("agents/run-1-inspect"), Some("agents/coord-a")),
+    );
+    let task_run_path = temp.path().join(".git/wt/task-runs/run-inspect.toml");
+    let mut task_run = std::fs::read_to_string(&task_run_path).unwrap();
+    task_run.push_str(
+        "coordinator_label = \"Coordinator\"\nlast_report_message_id = \"msg_report\"\nlast_reported_at = \"2026-05-18T00:01:00.000000000Z\"\nlast_review_status = \"accepted\"\nlast_review_message_id = \"msg_review\"\nlast_reviewed_at = \"2026-05-18T00:02:00.000000000Z\"\n",
+    );
+    std::fs::write(&task_run_path, task_run).unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "inspect",
+            "run-inspect",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "TaskRun route: task_agent=agents/run-1-inspect, coordinator=agents/coord-a, coordinator_label=Coordinator",
+        ))
+        .stdout(predicate::str::contains(
+            "TaskRun report: message=msg_report, reported_at=2026-05-18T00:01:00.000000000Z",
+        ))
+        .stdout(predicate::str::contains(
+            "TaskRun review: status=accepted, message=msg_review, reviewed_at=2026-05-18T00:02:00.000000000Z",
+        ));
 }
 
 #[test]

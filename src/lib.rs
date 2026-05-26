@@ -103,6 +103,21 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             }
             TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
             TaskCommand::Report { message } => commands::task_report::run(ctx, message),
+            TaskCommand::Review {
+                task_run_id,
+                accept,
+                reject,
+                block,
+                message,
+            } => {
+                let status = match (*accept, *reject, *block) {
+                    (true, false, false) => task_run::REVIEW_ACCEPTED,
+                    (false, true, false) => task_run::REVIEW_REJECTED,
+                    (false, false, true) => task_run::REVIEW_BLOCKED,
+                    _ => bail!("Pass exactly one of --accept, --reject, or --block"),
+                };
+                commands::task_review::run(ctx, task_run_id, status, message)
+            }
         },
         Commands::Workflow { command } => match command {
             WorkflowCommand::List => commands::workflow::list(ctx),

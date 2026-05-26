@@ -1,4 +1,4 @@
-use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, ArgGroup, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 const ROOT_HELP_TEMPLATE: &str = "\
@@ -289,7 +289,7 @@ pub enum Commands {
     },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to agents/<agent> <message>` as a low-level explicit inbox write. Task completion should use `wt task report <message>`, which derives direct or workflow scope from the current TaskRun. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --agent <agent> --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent falls back to WT_AGENT_ID. `wt msg check-inbox --silent` is an internal hook consumer for the WT_AGENT_ID inbox; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to agents/<agent> <message>` as a low-level explicit inbox write. Task completion should use `wt task report <message>`, which derives direct or workflow scope from the current TaskRun; coordinator feedback should use `wt task review <task-run-id> --accept|--reject|--block <message>`, which sends task_run:<id> scope to the recorded task agent. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --agent <agent> --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent falls back to WT_AGENT_ID. `wt msg check-inbox --silent` is an internal hook consumer for the WT_AGENT_ID inbox; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages and authorized workflow/task_run scoped messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -583,7 +583,7 @@ pub enum AgentSupervisorCommand {
 pub enum MsgCommand {
     /// Write one message to an agent inbox
     #[command(
-        long_about = "Write one message to an explicit agent inbox.\n\nUnscoped sends use the direct/default scope. Prefer `wt task report <message>` for TaskRun completion reports; use explicit `--scope workflow:<id>`, `--scope task_run:<id>`, or `--scope repo` only as low-level escape hatches."
+        long_about = "Write one message to an explicit agent inbox.\n\nUnscoped sends use the direct/default scope. Prefer `wt task report <message>` for TaskRun completion reports and `wt task review <task-run-id> --accept|--reject|--block <message>` for coordinator review feedback; use explicit `--scope workflow:<id>`, `--scope task_run:<id>`, or `--scope repo` only as low-level escape hatches."
     )]
     Send {
         /// Target agent id as NAME or agents/NAME
@@ -801,6 +801,28 @@ pub enum TaskCommand {
     )]
     Report {
         /// Report message to send
+        #[arg(value_name = "MESSAGE", num_args = 1..)]
+        message: Vec<String>,
+    },
+    /// Send coordinator review feedback to a TaskRun agent
+    #[command(
+        long_about = "Send coordinator review feedback to the task agent recorded on a TaskRun.\n\nUse `wt task review <task-run-id> --accept <message>` to accept a report, `--reject` to request changes, or `--block` when the task cannot proceed. Feedback is sent through the file inbox to TaskRun.agent_id with task_run:<id> scope and updates TaskRun review metadata.",
+        group(ArgGroup::new("review_status").required(true).args(["accept", "reject", "block"]))
+    )]
+    Review {
+        /// TaskRun id to review
+        #[arg(value_name = "TASK_RUN_ID")]
+        task_run_id: String,
+        /// Accept the TaskRun report
+        #[arg(long)]
+        accept: bool,
+        /// Reject the TaskRun report and ask for changes
+        #[arg(long)]
+        reject: bool,
+        /// Block the TaskRun on missing input or external state
+        #[arg(long)]
+        block: bool,
+        /// Review feedback message to send
         #[arg(value_name = "MESSAGE", num_args = 1..)]
         message: Vec<String>,
     },

@@ -306,12 +306,20 @@ merge.
   coordinator reports, `--scope task_run:<id>` for TaskRun-owned delivery, and
   `--scope repo` for repo-local singleton delivery. Workflow and TaskRun
   ownership belong in explicit message scope metadata, not in `correlates_with`.
+- `wt task review <task-run-id> --accept|--reject|--block <message>` sends
+  coordinator feedback to the task agent recorded on that TaskRun with
+  `task_run:<id>` scope and records review metadata on the TaskRun.
+- File-inbox senders may best-effort wake the recipient after the message is
+  durably written: if the recipient resolves to an idle live TaskRun or session
+  marker, `wt` nudges that surface to check its inbox. This is internal delivery
+  help, not a separate user-facing command or message lifecycle.
 - `wt msg check-inbox` is the hook-compatible consumer. With no `--agent`, it
   checks the inbox id from `WT_AGENT_ID`; `--agent <agent>` is an explicit
   single-inbox override. It claims deliverable direct-scope messages from
-  `inbox/new` or eligible `inbox/retry`, emits hook JSON, and acknowledges them
-  into `inbox/delivered` after stdout is written; it is not a separate
-  unread/read lifecycle.
+  `inbox/new` or eligible `inbox/retry`; task-run scoped feedback is deliverable
+  only when `WT_AGENT_ID` and `WT_TASK_RUN_ID` match the scoped TaskRun. Claimed
+  messages emit hook JSON and are acknowledged into `inbox/delivered` after
+  stdout is written; this is not a separate unread/read lifecycle.
 - `wt msg list --agent <agent>` is the read-only lifecycle inventory. It counts
   and summarizes `new`, `claimed`, `delivered`, `retry`, and `failed` messages,
   including claim owner, lease, attempts, scope, and error metadata when present.
@@ -333,10 +341,10 @@ handoff instructions. The normal report route is:
 wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>"
 ```
 
-`wt task report` uses the current TaskRun's stored coordinator route and applies
-direct or workflow scope automatically. Prompts also include fallback cmux
-coordinates with a `cmux send --workspace ... --surface ...` report command and
-a matching `cmux send-key ... enter` command.
+`wt task report` uses the current running TaskRun's stored coordinator route and
+applies direct or workflow scope from TaskRun state automatically. Prompts also
+include fallback cmux coordinates with a `cmux send --workspace ... --surface ...`
+report command and a matching `cmux send-key ... enter` command.
 
 Low-level `wt msg send --to agents/<id> ...` remains an explicit file-inbox
 escape hatch. Workflow ownership belongs in message scope or TaskRun routing
@@ -349,6 +357,16 @@ for their task:
 ```text
 Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>
 ```
+
+Coordinators send canonical task-agent feedback with:
+
+```bash
+wt task review <task-run-id> --accept|--reject|--block "<message>"
+```
+
+The feedback is addressed to the TaskRun's stored task-agent route with
+`task_run:<id>` scope, and updates the TaskRun's latest review status, message
+id, and timestamp.
 
 Immediate `wt run task` work reports `PR=none`. Workflow tasks follow the
 prepared workflow policy. Omit `--pr` to use the effective `[workflow]`
