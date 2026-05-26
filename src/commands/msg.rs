@@ -148,22 +148,44 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
 
 fn authorized_inbox_scopes(ctx: &Ctx, agent: &str) -> Result<Vec<MessageScope>> {
     let agent = AgentId::parse(agent)?;
+    let runtime_agent = env_agent_id("WT_AGENT_ID").unwrap_or(None);
+    let runtime_task_run_id = env_task_run_id().unwrap_or(None);
     let mut scopes = Vec::new();
     for record in task_run::list(ctx)? {
-        let Some(coordinator_id) = record.run.coordinator_id.as_deref() else {
-            continue;
-        };
-        let Ok(coordinator) = AgentId::parse(coordinator_id) else {
-            continue;
-        };
-        if coordinator.as_str() != agent.as_str() {
-            continue;
-        }
-        if let TaskRunContext::WorkflowLinked(context) = task_run::resolve_context(ctx, &record)? {
+        if let Some(coordinator_id) = record.run.coordinator_id.as_deref()
+            && let Ok(coordinator) = AgentId::parse(coordinator_id)
+            && coordinator.as_str() == agent.as_str()
+            && let TaskRunContext::WorkflowLinked(context) =
+                task_run::resolve_context(ctx, &record)?
+        {
             push_unique_scope(&mut scopes, MessageScope::workflow(context.workflow_id)?);
+        }
+        if task_run_scope_is_owned_by_runtime_agent(
+            &record,
+            &agent,
+            runtime_agent.as_ref(),
+            runtime_task_run_id.as_deref(),
+        ) {
+            push_unique_scope(&mut scopes, MessageScope::task_run(record.id.clone())?);
         }
     }
     Ok(scopes)
+}
+
+fn task_run_scope_is_owned_by_runtime_agent(
+    record: &task_run::TaskRunRecord,
+    inbox_agent: &AgentId,
+    runtime_agent: Option<&AgentId>,
+    runtime_task_run_id: Option<&str>,
+) -> bool {
+    runtime_agent.map(AgentId::as_str) == Some(inbox_agent.as_str())
+        && runtime_task_run_id == Some(record.id.as_str())
+        && record
+            .run
+            .agent_id
+            .as_deref()
+            .and_then(|id| AgentId::parse(id).ok())
+            .is_some_and(|task_agent| task_agent.as_str() == inbox_agent.as_str())
 }
 
 fn push_unique_scope(scopes: &mut Vec<MessageScope>, scope: MessageScope) {
@@ -270,6 +292,14 @@ fn env_agent_id(name: &str) -> Result<Option<AgentId>> {
         }
         Err(env::VarError::NotPresent) => Ok(None),
         Err(env::VarError::NotUnicode(_)) => bail!("Invalid {name}: value is not Unicode"),
+    }
+}
+
+fn env_task_run_id() -> Result<Option<String>> {
+    match env::var("WT_TASK_RUN_ID") {
+        Ok(value) => Ok((!value.trim().is_empty()).then(|| value.trim().to_string())),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => bail!("Invalid WT_TASK_RUN_ID: value is not Unicode"),
     }
 }
 

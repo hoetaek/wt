@@ -248,8 +248,31 @@ struct InspectTaskRunReport {
     context: String,
     group: Option<String>,
     error: Option<String>,
+    route: InspectTaskRunRouteReport,
+    report: InspectTaskRunReportState,
+    review: InspectTaskRunReviewState,
     task_path: String,
     task_title: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectTaskRunRouteReport {
+    agent_id: Option<String>,
+    coordinator_id: Option<String>,
+    coordinator_label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectTaskRunReportState {
+    last_message_id: Option<String>,
+    last_reported_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectTaskRunReviewState {
+    last_status: Option<String>,
+    last_message_id: Option<String>,
+    last_reviewed_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -410,6 +433,23 @@ fn inspect_task_run_report(
         context,
         group: record.run.group.clone(),
         error: record.run.error.clone(),
+        route: InspectTaskRunRouteReport {
+            agent_id: record.run.agent_id.clone(),
+            coordinator_id: record.run.coordinator_id.clone(),
+            coordinator_label: record.run.coordinator_label.clone(),
+        },
+        report: InspectTaskRunReportState {
+            last_message_id: record.run.last_report_message_id.clone(),
+            last_reported_at: record.run.last_reported_at.clone(),
+        },
+        review: InspectTaskRunReviewState {
+            last_status: record
+                .run
+                .last_review_status
+                .map(|status| status.as_str().into()),
+            last_message_id: record.run.last_review_message_id.clone(),
+            last_reviewed_at: record.run.last_reviewed_at.clone(),
+        },
         task_path,
         task_title,
     })
@@ -555,6 +595,9 @@ fn print_task_run(ctx: &Ctx, record: &task_run::TaskRunRecord) -> Result<()> {
     if let Some(error) = record.run.error.as_deref() {
         ctx.ui.print_warning(&format!("  TaskRun error: {error}"));
     }
+    print_task_run_route(ctx, record);
+    print_task_run_report_state(ctx, record);
+    print_task_run_review_state(ctx, record);
 
     match task::read_task_document(ctx, &record.run.task) {
         Ok(document) => ctx.ui.print_dim(&format!(
@@ -569,6 +612,53 @@ fn print_task_run(ctx: &Ctx, record: &task_run::TaskRunRecord) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_task_run_route(ctx: &Ctx, record: &task_run::TaskRunRecord) {
+    let task_agent = record.run.agent_id.as_deref().unwrap_or("missing");
+    let coordinator = record.run.coordinator_id.as_deref().unwrap_or("missing");
+    let label = record
+        .run
+        .coordinator_label
+        .as_deref()
+        .map(|label| format!(", coordinator_label={label}"))
+        .unwrap_or_default();
+    ctx.ui.print_dim(&format!(
+        "  TaskRun route: task_agent={task_agent}, coordinator={coordinator}{label}"
+    ));
+}
+
+fn print_task_run_report_state(ctx: &Ctx, record: &task_run::TaskRunRecord) {
+    match (
+        record.run.last_report_message_id.as_deref(),
+        record.run.last_reported_at.as_deref(),
+    ) {
+        (Some(message_id), Some(reported_at)) => ctx.ui.print_dim(&format!(
+            "  TaskRun report: message={message_id}, reported_at={reported_at}"
+        )),
+        (Some(message_id), None) => ctx.ui.print_dim(&format!(
+            "  TaskRun report: message={message_id}, reported_at=missing"
+        )),
+        _ => ctx.ui.print_dim("  TaskRun report: not reported"),
+    }
+}
+
+fn print_task_run_review_state(ctx: &Ctx, record: &task_run::TaskRunRecord) {
+    match (
+        record.run.last_review_status,
+        record.run.last_review_message_id.as_deref(),
+        record.run.last_reviewed_at.as_deref(),
+    ) {
+        (Some(status), Some(message_id), Some(reviewed_at)) => ctx.ui.print_dim(&format!(
+            "  TaskRun review: status={status}, message={message_id}, reviewed_at={reviewed_at}"
+        )),
+        (Some(status), message_id, reviewed_at) => ctx.ui.print_dim(&format!(
+            "  TaskRun review: status={status}, message={}, reviewed_at={}",
+            message_id.unwrap_or("missing"),
+            reviewed_at.unwrap_or("missing")
+        )),
+        _ => ctx.ui.print_dim("  TaskRun review: not reviewed"),
+    }
 }
 
 fn print_worktree_status(ctx: &Ctx, status: Option<&str>) {
@@ -1109,6 +1199,9 @@ run = "run-unrelated"
         assert!(dims.contains("Agent Completion Report"));
         assert!(dims.contains("PR=<pr>"));
         assert!(dims.contains("TaskRun: run-feature"));
+        assert!(dims.contains("TaskRun route: task_agent=missing, coordinator=missing"));
+        assert!(dims.contains("TaskRun report: not reported"));
+        assert!(dims.contains("TaskRun review: not reviewed"));
         assert!(dims.contains("Task: <git-common-dir>/wt/tasks/feature.toml (Feature)"));
         assert!(dims.contains("Workflow: Ship feature workflow"));
         assert!(dims.contains("id=2026-05-17-001"));
