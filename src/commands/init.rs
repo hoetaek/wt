@@ -2888,6 +2888,27 @@ mod tests {
     }
 
     #[test]
+    fn init_allows_local_directory_without_legacy_wt_state() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".local/cache")).unwrap();
+        std::fs::write(dir.path().join(".local/README"), "project-local files\n").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let config = Config::load_file(&dir.path().join(".git/wt/config/local.toml")).unwrap();
+        assert_eq!(config.worktree.link, vec![".local"]);
+        assert!(dir.path().join(".git/wt/execution").is_dir());
+    }
+
+    #[test]
     fn init_recommendation_plan_records_target_mode_and_sections() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_for_dir(&dir);

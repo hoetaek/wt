@@ -142,14 +142,13 @@ impl StorageRoot {
 
     pub fn detect_legacy_local(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
         let path = repo_root.as_ref().join(".local");
-        if path.is_dir() {
-            Some(LegacyLocalStorage {
-                path,
-                canonical_root: self.personal_root.clone(),
-            })
-        } else {
-            None
+        if !path.is_dir() || !legacy_local_contains_wt_state(&path) {
+            return None;
         }
+        Some(LegacyLocalStorage {
+            path,
+            canonical_root: self.personal_root.clone(),
+        })
     }
 
     pub fn detect_legacy_config(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
@@ -306,6 +305,22 @@ pub(crate) fn normalize_path_lexically(path: &Path) -> PathBuf {
         }
     }
     normalized
+}
+
+fn legacy_local_contains_wt_state(path: &Path) -> bool {
+    path.join(".wt.toml").is_file()
+        || [
+            "profiles",
+            "ideas",
+            "specs",
+            "retrospectives",
+            "tasks",
+            "workflows",
+            "task-runs",
+            "archive",
+        ]
+        .iter()
+        .any(|child| path.join(child).is_dir())
 }
 
 fn command_error(stdout: &str, stderr: &str) -> String {
@@ -468,7 +483,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let repo = temp.path().join("repo");
         fs::create_dir(&repo).unwrap();
-        fs::create_dir(repo.join(".local")).unwrap();
+        fs::create_dir_all(repo.join(".local/tasks")).unwrap();
         let storage = StorageRoot::from_git_common_dir(repo.join(".git"));
 
         let legacy = storage.detect_legacy_local(&repo).unwrap();
@@ -483,12 +498,16 @@ mod tests {
     }
 
     #[test]
-    fn ignores_missing_legacy_local_storage() {
+    fn ignores_missing_or_non_wt_legacy_local_storage() {
         let temp = TempDir::new().unwrap();
         let repo = temp.path().join("repo");
         fs::create_dir(&repo).unwrap();
         let storage = StorageRoot::from_git_common_dir(repo.join(".git"));
 
+        assert_eq!(storage.detect_legacy_local(&repo), None);
+        fs::create_dir(repo.join(".local")).unwrap();
+        fs::create_dir(repo.join(".local/cache")).unwrap();
+        fs::write(repo.join(".local/README"), "project-local files\n").unwrap();
         assert_eq!(storage.detect_legacy_local(&repo), None);
     }
 
