@@ -1,16 +1,23 @@
-use crate::cli::{InitAgent, InitIssueProvider, InitPreset, InitSiteProvider};
-use crate::config::{AgentCli, AgentConfig, Config, ReadyMode, SubmitMode};
-use crate::context::Ctx;
+use crate::cli::{InitAgent, InitIssueProvider, InitSiteProvider};
+use crate::config::{
+    AgentCli, AgentConfig, Config, CopyAsEntry, ReadyMode, SubmitMode, WORKSPACE_DEFAULT_COLORS,
+    WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
+    WorkspaceBrowserMode,
+};
+use crate::context::{Ctx, PromptItem};
 use crate::error::WtError;
-use anyhow::{Result, bail};
+use crate::storage::StorageRoot;
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
+
+const CLAUDE_LOCAL_SETTINGS_PATH: &str = ".claude/settings.local.json";
+const CLAUDE_ALLOW_RULES: [&str; 2] = ["Edit(/.git/wt/**)", "Write(/.git/wt/**)"];
+const DEFAULT_INJECT_LOCAL_CONTEXT: &str = "## Local context\n- site: {{site_url}}\n- worktree: {{worktree_path}}\n- parent: {{parent_branch}}\n";
 
 #[derive(Debug, Default)]
 pub struct InitOptions {
     pub local: bool,
     pub shared: bool,
-    pub preset: Option<InitPreset>,
-    pub minimal: bool,
     pub agent: Option<InitAgent>,
     pub agent_args: Vec<String>,
     pub agent_command: Option<String>,
@@ -34,7 +41,7 @@ struct InitTarget {
     kind: InitTargetKind,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct InitProfile {
     agent: AgentConfig,
 }
@@ -44,8 +51,8 @@ struct InitPlan {
     target_path: PathBuf,
     target_kind: InitTargetKind,
     target_exists: bool,
-    preset: InitPreset,
     sections: Vec<InitSection>,
+    #[cfg(test)]
     detected_signals: Vec<String>,
     notices: Vec<InitNotice>,
     content: String,
@@ -67,12 +74,16 @@ enum InitNoticeLevel {
 enum InitSection {
     Issues,
     Site,
+    Workflow,
     ProfileAgent,
+    ProfileAgentPrompt,
     Worktree,
+    WorktreeNaming,
     Setup,
     Editor,
     Test,
     Workspace,
+    WorkspaceBrowser,
 }
 
 impl InitSection {
@@ -80,24 +91,60 @@ impl InitSection {
         match self {
             InitSection::Issues => "issues",
             InitSection::Site => "site",
+            InitSection::Workflow => "workflow",
             InitSection::ProfileAgent => "profile.agent",
+            InitSection::ProfileAgentPrompt => "profile.agent.prompt",
             InitSection::Worktree => "worktree",
+            InitSection::WorktreeNaming => "worktree.naming",
             InitSection::Setup => "setup",
             InitSection::Editor => "editor",
             InitSection::Test => "test",
             InitSection::Workspace => "workspace",
+            InitSection::WorkspaceBrowser => "workspace.browser",
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Default)]
 struct InitCommonConfig {
     worktree_path: Option<String>,
+    worktree_copy: Vec<String>,
+    worktree_copy_as: Vec<CopyAsEntry>,
+    worktree_link: Vec<String>,
+    inject_local_context: Option<String>,
+    worktree_naming: bool,
     setup_deps: Vec<InitCommand>,
     editor_command: Option<String>,
     test_commands: Vec<InitCommand>,
     workspace_tabs: Vec<String>,
     post_deps_tabs: Vec<String>,
+    workspace_colors: Vec<(String, String)>,
+    workspace_browser: Option<InitWorkspaceBrowser>,
+}
+
+#[derive(Debug, Clone)]
+struct InitWorkspaceBrowser {
+    mode: InitWorkspaceBrowserMode,
+    url: Option<String>,
+    app: Option<String>,
+    chrome_devtools_user_data_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitWorkspaceBrowserMode {
+    System,
+    ChromeDevtools,
+}
+
+#[derive(Debug, Clone, Default)]
+struct InitDefaults {
+    from_existing_config: bool,
+    agent: Option<AgentConfig>,
+    workflow_policy: Option<WorkflowDefaultPolicy>,
+    issue_provider: Option<InitIssueProvider>,
+    gh_user: Option<String>,
+    site_provider: Option<InitSiteProvider>,
+    common: Option<InitCommonConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +168,10 @@ struct DetectedRepo {
     setup_deps: Vec<InitCommand>,
     post_deps_tabs: Vec<String>,
     test_commands: Vec<InitCommand>,
+    issue_provider: Option<InitIssueProvider>,
+    site_provider: Option<InitSiteProvider>,
+    has_env_file: bool,
+    local_links: Vec<String>,
 }
 
 impl DetectedRepo {
@@ -129,11 +180,34 @@ impl DetectedRepo {
             setup_deps: detect_setup_deps(repo_root),
             post_deps_tabs: detect_post_deps_tabs(repo_root),
             test_commands: detect_test_commands(repo_root),
+            issue_provider: detect_issue_provider(repo_root),
+            site_provider: detect_site_provider(repo_root),
+            has_env_file: repo_root.join(".env").exists(),
+            local_links: detect_local_links(repo_root),
         }
     }
 
+    #[cfg(test)]
     fn signals(&self) -> Vec<String> {
         let mut signals = Vec::new();
+        if self.has_env_file {
+            push_signal(&mut signals, "env: .env".into());
+        }
+        for link in &self.local_links {
+            push_signal(&mut signals, format!("local link: {link}"));
+        }
+        if let Some(provider) = &self.issue_provider {
+            push_signal(
+                &mut signals,
+                format!("issue provider: {}", issue_provider_name(provider)),
+            );
+        }
+        if let Some(provider) = &self.site_provider {
+            push_signal(
+                &mut signals,
+                format!("site provider: {}", site_provider_name(provider)),
+            );
+        }
         for command in &self.setup_deps {
             push_signal(&mut signals, format!("setup: {}", command_display(command)));
         }
@@ -147,15 +221,115 @@ impl DetectedRepo {
     }
 }
 
-impl Default for InitCommonConfig {
-    fn default() -> Self {
+impl InitCommonConfig {
+    fn from_config(config: &Config) -> Self {
+        let mut common = InitCommonConfig {
+            worktree_path: config.worktree.path.clone(),
+            worktree_copy: config.worktree.copy.clone(),
+            worktree_copy_as: config.worktree.copy_as.clone(),
+            worktree_link: config.worktree.link.clone(),
+            inject_local_context: config.worktree.inject_local_context.clone(),
+            worktree_naming: config.worktree.naming.is_some(),
+            setup_deps: config
+                .setup
+                .deps
+                .iter()
+                .map(|command| InitCommand {
+                    label: None,
+                    working_dir: command.working_dir.clone(),
+                    run: command.run.clone(),
+                    if_exists: command.if_exists.clone(),
+                    kind: InitCommandKind::Other,
+                    default_enabled: true,
+                })
+                .collect(),
+            editor_command: config.editor.command.clone(),
+            test_commands: config
+                .test
+                .as_ref()
+                .map(|test| {
+                    test.commands
+                        .iter()
+                        .map(|command| InitCommand {
+                            label: command.label.clone(),
+                            working_dir: command.working_dir.clone(),
+                            run: command.run.clone(),
+                            if_exists: command.if_exists.clone(),
+                            kind: InitCommandKind::Other,
+                            default_enabled: true,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            ..InitCommonConfig::default()
+        };
+
+        if let Some(workspace) = config.workspace.as_ref() {
+            common.workspace_tabs = workspace.tabs.clone();
+            common.post_deps_tabs = workspace.post_deps_tabs.clone();
+            common.workspace_colors = workspace
+                .effective_colors()
+                .into_iter()
+                .map(|(kind, color)| (kind.to_string(), color.to_string()))
+                .collect();
+            common.workspace_browser = workspace.browser.as_ref().and_then(|browser| {
+                let mode = match browser.mode {
+                    WorkspaceBrowserMode::None => return None,
+                    WorkspaceBrowserMode::System => InitWorkspaceBrowserMode::System,
+                    WorkspaceBrowserMode::ChromeDevtools => {
+                        InitWorkspaceBrowserMode::ChromeDevtools
+                    }
+                };
+                Some(InitWorkspaceBrowser {
+                    mode,
+                    url: browser.url.clone(),
+                    app: browser.app.clone(),
+                    chrome_devtools_user_data_dir: workspace
+                        .chrome_devtools
+                        .as_ref()
+                        .and_then(|chrome| chrome.user_data_dir.clone()),
+                })
+            });
+        }
+
+        common
+    }
+}
+
+impl InitDefaults {
+    fn from_config(config: Config) -> Self {
+        let workflow_policy = (config.workflow.pull_request.is_some()
+            || config.workflow.landing.is_some())
+        .then(|| config.workflow_default_policy());
+        let agent = config
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.agent.clone())
+            .or_else(|| config.agent.clone());
+        let issue_provider = config.issues.as_ref().map(|issues| match &issues.provider {
+            crate::config::IssueProviderType::Github => InitIssueProvider::Github,
+            crate::config::IssueProviderType::Linear => InitIssueProvider::Linear,
+        });
+        let site_provider = config.site.as_ref().map(|site| match &site.provider {
+            crate::config::SiteProvider::None => InitSiteProvider::None,
+            crate::config::SiteProvider::Herd => InitSiteProvider::Herd,
+            crate::config::SiteProvider::Valet => InitSiteProvider::Valet,
+            crate::config::SiteProvider::DockerProxy => InitSiteProvider::DockerProxy,
+            crate::config::SiteProvider::Traefik => InitSiteProvider::Traefik,
+        });
+        let gh_user = config
+            .issues
+            .as_ref()
+            .and_then(|issues| issues.gh_user.clone());
+        let common = InitCommonConfig::from_config(&config);
         Self {
-            worktree_path: None,
-            setup_deps: Vec::new(),
-            editor_command: None,
-            test_commands: Vec::new(),
-            workspace_tabs: vec!["lazygit".into(), "nvim".into()],
-            post_deps_tabs: Vec::new(),
+            from_existing_config: true,
+            agent,
+            workflow_policy,
+            issue_provider,
+            gh_user,
+            site_provider,
+            common: Some(common),
         }
     }
 }
@@ -165,11 +339,16 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     let interactive_wizard = is_interactive_wizard(&options);
     if interactive_wizard {
         print_wizard_header(ctx);
-        print_wizard_step(ctx, 1, "Repository");
+        print_wizard_step(
+            ctx,
+            1,
+            "설정 파일 위치",
+            "- 개인 설정 파일: <git-common-dir>/wt/config.toml (보통 .git/wt/config.toml)\n- 팀 공유 설정: ./.wt.toml",
+        );
     }
     let target = resolve_target(ctx, &options)?;
     let plan = build_plan(ctx, &options, target)?;
-    if plan.target_exists {
+    if plan.target_exists && options.yes && !options.dry_run {
         print_existing_target_warning(ctx, &plan, &options);
     }
 
@@ -180,7 +359,7 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
 
     if plan.target_exists && options.yes && !options.force {
         bail!(
-            "Config already exists: {} (use --force to overwrite)",
+            "설정 파일이 이미 있습니다: {} (--force로 덮어쓸 수 있습니다)",
             plan.target_path.display()
         );
     }
@@ -189,13 +368,18 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
         print_plan(ctx, &plan, interactive_wizard);
     }
     let confirm_prompt = if plan.target_exists {
-        "Overwrite config?"
+        "기존 설정을 덮어쓸까요?"
     } else {
-        "Create config?"
+        "설정을 생성할까요?"
     };
     let confirm_default = !plan.target_exists;
     if interactive_wizard {
-        print_wizard_step(ctx, 6, "Confirmation");
+        print_wizard_step(
+            ctx,
+            5,
+            "쓰기 확인",
+            "지금 설정 파일에 쓸지 확인합니다. 취소하면 파일은 바뀌지 않습니다.",
+        );
     }
     if !options.yes && !ctx.ui.confirm(confirm_prompt, confirm_default)? {
         return Err(WtError::Cancelled.into());
@@ -206,13 +390,180 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     }
     std::fs::write(&plan.target_path, &plan.content)?;
     let action = if plan.target_exists {
-        "Updated config"
+        "설정 업데이트됨"
     } else {
-        "Created config"
+        "설정 생성됨"
     };
     ctx.ui
         .print_step(&format!("{action}: {}", plan.target_path.display()));
 
+    bootstrap_core_dirs(&ctx.storage_root)?;
+    maybe_scaffold_claude_allow_rules(ctx, &options)?;
+
+    Ok(())
+}
+
+fn load_init_defaults(path: &Path) -> InitDefaults {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return InitDefaults::default();
+    };
+    let Ok(config) = toml::from_str::<Config>(&content) else {
+        return InitDefaults::default();
+    };
+    InitDefaults::from_config(config)
+}
+
+fn bootstrap_core_dirs(storage_root: &StorageRoot) -> Result<()> {
+    for dir in core_state_dirs(storage_root) {
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("Failed to create wt core state dir: {}", dir.display()))?;
+    }
+    Ok(())
+}
+
+fn core_state_dirs(storage_root: &StorageRoot) -> Vec<PathBuf> {
+    vec![
+        storage_root.tasks_dir(),
+        storage_root.messages_dir(),
+        storage_root.task_runs_dir(),
+        storage_root.agent_state_dir(),
+        storage_root.worktrees_dir(),
+    ]
+}
+
+fn maybe_scaffold_claude_allow_rules(ctx: &Ctx, options: &InitOptions) -> Result<()> {
+    if options.yes {
+        return Ok(());
+    }
+
+    if !ctx.ui.confirm(
+        "Claude가 .git/wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?",
+        false,
+    )? {
+        return Ok(());
+    }
+
+    let path = ctx.repo_root.join(CLAUDE_LOCAL_SETTINGS_PATH);
+    merge_claude_allow_rules(&path)?;
+    ctx.ui.print_step(&format!(
+        "Claude local settings 업데이트됨: {}",
+        path.display()
+    ));
+    Ok(())
+}
+
+fn merge_claude_allow_rules(path: &Path) -> Result<()> {
+    let mut settings = read_claude_local_settings(path)?;
+    merge_allow_rules_into_settings(&mut settings)?;
+    write_claude_local_settings(path, &settings)
+}
+
+fn read_claude_local_settings(path: &Path) -> Result<serde_json::Value> {
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read Claude local settings: {}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(&content).with_context(|| {
+        format!(
+            "Failed to parse Claude local settings JSON: {}",
+            path.display()
+        )
+    })
+}
+
+fn write_claude_local_settings(path: &Path, settings: &serde_json::Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create Claude local settings dir: {}",
+                parent.display()
+            )
+        })?;
+    }
+    let rendered = serde_json::to_string_pretty(settings)?;
+    std::fs::write(path, format!("{rendered}\n"))
+        .with_context(|| format!("Failed to write Claude local settings: {}", path.display()))
+}
+
+fn merge_allow_rules_into_settings(settings: &mut serde_json::Value) -> Result<()> {
+    let Some(root) = settings.as_object_mut() else {
+        bail!("Cannot update Claude local settings: root value must be a JSON object.");
+    };
+
+    let permissions_value = root
+        .entry("permissions")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let Some(permissions) = permissions_value.as_object_mut() else {
+        bail!("Cannot update Claude local settings: `permissions` must be a JSON object.");
+    };
+
+    if let Some(allow) = permissions.get("allow")
+        && !allow.is_array()
+    {
+        bail!("Cannot update Claude local settings: `permissions.allow` must be a JSON array.");
+    }
+    permissions
+        .entry("allow")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+
+    let legacy_allowed = match root.get("allowed") {
+        Some(serde_json::Value::Array(_)) => match root.remove("allowed") {
+            Some(serde_json::Value::Array(values)) => values,
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+
+    let permissions = root
+        .get_mut("permissions")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("permissions object was validated");
+    let allowed = permissions
+        .get_mut("allow")
+        .and_then(serde_json::Value::as_array_mut)
+        .expect("permissions.allow array was validated");
+
+    let mut seen_wt_rules = std::collections::BTreeSet::new();
+    let existing = std::mem::take(allowed);
+    let mut deduped =
+        Vec::with_capacity(existing.len() + legacy_allowed.len() + CLAUDE_ALLOW_RULES.len());
+    for item in existing {
+        if let Some(rule) = item.as_str()
+            && CLAUDE_ALLOW_RULES.contains(&rule)
+        {
+            if seen_wt_rules.insert(rule.to_string()) {
+                deduped.push(serde_json::Value::String(rule.to_string()));
+            }
+            continue;
+        }
+        deduped.push(item);
+    }
+
+    for item in legacy_allowed {
+        if let Some(rule) = item.as_str()
+            && CLAUDE_ALLOW_RULES.contains(&rule)
+        {
+            if seen_wt_rules.insert(rule.to_string()) {
+                deduped.push(serde_json::Value::String(rule.to_string()));
+            }
+            continue;
+        }
+        if !deduped.iter().any(|existing| existing == &item) {
+            deduped.push(item);
+        }
+    }
+
+    for rule in CLAUDE_ALLOW_RULES {
+        if seen_wt_rules.insert(rule.to_string()) {
+            deduped.push(serde_json::Value::String(rule.to_string()));
+        }
+    }
+
+    *allowed = deduped;
     Ok(())
 }
 
@@ -223,16 +574,49 @@ fn is_interactive_wizard(options: &InitOptions) -> bool {
 fn print_wizard_header(ctx: &Ctx) {
     ctx.ui.print_step("wt init");
     ctx.ui
-        .print_dim("Workspace config starter for git worktree projects");
+        .print_dim("이 저장소에 맞는 git worktree 프로젝트 설정을 추천합니다.");
 }
 
-fn print_wizard_step(ctx: &Ctx, number: usize, title: &str) {
-    ctx.ui.print_step(&format!("Step {number}/6: {title}"));
+fn print_wizard_step(ctx: &Ctx, number: usize, title: &str, description: impl AsRef<str>) {
+    ctx.ui.print_dim("");
+    ctx.ui.print_step(&format!("단계 {number}/5: {title}"));
+    let description = description.as_ref();
+    if !description.is_empty() {
+        for line in description.lines() {
+            ctx.ui.print_dim(&format!("  {line}"));
+        }
+    }
+}
+
+fn integration_step_description(
+    options: &InitOptions,
+    detected: &DetectedRepo,
+    defaults: &InitDefaults,
+) -> &'static str {
+    if explicit_issue_provider(options.issue_provider.as_ref()).is_some()
+        || explicit_site_provider(options.site_provider.as_ref()).is_some()
+        || matches!(options.issue_provider, Some(InitIssueProvider::None))
+        || matches!(options.site_provider, Some(InitSiteProvider::None))
+    {
+        return "명시한 issue/site 옵션을 사용합니다. 이미 정한 선택은 다시 묻지 않습니다.";
+    }
+
+    if detected.issue_provider.is_some()
+        || detected.site_provider.is_some()
+        || defaults.issue_provider.is_some()
+        || defaults.site_provider.is_some()
+    {
+        return "이 저장소에서 찾은 issue 도구나 local site 설정을 쓸지 고릅니다.";
+    }
+
+    "이 저장소에서 issue 도구나 local site 설정을 찾지 못해 관련 section은 만들지 않습니다."
 }
 
 fn validate_options(options: &InitOptions) -> Result<()> {
-    if options.minimal && options.preset.is_some() {
-        bail!("--minimal cannot be used with --preset");
+    if matches!(options.agent, Some(InitAgent::None))
+        && (options.agent_command.is_some() || !options.agent_args.is_empty())
+    {
+        bail!("--agent-command and --agent-arg cannot be used when --agent none");
     }
     Ok(())
 }
@@ -240,7 +624,7 @@ fn validate_options(options: &InitOptions) -> Result<()> {
 fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     if options.local {
         return Ok(InitTarget {
-            path: ctx.repo_root.join(".local/.wt.toml"),
+            path: ctx.storage_root.config_toml(),
             kind: InitTargetKind::Local,
         });
     }
@@ -252,18 +636,21 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     }
     if options.yes {
         return Ok(InitTarget {
-            path: ctx.repo_root.join(".local/.wt.toml"),
+            path: ctx.storage_root.config_toml(),
             kind: InitTargetKind::Local,
         });
     }
 
     let items = vec![
-        "Private repo config (.local/.wt.toml)".into(),
-        "Shared project config (.wt.toml)".into(),
+        PromptItem::with_hint("개인 설정 파일", "보통 .git/wt/config.toml"),
+        PromptItem::with_hint("팀 공유 설정", "./.wt.toml"),
     ];
-    match ctx.ui.select("Repository config file", &items)? {
+    match ctx
+        .ui
+        .select_nested_items_without_filter("저장 위치", &items)?
+    {
         0 => Ok(InitTarget {
-            path: ctx.repo_root.join(".local/.wt.toml"),
+            path: ctx.storage_root.config_toml(),
             kind: InitTargetKind::Local,
         }),
         _ => Ok(InitTarget {
@@ -273,70 +660,51 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     }
 }
 
-fn resolve_preset(ctx: &Ctx, options: &InitOptions) -> Result<InitPreset> {
-    if options.minimal {
-        return Ok(InitPreset::Minimal);
-    }
-    if let Some(preset) = options.preset {
-        return Ok(preset);
-    }
-    if let Some(preset) = preset_from_explicit_overrides(options) {
-        return Ok(preset);
-    }
-    if options.yes {
-        return Ok(InitPreset::Minimal);
-    }
-
-    let items = vec![
-        "Minimal - worktree basics".into(),
-        "Agent - worktree plus coding agent".into(),
-        "Issue - provider issue workflow".into(),
-        "App - setup, tests, site, and tabs".into(),
-    ];
-    Ok(match ctx.ui.select("Starter", &items)? {
-        1 => InitPreset::Agent,
-        2 => InitPreset::Issue,
-        3 => InitPreset::App,
-        _ => InitPreset::Minimal,
-    })
-}
-
-fn preset_from_explicit_overrides(options: &InitOptions) -> Option<InitPreset> {
-    if explicit_site_provider(options.site_provider.as_ref()).is_some() {
-        return Some(InitPreset::App);
-    }
-    if explicit_issue_provider(options.issue_provider.as_ref()).is_some() {
-        return Some(InitPreset::Issue);
-    }
-    if explicit_agent_requested(options) {
-        return Some(InitPreset::Agent);
-    }
-    None
-}
-
 fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<InitPlan> {
     validate_options(options)?;
     let target_exists = target.path.exists();
+    let defaults = if is_interactive_wizard(options) && target_exists {
+        load_init_defaults(&target.path)
+    } else {
+        InitDefaults::default()
+    };
     let detected = DetectedRepo::scan(&ctx.repo_root);
     if is_interactive_wizard(options) {
-        print_wizard_step(ctx, 2, "Starter");
+        print_wizard_step(
+            ctx,
+            2,
+            "외부 도구 연결",
+            integration_step_description(options, &detected, &defaults),
+        );
     }
-    let preset = resolve_preset(ctx, options)?;
-    if is_interactive_wizard(options) {
-        print_wizard_step(ctx, 3, "Integrations");
-    }
-    let profile = resolve_profile(ctx, options, preset)?;
-    let issue_provider = resolve_issue_provider(ctx, options, preset)?;
+    let issue_provider = resolve_issue_provider(ctx, options, &detected, &defaults)?;
     let gh_user = if issue_provider == Some(InitIssueProvider::Github) {
-        resolve_gh_user(ctx, options)?
+        resolve_gh_user(ctx, options, &defaults)?
     } else {
         None
     };
-    let site_provider = resolve_site_provider(ctx, options, preset)?;
+    let site_provider = resolve_site_provider(ctx, options, &detected, &defaults)?;
+    let workflow_policy = defaults
+        .workflow_policy
+        .unwrap_or_else(default_workflow_policy);
     if is_interactive_wizard(options) {
-        print_wizard_step(ctx, 4, "Detected commands");
+        print_wizard_step(
+            ctx,
+            3,
+            "개발 환경 설정",
+            "wt가 새 worktree를 만들거나 열 때 쓸 파일, 명령, 탭, editor, browser 설정입니다.",
+        );
     }
-    let common = resolve_common_config(ctx, options, preset, &detected)?;
+    let common = resolve_common_config(
+        ctx,
+        options,
+        target.kind,
+        &detected,
+        &defaults,
+        issue_provider.as_ref(),
+        site_provider.as_ref(),
+    )?;
+    let profile = resolve_profile(ctx, options, &defaults)?;
 
     let mut s = String::new();
     let mut sections = Vec::new();
@@ -372,38 +740,48 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
         }
         if matches!(
             *provider,
-            InitSiteProvider::Herd | InitSiteProvider::Valet | InitSiteProvider::Traefik
+            InitSiteProvider::Valet | InitSiteProvider::Traefik
         ) {
             s.push_str("secure = true\n");
         }
         s.push('\n');
     }
 
+    append_workflow_policy(&mut s, workflow_policy, &mut sections);
+
     if let Some(profile) = &profile {
         sections.push(InitSection::ProfileAgent);
+        if !profile.agent.prompt.is_empty() {
+            sections.push(InitSection::ProfileAgentPrompt);
+        }
         append_profile_selection(&mut s, profile);
     }
 
     append_active_common_config(&mut s, &common, &mut sections);
 
-    append_optional_scaffold(&mut s);
-
     toml::from_str::<Config>(&s)?;
-    let notices = build_plan_notices(
+    let mut notices = build_plan_notices(
         ctx,
-        preset,
         profile.as_ref(),
         issue_provider.as_ref(),
         site_provider.as_ref(),
+        target.kind,
+        &detected,
         &common,
     );
+    if target_exists && (!options.yes || options.dry_run) {
+        notices.push(InitNotice {
+            level: InitNoticeLevel::Warn,
+            message: existing_target_warning_message(&target.path, options),
+        });
+    }
 
     Ok(InitPlan {
         target_path: target.path,
         target_kind: target.kind,
         target_exists,
-        preset,
         sections,
+        #[cfg(test)]
         detected_signals: detected.signals(),
         notices,
         content: s,
@@ -412,22 +790,30 @@ fn build_plan(ctx: &Ctx, options: &InitOptions, target: InitTarget) -> Result<In
 
 fn print_plan(ctx: &Ctx, plan: &InitPlan, interactive_wizard: bool) {
     if interactive_wizard {
-        print_wizard_step(ctx, 5, plan_action_label(plan));
+        print_wizard_step(
+            ctx,
+            4,
+            "미리보기",
+            "파일에 쓰기 전에 어디에 무엇을 저장할지와 생성될 TOML을 확인합니다.",
+        );
     } else {
-        ctx.ui.print_step("Init plan");
+        ctx.ui.print_step("init 계획");
     }
     for line in render_plan_summary(plan) {
         ctx.ui.print_dim(&format!("  {line}"));
     }
-    ctx.ui.print_dim("  toml:");
+    ctx.ui.print_dim("");
+    ctx.ui.print_dim("  생성될 TOML:");
+    ctx.ui.print_dim("    ---");
     for line in plan.content.lines() {
         ctx.ui.print_dim(&format!("    {line}"));
     }
+    ctx.ui.print_dim("    ---");
 }
 
 fn render_plan_summary(plan: &InitPlan) -> Vec<String> {
-    let sections = if plan.sections.is_empty() {
-        "none".to_string()
+    let saved_settings = if plan.sections.is_empty() {
+        "없음".to_string()
     } else {
         plan.sections
             .iter()
@@ -435,78 +821,85 @@ fn render_plan_summary(plan: &InitPlan) -> Vec<String> {
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let detected_signals = if plan.detected_signals.is_empty() {
-        "none".to_string()
-    } else {
-        plan.detected_signals.join("; ")
-    };
     let planned_write = if plan.target_exists {
-        "overwrite existing config"
+        "기존 설정 덮어쓰기"
     } else {
-        "create config"
+        "새 설정 생성"
     };
 
     let mut lines = vec![
-        format!("target: {}", plan.target_path.display()),
-        format!("target kind: {}", target_kind_name(plan.target_kind)),
-        format!("planned write: {planned_write}"),
-        format!("preset: {}", preset_name(plan.preset)),
-        format!("selected sections: {sections}"),
-        format!("detected signals: {detected_signals}"),
+        "저장 대상".to_string(),
+        format!("  저장할 파일: {}", plan.target_path.display()),
+        format!("  저장 범위: {}", target_kind_name(plan.target_kind)),
+        format!("  작업: {planned_write}"),
+        format!("  저장될 설정: {saved_settings}"),
     ];
 
-    if plan.detected_signals.is_empty() {
-        lines.push("[warn] detected commands: none".to_string());
-    } else {
+    let hints = plan
+        .notices
+        .iter()
+        .filter(|notice| notice.level == InitNoticeLevel::Hint)
+        .collect::<Vec<_>>();
+    let warnings = plan
+        .notices
+        .iter()
+        .filter(|notice| notice.level == InitNoticeLevel::Warn)
+        .collect::<Vec<_>>();
+
+    if !hints.is_empty() {
+        lines.push("".to_string());
+        lines.push("안내".to_string());
+        lines.extend(hints.iter().map(|notice| format!("  - {}", notice.message)));
+    }
+    if !warnings.is_empty() {
+        lines.push("".to_string());
+        lines.push("경고".to_string());
         lines.extend(
-            plan.detected_signals
+            warnings
                 .iter()
-                .map(|signal| format!("[ok] detected {signal}")),
+                .map(|notice| format!("  - {}", notice.message)),
         );
     }
-
-    lines.extend(
-        plan.notices
-            .iter()
-            .map(|notice| format!("[{}] {}", notice_level_name(notice.level), notice.message)),
-    );
 
     lines
 }
 
-fn plan_action_label(plan: &InitPlan) -> &'static str {
-    if plan.target_exists {
-        "Will overwrite"
-    } else {
-        "Will create"
-    }
+fn print_existing_target_warning(ctx: &Ctx, plan: &InitPlan, options: &InitOptions) {
+    ctx.ui
+        .print_warning(&existing_target_warning_message(&plan.target_path, options));
 }
 
-fn print_existing_target_warning(ctx: &Ctx, plan: &InitPlan, options: &InitOptions) {
+fn existing_target_warning_message(path: &Path, options: &InitOptions) -> String {
     let suffix = if options.dry_run {
-        "dry run will not overwrite"
+        "dry run이라 덮어쓰지 않음"
     } else if options.force {
-        "--force will overwrite"
+        "--force로 덮어씀"
     } else if options.yes {
-        "use --force to overwrite"
+        "덮어쓰려면 --force 사용"
     } else {
-        "confirm overwrite to continue"
+        "계속하려면 덮어쓰기 확인 필요"
     };
-    ctx.ui.print_warning(&format!(
-        "Config already exists: {} ({suffix})",
-        plan.target_path.display()
-    ));
+    format!("설정 파일이 이미 있습니다: {} ({suffix})", path.display())
 }
 
 fn build_plan_notices(
     ctx: &Ctx,
-    preset: InitPreset,
     profile: Option<&InitProfile>,
     issue_provider: Option<&InitIssueProvider>,
     site_provider: Option<&InitSiteProvider>,
+    target_kind: InitTargetKind,
+    detected: &DetectedRepo,
     common: &InitCommonConfig,
 ) -> Vec<InitNotice> {
     let mut notices = Vec::new();
+
+    push_shared_target_omission_notice(
+        &mut notices,
+        target_kind,
+        detected,
+        issue_provider,
+        site_provider,
+    );
 
     if let Some(profile) = profile {
         push_agent_tool_notice(ctx, &mut notices, &profile.agent);
@@ -514,7 +907,7 @@ fn build_plan_notices(
             ctx,
             &mut notices,
             "cmux",
-            "cmux CLI missing; generated workspace config can be saved, but agent workspace launch needs cmux",
+            "cmux CLI가 없습니다. 생성된 workspace 설정은 저장할 수 있지만 agent workspace를 열려면 cmux가 필요합니다",
         );
     }
 
@@ -524,24 +917,24 @@ fn build_plan_notices(
                 ctx,
                 &mut notices,
                 "gh",
-                "gh CLI missing; generated GitHub issue config can be saved, but issue selection needs gh",
+                "gh CLI가 없습니다. 생성된 GitHub issue 설정은 저장할 수 있지만 issue 선택에는 gh가 필요합니다",
             ),
             InitIssueProvider::Linear => push_missing_command_warning(
                 ctx,
                 &mut notices,
                 "linear",
-                "linear CLI missing; generated Linear issue config can be saved, but issue selection needs linear",
+                "linear CLI가 없습니다. 생성된 Linear issue 설정은 저장할 수 있지만 issue 선택에는 linear가 필요합니다",
             ),
             InitIssueProvider::None => {}
         }
 
         let readiness = profile.map_or_else(
             || {
-                "issue agent prompt: no agent runtime selected; add --agent <name> when issue work should launch an agent".to_string()
+                "issue agent prompt: 선택된 agent runtime이 없습니다. issue 작업에서 agent를 바로 실행하려면 --agent <name>을 추가하세요".to_string()
             },
             |profile| {
                 format!(
-                    "issue agent prompt: ready via {}",
+                    "issue agent prompt: {}로 실행 준비됨",
                     agent_cli_name(&profile.agent.cli)
                 )
             },
@@ -555,41 +948,94 @@ fn build_plan_notices(
                 ctx,
                 &mut notices,
                 "herd",
-                "herd CLI missing; generated Herd site config can be saved, but site setup needs herd",
+                "herd CLI가 없습니다. 생성된 Herd site 설정은 저장할 수 있지만 site setup에는 herd가 필요합니다",
             ),
             InitSiteProvider::Valet => push_missing_command_warning(
                 ctx,
                 &mut notices,
                 "valet",
-                "valet CLI missing; generated Valet site config can be saved, but site setup needs valet",
+                "valet CLI가 없습니다. 생성된 Valet site 설정은 저장할 수 있지만 site setup에는 valet이 필요합니다",
             ),
             InitSiteProvider::Traefik => push_missing_command_warning(
                 ctx,
                 &mut notices,
                 "traefik",
-                "traefik CLI missing; generated Traefik site config can be saved, but site setup needs traefik",
+                "traefik CLI가 없습니다. 생성된 Traefik site 설정은 저장할 수 있지만 site setup에는 traefik이 필요합니다",
             ),
             InitSiteProvider::DockerProxy | InitSiteProvider::None => {}
         }
     }
 
+    if common.worktree_naming {
+        push_missing_command_warning(
+            ctx,
+            &mut notices,
+            "claude",
+            "claude command가 없습니다. 생성된 worktree naming 설정은 저장할 수 있지만 AI assisted naming에는 claude가 필요합니다",
+        );
+    }
+
     if !common.post_deps_tabs.is_empty() {
-        if preset == InitPreset::App {
-            push_notice(
-                &mut notices,
-                InitNoticeLevel::Hint,
-                format!("app dev tabs: {}", common.post_deps_tabs.join("; ")),
-            );
-        }
+        push_notice(
+            &mut notices,
+            InitNoticeLevel::Hint,
+            format!("dev 탭: {}", common.post_deps_tabs.join("; ")),
+        );
         push_missing_command_warning(
             ctx,
             &mut notices,
             "cmux",
-            "cmux CLI missing; generated dev tabs can be saved, but automatic tab launch needs cmux",
+            "cmux CLI가 없습니다. 생성된 dev 탭 설정은 저장할 수 있지만 자동 탭 실행에는 cmux가 필요합니다",
+        );
+    }
+
+    if common.workspace_browser.is_some() {
+        push_missing_command_warning(
+            ctx,
+            &mut notices,
+            "cmux",
+            "cmux CLI가 없습니다. 생성된 browser 설정은 저장할 수 있지만 자동 browser 실행에는 workspace setup이 필요합니다",
         );
     }
 
     notices
+}
+
+fn push_shared_target_omission_notice(
+    notices: &mut Vec<InitNotice>,
+    target_kind: InitTargetKind,
+    detected: &DetectedRepo,
+    issue_provider: Option<&InitIssueProvider>,
+    site_provider: Option<&InitSiteProvider>,
+) {
+    if target_kind != InitTargetKind::Shared {
+        return;
+    }
+
+    let mut omitted = Vec::new();
+    if detected.has_env_file {
+        omitted.push(".env copy".to_string());
+    }
+    if !detected.local_links.is_empty() {
+        omitted.push(format!("local links ({})", detected.local_links.join(", ")));
+    }
+    if issue_provider.is_some() {
+        omitted.push("worktree.naming".to_string());
+    }
+    if site_provider.is_some() {
+        omitted.push("workspace browser profile".to_string());
+    }
+
+    if !omitted.is_empty() {
+        push_notice(
+            notices,
+            InitNoticeLevel::Hint,
+            format!(
+                "팀 공유 설정에는 개인 helper를 쓰지 않습니다: {}; 머신별 setup까지 저장하려면 개인 설정 파일을 선택하세요",
+                omitted.join(", ")
+            ),
+        );
+    }
 }
 
 fn push_agent_tool_notice(ctx: &Ctx, notices: &mut Vec<InitNotice>, agent: &AgentConfig) {
@@ -599,14 +1045,14 @@ fn push_agent_tool_notice(ctx: &Ctx, notices: &mut Vec<InitNotice>, agent: &Agen
             notices,
             &command,
             format!(
-                "{command} command missing; generated agent config can be saved, but agent launch needs {command}"
+                "{command} command가 없습니다. 생성된 agent 설정은 저장할 수 있지만 agent 실행에는 {command}가 필요합니다"
             ),
         ),
         Ok(None) => {}
         Err(err) => push_notice(
             notices,
             InitNoticeLevel::Warn,
-            format!("agent command could not be parsed ({err}); run wt doctor after init"),
+            format!("agent command를 해석할 수 없습니다 ({err}); init 후 wt doctor를 실행하세요"),
         ),
     }
 }
@@ -647,76 +1093,50 @@ fn push_notice(notices: &mut Vec<InitNotice>, level: InitNoticeLevel, message: S
     notices.push(InitNotice { level, message });
 }
 
-fn append_optional_scaffold(s: &mut String) {
-    s.push_str("# Optional workflow policy for newly prepared workflows.\n");
-    s.push_str("# [workflow]\n");
-    s.push_str("# pull_request = \"none\"  # none | draft | ready\n");
-    s.push_str("# landing = \"manual\"     # manual | auto\n\n");
-
-    s.push_str("# Optional worktree behavior. Uncomment and adjust as needed.\n");
-    s.push_str("# [worktree]\n");
-    s.push_str("# path = \"$HOME/worktrees/{{default_name}}\"\n");
-    s.push_str("# copy = [\".env\"]\n");
-    s.push_str("# copy_as = [\n");
-    s.push_str("#     { from = \".local/templates/.env\", to = \".env\" },\n");
-    s.push_str("# ]\n");
-    s.push_str("# link = [\".local\"]\n");
-    s.push_str("# inject_local_context = \"\"\"\n");
-    s.push_str("# ## Local context\n");
-    s.push_str("# - site: {{site_url}}\n");
-    s.push_str("# - worktree: {{worktree_path}}\n");
-    s.push_str("# - parent: {{parent_branch}}\n");
-    s.push_str("# \"\"\"\n\n");
-
-    s.push_str("# Optional AI-assisted naming for issue worktrees.\n");
-    s.push_str("# [worktree.naming]\n");
-    s.push_str("# command = \"claude -p\"\n");
-    s.push_str("# branch = \"{{branch_prefix}}{{issue_key_lower}}-{{english_slug}}\"\n");
-    s.push('\n');
-
-    s.push_str("# Optional setup commands run inside each worktree.\n");
-    s.push_str(
-        "# Omit if_exists for required setup; use it only for intentionally optional commands.\n",
-    );
-    s.push_str("# [setup]\n");
-    s.push_str("# deps = [\n");
-    s.push_str("#     { run = \"npm install\" },\n");
-    s.push_str("#     { working_dir = \"frontend\", run = \"pnpm install\" },\n");
-    s.push_str("#     { working_dir = \"api\", run = \"uv sync\" },\n");
-    s.push_str(
-        "#     { working_dir = \"enterprise\", run = \"pnpm install\", if_exists = \"package.json\" },\n",
-    );
-    s.push_str("# ]\n\n");
-    s.push_str("# Optional environment substitutions for existing env files.\n");
-    s.push_str("# [setup.env]\n");
-    s.push_str("# APP_ENV = \"local\"\n\n");
-    s.push_str("# [setup.env_files.\".env.local\"]\n");
-    s.push_str("# APP_URL = \"{{site_url}}\"\n");
-    s.push_str("# VITE_PORT = \"{{vite_port}}\"\n\n");
-
-    s.push_str("# Optional editor for wt-managed TOML files.\n");
-    s.push_str("# [editor]\n");
-    s.push_str("# command = \"nvim {{path}}\"\n");
-    s.push_str("# placement = \"cmux_surface\"\n\n");
-
-    s.push_str("# Optional test commands run after setup.\n");
-    s.push_str("# [test]\n");
-    s.push_str("# commands = [\n");
-    s.push_str("#     { label = \"test\", run = \"cargo test\" },\n");
-    s.push_str("#     { label = \"lint\", working_dir = \"frontend\", run = \"npm run lint\" },\n");
-    s.push_str("#     { label = \"optional-pest\", working_dir = \"backend\", run = \"./vendor/bin/pest\", if_exists = \"vendor/bin/pest\" },\n");
-    s.push_str("# ]\n\n");
-}
-
 fn append_active_common_config(
     s: &mut String,
     common: &InitCommonConfig,
     sections: &mut Vec<InitSection>,
 ) {
-    if let Some(path) = common.worktree_path.as_deref() {
+    if common.worktree_path.is_some()
+        || !common.worktree_copy.is_empty()
+        || !common.worktree_copy_as.is_empty()
+        || !common.worktree_link.is_empty()
+        || common.inject_local_context.is_some()
+    {
         sections.push(InitSection::Worktree);
         s.push_str("[worktree]\n");
-        s.push_str(&format!("path = {}\n\n", toml_quote(path)));
+        if let Some(path) = common.worktree_path.as_deref() {
+            s.push_str(&format!("path = {}\n", toml_quote(path)));
+        }
+        if !common.worktree_copy.is_empty() {
+            s.push_str(&format!("copy = {}\n", toml_array(&common.worktree_copy)));
+        }
+        if !common.worktree_copy_as.is_empty() {
+            s.push_str("copy_as = [\n");
+            for entry in &common.worktree_copy_as {
+                s.push_str(&format!(
+                    "    {{ from = {}, to = {} }},\n",
+                    toml_quote(&entry.from),
+                    toml_quote(&entry.to)
+                ));
+            }
+            s.push_str("]\n");
+        }
+        if !common.worktree_link.is_empty() {
+            s.push_str(&format!("link = {}\n", toml_array(&common.worktree_link)));
+        }
+        if let Some(context) = common.inject_local_context.as_deref() {
+            append_multiline_string(s, "inject_local_context", context);
+        }
+        s.push('\n');
+    }
+
+    if common.worktree_naming {
+        sections.push(InitSection::WorktreeNaming);
+        s.push_str("[worktree.naming]\n");
+        s.push_str("command = \"claude -p\"\n");
+        s.push_str("branch = \"{{branch_prefix}}{{issue_key_lower}}-{{english_slug}}\"\n\n");
     }
 
     if !common.setup_deps.is_empty() {
@@ -754,22 +1174,59 @@ fn append_active_common_config(
             "post_deps_tabs = {}\n",
             toml_array(&common.post_deps_tabs)
         ));
-    } else {
-        s.push_str("# post_deps_tabs = [\"npm run dev\"]\n");
     }
-    s.push_str("# open_url = \"{{site_url}}\"\n");
-    s.push_str("# open_browser = true\n");
-    s.push_str("# browser = \"Google Chrome\"\n");
-    s.push_str("#\n");
-    s.push_str("# [workspace.chrome_devtools]\n");
-    s.push_str("# enabled = true\n");
-    s.push_str("# user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"\n");
-    s.push_str("# url = \"{{site_url}}\"\n");
-    s.push_str("# Workspace colors have built-in defaults; uncomment only to override.\n");
-    s.push_str("# Use \"\" to disable a color kind.\n");
-    s.push_str(
-        "# colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }\n\n",
-    );
+    s.push_str(&format!(
+        "colors = {}\n",
+        toml_inline_string_entries(&workspace_colors(common))
+    ));
+    s.push('\n');
+
+    if let Some(browser) = common.workspace_browser.as_ref() {
+        sections.push(InitSection::WorkspaceBrowser);
+        s.push_str("[workspace.browser]\n");
+        s.push_str(&format!(
+            "mode = {}\n",
+            toml_quote(workspace_browser_mode_name(browser.mode))
+        ));
+        if let Some(url) = browser.url.as_deref() {
+            s.push_str(&format!("url = {}\n", toml_quote(url)));
+        }
+        if let Some(app) = browser.app.as_deref()
+            && browser.mode == InitWorkspaceBrowserMode::System
+        {
+            s.push_str(&format!("app = {}\n", toml_quote(app)));
+        }
+        s.push('\n');
+
+        if browser.mode == InitWorkspaceBrowserMode::ChromeDevtools {
+            s.push_str("[workspace.chrome_devtools]\n");
+            if let Some(user_data_dir) = browser.chrome_devtools_user_data_dir.as_deref() {
+                s.push_str(&format!("user_data_dir = {}\n", toml_quote(user_data_dir)));
+            } else {
+                s.push_str(
+                    "user_data_dir = \"{{worktree_parent}}/.chrome-devtools/{{worktree_name}}\"\n",
+                );
+            }
+            s.push('\n');
+        }
+    }
+}
+
+fn append_workflow_policy(
+    s: &mut String,
+    policy: WorkflowDefaultPolicy,
+    sections: &mut Vec<InitSection>,
+) {
+    sections.push(InitSection::Workflow);
+    s.push_str("[workflow]\n");
+    s.push_str(&format!(
+        "pull_request = {}\n",
+        toml_quote(workflow_pull_request_name(policy.pull_request))
+    ));
+    s.push_str(&format!(
+        "landing = {}\n\n",
+        toml_quote(workflow_landing_name(policy.landing))
+    ));
 }
 
 fn append_command_entry(s: &mut String, command: &InitCommand) {
@@ -787,77 +1244,222 @@ fn append_command_entry(s: &mut String, command: &InitCommand) {
     s.push_str(" },\n");
 }
 
+fn workspace_colors(common: &InitCommonConfig) -> Vec<(String, String)> {
+    if common.workspace_colors.is_empty() {
+        return default_workspace_colors();
+    }
+    common.workspace_colors.clone()
+}
+
+fn default_workspace_colors() -> Vec<(String, String)> {
+    WORKSPACE_DEFAULT_COLORS
+        .iter()
+        .map(|(kind, color)| (kind.to_string(), color.to_string()))
+        .collect()
+}
+
+fn toml_inline_string_entries(entries: &[(String, String)]) -> String {
+    let rendered = entries
+        .iter()
+        .map(|(key, value)| format!("{} = {}", toml_key(key), toml_quote(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{ {rendered} }}")
+}
+
+fn toml_key(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        value.into()
+    } else {
+        toml_quote(value)
+    }
+}
+
+fn append_multiline_string(s: &mut String, key: &str, value: &str) {
+    s.push_str(key);
+    s.push_str(" = \"\"\"\n");
+    s.push_str(value);
+    if !value.ends_with('\n') {
+        s.push('\n');
+    }
+    s.push_str("\"\"\"\n");
+}
+
 fn resolve_common_config(
     ctx: &Ctx,
     options: &InitOptions,
-    preset: InitPreset,
+    target_kind: InitTargetKind,
     detected: &DetectedRepo,
+    defaults: &InitDefaults,
+    issue_provider: Option<&InitIssueProvider>,
+    site_provider: Option<&InitSiteProvider>,
 ) -> Result<InitCommonConfig> {
-    let mut config = InitCommonConfig::default();
-    if preset == InitPreset::App {
-        config = detected_app_common_config(detected);
-        if options.yes {
-            return Ok(config);
-        }
-
-        let items = vec![
-            "Use detected app defaults".into(),
-            "Customize commands and tabs".into(),
-        ];
-        if ctx.ui.select("App defaults", &items)? == 0 {
-            return Ok(config);
-        }
-
-        return resolve_custom_common_config(ctx, config, detected);
+    let existing_common = defaults.common.clone();
+    let mut config = existing_common.clone().unwrap_or_else(|| {
+        detected_project_common_config(ctx, target_kind, detected, issue_provider, site_provider)
+    });
+    if issue_provider.is_none() || target_kind != InitTargetKind::Local {
+        config.worktree_naming = false;
     }
+    if site_provider.is_none() {
+        config.workspace_browser = None;
+    }
+    let has_existing_defaults = defaults.from_existing_config && existing_common.is_some();
 
     if options.yes {
         return Ok(config);
     }
 
+    ctx.ui.print_dim(
+        "생성되는 TOML에는 선택한 active 설정만 들어가고, 주석 처리된 예시는 넣지 않습니다.",
+    );
+    let recommended_item = if has_existing_defaults {
+        PromptItem::with_description(
+            "기존 설정 파일 값 유지하기",
+            "1단계에서 고른 설정 파일에 저장된 값을 유지하고 editor/browser만 확인합니다.",
+        )
+    } else if cmux_available(ctx) {
+        PromptItem::with_description(
+            "감지한 개발 설정 저장",
+            "감지한 setup/test 명령, 로컬 파일, workspace 설정을 저장합니다.",
+        )
+    } else {
+        PromptItem::with_description(
+            "감지한 개발 설정 저장",
+            "감지한 setup/test 명령과 로컬 파일을 저장하고 workspace 자동화는 비워둡니다.",
+        )
+    };
     let items = vec![
-        "Use starter defaults".into(),
-        "Customize commands and tabs".into(),
+        recommended_item,
+        PromptItem::with_description(
+            "개발 설정 직접 고르기",
+            "worktree 위치, 파일, 명령, 탭, editor/browser를 직접 고릅니다.",
+        ),
+        PromptItem::with_description(
+            "자동화 없이 최소 설정",
+            "setup/test/editor/browser 없이 빈 workspace 설정만 저장합니다.",
+        ),
     ];
-    if ctx.ui.select("Workspace defaults", &items)? == 0 {
-        return Ok(config);
+    match ctx
+        .ui
+        .select_nested_items_without_filter("개발 환경 설정을 어떻게 만들까요?", &items)?
+    {
+        0 => resolve_recommended_common_config(ctx, target_kind, config, site_provider),
+        1 => resolve_custom_common_config(ctx, target_kind, config, detected, site_provider),
+        _ => Ok(InitCommonConfig::default()),
     }
-
-    resolve_custom_common_config(ctx, config, detected)
 }
 
-fn detected_app_common_config(detected: &DetectedRepo) -> InitCommonConfig {
+fn detected_project_common_config(
+    ctx: &Ctx,
+    target_kind: InitTargetKind,
+    detected: &DetectedRepo,
+    issue_provider: Option<&InitIssueProvider>,
+    site_provider: Option<&InitSiteProvider>,
+) -> InitCommonConfig {
+    let local_target = target_kind == InitTargetKind::Local;
+    let workspace_automation = cmux_available(ctx);
+    let worktree_copy = if local_target && detected.has_env_file {
+        vec![".env".into()]
+    } else {
+        Vec::new()
+    };
     InitCommonConfig {
+        worktree_copy,
+        worktree_copy_as: Vec::new(),
+        worktree_link: if local_target {
+            detected.local_links.clone()
+        } else {
+            Vec::new()
+        },
+        inject_local_context: local_target.then(|| DEFAULT_INJECT_LOCAL_CONTEXT.into()),
+        worktree_naming: local_target && issue_provider.is_some(),
         setup_deps: default_enabled_setup_deps(detected),
-        post_deps_tabs: detected.post_deps_tabs.clone(),
+        post_deps_tabs: if workspace_automation {
+            detected.post_deps_tabs.clone()
+        } else {
+            Vec::new()
+        },
         test_commands: default_enabled_test_commands(detected),
+        workspace_tabs: recommended_workspace_tabs(ctx),
+        workspace_browser: recommended_workspace_browser(ctx, target_kind, site_provider),
         ..InitCommonConfig::default()
     }
 }
 
+fn resolve_recommended_common_config(
+    ctx: &Ctx,
+    target_kind: InitTargetKind,
+    mut config: InitCommonConfig,
+    site_provider: Option<&InitSiteProvider>,
+) -> Result<InitCommonConfig> {
+    if target_kind == InitTargetKind::Local {
+        config.editor_command = resolve_editor_command(ctx, config.editor_command.as_deref())?;
+    }
+    if cmux_available(ctx) && site_provider.is_some() {
+        config.workspace_browser = resolve_workspace_browser(ctx, config.workspace_browser)?;
+    } else {
+        config.workspace_browser = None;
+    }
+    Ok(config)
+}
+
 fn resolve_custom_common_config(
     ctx: &Ctx,
+    target_kind: InitTargetKind,
     mut config: InitCommonConfig,
     detected: &DetectedRepo,
+    site_provider: Option<&InitSiteProvider>,
 ) -> Result<InitCommonConfig> {
-    config.worktree_path = resolve_worktree_path(ctx)?;
-    config.workspace_tabs = resolve_workspace_tabs(ctx)?;
+    config.worktree_path = resolve_worktree_path(ctx, config.worktree_path.as_deref())?;
+    if target_kind == InitTargetKind::Local {
+        config.worktree_copy = resolve_worktree_copy(ctx, &config.worktree_copy, detected)?;
+        config.worktree_link = resolve_worktree_link(ctx, &config.worktree_link, detected)?;
+    } else {
+        config.worktree_copy.clear();
+        config.worktree_link.clear();
+    }
+    config.workspace_tabs = resolve_workspace_tabs(ctx, &config.workspace_tabs)?;
 
-    config.setup_deps = resolve_setup_deps(ctx, detected)?;
+    config.setup_deps = resolve_setup_deps(ctx, detected, &config.setup_deps)?;
 
-    if !detected.post_deps_tabs.is_empty()
-        && ctx
-            .ui
-            .confirm("Start detected dev server after setup?", false)?
-    {
-        config.post_deps_tabs = detected.post_deps_tabs.clone();
+    if !detected.post_deps_tabs.is_empty() {
+        ctx.ui.print_dim(
+            "dev 탭은 dependency setup이 끝난 뒤 개발 서버 command를 별도 탭에서 시작합니다.",
+        );
+        print_detected_dev_server_commands(ctx, &detected.post_deps_tabs);
+        let prompt = dev_server_confirm_prompt(&detected.post_deps_tabs);
+        if ctx.ui.confirm(&prompt, !config.post_deps_tabs.is_empty())? {
+            config.post_deps_tabs = detected.post_deps_tabs.clone();
+        } else {
+            config.post_deps_tabs.clear();
+        }
     }
 
-    if !detected.test_commands.is_empty() && ctx.ui.confirm("Save detected test commands?", true)? {
-        config.test_commands = detected.test_commands.clone();
+    if !detected.test_commands.is_empty() {
+        ctx.ui
+            .print_dim("test command는 반복해서 쓸 validation 명령으로 저장됩니다.");
+        print_detected_commands(ctx, "감지한 test command", &detected.test_commands);
+        if ctx.ui.confirm(
+            "위 test command를 저장할까요?",
+            !config.test_commands.is_empty(),
+        )? {
+            config.test_commands = detected.test_commands.clone();
+        } else {
+            config.test_commands.clear();
+        }
     }
 
-    config.editor_command = resolve_editor_command(ctx)?;
+    config.editor_command = resolve_editor_command(ctx, config.editor_command.as_deref())?;
+    if cmux_available(ctx) && site_provider.is_some() {
+        config.workspace_browser = resolve_workspace_browser(ctx, config.workspace_browser)?;
+    } else {
+        config.workspace_browser = None;
+    }
     Ok(config)
 }
 
@@ -879,36 +1481,160 @@ fn default_enabled_test_commands(detected: &DetectedRepo) -> Vec<InitCommand> {
         .collect()
 }
 
+#[cfg(test)]
 fn push_signal(signals: &mut Vec<String>, signal: String) {
     if !signals.contains(&signal) {
         signals.push(signal);
     }
 }
 
-fn resolve_worktree_path(ctx: &Ctx) -> Result<Option<String>> {
-    let items = vec![
-        "Default sibling folder".into(),
-        "$HOME/worktrees/{{default_name}}".into(),
-        "Custom folder template".into(),
-    ];
-    match ctx.ui.select("Worktree folder", &items)? {
-        0 => Ok(None),
-        1 => Ok(Some("$HOME/worktrees/{{default_name}}".into())),
-        _ => {
-            let input = ctx.ui.input(
-                "Worktree folder template",
-                Some("$HOME/worktrees/{{default_name}}"),
-            )?;
-            let input = input.trim();
-            Ok((!input.is_empty()).then(|| input.to_string()))
-        }
-    }
+fn cmux_available(ctx: &Ctx) -> bool {
+    ctx.runner.has_command("cmux")
 }
 
-fn resolve_workspace_tabs(ctx: &Ctx) -> Result<Vec<String>> {
-    let input = ctx
+fn recommended_workspace_tabs(ctx: &Ctx) -> Vec<String> {
+    if !cmux_available(ctx) {
+        return Vec::new();
+    }
+    ["lazygit", "nvim"]
+        .into_iter()
+        .filter(|command| ctx.runner.has_command(command))
+        .map(str::to_string)
+        .collect()
+}
+
+fn recommended_workspace_browser(
+    ctx: &Ctx,
+    target_kind: InitTargetKind,
+    site_provider: Option<&InitSiteProvider>,
+) -> Option<InitWorkspaceBrowser> {
+    if target_kind != InitTargetKind::Local || site_provider.is_none() || !cmux_available(ctx) {
+        return None;
+    }
+    Some(InitWorkspaceBrowser {
+        mode: InitWorkspaceBrowserMode::ChromeDevtools,
+        url: None,
+        app: None,
+        chrome_devtools_user_data_dir: Some(
+            "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}".into(),
+        ),
+    })
+}
+
+fn resolve_worktree_path(ctx: &Ctx, default: Option<&str>) -> Result<Option<String>> {
+    let mut options = vec![
+        (
+            PromptItem::with_hint("현재 저장소 옆에 만들기", "../{{default_name}}"),
+            None,
+        ),
+        (
+            PromptItem::with_hint(
+                "홈 worktrees 폴더에 만들기",
+                "$HOME/worktrees/{{default_name}}",
+            ),
+            Some("$HOME/worktrees/{{default_name}}".to_string()),
+        ),
+    ];
+    if let Some(default) = default
+        && !options
+            .iter()
+            .any(|(_, value)| value.as_deref() == Some(default))
+    {
+        options.insert(
+            0,
+            (
+                PromptItem::with_hint("현재 설정값 유지", default),
+                Some(default.to_string()),
+            ),
+        );
+    }
+    options.push((PromptItem::new("직접 입력"), None));
+
+    let items = options
+        .iter()
+        .map(|(item, _)| item.clone())
+        .collect::<Vec<_>>();
+    ctx.ui
+        .print_dim("새 branch checkout을 어느 폴더에 만들지 고릅니다.");
+    let selection = ctx
         .ui
-        .input("Default workspace tabs", Some("lazygit, nvim"))?;
+        .select_nested_items_without_filter("worktree 만들 위치", &items)?;
+    if selection < options.len() - 1 {
+        return Ok(options[selection].1.clone());
+    }
+
+    let input = ctx.ui.input(
+        "worktree 만들 위치 템플릿",
+        default.or(Some("$HOME/worktrees/{{default_name}}")),
+    )?;
+    let input = input.trim();
+    Ok((!input.is_empty()).then(|| input.to_string()))
+}
+
+fn resolve_worktree_copy(
+    ctx: &Ctx,
+    current: &[String],
+    detected: &DetectedRepo,
+) -> Result<Vec<String>> {
+    if !detected.has_env_file && current.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut recommended = current.to_vec();
+    if detected.has_env_file && !recommended.iter().any(|path| path == ".env") {
+        recommended.push(".env".into());
+    }
+    let default = recommended.join(", ");
+    let input = ctx.ui.input(
+        "각 worktree로 복사할 파일",
+        Some(if default.is_empty() {
+            ""
+        } else {
+            default.as_str()
+        }),
+    )?;
+    Ok(split_list(&input))
+}
+
+fn resolve_worktree_link(
+    ctx: &Ctx,
+    current: &[String],
+    detected: &DetectedRepo,
+) -> Result<Vec<String>> {
+    if detected.local_links.is_empty() && current.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut recommended = current.to_vec();
+    for link in &detected.local_links {
+        if !recommended.contains(link) {
+            recommended.push(link.clone());
+        }
+    }
+    let default = recommended.join(", ");
+    let input = ctx.ui.input(
+        "각 worktree에 링크할 로컬 파일",
+        Some(if default.is_empty() {
+            ""
+        } else {
+            default.as_str()
+        }),
+    )?;
+    Ok(split_list(&input))
+}
+
+fn resolve_workspace_tabs(ctx: &Ctx, default_tabs: &[String]) -> Result<Vec<String>> {
+    let default = default_tabs.join(", ");
+    ctx.ui
+        .print_dim("worktree를 열 때 cmux 안에 같이 띄울 명령입니다. 예: lazygit, nvim");
+    let input = ctx.ui.input(
+        "worktree 열 때 같이 띄울 명령",
+        Some(if default_tabs.is_empty() {
+            ""
+        } else {
+            default.as_str()
+        }),
+    )?;
     let tabs = split_list(&input);
     if tabs.is_empty() {
         Ok(Vec::new())
@@ -917,24 +1643,131 @@ fn resolve_workspace_tabs(ctx: &Ctx) -> Result<Vec<String>> {
     }
 }
 
-fn resolve_editor_command(ctx: &Ctx) -> Result<Option<String>> {
-    let items = vec![
-        "Use system editor".into(),
-        "nvim {{path}}".into(),
-        "code {{path}}".into(),
-        "Custom editor command".into(),
+fn resolve_editor_command(ctx: &Ctx, default: Option<&str>) -> Result<Option<String>> {
+    let mut options = vec![
+        ("시스템 editor 사용".to_string(), None),
+        ("vim {{path}}".to_string(), Some("vim {{path}}".to_string())),
+        (
+            "code {{path}}".to_string(),
+            Some("code {{path}}".to_string()),
+        ),
+        (
+            "phpstorm {{path}}".to_string(),
+            Some("phpstorm {{path}}".to_string()),
+        ),
+        (
+            "pstorm {{path}}".to_string(),
+            Some("pstorm {{path}}".to_string()),
+        ),
     ];
-    match ctx.ui.select("Config editor command", &items)? {
-        0 => Ok(None),
-        1 => Ok(Some("nvim {{path}}".into())),
-        2 => Ok(Some("code {{path}}".into())),
-        _ => {
-            let input = ctx
-                .ui
-                .input("Custom editor command", Some("nvim {{path}}"))?;
-            let input = input.trim();
-            Ok((!input.is_empty()).then(|| input.to_string()))
+    if let Some(default) = default
+        && !options
+            .iter()
+            .any(|(_, value)| value.as_deref() == Some(default))
+    {
+        options.insert(0, (format!("현재값: {default}"), Some(default.to_string())));
+    }
+    options.push(("editor command 직접 입력".to_string(), None));
+
+    let items = options
+        .iter()
+        .map(|(label, _)| label.clone())
+        .collect::<Vec<_>>();
+    ctx.ui.print_dim(
+        "editor command는 wt가 관리하는 설정 파일을 엽니다. {{path}}는 파일 경로로 바뀝니다.",
+    );
+    let selection = ctx
+        .ui
+        .select_nested_without_filter("설정 editor command", &items)?;
+    if selection < options.len() - 1 {
+        return Ok(options[selection].1.clone());
+    }
+
+    let input = ctx
+        .ui
+        .input("editor command 직접 입력", default.or(Some("vim {{path}}")))?;
+    let input = input.trim();
+    Ok((!input.is_empty()).then(|| input.to_string()))
+}
+
+fn resolve_workspace_browser(
+    ctx: &Ctx,
+    default: Option<InitWorkspaceBrowser>,
+) -> Result<Option<InitWorkspaceBrowser>> {
+    let mut options = Vec::new();
+    if let Some(default) = default.as_ref() {
+        options.push((
+            format!("현재값: {}", workspace_browser_choice_label(default)),
+            Some(default.clone()),
+        ));
+    }
+    push_browser_option(
+        &mut options,
+        "Chrome DevTools".into(),
+        Some(InitWorkspaceBrowser {
+            mode: InitWorkspaceBrowserMode::ChromeDevtools,
+            url: None,
+            app: None,
+            chrome_devtools_user_data_dir: Some(
+                "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}".into(),
+            ),
+        }),
+    );
+    push_browser_option(
+        &mut options,
+        "시스템 browser".into(),
+        Some(InitWorkspaceBrowser {
+            mode: InitWorkspaceBrowserMode::System,
+            url: None,
+            app: Some("Google Chrome".into()),
+            chrome_devtools_user_data_dir: None,
+        }),
+    );
+    push_browser_option(&mut options, "browser 열지 않음".into(), None);
+
+    let items = options
+        .iter()
+        .map(|(label, _)| label.clone())
+        .collect::<Vec<_>>();
+    ctx.ui
+        .print_dim("workspace browser는 workspace에서 local site를 열 browser surface를 정합니다.");
+    Ok(options[ctx
+        .ui
+        .select_nested_without_filter("workspace browser", &items)?]
+    .1
+    .clone())
+}
+
+fn push_browser_option(
+    options: &mut Vec<(String, Option<InitWorkspaceBrowser>)>,
+    label: String,
+    browser: Option<InitWorkspaceBrowser>,
+) {
+    if !options
+        .iter()
+        .any(|(_, existing)| same_browser_choice(existing.as_ref(), browser.as_ref()))
+    {
+        options.push((label, browser));
+    }
+}
+
+fn same_browser_choice(
+    left: Option<&InitWorkspaceBrowser>,
+    right: Option<&InitWorkspaceBrowser>,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.mode == right.mode && left.url == right.url && left.app == right.app
         }
+        _ => false,
+    }
+}
+
+fn workspace_browser_choice_label(browser: &InitWorkspaceBrowser) -> &'static str {
+    match browser.mode {
+        InitWorkspaceBrowserMode::System => "시스템 browser",
+        InitWorkspaceBrowserMode::ChromeDevtools => "Chrome DevTools",
     }
 }
 
@@ -947,12 +1780,29 @@ fn split_list(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn resolve_setup_deps(ctx: &Ctx, detected: &DetectedRepo) -> Result<Vec<InitCommand>> {
+fn resolve_setup_deps(
+    ctx: &Ctx,
+    detected: &DetectedRepo,
+    current: &[InitCommand],
+) -> Result<Vec<InitCommand>> {
     let mut selected = Vec::new();
+    if !detected.setup_deps.is_empty() {
+        ctx.ui
+            .print_dim("setup command는 wt가 새 worktree를 만든 뒤 실행됩니다.");
+    }
     for mut command in detected.setup_deps.clone() {
+        if let Some(existing) = current.iter().find(|existing| {
+            existing.working_dir == command.working_dir
+                && existing.if_exists == command.if_exists
+                && existing.kind == command.kind
+                && (existing.kind == InitCommandKind::NodeInstall || existing.run == command.run)
+        }) {
+            command.run = existing.run.clone();
+            command.default_enabled = true;
+        }
         let display = command_display(&command);
         if !ctx.ui.confirm(
-            &format!("Use detected setup command ({display})?"),
+            &format!("감지된 setup command를 사용할까요 ({display})?"),
             command.default_enabled,
         )? {
             continue;
@@ -968,7 +1818,7 @@ fn resolve_setup_deps(ctx: &Ctx, detected: &DetectedRepo) -> Result<Vec<InitComm
 fn resolve_node_install_command(ctx: &Ctx, command: &InitCommand) -> Result<String> {
     let detected = command.run.as_str();
     let mut options = Vec::new();
-    push_node_install_option(&mut options, format!("{detected} (detected)"), detected);
+    push_node_install_option(&mut options, format!("{detected} (감지됨)"), detected);
     push_node_install_option(&mut options, "npm install".into(), "npm install");
     push_node_install_option(&mut options, "pnpm install".into(), "pnpm install");
     push_node_install_option(&mut options, "yarn install".into(), "yarn install");
@@ -983,18 +1833,18 @@ fn resolve_node_install_command(ctx: &Ctx, command: &InitCommand) -> Result<Stri
         .iter()
         .map(|(label, _)| label.clone())
         .collect::<Vec<_>>();
-    items.push("custom".into());
+    items.push("직접 입력".into());
 
     let prompt = command.working_dir.as_deref().map_or_else(
-        || "Package install command".to_string(),
-        |working_dir| format!("Package install command for {working_dir}"),
+        || "패키지 설치 명령".to_string(),
+        |working_dir| format!("패키지 설치 명령 ({working_dir})"),
     );
-    let selection = ctx.ui.select(&prompt, &items)?;
+    let selection = ctx.ui.select_nested_without_filter(&prompt, &items)?;
     if selection < options.len() {
         return Ok(options[selection].1.clone());
     }
 
-    let input = ctx.ui.input("Custom install command", Some(detected))?;
+    let input = ctx.ui.input("설치 명령 직접 입력", Some(detected))?;
     let input = input.trim();
     Ok(if input.is_empty() {
         detected.to_string()
@@ -1009,6 +1859,40 @@ fn push_node_install_option(options: &mut Vec<(String, String)>, label: String, 
     }
 }
 
+fn print_detected_commands(ctx: &Ctx, title: &str, commands: &[InitCommand]) {
+    if commands.len() == 1 {
+        ctx.ui
+            .print_dim(&format!("{title}: {}", command_display(&commands[0])));
+        return;
+    }
+
+    ctx.ui.print_dim(&format!("{title}:"));
+    for command in commands {
+        ctx.ui
+            .print_dim(&format!("  - {}", command_display(command)));
+    }
+}
+
+fn print_detected_dev_server_commands(ctx: &Ctx, commands: &[String]) {
+    if commands.len() == 1 {
+        ctx.ui
+            .print_dim(&format!("감지한 dev server command: {}", commands[0]));
+        return;
+    }
+
+    ctx.ui.print_dim("감지한 dev server commands:");
+    for command in commands {
+        ctx.ui.print_dim(&format!("  - {command}"));
+    }
+}
+
+fn dev_server_confirm_prompt(commands: &[String]) -> String {
+    if commands.len() == 1 {
+        return format!("setup 후 {}를 dev 탭에서 시작할까요?", commands[0]);
+    }
+    "setup 후 감지한 dev server 명령들을 dev 탭에서 시작할까요?".into()
+}
+
 fn detect_setup_deps(repo_root: &Path) -> Vec<InitCommand> {
     let mut commands = Vec::new();
     for rel_dir in detect_manifest_dirs(
@@ -1021,7 +1905,7 @@ fn detect_setup_deps(repo_root: &Path) -> Vec<InitCommand> {
             commands.push(InitCommand {
                 label: None,
                 working_dir: working_dir.clone(),
-                run: format!("{} install", node_package_manager(&project_root)),
+                run: node_install_command(&project_root),
                 if_exists: None,
                 kind: InitCommandKind::NodeInstall,
                 default_enabled: true,
@@ -1031,7 +1915,7 @@ fn detect_setup_deps(repo_root: &Path) -> Vec<InitCommand> {
             commands.push(InitCommand {
                 label: None,
                 working_dir: working_dir.clone(),
-                run: "composer install".into(),
+                run: "composer install --no-interaction --no-progress".into(),
                 if_exists: None,
                 kind: InitCommandKind::Other,
                 default_enabled: true,
@@ -1110,6 +1994,35 @@ fn detect_test_commands(repo_root: &Path) -> Vec<InitCommand> {
         }
     }
     commands
+}
+
+fn detect_issue_provider(repo_root: &Path) -> Option<InitIssueProvider> {
+    repo_root
+        .join(".linear.toml")
+        .exists()
+        .then_some(InitIssueProvider::Linear)
+}
+
+fn detect_site_provider(repo_root: &Path) -> Option<InitSiteProvider> {
+    if is_laravel_project(repo_root) {
+        return Some(InitSiteProvider::Herd);
+    }
+    None
+}
+
+fn detect_local_links(repo_root: &Path) -> Vec<String> {
+    [".local", ".linear.toml", "CLAUDE.local.md"]
+        .into_iter()
+        .filter(|path| repo_root.join(path).exists())
+        .map(str::to_string)
+        .collect()
+}
+
+fn is_laravel_project(repo_root: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(repo_root.join("composer.json")) else {
+        return false;
+    };
+    content.contains("\"laravel/framework\"")
 }
 
 fn command_display(command: &InitCommand) -> String {
@@ -1229,6 +2142,7 @@ fn is_ignored_manifest_dir(name: &str) -> bool {
             | ".turbo"
             | ".cache"
             | "node_modules"
+            | "references"
             | "vendor"
             | "target"
             | "dist"
@@ -1267,6 +2181,15 @@ fn node_package_manager(project_root: &Path) -> &'static str {
     })
 }
 
+fn node_install_command(project_root: &Path) -> String {
+    let manager = node_package_manager(project_root);
+    if manager == "npm" && project_root.join("package-lock.json").exists() {
+        "npm ci".into()
+    } else {
+        format!("{manager} install")
+    }
+}
+
 fn package_manager_from_package_json(project_root: &Path) -> Option<&'static str> {
     let content = std::fs::read_to_string(project_root.join("package.json")).ok()?;
     let value = serde_json::from_str::<serde_json::Value>(&content).ok()?;
@@ -1288,14 +2211,17 @@ fn known_node_package_manager(name: &str) -> Option<&'static str> {
 fn resolve_profile(
     ctx: &Ctx,
     options: &InitOptions,
-    preset: InitPreset,
+    defaults: &InitDefaults,
 ) -> Result<Option<InitProfile>> {
-    if !preset_includes_agent(preset) && !explicit_agent_requested(options) {
+    if !explicit_agent_requested(options)
+        && defaults.agent.is_none()
+        && (options.yes || options.dry_run)
+    {
         return Ok(None);
     }
 
-    let agent = resolve_agent(ctx, options)?;
-    let command = resolve_agent_command(options)?;
+    let agent = resolve_agent(ctx, options, defaults)?;
+    let command = resolve_agent_command(options, &agent, defaults)?;
     if agent == InitAgent::None {
         if command.is_some() {
             bail!("--agent-command cannot be used when --agent none");
@@ -1305,41 +2231,50 @@ fn resolve_profile(
         }
         return Ok(None);
     }
-    let args = resolve_agent_args(ctx, &agent, options)?;
-    Ok(build_profile(&agent, args, command))
+    let args = resolve_agent_args(ctx, &agent, options, defaults)?;
+    Ok(build_profile(&agent, args, command, defaults))
 }
 
-fn resolve_agent(ctx: &Ctx, options: &InitOptions) -> Result<InitAgent> {
+fn resolve_agent(ctx: &Ctx, options: &InitOptions, defaults: &InitDefaults) -> Result<InitAgent> {
     if let Some(agent) = &options.agent {
         return Ok(agent.clone());
     }
     if options.yes {
-        return Ok(InitAgent::Codex);
+        return Ok(InitAgent::None);
     }
 
-    let items = vec![
-        "Codex".into(),
-        "Claude".into(),
-        "Gemini".into(),
-        "No coding agent".into(),
-    ];
-    let agent = match ctx.ui.select("Coding agent", &items)? {
-        0 => InitAgent::Codex,
-        1 => InitAgent::Claude,
-        2 => InitAgent::Gemini,
-        _ => InitAgent::None,
-    };
-    Ok(agent)
+    let default_agent = defaults
+        .agent
+        .as_ref()
+        .map(|agent| init_agent_from_cli(&agent.cli));
+    let choices = ordered_agents(default_agent);
+    let items = choices.iter().map(agent_choice_label).collect::<Vec<_>>();
+    Ok(choices[ctx.ui.select_nested_without_filter("코딩 agent", &items)?].clone())
 }
 
-fn resolve_agent_command(options: &InitOptions) -> Result<Option<String>> {
+fn resolve_agent_command(
+    options: &InitOptions,
+    agent: &InitAgent,
+    defaults: &InitDefaults,
+) -> Result<Option<String>> {
     if let Some(command) = &options.agent_command {
         return Ok(Some(command.clone()));
+    }
+    if *agent == InitAgent::None {
+        return Ok(None);
+    }
+    if let Some(default_agent) = matching_default_agent(defaults, agent) {
+        return Ok(default_agent.command.clone());
     }
     Ok(None)
 }
 
-fn resolve_agent_args(ctx: &Ctx, agent: &InitAgent, options: &InitOptions) -> Result<Vec<String>> {
+fn resolve_agent_args(
+    ctx: &Ctx,
+    agent: &InitAgent,
+    options: &InitOptions,
+    defaults: &InitDefaults,
+) -> Result<Vec<String>> {
     if !options.agent_args.is_empty() {
         return Ok(options.agent_args.clone());
     }
@@ -1350,23 +2285,42 @@ fn resolve_agent_args(ctx: &Ctx, agent: &InitAgent, options: &InitOptions) -> Re
         return Ok(Vec::new());
     }
 
-    let items = vec!["No extra args".into(), "Enter custom args".into()];
-    match ctx.ui.select("Agent launch args", &items)? {
-        0 => Ok(Vec::new()),
-        _ => {
-            let input = ctx.ui.input("Custom agent args", None)?;
-            Ok(input
-                .split_whitespace()
-                .map(str::to_string)
-                .collect::<Vec<_>>())
-        }
+    let default_args = matching_default_agent(defaults, agent)
+        .map(|agent| agent.args.clone())
+        .unwrap_or_default();
+    let default_args_input = (!default_args.is_empty()).then(|| default_args.join(" "));
+    let mut items = Vec::new();
+    if let Some(default) = default_args_input.as_deref() {
+        items.push(format!("기존 args 유지: {default}"));
     }
+    items.push("추가 args 없음".into());
+    items.push("args 직접 입력".into());
+
+    let selection = ctx
+        .ui
+        .select_nested_without_filter("agent 실행 args", &items)?;
+    if !default_args.is_empty() && selection == 0 {
+        return Ok(default_args);
+    }
+    let custom_index = items.len() - 1;
+    if selection != custom_index {
+        return Ok(Vec::new());
+    }
+
+    let input = ctx
+        .ui
+        .input("agent args 직접 입력", default_args_input.as_deref())?;
+    Ok(input
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>())
 }
 
 fn resolve_issue_provider(
     ctx: &Ctx,
     options: &InitOptions,
-    preset: InitPreset,
+    detected: &DetectedRepo,
+    defaults: &InitDefaults,
 ) -> Result<Option<InitIssueProvider>> {
     if let Some(provider) = explicit_issue_provider(options.issue_provider.as_ref()) {
         return Ok(Some(provider));
@@ -1374,29 +2328,35 @@ fn resolve_issue_provider(
     if matches!(options.issue_provider, Some(InitIssueProvider::None)) {
         return Ok(None);
     }
-    if !preset_includes_issue_provider(preset) {
+    let recommended = defaults
+        .issue_provider
+        .clone()
+        .or_else(|| detected.issue_provider.clone());
+    if recommended.is_none() {
         return Ok(None);
     }
     if options.yes {
-        return Ok(Some(InitIssueProvider::Github));
+        return Ok(recommended);
     }
 
-    let items = vec![
-        "GitHub issues".into(),
-        "Linear issues".into(),
-        "Skip issue workflow".into(),
-    ];
-    Ok(match ctx.ui.select("Issue workflow", &items)? {
-        0 => Some(InitIssueProvider::Github),
-        1 => Some(InitIssueProvider::Linear),
-        _ => None,
-    })
+    let choices = ordered_issue_providers(recommended.as_ref());
+    let items = choices
+        .iter()
+        .map(issue_provider_choice_label)
+        .collect::<Vec<_>>();
+    let provider = choices[ctx.ui.select_nested_without_filter("issue 도구", &items)?].clone();
+    if provider == InitIssueProvider::None {
+        Ok(None)
+    } else {
+        Ok(Some(provider))
+    }
 }
 
 fn resolve_site_provider(
     ctx: &Ctx,
     options: &InitOptions,
-    preset: InitPreset,
+    detected: &DetectedRepo,
+    defaults: &InitDefaults,
 ) -> Result<Option<InitSiteProvider>> {
     if let Some(provider) = explicit_site_provider(options.site_provider.as_ref()) {
         return Ok(Some(provider));
@@ -1404,30 +2364,38 @@ fn resolve_site_provider(
     if matches!(options.site_provider, Some(InitSiteProvider::None)) {
         return Ok(None);
     }
-    if !preset_includes_site_provider(preset) {
+    let recommended = defaults
+        .site_provider
+        .clone()
+        .or_else(|| detected.site_provider.clone());
+    if recommended.is_none() {
         return Ok(None);
     }
     if options.yes {
-        return Ok(None);
+        return Ok(recommended);
     }
 
-    let items = vec![
-        "No local site".into(),
-        "Herd".into(),
-        "Valet".into(),
-        "Docker proxy".into(),
-        "Traefik".into(),
-    ];
-    Ok(match ctx.ui.select("Local site", &items)? {
-        1 => Some(InitSiteProvider::Herd),
-        2 => Some(InitSiteProvider::Valet),
-        3 => Some(InitSiteProvider::DockerProxy),
-        4 => Some(InitSiteProvider::Traefik),
-        _ => None,
-    })
+    let choices = ordered_site_providers(recommended.as_ref());
+    let items = choices
+        .iter()
+        .map(site_provider_choice_label)
+        .collect::<Vec<_>>();
+    let provider = choices[ctx
+        .ui
+        .select_nested_without_filter("local site 설정", &items)?]
+    .clone();
+    if provider == InitSiteProvider::None {
+        Ok(None)
+    } else {
+        Ok(Some(provider))
+    }
 }
 
-fn resolve_gh_user(ctx: &Ctx, options: &InitOptions) -> Result<Option<String>> {
+fn resolve_gh_user(
+    ctx: &Ctx,
+    options: &InitOptions,
+    defaults: &InitDefaults,
+) -> Result<Option<String>> {
     if let Some(user) = options.gh_user.as_deref() {
         let user = user.trim();
         return Ok((!user.is_empty()).then(|| user.to_string()));
@@ -1436,16 +2404,117 @@ fn resolve_gh_user(ctx: &Ctx, options: &InitOptions) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    let user = ctx.ui.input("GitHub user filter (optional)", Some(""))?;
+    let user = ctx.ui.input(
+        "GitHub 사용자 필터 (선택)",
+        Some(defaults.gh_user.as_deref().unwrap_or("")),
+    )?;
     let user = user.trim();
     Ok((!user.is_empty()).then(|| user.to_string()))
+}
+
+fn ordered_agents(default: Option<InitAgent>) -> Vec<InitAgent> {
+    ordered_values(&[InitAgent::Codex, InitAgent::Claude], default.as_ref())
+}
+
+fn ordered_issue_providers(default: Option<&InitIssueProvider>) -> Vec<InitIssueProvider> {
+    ordered_values(
+        &[
+            InitIssueProvider::Github,
+            InitIssueProvider::Linear,
+            InitIssueProvider::None,
+        ],
+        default,
+    )
+}
+
+fn ordered_site_providers(default: Option<&InitSiteProvider>) -> Vec<InitSiteProvider> {
+    ordered_values(
+        &[
+            InitSiteProvider::Herd,
+            InitSiteProvider::Valet,
+            InitSiteProvider::DockerProxy,
+            InitSiteProvider::Traefik,
+            InitSiteProvider::None,
+        ],
+        default,
+    )
+}
+
+fn ordered_values<T: Clone + PartialEq>(values: &[T], default: Option<&T>) -> Vec<T> {
+    let mut ordered = Vec::with_capacity(values.len());
+    if let Some(default) = default
+        && values.contains(default)
+    {
+        ordered.push(default.clone());
+    }
+    for value in values {
+        if ordered.iter().all(|existing| existing != value) {
+            ordered.push(value.clone());
+        }
+    }
+    ordered
+}
+
+fn agent_choice_label(agent: &InitAgent) -> String {
+    match agent {
+        InitAgent::Codex => "Codex",
+        InitAgent::Claude => "Claude",
+        InitAgent::Gemini => "Gemini",
+        InitAgent::None => "코딩 agent 없음",
+    }
+    .into()
+}
+
+fn issue_provider_choice_label(provider: &InitIssueProvider) -> String {
+    match provider {
+        InitIssueProvider::Github => "GitHub issues",
+        InitIssueProvider::Linear => "Linear issues",
+        InitIssueProvider::None => "건너뛰기",
+    }
+    .into()
+}
+
+fn site_provider_choice_label(provider: &InitSiteProvider) -> String {
+    match provider {
+        InitSiteProvider::None => "건너뛰기",
+        InitSiteProvider::Herd => "Herd",
+        InitSiteProvider::Valet => "Valet",
+        InitSiteProvider::DockerProxy => "Docker proxy",
+        InitSiteProvider::Traefik => "Traefik",
+    }
+    .into()
+}
+
+fn init_agent_from_cli(agent: &AgentCli) -> InitAgent {
+    match agent {
+        AgentCli::Codex => InitAgent::Codex,
+        AgentCli::Claude => InitAgent::Claude,
+        AgentCli::Gemini => InitAgent::Gemini,
+        AgentCli::None => InitAgent::None,
+    }
+}
+
+fn matching_default_agent<'a>(
+    defaults: &'a InitDefaults,
+    selected: &InitAgent,
+) -> Option<&'a AgentConfig> {
+    defaults
+        .agent
+        .as_ref()
+        .filter(|agent| agent.cli != AgentCli::None && init_agent_from_cli(&agent.cli) == *selected)
 }
 
 fn build_profile(
     agent: &InitAgent,
     args: Vec<String>,
     command: Option<String>,
+    defaults: &InitDefaults,
 ) -> Option<InitProfile> {
+    let prompt = matching_default_agent(defaults, agent)
+        .map(|agent| agent.prompt.clone())
+        .filter(|prompt| !prompt.is_empty())
+        .unwrap_or_else(default_agent_prompts);
+
     (*agent != InitAgent::None).then(|| InitProfile {
         agent: AgentConfig {
             cli: init_agent_cli(agent),
@@ -1455,32 +2524,123 @@ fn build_profile(
             submit: SubmitMode::Auto,
             timeout: 30,
             send_after: 2,
-            prompt: Default::default(),
+            prompt,
+            ..AgentConfig::default()
         },
     })
 }
 
 fn append_profile_selection(s: &mut String, profile: &InitProfile) {
-    append_inline_agent_section(s, &profile.agent);
+    append_inline_agent_section(s, &profile.agent, true);
     s.push('\n');
 }
 
-fn append_inline_agent_section(s: &mut String, agent: &AgentConfig) {
+fn append_inline_agent_section(s: &mut String, agent: &AgentConfig, include_prompt: bool) {
     s.push_str("[profile.agent]\n");
+    s.push_str("# 이 프로필로 실행할 coding agent CLI입니다.\n");
     s.push_str(&format!(
         "cli = {}\n",
         toml_quote(agent_cli_name(&agent.cli))
     ));
     if !agent.args.is_empty() {
+        s.push_str("# agent를 실행할 때 항상 추가할 CLI args입니다.\n");
         s.push_str(&format!("args = {}\n", toml_array(&agent.args)));
     }
     if let Some(command) = agent.command.as_deref() {
+        s.push_str("# cli 이름만으로 부족할 때 사용할 전체 실행 command입니다.\n");
         s.push_str(&format!("command = {}\n", toml_quote(command)));
     }
-    s.push_str(&format!(
-        "timeout = {}\nsend_after = {}\n",
-        agent.timeout, agent.send_after
-    ));
+    s.push_str("# timeout은 agent 준비 신호를 기다릴 최대 시간(초)입니다.\n");
+    s.push_str(&format!("timeout = {}\n", agent.timeout));
+    s.push_str("# send_after는 prompt를 보낸 뒤 submit하기 전 대기 시간(초)입니다.\n");
+    s.push_str(&format!("send_after = {}\n", agent.send_after));
+    if include_prompt && !agent.prompt.is_empty() {
+        s.push('\n');
+        s.push_str("[profile.agent.prompt]\n");
+        s.push_str("# wt가 기본 launch prompt 뒤에 덧붙이는 profile prompt입니다.\n");
+        append_agent_prompts(s, &agent.prompt);
+    }
+}
+
+fn append_agent_prompts(s: &mut String, prompts: &std::collections::HashMap<String, Vec<String>>) {
+    let mut entries = prompts.iter().collect::<Vec<_>>();
+    entries.sort_by(|(left, _), (right, _)| prompt_mode_order(left).cmp(&prompt_mode_order(right)));
+    for (mode, prompt_blocks) in entries {
+        append_prompt_array(s, mode, prompt_blocks);
+    }
+}
+
+fn append_prompt_array(s: &mut String, mode: &str, prompt_blocks: &[String]) {
+    if let Some(comment) = prompt_mode_comment(mode) {
+        s.push_str(comment);
+    }
+    s.push_str(&format!("{mode} = [\n"));
+    for block in prompt_blocks {
+        s.push_str(&format!("    {},\n", toml_quote(block)));
+    }
+    s.push_str("]\n");
+}
+
+fn prompt_mode_comment(mode: &str) -> Option<&'static str> {
+    match mode {
+        "common" => Some(
+            "# common은 issue/branch/pr prompt 앞에 공통으로 붙습니다.\n\
+             # 모든 작업에 반복되는 보고 방식, 검증 기준, 범위 제한을 넣기 좋습니다.\n",
+        ),
+        "issue" => Some(
+            "# issue는 provider issue에서 시작하는 `wt run issue` 작업에 붙습니다.\n\
+             # GitHub/Linear issue의 문제, 수용 기준, 댓글 맥락을 우선 확인하게 할 때 씁니다.\n",
+        ),
+        "branch" => Some(
+            "# branch는 branch-name text로 시작하는 `wt run branch` 작업에 붙습니다.\n\
+             # 현재 branch 이름, task context, 기존 diff에서 작업 범위를 추론하게 할 때 씁니다.\n",
+        ),
+        "pr" => Some(
+            "# pr은 pull request branch를 여는 `wt run pr` 작업에 붙습니다.\n\
+             # review comment, 실패한 check, PR diff를 우선순위로 다루게 할 때 씁니다.\n",
+        ),
+        "workflow" => Some(
+            "# workflow는 `wt run workflow`로 시작한 workflow task에만 붙습니다.\n\
+             # issue/branch setup prompt와 함께 추가되는 workflow 전용 지침입니다.\n",
+        ),
+        _ => None,
+    }
+}
+
+fn prompt_mode_order(mode: &str) -> (usize, &str) {
+    let order = match mode {
+        "common" => 0,
+        "issue" => 1,
+        "branch" => 2,
+        "pr" => 3,
+        "workflow" => 4,
+        _ => 5,
+    };
+    (order, mode)
+}
+
+fn default_agent_prompts() -> std::collections::HashMap<String, Vec<String>> {
+    [
+        (
+            "common",
+            "Before editing, identify the intended outcome, the smallest coherent change, and the checks that should prove it.",
+        ),
+        (
+            "issue",
+            "Use the linked issue as the contract: extract the user-visible problem, acceptance criteria, constraints, and comments that change scope before coding.",
+        ),
+        (
+            "branch",
+            "Use the current branch and local task context as the contract: inspect recent commits and existing diff, then continue only the requested line of work.",
+        ),
+        (
+            "pr",
+            "Use review comments, CI failures, and the PR diff as the contract: fix correctness and regressions first, and explain any non-code decisions.",
+        ),
+    ]
+    .into_iter()
+    .map(|(mode, prompt)| (mode.to_string(), vec![prompt.to_string()]))
+    .collect()
 }
 
 fn init_agent_cli(agent: &InitAgent) -> AgentCli {
@@ -1490,18 +2650,6 @@ fn init_agent_cli(agent: &InitAgent) -> AgentCli {
         InitAgent::Gemini => AgentCli::Gemini,
         InitAgent::None => AgentCli::None,
     }
-}
-
-fn preset_includes_agent(preset: InitPreset) -> bool {
-    preset == InitPreset::Agent
-}
-
-fn preset_includes_issue_provider(preset: InitPreset) -> bool {
-    preset == InitPreset::Issue
-}
-
-fn preset_includes_site_provider(preset: InitPreset) -> bool {
-    preset == InitPreset::App
 }
 
 fn explicit_agent_requested(options: &InitOptions) -> bool {
@@ -1539,26 +2687,32 @@ fn agent_cli_name(agent: &AgentCli) -> &'static str {
     }
 }
 
-fn preset_name(preset: InitPreset) -> &'static str {
-    match preset {
-        InitPreset::Minimal => "minimal",
-        InitPreset::Agent => "agent",
-        InitPreset::Issue => "issue",
-        InitPreset::App => "app",
-    }
-}
-
 fn target_kind_name(kind: InitTargetKind) -> &'static str {
     match kind {
-        InitTargetKind::Local => "local",
-        InitTargetKind::Shared => "shared",
+        InitTargetKind::Local => "개인 설정",
+        InitTargetKind::Shared => "팀 공유 설정",
     }
 }
 
-fn notice_level_name(level: InitNoticeLevel) -> &'static str {
-    match level {
-        InitNoticeLevel::Hint => "hint",
-        InitNoticeLevel::Warn => "warn",
+fn default_workflow_policy() -> WorkflowDefaultPolicy {
+    WorkflowDefaultPolicy {
+        pull_request: WorkflowDefaultPullRequestMode::None,
+        landing: WorkflowDefaultLandingPolicy::Manual,
+    }
+}
+
+fn workflow_pull_request_name(mode: WorkflowDefaultPullRequestMode) -> &'static str {
+    match mode {
+        WorkflowDefaultPullRequestMode::None => "none",
+        WorkflowDefaultPullRequestMode::Draft => "draft",
+        WorkflowDefaultPullRequestMode::Ready => "ready",
+    }
+}
+
+fn workflow_landing_name(policy: WorkflowDefaultLandingPolicy) -> &'static str {
+    match policy {
+        WorkflowDefaultLandingPolicy::Manual => "manual",
+        WorkflowDefaultLandingPolicy::Auto => "auto",
     }
 }
 
@@ -1577,6 +2731,13 @@ fn site_provider_name(provider: &InitSiteProvider) -> &'static str {
         InitSiteProvider::Valet => "valet",
         InitSiteProvider::DockerProxy => "docker_proxy",
         InitSiteProvider::Traefik => "traefik",
+    }
+}
+
+fn workspace_browser_mode_name(mode: InitWorkspaceBrowserMode) -> &'static str {
+    match mode {
+        InitWorkspaceBrowserMode::System => "system",
+        InitWorkspaceBrowserMode::ChromeDevtools => "chrome_devtools",
     }
 }
 
@@ -1609,7 +2770,7 @@ fn toml_array(values: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AgentCli, IssueProviderType, SiteProvider};
+    use crate::config::{AgentCli, IssueProviderType, SiteProvider, WorkspaceBrowserMode};
     use crate::context::UserInterface;
     use crate::context::mock::{MockRunner, MockUi};
     use std::collections::VecDeque;
@@ -1617,57 +2778,93 @@ mod tests {
 
     fn local_target(dir: &tempfile::TempDir) -> InitTarget {
         InitTarget {
-            path: dir.path().join(".local/.wt.toml"),
+            path: dir.path().join(".git/wt/config.toml"),
             kind: InitTargetKind::Local,
         }
     }
 
     fn ctx_for_dir(dir: &tempfile::TempDir) -> Ctx {
+        ctx_for_dir_with_commands(dir, &[])
+    }
+
+    fn ctx_for_dir_with_commands(dir: &tempfile::TempDir, commands: &[&str]) -> Ctx {
+        let mut runner = MockRunner::new();
+        for command in commands {
+            runner.add_command(command);
+        }
         Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
             Config::default(),
-            Box::new(MockRunner::new()),
+            Box::new(runner),
             Box::new(MockUi::new()),
         )
     }
 
     #[test]
-    fn init_minimal_preset_plan_records_target_preset_and_sections() {
+    fn init_recommendation_plan_records_target_mode_and_sections() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_for_dir(&dir);
 
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::Minimal),
                 yes: true,
                 ..InitOptions::default()
             },
             local_target(&dir),
         )
         .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
 
-        assert_eq!(plan.target_path, dir.path().join(".local/.wt.toml"));
+        assert_eq!(plan.target_path, dir.path().join(".git/wt/config.toml"));
         assert_eq!(plan.target_kind, InitTargetKind::Local);
         assert!(!plan.target_exists);
-        assert_eq!(plan.preset, InitPreset::Minimal);
-        assert_eq!(plan.sections, vec![InitSection::Workspace]);
+        assert_eq!(
+            plan.sections,
+            vec![
+                InitSection::Workflow,
+                InitSection::Worktree,
+                InitSection::Workspace
+            ]
+        );
         assert!(plan.detected_signals.is_empty());
+        assert!(plan.content.contains("[workflow]"));
+        assert!(plan.content.contains("pull_request = \"none\""));
+        assert!(plan.content.contains("landing = \"manual\""));
+        assert!(plan.content.contains(
+            "colors = { task = \"blue\", issue = \"blue\", branch = \"green\", pr = \"magenta\" }"
+        ));
+        let workspace = config.workspace.unwrap();
+        assert_eq!(
+            workspace.colors.get("task").map(String::as_str),
+            Some("blue")
+        );
+        assert_eq!(
+            workspace.colors.get("issue").map(String::as_str),
+            Some("blue")
+        );
+        assert_eq!(
+            workspace.colors.get("branch").map(String::as_str),
+            Some("green")
+        );
+        assert_eq!(
+            workspace.colors.get("pr").map(String::as_str),
+            Some("magenta")
+        );
         assert!(!plan.content.contains("[profile.agent]"));
         assert!(!plan.content.contains("[issues]"));
         assert!(!plan.content.contains("[site]"));
     }
 
     #[test]
-    fn init_minimal_plan_summary_shows_selected_sections_and_no_signals() {
+    fn init_recommendation_plan_summary_shows_selected_sections_and_no_signals() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_for_dir(&dir);
 
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::Minimal),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -1676,22 +2873,21 @@ mod tests {
         .unwrap();
         let summary = render_plan_summary(&plan).join("\n");
 
-        assert!(summary.contains("planned write: create config"));
-        assert!(summary.contains("preset: minimal"));
-        assert!(summary.contains("selected sections: workspace"));
-        assert!(summary.contains("detected signals: none"));
-        assert!(summary.contains("[warn] detected commands: none"));
+        assert!(summary.contains("작업: 새 설정 생성"));
+        assert!(summary.contains("저장될 설정: workflow, worktree, workspace"));
+        assert!(!summary.contains("감지된 신호"));
+        assert!(!summary.contains("감지된 명령"));
     }
 
     #[test]
-    fn init_agent_preset_plan_writes_agent_section() {
+    fn init_explicit_agent_plan_writes_agent_section() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_for_dir(&dir);
 
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::Agent),
+                agent: Some(InitAgent::Codex),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -1701,22 +2897,55 @@ mod tests {
 
         assert_eq!(
             plan.sections,
-            vec![InitSection::ProfileAgent, InitSection::Workspace]
+            vec![
+                InitSection::Workflow,
+                InitSection::ProfileAgent,
+                InitSection::ProfileAgentPrompt,
+                InitSection::Worktree,
+                InitSection::Workspace
+            ]
         );
         assert!(plan.content.contains("[profile.agent]"));
+        assert!(plan.content.contains("[profile.agent.prompt]"));
         assert!(plan.content.contains("cli = \"codex\""));
+        assert!(plan.content.contains("common = ["));
+        assert!(plan.content.contains("issue = ["));
+        assert!(plan.content.contains("branch = ["));
+        assert!(plan.content.contains("pr = ["));
+        assert!(
+            plan.content
+                .contains("# 이 프로필로 실행할 coding agent CLI입니다.")
+        );
+        assert!(
+            plan.content
+                .contains("# common은 issue/branch/pr prompt 앞에 공통으로 붙습니다.")
+        );
+        assert!(
+            plan.content
+                .contains("# issue는 provider issue에서 시작하는 `wt run issue` 작업에 붙습니다.")
+        );
+        assert!(
+            plan.content.contains(
+                "# branch는 branch-name text로 시작하는 `wt run branch` 작업에 붙습니다."
+            )
+        );
+        assert!(
+            plan.content
+                .contains("# pr은 pull request branch를 여는 `wt run pr` 작업에 붙습니다.")
+        );
+        assert!(!plan.content.contains("Read AGENTS.md"));
         assert!(!plan.content.contains("[issues]"));
     }
 
     #[test]
-    fn init_issue_preset_plan_writes_issue_section() {
+    fn init_explicit_issue_provider_plan_writes_issue_section() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_for_dir(&dir);
 
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::Issue),
+                issue_provider: Some(InitIssueProvider::Github),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -1726,10 +2955,17 @@ mod tests {
 
         assert_eq!(
             plan.sections,
-            vec![InitSection::Issues, InitSection::Workspace]
+            vec![
+                InitSection::Issues,
+                InitSection::Workflow,
+                InitSection::Worktree,
+                InitSection::WorktreeNaming,
+                InitSection::Workspace
+            ]
         );
         assert!(plan.content.contains("[issues]"));
         assert!(plan.content.contains("provider = \"github\""));
+        assert!(plan.content.contains("[worktree.naming]"));
         assert!(!plan.content.contains("[profile.agent]"));
     }
 
@@ -1741,7 +2977,7 @@ mod tests {
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::Issue),
+                issue_provider: Some(InitIssueProvider::Github),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -1750,11 +2986,13 @@ mod tests {
         .unwrap();
         let summary = render_plan_summary(&plan).join("\n");
 
-        assert!(summary.contains("selected sections: issues, workspace"));
-        assert!(summary.contains("[warn] gh CLI missing"));
+        assert!(
+            summary.contains("저장될 설정: issues, workflow, worktree, worktree.naming, workspace")
+        );
+        assert!(summary.contains("경고\n  - gh CLI가 없습니다"));
         assert!(
             summary.contains(
-                "[hint] issue agent prompt: no agent runtime selected; add --agent <name>"
+                "안내\n  - issue agent prompt: 선택된 agent runtime이 없습니다. issue 작업에서 agent를 바로 실행하려면 --agent <name>"
             )
         );
         assert!(!plan.content.contains("[profile.agent]"));
@@ -1768,8 +3006,8 @@ mod tests {
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::Issue),
                 agent: Some(InitAgent::Codex),
+                issue_provider: Some(InitIssueProvider::Github),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -1780,23 +3018,23 @@ mod tests {
 
         assert!(plan.content.contains("[issues]"));
         assert!(plan.content.contains("[profile.agent]"));
-        assert!(summary.contains("[hint] issue agent prompt: ready via codex"));
+        assert!(plan.content.contains("[profile.agent.prompt]"));
+        assert!(summary.contains("안내\n  - issue agent prompt: codex로 실행 준비됨"));
     }
 
     #[test]
-    fn init_app_preset_plan_writes_detected_app_sections() {
+    fn init_recommendation_plan_writes_detected_project_sections() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("package.json"),
             r#"{"scripts":{"dev":"vite","test":"vitest","lint":"eslint ."}}"#,
         )
         .unwrap();
-        let ctx = ctx_for_dir(&dir);
+        let ctx = ctx_for_dir_with_commands(&dir, &["cmux"]);
 
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::App),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -1807,6 +3045,8 @@ mod tests {
         assert_eq!(
             plan.sections,
             vec![
+                InitSection::Workflow,
+                InitSection::Worktree,
                 InitSection::Setup,
                 InitSection::Test,
                 InitSection::Workspace
@@ -1832,11 +3072,11 @@ mod tests {
     }
 
     #[test]
-    fn init_app_preset_detects_rust_only_repo_tests() {
+    fn init_recommendation_without_cmux_omits_workspace_automation() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
-            dir.path().join("Cargo.toml"),
-            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            dir.path().join("package.json"),
+            r#"{"scripts":{"dev":"vite","test":"vitest"}}"#,
         )
         .unwrap();
         let ctx = ctx_for_dir(&dir);
@@ -1844,7 +3084,154 @@ mod tests {
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::App),
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+        let workspace = config.workspace.unwrap();
+
+        assert!(
+            plan.detected_signals
+                .contains(&"post-deps tab: npm run dev".to_string())
+        );
+        assert!(workspace.tabs.is_empty());
+        assert!(workspace.post_deps_tabs.is_empty());
+        assert!(!plan.content.contains("post_deps_tabs"));
+    }
+
+    #[test]
+    fn init_recommendation_uses_only_installed_cmux_workspace_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir_with_commands(&dir, &["cmux", "lazygit"]);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+
+        assert_eq!(config.workspace.unwrap().tabs, vec!["lazygit".to_string()]);
+        assert!(plan.content.contains("tabs = [\"lazygit\"]"));
+    }
+
+    #[test]
+    fn init_recommendation_writes_local_project_specific_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "APP_KEY=secret\n").unwrap();
+        std::fs::write(dir.path().join(".linear.toml"), "[workspace]\n").unwrap();
+        std::fs::create_dir(dir.path().join(".local")).unwrap();
+        std::fs::write(dir.path().join("CLAUDE.local.md"), "local notes\n").unwrap();
+        std::fs::write(
+            dir.path().join("composer.json"),
+            r#"{"require":{"laravel/framework":"^13.0"}}"#,
+        )
+        .unwrap();
+        let ctx = ctx_for_dir_with_commands(&dir, &["cmux"]);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+
+        assert!(plan.content.contains("[worktree]\n"));
+        assert_eq!(config.worktree.copy, vec![".env"]);
+        assert!(config.worktree.copy_as.is_empty());
+        assert_eq!(
+            config.worktree.inject_local_context.as_deref(),
+            Some(DEFAULT_INJECT_LOCAL_CONTEXT)
+        );
+        assert!(plan.content.contains("inject_local_context = \"\"\""));
+        assert!(plan.content.contains("- site: {{site_url}}"));
+        assert!(plan.content.contains("- worktree: {{worktree_path}}"));
+        assert!(plan.content.contains("- parent: {{parent_branch}}"));
+        assert_eq!(
+            config.worktree.link,
+            vec![".local", ".linear.toml", "CLAUDE.local.md"]
+        );
+        let naming = config.worktree.naming.unwrap();
+        assert_eq!(naming.command, "claude -p");
+        assert_eq!(
+            naming.branch.as_deref(),
+            Some("{{branch_prefix}}{{issue_key_lower}}-{{english_slug}}")
+        );
+        assert_eq!(config.issues.unwrap().provider, IssueProviderType::Linear);
+        assert_eq!(config.site.unwrap().provider, SiteProvider::Herd);
+        let workspace = config.workspace.unwrap();
+        assert_eq!(
+            workspace.browser.unwrap().mode,
+            WorkspaceBrowserMode::ChromeDevtools
+        );
+        assert_eq!(
+            workspace.chrome_devtools.unwrap().user_data_dir.as_deref(),
+            Some("{{worktree_parent}}/.chrome-devtools/{{worktree_name}}")
+        );
+        assert!(plan.content.contains("[workspace.browser]"));
+        assert!(plan.content.contains("mode = \"chrome_devtools\""));
+        assert!(!plan.content.contains("php artisan storage:link"));
+        assert!(!plan.content.contains("setup-env"));
+    }
+
+    #[test]
+    fn init_shared_recommendation_omits_private_local_helpers() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "APP_KEY=secret\n").unwrap();
+        std::fs::write(dir.path().join(".linear.toml"), "[workspace]\n").unwrap();
+        std::fs::write(
+            dir.path().join("composer.json"),
+            r#"{"require":{"laravel/framework":"^13.0"}}"#,
+        )
+        .unwrap();
+        let ctx = ctx_for_dir_with_commands(&dir, &["cmux"]);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+            InitTarget {
+                path: dir.path().join(".wt.toml"),
+                kind: InitTargetKind::Shared,
+            },
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+
+        assert!(config.worktree.copy.is_empty());
+        assert!(config.worktree.link.is_empty());
+        assert!(config.worktree.naming.is_none());
+        assert!(config.workspace.unwrap().browser.is_none());
+        assert_eq!(config.issues.unwrap().provider, IssueProviderType::Linear);
+        assert_eq!(config.site.unwrap().provider, SiteProvider::Herd);
+    }
+
+    #[test]
+    fn init_recommendation_detects_rust_only_repo_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        let ctx = ctx_for_dir_with_commands(&dir, &["cmux"]);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
                 yes: true,
                 ..InitOptions::default()
             },
@@ -1859,7 +3246,12 @@ mod tests {
         );
         assert_eq!(
             plan.sections,
-            vec![InitSection::Test, InitSection::Workspace]
+            vec![
+                InitSection::Workflow,
+                InitSection::Worktree,
+                InitSection::Test,
+                InitSection::Workspace
+            ]
         );
         assert!(config.setup.deps.is_empty());
         let test = config.test.unwrap();
@@ -1870,19 +3262,24 @@ mod tests {
     }
 
     #[test]
-    fn init_app_preset_detects_node_scripts_for_setup_tests_and_dev_tabs() {
+    fn init_recommendation_detects_node_scripts_for_setup_tests_and_dev_tabs() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("package.json"),
             r#"{"packageManager":"pnpm@9.0.0","scripts":{"dev":"vite","test":"vitest","lint":"eslint ."}}"#,
         )
         .unwrap();
-        let ctx = ctx_for_dir(&dir);
+        std::fs::create_dir_all(dir.path().join("references/demo")).unwrap();
+        std::fs::write(
+            dir.path().join("references/demo/package.json"),
+            r#"{"scripts":{"dev":"vite","lint":"eslint ."}}"#,
+        )
+        .unwrap();
+        let ctx = ctx_for_dir_with_commands(&dir, &["cmux"]);
 
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::App),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -1907,6 +3304,12 @@ mod tests {
             plan.detected_signals
                 .contains(&"test: pnpm run lint".to_string())
         );
+        assert!(
+            !plan
+                .detected_signals
+                .iter()
+                .any(|signal| signal.contains("references/demo"))
+        );
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].run, "pnpm install");
         let test = config.test.unwrap();
@@ -1922,7 +3325,29 @@ mod tests {
     }
 
     #[test]
-    fn init_app_preset_detects_uv_subproject_setup() {
+    fn init_recommendation_prefers_npm_ci_with_package_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"scripts":{}}"#).unwrap();
+        std::fs::write(dir.path().join("package-lock.json"), "{}").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+
+        assert!(plan.detected_signals.contains(&"setup: npm ci".to_string()));
+        assert_eq!(config.setup.deps[0].run, "npm ci");
+    }
+
+    #[test]
+    fn init_recommendation_detects_uv_subproject_setup() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("api")).unwrap();
         std::fs::write(
@@ -1936,7 +3361,6 @@ mod tests {
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::App),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -1956,7 +3380,7 @@ mod tests {
     }
 
     #[test]
-    fn init_app_preset_detects_polyglot_repo_without_optional_guards() {
+    fn init_recommendation_detects_polyglot_repo_without_optional_guards() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("Cargo.toml"),
@@ -1977,12 +3401,11 @@ mod tests {
             r#"{"packageManager":"bun@1.0.0","scripts":{"dev":"vite","test":"vitest"}}"#,
         )
         .unwrap();
-        let ctx = ctx_for_dir(&dir);
+        let ctx = ctx_for_dir_with_commands(&dir, &["cmux"]);
 
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::App),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -1993,7 +3416,7 @@ mod tests {
 
         assert!(
             plan.detected_signals
-                .contains(&"setup: composer install".to_string())
+                .contains(&"setup: composer install --no-interaction --no-progress".to_string())
         );
         assert!(
             plan.detected_signals
@@ -2019,11 +3442,10 @@ mod tests {
                 .iter()
                 .all(|command| command.if_exists.is_none())
         );
-        assert!(
-            config.setup.deps.iter().any(|command| {
-                command.working_dir.is_none() && command.run == "composer install"
-            })
-        );
+        assert!(config.setup.deps.iter().any(|command| {
+            command.working_dir.is_none()
+                && command.run == "composer install --no-interaction --no-progress"
+        }));
         assert!(config.setup.deps.iter().any(|command| {
             command.working_dir.as_deref() == Some("api") && command.run == "uv sync"
         }));
@@ -2038,19 +3460,18 @@ mod tests {
     }
 
     #[test]
-    fn init_minimal_preset_reports_detection_without_activating_detected_config() {
+    fn init_recommendation_activates_detected_config() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("package.json"),
             r#"{"scripts":{"dev":"vite","test":"vitest","lint":"eslint ."}}"#,
         )
         .unwrap();
-        let ctx = ctx_for_dir(&dir);
+        let ctx = ctx_for_dir_with_commands(&dir, &["cmux"]);
 
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::Minimal),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -2059,7 +3480,16 @@ mod tests {
         .unwrap();
         let config: Config = toml::from_str(&plan.content).unwrap();
 
-        assert_eq!(plan.sections, vec![InitSection::Workspace]);
+        assert_eq!(
+            plan.sections,
+            vec![
+                InitSection::Workflow,
+                InitSection::Worktree,
+                InitSection::Setup,
+                InitSection::Test,
+                InitSection::Workspace
+            ]
+        );
         assert!(
             plan.detected_signals
                 .contains(&"setup: npm install".to_string())
@@ -2068,29 +3498,27 @@ mod tests {
             plan.detected_signals
                 .contains(&"post-deps tab: npm run dev".to_string())
         );
-        assert!(config.setup.deps.is_empty());
-        assert!(config.test.is_none());
+        assert_eq!(config.setup.deps.len(), 1);
+        assert!(config.test.is_some());
         let workspace = config.workspace.unwrap();
-        assert!(workspace.post_deps_tabs.is_empty());
-        assert!(!plan.content.lines().any(|line| line == "[setup]"));
-        assert!(!plan.content.lines().any(|line| line == "[test]"));
+        assert_eq!(workspace.post_deps_tabs, vec!["npm run dev".to_string()]);
+        assert!(plan.content.lines().any(|line| line == "[setup]"));
+        assert!(plan.content.lines().any(|line| line == "[test]"));
         assert!(
-            !plan
-                .content
+            plan.content
                 .lines()
                 .any(|line| line == "post_deps_tabs = [\"npm run dev\"]")
         );
     }
 
     #[test]
-    fn init_app_preset_uses_explicit_docker_proxy_site_defaults() {
+    fn init_explicit_docker_proxy_site_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_for_dir(&dir);
 
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::App),
                 site_provider: Some(InitSiteProvider::DockerProxy),
                 yes: true,
                 ..InitOptions::default()
@@ -2114,8 +3542,10 @@ mod tests {
         )
         .unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // use detected app defaults
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
         let ui = Arc::new(ui);
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2129,7 +3559,6 @@ mod tests {
             &ctx,
             InitOptions {
                 local: true,
-                preset: Some(InitPreset::App),
                 agent: Some(InitAgent::None),
                 issue_provider: Some(InitIssueProvider::None),
                 site_provider: Some(InitSiteProvider::None),
@@ -2142,12 +3571,14 @@ mod tests {
         assert_eq!(
             *ui.prompts.lock().unwrap(),
             vec![
-                "select: App defaults".to_string(),
-                "confirm: Create config?".to_string(),
+                "select: 개발 환경 설정을 어떻게 만들까요?".to_string(),
+                "select: 설정 editor command".to_string(),
+                "confirm: 설정을 생성할까요?".to_string(),
+                "confirm: Claude가 .git/wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?".to_string(),
             ]
         );
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].run, "npm install");
@@ -2159,11 +3590,71 @@ mod tests {
             command.label.as_deref() == Some("lint") && command.run == "npm run lint"
         }));
         let workspace = config.workspace.unwrap();
-        assert_eq!(workspace.post_deps_tabs, vec!["npm run dev".to_string()]);
+        assert!(workspace.tabs.is_empty());
+        assert!(workspace.post_deps_tabs.is_empty());
     }
 
     #[test]
-    fn init_app_plan_summary_shows_detected_signals() {
+    fn init_interactive_detected_integrations_use_select_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".linear.toml"), "[workspace]\n").unwrap();
+        std::fs::write(
+            dir.path().join("composer.json"),
+            r#"{"require":{"laravel/framework":"^11.0"}}"#,
+        )
+        .unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // use detected Linear issue workflow
+        ui.add_select(0); // use detected Herd local site
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_select(0); // use Chrome DevTools browser
+        ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
+        let ui = Arc::new(ui);
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                agent: Some(InitAgent::None),
+                yes: false,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let prompts = ui.prompts.lock().unwrap().clone();
+        assert!(prompts.contains(&"select: issue 도구".to_string()));
+        assert!(prompts.contains(&"select: local site 설정".to_string()));
+        assert!(
+            !prompts
+                .iter()
+                .any(|prompt| prompt == "confirm: Linear issues를 설정할까요?")
+        );
+        assert!(
+            !prompts
+                .iter()
+                .any(|prompt| prompt == "confirm: Herd local site를 설정할까요?")
+        );
+
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        assert_eq!(config.issues.unwrap().provider, IssueProviderType::Linear);
+        assert_eq!(config.site.unwrap().provider, SiteProvider::Herd);
+    }
+
+    #[test]
+    fn init_app_plan_summary_keeps_preview_to_saved_settings() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("package.json"),
@@ -2175,7 +3666,6 @@ mod tests {
         let plan = build_plan(
             &ctx,
             &InitOptions {
-                preset: Some(InitPreset::App),
                 yes: true,
                 ..InitOptions::default()
             },
@@ -2184,14 +3674,49 @@ mod tests {
         .unwrap();
         let summary = render_plan_summary(&plan).join("\n");
 
-        assert!(summary.contains("preset: app"));
-        assert!(summary.contains("selected sections: setup, test, workspace"));
-        assert!(summary.contains("detected signals: setup: npm install"));
-        assert!(summary.contains("test: npm test"));
-        assert!(summary.contains("test: npm run lint"));
-        assert!(summary.contains("[ok] detected setup: npm install"));
-        assert!(summary.contains("[ok] detected test: npm test"));
-        assert!(summary.contains("[ok] detected test: npm run lint"));
+        assert!(summary.contains("저장될 설정: workflow, worktree, setup, test, workspace"));
+        assert!(
+            plan.detected_signals
+                .contains(&"test: npm test".to_string())
+        );
+        assert!(
+            plan.detected_signals
+                .contains(&"test: npm run lint".to_string())
+        );
+        assert!(!summary.contains("test: npm test"));
+        assert!(!summary.contains("test: npm run lint"));
+        assert!(!summary.contains("[ok] 감지됨"));
+        assert!(!summary.contains("감지된 신호"));
+    }
+
+    #[test]
+    fn init_shared_plan_explains_omitted_private_helpers() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "APP_KEY=test").unwrap();
+        std::fs::write(dir.path().join(".local"), "local").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                issue_provider: Some(InitIssueProvider::Linear),
+                yes: true,
+                ..InitOptions::default()
+            },
+            InitTarget {
+                path: dir.path().join(".wt.toml"),
+                kind: InitTargetKind::Shared,
+            },
+        )
+        .unwrap();
+        let summary = render_plan_summary(&plan).join("\n");
+
+        assert!(!summary.contains("감지된 신호"));
+        assert!(summary.contains(
+            "안내\n  - 팀 공유 설정에는 개인 helper를 쓰지 않습니다: .env copy, local links (.local), worktree.naming"
+        ));
+        assert!(!plan.content.contains("[worktree]"));
+        assert!(!plan.content.contains("[worktree.naming]"));
     }
 
     #[test]
@@ -2210,7 +3735,6 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
-                preset: Some(InitPreset::Agent),
                 agent: Some(InitAgent::Codex),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -2224,25 +3748,14 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
-        assert!(content.contains("# path = \"$HOME/worktrees/{{default_name}}\""));
-        assert!(content.contains("# copy_as = ["));
-        assert!(content.contains("# inject_local_context = \"\"\""));
-        assert!(content.contains("# [worktree.naming]"));
-        assert!(
-            content
-                .contains("# branch = \"{{branch_prefix}}{{issue_key_lower}}-{{english_slug}}\"")
-        );
-        assert!(!content.contains("{{english_title}}"));
-        assert!(content.contains("# [setup.env]"));
-        assert!(content.contains("# [setup.env_files.\".env.local\"]"));
-        assert!(content.contains("# [editor]"));
-        assert!(content.contains("# [test]"));
-        assert!(content.contains("# post_deps_tabs = [\"npm run dev\"]"));
-        assert!(content.contains(
-            "# colors = { task = \"blue\", issue = \"blue\", new = \"green\", pr = \"magenta\" }"
-        ));
+        assert!(!content.contains("# [worktree.naming]"));
+        assert!(!content.contains("# [setup.env]"));
+        assert!(!content.contains("# [editor]"));
+        assert!(!content.contains("# [test]"));
+        assert!(!content.contains("# post_deps_tabs"));
+        assert!(!content.contains("# colors ="));
         assert!(config.worktree.path.is_none());
         assert!(config.worktree.naming.is_none());
         let profile = config.profile.unwrap();
@@ -2254,7 +3767,7 @@ mod tests {
         assert!(!content.contains("args ="));
         assert!(
             !dir.path()
-                .join(".local/profiles/codex/profile.toml")
+                .join(".git/wt/profiles/codex/profile.toml")
                 .exists()
         );
         assert!(!content.contains("현재 GitHub 이슈"));
@@ -2264,8 +3777,9 @@ mod tests {
     fn init_shared_with_github_options_creates_only_shared_config() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // minimal additional settings
+        ui.add_select(0); // use project recommendation
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
@@ -2279,7 +3793,6 @@ mod tests {
             InitOptions {
                 local: false,
                 shared: true,
-                preset: Some(InitPreset::Issue),
                 agent: Some(InitAgent::None),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -2302,11 +3815,12 @@ mod tests {
         let issues = config.issues.unwrap();
         assert_eq!(issues.provider, IssueProviderType::Github);
         assert_eq!(issues.gh_user.as_deref(), Some("alice"));
+        assert!(!content.contains("[worktree.naming]"));
 
-        assert!(!dir.path().join(".local/.wt.toml").exists());
+        assert!(!dir.path().join(".git/wt/config.toml").exists());
         assert!(
             !dir.path()
-                .join(".local/profiles/gemini/profile.toml")
+                .join(".git/wt/profiles/gemini/profile.toml")
                 .exists()
         );
     }
@@ -2327,7 +3841,6 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
-                preset: Some(InitPreset::Issue),
                 agent: Some(InitAgent::None),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -2341,7 +3854,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let issues = config.issues.unwrap();
         assert_eq!(issues.provider, IssueProviderType::Github);
@@ -2353,9 +3866,12 @@ mod tests {
     fn init_with_site_provider_writes_site_section() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_select(0); // use Chrome DevTools browser
         ui.add_select(0); // no agent args
-        ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
@@ -2369,7 +3885,6 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
-                preset: Some(InitPreset::Agent),
                 agent: Some(InitAgent::Codex),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -2383,7 +3898,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let site = config.site.unwrap();
         assert_eq!(site.provider, SiteProvider::Valet);
@@ -2393,12 +3908,40 @@ mod tests {
     }
 
     #[test]
+    fn init_with_herd_site_provider_omits_default_secure() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let plan = build_plan(
+            &ctx,
+            &InitOptions {
+                yes: true,
+                site_provider: Some(InitSiteProvider::Herd),
+                ..InitOptions::default()
+            },
+            local_target(&dir),
+        )
+        .unwrap();
+        let config: Config = toml::from_str(&plan.content).unwrap();
+        let site = config.site.unwrap();
+
+        assert_eq!(site.provider, SiteProvider::Herd);
+        assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
+        assert!(site.secure.is_none());
+        assert!(site.effective_secure());
+        assert!(!plan.content.contains("secure = true"));
+    }
+
+    #[test]
     fn init_with_traefik_site_provider_writes_traefik_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_select(0); // use Chrome DevTools browser
         ui.add_select(0); // no agent args
-        ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
@@ -2412,7 +3955,6 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
-                preset: Some(InitPreset::Agent),
                 agent: Some(InitAgent::Codex),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -2426,7 +3968,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let site = config.site.unwrap();
         assert_eq!(site.provider, SiteProvider::Traefik);
@@ -2443,12 +3985,11 @@ mod tests {
     fn init_interactive_flow_uses_ui_answers() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(1); // .wt.toml
-        ui.add_select(1); // agent preset
-        ui.add_select(0); // codex
+        ui.add_select(1); // shared .wt.toml
+        ui.add_select(0); // use project recommendation
         ui.add_select(0); // no agent args
-        ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2463,7 +4004,7 @@ mod tests {
             InitOptions {
                 local: false,
                 shared: false,
-                agent: None,
+                agent: Some(InitAgent::Codex),
                 agent_args: Vec::new(),
                 agent_command: None,
                 issue_provider: None,
@@ -2481,7 +4022,7 @@ mod tests {
         assert!(config.agent.is_none());
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
-        assert!(!dir.path().join(".local/.wt.toml").exists());
+        assert!(!dir.path().join(".git/wt/config.toml").exists());
         assert!(config.issues.is_none());
     }
 
@@ -2490,11 +4031,152 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
         ui.add_select(0); // private repo config
-        ui.add_select(1); // agent starter
-        ui.add_select(0); // codex
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
         ui.add_select(0); // no agent args
-        ui.add_select(0); // use starter defaults
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
+        let ui = Arc::new(ui);
+
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: false,
+                shared: false,
+                agent: Some(InitAgent::Codex),
+                agent_args: Vec::new(),
+                agent_command: None,
+                issue_provider: None,
+                site_provider: None,
+                gh_user: None,
+                yes: false,
+                force: false,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let steps = ui.steps.lock().unwrap().clone();
+        assert_eq!(
+            &steps[..6],
+            &[
+                "wt init".to_string(),
+                "단계 1/5: 설정 파일 위치".to_string(),
+                "단계 2/5: 외부 도구 연결".to_string(),
+                "단계 3/5: 개발 환경 설정".to_string(),
+                "단계 4/5: 미리보기".to_string(),
+                "단계 5/5: 쓰기 확인".to_string(),
+            ]
+        );
+        assert!(steps[6].starts_with("설정 생성됨:"));
+
+        let dims = ui.dims.lock().unwrap().clone();
+        assert!(
+            dims.iter()
+                .any(|line| line.contains("이 저장소에 맞는 git worktree 프로젝트 설정"))
+        );
+        assert!(
+            dims.iter()
+                .any(|line| line.contains("  - 개인 설정 파일: <git-common-dir>/wt/config.toml"))
+        );
+        assert!(dims.iter().any(|line| line.is_empty()));
+        assert!(
+            dims.iter().any(|line| {
+                line.contains("issue 도구나 local site 설정을 찾지 못해")
+            })
+        );
+        assert!(
+            dims.iter().any(|line| {
+                line.contains("생성되는 TOML에는 선택한 active 설정만")
+            })
+        );
+        assert!(
+            dims.iter()
+                .any(|line| line.contains("어디에 무엇을 저장할지"))
+        );
+        assert!(
+            dims.iter()
+                .any(|line| line.contains("지금 설정 파일에 쓸지 확인"))
+        );
+        assert!(!dims.iter().any(|line| line.contains("감지된 명령: 없음")));
+
+        assert_eq!(
+            *ui.prompts.lock().unwrap(),
+            vec![
+                "select: 저장 위치".to_string(),
+                "select: 개발 환경 설정을 어떻게 만들까요?".to_string(),
+                "select: 설정 editor command".to_string(),
+                "select: agent 실행 args".to_string(),
+                "confirm: 설정을 생성할까요?".to_string(),
+                "confirm: Claude가 .git/wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn init_interactive_flow_accepts_manual_agent_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_select(1); // enter agent args
+        ui.add_input("--model gpt-5.5");
+        ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
+
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: false,
+                shared: false,
+                agent: Some(InitAgent::Codex),
+                agent_args: Vec::new(),
+                agent_command: None,
+                issue_provider: None,
+                site_provider: None,
+                gh_user: None,
+                yes: false,
+                force: false,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        let agent = config.profile.unwrap().agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Codex);
+        assert_eq!(agent.args, vec!["--model", "gpt-5.5"]);
+    }
+
+    #[test]
+    fn init_interactive_flow_prompts_for_agent_and_writes_prompt_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_select(0); // Codex agent
+        ui.add_select(0); // no agent args
+        ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
         let ui = Arc::new(ui);
 
         let ctx = Ctx::new(
@@ -2523,87 +4205,20 @@ mod tests {
         )
         .unwrap();
 
-        let steps = ui.steps.lock().unwrap().clone();
-        assert_eq!(
-            &steps[..7],
-            &[
-                "wt init".to_string(),
-                "Step 1/6: Repository".to_string(),
-                "Step 2/6: Starter".to_string(),
-                "Step 3/6: Integrations".to_string(),
-                "Step 4/6: Detected commands".to_string(),
-                "Step 5/6: Will create".to_string(),
-                "Step 6/6: Confirmation".to_string(),
-            ]
-        );
-        assert!(steps[7].starts_with("Created config:"));
+        let prompts = ui.prompts.lock().unwrap().clone();
+        assert!(prompts.contains(&"select: 코딩 agent".to_string()));
+        let select_items = ui.select_items.lock().unwrap().clone();
+        assert_eq!(select_items[3], vec!["Codex", "Claude"]);
 
-        let dims = ui.dims.lock().unwrap().clone();
-        assert!(
-            dims.iter()
-                .any(|line| line.contains("Workspace config starter for git worktree projects"))
-        );
-        assert!(
-            dims.iter()
-                .any(|line| line.contains("[warn] detected commands: none"))
-        );
-
-        assert_eq!(
-            *ui.prompts.lock().unwrap(),
-            vec![
-                "select: Repository config file".to_string(),
-                "select: Starter".to_string(),
-                "select: Coding agent".to_string(),
-                "select: Agent launch args".to_string(),
-                "select: Workspace defaults".to_string(),
-                "confirm: Create config?".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn init_interactive_flow_accepts_manual_agent_args() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut ui = MockUi::new();
-        ui.add_select(0); // .local/.wt.toml
-        ui.add_select(1); // agent preset
-        ui.add_select(0); // codex
-        ui.add_select(1); // enter agent args
-        ui.add_input("--model gpt-5.5");
-        ui.add_select(0); // minimal additional settings
-        ui.add_confirm(true); // create config
-
-        let ctx = Ctx::new(
-            dir.path().to_path_buf(),
-            dir.path().to_path_buf(),
-            Config::default(),
-            Box::new(MockRunner::new()),
-            Box::new(ui),
-        );
-
-        run(
-            &ctx,
-            InitOptions {
-                local: false,
-                shared: false,
-                agent: None,
-                agent_args: Vec::new(),
-                agent_command: None,
-                issue_provider: None,
-                site_provider: None,
-                gh_user: None,
-                yes: false,
-                force: false,
-                ..InitOptions::default()
-            },
-        )
-        .unwrap();
-
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
-        assert_eq!(agent.args, vec!["--model", "gpt-5.5"]);
+        assert!(content.contains("[profile.agent.prompt]"));
+        assert!(agent.prompt.contains_key("common"));
+        assert!(agent.prompt.contains_key("issue"));
+        assert!(agent.prompt.contains_key("branch"));
+        assert!(agent.prompt.contains_key("pr"));
     }
 
     #[test]
@@ -2618,7 +4233,7 @@ mod tests {
 
         let mut ui = MockUi::new();
         ui.add_select(1); // customize frequently used settings
-        ui.add_select(1); // $HOME/worktrees/{{default_name}}
+        ui.add_select(1); // home worktrees folder
         ui.add_input("lazygit, nvim, pnpm run dev");
         ui.add_confirm(true); // add detected setup commands
         ui.add_select(0); // detected pnpm install
@@ -2626,13 +4241,15 @@ mod tests {
         ui.add_confirm(true); // add detected test commands
         ui.add_select(1); // nvim {{path}}
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
+        let ui = Arc::new(ui);
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
             Config::default(),
             Box::new(MockRunner::new()),
-            Box::new(ui),
+            Box::new(Arc::clone(&ui)),
         );
 
         run(
@@ -2640,7 +4257,6 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
-                preset: Some(InitPreset::Minimal),
                 agent: Some(InitAgent::None),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -2654,7 +4270,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(
             config.worktree.path.as_deref(),
@@ -2664,7 +4280,7 @@ mod tests {
         assert_eq!(config.setup.deps[0].run, "pnpm install");
         assert!(config.setup.deps[0].working_dir.is_none());
         assert!(config.setup.deps[0].if_exists.is_none());
-        assert_eq!(config.editor.command.as_deref(), Some("nvim {{path}}"));
+        assert_eq!(config.editor.command.as_deref(), Some("vim {{path}}"));
 
         let workspace = config.workspace.unwrap();
         assert_eq!(
@@ -2690,6 +4306,23 @@ mod tests {
                 && command.working_dir.is_none()
                 && command.if_exists.is_none()
         }));
+
+        let dims = ui.dims.lock().unwrap().clone();
+        assert!(dims.iter().any(|line| line
+            == "dev 탭은 dependency setup이 끝난 뒤 개발 서버 command를 별도 탭에서 시작합니다."));
+        assert!(
+            dims.iter()
+                .any(|line| line == "감지한 dev server command: pnpm run dev")
+        );
+        assert!(dims.iter().any(|line| line == "감지한 test command:"));
+        assert!(dims.iter().any(|line| line == "  - pnpm run test"));
+        assert!(dims.iter().any(|line| line == "  - pnpm run lint"));
+        assert!(
+            ui.prompts
+                .lock()
+                .unwrap()
+                .contains(&"confirm: setup 후 pnpm run dev를 dev 탭에서 시작할까요?".to_string())
+        );
     }
 
     #[test]
@@ -2706,16 +4339,17 @@ mod tests {
 
         let mut ui = MockUi::new();
         ui.add_select(1); // customize frequently used settings
-        ui.add_select(0); // default worktree path
+        ui.add_select(0); // next to current repository
         ui.add_input("lazygit, nvim");
         ui.add_confirm(true); // root npm install
         ui.add_select(0); // detected npm install
-        ui.add_confirm(true); // root composer install
+        ui.add_confirm(true); // root composer install --no-interaction --no-progress
         ui.add_confirm(true); // apps/web pnpm install
         ui.add_select(4); // nvm use && npm install
         ui.add_confirm(false); // do not start detected dev command
         ui.add_select(0); // default editor
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2730,7 +4364,6 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
-                preset: Some(InitPreset::Minimal),
                 agent: Some(InitAgent::None),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -2744,21 +4377,25 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 3);
-        assert_eq!(config.setup.deps[0].run, "npm install");
-        assert!(config.setup.deps[0].working_dir.is_none());
-        assert_eq!(config.setup.deps[1].run, "composer install");
-        assert!(config.setup.deps[1].working_dir.is_none());
-        assert_eq!(
-            config.setup.deps[2].working_dir.as_deref(),
-            Some("apps/web")
+        assert!(
+            config
+                .setup
+                .deps
+                .iter()
+                .any(|command| { command.working_dir.is_none() && command.run == "npm install" })
         );
-        assert_eq!(
-            config.setup.deps[2].run,
-            "bash -lc 'source \"$HOME/.nvm/nvm.sh\" && nvm use && npm install'"
-        );
+        assert!(config.setup.deps.iter().any(|command| {
+            command.working_dir.is_none()
+                && command.run == "composer install --no-interaction --no-progress"
+        }));
+        assert!(config.setup.deps.iter().any(|command| {
+            command.working_dir.as_deref() == Some("apps/web")
+                && command.run
+                    == "bash -lc 'source \"$HOME/.nvm/nvm.sh\" && nvm use && npm install'"
+        }));
         assert!(content.contains("working_dir = \"apps/web\""));
     }
 
@@ -2775,11 +4412,12 @@ mod tests {
 
         let mut ui = MockUi::new();
         ui.add_select(1); // customize frequently used settings
-        ui.add_select(0); // default worktree path
+        ui.add_select(0); // next to current repository
         ui.add_input("lazygit, nvim");
         ui.add_confirm(true); // api uv sync
         ui.add_select(0); // default editor
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2794,7 +4432,6 @@ mod tests {
             InitOptions {
                 local: true,
                 shared: false,
-                preset: Some(InitPreset::Minimal),
                 agent: Some(InitAgent::None),
                 agent_args: Vec::new(),
                 agent_command: None,
@@ -2808,7 +4445,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].working_dir.as_deref(), Some("api"));
@@ -2826,7 +4463,7 @@ mod tests {
 
         impl UserInterface for CapturingUi {
             fn select(&self, prompt: &str, items: &[String]) -> Result<usize> {
-                if prompt == "Agent launch args" {
+                if prompt == "agent 실행 args" {
                     *self.agent_args_items.lock().unwrap() = Some(items.to_vec());
                 }
                 self.selects
@@ -2864,8 +4501,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let agent_args_items = Arc::new(Mutex::new(None));
         let ui = CapturingUi {
-            selects: Mutex::new(VecDeque::from([0, 1, 0, 0, 0])),
-            confirms: Mutex::new(VecDeque::from([true])),
+            selects: Mutex::new(VecDeque::from([0, 0, 0, 0])),
+            confirms: Mutex::new(VecDeque::from([true, false])),
             agent_args_items: Arc::clone(&agent_args_items),
         };
         let ctx = Ctx::new(
@@ -2881,7 +4518,7 @@ mod tests {
             InitOptions {
                 local: false,
                 shared: false,
-                agent: None,
+                agent: Some(InitAgent::Codex),
                 agent_args: Vec::new(),
                 agent_command: None,
                 issue_provider: None,
@@ -2896,7 +4533,7 @@ mod tests {
 
         assert_eq!(
             agent_args_items.lock().unwrap().as_ref().unwrap(),
-            &vec!["No extra args".to_string(), "Enter custom args".to_string()]
+            &vec!["추가 args 없음".to_string(), "args 직접 입력".to_string()]
         );
     }
 
@@ -2904,12 +4541,12 @@ mod tests {
     fn init_interactive_codex_none_agent_args_omits_args() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .local/.wt.toml
-        ui.add_select(1); // agent preset
-        ui.add_select(0); // codex
+        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
         ui.add_select(0); // no agent args
-        ui.add_select(0); // minimal additional settings
         ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -2924,7 +4561,7 @@ mod tests {
             InitOptions {
                 local: false,
                 shared: false,
-                agent: None,
+                agent: Some(InitAgent::Codex),
                 agent_args: Vec::new(),
                 agent_command: None,
                 issue_provider: None,
@@ -2937,7 +4574,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
@@ -2974,7 +4611,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".local/.wt.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
@@ -3017,7 +4654,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("--agent-command cannot be used when --agent none")
+                .contains("--agent-command and --agent-arg cannot be used when --agent none")
         );
     }
 
@@ -3053,7 +4690,7 @@ mod tests {
         let content = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.profile.unwrap().agent.unwrap().cli, AgentCli::Codex);
-        assert!(!dir.path().join(".local/.wt.toml").exists());
+        assert!(!dir.path().join(".git/wt/config.toml").exists());
     }
 
     #[test]
@@ -3089,7 +4726,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("--agent-arg cannot be used when --agent none")
+                .contains("--agent-command and --agent-arg cannot be used when --agent none")
         );
     }
 
@@ -3097,9 +4734,11 @@ mod tests {
     fn init_interactive_flow_respects_create_confirmation() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .local/.wt.toml
-        ui.add_select(0); // minimal preset
-        ui.add_select(0); // minimal additional settings
+        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_select(0); // Codex agent
+        ui.add_select(0); // no agent args
         ui.add_confirm(false); // do not create config
 
         let ctx = Ctx::new(
@@ -3128,15 +4767,376 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(!dir.path().join(".local/.wt.toml").exists());
+        assert!(!dir.path().join(".git/wt/config.toml").exists());
+    }
+
+    #[test]
+    fn init_interactive_rerun_prefills_existing_config_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join(".git/wt");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(
+            local.join("config.toml"),
+            r#"[profile.agent]
+cli = "claude"
+args = ["--model", "sonnet"]
+command = "claude --resume"
+timeout = 45
+send_after = 4
+
+[workflow]
+pull_request = "draft"
+landing = "auto"
+
+[workspace]
+tabs = ["existing", "vim"]
+colors = { task = "", issue = "cyan" }
+"#,
+        )
+        .unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_select(0); // use current config defaults
+        ui.add_select(0); // use system editor
+        ui.add_select(0); // prefilled claude agent
+        ui.add_select(0); // keep existing args
+        ui.add_confirm(true); // overwrite config
+        ui.add_confirm(false); // do not add Claude allow rules
+        let ui = Arc::new(ui);
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(Arc::clone(&ui)),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                force: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let select_items = ui.select_items.lock().unwrap().clone();
+        assert_eq!(select_items[0][0], "기존 설정 파일 값 유지하기");
+        assert_eq!(select_items[1][0], "시스템 editor 사용");
+        assert_eq!(select_items[2][0], "Claude");
+        assert_eq!(select_items[3][0], "기존 args 유지: --model sonnet");
+
+        let content = std::fs::read_to_string(local.join("config.toml")).unwrap();
+        let config: Config = toml::from_str(&content).unwrap();
+        let policy = config.workflow_default_policy();
+        let agent = config.profile.unwrap().agent.unwrap();
+        assert_eq!(agent.cli, AgentCli::Claude);
+        assert_eq!(agent.args, vec!["--model", "sonnet"]);
+        assert_eq!(agent.command.as_deref(), Some("claude --resume"));
+        assert_eq!(policy.pull_request, WorkflowDefaultPullRequestMode::Draft);
+        assert_eq!(policy.landing, WorkflowDefaultLandingPolicy::Auto);
+        let workspace = config.workspace.unwrap();
+        assert_eq!(
+            workspace.tabs,
+            vec!["existing".to_string(), "vim".to_string()]
+        );
+        assert_eq!(workspace.colors.get("task").map(String::as_str), Some(""));
+        assert_eq!(
+            workspace.colors.get("issue").map(String::as_str),
+            Some("cyan")
+        );
+        assert_eq!(
+            workspace.colors.get("branch").map(String::as_str),
+            Some("green")
+        );
+        assert_eq!(
+            workspace.colors.get("pr").map(String::as_str),
+            Some("magenta")
+        );
+    }
+
+    #[test]
+    fn init_accepting_claude_allow_rules_creates_local_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_confirm(true); // create config
+        ui.add_confirm(true); // add Claude allow rules
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                agent: Some(InitAgent::None),
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        let settings = read_claude_local_settings(&settings_path).unwrap();
+        assert_eq!(
+            allow_rules(&settings),
+            vec!["Edit(/.git/wt/**)", "Write(/.git/wt/**)"]
+        );
+        assert!(settings.get("allowed").is_none());
+        assert_eq!(
+            settings,
+            serde_json::json!({
+                "permissions": {
+                    "allow": [
+                        "Edit(/.git/wt/**)",
+                        "Write(/.git/wt/**)"
+                    ]
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn init_accepting_claude_allow_rules_migrates_legacy_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{
+  "allowed": [
+    "Edit(/.git/wt/**)",
+    "Write(/.git/wt/**)",
+    "Bash(echo:*)"
+  ]
+}
+"#,
+        )
+        .unwrap();
+
+        let mut ui = MockUi::new();
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_confirm(true); // create config
+        ui.add_confirm(true); // add Claude allow rules
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                agent: Some(InitAgent::None),
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let settings = read_claude_local_settings(&settings_path).unwrap();
+        assert!(settings.get("allowed").is_none());
+        assert_eq!(
+            allow_rules(&settings),
+            vec!["Edit(/.git/wt/**)", "Write(/.git/wt/**)", "Bash(echo:*)"]
+        );
+    }
+
+    #[test]
+    fn init_declining_claude_allow_rules_leaves_settings_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = MockUi::new();
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(ui),
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                local: true,
+                agent: Some(InitAgent::None),
+                issue_provider: Some(InitIssueProvider::None),
+                site_provider: Some(InitSiteProvider::None),
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH).exists());
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_migrates_legacy_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{
+  "allowed": [
+    "Edit(/.git/wt/**)",
+    "Write(/.git/wt/**)",
+    "Bash(echo:*)",
+    "Edit(/.git/wt/**)"
+  ]
+}
+"#,
+        )
+        .unwrap();
+
+        merge_claude_allow_rules(&settings_path).unwrap();
+        let settings = read_claude_local_settings(&settings_path).unwrap();
+
+        assert!(settings.get("allowed").is_none());
+        assert_eq!(
+            allow_rules(&settings),
+            vec!["Edit(/.git/wt/**)", "Write(/.git/wt/**)", "Bash(echo:*)"]
+        );
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_preserves_existing_permissions_allow_order_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)"
+    ]
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        merge_claude_allow_rules(&settings_path).unwrap();
+        let first = std::fs::read_to_string(&settings_path).unwrap();
+        merge_claude_allow_rules(&settings_path).unwrap();
+        let second = std::fs::read_to_string(&settings_path).unwrap();
+
+        assert_eq!(first, second);
+        let settings: serde_json::Value = serde_json::from_str(&second).unwrap();
+        assert!(settings.get("allowed").is_none());
+        assert_eq!(
+            allow_rules(&settings),
+            vec!["Bash(npm run *)", "Edit(/.git/wt/**)", "Write(/.git/wt/**)"]
+        );
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_migrates_legacy_allowed_into_existing_permissions_allow() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{
+  "allowed": [
+    "Bash(echo:*)",
+    "Edit(/.git/wt/**)"
+  ],
+  "permissions": {
+    "allow": [
+      "Bash(git:*)",
+      "Edit(/.git/wt/**)"
+    ]
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        merge_claude_allow_rules(&settings_path).unwrap();
+        let settings = read_claude_local_settings(&settings_path).unwrap();
+
+        assert!(settings.get("allowed").is_none());
+        assert_eq!(
+            allow_rules(&settings),
+            vec![
+                "Bash(git:*)",
+                "Edit(/.git/wt/**)",
+                "Bash(echo:*)",
+                "Write(/.git/wt/**)"
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_creates_fresh_schema_for_missing_and_empty_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_path = dir.path().join("missing").join(CLAUDE_LOCAL_SETTINGS_PATH);
+        merge_claude_allow_rules(&missing_path).unwrap();
+        assert_fresh_claude_allow_rules(&missing_path);
+
+        let empty_path = dir.path().join("empty").join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(empty_path.parent().unwrap()).unwrap();
+        std::fs::write(&empty_path, "\n").unwrap();
+        merge_claude_allow_rules(&empty_path).unwrap();
+        assert_fresh_claude_allow_rules(&empty_path);
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_rejects_non_object_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(&settings_path, r#"{"permissions":"not-an-object"}"#).unwrap();
+
+        let err = merge_claude_allow_rules(&settings_path)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("`permissions` must be a JSON object"));
+    }
+
+    #[test]
+    fn claude_allow_rules_merge_rejects_non_array_permissions_allow() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join(CLAUDE_LOCAL_SETTINGS_PATH);
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"permissions":{"allow":"not-an-array"}}"#,
+        )
+        .unwrap();
+
+        let err = merge_claude_allow_rules(&settings_path)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("`permissions.allow` must be a JSON array"));
     }
 
     #[test]
     fn init_refuses_existing_file_without_force_and_overwrites_with_force() {
         let dir = tempfile::tempdir().unwrap();
-        let local = dir.path().join(".local");
+        let local = dir.path().join(".git/wt");
         std::fs::create_dir_all(&local).unwrap();
-        std::fs::write(local.join(".wt.toml"), "[workspace]\ntabs = []\n").unwrap();
+        std::fs::write(local.join("config.toml"), "[workspace]\ntabs = []\n").unwrap();
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -3182,13 +5182,38 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(local.join(".wt.toml")).unwrap();
+        let content = std::fs::read_to_string(local.join("config.toml")).unwrap();
         let config = toml::from_str::<Config>(&content).unwrap();
         assert_eq!(config.profile.unwrap().agent.unwrap().cli, AgentCli::Claude);
         assert!(
             !dir.path()
-                .join(".local/profiles/claude/profile.toml")
+                .join(".git/wt/profiles/claude/profile.toml")
                 .exists()
+        );
+    }
+
+    fn allow_rules(settings: &serde_json::Value) -> Vec<&str> {
+        settings["permissions"]["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect()
+    }
+
+    fn assert_fresh_claude_allow_rules(path: &std::path::Path) {
+        let settings = read_claude_local_settings(path).unwrap();
+        assert!(settings.get("allowed").is_none());
+        assert_eq!(
+            settings,
+            serde_json::json!({
+                "permissions": {
+                    "allow": [
+                        "Edit(/.git/wt/**)",
+                        "Write(/.git/wt/**)"
+                    ]
+                }
+            })
         );
     }
 }

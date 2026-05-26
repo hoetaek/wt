@@ -1,15 +1,15 @@
 [package]
 name = "wt"
-version = "0.28.0"
+version = "0.42.0"
 edition = "2024"
 rust-version = "1.85"
 publish = false
-description = "Git worktree workspace manager"
+description = "Worktree-based agent orchestration harness"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hoetaek/wt"
 homepage = "https://github.com/hoetaek/wt"
 readme = "README.md"
-keywords = ["git", "worktree", "cli", "automation"]
+keywords = ["git", "worktree", "agent", "cli", "orchestration"]
 categories = ["command-line-utilities", "development-tools"]
 include = [
     "Cargo.toml",
@@ -26,17 +26,23 @@ include = [
 
 [dependencies]
 anyhow = "1"
-axum = "0.7"
+axum = "0.8"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
-cliclack = "0.5.4"
 console = "0.16"
+crossterm = "0.29"
+nix = { version = "0.31.3", features = ["process", "signal"] }
+notify = "8"
+opener = "0.8.4"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11"
+signal-hook = "0.3"
 shell-words = "1"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 toml = "1"
+toml_edit = "0.25"
 thiserror = "2"
 
 [dev-dependencies]

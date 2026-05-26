@@ -69,7 +69,7 @@ fn build_repair_plan(
                     problem: format!("Workflow task references an unreadable TaskRun: {err:#}"),
                     action: RepairAction::Manual {
                         note:
-                            "Recreate the TaskRun or edit the workflow row after inspecting local state"
+                            "Recreate the TaskRun or edit the workflow row after inspecting personal wt state"
                                 .into(),
                     },
                 }),

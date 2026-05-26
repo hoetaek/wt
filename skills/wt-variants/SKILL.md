@@ -13,7 +13,8 @@ approach is uncertain and worth comparing through multiple agent runs.
 `variant` is skill shorthand only. Do not add a persisted `variant` concept to
 `wt` state.
 
-In `wt`, variants are represented as:
+Object model and TaskRun semantics: see
+`../wt-work/references/task-lifecycle.md`. Variants are represented as:
 
 - one shared local TaskDocument
 - one `mode = "matrix"` workflow
@@ -21,17 +22,18 @@ In `wt`, variants are represented as:
 - one profile-specific TaskRun/worktree/branch per variant
 
 The workflow TOML stores `profiles = [...]` and `[[tasks.runs]]` mappings. The
-variant instructions live in `.local/profiles/<name>/profile.toml` or
+variant instructions live in `<git-common-dir>/wt/profiles/<name>/profile.toml` or
 `prompts/workflow.append.md`, not in the workflow file.
 
 ## Boundaries
 
-- Use `wt-idea` first if the problem is vague or still needs research.
-- Use this skill to prepare variants and a matrix workflow.
-- Use `wt-start` to launch the prepared workflow.
-- Use `wt-coordinate` to monitor, review PRs, collect bot feedback, and mark
-  reviewed workflow runs complete.
-- Use `wt-land` only after the selected branch is reviewed and ready to land.
+| Phase | Where |
+|---|---|
+| problem still vague | `wt-idea` |
+| prepare variants + matrix workflow | this skill |
+| launch | `wt-start` |
+| monitor, PR review, bot feedback, complete | `wt-coordinate` |
+| land selected branch | `wt-land` |
 
 Do not use variants for dependent slices. If tasks depend on each other, use a
 stack. If tasks are independent but not competing answers to the same question,
@@ -45,7 +47,8 @@ Inspect local truth before writing variant artifacts:
 git status --short --branch
 find . -maxdepth 2 -name AGENTS.md -o -name AGENTS.override.md
 sed -n '90,115p' docs/consistency.md 2>/dev/null || true
-find .local/ideas .local/tasks .local/workflows -maxdepth 1 -type f 2>/dev/null | sort
+common_dir="$(git rev-parse --git-common-dir)"
+find "$common_dir/wt/ideas" "$common_dir/wt/tasks" "$common_dir/wt/workflows" -maxdepth 1 -type f 2>/dev/null | sort
 wt config 2>/dev/null || ./target/debug/wt config 2>/dev/null || true
 ```
 
@@ -64,7 +67,7 @@ three profiles that only reword the same instruction.
 
 ## TaskDocument
 
-Create one shared task in `.local/tasks/<key>.toml`.
+Create one shared task in `<git-common-dir>/wt/tasks/<key>.toml`.
 
 The task body should include:
 
@@ -80,7 +83,7 @@ each run must follow its selected profile.
 
 ## Profiles
 
-Create one profile per variant under `.local/profiles/<profile>/profile.toml`.
+Create one profile per variant under `<git-common-dir>/wt/profiles/<profile>/profile.toml`.
 
 Each matrix profile must include an explicit `[agent]` section copied from the
 current effective config or chosen deliberately for the run. Do not rely on a
@@ -140,7 +143,7 @@ Use a matrix workflow with exactly one task and the selected profile list:
   --profiles <profile-a>,<profile-b>,<profile-c> \
   --base <base> \
   --pr draft \
-  --objective "<comparison objective>" \
+  --title "<comparison objective>" \
   <task-key>
 ```
 
@@ -148,7 +151,7 @@ Then verify:
 
 ```bash
 ./target/debug/wt workflow show <workflow-id>
-sed -n '1,180p' .local/workflows/<workflow-id>.toml
+sed -n '1,180p' "$(git rev-parse --git-common-dir)/wt/workflows/<workflow-id>.toml"
 ```
 
 The workflow should store the profile names and one `[[tasks.runs]]` entry per
@@ -159,7 +162,7 @@ profile. It should not store variant prose or cmux runtime coordinates.
 Launch with `wt-start` or the explicit command:
 
 ```bash
-./target/debug/wt workflow run <workflow-id> --jobs <n>
+./target/debug/wt run workflow <workflow-id> --jobs <n>
 ```
 
 If `--jobs` does not fan out matrix profiles concurrently, record that as a

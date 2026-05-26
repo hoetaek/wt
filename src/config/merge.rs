@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 
-use super::schema::{
-    PROMPT_COMMON_SCOPE, PROMPT_RUNTIME_MODES, default_agent_ready, default_agent_send_after,
-    default_agent_submit, default_agent_timeout, prompt_append_mode,
-};
+use super::schema::{PROMPT_COMMON_SCOPE, PROMPT_RUNTIME_MODES, prompt_append_mode};
 use super::{
-    AgentCli, AgentConfig, Config, CopyAsEntry, EditorConfig, SetupConfig, WorkflowConfig,
-    WorkspaceConfig, WorktreeConfig,
+    AgentConfig, Config, CopyAsEntry, EditorConfig, SetupConfig, WorkflowConfig, WorkspaceConfig,
+    WorktreeConfig,
 };
 
 pub(super) fn merge_config(base: &Config, profile: Config) -> Config {
@@ -65,14 +62,6 @@ pub(super) fn finalize_config_prompt_appends(config: &mut Config) {
     }
 }
 
-pub(super) fn finalize_config_prompt_appends_for_merge_layer(config: &mut Config) {
-    if let Some(agent) = config.agent.as_mut()
-        && !is_prompt_only_agent_patch(agent)
-    {
-        finalize_agent_prompt_appends(agent);
-    }
-}
-
 pub(super) fn finalize_config_common_prompt_scope(config: &mut Config) {
     if let Some(agent) = config.agent.as_mut() {
         finalize_agent_common_prompt_scope(agent);
@@ -80,25 +69,37 @@ pub(super) fn finalize_config_common_prompt_scope(config: &mut Config) {
 }
 
 fn merge_agent_config(mut base: AgentConfig, profile: AgentConfig) -> AgentConfig {
-    if is_prompt_only_agent_patch(&profile) {
-        apply_prompt_overlay(&mut base.prompt, profile.prompt);
-        return base;
+    if profile.presence.cli {
+        base.cli = profile.cli;
+        base.presence.cli = true;
+    }
+    if profile.presence.args {
+        base.args = profile.args;
+        base.presence.args = true;
+    }
+    if profile.presence.command {
+        base.command = profile.command;
+        base.presence.command = true;
+    }
+    if profile.presence.ready {
+        base.ready = profile.ready;
+        base.presence.ready = true;
+    }
+    if profile.presence.submit {
+        base.submit = profile.submit;
+        base.presence.submit = true;
+    }
+    if profile.presence.timeout {
+        base.timeout = profile.timeout;
+        base.presence.timeout = true;
+    }
+    if profile.presence.send_after {
+        base.send_after = profile.send_after;
+        base.presence.send_after = true;
     }
 
-    let mut profile = profile;
-    finalize_agent_prompt_appends(&mut profile);
-    profile
-}
-
-fn is_prompt_only_agent_patch(agent: &AgentConfig) -> bool {
-    agent.cli == AgentCli::None
-        && agent.args.is_empty()
-        && agent.command.is_none()
-        && agent.ready == default_agent_ready()
-        && agent.submit == default_agent_submit()
-        && agent.timeout == default_agent_timeout()
-        && agent.send_after == default_agent_send_after()
-        && !agent.prompt.is_empty()
+    apply_prompt_overlay(&mut base.prompt, profile.prompt);
+    base
 }
 
 fn finalize_agent_prompt_appends(agent: &mut AgentConfig) {
@@ -206,12 +207,6 @@ fn merge_workspace_config(base: &mut WorkspaceConfig, profile: WorkspaceConfig) 
     extend_unique(&mut base.tabs, profile.tabs);
     extend_unique(&mut base.post_deps_tabs, profile.post_deps_tabs);
     base.colors.extend(profile.colors);
-    if profile.open_url.is_some() {
-        base.open_url = profile.open_url;
-    }
-    if profile.open_browser.is_some() {
-        base.open_browser = profile.open_browser;
-    }
     if profile.browser.is_some() {
         base.browser = profile.browser;
     }

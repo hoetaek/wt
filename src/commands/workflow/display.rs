@@ -7,11 +7,7 @@ use anyhow::Result;
 use std::path::Path;
 
 pub(super) fn show_workflow(ctx: &Ctx, path: &Path, metadata: &WorkflowMetadata) -> Result<()> {
-    let display_path = path
-        .strip_prefix(&ctx.repo_root)
-        .unwrap_or(path)
-        .display()
-        .to_string();
+    let display_path = ctx.storage_root.display_path(path);
 
     ctx.ui.print_step(&format!("Workflow: {display_path}"));
     ctx.ui

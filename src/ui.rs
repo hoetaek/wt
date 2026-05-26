@@ -1,18 +1,16 @@
-use crate::context::{PromptItem, UserInterface};
+use crate::context::{PromptItem, PromptOption, PromptRow, UserInterface, prompt_items_to_rows};
 use crate::error::WtError;
-use anyhow::{Result, anyhow};
-use cliclack::{Theme, ThemeState};
-use console::{Style, measure_text_width, style};
-use std::io::{self, IsTerminal};
+use crate::ui::selector::{
+    DEFAULT_VISIBLE_ROWS, SelectorOption, SelectorRenderOptions, SelectorRow, SelectorSection,
+    SelectorState, SelectorSubmission, run_selector_prompt,
+};
+use anyhow::{Result, anyhow, bail};
+use console::style;
+use std::io::{self, IsTerminal, Write};
 
-const PROMPT_MAX_ROWS: usize = 10;
-const PROMPT_HINT_GAP: usize = 2;
-const PROMPT_SEARCH_SEPARATOR: char = '\x1f';
-const BAR: &str = "│";
-const RADIO_SELECTED: &str = "◉";
-const RADIO_UNSELECTED: &str = "○";
-const CHECKBOX_SELECTED: &str = "☑";
-const CHECKBOX_UNSELECTED: &str = "☐";
+pub(crate) mod selector;
+
+const PROMPT_START: &str = "◆";
 
 pub struct TerminalUi {
     quiet: bool,
@@ -25,7 +23,6 @@ impl TerminalUi {
     }
 
     pub fn with_decoration(quiet: bool, decorated: bool) -> Self {
-        cliclack::set_theme(WtPromptTheme);
         Self { quiet, decorated }
     }
 }
@@ -54,39 +51,88 @@ impl UserInterface for TerminalUi {
     }
 
     fn select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<usize> {
-        let items = prompt_entries(items);
-        let mut select = cliclack::select(prompt)
-            .max_rows(PROMPT_MAX_ROWS)
-            .filter_mode();
-        for (index, item) in items.iter().enumerate() {
-            select = select.item(index, &item.label, &item.hint);
-        }
-        prompt_result(prompt, select.interact())
+        let rows = prompt_items_to_rows(items);
+        self.select_rows(prompt, &rows)
     }
 
     fn multi_select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<Vec<usize>> {
-        let items = prompt_entries(items);
-        let mut multi_select = cliclack::multiselect(prompt)
-            .max_rows(PROMPT_MAX_ROWS)
-            .required(false)
-            .filter_mode();
-        for (index, item) in items.iter().enumerate() {
-            multi_select = multi_select.item(index, &item.label, &item.hint);
+        let rows = prompt_items_to_rows(items);
+        self.multi_select_rows(prompt, &rows)
+    }
+
+    fn select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+        ensure_selectable_rows(prompt, rows)?;
+        prompt_result(prompt, require_prompt_terminal())?;
+
+        let mut state = SelectorState::single(selector_rows(rows));
+        let options = selector_options(prompt, self.decorated);
+        let mut stderr = io::stderr().lock();
+        match prompt_result(
+            prompt,
+            run_selector_prompt(&mut stderr, &mut state, &options),
+        )? {
+            SelectorSubmission::Single(index) => Ok(index),
+            SelectorSubmission::Multi(_) => bail!("prompt '{prompt}' returned multiselect output"),
         }
-        prompt_result(prompt, multi_select.interact())
+    }
+
+    fn select_rows_without_filter(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+        ensure_selectable_rows(prompt, rows)?;
+        prompt_result(prompt, require_prompt_terminal())?;
+
+        let mut state = SelectorState::single(selector_rows(rows));
+        let options = selector_options(prompt, self.decorated).filter_visible(false);
+        let mut stderr = io::stderr().lock();
+        match prompt_result(
+            prompt,
+            run_selector_prompt(&mut stderr, &mut state, &options),
+        )? {
+            SelectorSubmission::Single(index) => Ok(index),
+            SelectorSubmission::Multi(_) => bail!("prompt '{prompt}' returned multiselect output"),
+        }
+    }
+
+    fn select_nested_rows_without_filter(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+        ensure_selectable_rows(prompt, rows)?;
+        prompt_result(prompt, require_prompt_terminal())?;
+
+        let mut state = SelectorState::single(selector_rows(rows));
+        let options = selector_options(prompt, self.decorated)
+            .filter_visible(false)
+            .nested(true);
+        let mut stderr = io::stderr().lock();
+        match prompt_result(
+            prompt,
+            run_selector_prompt(&mut stderr, &mut state, &options),
+        )? {
+            SelectorSubmission::Single(index) => Ok(index),
+            SelectorSubmission::Multi(_) => bail!("prompt '{prompt}' returned multiselect output"),
+        }
+    }
+
+    fn multi_select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<Vec<usize>> {
+        ensure_option_rows(prompt, rows)?;
+        prompt_result(prompt, require_prompt_terminal())?;
+
+        let mut state = SelectorState::multi(selector_rows(rows));
+        let options = selector_options(prompt, self.decorated)
+            .selected_summary(should_show_selected_summary(rows));
+        let mut stderr = io::stderr().lock();
+        match prompt_result(
+            prompt,
+            run_selector_prompt(&mut stderr, &mut state, &options),
+        )? {
+            SelectorSubmission::Multi(indices) => Ok(indices),
+            SelectorSubmission::Single(_) => bail!("prompt '{prompt}' returned select output"),
+        }
     }
 
     fn confirm(&self, prompt: &str, default: bool) -> Result<bool> {
-        let mut confirm = cliclack::confirm(prompt).initial_value(default);
-        prompt_result(prompt, confirm.interact())
+        prompt_result(prompt, run_confirm_prompt(prompt, default, self.decorated))
     }
 
     fn input(&self, prompt: &str, default: Option<&str>) -> Result<String> {
-        let mut input = cliclack::input(prompt);
-        if let Some(d) = default {
-            input = input.default_input(d);
-        }
-        prompt_result(prompt, input.interact::<String>())
+        prompt_result(prompt, run_input_prompt(prompt, default, self.decorated))
     }
 
     fn print_step(&self, msg: &str) {
@@ -94,10 +140,17 @@ impl UserInterface for TerminalUi {
             return;
         }
         if self.decorated {
-            println!("{} {}", style("==>").green(), msg);
+            println!("{} {}", style(PROMPT_START).green(), msg);
         } else {
             println!("{msg}");
         }
+    }
+
+    fn print_plain(&self, msg: &str) {
+        if self.quiet {
+            return;
+        }
+        println!("{msg}");
     }
 
     fn print_dim(&self, msg: &str) {
@@ -128,210 +181,148 @@ impl UserInterface for TerminalUi {
     }
 }
 
-struct WtPromptTheme;
-
-struct PromptEntry {
-    label: String,
-    hint: String,
+fn selector_options(prompt: &str, decorated: bool) -> SelectorRenderOptions {
+    SelectorRenderOptions::new(prompt).decorated(decorated)
 }
 
-fn prompt_entries(items: &[PromptItem]) -> Vec<PromptEntry> {
-    let hint_label_width = items
-        .iter()
-        .filter(|item| has_prompt_hint(item))
-        .map(|item| measure_text_width(&item.label))
-        .max();
-
-    items
-        .iter()
-        .map(|item| {
-            let hint = item.hint.as_deref().unwrap_or("").trim().to_string();
-            let mut label = item.label.clone();
-            if !hint.is_empty() {
-                if let Some(target_width) = hint_label_width {
-                    label.push_str(
-                        &" ".repeat(target_width.saturating_sub(measure_text_width(&label))),
-                    );
-                }
-                // Cliclack filters only labels, so carry hint text in a suffix
-                // that the theme strips before rendering.
-                label.push(PROMPT_SEARCH_SEPARATOR);
-                label.push_str(&hint);
+fn selector_rows(rows: &[PromptRow]) -> Vec<SelectorRow> {
+    let mut option_index = 0;
+    rows.iter()
+        .map(|row| match row {
+            PromptRow::Section(section) => match section.hint.as_deref() {
+                Some(hint) => SelectorRow::Section(SelectorSection::with_hint(
+                    section.title.clone(),
+                    hint.to_string(),
+                )),
+                None => SelectorRow::Section(SelectorSection::new(section.title.clone())),
+            },
+            PromptRow::Option(option) => {
+                let row = selector_option(option.value_index.unwrap_or(option_index), option);
+                option_index += 1;
+                SelectorRow::Option(row)
             }
-            PromptEntry { label, hint }
         })
         .collect()
 }
 
-fn has_prompt_hint(item: &PromptItem) -> bool {
-    item.hint
-        .as_deref()
-        .is_some_and(|hint| !hint.trim().is_empty())
+fn selector_option(index: usize, option: &PromptOption) -> SelectorOption {
+    let mut row = match option.hint.as_deref() {
+        Some(hint) => SelectorOption::with_hint(index, option.label.clone(), hint.to_string()),
+        None => SelectorOption::new(index, option.label.clone()),
+    };
+    for text in &option.search_text {
+        row = row.search_text(text.clone());
+    }
+    if let Some(description) = option.description.as_deref() {
+        row = row.description(description.to_string());
+    }
+    row.selected(option.selected).disabled(option.disabled)
 }
 
-fn display_label(label: &str) -> &str {
-    label
-        .split_once(PROMPT_SEARCH_SEPARATOR)
-        .map_or(label, |(display, _)| display)
+fn should_show_selected_summary(rows: &[PromptRow]) -> bool {
+    let mut options = 0;
+    let mut has_section = false;
+    for row in rows {
+        match row {
+            PromptRow::Section(_) => has_section = true,
+            PromptRow::Option(_) => options += 1,
+        }
+    }
+    has_section || options > DEFAULT_VISIBLE_ROWS
 }
 
-impl Theme for WtPromptTheme {
-    fn bar_color(&self, state: &ThemeState) -> Style {
-        match state {
-            ThemeState::Active => accent_style(),
-            ThemeState::Cancel => Style::new().red(),
-            ThemeState::Submit => muted_style(),
-            ThemeState::Error(_) => Style::new().yellow(),
-        }
-    }
-
-    fn state_symbol_color(&self, state: &ThemeState) -> Style {
-        match state {
-            ThemeState::Submit => selected_style(),
-            _ => self.bar_color(state),
-        }
-    }
-
-    fn radio_symbol(&self, state: &ThemeState, selected: bool) -> String {
-        match state {
-            ThemeState::Active | ThemeState::Error(_) if selected => {
-                accent_style().apply_to(RADIO_SELECTED)
-            }
-            ThemeState::Active | ThemeState::Error(_) => muted_style().apply_to(RADIO_UNSELECTED),
-            ThemeState::Submit if selected => selected_style().apply_to(RADIO_SELECTED),
-            ThemeState::Cancel if selected => muted_style().apply_to(RADIO_SELECTED),
-            _ => Style::new().apply_to(""),
-        }
-        .to_string()
-    }
-
-    fn checkbox_symbol(&self, state: &ThemeState, selected: bool, active: bool) -> String {
-        match state {
-            ThemeState::Active | ThemeState::Error(_) if selected => {
-                selected_style().apply_to(CHECKBOX_SELECTED)
-            }
-            ThemeState::Active | ThemeState::Error(_) if active => {
-                accent_style().apply_to(CHECKBOX_UNSELECTED)
-            }
-            ThemeState::Active | ThemeState::Error(_) => {
-                muted_style().apply_to(CHECKBOX_UNSELECTED)
-            }
-            ThemeState::Submit if selected => selected_style().apply_to(CHECKBOX_SELECTED),
-            ThemeState::Cancel if selected => muted_style().apply_to(CHECKBOX_SELECTED),
-            _ => Style::new().apply_to(""),
-        }
-        .to_string()
-    }
-
-    fn checkbox_style(&self, state: &ThemeState, selected: bool, active: bool) -> Style {
-        match state {
-            ThemeState::Cancel if selected => Style::new().dim().strikethrough(),
-            ThemeState::Submit if selected => muted_style(),
-            ThemeState::Active | ThemeState::Error(_) if active => Style::new().bold(),
-            ThemeState::Active | ThemeState::Error(_) if selected => Style::new(),
-            _ => muted_style(),
-        }
-    }
-
-    fn format_select_item(
-        &self,
-        state: &ThemeState,
-        selected: bool,
-        label: &str,
-        hint: &str,
-    ) -> String {
-        match state {
-            ThemeState::Cancel | ThemeState::Submit if !selected => return String::new(),
-            _ => {}
-        }
-
-        format_prompt_row(
-            state,
-            self.bar_color(state),
-            self.radio_symbol(state, selected),
-            if selected {
-                Style::new().bold()
-            } else {
-                muted_style()
-            },
-            label,
-            hint,
+fn ensure_selectable_rows(prompt: &str, rows: &[PromptRow]) -> Result<()> {
+    if rows.iter().any(|row| {
+        matches!(
+            row,
+            PromptRow::Option(PromptOption {
+                disabled: false,
+                ..
+            })
         )
-    }
-
-    fn format_multiselect_item(
-        &self,
-        state: &ThemeState,
-        selected: bool,
-        active: bool,
-        label: &str,
-        hint: &str,
-    ) -> String {
-        match state {
-            ThemeState::Cancel | ThemeState::Submit if !selected => return String::new(),
-            _ => {}
-        }
-
-        format_prompt_row(
-            state,
-            self.bar_color(state),
-            self.checkbox_symbol(state, selected, active),
-            self.checkbox_style(state, selected, active),
-            label,
-            hint,
-        )
-    }
-}
-
-fn accent_style() -> Style {
-    Style::new().color256(110).bold()
-}
-
-fn selected_style() -> Style {
-    Style::new().color256(114).bold()
-}
-
-fn muted_style() -> Style {
-    Style::new().color256(245)
-}
-
-fn hint_style(state: &ThemeState) -> Style {
-    match state {
-        ThemeState::Cancel => Style::new().dim().strikethrough(),
-        ThemeState::Submit => Style::new().dim(),
-        _ => muted_style(),
-    }
-}
-
-fn format_prompt_row(
-    state: &ThemeState,
-    bar_style: Style,
-    marker: String,
-    label_style: Style,
-    label: &str,
-    hint: &str,
-) -> String {
-    let label = display_label(label);
-    let hint = format_hint(state, hint);
-    format!(
-        "{bar}  {marker}  {label}{hint}\n",
-        bar = bar_style.apply_to(BAR),
-        label = label_style.apply_to(label),
-    )
-}
-
-fn format_hint(state: &ThemeState, hint: &str) -> String {
-    let hint = hint.trim();
-    if hint.is_empty() {
-        String::new()
+    }) {
+        Ok(())
     } else {
-        let hint = hint.replace(" | ", " · ");
-        format!(
-            "{}{}",
-            " ".repeat(PROMPT_HINT_GAP),
-            hint_style(state).apply_to(hint)
-        )
+        bail!("prompt '{prompt}' has no selectable items")
     }
+}
+
+fn ensure_option_rows(prompt: &str, rows: &[PromptRow]) -> Result<()> {
+    if rows.iter().any(|row| matches!(row, PromptRow::Option(_))) {
+        Ok(())
+    } else {
+        bail!("prompt '{prompt}' has no items")
+    }
+}
+
+fn require_prompt_terminal() -> io::Result<()> {
+    if io::stdin().is_terminal() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "not a terminal",
+        ))
+    }
+}
+
+fn run_confirm_prompt(prompt: &str, default: bool, decorated: bool) -> io::Result<bool> {
+    require_prompt_terminal()?;
+    let choices = if default { "[Y/n]" } else { "[y/N]" };
+    loop {
+        write_prompt(prompt, Some(choices), None, decorated)?;
+        let input = read_line()?;
+        match input.trim().to_ascii_lowercase().as_str() {
+            "" => return Ok(default),
+            "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => {
+                eprintln!("Enter y or n.");
+            }
+        }
+    }
+}
+
+fn run_input_prompt(prompt: &str, default: Option<&str>, decorated: bool) -> io::Result<String> {
+    require_prompt_terminal()?;
+    write_prompt(prompt, None, default, decorated)?;
+    let input = read_line()?;
+    if input.is_empty() {
+        Ok(default.unwrap_or_default().to_string())
+    } else {
+        Ok(input)
+    }
+}
+
+fn write_prompt(
+    prompt: &str,
+    suffix: Option<&str>,
+    default: Option<&str>,
+    decorated: bool,
+) -> io::Result<()> {
+    let prompt_start = if decorated {
+        style(PROMPT_START).color256(110).bold().to_string()
+    } else {
+        PROMPT_START.to_string()
+    };
+    let mut stderr = io::stderr().lock();
+    write!(stderr, "{prompt_start} {prompt}")?;
+    if let Some(suffix) = suffix {
+        write!(stderr, " {suffix}")?;
+    }
+    if let Some(default) = default
+        && !default.is_empty()
+    {
+        write!(stderr, " ({default})")?;
+    }
+    write!(stderr, " ")?;
+    stderr.flush()
+}
+
+fn read_line() -> io::Result<String> {
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(input.trim_end_matches(['\r', '\n']).to_string())
 }
 
 fn prompt_result<T>(prompt: &str, result: io::Result<T>) -> Result<T> {
@@ -349,7 +340,6 @@ fn prompt_result<T>(prompt: &str, result: io::Result<T>) -> Result<T> {
 mod tests {
     use super::*;
     use crate::task::{self, TaskDocument, TaskOrigin};
-    use console::strip_ansi_codes;
 
     #[test]
     fn interrupted_prompt_maps_to_cancelled_error() {
@@ -383,101 +373,38 @@ mod tests {
     }
 
     #[test]
-    fn prompt_theme_remains_readable_without_color() {
-        console::set_colors_enabled(false);
-        let rendered = WtPromptTheme.format_select_item(
-            &ThemeState::Active,
-            true,
+    fn prompt_rows_map_options_to_return_indices_while_skipping_sections() {
+        let rows = vec![
+            PromptRow::section("GitHub"),
+            PromptRow::option_with_hint("Fix", "GitHub #73"),
+            PromptRow::section("Local"),
+            PromptRow::option_with_hint("Cleanup", "branch cleanup"),
+        ];
+        let mut state = SelectorState::single(selector_rows(&rows));
+
+        state.apply_input(crate::ui::selector::SelectorInput::Down);
+
+        assert_eq!(
+            state.apply_input(crate::ui::selector::SelectorInput::Enter),
+            crate::ui::selector::SelectorTransition::Submitted(SelectorSubmission::Single(1))
+        );
+    }
+
+    #[test]
+    fn prompt_row_hint_remains_metadata_in_owned_selector_rendering() {
+        let rows = vec![PromptRow::option_with_hint(
             "Fix editor",
             "task PROJ-123 | Linear",
-        );
-        console::set_colors_enabled(true);
+        )];
+        let state = SelectorState::single(selector_rows(&rows));
+        let rendered = render_plain(&state, "Task to start");
 
-        let plain = strip_ansi_codes(&rendered);
-        assert!(plain.contains("◉  Fix editor"));
-        assert!(plain.contains("task PROJ-123 · Linear"));
+        assert!(rendered.contains("●  Fix editor"));
+        assert!(rendered.contains("task PROJ-123 · Linear"));
     }
 
     #[test]
-    fn prompt_theme_renders_checkbox_rows_without_color() {
-        console::set_colors_enabled(false);
-        let rendered = WtPromptTheme.format_multiselect_item(
-            &ThemeState::Active,
-            true,
-            true,
-            "Publish docs",
-            "PROJ-123 | Todo | alice",
-        );
-        console::set_colors_enabled(true);
-
-        let plain = strip_ansi_codes(&rendered);
-        assert!(plain.contains("☑  Publish docs"));
-        assert!(plain.contains("PROJ-123 · Todo · alice"));
-    }
-
-    #[test]
-    fn prompt_theme_aligns_select_hint_columns_after_stripping_ansi() {
-        console::set_colors_enabled(true);
-        let items = prompt_entries(&[
-            PromptItem::with_hint("Fix", "task PROJ-123"),
-            PromptItem::with_hint("Publish documentation", "task PROJ-456"),
-        ]);
-        let short = strip_ansi_codes(&WtPromptTheme.format_select_item(
-            &ThemeState::Active,
-            true,
-            &items[0].label,
-            &items[0].hint,
-        ))
-        .into_owned();
-        let long = strip_ansi_codes(&WtPromptTheme.format_select_item(
-            &ThemeState::Active,
-            false,
-            &items[1].label,
-            &items[1].hint,
-        ))
-        .into_owned();
-        console::set_colors_enabled(true);
-
-        assert_eq!(
-            hint_column(&short, "task PROJ-123"),
-            hint_column(&long, "task PROJ-456")
-        );
-    }
-
-    #[test]
-    fn prompt_theme_aligns_multiselect_hint_columns_after_stripping_ansi() {
-        console::set_colors_enabled(true);
-        let items = prompt_entries(&[
-            PromptItem::with_hint("Fix", "task PROJ-123"),
-            PromptItem::with_hint("Publish documentation", "task PROJ-456"),
-        ]);
-        let short = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
-            &ThemeState::Active,
-            true,
-            true,
-            &items[0].label,
-            &items[0].hint,
-        ))
-        .into_owned();
-        let long = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
-            &ThemeState::Active,
-            false,
-            false,
-            &items[1].label,
-            &items[1].hint,
-        ))
-        .into_owned();
-        console::set_colors_enabled(true);
-
-        assert_eq!(
-            hint_column(&short, "task PROJ-123"),
-            hint_column(&long, "task PROJ-456")
-        );
-    }
-
-    #[test]
-    fn task_selector_origin_state_starts_in_same_rendered_column_for_full_width_titles() {
-        console::set_colors_enabled(true);
+    fn task_selector_hint_starts_in_same_rendered_column_for_full_width_titles() {
         let local = task::task_resource_item(
             "a",
             &TaskDocument {
@@ -501,69 +428,39 @@ mod tests {
             },
             "origin:linear:PROJ-123",
         );
-        let items = prompt_entries(&[local, provider]);
-
-        let local = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
-            &ThemeState::Active,
-            true,
-            true,
-            &items[0].label,
-            &items[0].hint,
-        ))
-        .into_owned();
-        let provider = strip_ansi_codes(&WtPromptTheme.format_multiselect_item(
-            &ThemeState::Active,
-            false,
-            false,
-            &items[1].label,
-            &items[1].hint,
-        ))
-        .into_owned();
-        console::set_colors_enabled(true);
+        let rows = prompt_items_to_rows(&[local, provider]);
+        let state = SelectorState::multi(selector_rows(&rows));
+        let rendered = render_plain(&state, "Tasks to start");
+        let local = rendered
+            .lines()
+            .find(|line| line.contains("짧은 제목"))
+            .unwrap();
+        let provider = rendered
+            .lines()
+            .find(|line| line.contains("인디위키 보호된 제목 목록 구현"))
+            .unwrap();
 
         assert_eq!(
-            rendered_column(&local, "not published"),
-            rendered_column(&provider, "Linear PROJ-123")
+            rendered_column(local, "branch a"),
+            rendered_column(provider, "Linear PROJ-123")
         );
-        assert!(items[0].label.contains("not published | task a | branch a"));
-        assert!(items[1].label.contains(
-            "Linear PROJ-123 | task very-long-task-key | branch team/very-long-task-key"
-        ));
     }
 
     #[test]
-    fn prompt_entries_keep_hint_text_searchable_without_rendering_search_suffix() {
-        let items = prompt_entries(&[PromptItem::with_hint(
-            "Fix editor",
-            "task PROJ-123 | Linear",
-        )]);
+    fn selected_summary_is_enabled_for_grouped_or_long_multiselects() {
+        let grouped = vec![
+            PromptRow::section("Local"),
+            PromptRow::option("One"),
+            PromptRow::option("Two"),
+        ];
+        let compact = vec![PromptRow::option("One"), PromptRow::option("Two")];
+        let long = (0..=DEFAULT_VISIBLE_ROWS)
+            .map(|index| PromptRow::option(format!("Task {index}")))
+            .collect::<Vec<_>>();
 
-        assert!(items[0].label.contains("Fix editor"));
-        assert!(items[0].label.contains("task PROJ-123 | Linear"));
-
-        let rendered = WtPromptTheme.format_select_item(
-            &ThemeState::Active,
-            true,
-            &items[0].label,
-            &items[0].hint,
-        );
-        let plain = strip_ansi_codes(&rendered);
-        assert!(!plain.contains(PROMPT_SEARCH_SEPARATOR));
-        assert!(!plain.contains("task PROJ-123 | Linear"));
-        assert!(plain.contains("task PROJ-123 · Linear"));
-    }
-
-    #[test]
-    fn prompt_entries_leave_plain_labels_unpadded() {
-        let items = prompt_entries(&[
-            PromptItem::new("Fix"),
-            PromptItem::new("Publish documentation"),
-        ]);
-
-        assert_eq!(items[0].label, "Fix");
-        assert_eq!(items[0].hint, "");
-        assert_eq!(items[1].label, "Publish documentation");
-        assert_eq!(items[1].hint, "");
+        assert!(should_show_selected_summary(&grouped));
+        assert!(!should_show_selected_summary(&compact));
+        assert!(should_show_selected_summary(&long));
     }
 
     fn hint_column(row: &str, hint: &str) -> usize {
@@ -573,6 +470,12 @@ mod tests {
 
     fn rendered_column(row: &str, hint: &str) -> usize {
         let byte_index = hint_column(row, hint);
-        measure_text_width(&row[..byte_index])
+        console::measure_text_width(&row[..byte_index])
+    }
+
+    fn render_plain(state: &SelectorState, prompt: &str) -> String {
+        let options = SelectorRenderOptions::new(prompt).decorated(false);
+        console::strip_ansi_codes(&crate::ui::selector::render_selector(state, &options))
+            .into_owned()
     }
 }

@@ -71,7 +71,7 @@ fn handle_existing_profile_path(
         .print_warning(&format!("Worktree {} already exists.", path.display()));
     if prompt_policy == PromptPolicy::Deny {
         bail!(
-            "Worktree {} already exists; parallel batch workers cannot prompt to delete, skip, or abort",
+            "Worktree {} already exists; parallel workers cannot prompt to delete, skip, or abort",
             path.display()
         );
     }
@@ -110,7 +110,7 @@ fn handle_existing_profile_branch(
         .print_warning(&format!("Branch {branch} already exists."));
     if prompt_policy == PromptPolicy::Deny {
         bail!(
-            "Branch {branch} already exists; parallel batch workers cannot prompt to reuse, delete, skip, or abort"
+            "Branch {branch} already exists; parallel workers cannot prompt to reuse, delete, skip, or abort"
         );
     }
 

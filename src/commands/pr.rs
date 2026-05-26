@@ -1,33 +1,64 @@
+use crate::commands::profile_workspace::PromptPolicy;
 use crate::config::Config;
-use crate::context::{Ctx, PromptItem};
+use crate::context::{Ctx, PromptItem, PromptRow};
 use crate::error::WtError;
 use crate::names::WorktreeNames;
+use crate::parallel::{self, ParallelControl};
 use crate::services::git::GitService;
 use crate::services::github::{GithubService, PullRequest};
 use crate::setup;
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 
-pub fn run(ctx: &Ctx, numbers: &[u32], profile: Option<&str>) -> Result<()> {
+#[derive(Clone)]
+enum PrWorkItem {
+    Number(u32),
+    Resolved(PullRequest),
+}
+
+impl PrWorkItem {
+    fn label(&self) -> String {
+        match self {
+            PrWorkItem::Number(number) => format!("#{number}"),
+            PrWorkItem::Resolved(pr) => format!("#{}", pr.number),
+        }
+    }
+}
+
+pub fn run(ctx: &Ctx, numbers: &[u32], profile: Option<&str>, jobs: usize) -> Result<()> {
     let github = GithubService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
-    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
     let profile_config = load_profile_config(ctx, profile)?;
     let config = profile_config.as_ref().unwrap_or(&ctx.config);
 
-    if numbers.is_empty() {
-        let prs = select_prs(ctx, &github)?;
-        for pr in prs {
-            run_resolved_pr(ctx, &git, &pr, profile, profile_config.as_ref(), config)
-                .with_context(|| format!("PR #{}", pr.number))?;
-        }
+    let items = if numbers.is_empty() {
+        select_prs(ctx, &github)?
+            .into_iter()
+            .map(PrWorkItem::Resolved)
+            .collect::<Vec<_>>()
     } else {
-        for number in numbers {
-            let pr = github
-                .get_pr(*number)
-                .with_context(|| format!("PR #{number}"))?;
-            run_resolved_pr(ctx, &git, &pr, profile, profile_config.as_ref(), config)
-                .with_context(|| format!("PR #{}", pr.number))?;
-        }
+        numbers
+            .iter()
+            .copied()
+            .map(PrWorkItem::Number)
+            .collect::<Vec<_>>()
+    };
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    if jobs > 1 && items.len() > 1 {
+        return run_pr_items_parallel(ctx, items, profile, profile_config.as_ref(), config, jobs);
+    }
+
+    for item in items {
+        run_pr_item(
+            ctx,
+            item,
+            profile,
+            profile_config.as_ref(),
+            config,
+            PromptPolicy::Allow,
+        )?;
     }
 
     Ok(())
@@ -39,8 +70,8 @@ fn select_prs(ctx: &Ctx, github: &GithubService<'_>) -> Result<Vec<PullRequest>>
         bail!("No open PRs found");
     }
 
-    let items = format_pr_select_prompt_items(&prs);
-    let selected_indices = ctx.ui.multi_select_items("PRs to start", &items)?;
+    let rows = format_pr_select_prompt_rows(&prs);
+    let selected_indices = ctx.ui.multi_select_rows("PRs to start", &rows)?;
     if selected_indices.is_empty() {
         ctx.ui.print_warning("No PRs selected");
         return Ok(Vec::new());
@@ -58,12 +89,13 @@ fn select_prs(ctx: &Ctx, github: &GithubService<'_>) -> Result<Vec<PullRequest>>
 
 fn run_resolved_pr(
     ctx: &Ctx,
-    git: &GitService<'_>,
     pr: &PullRequest,
     profile: Option<&str>,
     profile_config: Option<&Config>,
     config: &Config,
+    prompt_policy: PromptPolicy,
 ) -> Result<()> {
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
     let pr_number = pr.number;
     let title = pr.title.as_str();
     let branch_name = pr.head_ref_name.as_str();
@@ -123,6 +155,12 @@ fn run_resolved_pr(
             "Worktree {} already exists.",
             names.path.display()
         ));
+        if prompt_policy == PromptPolicy::Deny {
+            bail!(
+                "Worktree {} already exists; parallel workers cannot prompt to delete or open it",
+                names.path.display()
+            );
+        }
         let items = vec![
             "Delete and recreate".into(),
             "Open existing".into(),
@@ -185,11 +223,72 @@ fn run_resolved_pr(
     Ok(())
 }
 
+fn run_pr_item(
+    ctx: &Ctx,
+    item: PrWorkItem,
+    profile: Option<&str>,
+    profile_config: Option<&Config>,
+    config: &Config,
+    prompt_policy: PromptPolicy,
+) -> Result<()> {
+    let label = item.label();
+    let pr = match item {
+        PrWorkItem::Resolved(pr) => pr,
+        PrWorkItem::Number(number) => {
+            let github = GithubService::new(ctx.runner.as_ref(), Some(&ctx.repo_root));
+            github
+                .get_pr(number)
+                .with_context(|| format!("PR #{number}"))?
+        }
+    };
+    run_resolved_pr(ctx, &pr, profile, profile_config, config, prompt_policy)
+        .with_context(|| format!("PR {label}"))
+}
+
+fn run_pr_items_parallel(
+    ctx: &Ctx,
+    items: Vec<PrWorkItem>,
+    profile: Option<&str>,
+    profile_config: Option<&Config>,
+    config: &Config,
+    jobs: usize,
+) -> Result<()> {
+    let mut first_error = None;
+    parallel::run_bounded_parallel(
+        items,
+        jobs,
+        |_| Ok(()),
+        |item| {
+            run_pr_item(
+                ctx,
+                item,
+                profile,
+                profile_config,
+                config,
+                PromptPolicy::Deny,
+            )
+        },
+        |completion| {
+            if let Err(err) = completion.result
+                && first_error.is_none()
+            {
+                first_error = Some(err);
+            }
+            Ok(ParallelControl::Continue)
+        },
+    )?;
+
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+    Ok(())
+}
+
 fn load_profile_config(ctx: &Ctx, profile: Option<&str>) -> Result<Option<Config>> {
     let Some(profile) = profile else {
         return Ok(None);
     };
-    Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
+    Config::load_profile_from_storage(&ctx.repo_root, &ctx.storage_root, profile, &ctx.base_config)?
         .map(Some)
         .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))
 }
@@ -208,8 +307,20 @@ fn format_pr_select_items(prs: &[PullRequest]) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn format_pr_select_prompt_items(prs: &[PullRequest]) -> Vec<PromptItem> {
     prs.iter().map(format_pr_select_item).collect()
+}
+
+fn format_pr_select_prompt_rows(prs: &[PullRequest]) -> Vec<PromptRow> {
+    let mut rows = vec![PromptRow::section("GitHub")];
+    rows.extend(
+        prs.iter()
+            .map(format_pr_select_item)
+            .enumerate()
+            .map(|(index, item)| PromptRow::from_indexed_item(index, item)),
+    );
+    rows
 }
 
 fn format_pr_select_item(pr: &PullRequest) -> PromptItem {
@@ -319,7 +430,7 @@ mod tests {
             Box::new(ui),
         );
 
-        let result = run(&ctx, &[42], None);
+        let result = run(&ctx, &[42], None, 1);
         assert!(result.is_ok() || result.unwrap_err().to_string().contains("setup"));
 
         let calls = runner.calls.lock().unwrap();
@@ -353,7 +464,7 @@ mod tests {
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, &[42, 43], None).unwrap();
+        run(&ctx, &[42, 43], None, 1).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let viewed_prs = calls
@@ -380,7 +491,7 @@ mod tests {
     #[test]
     fn pr_with_profile_uses_profile_config_for_setup() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex-yolo");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex-yolo");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),
@@ -424,7 +535,7 @@ cli = "codex"
             Box::new(MockUi::new()),
         );
 
-        run(&ctx, &[42], Some("codex-yolo")).unwrap();
+        run(&ctx, &[42], Some("codex-yolo"), 1).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let worktree_add_call = calls
@@ -464,7 +575,7 @@ cli = "codex"
             Box::new(ui),
         );
 
-        let result = run(&ctx, &[], None);
+        let result = run(&ctx, &[], None, 1);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No open PRs"));
     }
@@ -498,7 +609,7 @@ cli = "codex"
             Box::new(Arc::clone(&ui)),
         );
 
-        run(&ctx, &[], None).unwrap();
+        run(&ctx, &[], None, 1).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let created_branches = calls
@@ -513,6 +624,8 @@ cli = "codex"
             .map(|(_, args, _)| args[3].clone())
             .collect::<Vec<_>>();
         assert_eq!(created_branches, vec!["alice/first", "alice/third"]);
+        let rows = ui.multi_select_rows.lock().unwrap();
+        assert_eq!(section_titles(&rows[0]), vec!["GitHub"]);
         assert!(ui.warnings.lock().unwrap().is_empty());
     }
 
@@ -539,7 +652,7 @@ cli = "codex"
             Box::new(Arc::clone(&ui)),
         );
 
-        run(&ctx, &[], None).unwrap();
+        run(&ctx, &[], None, 1).unwrap();
 
         assert_eq!(ui.warnings.lock().unwrap().as_slice(), ["No PRs selected"]);
         let calls = runner.calls.lock().unwrap();
@@ -579,7 +692,7 @@ cli = "codex"
             Box::new(ui),
         );
 
-        let result = run(&ctx, &[10], None);
+        let result = run(&ctx, &[10], None, 1);
         assert!(result.is_ok() || !result.unwrap_err().to_string().contains("already exists"));
     }
 
@@ -654,5 +767,14 @@ cli = "codex"
                 "Long author  PR #123 | @octocat | OPEN | head octocat/long | base main"
             ]
         );
+    }
+
+    fn section_titles(rows: &[PromptRow]) -> Vec<String> {
+        rows.iter()
+            .filter_map(|row| match row {
+                PromptRow::Section(section) => Some(section.title.clone()),
+                PromptRow::Option(_) => None,
+            })
+            .collect()
     }
 }

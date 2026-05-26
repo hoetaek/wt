@@ -1,28 +1,67 @@
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+const ROOT_HELP_TEMPLATE: &str = "\
+{about}
+
+{usage-heading} {usage}
+
+Common:
+  run      Start workspace execution from issue, PR, branch text, task, or workflow
+  open     Open an existing worktree or branch
+  inspect  Read a work dossier
+  done     Clean completed work
+  list     Show current wt state
+
+Prepared Work:
+  task      Manage local TaskDocuments
+  workflow  Prepare and coordinate saved workflow tasks
+
+Setup:
+  init    이 저장소에 맞는 config 추천 wizard 시작
+  config  Print, edit, or refactor config
+  setup   Install or remove per-machine integration
+  doctor  Check config and local tools
+
+Explore:
+  wt run -h        start surfaces
+  wt task -h       TaskDocument commands
+  wt workflow -h   workflow lifecycle
+  wt agent -h      agent observation
+  wt msg -h        agent inbox messages
+  wt help <cmd>    any other command
+
+Options:
+{options}{after-help}";
+
 #[derive(Parser, Debug)]
-#[command(name = "wt", version, about = "Git worktree workspace manager")]
+#[command(
+    name = "wt",
+    version,
+    about = "Worktree-based agent orchestration harness",
+    help_template = ROOT_HELP_TEMPLATE,
+    after_help = "Start workspace execution with: wt run issue, wt run pr, wt run branch, wt run task, wt run workflow.\nUse wt open for existing branches or worktrees; use wt workflow for saved workflow files and lifecycle actions."
+)]
 pub struct Cli {
-    /// Run wt from DIR
+    /// DIR에서 wt 실행
     #[arg(short = 'C', long = "directory", global = true, value_name = "DIR")]
     pub directory: Option<PathBuf>,
-    /// Config file to load for commands that read wt config
+    /// wt config를 읽는 명령에서 사용할 config 파일
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
-    /// Increase diagnostic output (-v, -vv)
+    /// 진단 출력 자세히 보기 (-v, -vv)
     #[arg(short, long, action = ArgAction::Count, global = true, conflicts_with = "quiet")]
     pub verbose: u8,
-    /// Suppress normal status output
+    /// 일반 status 출력 숨기기
     #[arg(short, long, global = true)]
     pub quiet: bool,
-    /// When to use terminal colors
+    /// 터미널 색상 사용 시점
     #[arg(long, value_enum, default_value_t = ColorMode::Auto, global = true)]
     pub color: ColorMode,
-    /// Disable terminal colors
+    /// 터미널 색상 끄기
     #[arg(long = "no-color", global = true, conflicts_with = "color")]
     pub no_color: bool,
-    /// Emit machine-readable JSON for supported commands
+    /// 지원하는 명령에서 machine-readable JSON 출력
     #[arg(long, global = true)]
     pub json: bool,
     #[command(subcommand)]
@@ -39,53 +78,118 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
-    /// Start a workspace from an issue
-    Issue {
-        /// Issue number or provider-specific key
-        target: Option<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-        /// Create a profiled issue worktree from .local/profiles/<name>
-        #[arg(long)]
-        profile: Option<String>,
-        /// Start one workspace for each named profile
-        #[arg(long, conflicts_with = "profile")]
-        matrix: bool,
+    /// Print shell integration source for ambient worker identity binding
+    #[command(
+        long_about = "Print shell integration source for ambient worker identity binding.\n\nAdd `eval \"$(wt shell-init zsh)\"` or `eval \"$(wt shell-init bash)\"` to your shell rc. The generated hook runs `wt env` when the current directory changes so worker worktree shells inherit WT_AGENT_ID and WT_COORDINATOR_AGENT_ID. See docs/architecture.md#shell-integration."
+    )]
+    ShellInit {
+        /// Shell to initialize: zsh or bash
+        #[arg(value_enum)]
+        shell: ShellInitShell,
     },
-    /// Start workspaces from pull requests
-    Pr {
-        /// Pull request numbers (omit to select multiple open PRs)
-        #[arg(value_name = "PR")]
-        numbers: Vec<u32>,
-        /// Apply config from .local/profiles/<name> to the PR worktree
-        #[arg(long)]
-        profile: Option<String>,
+    /// Print shell statements for the current worker worktree identity
+    #[command(
+        name = "env",
+        hide = true,
+        long_about = "Internal shell-hook command. Print export/unset statements for WT_AGENT_ID and WT_COORDINATOR_AGENT_ID based on the current git worktree branch and matching <git-common-dir>/wt/task-runs records.\n\nThis command is intended to be called by source generated from `wt shell-init <shell>`."
+    )]
+    Env,
+    /// Declare or clear the coordinator identity for the current shell
+    #[command(
+        long_about = "Print shell statements for declaring or clearing the coordinator identity in the current shell.\n\nUse `eval \"$(wt coord use <id>)\"` once per coordinator session, for example `eval \"$(wt coord use my-coord)\"`. `wt coord use` sets WT_AGENT_ID and WT_COORDINATOR_AGENT_ID to the same agent because a coordinator session is its own coordinator.\n\n`wt shell-init <shell>` provides a shell function wrapper so users can run `wt-coord-use my-coord` directly."
+    )]
+    Coord {
+        #[command(subcommand)]
+        command: CoordCommand,
     },
-    /// Start a workspace from branch-name text
-    New {
-        /// Branch name words
-        #[arg(num_args = 0..)]
-        name: Vec<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-        /// Create a profiled branch worktree from .local/profiles/<name>
-        #[arg(long)]
-        profile: Option<String>,
-        /// Start one workspace for each named profile
-        #[arg(long, conflicts_with = "profile")]
-        matrix: bool,
+    /// Declare, clear, or inspect the current session agent identity
+    #[command(
+        long_about = "Declare, clear, or inspect the current session agent identity using the current terminal or agent-session anchor.\n\nUse `eval \"$(wt session set <id>)\"` to bind this shell or agent session to WT_AGENT_ID and WT_COORDINATOR_AGENT_ID while also writing a marker that later wt invocations from the same anchor can resolve."
+    )]
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
+    /// Start workspace execution from issue, PR, branch text, task, or workflow
+    #[command(
+        long_about = "Start workspace execution from issues, pull requests, branch-name text, local TaskDocuments, or saved Workflows.\n\nCanonical start surfaces are `wt run issue`, `wt run pr`, `wt run branch`, `wt run task`, and `wt run workflow`.\n\n`wt run` only starts workspace execution. Cleanup stays under `wt done`, inspection under `wt inspect`, agent observation under `wt agent`, and saved workflow lifecycle actions under `wt workflow`."
+    )]
+    Run {
+        #[command(subcommand)]
+        command: RunCommand,
+    },
+    #[command(name = "issue", hide = true, disable_help_flag = true)]
+    DeprecatedIssue {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
+    },
+    #[command(name = "pr", hide = true, disable_help_flag = true)]
+    DeprecatedPr {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
+    },
+    #[command(name = "new", hide = true, disable_help_flag = true)]
+    DeprecatedNew {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
     },
     /// Manage local TaskDocuments
     Task {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Prepare, inspect, edit, run, repair, or complete workflow tasks
+    /// Prepare, inspect, edit, repair, archive, or complete workflow tasks
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
+    },
+    /// Create blank skeleton documents for a feature
+    #[command(
+        long_about = "Create blank skeleton documents for a feature under <git-common-dir>/wt/ideas, numbered specs, tasks, workflows, and spec-local retrospects. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
+    )]
+    Scaffold {
+        /// Feature slug to use for every generated path
+        #[arg(value_name = "FEATURE")]
+        feature: String,
+        /// Create <git-common-dir>/wt/ideas/<feature>.md
+        #[arg(long)]
+        idea: bool,
+        /// Create numbered prep files under <git-common-dir>/wt/specs/<feature>/
+        #[arg(long)]
+        spec: bool,
+        /// Create <git-common-dir>/wt/tasks/<feature>.toml
+        #[arg(long)]
+        task: bool,
+        /// Create <git-common-dir>/wt/workflows/<feature>.toml
+        #[arg(long)]
+        workflow: bool,
+        /// Create <git-common-dir>/wt/specs/<feature>/11-retrospect.md
+        #[arg(long)]
+        retrospect: bool,
+        /// Create all scaffold document kinds
+        #[arg(
+            long,
+            conflicts_with_all = ["idea", "spec", "task", "workflow", "retrospect"]
+        )]
+        all: bool,
+        /// Overwrite existing scaffold files
+        #[arg(short = 'f', long)]
+        force: bool,
     },
     /// Show worktree, branch, site, and setup state
     List {
@@ -108,25 +212,96 @@ pub enum Commands {
     },
     /// Read a work dossier for a branch, worktree, or TaskRun
     #[command(
-        long_about = "Read a concise, read-only work dossier for a branch, worktree path/name, or TaskRun id. Omit TARGET in an interactive terminal to choose an inspectable work target; pass TARGET explicitly for scripts and non-interactive use."
+        long_about = "Read a concise, read-only work dossier for a branch, worktree path/name, or TaskRun id. Omit TARGET in an interactive terminal to choose an inspectable work target; pass TARGET explicitly for scripts and non-interactive use. Pass --pr to fetch and render read-only pull request review evidence for the inspected branch."
     )]
     Inspect {
         /// Branch, worktree path/name, or TaskRun id to inspect
         target: Option<String>,
+        /// Fetch and render read-only pull request review evidence for the inspected branch
+        #[arg(long)]
+        pr: bool,
     },
     /// Observe and watch task agent runtime state
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
     },
-    /// Start a read-only local state web UI
+    /// Set up or remove per-machine wt integration
     #[command(
-        long_about = "Start a read-only local web UI for wt state. The server binds to 127.0.0.1, serves embedded no-build assets, and exposes only allowlisted routes including GET /api/snapshot for .local ideas, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
+        long_about = "Set up or remove per-machine wt integration.\n\n`wt setup` detects supported local agent CLIs, prompts before installing wt-managed Claude and Codex inbox hooks, and can add shell integration and completion eval lines to the resolved shell rc file. Use --yes to accept detected steps without prompting, --dry-run to preview changes without writing files, and --remove to remove wt-managed per-machine entries."
+    )]
+    Setup {
+        /// Accept every detected setup step without prompting
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+        /// Preview setup or removal without writing files
+        #[arg(long)]
+        dry_run: bool,
+        /// Remove wt-managed per-machine setup entries
+        #[arg(long)]
+        remove: bool,
+    },
+    /// Launch Codex with the current worktree's wt agent identity
+    #[command(
+        long_about = "Launch Codex with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID resolved from the launch context when available.\n\nUse `wt codex` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt codex @planner` or `wt codex @reviewer` to launch a separate inbox like `agents/<branch_slug>-planner`, so multiple agents do not consume each other's messages. Extra Codex arguments are passed through after the optional role."
+    )]
+    Codex {
+        /// Optional @role followed by arguments passed to codex
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
+    },
+    /// Launch Claude with the current worktree's wt agent identity
+    #[command(
+        long_about = "Launch Claude with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID resolved from the launch context when available.\n\nUse `wt claude` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt claude @coordinator` or `wt claude @reviewer` to launch a separate inbox like `agents/<branch_slug>-coordinator`, so multiple agents do not consume each other's messages. Extra Claude arguments are passed through after the optional role."
+    )]
+    Claude {
+        /// Optional @role followed by arguments passed to claude
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
+    },
+    /// Run any command with an explicit wt agent identity
+    #[command(
+        long_about = "Run any command with an explicit WT_AGENT_ID and context-resolved WT_COORDINATOR_AGENT_ID when available.\n\nUse `wt as <AGENT> -- <COMMAND>` as the low-level escape hatch for scripts, unusual agent CLIs, or identities that should not be derived from the current branch. For daily Codex and Claude launches, prefer `wt codex`, `wt codex @planner`, `wt claude`, or `wt claude @reviewer`."
+    )]
+    As {
+        /// Agent id as NAME or agents/NAME
+        agent: String,
+        /// Command to run with WT_AGENT_ID set
+        #[arg(
+            value_name = "COMMAND",
+            required = true,
+            num_args = 1..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        command: Vec<String>,
+    },
+    /// Start a read-only personal state web UI
+    #[command(
+        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <git-common-dir>/wt ideas, spec-local and cross-work retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
     )]
     Ui {
         /// Port to bind on 127.0.0.1; 0 selects an available port
         #[arg(long, default_value_t = 0, value_name = "PORT")]
         port: u16,
+    },
+    /// Send, deliver, and inspect file-based agent inbox messages
+    #[command(
+        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use `wt msg check-inbox --silent` from agent hooks so the WT_AGENT_ID inbox is checked; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+    )]
+    Msg {
+        #[command(subcommand)]
+        command: MsgCommand,
     },
     /// Send a message to a task agent's cmux surface
     Send {
@@ -146,59 +321,66 @@ pub enum Commands {
         no_enter: bool,
     },
     /// Check configured providers and required local tools
-    Doctor,
+    Doctor {
+        /// Run checks against the effective config for <git-common-dir>/wt/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+        /// Delete one env-keyed session marker by display key, for example surface:A22D...
+        #[arg(long, value_name = "KEY")]
+        prune_env_markers: Option<String>,
+    },
     /// Print, edit, or refactor wt config files
+    #[command(
+        long_about = "Print, edit, or refactor wt config files. Shared repo config is .wt.toml; private repo config is <git-common-dir>/wt/config.toml; named profile config is <git-common-dir>/wt/profiles/<name>/profile.toml."
+    )]
     Config {
-        /// Show effective config using .local/profiles/<name>
+        /// Show effective config using <git-common-dir>/wt/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         #[command(subcommand)]
         command: Option<ConfigCommand>,
     },
     /// List or manage named profile configs
+    #[command(
+        long_about = "List or manage named profile configs stored under <git-common-dir>/wt/profiles/<name>/profile.toml. Bare `wt profile` is an omission-default that runs `wt profile list`; the canonical inventory surface is the explicit `wt profile list` subcommand. Use `wt profile create <name>` to scaffold a new profile."
+    )]
     Profile {
         #[command(subcommand)]
         command: Option<ProfileCommand>,
     },
-    /// Start the workspace config wizard
+    /// 이 저장소에 맞는 config 추천 wizard 시작
     Init {
-        /// Write private config to .local/.wt.toml
+        /// 개인 설정 파일에 쓰기
         #[arg(long, conflicts_with = "shared")]
         local: bool,
-        /// Write shared project config to .wt.toml
+        /// 팀 공유 설정을 .wt.toml에 쓰기
         #[arg(long)]
         shared: bool,
-        /// Starter preset to generate
-        #[arg(long, value_enum, value_name = "PRESET", conflicts_with = "minimal")]
-        preset: Option<InitPreset>,
-        /// Generate the minimal starter preset
-        #[arg(long, conflicts_with = "preset")]
-        minimal: bool,
-        /// Agent runtime to write into [profile.agent]
+        /// [profile.agent]에 저장할 agent runtime
         #[arg(long, value_enum)]
         agent: Option<InitAgent>,
-        /// Extra argument for [profile.agent]
+        /// [profile.agent]에 추가할 실행 인자
         #[arg(long = "agent-arg", allow_hyphen_values = true)]
         agent_args: Vec<String>,
-        /// Override the agent launch command
+        /// agent 실행 command override
         #[arg(long)]
         agent_command: Option<String>,
-        /// Issue provider to configure
+        /// 설정할 issue provider
         #[arg(long, value_enum)]
         issue_provider: Option<InitIssueProvider>,
-        /// Local site provider to configure
+        /// 설정할 local site provider
         #[arg(long, value_enum)]
         site_provider: Option<InitSiteProvider>,
-        /// GitHub user for issue list filtering
+        /// issue 목록 필터링에 사용할 GitHub 사용자
         #[arg(long)]
         gh_user: Option<String>,
-        /// Skip interactive prompts, use defaults, and write unless target exists
+        /// interactive 질문을 건너뛰고 기본 추천값으로 쓰기
         #[arg(long)]
         yes: bool,
-        /// Preview target, preset, detected signals, and TOML without writing files
+        /// 파일을 쓰지 않고 대상, 추천 모드, 감지된 신호, TOML 미리보기
         #[arg(long)]
         dry_run: bool,
-        /// Overwrite an existing config file during non-interactive writes
+        /// non-interactive 쓰기에서 기존 설정 파일 덮어쓰기
         #[arg(long)]
         force: bool,
     },
@@ -207,6 +389,45 @@ pub enum Commands {
         #[command(subcommand)]
         command: SiteCommand,
     },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum CoordCommand {
+    /// Print exports for using this shell as a coordinator
+    #[command(
+        long_about = "Print shell exports for using this shell as a coordinator.\n\nUse `eval \"$(wt coord use <id>)\"` once per coordinator session, for example `eval \"$(wt coord use my-coord)\"`.\n\n`wt shell-init <shell>` provides a shell function wrapper so users can run `wt-coord-use my-coord` directly."
+    )]
+    Use {
+        /// Coordinator agent id as NAME or agents/NAME
+        id: String,
+    },
+    /// Print unsets for clearing the coordinator identity
+    Exit,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum SessionCommand {
+    /// Write a session identity marker and print shell exports
+    #[command(
+        long_about = "Write a session identity marker for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set my-coord)\"`, so the current shell gets WT_AGENT_ID and WT_COORDINATOR_AGENT_ID immediately while later wt invocations from the same anchor can resolve the marker."
+    )]
+    Set {
+        /// Agent id as NAME or agents/NAME
+        id: String,
+    },
+    /// Remove the current session identity marker and print shell unsets
+    Unset,
+    /// Print the current session identity resolution
+    Whoami {
+        /// Emit machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellInitShell {
+    Zsh,
+    Bash,
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
@@ -230,6 +451,11 @@ pub enum ConfigCommand {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum ProfileCommand {
+    /// List named profile configs
+    #[command(
+        long_about = "List named profile configs discovered under <git-common-dir>/wt/profiles/<name>/profile.toml. Profiles are listed in deterministic name order with their copy, link, and agent summary. Invalid profile records are surfaced as warnings in text output and as `invalid_profiles` entries in JSON output rather than being silently hidden. The reserved `default` name is never shown as a valid named profile."
+    )]
+    List,
     /// Create a named profile scaffold
     Create {
         /// New profile name
@@ -249,7 +475,7 @@ pub enum AgentCommand {
     },
     /// Poll a task agent's runtime state until it is no longer running, becomes blocked, or reaches a bound
     #[command(
-        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
+        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. When --timeout or --heartbeat emits a non-idle sample, wt agent watch appends it to the local <git-common-dir>/wt/agent.state/wait-observations.jsonl file. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
     )]
     Watch {
         /// Branch, worktree path/name, or TaskRun id to watch
@@ -269,6 +495,173 @@ pub enum AgentCommand {
         #[arg(long, value_name = "SECONDS", value_parser = parse_positive_u64)]
         heartbeat: Option<u64>,
     },
+    /// Summarize recorded non-idle wait observations
+    #[command(
+        long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch` when heartbeat or timeout samples are emitted. This is read-only: it summarizes <git-common-dir>/wt/agent.state/wait-observations.jsonl with count, sum, average, min, max, bucket, and low-cardinality group data; it does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
+    )]
+    WaitStats,
+    /// Manage opt-in supervisors for agent inbox stale-rescue
+    #[command(
+        long_about = "Manage opt-in supervisors for agent inbox stale-rescue.\n\nA supervisor is default-off Layer 3 insurance for one agent identity. It records a local registration under <git-common-dir>/wt/supervisors/ and only intervenes after an inbox/new message has aged past --stale-threshold. Supervisors started with --surface run inside an unfocused cmux surface in the target pane so cmux push delivery stays attached to cmux without creating another workspace; supervisors without --surface use the detached process path. No wt verb starts a supervisor implicitly."
+    )]
+    Supervisor {
+        #[command(subcommand)]
+        command: AgentSupervisorCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum AgentSupervisorCommand {
+    /// Start a supervisor for one agent identity
+    Start {
+        /// Agent id as NAME or agents/NAME
+        agent_id: String,
+        /// Stop any existing live supervisor for this identity before starting
+        #[arg(long)]
+        replace: bool,
+        /// Pre-bound cmux surface id for later delivery slices
+        #[arg(long, value_name = "ID")]
+        surface: Option<String>,
+        /// Target agent kind fallback when cmux cannot detect it
+        #[arg(long, value_name = "claude|codex|unknown")]
+        kind: Option<String>,
+        /// Whether session-end cleanup should stop this supervisor
+        #[arg(long, value_name = "BOOL")]
+        cleanup_on_session_end: Option<bool>,
+        /// Message age before later delivery slices may rescue it
+        #[arg(long, default_value = "15m", value_name = "DURATION")]
+        stale_threshold: String,
+        /// Poll cadence for later delivery slices
+        #[arg(long, default_value = "60s", value_name = "DURATION")]
+        poll_interval: String,
+    },
+    /// Stop registered supervisors by target identity or owner
+    Stop {
+        /// Agent id as NAME or agents/NAME
+        agent_id: Option<String>,
+        /// Stop only supervisors started by this agent id
+        #[arg(long, value_name = "AGENT")]
+        owned_by: Option<String>,
+    },
+    /// List registered supervisors
+    Status {
+        /// Agent id as NAME or agents/NAME
+        agent_id: Option<String>,
+    },
+    /// Print or follow a supervisor log
+    Logs {
+        /// Agent id as NAME or agents/NAME
+        agent_id: String,
+        /// Continue printing appended log lines
+        #[arg(long)]
+        follow: bool,
+    },
+    /// Run the supervisor loop process
+    #[command(hide = true)]
+    Run {
+        /// Agent id as NAME or agents/NAME
+        agent_id: String,
+        /// Run in the foreground for debugging
+        #[arg(long)]
+        foreground: bool,
+        /// Pre-bound cmux surface id for later delivery slices
+        #[arg(long, value_name = "ID")]
+        surface: Option<String>,
+        /// Target agent kind fallback when cmux cannot detect it
+        #[arg(long, value_name = "claude|codex|unknown")]
+        kind: Option<String>,
+        /// Whether session-end cleanup should stop this supervisor
+        #[arg(long, value_name = "BOOL")]
+        cleanup_on_session_end: Option<bool>,
+        /// Parsed stale threshold from start
+        #[arg(
+            long,
+            default_value_t = 900,
+            value_name = "SECONDS",
+            value_parser = parse_positive_u64
+        )]
+        stale_threshold_secs: u64,
+        /// Parsed poll interval from start
+        #[arg(
+            long,
+            default_value_t = 60,
+            value_name = "SECONDS",
+            value_parser = parse_positive_u64
+        )]
+        poll_interval_secs: u64,
+        /// Maximum stale messages processed per poll cycle
+        #[arg(long, default_value_t = 64, value_name = "COUNT", value_parser = parse_positive_usize)]
+        cycle_cap: usize,
+        /// Maximum rendered payload size in bytes
+        #[arg(long, default_value_t = 1024, value_name = "BYTES", value_parser = parse_positive_usize)]
+        payload_cap: usize,
+        /// Log path for the supervisor process
+        #[arg(long, value_name = "PATH")]
+        log_path: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum MsgCommand {
+    /// Write one message to an agent inbox
+    #[command(
+        long_about = "Write one message to an agent inbox.\n\nUnscoped sends use the direct/default scope. Use `--scope workflow:<id>` for workflow-owned coordinator reports, `--scope task_run:<id>` for TaskRun-owned delivery, or `--scope repo` for repo-local singleton delivery."
+    )]
+    Send {
+        /// Target agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
+        #[arg(long)]
+        to: String,
+        /// Message ownership scope: direct, repo, workflow:<id>, or task_run:<id>
+        #[arg(long)]
+        scope: Option<String>,
+        /// Message text
+        #[arg(
+            value_name = "MESSAGE",
+            required = true,
+            num_args = 1..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        message: Vec<String>,
+    },
+    /// List lifecycle messages for one agent inbox without claiming them
+    List {
+        /// Agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
+        #[arg(long)]
+        agent: String,
+    },
+    /// Read one lifecycle message by id without changing delivery state
+    Read {
+        /// Agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
+        #[arg(long)]
+        agent: String,
+        /// Message id without the .toml extension
+        message_id: String,
+    },
+    /// Claim deliverable inbox messages, emit hook JSON, and acknowledge delivery
+    CheckInbox {
+        /// Explicit single agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID; omitted uses WT_AGENT_ID
+        #[arg(long)]
+        agent: Option<String>,
+        /// Hook mode: exit 0 silently when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup). Intended for agent hooks installed globally; direct CLI use should omit this flag.
+        #[arg(long)]
+        silent: bool,
+    },
+    /// Observe pending or newly-arriving inbox/new messages without claiming them
+    #[command(
+        long_about = "Observe pending or newly-arriving inbox/new messages for one agent without claiming, moving, or acknowledging them.\n\n`wt msg watch` arms a filesystem watcher, drains existing .toml messages in mtime order, and exits after emitting pending messages, one new arrival, or a timeout. Omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use --json for newline-delimited JSON rows with the same fields as `wt msg list --json` message records. Use `wt msg list` for a snapshot instead of --timeout 0."
+    )]
+    Watch {
+        /// Explicit single agent id as NAME or agents/NAME; omitted tries WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID
+        #[arg(long)]
+        agent: Option<String>,
+        /// Maximum seconds to wait for a new inbox/new message; must be greater than 0
+        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..))]
+        timeout: u64,
+        /// Emit newline-delimited JSON message rows
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -278,20 +671,93 @@ pub enum ColorMode {
     Never,
 }
 
+#[derive(Subcommand, Debug, Clone, PartialEq)]
+pub enum RunCommand {
+    /// Start a workspace from an issue
+    Issue {
+        /// Issue numbers or provider-specific keys (omit to select multiple provider issues)
+        #[arg(value_name = "ISSUE")]
+        targets: Vec<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Create a profiled issue worktree from <git-common-dir>/wt/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+        /// Start one workspace for each named profile
+        #[arg(long, conflicts_with = "profile")]
+        matrix: bool,
+        /// Maximum number of provider issues to execute concurrently
+        #[arg(long, default_value_t = 3, value_parser = parse_positive_usize)]
+        jobs: usize,
+    },
+    /// Start workspaces from pull requests
+    Pr {
+        /// Pull request numbers (omit to select multiple open PRs)
+        #[arg(value_name = "PR")]
+        numbers: Vec<u32>,
+        /// Apply config from <git-common-dir>/wt/profiles/<name> to the PR worktree
+        #[arg(long)]
+        profile: Option<String>,
+        /// Maximum number of pull requests to execute concurrently
+        #[arg(long, default_value_t = 3, value_parser = parse_positive_usize)]
+        jobs: usize,
+    },
+    /// Start a workspace from branch-name text
+    #[command(
+        long_about = "Start one ad hoc workspace from branch-name text by creating a new local branch and worktree.\n\nThis does not open an existing branch or worktree. Use `wt open <branch|worktree>` for existing work."
+    )]
+    Branch {
+        /// Branch name words
+        #[arg(num_args = 0..)]
+        name: Vec<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Create a profiled branch worktree from <git-common-dir>/wt/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+        /// Start one workspace for each named profile
+        #[arg(long, conflicts_with = "profile")]
+        matrix: bool,
+    },
+    /// Start one worktree per selected local TaskDocument
+    #[command(
+        long_about = "Start one worktree per selected <git-common-dir>/wt/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun in <git-common-dir>/wt/task-runs.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator inbox target `coordinator` and fallback cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
+    )]
+    Task {
+        /// Local task keys from <git-common-dir>/wt/tasks/<task>.toml
+        #[arg(value_name = "TASK")]
+        tasks: Vec<String>,
+        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        base: Option<String>,
+        /// Create a profiled task worktree from <git-common-dir>/wt/profiles/<name>
+        #[arg(long)]
+        profile: Option<String>,
+        /// Maximum number of local tasks to execute concurrently
+        #[arg(long, default_value_t = 3, value_parser = parse_positive_usize)]
+        jobs: usize,
+    },
+    /// Start runnable tasks from a saved workflow
+    #[command(
+        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts. In non-interactive shells, pass WORKFLOW explicitly.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with a scoped coordinator inbox target using `wt msg send --scope workflow:<id> --to coordinator` and fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
+    )]
+    Workflow {
+        /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
+        workflow: Option<String>,
+        /// Maximum number of runnable batch-mode tasks to execute concurrently
+        #[arg(long, default_value_t = 1, value_parser = parse_positive_usize)]
+        jobs: usize,
+    },
+}
+
 #[derive(clap::ValueEnum, Debug, Clone, PartialEq)]
 pub enum InitAgent {
     Codex,
     Claude,
     Gemini,
     None,
-}
-
-#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InitPreset {
-    Minimal,
-    Agent,
-    Issue,
-    App,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, PartialEq)]
@@ -313,41 +779,40 @@ pub enum InitSiteProvider {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum TaskCommand {
-    /// List saved local TaskDocument files
+    /// List actionable local TaskDocument files
     #[command(
-        long_about = "List all saved .local/tasks/<task>.toml TaskDocument files.\n\nThis is the canonical read-only inventory for local TaskDocuments. It lists valid TaskDocument files whether or not they are selectable by wt task run, reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
+        long_about = "List actionable <git-common-dir>/wt/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is done or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nEach mode reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
     )]
-    List,
+    List {
+        /// Show the full TaskDocument inventory, including done and running tasks
+        #[arg(long)]
+        all: bool,
+    },
     /// Import provider issues as local TaskDocuments
     #[command(
-        long_about = "Import existing provider issues into .local/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
+        long_about = "Import existing provider issues into <git-common-dir>/wt/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
     )]
     Import {
         /// Provider issue ids to import
         #[arg(value_name = "ISSUE")]
         issues: Vec<String>,
     },
-    /// Start one worktree per selected local TaskDocument
-    #[command(
-        long_about = "Start one worktree per selected .local/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt workflow run` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt workflow run` when multiple TaskDocuments should share one workspace."
-    )]
-    Run {
-        /// Local task keys from .local/tasks/<task>.toml
-        #[arg(value_name = "TASK")]
-        tasks: Vec<String>,
-        /// Base branch: --base (interactive), --base . (current), --base main (explicit)
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        base: Option<String>,
-        /// Create a profiled task worktree from .local/profiles/<name>
-        #[arg(long)]
-        profile: Option<String>,
+    #[command(name = "run", hide = true, disable_help_flag = true)]
+    DeprecatedRun {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
     },
     /// Publish local TaskDocuments as provider issues
     #[command(
-        long_about = "Create provider issues from selected .local/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt task run and wt workflow run treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+        long_about = "Create provider issues from selected <git-common-dir>/wt/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
     )]
     Publish {
-        /// Local task keys from .local/tasks/<task>.toml
+        /// Local task keys from <git-common-dir>/wt/tasks/<task>.toml
         #[arg(value_name = "TASK")]
         tasks: Vec<String>,
     },
@@ -357,9 +822,17 @@ pub enum TaskCommand {
 pub enum WorkflowCommand {
     /// List saved workflow files
     #[command(
-        long_about = "List all saved .local/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and done, with indented rows and secondary detail lines."
+        long_about = "List all saved <git-common-dir>/wt/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and done, with indented rows and secondary detail lines."
     )]
     List,
+    /// Move completed workflow state into the frozen archive
+    #[command(
+        long_about = "Move a completed Workflow out of the active surface into <git-common-dir>/wt/archive/workflows/<workflow-id>/.\n\nArchive is a visibility and retention action: wt workflow list, wt task list, and wt ui stop showing the archived workflow because active inventory reads only typed active directories. It is not a substitute for landing, merge checks, wt workflow complete, or wt done. Only workflows whose linked TaskRuns are done or skipped can be archived."
+    )]
+    Archive {
+        /// Workflow key under <git-common-dir>/wt/workflows/<workflow>.toml
+        workflow: String,
+    },
     /// Prepare local tasks as a workflow file without starting workspaces
     #[command(
         long_about = "Prepare local TaskDocuments as a saved Workflow without starting workspaces.\n\nUse --title, --body/--body-file, and --origin-provider with --origin-id for Workflow-level context when one larger issue-like unit is split into runnable child TaskDocuments. Workflow-level [origin] is stored only on the Workflow; it is not copied into child TaskDocuments and does not add issue-closing keywords to child PR bodies.\n\nTaskDocument [origin] still belongs only to a runnable slice that is itself a provider issue."
@@ -370,7 +843,7 @@ pub enum WorkflowCommand {
         /// Workflow execution shape
         #[arg(long, value_enum)]
         mode: WorkflowModeArg,
-        /// Named profile from .local/profiles/<name> for all tasks
+        /// Named profile from <git-common-dir>/wt/profiles/<name> for all tasks
         #[arg(long, conflicts_with = "profiles")]
         profile: Option<String>,
         /// With --mode matrix, selected named profiles to run in order
@@ -408,7 +881,7 @@ pub enum WorkflowCommand {
         /// Workflow execution shape
         #[arg(long, value_enum)]
         mode: WorkflowModeArg,
-        /// Named profile from .local/profiles/<name> for all tasks
+        /// Named profile from <git-common-dir>/wt/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
         /// Short workflow title for list, select, and show surfaces
@@ -433,16 +906,15 @@ pub enum WorkflowCommand {
         #[arg(long = "pr", value_enum, value_name = "none|draft|ready")]
         pr: Option<WorkflowPrModeArg>,
     },
-    /// Start runnable tasks from a workflow
-    #[command(
-        long_about = "Start runnable tasks from a workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with coordinator cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
-    )]
-    Run {
-        /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
-        workflow: Option<String>,
-        /// Maximum number of runnable batch-mode tasks to execute concurrently
-        #[arg(long, default_value_t = 1, value_parser = parse_positive_usize)]
-        jobs: usize,
+    #[command(name = "run", hide = true, disable_help_flag = true)]
+    DeprecatedRun {
+        #[arg(
+            value_name = "ARGS",
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
+        args: Vec<String>,
     },
     /// Show workflow metadata and task statuses
     Show {
@@ -562,6 +1034,30 @@ mod tests {
         Cli::try_parse_from(args).unwrap()
     }
 
+    fn root_help_section<'a>(help: &'a str, heading: &str, next_heading: &str) -> &'a str {
+        let start_marker = format!("{heading}:\n");
+        let start = help
+            .find(&start_marker)
+            .unwrap_or_else(|| panic!("missing heading {heading}"))
+            + start_marker.len();
+        let end_marker = format!("\n\n{next_heading}:\n");
+        let end = help[start..]
+            .find(&end_marker)
+            .unwrap_or_else(|| panic!("missing next heading {next_heading}"))
+            + start;
+        &help[start..end]
+    }
+
+    fn assert_section_contains_command(section: &str, command: &str) {
+        let prefix = format!("{command} ");
+        assert!(
+            section
+                .lines()
+                .any(|line| line.trim_start().starts_with(&prefix)),
+            "expected section to contain command {command:?}; section was:\n{section}"
+        );
+    }
+
     #[test]
     fn no_subcommand_is_allowed_for_manual_help_handling() {
         let cli = parse(&["wt"]);
@@ -608,53 +1104,108 @@ mod tests {
         );
         assert_eq!(cli.color, ColorMode::Always);
         assert_eq!(cli.verbose, 2);
-        assert!(matches!(cli.command, Some(Commands::Doctor)));
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Doctor {
+                profile: None,
+                prune_env_markers: None
+            })
+        ));
     }
 
     #[test]
     fn no_color_flag() {
         let cli = parse(&["wt", "--no-color", "doctor"]);
         assert!(cli.no_color);
-        assert!(matches!(cli.command, Some(Commands::Doctor)));
-    }
-
-    #[test]
-    fn issue_no_args_starts_interactive_issue_flow() {
-        let cli = parse(&["wt", "issue"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Issue {
-                target: None,
-                base: None,
+            Some(Commands::Doctor {
                 profile: None,
-                matrix: false,
+                prune_env_markers: None
             })
         ));
     }
 
     #[test]
-    fn issue_with_target() {
-        let cli = parse(&["wt", "issue", "PROJ-680"]);
-        if let Some(Commands::Issue {
-            target,
-            base,
-            profile,
-            matrix,
+    fn run_issue_no_args_starts_interactive_issue_flow() {
+        let cli = parse(&["wt", "run", "issue"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                command: RunCommand::Issue {
+                    ref targets,
+                    base: None,
+                    profile: None,
+                    matrix: false,
+                    jobs: 3,
+                }
+            }) if targets.is_empty()
+        ));
+    }
+
+    #[test]
+    fn run_issue_with_target() {
+        let cli = parse(&["wt", "run", "issue", "PROJ-680"]);
+        if let Some(Commands::Run {
+            command:
+                RunCommand::Issue {
+                    targets,
+                    base,
+                    profile,
+                    matrix,
+                    jobs,
+                },
         }) = cli.command
         {
-            assert_eq!(target.as_deref(), Some("PROJ-680"));
+            assert_eq!(targets, vec!["PROJ-680".to_string()]);
             assert_eq!(base, None);
             assert_eq!(profile, None);
             assert!(!matrix);
+            assert_eq!(jobs, 3);
         } else {
             panic!("expected Issue");
         }
     }
 
     #[test]
-    fn issue_with_base_interactive() {
-        let cli = parse(&["wt", "issue", "--base"]);
-        if let Some(Commands::Issue { base, .. }) = &cli.command {
+    fn run_issue_with_multiple_targets() {
+        let cli = parse(&["wt", "run", "issue", "PROJ-680", "PROJ-681"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                command: RunCommand::Issue {
+                    ref targets,
+                    base: None,
+                    profile: None,
+                    matrix: false,
+                    jobs: 3,
+                }
+            }) if targets == &vec!["PROJ-680".to_string(), "PROJ-681".to_string()]
+        ));
+    }
+
+    #[test]
+    fn run_issue_accepts_jobs() {
+        let cli = parse(&["wt", "run", "issue", "PROJ-680", "PROJ-681", "--jobs", "1"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                command: RunCommand::Issue {
+                    ref targets,
+                    jobs: 1,
+                    ..
+                }
+            }) if targets == &vec!["PROJ-680".to_string(), "PROJ-681".to_string()]
+        ));
+    }
+
+    #[test]
+    fn run_issue_with_base_interactive() {
+        let cli = parse(&["wt", "run", "issue", "--base"]);
+        if let Some(Commands::Run {
+            command: RunCommand::Issue { base, .. },
+        }) = &cli.command
+        {
             assert_eq!(BaseMode::from_raw(base), BaseMode::Interactive);
         } else {
             panic!("expected Issue");
@@ -662,42 +1213,55 @@ mod tests {
     }
 
     #[test]
-    fn issue_with_matrix_flag() {
-        let cli = parse(&["wt", "issue", "680", "--matrix"]);
+    fn run_issue_with_matrix_flag() {
+        let cli = parse(&["wt", "run", "issue", "680", "--matrix"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Issue { matrix: true, .. })
+            Some(Commands::Run {
+                command: RunCommand::Issue { matrix: true, .. }
+            })
         ));
     }
 
     #[test]
-    fn issue_with_profile_flag() {
-        let cli = parse(&["wt", "issue", "680", "--profile", "codex-yolo"]);
+    fn run_issue_with_profile_flag() {
+        let cli = parse(&["wt", "run", "issue", "680", "--profile", "codex-yolo"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Issue {
-                profile: Some(ref profile),
-                ..
+            Some(Commands::Run {
+                command: RunCommand::Issue {
+                    profile: Some(ref profile),
+                    ..
+                }
             }) if profile == "codex-yolo"
         ));
     }
 
     #[test]
-    fn issue_rejects_matrix_with_profile() {
-        let result = Cli::try_parse_from(["wt", "issue", "680", "--matrix", "--profile", "codex"]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn issue_rejects_profiles_flag() {
-        let result = Cli::try_parse_from(["wt", "issue", "680", "--profiles", "alpha,beta"]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn issue_rejects_profiles_with_profile() {
+    fn run_issue_rejects_matrix_with_profile() {
         let result = Cli::try_parse_from([
             "wt",
+            "run",
+            "issue",
+            "680",
+            "--matrix",
+            "--profile",
+            "codex",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_issue_rejects_profiles_flag() {
+        let result = Cli::try_parse_from(["wt", "run", "issue", "680", "--profiles", "alpha,beta"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_issue_rejects_profiles_with_profile() {
+        let result = Cli::try_parse_from([
+            "wt",
+            "run",
             "issue",
             "680",
             "--matrix",
@@ -710,51 +1274,77 @@ mod tests {
     }
 
     #[test]
-    fn issue_rejects_removed_parallel_flag() {
-        let result = Cli::try_parse_from(["wt", "issue", "680", "--parallel"]);
+    fn run_issue_rejects_removed_parallel_flag() {
+        let result = Cli::try_parse_from(["wt", "run", "issue", "680", "--parallel"]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn pr_no_args_starts_interactive_pr_flow() {
-        let cli = parse(&["wt", "pr"]);
+    fn run_pr_no_args_starts_interactive_pr_flow() {
+        let cli = parse(&["wt", "run", "pr"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Pr {
-                ref numbers,
-                profile: None
+            Some(Commands::Run {
+                command: RunCommand::Pr {
+                    ref numbers,
+                    profile: None,
+                    jobs: 3,
+                }
             }) if numbers.is_empty()
         ));
     }
 
     #[test]
-    fn pr_with_number_and_profile() {
-        let cli = parse(&["wt", "pr", "42", "--profile", "codex"]);
+    fn run_pr_with_number_and_profile() {
+        let cli = parse(&["wt", "run", "pr", "42", "--profile", "codex"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Pr {
-                ref numbers,
-                profile: Some(ref profile),
+            Some(Commands::Run {
+                command: RunCommand::Pr {
+                    ref numbers,
+                    profile: Some(ref profile),
+                    jobs: 3,
+                }
             }) if numbers == &vec![42] && profile == "codex"
         ));
     }
 
     #[test]
-    fn pr_with_multiple_numbers_and_profile() {
-        let cli = parse(&["wt", "pr", "42", "43", "44", "--profile", "codex"]);
+    fn run_pr_with_multiple_numbers_and_profile() {
+        let cli = parse(&["wt", "run", "pr", "42", "43", "44", "--profile", "codex"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Pr {
-                ref numbers,
-                profile: Some(ref profile),
+            Some(Commands::Run {
+                command: RunCommand::Pr {
+                    ref numbers,
+                    profile: Some(ref profile),
+                    jobs: 3,
+                }
             }) if numbers == &vec![42, 43, 44] && profile == "codex"
         ));
     }
 
     #[test]
-    fn pr_help_describes_multiple_targets() {
+    fn run_pr_accepts_jobs() {
+        let cli = parse(&["wt", "run", "pr", "42", "43", "--jobs", "1"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                command: RunCommand::Pr {
+                    ref numbers,
+                    jobs: 1,
+                    ..
+                }
+            }) if numbers == &vec![42, 43]
+        ));
+    }
+
+    #[test]
+    fn run_pr_help_describes_multiple_targets() {
         let mut command = Cli::command();
         let help = command
+            .find_subcommand_mut("run")
+            .unwrap()
             .find_subcommand_mut("pr")
             .unwrap()
             .render_long_help()
@@ -763,6 +1353,24 @@ mod tests {
         assert!(help.contains("[PR]..."));
         assert!(help.contains("Pull request numbers"));
         assert!(help.contains("select multiple open PRs"));
+        assert!(help.contains("--jobs"));
+    }
+
+    #[test]
+    fn run_issue_help_describes_multiple_targets() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("run")
+            .unwrap()
+            .find_subcommand_mut("issue")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("[ISSUE]..."));
+        assert!(help.contains("Issue numbers or provider-specific keys"));
+        assert!(help.contains("select multiple provider issues"));
+        assert!(help.contains("--jobs"));
     }
 
     #[test]
@@ -770,13 +1378,28 @@ mod tests {
         let cli = parse(&["wt", "inspect"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Inspect { target: None })
+            Some(Commands::Inspect {
+                target: None,
+                pr: false
+            })
         ));
 
         let cli = parse(&["wt", "inspect", "feature"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Inspect { ref target }) if target.as_deref() == Some("feature")
+            Some(Commands::Inspect {
+                ref target,
+                pr: false
+            }) if target.as_deref() == Some("feature")
+        ));
+
+        let cli = parse(&["wt", "inspect", "feature", "--pr"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Inspect {
+                ref target,
+                pr: true
+            }) if target.as_deref() == Some("feature")
         ));
     }
 
@@ -793,6 +1416,8 @@ mod tests {
         assert!(help.contains("read-only work dossier"));
         assert!(help.contains("Branch, worktree path/name, or TaskRun id"));
         assert!(help.contains("Omit TARGET in an interactive terminal"));
+        assert!(help.contains("--pr"));
+        assert!(help.contains("pull request review evidence"));
     }
 
     #[test]
@@ -846,8 +1471,29 @@ mod tests {
         assert!(help.contains("[TARGET]"));
         assert!(help.contains("--timeout"));
         assert!(help.contains("--heartbeat"));
+        assert!(!help.contains("--record-wait-observations"));
+        assert!(help.contains("<git-common-dir>/wt/agent.state/wait-observations.jsonl"));
+        assert!(help.contains("When --timeout or --heartbeat emits a non-idle sample"));
         assert!(help.contains("unchanged running observations"));
         assert!(help.contains("Omit TARGET in an interactive terminal"));
+    }
+
+    #[test]
+    fn agent_wait_stats_help_describes_read_only_summary() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("agent")
+            .unwrap()
+            .find_subcommand_mut("wait-stats")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("non-idle wait observations"));
+        assert!(help.contains("read-only"));
+        assert!(help.contains("<git-common-dir>/wt/agent.state/wait-observations.jsonl"));
+        assert!(help.contains("does not observe agents"));
+        assert!(help.contains("mutate TaskRuns"));
     }
 
     #[test]
@@ -871,6 +1517,19 @@ mod tests {
                     ref target,
                     interval: 5,
                     timeout: Some(60),
+                    heartbeat: Some(10),
+                }
+            }) if target.as_deref() == Some("feature")
+        ));
+
+        let cli = parse(&["wt", "agent", "watch", "feature", "--heartbeat", "10"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Agent {
+                command: AgentCommand::Watch {
+                    ref target,
+                    interval: 2,
+                    timeout: None,
                     heartbeat: Some(10),
                 }
             }) if target.as_deref() == Some("feature")
@@ -901,6 +1560,17 @@ mod tests {
         let heartbeat =
             Cli::try_parse_from(["wt", "agent", "watch", "feature", "--heartbeat", "0"]);
         assert!(heartbeat.is_err());
+    }
+
+    #[test]
+    fn agent_wait_stats_parses_read_only_subcommand() {
+        let cli = parse(&["wt", "agent", "wait-stats"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Agent {
+                command: AgentCommand::WaitStats
+            })
+        ));
     }
 
     #[test]
@@ -997,7 +1667,7 @@ mod tests {
             .to_string();
 
         assert!(help.contains("Import existing provider issues"));
-        assert!(help.contains(".local/tasks/<safe-issue-id>.toml"));
+        assert!(help.contains("<git-common-dir>/wt/tasks/<safe-issue-id>.toml"));
         assert!(help.contains("write title, branch, body, and [origin]"));
         assert!(help.contains("does not start workspaces"));
         assert!(help.contains("create local branches"));
@@ -1066,7 +1736,7 @@ mod tests {
         assert!(help.contains("provider issue"));
         assert!(help.contains("write [origin]"));
         assert!(help.contains("does not start workspaces"));
-        assert!(help.contains("later wt task run and wt workflow run"));
+        assert!(help.contains("later wt run task and wt run workflow"));
         assert!(help.contains("Omit task keys to choose unprocessed local TaskDocuments"));
         assert!(help.contains("tasks that already have [origin] are excluded"));
         assert!(!help.contains("--stack <STACK>"));
@@ -1076,27 +1746,79 @@ mod tests {
     }
 
     #[test]
-    fn task_run_accepts_task_keys_base_and_profile() {
-        let cli = parse(&["wt", "task", "run", "task-a", "task-b", "--base", "main"]);
+    fn scaffold_accepts_feature_and_kind_flags() {
+        let cli = parse(&["wt", "scaffold", "foo", "--idea", "--task"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Task {
-                command: TaskCommand::Run {
+            Some(Commands::Scaffold {
+                ref feature,
+                idea: true,
+                spec: false,
+                task: true,
+                workflow: false,
+                retrospect: false,
+                all: false,
+                force: false,
+            }) if feature == "foo"
+        ));
+    }
+
+    #[test]
+    fn scaffold_rejects_all_with_kind_flags() {
+        let result = Cli::try_parse_from(["wt", "scaffold", "foo", "--all", "--idea"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn scaffold_rejects_missing_feature() {
+        let result = Cli::try_parse_from(["wt", "scaffold", "--idea"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn scaffold_help_exposes_document_kind_flags() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("scaffold")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("Create blank skeleton documents for a feature"));
+        assert!(help.contains("<FEATURE>"));
+        assert!(help.contains("--idea"));
+        assert!(help.contains("--spec"));
+        assert!(help.contains("--task"));
+        assert!(help.contains("--workflow"));
+        assert!(help.contains("--retrospect"));
+        assert!(help.contains("--all"));
+        assert!(help.contains("--force"));
+    }
+
+    #[test]
+    fn run_task_accepts_task_keys_base_and_profile() {
+        let cli = parse(&["wt", "run", "task", "task-a", "task-b", "--base", "main"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                command: RunCommand::Task {
                     ref tasks,
                     base: Some(ref base),
                     profile: None,
+                    jobs: 3,
                 }
             }) if tasks == &vec!["task-a".to_string(), "task-b".to_string()]
                 && base == "main"
         ));
 
-        let cli = parse(&["wt", "task", "run", "task-a", "--profile", "codex"]);
+        let cli = parse(&["wt", "run", "task", "task-a", "--profile", "codex"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Task {
-                command: TaskCommand::Run {
+            Some(Commands::Run {
+                command: RunCommand::Task {
                     ref tasks,
                     profile: Some(ref profile),
+                    jobs: 3,
                     ..
                 }
             }) if tasks == &vec!["task-a".to_string()] && profile == "codex"
@@ -1104,39 +1826,55 @@ mod tests {
     }
 
     #[test]
-    fn task_run_accepts_no_task_keys_for_interactive_selection() {
-        let cli = parse(&["wt", "task", "run"]);
+    fn run_task_accepts_no_task_keys_for_interactive_selection() {
+        let cli = parse(&["wt", "run", "task"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Task {
-                command: TaskCommand::Run {
+            Some(Commands::Run {
+                command: RunCommand::Task {
                     ref tasks,
                     base: None,
                     profile: None,
+                    jobs: 3,
                 }
             }) if tasks.is_empty()
         ));
     }
 
     #[test]
-    fn task_run_rejects_matrix() {
-        let result = Cli::try_parse_from(["wt", "task", "run", "task-a", "--matrix"]);
+    fn run_task_accepts_jobs() {
+        let cli = parse(&["wt", "run", "task", "task-a", "task-b", "--jobs", "1"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                command: RunCommand::Task {
+                    ref tasks,
+                    jobs: 1,
+                    ..
+                }
+            }) if tasks == &vec!["task-a".to_string(), "task-b".to_string()]
+        ));
+    }
+
+    #[test]
+    fn run_task_rejects_matrix() {
+        let result = Cli::try_parse_from(["wt", "run", "task", "task-a", "--matrix"]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn task_run_rejects_profiles_without_matrix() {
+    fn run_task_rejects_profiles_without_matrix() {
         let result =
-            Cli::try_parse_from(["wt", "task", "run", "task-a", "--profiles", "alpha,beta"]);
+            Cli::try_parse_from(["wt", "run", "task", "task-a", "--profiles", "alpha,beta"]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn task_run_rejects_profiles_with_profile() {
+    fn run_task_rejects_profiles_with_profile() {
         let result = Cli::try_parse_from([
             "wt",
-            "task",
             "run",
+            "task",
             "task-a",
             "--profiles",
             "alpha",
@@ -1147,12 +1885,12 @@ mod tests {
     }
 
     #[test]
-    fn task_run_help_explains_task_execution_surface() {
+    fn run_task_help_explains_task_execution_surface() {
         let mut command = Cli::command();
         let help = command
-            .find_subcommand_mut("task")
-            .unwrap()
             .find_subcommand_mut("run")
+            .unwrap()
+            .find_subcommand_mut("task")
             .unwrap()
             .render_long_help()
             .to_string();
@@ -1161,9 +1899,13 @@ mod tests {
         assert!(help.contains("direct TaskRun"));
         assert!(help.contains("Omit task keys"));
         assert!(help.contains("Task Run Coordinator Handoff"));
+        assert!(help.contains("coordinator inbox target `coordinator`"));
+        assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("Task-run agents report PR=none"));
         assert!(help.contains("wt workflow task --mode batch"));
         assert!(help.contains("wt workflow task --mode single"));
+        assert!(help.contains("wt run workflow"));
+        assert!(help.contains("--jobs"));
         assert!(!help.contains("--matrix"));
         assert!(!help.contains("--profiles"));
     }
@@ -1358,12 +2100,12 @@ mod tests {
     }
 
     #[test]
-    fn workflow_run_accepts_jobs() {
-        let cli = parse(&["wt", "workflow", "run", "2026-05-16-001", "--jobs", "3"]);
+    fn run_workflow_accepts_jobs() {
+        let cli = parse(&["wt", "run", "workflow", "2026-05-16-001", "--jobs", "3"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Workflow {
-                command: WorkflowCommand::Run {
+            Some(Commands::Run {
+                command: RunCommand::Workflow {
                     ref workflow,
                     jobs: 3,
                 }
@@ -1397,13 +2139,17 @@ mod tests {
     }
 
     #[test]
-    fn workflow_run_help_describes_coordinator_handoff() {
+    fn run_workflow_help_describes_coordinator_handoff() {
         let mut command = Cli::command();
-        let workflow = command.find_subcommand_mut("workflow").unwrap();
-        let run = workflow.find_subcommand_mut("run").unwrap();
-        let help = run.render_long_help().to_string();
+        let run = command.find_subcommand_mut("run").unwrap();
+        let workflow = run.find_subcommand_mut("workflow").unwrap();
+        let help = workflow.render_long_help().to_string();
+        assert!(help.contains("saved workflow"));
+        assert!(help.contains("does not list, edit, repair, or complete workflow files"));
         assert!(help.contains("Workflow Coordinator Handoff"));
-        assert!(help.contains("coordinator cmux send coordinates"));
+        assert!(help.contains("scoped coordinator inbox target"));
+        assert!(help.contains("wt msg send --scope workflow:<id> --to coordinator"));
+        assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("prepared [policy].pull_request"));
         assert!(help.contains("wt workflow complete"));
     }
@@ -1445,7 +2191,11 @@ mod tests {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_help().to_string();
-        assert!(help.contains("Prepare, inspect, edit, run, repair, or complete workflow tasks"));
+        assert!(
+            help.contains("Prepare, inspect, edit, repair, archive, or complete workflow tasks")
+        );
+        assert!(!help.contains("Start runnable tasks from a workflow"));
+        assert!(help.contains("archive"));
         assert!(help.contains("repair"));
         assert!(help.contains("task"));
         assert!(help.contains("issue"));
@@ -1479,29 +2229,33 @@ mod tests {
     }
 
     #[test]
-    fn new_with_matrix_flag() {
-        let cli = parse(&["wt", "new", "some", "feature", "--matrix"]);
-        if let Some(Commands::New { name, matrix, .. }) = &cli.command {
+    fn run_branch_with_matrix_flag() {
+        let cli = parse(&["wt", "run", "branch", "some", "feature", "--matrix"]);
+        if let Some(Commands::Run {
+            command: RunCommand::Branch { name, matrix, .. },
+        }) = &cli.command
+        {
             assert_eq!(name, &vec!["some".to_string(), "feature".to_string()]);
             assert!(*matrix);
         } else {
-            panic!("expected New");
+            panic!("expected Branch");
         }
     }
 
     #[test]
-    fn new_rejects_task_option() {
-        let err = Cli::try_parse_from(["wt", "new", "--task", "add-schema"])
+    fn run_branch_rejects_task_option() {
+        let err = Cli::try_parse_from(["wt", "run", "branch", "--task", "add-schema"])
             .unwrap_err()
             .to_string();
         assert!(err.contains("unexpected argument '--task'"));
     }
 
     #[test]
-    fn new_with_base_and_profile() {
+    fn run_branch_with_base_and_profile() {
         let cli = parse(&[
             "wt",
-            "new",
+            "run",
+            "branch",
             "some",
             "feature",
             "--base",
@@ -1511,11 +2265,13 @@ mod tests {
         ]);
         assert!(matches!(
             cli.command,
-            Some(Commands::New {
-                ref name,
-                base: Some(ref base),
-                profile: Some(ref profile),
-                matrix: false,
+            Some(Commands::Run {
+                command: RunCommand::Branch {
+                    ref name,
+                    base: Some(ref base),
+                    profile: Some(ref profile),
+                    matrix: false,
+                }
             }) if name == &vec!["some".to_string(), "feature".to_string()]
                 && base == "main"
                 && profile == "codex"
@@ -1523,10 +2279,11 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_matrix_with_profile() {
+    fn run_branch_rejects_matrix_with_profile() {
         let result = Cli::try_parse_from([
             "wt",
-            "new",
+            "run",
+            "branch",
             "some",
             "feature",
             "--matrix",
@@ -1537,17 +2294,25 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_profiles_flag() {
-        let result =
-            Cli::try_parse_from(["wt", "new", "some", "feature", "--profiles", "alpha,beta"]);
+    fn run_branch_rejects_profiles_flag() {
+        let result = Cli::try_parse_from([
+            "wt",
+            "run",
+            "branch",
+            "some",
+            "feature",
+            "--profiles",
+            "alpha,beta",
+        ]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn new_rejects_profiles_with_profile() {
+    fn run_branch_rejects_profiles_with_profile() {
         let result = Cli::try_parse_from([
             "wt",
-            "new",
+            "run",
+            "branch",
             "some",
             "feature",
             "--matrix",
@@ -1560,25 +2325,134 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_removed_parallel_flag() {
-        let result = Cli::try_parse_from(["wt", "new", "some", "feature", "--parallel"]);
+    fn run_branch_rejects_removed_parallel_flag() {
+        let result = Cli::try_parse_from(["wt", "run", "branch", "some", "feature", "--parallel"]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn new_help_explains_branch_text_and_task_selection() {
+    fn run_branch_help_explains_branch_text_and_task_selection() {
         let mut command = Cli::command();
-        let new = command.find_subcommand_mut("new").unwrap();
-        let help = new.render_help().to_string();
-        assert!(help.contains("Start a workspace from branch-name text"));
+        let branch = command
+            .find_subcommand_mut("run")
+            .unwrap()
+            .find_subcommand_mut("branch")
+            .unwrap();
+        let help = branch.render_long_help().to_string();
+        assert!(help.contains("branch-name text"));
+        assert!(help.contains("new local branch and worktree"));
+        assert!(help.contains("wt open"));
         assert!(!help.contains("--task"));
         assert!(!help.contains("prepared local task"));
+    }
+
+    #[test]
+    fn root_help_lists_canonical_start_surfaces() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("wt run issue"));
+        assert!(help.contains("wt run pr"));
+        assert!(help.contains("wt run branch"));
+        assert!(help.contains("wt run task"));
+        assert!(help.contains("wt run workflow"));
+        assert!(help.contains("wt run -h"));
+        assert!(help.contains("wt help <cmd>"));
+        assert!(!help.contains("wt new"));
+    }
+
+    #[test]
+    fn root_help_prioritizes_common_commands() {
+        let help = Cli::command().render_long_help().to_string();
+
+        for heading in ["Common:", "Prepared Work:", "Setup:", "Explore:"] {
+            assert!(help.contains(heading), "missing heading {heading}");
+        }
+        assert!(!help.contains("\nCommands:\n"));
+
+        let common = root_help_section(&help, "Common", "Prepared Work");
+        for command in ["run", "open", "list", "inspect", "done"] {
+            assert_section_contains_command(common, command);
+        }
+        assert!(!common.contains("\n  ui"));
+
+        let prepared_work = root_help_section(&help, "Prepared Work", "Setup");
+        for command in ["task", "workflow"] {
+            assert_section_contains_command(prepared_work, command);
+        }
+        assert!(!prepared_work.contains("\n  scaffold"));
+
+        let setup = root_help_section(&help, "Setup", "Explore");
+        for command in ["init", "config", "setup", "doctor"] {
+            assert_section_contains_command(setup, command);
+        }
+        assert!(!setup.contains("\n  profile"));
+        assert!(!setup.contains("\n  shell-init"));
+
+        let explore = root_help_section(&help, "Explore", "Options");
+        for command in [
+            "wt run -h",
+            "wt task -h",
+            "wt workflow -h",
+            "wt agent -h",
+            "wt msg -h",
+        ] {
+            assert!(explore.contains(command), "missing explore hint {command}");
+        }
+    }
+
+    #[test]
+    fn run_help_lists_execution_start_surfaces() {
+        let mut command = Cli::command();
+        let run = command.find_subcommand_mut("run").unwrap();
+        let help = run.render_long_help().to_string();
+        assert!(help.contains("wt run issue"));
+        assert!(help.contains("wt run pr"));
+        assert!(help.contains("wt run branch"));
+        assert!(help.contains("wt run task"));
+        assert!(help.contains("wt run workflow"));
+        assert!(help.contains("issue"));
+        assert!(help.contains("pr"));
+        assert!(help.contains("branch"));
+        assert!(help.contains("task"));
+        assert!(help.contains("workflow"));
+        assert!(help.contains("only starts workspace execution"));
+        assert!(help.contains("Cleanup stays under `wt done`"));
     }
 
     #[test]
     fn start_subcommand_is_removed() {
         let result = Cli::try_parse_from(["wt", "start"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn old_execution_start_subcommands_parse_as_hidden_deprecated_traps() {
+        let cli = parse(&["wt", "issue"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::DeprecatedIssue { .. })
+        ));
+
+        let cli = parse(&["wt", "pr"]);
+        assert!(matches!(cli.command, Some(Commands::DeprecatedPr { .. })));
+
+        let cli = parse(&["wt", "new"]);
+        assert!(matches!(cli.command, Some(Commands::DeprecatedNew { .. })));
+
+        let cli = parse(&["wt", "task", "run"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Task {
+                command: TaskCommand::DeprecatedRun { .. }
+            })
+        ));
+
+        let cli = parse(&["wt", "workflow", "run"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::DeprecatedRun { .. }
+            })
+        ));
     }
 
     #[test]
@@ -1605,7 +2479,37 @@ mod tests {
     #[test]
     fn doctor_subcommand() {
         let cli = parse(&["wt", "doctor"]);
-        assert!(matches!(cli.command, Some(Commands::Doctor)));
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Doctor {
+                profile: None,
+                prune_env_markers: None
+            })
+        ));
+    }
+
+    #[test]
+    fn doctor_accepts_profile_flag() {
+        let cli = parse(&["wt", "doctor", "--profile", "codex"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Doctor {
+                profile: Some(ref profile),
+                prune_env_markers: None,
+            }) if profile == "codex"
+        ));
+    }
+
+    #[test]
+    fn doctor_accepts_prune_env_markers_flag() {
+        let cli = parse(&["wt", "doctor", "--prune-env-markers", "surface:A22D"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Doctor {
+                profile: None,
+                prune_env_markers: Some(ref key),
+            }) if key == "surface:A22D"
+        ));
     }
 
     #[test]
@@ -1634,25 +2538,25 @@ mod tests {
 
     #[test]
     fn config_edit_accepts_optional_source() {
-        let cli = parse(&["wt", "config", "edit", ".local/.wt.toml"]);
+        let cli = parse(&["wt", "config", "edit", ".git/wt/config.toml"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
                 profile: None,
                 command: Some(ConfigCommand::Edit { ref source }),
-            }) if source.as_deref() == Some(std::path::Path::new(".local/.wt.toml"))
+            }) if source.as_deref() == Some(std::path::Path::new(".git/wt/config.toml"))
         ));
     }
 
     #[test]
     fn config_extract_accepts_optional_source() {
-        let cli = parse(&["wt", "config", "extract", ".local/.wt.toml"]);
+        let cli = parse(&["wt", "config", "extract", ".git/wt/config.toml"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
                 profile: None,
                 command: Some(ConfigCommand::Extract { ref source }),
-            }) if source.as_deref() == Some(std::path::Path::new(".local/.wt.toml"))
+            }) if source.as_deref() == Some(std::path::Path::new(".git/wt/config.toml"))
         ));
     }
 
@@ -1662,14 +2566,14 @@ mod tests {
             "wt",
             "config",
             "inline",
-            ".local/profiles/codex/profile.toml",
+            ".git/wt/profiles/codex/profile.toml",
         ]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
                 profile: None,
                 command: Some(ConfigCommand::Inline { ref source }),
-            }) if source.as_deref() == Some(std::path::Path::new(".local/profiles/codex/profile.toml"))
+            }) if source.as_deref() == Some(std::path::Path::new(".git/wt/profiles/codex/profile.toml"))
         ));
     }
 
@@ -1748,40 +2652,23 @@ mod tests {
     }
 
     #[test]
-    fn init_parses_preset() {
-        let cli = parse(&["wt", "init", "--preset", "agent", "--dry-run"]);
+    fn init_parses_recommendation_dry_run() {
+        let cli = parse(&["wt", "init", "--dry-run"]);
         assert!(matches!(
             cli.command,
-            Some(Commands::Init {
-                preset: Some(InitPreset::Agent),
-                dry_run: true,
-                ..
-            })
+            Some(Commands::Init { dry_run: true, .. })
         ));
     }
 
     #[test]
-    fn init_parses_minimal_shortcut() {
-        let cli = parse(&["wt", "init", "--minimal"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Init {
-                minimal: true,
-                preset: None,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn init_rejects_conflicting_preset_and_minimal() {
-        let result = Cli::try_parse_from(["wt", "init", "--preset", "minimal", "--minimal"]);
+    fn init_rejects_legacy_preset_flag() {
+        let result = Cli::try_parse_from(["wt", "init", "--preset", "agent"]);
         assert!(result.is_err());
     }
 
     #[test]
-    fn init_rejects_unknown_preset_alias() {
-        let result = Cli::try_parse_from(["wt", "init", "--preset", "full"]);
+    fn init_rejects_legacy_minimal_flag() {
+        let result = Cli::try_parse_from(["wt", "init", "--minimal"]);
         assert!(result.is_err());
     }
 
@@ -1882,5 +2769,70 @@ mod tests {
             BaseMode::from_raw(&Some("develop".into())),
             BaseMode::Explicit("develop".into())
         );
+    }
+
+    #[test]
+    fn profile_list_subcommand_parses() {
+        let cli = parse(&["wt", "profile", "list"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Profile {
+                command: Some(ProfileCommand::List)
+            })
+        ));
+    }
+
+    #[test]
+    fn profile_without_subcommand_parses_as_omission_default() {
+        let cli = parse(&["wt", "profile"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Profile { command: None })
+        ));
+    }
+
+    #[test]
+    fn profile_help_describes_omission_default_and_list_subcommand() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("profile")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("omission-default"));
+        assert!(help.contains("wt profile list"));
+        assert!(help.contains("list"));
+        assert!(help.contains("create"));
+    }
+
+    #[test]
+    fn config_help_describes_canonical_config_locations() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("config")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains(".wt.toml"));
+        assert!(help.contains("<git-common-dir>/wt/config.toml"));
+        assert!(help.contains("<git-common-dir>/wt/profiles/<name>/profile.toml"));
+    }
+
+    #[test]
+    fn profile_list_help_describes_invalid_profile_reporting() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("profile")
+            .unwrap()
+            .find_subcommand_mut("list")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("List named profile configs"));
+        assert!(help.contains("invalid_profiles"));
+        assert!(help.contains("deterministic"));
     }
 }

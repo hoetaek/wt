@@ -1,13 +1,24 @@
-use crate::context::{Ctx, PromptItem};
+use crate::context::Ctx;
 use crate::task::{self, TaskDocument};
+use crate::task_run;
 use anyhow::{Context, Result};
+use console::measure_text_width;
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub(crate) fn run(ctx: &Ctx) -> Result<()> {
-    let report = collect(ctx)?;
+const LIST_START: &str = "◆";
+const BAR: &str = "│";
+const FOOTER: &str = "└";
+const BULLET: &str = "•";
+const TITLE_COLUMN_MAX: usize = 56;
+const SOURCE_COLUMN_MAX: usize = 18;
+const TASK_COLUMN_MAX: usize = 34;
+const BRANCH_COLUMN_MAX: usize = 48;
+
+pub(crate) fn run(ctx: &Ctx, all: bool) -> Result<()> {
+    let report = collect(ctx, all)?;
     if ctx.is_json() {
         write_json(&report)?;
     } else {
@@ -20,6 +31,10 @@ pub(crate) fn run(ctx: &Ctx) -> Result<()> {
 struct TaskListReport {
     tasks: Vec<TaskListRow>,
     invalid_tasks: Vec<InvalidTaskRow>,
+    #[serde(skip_serializing)]
+    hidden_task_count: usize,
+    #[serde(skip_serializing)]
+    full_inventory: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,15 +64,22 @@ struct InvalidTaskRow {
     error: String,
 }
 
-fn collect(ctx: &Ctx) -> Result<TaskListReport> {
+fn collect(ctx: &Ctx, all: bool) -> Result<TaskListReport> {
     let mut tasks = Vec::new();
     let mut invalid_tasks = Vec::new();
+    let mut hidden_task_count = 0;
 
-    for path in task_paths(ctx)? {
+    for path in task::task_document_paths(ctx)? {
         let key = task_key_from_path(&path).unwrap_or_default();
         let relative_path = task_relative_path(ctx, &path);
         match read_task_row(ctx, &path) {
-            Ok(row) => tasks.push(row),
+            Ok(row) => {
+                if all || task_run::task_is_selectable(ctx, &row.key)? {
+                    tasks.push(row);
+                } else {
+                    hidden_task_count += 1;
+                }
+            }
             Err(err) => invalid_tasks.push(InvalidTaskRow {
                 key,
                 path: relative_path,
@@ -69,26 +91,9 @@ fn collect(ctx: &Ctx) -> Result<TaskListReport> {
     Ok(TaskListReport {
         tasks,
         invalid_tasks,
+        hidden_task_count,
+        full_inventory: all,
     })
-}
-
-fn task_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
-    let tasks_dir = ctx.repo_root.join(".local/tasks");
-    if !tasks_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut paths = Vec::new();
-    for entry in
-        fs::read_dir(&tasks_dir).with_context(|| "Failed to read task directory: .local/tasks")?
-    {
-        let path = entry?.path();
-        if path.extension().is_some_and(|ext| ext == "toml") {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-    Ok(paths)
 }
 
 fn read_task_row(ctx: &Ctx, path: &Path) -> Result<TaskListRow> {
@@ -141,10 +146,7 @@ fn task_key_from_path(path: &Path) -> Result<String> {
 }
 
 fn task_relative_path(ctx: &Ctx, path: &Path) -> String {
-    path.strip_prefix(&ctx.repo_root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .into_owned()
+    ctx.storage_root.display_path(path)
 }
 
 fn body_summary(body: &str) -> Option<String> {
@@ -171,19 +173,19 @@ fn one_line(value: &str) -> String {
 }
 
 fn print_text(ctx: &Ctx, report: &TaskListReport) {
-    if report.tasks.is_empty() && report.invalid_tasks.is_empty() {
-        ctx.ui.print_step("No tasks found in .local/tasks");
+    if report.tasks.is_empty() && report.invalid_tasks.is_empty() && report.hidden_task_count == 0 {
+        ctx.ui
+            .print_plain("No tasks found in <git-common-dir>/wt/tasks");
         return;
     }
 
-    for row in &report.tasks {
-        ctx.ui.print_step(&task_inventory_label(row));
-        ctx.ui.print_dim(&format!("  Path: {}", row.path));
+    if report.tasks.is_empty() && report.invalid_tasks.is_empty() && !report.full_inventory {
         ctx.ui
-            .print_dim(&format!("  Origin: {}", origin_label(row)));
-        if let Some(summary) = row.body_summary.as_deref() {
-            ctx.ui.print_dim(&format!("  Summary: {summary}"));
-        }
+            .print_plain("No actionable tasks found in <git-common-dir>/wt/tasks");
+    }
+
+    for line in render_text_lines(report) {
+        ctx.ui.print_plain(&line);
     }
 
     for invalid in &report.invalid_tasks {
@@ -195,17 +197,163 @@ fn print_text(ctx: &Ctx, report: &TaskListReport) {
     }
 }
 
-fn task_inventory_label(row: &TaskListRow) -> String {
-    let mut hint_parts = row.display.inventory_hint_parts();
-    hint_parts.push(format!("source {}", row.source));
-    PromptItem::from_hint_parts(row.display.label().to_string(), hint_parts).render_plain()
+fn render_text_lines(report: &TaskListReport) -> Vec<String> {
+    let mut lines = vec![format!("{LIST_START} Tasks"), BAR.to_string()];
+    let mut emitted_group = false;
+    for group in ["provider-origin", "local"] {
+        let rows = report
+            .tasks
+            .iter()
+            .filter(|row| row.source == group)
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            continue;
+        }
+
+        if emitted_group {
+            lines.push(BAR.to_string());
+        }
+        lines.push(format!("{BAR} {group}"));
+        emitted_group = true;
+        let widths = task_list_column_widths(&rows);
+        for row in rows {
+            lines.push(format!(
+                "{BAR}  {BULLET}  {}",
+                task_inventory_label(row, &widths)
+            ));
+        }
+    }
+    if report.hidden_task_count > 0 {
+        if emitted_group {
+            lines.push(BAR.to_string());
+        }
+        lines.push(format!(
+            "{BAR} {}",
+            hidden_task_count_hint(report.hidden_task_count)
+        ));
+    }
+    lines.push(FOOTER.to_string());
+    lines
 }
 
-fn origin_label(row: &TaskListRow) -> String {
+fn hidden_task_count_hint(count: usize) -> String {
+    let noun = if count == 1 { "task" } else { "tasks" };
+    format!("{count} {noun} hidden; use wt task list --all to show the full inventory")
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TaskListColumnWidths {
+    title: usize,
+    source: usize,
+    task: usize,
+    branch: usize,
+}
+
+fn task_list_column_widths(rows: &[&TaskListRow]) -> TaskListColumnWidths {
+    rows.iter().fold(
+        TaskListColumnWidths {
+            title: 0,
+            source: 0,
+            task: 0,
+            branch: 0,
+        },
+        |widths, row| {
+            let columns = task_inventory_columns(row);
+            TaskListColumnWidths {
+                title: capped_width(widths.title, &columns.title, TITLE_COLUMN_MAX),
+                source: capped_width(widths.source, &columns.source, SOURCE_COLUMN_MAX),
+                task: capped_width(widths.task, &columns.task, TASK_COLUMN_MAX),
+                branch: columns.branch.as_deref().map_or(widths.branch, |branch| {
+                    capped_width(widths.branch, branch, BRANCH_COLUMN_MAX)
+                }),
+            }
+        },
+    )
+}
+
+#[derive(Debug, Clone)]
+struct TaskInventoryColumns {
+    title: String,
+    source: String,
+    task: String,
+    branch: Option<String>,
+}
+
+fn task_inventory_columns(row: &TaskListRow) -> TaskInventoryColumns {
+    TaskInventoryColumns {
+        title: row.display.label().to_string(),
+        source: task_inventory_source(row),
+        task: format!("task {}", row.key),
+        branch: row.branch.as_ref().map(|branch| format!("branch {branch}")),
+    }
+}
+
+fn task_inventory_source(row: &TaskListRow) -> String {
     row.origin
         .as_ref()
-        .map(|origin| format!("{}:{}", origin.provider, origin.id))
-        .unwrap_or_else(|| "none".into())
+        .map(|origin| {
+            format!(
+                "{} {}",
+                provider_display_label(&origin.provider),
+                origin.id.trim()
+            )
+        })
+        .unwrap_or_else(|| "not published".into())
+}
+
+fn provider_display_label(provider: &str) -> String {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "github" => "GitHub".into(),
+        "linear" => "Linear".into(),
+        "" => "external".into(),
+        other => other.to_string(),
+    }
+}
+
+fn task_inventory_label(row: &TaskListRow, widths: &TaskListColumnWidths) -> String {
+    let columns = task_inventory_columns(row);
+    let mut parts = vec![
+        pad_column(&columns.title, widths.title),
+        pad_column(&columns.source, widths.source),
+        pad_column(&columns.task, widths.task),
+    ];
+    if let Some(branch) = columns.branch {
+        parts.push(truncate_display_width(&branch, widths.branch));
+    }
+    parts.join("  ")
+}
+
+fn capped_width(current: usize, value: &str, max_width: usize) -> usize {
+    current.max(measure_text_width(value).min(max_width))
+}
+
+fn pad_column(value: &str, width: usize) -> String {
+    let value = truncate_display_width(value, width);
+    let padding = width.saturating_sub(measure_text_width(&value));
+    format!("{value}{}", " ".repeat(padding))
+}
+
+fn truncate_display_width(value: &str, max_width: usize) -> String {
+    if measure_text_width(value) <= max_width {
+        return value.to_string();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let mut width = 0;
+    let mut truncated = String::new();
+    let target_width = max_width - 3;
+    for ch in value.chars() {
+        let ch_width = measure_text_width(&ch.to_string());
+        if width + ch_width > target_width {
+            break;
+        }
+        truncated.push(ch);
+        width += ch_width;
+    }
+    truncated.push_str("...");
+    truncated
 }
 
 fn write_json(report: &TaskListReport) -> Result<()> {
@@ -222,6 +370,7 @@ mod tests {
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions, OutputMode};
+    use crate::task_run;
 
     fn ctx(root: &Path, output_mode: OutputMode) -> Ctx {
         Ctx::new_with_options(
@@ -241,7 +390,7 @@ mod tests {
     fn collect_lists_valid_tasks_and_reports_invalid_files() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
-        let tasks_dir = dir.path().join(".local/tasks");
+        let tasks_dir = dir.path().join(".git/wt/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
         fs::write(
             tasks_dir.join("local.toml"),
@@ -265,12 +414,17 @@ id = "PROJ-123"
         .unwrap();
         fs::write(tasks_dir.join("bad.toml"), "unknown = true\n").unwrap();
 
-        let report = collect(&ctx).unwrap();
+        let report = collect(&ctx, false).unwrap();
 
         assert_eq!(report.tasks.len(), 2);
         assert_eq!(report.invalid_tasks.len(), 1);
+        assert_eq!(report.hidden_task_count, 0);
+        assert!(!report.full_inventory);
         assert_eq!(report.tasks[0].key, "PROJ-123");
-        assert_eq!(report.tasks[0].path, ".local/tasks/PROJ-123.toml");
+        assert_eq!(
+            report.tasks[0].path,
+            "<git-common-dir>/wt/tasks/PROJ-123.toml"
+        );
         assert_eq!(report.tasks[0].publish_state, "published");
         assert_eq!(report.tasks[0].source, "provider-origin");
         assert_eq!(report.tasks[0].origin.as_ref().unwrap().provider, "linear");
@@ -284,7 +438,7 @@ id = "PROJ-123"
     fn collect_does_not_apply_selector_visible_cap() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
-        let tasks_dir = dir.path().join(".local/tasks");
+        let tasks_dir = dir.path().join(".git/wt/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
 
         for idx in 1..=11 {
@@ -299,10 +453,124 @@ branch = "feature/task-{idx}"
             .unwrap();
         }
 
-        let report = collect(&ctx).unwrap();
+        let report = collect(&ctx, false).unwrap();
 
         assert_eq!(report.tasks.len(), 11);
         assert_eq!(report.invalid_tasks.len(), 0);
         assert_eq!(report.tasks[10].key, "task-9");
+    }
+
+    #[test]
+    fn collect_default_uses_task_selectability_and_all_keeps_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path(), OutputMode::Json);
+        let tasks_dir = dir.path().join(".git/wt/tasks");
+        fs::create_dir_all(&tasks_dir).unwrap();
+
+        for key in [
+            "done",
+            "failed",
+            "latest-failed",
+            "no-run",
+            "prepared",
+            "running",
+            "skipped",
+        ] {
+            fs::write(
+                tasks_dir.join(format!("{key}.toml")),
+                format!(
+                    r#"title = "{key}"
+branch = "feature/{key}"
+"#
+                ),
+            )
+            .unwrap();
+        }
+
+        task_run::create(&ctx, "done", "feature/done", None, task_run::STATUS_DONE).unwrap();
+        task_run::create(
+            &ctx,
+            "failed",
+            "feature/failed",
+            None,
+            task_run::STATUS_FAILED,
+        )
+        .unwrap();
+        task_run::create(
+            &ctx,
+            "latest-failed",
+            "feature/latest-failed",
+            None,
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+        task_run::create(
+            &ctx,
+            "latest-failed",
+            "feature/latest-failed",
+            None,
+            task_run::STATUS_FAILED,
+        )
+        .unwrap();
+        task_run::create(
+            &ctx,
+            "prepared",
+            "feature/prepared",
+            None,
+            task_run::STATUS_PREPARED,
+        )
+        .unwrap();
+        task_run::create(
+            &ctx,
+            "running",
+            "feature/running",
+            None,
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+        task_run::create(
+            &ctx,
+            "skipped",
+            "feature/skipped",
+            None,
+            task_run::STATUS_SKIPPED,
+        )
+        .unwrap();
+
+        let report = collect(&ctx, false).unwrap();
+
+        let keys = report
+            .tasks
+            .iter()
+            .map(|row| row.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            ["failed", "latest-failed", "no-run", "prepared", "skipped"]
+        );
+        assert_eq!(report.hidden_task_count, 2);
+        assert!(!report.full_inventory);
+
+        let all_report = collect(&ctx, true).unwrap();
+
+        let all_keys = all_report
+            .tasks
+            .iter()
+            .map(|row| row.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            all_keys,
+            [
+                "done",
+                "failed",
+                "latest-failed",
+                "no-run",
+                "prepared",
+                "running",
+                "skipped"
+            ]
+        );
+        assert_eq!(all_report.hidden_task_count, 0);
+        assert!(all_report.full_inventory);
     }
 }

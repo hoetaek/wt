@@ -8,23 +8,19 @@ description: "Use after wt work is reviewed: respect workflow policy, complete w
 Use this skill after `wt-coordinate` review says the work is acceptable. Do not
 use it to monitor active agents or request fixes; use `wt-coordinate` for that.
 
+In the work-sequence model, this skill owns the land/close gate between
+review/sync and retrospect. It proves integration or discard, performs
+applicable completion, and cleans only after that closure is safe.
+
+Object model, status boundaries, and completion vs cleanup commands: see
+`../wt-work/references/task-lifecycle.md`.
+
 ## Boundaries
 
-Keep lifecycle states separate:
-
-- `complete`: for workflow-linked runs, mark reviewed running workflow tasks
-  complete with `wt workflow complete`.
-- `land`: merge or otherwise integrate the reviewed branch.
-- `done`: remove the worktree and local branch after landing is proven; this
-  cleanup marks only matching running direct TaskRuns done.
-
-TaskRun `done` is not proof that a branch landed. A clean worktree is not proof
-that the branch is reviewed. Do not run cleanup before ancestry or explicit
-discard intent is clear.
-
-Coordinator landing must not absorb task-branch merge conflict ownership. A
-merge conflict during landing is a task-branch update problem until the user
-explicitly asks the coordinator to take it over.
+- Do not run cleanup before ancestry or explicit discard intent is clear.
+- Coordinator landing must not absorb task-branch merge conflict ownership. A
+  merge conflict during landing is a task-branch update problem until the user
+  explicitly asks the coordinator to take it over.
 
 ## Preflight
 
@@ -99,10 +95,9 @@ wait, omit `--run-next`:
 wt workflow complete <workflow> <task>
 ```
 
-For direct TaskRuns, do not invent a separate completion step. After landing or
-explicit discard proof, `wt done <branch-or-worktree>` cleans the worktree/local
-branch and marks matching running direct TaskRuns done. Do not use `wt done` as
-a substitute for workflow completion.
+For direct TaskRuns, no separate completion exists — `wt done` during cleanup
+also marks running direct TaskRuns done. See `task-lifecycle.md` for the full
+completion vs cleanup boundary.
 
 ## Land
 
@@ -146,8 +141,50 @@ git pull --ff-only
 git merge --ff-only <branch>
 ```
 
-For stack-mode work, land base-to-top unless the reviewed tip intentionally
-contains the whole stack. Before each merge, confirm the parent branch and diff:
+### Stack-mode landing — base-to-top, with explicit base re-target
+
+For stack-mode work, slices are dependency-ordered. Given a stack such as
+
+```
+integration-branch  <-  feature-a  <-  feature-b  <-  feature-c
+```
+
+`feature-a` is the slice closest to the integration branch and `feature-c` is
+the stack tip. Build order is left-to-right (a, then b, then c). **Land order
+is the same left-to-right order: land `feature-a` first, then `feature-b`,
+then `feature-c`.** Never merge a child slice before its stack parent has
+landed into the integration branch.
+
+Each stack PR was originally opened with its **stack parent** as the PR base
+(GitHub `baseRefName`), not the integration branch. That is correct during
+review (the diff reflects the slice's own changes against its parent), but it
+is **wrong at land time**: a squash-merge with `baseRefName = <stack parent>`
+puts the squash commit on the stack-parent branch on origin, **not on the
+integration branch**, so the slice content never reaches integration even
+though GitHub marks the PR `MERGED`.
+
+The base re-target rule applies before every stack child merge:
+
+1. Land the stack root (`feature-a` → integration-branch) normally. The root
+   PR's base is already the integration branch.
+2. After the root lands, for each subsequent stack child (`feature-b`,
+   `feature-c`, ...): **re-target the PR base to the integration branch**
+   before merging.
+
+```bash
+# Verify the current base
+gh pr view <number> --json baseRefName
+
+# If baseRefName is the stack parent (not the integration branch), re-target.
+# `gh pr edit` errors on the legacy Projects classic field, so use the REST API:
+gh api repos/<owner>/<repo>/pulls/<number> -X PATCH -f base=<integration-branch>
+
+# Confirm the change took effect
+gh pr view <number> --json baseRefName
+```
+
+Only after `baseRefName` equals the integration branch should the squash-merge
+run. Confirm parent/diff once more before merging:
 
 ```bash
 git log --oneline <parent>..<branch>
@@ -156,6 +193,42 @@ git diff --stat <parent>...<branch>
 
 If the primary checkout is dirty or busy, create a temporary integration
 worktree instead of disturbing user state.
+
+### Recovery when a stack child was merged into the wrong base
+
+If a stack child was already merged with the wrong `baseRefName` (squash
+commit landed on the stack-parent branch, not the integration branch), the
+slice's content is on origin but missing from the integration branch.
+Reverting the merge is usually noisier than recovering forward.
+
+Recover via cherry-pick onto the integration branch:
+
+```bash
+# Identify each mis-targeted PR's squash merge commit (the content carrier)
+gh pr view <number> --json mergeCommit,baseRefName
+
+# Create a fresh recovery branch off the integration branch
+git fetch --all --prune
+git switch -c land-<slug>-recover origin/<integration-branch>
+
+# Cherry-pick each mis-targeted squash commit in build order
+git cherry-pick <slice-N-squash-sha>
+git cherry-pick <slice-N+1-squash-sha>
+
+# Push and open a single recovery PR against the integration branch
+git push -u origin land-<slug>-recover
+gh pr create --base <integration-branch> --head land-<slug>-recover \
+  --title "Land <slug> slices (stack base re-target recovery)" \
+  --body "Cherry-picks the squash merge commits from the mis-targeted stack PRs onto current <integration-branch>. References the original PR numbers."
+```
+
+The original PRs stay `MERGED` (just into the wrong base); the recovery PR is
+the one that actually lands the content. Document the recovery in the
+workflow's spec or `09-execution.md` so future readers understand the history.
+
+The robust path is to prevent mis-targeting up front via the explicit
+re-target step above. Treat the recovery procedure as a fallback, not a
+regular step.
 
 ## Cleanup
 

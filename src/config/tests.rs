@@ -8,7 +8,7 @@ fn parses_full_config() {
 [worktree]
 path = "$HOME/worktrees/{{default_name}}"
 copy = [".env", "CLAUDE.local.md", ".claude/settings.local.json"]
-link = [".local"]
+link = ["tmp/shared-cache"]
 inject_local_context = "\n## env\n- parent: `{{parent_branch}}`\n"
 
 [setup]
@@ -40,8 +40,6 @@ provider = "valet"
 name = "{{repo}}-{{branch_slug}}"
 root = "public"
 secure = true
-open_browser = true
-browser = "Safari"
 url = "https://{{site_name}}.test"
 target = "http://127.0.0.1:{{vite_port}}"
 
@@ -53,15 +51,15 @@ placement = "cmux_surface"
 tabs = ["lazygit"]
 post_deps_tabs = ["npm run dev"]
 colors = { task = "Blue", issue = "Red", pr = "Green" }
-open_url = "{{site_url}}"
-open_browser = true
-browser = "Google Chrome"
+
+[workspace.browser]
+mode = "system"
+url = "{{site_url}}"
+app = "Google Chrome"
 
 [workspace.chrome_devtools]
-enabled = true
 port = 9222
 user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
-url = "{{site_url}}"
 
 [agent]
 cli = "claude"
@@ -81,7 +79,7 @@ commands = [
         config.worktree.path.as_deref(),
         Some("$HOME/worktrees/{{default_name}}")
     );
-    assert_eq!(config.worktree.link, vec![".local"]);
+    assert_eq!(config.worktree.link, vec!["tmp/shared-cache"]);
     assert!(config.worktree.inject_local_context.is_some());
     assert!(
         config
@@ -143,8 +141,6 @@ commands = [
     assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
     assert_eq!(site.root.as_deref(), Some("public"));
     assert_eq!(site.secure, Some(true));
-    assert_eq!(site.open_browser, Some(true));
-    assert_eq!(site.browser.as_deref(), Some("Safari"));
     assert_eq!(site.url.as_deref(), Some("https://{{site_name}}.test"));
     assert_eq!(
         site.target.as_deref(),
@@ -161,17 +157,16 @@ commands = [
     assert_eq!(ws.post_deps_tabs, vec!["npm run dev"]);
     assert_eq!(ws.colors.get("task").unwrap(), "Blue");
     assert_eq!(ws.colors.get("issue").unwrap(), "Red");
-    assert_eq!(ws.open_url.as_deref(), Some("{{site_url}}"));
-    assert_eq!(ws.open_browser, Some(true));
-    assert_eq!(ws.browser.as_deref(), Some("Google Chrome"));
+    let browser = ws.browser.unwrap();
+    assert_eq!(browser.mode, WorkspaceBrowserMode::System);
+    assert_eq!(browser.url.as_deref(), Some("{{site_url}}"));
+    assert_eq!(browser.app.as_deref(), Some("Google Chrome"));
     let chrome_devtools = ws.chrome_devtools.unwrap();
-    assert!(chrome_devtools.enabled);
     assert_eq!(chrome_devtools.port, Some(9222));
     assert_eq!(
         chrome_devtools.user_data_dir.as_deref(),
         Some("{{worktree_parent}}/.chrome-devtools/{{worktree_name}}")
     );
-    assert_eq!(chrome_devtools.url.as_deref(), Some("{{site_url}}"));
 
     let agent = config.agent.unwrap();
     assert_eq!(agent.cli, AgentCli::Claude);
@@ -216,13 +211,133 @@ fn rejects_unknown_workspace_chrome_devtools_field() {
     let err = toml::from_str::<Config>(
         r#"
 [workspace.chrome_devtools]
-enabled = true
 debug_port = 9222
 "#,
     )
     .unwrap_err();
 
     assert!(err.to_string().contains("unknown field `debug_port`"));
+}
+
+#[test]
+fn parses_workspace_browser_system_policy() {
+    let config: Config = toml::from_str(
+        r#"
+[workspace.browser]
+mode = "system"
+url = "{{site_url}}"
+app = "Google Chrome"
+"#,
+    )
+    .unwrap();
+
+    let browser = config.workspace.unwrap().browser.unwrap();
+    assert_eq!(browser.mode, WorkspaceBrowserMode::System);
+    assert_eq!(browser.effective_url().unwrap().as_ref(), "{{site_url}}");
+    assert_eq!(browser.app.as_deref(), Some("Google Chrome"));
+}
+
+#[test]
+fn parses_workspace_browser_chrome_devtools_policy() {
+    let config: Config = toml::from_str(
+        r#"
+[workspace.browser]
+mode = "chrome_devtools"
+"#,
+    )
+    .unwrap();
+
+    let browser = config.workspace.unwrap().browser.unwrap();
+    assert_eq!(browser.mode, WorkspaceBrowserMode::ChromeDevtools);
+    assert_eq!(browser.effective_url().unwrap().as_ref(), "{{site_url}}");
+}
+
+#[test]
+fn workspace_browser_none_rejects_unused_fields() {
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.browser]
+mode = "none"
+url = "{{site_url}}"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("[workspace.browser].url"));
+
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.browser]
+mode = "none"
+app = "Google Chrome"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("[workspace.browser].app"));
+}
+
+#[test]
+fn workspace_browser_chrome_devtools_rejects_app() {
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.browser]
+mode = "chrome_devtools"
+app = "Google Chrome"
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("[workspace.browser].app"));
+}
+
+#[test]
+fn rejects_legacy_workspace_browser_keys() {
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace]
+open_url = "{{site_url}}"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("open_url"));
+
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace]
+open_browser = true
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("open_browser"));
+
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace]
+browser = "Google Chrome"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("invalid type"));
+}
+
+#[test]
+fn rejects_legacy_workspace_chrome_devtools_launch_fields() {
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.chrome_devtools]
+enabled = true
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("enabled"));
+
+    let err = toml::from_str::<Config>(
+        r#"
+[workspace.chrome_devtools]
+url = "{{site_url}}"
+"#,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("url"));
 }
 
 #[test]
@@ -238,14 +353,14 @@ fn parses_explicit_claude_paths_in_copy() {
     let toml_str = r#"
 [worktree]
 copy = [".env", ".claude/settings.local.json", ".claude/hooks"]
-link = [".local"]
+link = ["tmp/shared-cache"]
 "#;
     let config: Config = toml::from_str(toml_str).unwrap();
     assert_eq!(
         config.worktree.copy,
         vec![".env", ".claude/settings.local.json", ".claude/hooks"]
     );
-    assert_eq!(config.worktree.link, vec![".local"]);
+    assert_eq!(config.worktree.link, vec!["tmp/shared-cache"]);
 }
 
 #[test]
@@ -275,7 +390,7 @@ claude_copy = ["settings.local.json"]
 #[test]
 fn local_config_overrides_root_config() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".local")).ok();
+    std::fs::create_dir_all(dir.path().join(".git/wt")).ok();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -298,7 +413,7 @@ copy = [".env"]
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".local/.wt.toml"),
+        dir.path().join(".git/wt/config.toml"),
         r#"
 [profile.agent]
 cli = "codex"
@@ -339,7 +454,7 @@ copy = ["CLAUDE.local.md"]
 #[test]
 fn workflow_policy_merges_per_field() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -352,7 +467,7 @@ landing = "manual"
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".local/.wt.toml"),
+        dir.path().join(".git/wt/config.toml"),
         r#"
 [workflow]
 landing = "auto"
@@ -369,7 +484,7 @@ landing = "auto"
 #[test]
 fn workflow_policy_profile_overlay_merges_per_field() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".local/profiles/codex")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/wt/profiles/codex")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -381,7 +496,7 @@ landing = "manual"
     )
     .unwrap();
     std::fs::write(
-        dir.path().join(".local/profiles/codex/profile.toml"),
+        dir.path().join(".git/wt/profiles/codex/profile.toml"),
         r#"
 [workflow]
 landing = "auto"
@@ -476,7 +591,6 @@ fn profile_workspace_chrome_devtools_replaces_base_section() {
     let base: Config = toml::from_str(
         r#"
 [workspace.chrome_devtools]
-enabled = true
 port = 9222
 "#,
     )
@@ -484,21 +598,50 @@ port = 9222
     let profile: Config = toml::from_str(
         r#"
 [workspace.chrome_devtools]
-enabled = false
+user_data_dir = ".chrome-alt"
 "#,
     )
     .unwrap();
 
     let merged = merge_config(&base, profile);
     let chrome_devtools = merged.workspace.unwrap().chrome_devtools.unwrap();
-    assert!(!chrome_devtools.enabled);
     assert_eq!(chrome_devtools.port, None);
+    assert_eq!(
+        chrome_devtools.user_data_dir.as_deref(),
+        Some(".chrome-alt")
+    );
+}
+
+#[test]
+fn profile_workspace_browser_replaces_base_section() {
+    let base: Config = toml::from_str(
+        r#"
+[workspace.browser]
+mode = "system"
+url = "{{site_url}}"
+app = "Google Chrome"
+"#,
+    )
+    .unwrap();
+    let profile: Config = toml::from_str(
+        r#"
+[workspace.browser]
+mode = "chrome_devtools"
+"#,
+    )
+    .unwrap();
+
+    let merged = merge_config(&base, profile);
+    let browser = merged.workspace.unwrap().browser.unwrap();
+    assert_eq!(browser.mode, WorkspaceBrowserMode::ChromeDevtools);
+    assert_eq!(browser.url, None);
+    assert_eq!(browser.app, None);
 }
 
 #[test]
 fn prompt_append_layers_extend_effective_prompt_without_redeclaring_agent() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -517,7 +660,7 @@ issue = ["shared append\n"]
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".local/.wt.toml"),
+        dir.path().join(".git/wt/config.toml"),
         r#"
 [agent.prompt.append]
 issue = ["local append\n"]
@@ -538,7 +681,7 @@ issue = ["local append\n"]
 #[test]
 fn workflow_prompt_append_layers_extend_workflow_scope() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -556,7 +699,7 @@ workflow = ["shared workflow append\n"]
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".local/.wt.toml"),
+        dir.path().join(".git/wt/config.toml"),
         r#"
 [agent.prompt.append]
 workflow = ["local workflow append\n"]
@@ -575,7 +718,7 @@ workflow = ["local workflow append\n"]
 #[test]
 fn prompt_overwrite_layer_replaces_then_append_extends() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -590,7 +733,7 @@ issue = ["shared prompt\n"]
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".local/.wt.toml"),
+        dir.path().join(".git/wt/config.toml"),
         r#"
 [agent.prompt]
 issue = ["local prompt\n"]
@@ -611,9 +754,125 @@ issue = ["local append\n"]
 }
 
 #[test]
+fn named_profile_agent_fields_merge_by_presence_and_prompt_overlay() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile_dir = dir.path().join(".git/wt/profiles/codex");
+    std::fs::create_dir_all(&profile_dir).unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
+[agent]
+cli = "codex"
+args = ["--model", "gpt-5.5"]
+command = "env WT_AGENT=1 codex"
+ready = "BASE_READY"
+submit = "newline"
+timeout = 99
+send_after = 8
+
+[agent.prompt]
+common = ["base common\n"]
+issue = ["base issue\n"]
+branch = ["base branch\n"]
+pr = ["base pr\n"]
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+    std::fs::write(
+        dir.path().join(".git/wt/config.toml"),
+        r#"
+[profile]
+name = "codex"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        profile_dir.join("profile.toml"),
+        r#"
+[agent]
+args = ["--yolo"]
+
+[agent.prompt]
+issue = ["profile issue\n"]
+
+[agent.prompt.append]
+issue = ["profile issue append\n"]
+"#,
+    )
+    .unwrap();
+
+    let config = Config::load(dir.path()).unwrap();
+    let agent = config.agent.unwrap();
+    assert_eq!(agent.cli, AgentCli::Codex);
+    assert_eq!(agent.args, vec!["--yolo"]);
+    assert_eq!(agent.command.as_deref(), Some("env WT_AGENT=1 codex"));
+    assert_eq!(agent.ready, ReadyMode::Marker("BASE_READY".into()));
+    assert_eq!(agent.submit, SubmitMode::Newline);
+    assert_eq!(agent.timeout, 99);
+    assert_eq!(agent.send_after, 8);
+    assert!(!agent.prompt.contains_key("common"));
+    assert_eq!(
+        agent.prompt.get("issue").unwrap(),
+        &vec![
+            "base common\n".to_string(),
+            "profile issue\n\nprofile issue append\n".to_string(),
+        ]
+    );
+    assert_eq!(
+        agent.prompt.get("branch").unwrap(),
+        &vec!["base common\n".to_string(), "base branch\n".to_string()]
+    );
+    assert_eq!(
+        agent.prompt.get("pr").unwrap(),
+        &vec!["base common\n".to_string(), "base pr\n".to_string()]
+    );
+}
+
+#[test]
+fn named_profile_empty_args_clears_inherited_args() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile_dir = dir.path().join(".git/wt/profiles/codex");
+    std::fs::create_dir_all(&profile_dir).unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
+[agent]
+cli = "codex"
+args = ["--model", "gpt-5.5"]
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+    std::fs::write(
+        dir.path().join(".git/wt/config.toml"),
+        r#"
+[profile]
+name = "codex"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        profile_dir.join("profile.toml"),
+        r#"
+[agent]
+args = []
+"#,
+    )
+    .unwrap();
+
+    let config = Config::load(dir.path()).unwrap();
+    let agent = config.agent.unwrap();
+    assert_eq!(agent.cli, AgentCli::Codex);
+    assert!(agent.args.is_empty());
+}
+
+#[test]
 fn common_prompt_scope_expands_after_layers_before_mode_prompt() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -632,7 +891,7 @@ common = ["shared common append\n"]
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".local/.wt.toml"),
+        dir.path().join(".git/wt/config.toml"),
         r#"
 [agent.prompt.append]
 common = ["local common append\n"]
@@ -652,7 +911,7 @@ issue = ["local issue append\n"]
         ]
     );
     assert_eq!(
-        agent.prompt.get("new").unwrap(),
+        agent.prompt.get("branch").unwrap(),
         &vec!["shared common\n\nshared common append\n\nlocal common append\n".to_string()]
     );
     assert_eq!(
@@ -665,7 +924,7 @@ issue = ["local issue append\n"]
 #[test]
 fn profile_convention_common_prompt_files_expand_after_mode_files() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".local/profiles/codex");
+    let profile_dir = dir.path().join(".git/wt/profiles/codex");
     std::fs::create_dir_all(profile_dir.join("prompts")).unwrap();
 
     std::fs::write(
@@ -680,7 +939,14 @@ issue = ["root issue\n"]
 "#,
     )
     .unwrap();
-    std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+    std::fs::write(
+        profile_dir.join("profile.toml"),
+        r#"
+[agent.prompt]
+issue = ["profile issue\n"]
+"#,
+    )
+    .unwrap();
     std::fs::write(profile_dir.join("prompts/common.md"), "file common\n").unwrap();
     std::fs::write(
         profile_dir.join("prompts/common.append.md"),
@@ -691,6 +957,12 @@ issue = ["root issue\n"]
     std::fs::write(
         profile_dir.join("prompts/issue.append.md"),
         "file issue append\n",
+    )
+    .unwrap();
+    std::fs::write(profile_dir.join("prompts/branch.md"), "file branch\n").unwrap();
+    std::fs::write(
+        profile_dir.join("prompts/branch.append.md"),
+        "file branch append\n",
     )
     .unwrap();
     std::fs::write(profile_dir.join("prompts/workflow.md"), "file workflow\n").unwrap();
@@ -714,8 +986,11 @@ issue = ["root issue\n"]
         ]
     );
     assert_eq!(
-        agent.prompt.get("new").unwrap(),
-        &vec!["file common\n\nfile common append\n".to_string()]
+        agent.prompt.get("branch").unwrap(),
+        &vec![
+            "file common\n\nfile common append\n".to_string(),
+            "file branch\n\nfile branch append\n".to_string(),
+        ]
     );
     assert_eq!(
         agent.prompt.get("pr").unwrap(),
@@ -725,6 +1000,66 @@ issue = ["root issue\n"]
         agent.prompt.get("workflow").unwrap(),
         &vec!["file workflow\n\nfile workflow append\n".to_string()]
     );
+}
+
+#[test]
+fn rejects_legacy_new_prompt_scope() {
+    let err = toml::from_str::<Config>(
+        r#"
+[agent]
+cli = "codex"
+
+[agent.prompt]
+new = ["legacy branch prompt\n"]
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("[agent.prompt].new"));
+    assert!(err.to_string().contains("[agent.prompt].branch"));
+}
+
+#[test]
+fn rejects_legacy_new_prompt_append_scope() {
+    let err = toml::from_str::<Config>(
+        r#"
+[agent]
+cli = "codex"
+
+[agent.prompt.append]
+new = ["legacy branch append\n"]
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("[agent.prompt.append].new"));
+    assert!(err.to_string().contains("[agent.prompt.append].branch"));
+}
+
+#[test]
+fn rejects_legacy_new_profile_prompt_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let profile_dir = dir.path().join(".git/wt/profiles/codex");
+    std::fs::create_dir_all(profile_dir.join("prompts")).unwrap();
+
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
+[agent]
+cli = "codex"
+"#,
+    )
+    .unwrap();
+    std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
+    std::fs::write(profile_dir.join("prompts/new.md"), "legacy prompt\n").unwrap();
+
+    let (base, _, _) = Config::load_base_and_effective_with_source(dir.path()).unwrap();
+    let err = Config::load_profile(dir.path(), "codex", &base)
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("prompts/new.md"));
+    assert!(err.contains("prompts/branch.md"));
 }
 
 #[test]
@@ -753,7 +1088,7 @@ name = "root"
 #[test]
 fn load_profiles_discovers_profile_toml_files() {
     let dir = tempfile::tempdir().unwrap();
-    let profiles_dir = dir.path().join(".local/profiles");
+    let profiles_dir = dir.path().join(".git/wt/profiles");
     let baseline_dir = profiles_dir.join("baseline");
     let tdd_dir = profiles_dir.join("tdd");
     std::fs::create_dir_all(&baseline_dir).unwrap();
@@ -791,17 +1126,57 @@ fn load_profiles_returns_empty_when_no_profiles_dir() {
 #[test]
 fn load_profiles_returns_empty_when_no_profile_toml_files() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".local/profiles/empty")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/wt/profiles/empty")).unwrap();
     let profiles = Config::load_profiles(dir.path(), &Config::default()).unwrap();
     assert!(profiles.is_empty());
 }
 
 #[test]
-fn load_with_source_applies_inline_profile_to_effective_config() {
+fn rejects_legacy_repo_root_personal_config() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".local")).unwrap();
     std::fs::write(
         dir.path().join(".local/.wt.toml"),
+        "[agent]\ncli = \"codex\"\n",
+    )
+    .unwrap();
+
+    let err = Config::load(dir.path()).unwrap_err().to_string();
+
+    assert!(err.contains("legacy repo-root config"));
+    assert!(err.contains(".local/.wt.toml"));
+    assert!(err.contains(".git/wt/config.toml"));
+    assert!(err.contains("does not silently fall back"));
+}
+
+#[test]
+fn reports_legacy_repo_root_profile_storage() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".local/profiles/codex")).unwrap();
+    std::fs::write(
+        dir.path().join(".local/profiles/codex/profile.toml"),
+        "[agent]\ncli = \"codex\"\n",
+    )
+    .unwrap();
+
+    let inventory = Config::load_profile_inventory(dir.path(), &Config::default()).unwrap();
+
+    assert!(inventory.profiles.is_empty());
+    assert_eq!(inventory.invalid_profiles.len(), 1);
+    let invalid = &inventory.invalid_profiles[0];
+    assert_eq!(invalid.name, "<legacy>");
+    assert!(invalid.path.ends_with(".local/profiles"));
+    assert!(invalid.error.contains("legacy repo-root profile storage"));
+    assert!(invalid.error.contains(".git/wt/profiles"));
+    assert!(invalid.error.contains("does not silently fall back"));
+}
+
+#[test]
+fn load_with_source_applies_inline_profile_to_effective_config() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+    std::fs::write(
+        dir.path().join(".git/wt/config.toml"),
         r#"
 [profile.agent]
 cli = "codex"
@@ -824,19 +1199,19 @@ args = ["--yolo"]
 #[test]
 fn load_with_source_resolves_named_profile_without_polluting_base_config() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".local/profiles/codex")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".git/wt/profiles/codex")).unwrap();
     std::fs::write(
         dir.path().join(".wt.toml"),
         "[issues]\nprovider = \"github\"\n",
     )
     .unwrap();
     std::fs::write(
-        dir.path().join(".local/.wt.toml"),
+        dir.path().join(".git/wt/config.toml"),
         "[profile]\nname = \"codex\"\n",
     )
     .unwrap();
     std::fs::write(
-        dir.path().join(".local/profiles/codex/profile.toml"),
+        dir.path().join(".git/wt/profiles/codex/profile.toml"),
         "[agent]\ncli = \"codex\"\n",
     )
     .unwrap();
@@ -909,12 +1284,19 @@ append = ["ambiguous\n"]
 
 #[test]
 fn rejects_partial_agent_without_prompt_patch() {
-    let toml_str = r#"
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".wt.toml"),
+        r#"
 [agent]
 args = ["--yolo"]
-"#;
-    let err = toml::from_str::<Config>(toml_str).unwrap_err();
-    assert!(err.to_string().contains("agent.cli is required"));
+"#,
+    )
+    .unwrap();
+
+    let err = Config::load(dir.path()).unwrap_err().to_string();
+    assert!(err.contains("agent.cli is required"));
+    assert!(err.contains("inheriting agent.cli"));
 }
 
 #[test]
@@ -969,6 +1351,7 @@ fn agent_command_line_escapes_args_and_respects_override() {
         timeout: 15,
         send_after: 3,
         prompt: HashMap::new(),
+        ..AgentConfig::default()
     };
     assert_eq!(
         agent.command_line().unwrap(),
@@ -1016,6 +1399,7 @@ fn agent_command_line_escapes_args_and_respects_override() {
         timeout: 15,
         send_after: 3,
         prompt: HashMap::new(),
+        ..AgentConfig::default()
     };
     assert_eq!(
         templated_args_agent
@@ -1036,6 +1420,7 @@ fn agent_helpers_pick_ready_and_submit_by_cli() {
         timeout: 15,
         send_after: 3,
         prompt: HashMap::new(),
+        ..AgentConfig::default()
     };
     let claude = AgentConfig {
         cli: AgentCli::Claude,
@@ -1071,6 +1456,7 @@ fn agent_none_disables_command_even_with_override() {
         timeout: 15,
         send_after: 3,
         prompt: HashMap::new(),
+        ..AgentConfig::default()
     };
 
     assert_eq!(agent.command_line().unwrap(), None);
@@ -1079,7 +1465,7 @@ fn agent_none_disables_command_even_with_override() {
 #[test]
 fn load_profile_returns_specific_config_or_none() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".local/profiles/codex");
+    let profile_dir = dir.path().join(".git/wt/profiles/codex");
     std::fs::create_dir_all(&profile_dir).unwrap();
     std::fs::write(
         profile_dir.join("profile.toml"),
@@ -1105,7 +1491,7 @@ args = ["--model", "gpt-5.5"]
 #[test]
 fn load_profile_overlays_base_config_and_applies_conventions() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".local/profiles/codex-yolo");
+    let profile_dir = dir.path().join(".git/wt/profiles/codex-yolo");
     std::fs::create_dir_all(profile_dir.join("prompts")).unwrap();
     std::fs::create_dir_all(profile_dir.join("scaffold/.codex/skills")).unwrap();
     std::fs::write(
@@ -1131,7 +1517,7 @@ args = ["--yolo"]
 
     let mut base = Config::default();
     base.worktree.copy = vec![".env".into()];
-    base.worktree.link = vec![".local".into()];
+    base.worktree.link = vec!["tmp/shared-cache".into()];
     base.worktree.path = Some("worktrees/{{default_name}}".into());
 
     let profile = Config::load_profile(dir.path(), "codex-yolo", &base)
@@ -1139,7 +1525,7 @@ args = ["--yolo"]
         .unwrap();
 
     assert_eq!(profile.worktree.copy, vec![".env"]);
-    assert_eq!(profile.worktree.link, vec![".local"]);
+    assert_eq!(profile.worktree.link, vec!["tmp/shared-cache"]);
     assert_eq!(
         profile.worktree.path.as_deref(),
         Some("worktrees/{{default_name}}")
@@ -1147,17 +1533,15 @@ args = ["--yolo"]
     let agent = profile.agent.unwrap();
     assert_eq!(agent.args, vec!["--yolo"]);
     assert_eq!(agent.prompt.get("issue").unwrap(), &vec!["handle issue\n"]);
-    assert!(
-        profile.worktree.copy_as.iter().any(|entry| {
-            entry.from == ".local/profiles/codex-yolo/scaffold" && entry.to == "."
-        })
-    );
+    assert!(profile.worktree.copy_as.iter().any(|entry| {
+        entry.from == profile_dir.join("scaffold").display().to_string() && entry.to == "."
+    }));
 }
 
 #[test]
 fn load_profile_merges_worktree_fields_without_dropping_base_lists() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".local/profiles/alternate-path");
+    let profile_dir = dir.path().join(".git/wt/profiles/alternate-path");
     std::fs::create_dir_all(&profile_dir).unwrap();
     std::fs::write(
         profile_dir.join("profile.toml"),
@@ -1170,7 +1554,7 @@ path = "profiles/{{default_name}}"
 
     let mut base = Config::default();
     base.worktree.copy = vec![".env".into()];
-    base.worktree.link = vec![".local".into()];
+    base.worktree.link = vec!["tmp/shared-cache".into()];
 
     let profile = Config::load_profile(dir.path(), "alternate-path", &base)
         .unwrap()
@@ -1181,13 +1565,13 @@ path = "profiles/{{default_name}}"
         Some("profiles/{{default_name}}")
     );
     assert_eq!(profile.worktree.copy, vec![".env"]);
-    assert_eq!(profile.worktree.link, vec![".local"]);
+    assert_eq!(profile.worktree.link, vec!["tmp/shared-cache"]);
 }
 
 #[test]
 fn load_profile_applies_profile_scaffold_root() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".local/profiles/claude-plan");
+    let profile_dir = dir.path().join(".git/wt/profiles/claude-plan");
     std::fs::create_dir_all(profile_dir.join("scaffold/.claude/commands")).unwrap();
     std::fs::write(
         profile_dir.join("profile.toml"),
@@ -1208,11 +1592,9 @@ cli = "claude"
         .unwrap()
         .unwrap();
 
-    assert!(
-        profile.worktree.copy_as.iter().any(|entry| {
-            entry.from == ".local/profiles/claude-plan/scaffold" && entry.to == "."
-        })
-    );
+    assert!(profile.worktree.copy_as.iter().any(|entry| {
+        entry.from == profile_dir.join("scaffold").display().to_string() && entry.to == "."
+    }));
 }
 
 #[test]
@@ -1254,16 +1636,27 @@ claude_local_context = "old"
 }
 
 #[test]
-fn parses_site_open_browser_config() {
+fn rejects_legacy_site_open_browser_config() {
     let toml_str = r#"
 [site]
 provider = "herd"
 name = "test"
 open_browser = true
 "#;
-    let config: Config = toml::from_str(toml_str).unwrap();
-    let site = config.site.unwrap();
-    assert_eq!(site.open_browser, Some(true));
+    let err = toml::from_str::<Config>(toml_str).unwrap_err();
+    assert!(err.to_string().contains("open_browser"));
+}
+
+#[test]
+fn rejects_legacy_site_browser_config() {
+    let toml_str = r#"
+[site]
+provider = "herd"
+name = "test"
+browser = "Google Chrome"
+"#;
+    let err = toml::from_str::<Config>(toml_str).unwrap_err();
+    assert!(err.to_string().contains("browser"));
 }
 
 #[test]
@@ -1305,16 +1698,12 @@ fn effective_site_uses_site_provider_herd() {
 provider = "herd"
 name = "{{repo}}-{{branch_slug}}"
 secure = true
-open_browser = true
-browser = "Google Chrome"
 "#;
     let config: Config = toml::from_str(toml_str).unwrap();
     let site = config.effective_site().unwrap();
     assert_eq!(site.provider, SiteProvider::Herd);
     assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
     assert_eq!(site.secure, Some(true));
-    assert_eq!(site.open_browser, Some(true));
-    assert_eq!(site.browser.as_deref(), Some("Google Chrome"));
 }
 
 #[test]
@@ -1329,7 +1718,6 @@ provider = "herd"
     assert_eq!(site.name.as_deref(), Some("{{repo}}-{{branch_slug}}"));
     assert_eq!(site.root.as_deref(), Some("."));
     assert_eq!(site.secure, Some(true));
-    assert_eq!(site.open_browser, Some(false));
     assert_eq!(site.url.as_deref(), Some("https://{{site_name}}.test"));
     assert_eq!(site.target, None);
 }

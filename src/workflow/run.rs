@@ -127,6 +127,8 @@ pub(crate) fn prepare_workflow(
         prepared_tasks,
         options.profiles,
     )?;
+    let default_title =
+        default_workflow_title(ctx, options.mode, &prepared.tasks, options.profiles);
 
     let mut metadata = WorkflowMetadata::new(
         workflow_mode(options.mode),
@@ -138,7 +140,7 @@ pub(crate) fn prepare_workflow(
     if options.mode == WorkflowModeArg::Matrix {
         metadata.profiles = options.profiles.to_vec();
     }
-    metadata.title = workflow_metadata.title;
+    metadata.title = workflow_metadata.title.or(default_title);
     metadata.body = workflow_metadata.body;
     metadata.origin = workflow_metadata.origin;
     metadata.policy = workflow_policy(default_policy, pull_request);
@@ -148,8 +150,11 @@ pub(crate) fn prepare_workflow(
         return Err(err);
     }
 
-    ctx.ui
-        .print_step(&prepared_workflow_message(&workflow_path));
+    ctx.ui.print_step(&prepared_workflow_message(
+        ctx,
+        &workflow_path,
+        metadata.title.as_deref(),
+    ));
     Ok(())
 }
 
@@ -317,7 +322,7 @@ fn run_single_workflow_group(
             identifier: &branch,
             title: &title,
             branch_name: Some(&branch),
-            setup_mode: setup::WORKSPACE_COLOR_KIND_NEW,
+            setup_mode: setup::WORKSPACE_COLOR_KIND_BRANCH,
             additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: None,
@@ -429,18 +434,25 @@ fn workflow_tasks_from_prepared(
     }
 
     let group = task_run::group_from_path(workflow_path)?;
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
     let mut parent = Some(initial_parent.to_string());
     let mut tasks = Vec::new();
     let mut task_runs = Vec::new();
     for task in prepared_tasks {
-        let run =
-            match task_run::create(ctx, &task.key, &task.branch, Some(&group), STATUS_PREPARED) {
-                Ok(run) => run,
-                Err(err) => {
-                    rollback_task_runs(&task_runs);
-                    return Err(err);
-                }
-            };
+        let run = match task_run::create_with_coordinator_id(
+            ctx,
+            &task.key,
+            &task.branch,
+            Some(&group),
+            coordinator_id,
+            STATUS_PREPARED,
+        ) {
+            Ok(run) => run,
+            Err(err) => {
+                rollback_task_runs(&task_runs);
+                return Err(err);
+            }
+        };
 
         let mut row = WorkflowTask::new(task.key.clone(), run.id.clone());
         if mode == WorkflowModeArg::Stack {
@@ -463,11 +475,19 @@ fn matrix_workflow_tasks_from_prepared(
         bail!("matrix mode workflow requires exactly one task");
     };
     let group = task_run::group_from_path(workflow_path)?;
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
     let mut task_runs = Vec::new();
     let mut runs = Vec::new();
     for profile in profiles {
         let branch = matrix_profile_branch(&task.branch, profile)?;
-        let run = match task_run::create(ctx, &task.key, &branch, Some(&group), STATUS_PREPARED) {
+        let run = match task_run::create_with_coordinator_id(
+            ctx,
+            &task.key,
+            &branch,
+            Some(&group),
+            coordinator_id,
+            STATUS_PREPARED,
+        ) {
             Ok(run) => run,
             Err(err) => {
                 rollback_task_runs(&task_runs);
@@ -494,6 +514,32 @@ fn matrix_profile_branch(branch: &str, profile: &str) -> Result<String> {
         bail!("matrix mode workflow task has no branch");
     };
     Ok(format!("{branch}-{profile}"))
+}
+
+fn default_workflow_title(
+    ctx: &Ctx,
+    mode: WorkflowModeArg,
+    tasks: &[WorkflowTask],
+    profiles: &[String],
+) -> Option<String> {
+    let first = tasks.first()?;
+    let first_title = match task_store::read_task_document(ctx, &first.task) {
+        Ok(document) => document.title_or_key(&first.task),
+        Err(_) => first.task.clone(),
+    };
+    let first_title = first_title.split_whitespace().collect::<Vec<_>>().join(" ");
+    if first_title.is_empty() {
+        return None;
+    }
+
+    let title = if mode == WorkflowModeArg::Matrix {
+        format!("{first_title} ({}개 프로필)", profiles.len())
+    } else if tasks.len() > 1 {
+        format!("{first_title} 외 {}개 작업", tasks.len() - 1)
+    } else {
+        first_title
+    };
+    Some(title)
 }
 
 fn validate_mode_options(mode: WorkflowModeArg, pr: Option<WorkflowPrModeArg>) -> Result<()> {
@@ -615,7 +661,14 @@ fn validate_profile(ctx: &Ctx, profile: Option<&str>) -> Result<()> {
     };
 
     validate_profile_name(profile)?;
-    if Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?.is_none() {
+    if Config::load_profile_from_storage(
+        &ctx.repo_root,
+        &ctx.storage_root,
+        profile,
+        &ctx.base_config,
+    )?
+    .is_none()
+    {
         bail!("Profile '{profile}' not found");
     }
 
@@ -627,7 +680,13 @@ fn workflow_default_policy(ctx: &Ctx, profile: Option<&str>) -> Result<WorkflowD
         return Ok(ctx.config.workflow_default_policy());
     };
 
-    let Some(config) = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)? else {
+    let Some(config) = Config::load_profile_from_storage(
+        &ctx.repo_root,
+        &ctx.storage_root,
+        profile,
+        &ctx.base_config,
+    )?
+    else {
         bail!("Profile '{profile}' not found");
     };
     Ok(config.workflow_default_policy())

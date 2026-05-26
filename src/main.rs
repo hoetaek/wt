@@ -1,12 +1,15 @@
 use anyhow::{Context, Result, bail};
-use clap::{CommandFactory, Parser};
-use std::io::{self, IsTerminal};
+use clap::{Command as ClapCommand, CommandFactory, Parser};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use wt::cli::{AgentCommand, Cli, ColorMode, Commands, TaskCommand, WorkflowCommand};
+use wt::cli::{
+    AgentCommand, AgentSupervisorCommand, Cli, ColorMode, Commands, CoordCommand, MsgCommand,
+    SessionCommand, TaskCommand, WorkflowCommand,
+};
 use wt::config::{Config, ConfigSource};
-use wt::context::{Ctx, CtxOptions, OutputMode};
+use wt::context::{Ctx, CtxOptions, MachineCtx, MachineCtxOptions, OutputMode};
 use wt::error::WtError;
 use wt::runner::RealRunner;
 use wt::services::git::GitService;
@@ -38,7 +41,7 @@ fn try_main() -> Result<()> {
 
     if cli.json && !supports_json(command) {
         bail!(
-            "JSON output is supported for: wt version, wt list, wt task list, wt workflow list, wt agent status, wt agent watch, wt doctor, wt profile"
+            "JSON output is supported for: wt version, wt list, wt inspect, wt scaffold, wt task list, wt workflow list, wt workflow archive, wt agent status, wt agent watch, wt agent wait-stats, wt agent supervisor status, wt msg list, wt msg read, wt msg check-inbox, wt msg watch, wt session whoami, wt doctor, wt profile"
         );
     }
 
@@ -48,57 +51,56 @@ fn try_main() -> Result<()> {
             return Ok(());
         }
         Commands::Completion { shell } => {
-            let mut command = Cli::command();
+            let mut command = completion_command();
             let bin_name = command.get_name().to_string();
-            clap_complete::generate(*shell, &mut command, bin_name, &mut io::stdout());
+            let mut buffer = Vec::new();
+            clap_complete::generate(*shell, &mut command, bin_name, &mut buffer);
+            let script = String::from_utf8(buffer)?;
+            io::stdout().write_all(strip_removed_completion_entries(*shell, &script).as_bytes())?;
+            return Ok(());
+        }
+        Commands::ShellInit { shell } => {
+            wt::commands::shell_init::run(*shell);
+            return Ok(());
+        }
+        Commands::Env => {
+            let current_dir = std::env::current_dir()?;
+            let working_dir = resolve_directory(&current_dir, cli.directory.as_deref())?;
+            wt::commands::env::run(working_dir.as_deref().unwrap_or(&current_dir))?;
+            return Ok(());
+        }
+        Commands::Coord { command } => {
+            match command {
+                CoordCommand::Use { id } => wt::commands::coord::use_coordinator(id)?,
+                CoordCommand::Exit => wt::commands::coord::exit_coordinator(),
+            }
             return Ok(());
         }
         _ => {}
     }
 
-    let runner = RealRunner;
-    let current_dir = std::env::current_dir()?;
-    let working_dir = resolve_directory(&current_dir, cli.directory.as_deref())?;
+    if let Some((old, new)) = wt::deprecated_start_replacement(command) {
+        bail!(
+            "`{old}` has moved. Use `{new}` to start workspace execution. The old command is not an alias."
+        );
+    }
 
-    let git = GitService::new(&runner, working_dir.as_deref());
-    let invocation_root = git.repo_root()?;
-    let repo_root = git.canonical_repo_root()?;
-    let config_base = working_dir.as_deref().unwrap_or(&current_dir);
+    if matches!(command, Commands::Setup { .. }) {
+        return run_setup_command(&cli, command);
+    }
 
-    let (base_config, config, config_source) = if matches!(command, Commands::Init { .. }) {
-        (Config::default(), Config::default(), ConfigSource::Default)
-    } else if let Some(path) = cli.config.as_deref() {
-        let path = resolve_path(config_base, path);
-        let (base_config, config) = Config::load_file_for_repo(&path, &repo_root)
-            .with_context(|| format!("failed to load config: {}", path.display()))?;
-        (base_config, config, ConfigSource::File(path))
-    } else {
-        Config::load_base_and_effective_with_source(&repo_root)?
-    };
-
-    let output_mode = if cli.json {
-        OutputMode::Json
-    } else {
-        OutputMode::Text
-    };
-
-    let ctx = Ctx::new_with_options(
-        repo_root,
-        invocation_root,
-        config,
-        Box::new(RealRunner),
-        Box::new(TerminalUi::with_decoration(
-            cli.quiet,
-            use_decorative_output(&cli),
-        )),
-        CtxOptions {
-            base_config,
-            config_source: config_source.clone(),
-            output_mode,
-            verbosity: cli.verbose,
-            quiet: cli.quiet,
-        },
+    let silent_check_inbox = matches!(
+        command,
+        Commands::Msg {
+            command: MsgCommand::CheckInbox { silent: true, .. },
+        }
     );
+
+    let (ctx, config_source) = match build_ctx(&cli, command) {
+        Ok(pair) => pair,
+        Err(_) if silent_check_inbox => return Ok(()),
+        Err(e) => return Err(e),
+    };
 
     if cli.verbose > 0 && !ctx.is_json() {
         ctx.ui
@@ -120,6 +122,282 @@ fn try_main() -> Result<()> {
     }
 
     wt::dispatch(&ctx, command)
+}
+
+fn run_setup_command(cli: &Cli, command: &Commands) -> Result<()> {
+    let current_dir = std::env::current_dir()?;
+    let _working_dir = resolve_directory(&current_dir, cli.directory.as_deref())?;
+    let runner = RealRunner;
+    let ui = TerminalUi::with_decoration(cli.quiet, use_decorative_output(cli));
+    let output_mode = if cli.json {
+        OutputMode::Json
+    } else {
+        OutputMode::Text
+    };
+    let ctx = MachineCtx::new_with_options(
+        &runner,
+        &ui,
+        MachineCtxOptions {
+            output_mode,
+            verbosity: cli.verbose,
+            quiet: cli.quiet,
+        },
+    );
+    wt::dispatch_machine(&ctx, command)
+}
+
+fn build_ctx(cli: &Cli, command: &Commands) -> Result<(Ctx, ConfigSource)> {
+    let runner = RealRunner;
+    let current_dir = std::env::current_dir()?;
+    let working_dir = resolve_directory(&current_dir, cli.directory.as_deref())?;
+
+    let git = GitService::new(&runner, working_dir.as_deref());
+    let invocation_root = git.repo_root()?;
+    let repo_root = git.canonical_repo_root()?;
+    let storage_root = wt::storage::StorageRoot::resolve(&runner, Some(&invocation_root))?;
+    let config_base = working_dir.as_deref().unwrap_or(&current_dir);
+
+    let (base_config, config, config_source) = if matches!(command, Commands::Init { .. }) {
+        (Config::default(), Config::default(), ConfigSource::Default)
+    } else if let Some(path) = cli.config.as_deref() {
+        let path = resolve_path(config_base, path);
+        let (base_config, config) =
+            Config::load_file_for_repo_with_storage_root(&path, &repo_root, &storage_root)
+                .with_context(|| format!("failed to load config: {}", path.display()))?;
+        (base_config, config, ConfigSource::File(path))
+    } else {
+        Config::load_base_and_effective_with_source_and_storage_root(&repo_root, &storage_root)?
+    };
+
+    let output_mode = if cli.json {
+        OutputMode::Json
+    } else {
+        OutputMode::Text
+    };
+    let ctx_seed = Ctx::new_with_options(
+        repo_root.clone(),
+        invocation_root.clone(),
+        config.clone(),
+        Box::new(RealRunner),
+        Box::new(TerminalUi::with_decoration(false, false)),
+        CtxOptions {
+            base_config: base_config.clone(),
+            config_source: config_source.clone(),
+            storage_root: Some(storage_root.clone()),
+            output_mode,
+            verbosity: cli.verbose,
+            quiet: cli.quiet,
+            launcher_coordinator_id: None,
+            coordinator_agent_id: None,
+        },
+    );
+    let marker = match wt::services::identity_locator::resolve_identity(&ctx_seed) {
+        Ok(marker) => marker,
+        Err(_)
+            if matches!(
+                command,
+                Commands::Session {
+                    command: SessionCommand::Unset,
+                }
+            ) =>
+        {
+            None
+        }
+        Err(err) => return Err(err),
+    };
+    let launcher_coordinator_id = launcher_coordinator_id_from_env()?
+        .or_else(|| marker.as_ref().map(|marker| marker.id.clone()));
+    let coordinator_agent_id = coordinator_agent_id_from_env()?
+        .or_else(|| marker.as_ref().map(|marker| marker.id.clone()));
+
+    let ctx = Ctx::new_with_options(
+        repo_root,
+        invocation_root,
+        config,
+        Box::new(RealRunner),
+        Box::new(TerminalUi::with_decoration(
+            cli.quiet,
+            use_decorative_output(cli),
+        )),
+        CtxOptions {
+            base_config,
+            config_source: config_source.clone(),
+            storage_root: Some(storage_root),
+            output_mode,
+            verbosity: cli.verbose,
+            quiet: cli.quiet,
+            launcher_coordinator_id,
+            coordinator_agent_id,
+        },
+    );
+
+    Ok((ctx, config_source))
+}
+
+fn launcher_coordinator_id_from_env() -> Result<Option<String>> {
+    match std::env::var("WT_AGENT_ID") {
+        Ok(value) => {
+            let value = value.trim();
+            Ok((!value.is_empty()).then(|| value.to_string()))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("Invalid WT_AGENT_ID: value is not Unicode")
+        }
+    }
+}
+
+fn coordinator_agent_id_from_env() -> Result<Option<String>> {
+    match std::env::var("WT_COORDINATOR_AGENT_ID") {
+        Ok(value) => {
+            let value = value.trim();
+            Ok((!value.is_empty()).then(|| value.to_string()))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("Invalid WT_COORDINATOR_AGENT_ID: value is not Unicode")
+        }
+    }
+}
+
+const HIDDEN_COMPLETION_PREFIX: &str = "__wt_removed_";
+
+fn completion_command() -> ClapCommand {
+    let mut hidden_index = 0;
+    rename_hidden_subcommands(Cli::command(), &mut hidden_index)
+}
+
+fn rename_hidden_subcommands(command: ClapCommand, hidden_index: &mut usize) -> ClapCommand {
+    command.mut_subcommands(|subcommand| {
+        let is_hidden = subcommand.is_hide_set();
+        let subcommand = rename_hidden_subcommands(subcommand, hidden_index);
+        if is_hidden {
+            // AOT completion scripts still walk hidden parser traps; keep them
+            // unreachable without teaching removed command names to shells.
+            // Clap stores command names as borrowed values; completion runs once
+            // and exits, so leaking this generated hidden name is intentional.
+            let hidden_name: &'static str =
+                Box::leak(format!("{HIDDEN_COMPLETION_PREFIX}{hidden_index}").into_boxed_str());
+            *hidden_index += 1;
+            subcommand.name(hidden_name)
+        } else {
+            subcommand
+        }
+    })
+}
+
+fn strip_removed_completion_entries(shell: clap_complete::Shell, script: &str) -> String {
+    let mut output = String::new();
+    let mut skipping_removed_case_arm_depth: Option<usize> = None;
+
+    for line in script.lines() {
+        let trimmed = line.trim_start();
+        if let Some(case_depth) = skipping_removed_case_arm_depth.as_mut() {
+            if trimmed.starts_with("case ") {
+                *case_depth += 1;
+            } else if trimmed == "esac" {
+                *case_depth = case_depth.saturating_sub(1);
+            } else if *case_depth == 0 && trimmed == ";;" {
+                skipping_removed_case_arm_depth = None;
+            }
+            continue;
+        }
+
+        if matches!(
+            shell,
+            clap_complete::Shell::Fish
+                | clap_complete::Shell::Elvish
+                | clap_complete::Shell::PowerShell
+        ) && contains_hidden_completion_name(trimmed)
+        {
+            continue;
+        }
+
+        if matches!(shell, clap_complete::Shell::Zsh)
+            && contains_hidden_completion_name(trimmed)
+            && (trimmed.starts_with('\'') || trimmed.starts_with('"'))
+        {
+            continue;
+        }
+
+        if contains_hidden_completion_name(trimmed)
+            && (trimmed.starts_with(HIDDEN_COMPLETION_PREFIX)
+                || trimmed
+                    .strip_prefix("case ")
+                    .is_some_and(|rest| rest.starts_with(HIDDEN_COMPLETION_PREFIX)))
+        {
+            continue;
+        }
+
+        if matches!(
+            shell,
+            clap_complete::Shell::Bash | clap_complete::Shell::Zsh
+        ) && contains_hidden_completion_name(trimmed)
+            && trimmed.ends_with(')')
+        {
+            skipping_removed_case_arm_depth = Some(0);
+            continue;
+        }
+
+        if !trimmed.contains(' ') && contains_hidden_completion_name(trimmed) {
+            continue;
+        }
+
+        let cleaned = strip_removed_completion_tokens(line);
+        if cleaned.trim().is_empty() && contains_hidden_completion_name(line) {
+            continue;
+        }
+        output.push_str(&cleaned);
+        output.push('\n');
+    }
+
+    output
+}
+
+fn contains_hidden_completion_name(line: &str) -> bool {
+    line.contains(HIDDEN_COMPLETION_PREFIX)
+}
+
+fn strip_removed_completion_tokens(line: &str) -> String {
+    let mut cleaned = line.to_string();
+
+    while let Some(start) = cleaned.find(HIDDEN_COMPLETION_PREFIX) {
+        let end = hidden_completion_name_end(&cleaned, start);
+        let (start, end) = expand_hidden_completion_token_range(&cleaned, start, end);
+        cleaned.replace_range(start..end, "");
+    }
+
+    cleaned
+}
+
+fn hidden_completion_name_end(line: &str, start: usize) -> usize {
+    let mut end = start + HIDDEN_COMPLETION_PREFIX.len();
+    for (offset, ch) in line[end..].char_indices() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            end = start + HIDDEN_COMPLETION_PREFIX.len() + offset + ch.len_utf8();
+        } else {
+            return end;
+        }
+    }
+    line.len()
+}
+
+fn expand_hidden_completion_token_range(line: &str, start: usize, end: usize) -> (usize, usize) {
+    if start > 0 {
+        let previous = line[..start].chars().next_back().unwrap();
+        if previous.is_whitespace() {
+            return (start - previous.len_utf8(), end);
+        }
+    }
+
+    if end < line.len() {
+        let next = line[end..].chars().next().unwrap();
+        if next.is_whitespace() {
+            return (start, end + next.len_utf8());
+        }
+    }
+
+    (start, end)
 }
 
 fn effective_color(cli: &Cli) -> ColorMode {
@@ -153,25 +431,48 @@ fn use_decorative_output(cli: &Cli) -> bool {
 }
 
 fn supports_json(command: &Commands) -> bool {
-    matches!(
-        command,
-        Commands::Version
-            | Commands::List { .. }
-            | Commands::Workflow {
-                command: WorkflowCommand::List,
-            }
-            | Commands::Task {
-                command: TaskCommand::List,
-            }
-            | Commands::Agent {
-                command: AgentCommand::Status { .. },
-            }
-            | Commands::Agent {
-                command: AgentCommand::Watch { .. },
-            }
-            | Commands::Doctor
-            | Commands::Profile { .. }
-    )
+    wt::deprecated_start_replacement(command).is_some()
+        || matches!(
+            command,
+            Commands::Version
+                | Commands::List { .. }
+                | Commands::Inspect { .. }
+                | Commands::Scaffold { .. }
+                | Commands::Workflow {
+                    command: WorkflowCommand::List,
+                }
+                | Commands::Workflow {
+                    command: WorkflowCommand::Archive { .. },
+                }
+                | Commands::Task {
+                    command: TaskCommand::List { .. },
+                }
+                | Commands::Agent {
+                    command: AgentCommand::Status { .. },
+                }
+                | Commands::Agent {
+                    command: AgentCommand::Watch { .. },
+                }
+                | Commands::Agent {
+                    command: AgentCommand::WaitStats,
+                }
+                | Commands::Agent {
+                    command: AgentCommand::Supervisor {
+                        command: AgentSupervisorCommand::Status { .. },
+                    },
+                }
+                | Commands::Msg {
+                    command: MsgCommand::List { .. }
+                        | MsgCommand::Read { .. }
+                        | MsgCommand::CheckInbox { .. }
+                        | MsgCommand::Watch { .. },
+                }
+                | Commands::Session {
+                    command: SessionCommand::Whoami { .. },
+                }
+                | Commands::Doctor { .. }
+                | Commands::Profile { .. }
+        )
 }
 
 fn print_version(json: bool) {

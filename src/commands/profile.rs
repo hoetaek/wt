@@ -12,43 +12,62 @@ use std::path::PathBuf;
 pub fn run(ctx: &Ctx, command: Option<&ProfileCommand>) -> Result<()> {
     match command {
         Some(ProfileCommand::Create { name }) => create(ctx, name),
-        None => list(ctx),
+        Some(ProfileCommand::List) | None => list(ctx),
     }
 }
 
 fn list(ctx: &Ctx) -> Result<()> {
-    let profiles = Config::load_profiles(&ctx.repo_root, &ctx.base_config)?;
-    if profiles.is_empty() {
-        if ctx.is_json() {
-            write_json(&Vec::<ProfileSummary>::new())?;
-            return Ok(());
-        }
-        ctx.ui
-            .print_step("No profiles found. Create one with: wt profile create <name>");
-        return Ok(());
-    }
+    let inventory = Config::load_profile_inventory_from_storage(
+        &ctx.repo_root,
+        &ctx.storage_root,
+        &ctx.base_config,
+    )?;
 
     if ctx.is_json() {
-        let summaries = profiles
+        let summaries = inventory
+            .profiles
             .iter()
-            .map(|(name, config)| ProfileSummary::from_config(name, config))
+            .map(|record| ProfileSummary::from_config(&record.name, &record.config))
             .collect::<Vec<_>>();
-        write_json(&summaries)?;
+        let invalid = inventory
+            .invalid_profiles
+            .iter()
+            .map(|record| InvalidProfileSummary {
+                name: record.name.clone(),
+                path: record.path.display().to_string(),
+                error: record.error.clone(),
+            })
+            .collect::<Vec<_>>();
+        write_json(&ProfileListJson {
+            profiles: summaries,
+            invalid_profiles: invalid,
+        })?;
         return Ok(());
     }
 
-    for (name, config) in &profiles {
-        let copy_count = config.worktree.copy.len() + config.worktree.copy_as.len();
-        let link_count = config.worktree.link.len();
-        let agent = config
-            .agent
-            .as_ref()
-            .map(|agent| agent_cli_name(&agent.cli))
-            .unwrap_or("none");
-        ctx.ui.print_step(&format!(
-            "  {name}  (copy: {copy_count}, link: {link_count}, agent: {agent})"
+    if inventory.profiles.is_empty() && inventory.invalid_profiles.is_empty() {
+        ctx.ui
+            .print_plain("No profiles found. Create one with: wt profile create <name>");
+        return Ok(());
+    }
+
+    for record in &inventory.profiles {
+        let summary = ProfileSummary::from_config(&record.name, &record.config);
+        ctx.ui.print_plain(&format!(
+            "  {}  (copy: {}, link: {}, agent: {})",
+            summary.name, summary.copy_count, summary.link_count, summary.agent
         ));
     }
+
+    for invalid in &inventory.invalid_profiles {
+        ctx.ui.print_warning(&format!(
+            "Invalid profile '{}' at {}: {}",
+            invalid.name,
+            invalid.path.display(),
+            invalid.error
+        ));
+    }
+
     Ok(())
 }
 
@@ -56,7 +75,11 @@ fn create(ctx: &Ctx, name: &str) -> Result<()> {
     validate_profile_name(name)?;
     let loaded_base_config;
     let base_config = if ctx.base_config == Config::default() {
-        loaded_base_config = Config::load_base_and_effective_with_source(&ctx.repo_root)?.0;
+        loaded_base_config = Config::load_base_and_effective_with_source_and_storage_root(
+            &ctx.repo_root,
+            &ctx.storage_root,
+        )?
+        .0;
         &loaded_base_config
     } else {
         &ctx.base_config
@@ -111,7 +134,7 @@ pub(crate) fn create_profile(
 ) -> Result<CreatedProfileInfo> {
     let name = options.name;
     validate_profile_name(name)?;
-    let profile_dir = ctx.repo_root.join(".local/profiles").join(name);
+    let profile_dir = ctx.storage_root.profiles_dir().join(name);
     let toml_path = profile_dir.join("profile.toml");
 
     if toml_path.exists() {
@@ -166,8 +189,8 @@ pub(crate) fn create_profile(
             generate_issue_prompt(name),
         )?;
         fs::write(
-            profile_dir.join("prompts/new.md"),
-            generate_new_prompt(name),
+            profile_dir.join("prompts/branch.md"),
+            generate_branch_prompt(name),
         )?;
         fs::write(profile_dir.join("prompts/pr.md"), generate_pr_prompt(name))?;
     }
@@ -179,6 +202,19 @@ pub(crate) fn create_profile(
         config_path: toml_path,
         dir: profile_dir,
     })
+}
+
+#[derive(Serialize)]
+struct ProfileListJson {
+    profiles: Vec<ProfileSummary>,
+    invalid_profiles: Vec<InvalidProfileSummary>,
+}
+
+#[derive(Serialize)]
+struct InvalidProfileSummary {
+    name: String,
+    path: String,
+    error: String,
 }
 
 #[derive(Serialize)]
@@ -322,6 +358,7 @@ fn default_profile_agent() -> AgentConfig {
         timeout: 30,
         send_after: 2,
         prompt: Default::default(),
+        ..AgentConfig::default()
     }
 }
 
@@ -358,7 +395,7 @@ Review the current issue context, inspect the codebase, make the required change
     )
 }
 
-fn generate_new_prompt(name: &str) -> String {
+fn generate_branch_prompt(name: &str) -> String {
     format!(
         r#"Use the `{name}` profile.
 
@@ -553,7 +590,7 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".local/profiles/codex");
+        let profile_dir = dir.path().join(".git/wt/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),
@@ -582,9 +619,172 @@ cli = "codex"
     }
 
     #[test]
+    fn list_subcommand_dispatches_to_inventory() {
+        struct SharedUi {
+            steps: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl UserInterface for SharedUi {
+            fn select(&self, _prompt: &str, _items: &[String]) -> Result<usize> {
+                unreachable!()
+            }
+
+            fn multi_select(&self, _prompt: &str, _items: &[String]) -> Result<Vec<usize>> {
+                unreachable!()
+            }
+
+            fn confirm(&self, _prompt: &str, _default: bool) -> Result<bool> {
+                unreachable!()
+            }
+
+            fn input(&self, _prompt: &str, _default: Option<&str>) -> Result<String> {
+                unreachable!()
+            }
+
+            fn print_step(&self, msg: &str) {
+                self.steps.lock().unwrap().push(msg.into());
+            }
+
+            fn print_dim(&self, _msg: &str) {}
+
+            fn print_warning(&self, _msg: &str) {}
+
+            fn print_error(&self, _msg: &str) {}
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join(".git/wt/profiles/claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("profile.toml"),
+            "[agent]\ncli = \"claude\"\n",
+        )
+        .unwrap();
+
+        let codex_dir = dir.path().join(".git/wt/profiles/codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        std::fs::write(codex_dir.join("profile.toml"), "[agent]\ncli = \"codex\"\n").unwrap();
+
+        let steps = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(SharedUi {
+                steps: Arc::clone(&steps),
+            }),
+        );
+
+        run(&ctx, Some(&ProfileCommand::List)).unwrap();
+
+        let recorded = steps.lock().unwrap().clone();
+        assert!(
+            recorded
+                .iter()
+                .any(|line| line.contains("claude  (copy: 0, link: 0, agent: claude)")),
+            "expected claude profile row, got: {recorded:?}"
+        );
+        assert!(
+            recorded
+                .iter()
+                .any(|line| line.contains("codex  (copy: 0, link: 0, agent: codex)")),
+            "expected codex profile row, got: {recorded:?}"
+        );
+
+        let claude_idx = recorded
+            .iter()
+            .position(|line| line.contains("claude  ("))
+            .expect("claude row missing");
+        let codex_idx = recorded
+            .iter()
+            .position(|line| line.contains("codex  ("))
+            .expect("codex row missing");
+        assert!(
+            claude_idx < codex_idx,
+            "expected deterministic alphabetical order (claude before codex), got: {recorded:?}"
+        );
+    }
+
+    #[test]
+    fn list_surfaces_invalid_profiles_as_warnings() {
+        struct SharedUi {
+            steps: Arc<Mutex<Vec<String>>>,
+            warnings: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl UserInterface for SharedUi {
+            fn select(&self, _prompt: &str, _items: &[String]) -> Result<usize> {
+                unreachable!()
+            }
+
+            fn multi_select(&self, _prompt: &str, _items: &[String]) -> Result<Vec<usize>> {
+                unreachable!()
+            }
+
+            fn confirm(&self, _prompt: &str, _default: bool) -> Result<bool> {
+                unreachable!()
+            }
+
+            fn input(&self, _prompt: &str, _default: Option<&str>) -> Result<String> {
+                unreachable!()
+            }
+
+            fn print_step(&self, msg: &str) {
+                self.steps.lock().unwrap().push(msg.into());
+            }
+
+            fn print_dim(&self, _msg: &str) {}
+
+            fn print_warning(&self, msg: &str) {
+                self.warnings.lock().unwrap().push(msg.into());
+            }
+
+            fn print_error(&self, _msg: &str) {}
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let valid_dir = dir.path().join(".git/wt/profiles/codex");
+        std::fs::create_dir_all(&valid_dir).unwrap();
+        std::fs::write(valid_dir.join("profile.toml"), "[agent]\ncli = \"codex\"\n").unwrap();
+
+        let invalid_dir = dir.path().join(".git/wt/profiles/broken");
+        std::fs::create_dir_all(&invalid_dir).unwrap();
+        std::fs::write(
+            invalid_dir.join("profile.toml"),
+            "this is not valid toml = [\n",
+        )
+        .unwrap();
+
+        let steps = Arc::new(Mutex::new(Vec::new()));
+        let warnings = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(SharedUi {
+                steps: Arc::clone(&steps),
+                warnings: Arc::clone(&warnings),
+            }),
+        );
+
+        run(&ctx, Some(&ProfileCommand::List)).unwrap();
+
+        let step_output = steps.lock().unwrap().join("\n");
+        assert!(step_output.contains("codex  (copy: 0, link: 0, agent: codex)"));
+
+        let warning_output = warnings.lock().unwrap().join("\n");
+        assert!(
+            warning_output.contains("Invalid profile 'broken'"),
+            "expected invalid profile warning, got: {warning_output}"
+        );
+    }
+
+    #[test]
     fn create_scaffolds_profile_structure() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".local")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".repo-private")).unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "shared instructions\n").unwrap();
 
         let ctx = Ctx::new(
@@ -600,10 +800,10 @@ cli = "codex"
         };
         assert!(run(&ctx, Some(&command)).is_ok());
 
-        let profile_dir = dir.path().join(".local/profiles/baseline");
+        let profile_dir = dir.path().join(".git/wt/profiles/baseline");
         assert!(profile_dir.join("profile.toml").exists());
         assert!(profile_dir.join("prompts/issue.md").exists());
-        assert!(profile_dir.join("prompts/new.md").exists());
+        assert!(profile_dir.join("prompts/branch.md").exists());
         assert!(profile_dir.join("prompts/pr.md").exists());
         assert_eq!(
             std::fs::read_to_string(profile_dir.join("scaffold/AGENTS.override.md")).unwrap(),
@@ -649,7 +849,7 @@ cli = "codex"
 
         let skill = std::fs::read_to_string(
             dir.path()
-                .join(".local/profiles/baseline/scaffold/.codex/skills/start/SKILL.md"),
+                .join(".git/wt/profiles/baseline/scaffold/.codex/skills/start/SKILL.md"),
         )
         .unwrap();
         assert!(skill.contains("GitHub 이슈"));
@@ -671,6 +871,7 @@ cli = "codex"
                 timeout: 30,
                 send_after: 2,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -694,7 +895,7 @@ cli = "codex"
         )
         .unwrap();
 
-        let profile_dir = dir.path().join(".local/profiles/claude-plan");
+        let profile_dir = dir.path().join(".git/wt/profiles/claude-plan");
         assert!(profile_dir.join("scaffold/CLAUDE.local.md").exists());
         assert!(profile_dir.join("scaffold/.claude/agents").is_dir());
         assert!(profile_dir.join("scaffold/.claude/commands").is_dir());
@@ -724,7 +925,7 @@ cli = "codex"
     #[test]
     fn create_rejects_duplicate() {
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".local/profiles/tdd");
+        let profile_dir = dir.path().join(".git/wt/profiles/tdd");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),
@@ -757,6 +958,7 @@ cli = "codex"
             timeout: 22,
             send_after: 4,
             prompt: HashMap::from([("issue".into(), vec!["say \"hi\"\npath C:\\tmp".into()])]),
+            ..AgentConfig::default()
         };
 
         let generated = generate_toml(&agent);

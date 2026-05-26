@@ -1,5 +1,6 @@
 mod agent;
 mod background_tests;
+mod browser;
 mod chrome_devtools;
 mod command;
 mod deps;
@@ -11,9 +12,9 @@ mod site;
 mod summary;
 mod workspace;
 
+pub(crate) use agent::agent_launch_command;
 use agent::bootstrap_agent;
 use background_tests::run_background_tests;
-use chrome_devtools::{apply_chrome_devtools_template_vars, launch_chrome_devtools};
 use deps::install_deps;
 use env_template::substitute_env;
 use files::{copy_files, link_files};
@@ -22,13 +23,13 @@ use post_deps::open_post_deps_tabs;
 use summary::print_summary;
 use workspace::{insert_cmux_template_vars, open_workspace, workspace_color};
 
+pub(crate) use browser::{launch_browser, prepare_browser_launch};
 pub(crate) use env_template::build_template_vars;
-pub(crate) use site::{apply_site_template_vars, open_site_url};
-pub(crate) use workspace::open_workspace_url;
+pub(crate) use site::apply_site_template_vars;
 
 use crate::config::{Config, SiteProvider};
 pub(crate) use crate::config::{
-    WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_NEW, WORKSPACE_COLOR_KIND_PR,
+    WORKSPACE_COLOR_KIND_BRANCH, WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_PR,
     WORKSPACE_COLOR_KIND_TASK,
 };
 use crate::context::Ctx;
@@ -88,8 +89,6 @@ pub(crate) struct SiteDescriptor {
     pub(crate) root: String,
     pub(crate) secure: bool,
     pub(crate) target: Option<String>,
-    pub(crate) open_browser: Option<bool>,
-    pub(crate) browser: Option<String>,
 }
 
 /// Run the full setup sequence on a newly created worktree.
@@ -133,7 +132,7 @@ pub(crate) fn run_setup_with_workspace_color_kind(
         template_vars.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
     let site = apply_site_template_vars(config, &mut template_vars);
-    let chrome_devtools = apply_chrome_devtools_template_vars(config, wt_path, &mut template_vars)?;
+    let browser_launch = prepare_browser_launch(config, wt_path, &mut template_vars)?;
 
     if let Some(ref site) = site {
         site::register_site(ctx, wt_path, site);
@@ -164,16 +163,8 @@ pub(crate) fn run_setup_with_workspace_color_kind(
         open_post_deps_tabs(ctx, config, handle, &template_vars)?;
     }
 
-    if let Some(chrome_devtools) = chrome_devtools {
-        launch_chrome_devtools(ctx, chrome_devtools)?;
-    }
-
-    // Open browser after deps (site may need built assets)
-    if let Some(ref site) = site {
-        open_site_url(ctx, site, None)?;
-    }
-
-    open_workspace_url(ctx, config, &template_vars)?;
+    // Launch browser after deps (site may need built assets).
+    launch_browser(ctx, browser_launch)?;
 
     if let (Some(handle), Some(agent)) = (ws_handle, &config.agent) {
         bootstrap_agent(ctx, handle, agent, modes.setup_mode, &template_vars)?;
@@ -190,7 +181,7 @@ pub(crate) fn run_setup_with_workspace_color_kind(
 mod tests {
     use super::*;
     use crate::context::mock::{MockRunner, MockUi};
-    use crate::context::{CmdOutput, CommandRunner};
+    use crate::context::{CmdOutput, CommandRunner, CtxOptions};
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -233,6 +224,7 @@ mod tests {
             timeout: 30,
             send_after: 2,
             prompt: HashMap::new(),
+            ..AgentConfig::default()
         }
     }
 
@@ -316,7 +308,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
         let wt = dir.path().join("worktree");
-        let scaffold = repo.join(".local/profiles/codex/scaffold");
+        let scaffold = repo.join(".git/wt/profiles/codex/scaffold");
         fs::create_dir_all(scaffold.join(".codex/skills/start")).unwrap();
         fs::create_dir_all(&wt).unwrap();
         fs::write(scaffold.join("AGENTS.override.md"), "instructions\n").unwrap();
@@ -328,7 +320,7 @@ mod tests {
 
         let mut config = Config::default();
         config.worktree.copy_as = vec![CopyAsEntry {
-            from: ".local/profiles/codex/scaffold".into(),
+            from: ".git/wt/profiles/codex/scaffold".into(),
             to: ".".into(),
         }];
 
@@ -477,12 +469,16 @@ mod tests {
             site: Some("sample-app-proj-680".into()),
         };
 
-        let ctx = Ctx::new(
+        let ctx = Ctx::new_with_options(
             PathBuf::from("/home/dev/sample-app"),
             PathBuf::from("/home/dev/sample-app"),
             Config::default(),
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
+            CtxOptions {
+                launcher_coordinator_id: Some("agents/coord-a".into()),
+                ..CtxOptions::default()
+            },
         );
 
         let actual_worktree_path = PathBuf::from("/tmp/existing-sample-app-proj-680");
@@ -501,6 +497,15 @@ mod tests {
         );
         assert_eq!(vars.get("site_name").unwrap(), "sample-app-proj-680");
         assert_eq!(vars.get("branch_slug").unwrap(), "proj-680-document-editor");
+        assert_eq!(
+            vars.get("wt_agent_id").unwrap(),
+            "agents/proj-680-document-editor"
+        );
+        assert_eq!(
+            vars.get("wt_coordinator_agent_id").unwrap(),
+            "agents/coord-a"
+        );
+        assert_eq!(vars.get("coordinator_msg_target").unwrap(), "coordinator");
         assert_eq!(vars.get("issue_title").unwrap(), "Document editor");
         assert!(vars.contains_key("vite_port"));
         assert!(vars.contains_key("api_port"));
@@ -653,7 +658,9 @@ mod tests {
 
     #[test]
     fn run_setup_opens_workspace_url_without_site() {
-        use crate::config::{Config, WorkspaceConfig};
+        use crate::config::{
+            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceConfig,
+        };
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
         use anyhow::Result;
@@ -689,9 +696,11 @@ mod tests {
 
         let config = Config {
             workspace: Some(WorkspaceConfig {
-                open_url: Some("{{site_url}}".into()),
-                open_browser: Some(true),
-                browser: Some("Google Chrome".into()),
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::System,
+                    url: Some("{{site_url}}".into()),
+                    app: Some("Google Chrome".into()),
+                }),
                 ..WorkspaceConfig::default()
             }),
             ..Config::default()
@@ -729,8 +738,83 @@ mod tests {
     }
 
     #[test]
+    fn run_setup_browser_mode_none_suppresses_browser_and_chrome_launch() {
+        use crate::config::{
+            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
+            WorkspaceConfig,
+        };
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner};
+        use anyhow::Result;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let repo = std::env::temp_dir().join("wt-test-browser-none-repo");
+        let wt = std::env::temp_dir().join("wt-test-browser-none-worktree");
+        fs::create_dir_all(&repo).ok();
+        fs::create_dir_all(&wt).ok();
+
+        let config = Config {
+            workspace: Some(WorkspaceConfig {
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::None,
+                    url: None,
+                    app: None,
+                }),
+                chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                    port: Some(9222),
+                    ..WorkspaceChromeDevtoolsConfig::default()
+                }),
+                ..WorkspaceConfig::default()
+            }),
+            ..Config::default()
+        };
+        let runner = Arc::new(MockRunner::new());
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: wt.clone(),
+            branch: "alice/issue-1-test".into(),
+            workspace: "test".into(),
+            site: None,
+        };
+
+        run_setup(&ctx, &wt, &names, Some("GitHub Issue"), "issue", None, None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(!calls.iter().any(|(cmd, _, _)| cmd == "open" || cmd == "sh"));
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
     fn run_setup_launches_chrome_devtools_and_renders_local_context_vars() {
-        use crate::config::{Config, WorkspaceChromeDevtoolsConfig, WorkspaceConfig};
+        use crate::config::{
+            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
+            WorkspaceConfig,
+        };
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
         use anyhow::Result;
@@ -753,7 +837,7 @@ mod tests {
 
         let repo = std::env::temp_dir().join("wt-test-chrome-devtools-repo");
         let wt = std::env::temp_dir().join("wt-test-chrome-devtools-worktree");
-        fs::create_dir_all(repo.join(".local")).ok();
+        fs::create_dir_all(repo.join(".repo-private")).ok();
         fs::create_dir_all(&wt).ok();
         fs::write(wt.join("CLAUDE.local.md"), "# Existing content\n").unwrap();
 
@@ -767,8 +851,12 @@ mod tests {
 
         let mut config = Config {
             workspace: Some(WorkspaceConfig {
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::ChromeDevtools,
+                    url: None,
+                    app: None,
+                }),
                 chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    enabled: true,
                     ..WorkspaceChromeDevtoolsConfig::default()
                 }),
                 ..WorkspaceConfig::default()
@@ -822,7 +910,7 @@ mod tests {
         assert!(context.contains(&expected_user_data_dir_text));
         assert!(!context.contains("{{chrome_"));
         assert!(!context.contains("{{worktree_"));
-        assert!(!context.contains(&repo.join(".local").to_string_lossy().to_string()));
+        assert!(!context.contains(&repo.join(".repo-private").to_string_lossy().to_string()));
 
         fs::remove_dir_all(&expected_user_data_dir).ok();
         if let Some(parent) = expected_user_data_dir.parent() {
@@ -834,7 +922,10 @@ mod tests {
 
     #[test]
     fn run_setup_renders_chrome_devtools_vars_for_post_deps_tabs() {
-        use crate::config::{Config, WorkspaceChromeDevtoolsConfig, WorkspaceConfig};
+        use crate::config::{
+            Config, WorkspaceBrowserConfig, WorkspaceBrowserMode, WorkspaceChromeDevtoolsConfig,
+            WorkspaceConfig,
+        };
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
         use anyhow::Result;
@@ -879,8 +970,12 @@ mod tests {
                     "echo {{chrome_debug_url}} {{chrome_debug_port}} {{chrome_user_data_dir}}"
                         .into(),
                 ],
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::ChromeDevtools,
+                    url: None,
+                    app: None,
+                }),
                 chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
-                    enabled: true,
                     ..WorkspaceChromeDevtoolsConfig::default()
                 }),
                 ..WorkspaceConfig::default()
@@ -910,7 +1005,16 @@ mod tests {
             .join(wt.file_name().unwrap());
         let expected_user_data_dir_text = expected_user_data_dir.to_string_lossy().into_owned();
 
-        run_setup(&ctx, &wt, &names, Some("GitHub Issue"), "new", None, None).unwrap();
+        run_setup(
+            &ctx,
+            &wt,
+            &names,
+            Some("GitHub Issue"),
+            "branch",
+            None,
+            None,
+        )
+        .unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let send_call = calls
@@ -990,7 +1094,7 @@ mod tests {
             site: None,
         };
 
-        run_setup(&ctx, &wt, &names, None, "new", None, None).unwrap();
+        run_setup(&ctx, &wt, &names, None, "branch", None, None).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let expected_site = format!("{}-my-feature", repo.file_name().unwrap().to_string_lossy());
@@ -1494,6 +1598,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: HashMap::new(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -1514,7 +1619,7 @@ mod tests {
             site: None,
         };
 
-        run_setup(&ctx, &wt, &names, None, "new", None, None).unwrap();
+        run_setup(&ctx, &wt, &names, None, "branch", None, None).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let workspace_call = calls
@@ -1538,11 +1643,109 @@ mod tests {
         assert_eq!(
             command_arg,
             &format!(
-                "codex --model wt-test-agent-command-repo-issue-1-test --cd {}",
+                "export WT_AGENT_ID=agents/issue-1-test; codex --model wt-test-agent-command-repo-issue-1-test --cd {}",
                 wt.display()
             )
         );
         assert_eq!(focus_arg, "false");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
+    fn run_setup_opens_workspace_with_claude_agent_identity_env() {
+        use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode, WorkspaceConfig};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let repo = std::env::temp_dir().join("wt-test-claude-agent-env-repo");
+        let wt = std::env::temp_dir().join("wt-test-claude-agent-env-worktree");
+        fs::create_dir_all(&repo).ok();
+        fs::create_dir_all(&wt).ok();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            r#"{"caller":{"window_ref":"window:1","workspace_ref":"workspace:0"}}"#,
+            true,
+        );
+        runner.add_response("workspace:1 workspace:1", true);
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response("ready ❯", true);
+        runner.add_response("", true);
+        runner.add_response("pane:0", true);
+        let runner = Arc::new(runner);
+
+        let config = Config {
+            workspace: Some(WorkspaceConfig::default()),
+            agent: Some(AgentConfig {
+                cli: AgentCli::Claude,
+                args: Vec::new(),
+                command: None,
+                ready: ReadyMode::Auto,
+                submit: SubmitMode::Auto,
+                timeout: 15,
+                send_after: 3,
+                prompt: HashMap::new(),
+                ..AgentConfig::default()
+            }),
+            ..Config::default()
+        };
+
+        let ctx = Ctx::new(
+            repo.clone(),
+            repo.clone(),
+            config,
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+        let names = WorktreeNames {
+            path: repo.with_file_name("wt-test-claude-agent-env-computed-path"),
+            branch: "alice/issue-1-test".into(),
+            workspace: "test".into(),
+            site: None,
+        };
+
+        run_setup(&ctx, &wt, &names, None, "branch", None, None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let workspace_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "cmux" && args.first().is_some_and(|a| a == "new-workspace")
+            })
+            .expect("expected new-workspace call");
+        let command_arg = workspace_call
+            .1
+            .iter()
+            .position(|arg| arg == "--command")
+            .and_then(|idx| workspace_call.1.get(idx + 1))
+            .unwrap();
+        assert_eq!(
+            command_arg,
+            "export WT_AGENT_ID=agents/issue-1-test; claude"
+        );
 
         fs::remove_dir_all(&repo).ok();
         fs::remove_dir_all(&wt).ok();
@@ -1601,6 +1804,7 @@ mod tests {
                 "issue".into(),
                 vec!["start {{api_url}} on {{task_agent_cmux_surface}}\n".into()],
             )]),
+            ..AgentConfig::default()
         };
         let vars = HashMap::from([("api_url".into(), "http://127.0.0.1:15001".into())]);
 
@@ -1633,6 +1837,192 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_agent_waits_for_claude_ready_and_submits_with_enter_key() {
+        use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let mut runner = MockRunner::new();
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response("ready ❯", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        let agent = AgentConfig {
+            cli: AgentCli::Claude,
+            args: Vec::new(),
+            command: None,
+            ready: ReadyMode::Auto,
+            submit: SubmitMode::Auto,
+            timeout: 1,
+            send_after: 0,
+            prompt: HashMap::from([(
+                "issue".into(),
+                vec!["claude start {{api_url}} on {{task_agent_cmux_surface}}\n".into()],
+            )]),
+            ..AgentConfig::default()
+        };
+        let vars = HashMap::from([("api_url".into(), "http://127.0.0.1:15002".into())]);
+
+        bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &vars).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let cmux_calls: Vec<&(String, Vec<String>, Option<PathBuf>)> =
+            calls.iter().filter(|(cmd, _, _)| cmd == "cmux").collect();
+        let send_idx = cmux_calls
+            .iter()
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "send"))
+            .expect("expected cmux send call");
+        let send_key_idx = cmux_calls
+            .iter()
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "send-key"))
+            .expect("expected cmux send-key call");
+        assert!(
+            send_idx < send_key_idx,
+            "send must precede send-key for claude auto submit"
+        );
+        let send_call = cmux_calls[send_idx];
+        assert_eq!(
+            send_call.1.last().unwrap(),
+            "claude start http://127.0.0.1:15002 on surface:0"
+        );
+        let send_key_call = cmux_calls[send_key_idx];
+        assert_eq!(
+            send_key_call.1,
+            vec![
+                "send-key",
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1",
+                "enter"
+            ]
+        );
+    }
+
+    #[test]
+    fn bootstrap_agent_waits_for_gemini_ready_and_submits_with_enter_key() {
+        use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode};
+        use crate::context::mock::{MockRunner, MockUi};
+        use crate::context::{CmdOutput, CommandRunner, Ctx};
+        use anyhow::Result;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+
+        struct SharedRunner {
+            inner: Arc<MockRunner>,
+        }
+
+        impl CommandRunner for SharedRunner {
+            fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+                self.inner.run(cmd, args, cwd)
+            }
+
+            fn has_command(&self, cmd: &str) -> bool {
+                self.inner.has_command(cmd)
+            }
+        }
+
+        let mut runner = MockRunner::new();
+        runner.add_response("pane:0", true);
+        runner.add_response("surface:0", true);
+        runner.add_response("gemini ready", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        let agent = AgentConfig {
+            cli: AgentCli::Gemini,
+            args: Vec::new(),
+            command: None,
+            ready: ReadyMode::Marker("gemini ready".into()),
+            submit: SubmitMode::Auto,
+            timeout: 1,
+            send_after: 0,
+            prompt: HashMap::from([(
+                "issue".into(),
+                vec!["gemini start {{api_url}} on {{task_agent_cmux_surface}}\n".into()],
+            )]),
+            ..AgentConfig::default()
+        };
+        let vars = HashMap::from([("api_url".into(), "http://127.0.0.1:15003".into())]);
+
+        bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &vars).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        let cmux_calls: Vec<&(String, Vec<String>, Option<PathBuf>)> =
+            calls.iter().filter(|(cmd, _, _)| cmd == "cmux").collect();
+        let send_idx = cmux_calls
+            .iter()
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "send"))
+            .expect("expected cmux send call");
+        let send_key_idx = cmux_calls
+            .iter()
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "send-key"))
+            .expect("expected cmux send-key call");
+        assert!(
+            send_idx < send_key_idx,
+            "send must precede send-key for gemini auto submit"
+        );
+        let send_call = cmux_calls[send_idx];
+        assert_eq!(
+            send_call.1.last().unwrap(),
+            "gemini start http://127.0.0.1:15003 on surface:0"
+        );
+        let send_key_call = cmux_calls[send_key_idx];
+        assert_eq!(
+            send_key_call.1,
+            vec![
+                "send-key",
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1",
+                "enter"
+            ]
+        );
+    }
+
+    #[test]
     fn bootstrap_agent_no_configured_prompts_is_noop() {
         let runner = Arc::new(MockRunner::new());
         let ctx = bootstrap_test_ctx(Arc::clone(&runner));
@@ -1645,6 +2035,7 @@ mod tests {
             timeout: 1,
             send_after: 0,
             prompt: HashMap::new(),
+            ..AgentConfig::default()
         };
 
         bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new()).unwrap();
@@ -1674,6 +2065,7 @@ mod tests {
                 "issue".into(),
                 vec!["first prompt".into(), "second prompt".into()],
             )]),
+            ..AgentConfig::default()
         };
 
         let err = bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new())
@@ -1709,6 +2101,7 @@ mod tests {
             timeout: 1,
             send_after: 0,
             prompt: HashMap::from([("issue".into(), vec!["first prompt".into()])]),
+            ..AgentConfig::default()
         };
 
         let err = bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new())
@@ -1750,6 +2143,7 @@ mod tests {
                 "issue".into(),
                 vec!["first prompt".into(), "second prompt".into()],
             )]),
+            ..AgentConfig::default()
         };
 
         bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &HashMap::new()).unwrap();

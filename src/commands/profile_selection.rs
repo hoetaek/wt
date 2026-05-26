@@ -43,8 +43,13 @@ pub(crate) fn load_profile_selection(
 
 fn load_one_profile(ctx: &Ctx, profile: &str) -> Result<Vec<(String, Config)>> {
     validate_profile_name(profile)?;
-    let config = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
-        .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))?;
+    let config = Config::load_profile_from_storage(
+        &ctx.repo_root,
+        &ctx.storage_root,
+        profile,
+        &ctx.base_config,
+    )?
+    .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))?;
     Ok(vec![(profile.to_string(), config)])
 }
 
@@ -63,17 +68,23 @@ pub(crate) fn load_selected_profiles(
     selected_profiles
         .iter()
         .map(|profile| {
-            let config = Config::load_profile(&ctx.repo_root, profile, &ctx.base_config)?
-                .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))?;
+            let config = Config::load_profile_from_storage(
+                &ctx.repo_root,
+                &ctx.storage_root,
+                profile,
+                &ctx.base_config,
+            )?
+            .ok_or_else(|| anyhow::anyhow!("Profile '{profile}' not found"))?;
             Ok((profile.clone(), config))
         })
         .collect()
 }
 
 fn load_all_profiles(ctx: &Ctx) -> Result<Vec<(String, Config)>> {
-    let profiles = Config::load_profiles(&ctx.repo_root, &ctx.base_config)?;
+    let profiles =
+        Config::load_profiles_from_storage(&ctx.repo_root, &ctx.storage_root, &ctx.base_config)?;
     if profiles.is_empty() {
-        bail!("No profile configs found in .local/profiles/*/profile.toml");
+        bail!("No profile configs found in <git-common-dir>/wt/profiles/*/profile.toml");
     }
     Ok(profiles)
 }

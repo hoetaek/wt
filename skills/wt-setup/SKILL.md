@@ -1,213 +1,164 @@
 ---
 name: wt-setup
-description: "Use to initialize, audit, improve, or clean wt config: ownership, providers, prompts, workspace, workflow policy, profiles, and validation."
+description: "Use to inspect the current project and recommend an ideal wt config: ownership, active sections, omitted sections, commands, providers, workspace, workflow policy, profiles, and validation."
 ---
 
 # WT Setup
 
-Use this skill only for wt configuration: first setup, existing config audit,
-safe edits, prompt/workspace recommendations, profile structure, and validation.
-Do not start work, coordinate agents, land branches, or clean worktrees here.
+Use this skill to produce a project-specific wt config recommendation. Do not
+answer as a generic config manual. Do not list every possible field unless it is
+relevant to the current repo. Do not start work, coordinate agents, land
+branches, or clean worktrees.
 
-## Check First
+## Core Job
 
-Check current syntax before giving exact commands:
+Given a repo, inspect the actual project and recommend the smallest useful
+active config for that project.
+
+The recommendation must answer:
+
+- what should go into the active config;
+- which file should own it;
+- what should stay out and why;
+- what is already configured effectively;
+- which local tools are missing for recommended commands;
+- what commands validate the result.
+
+Ask questions only for choices that cannot be inferred from repo facts and
+would change the config.
+
+## Inspect First
+
+Run these before giving a concrete recommendation:
 
 ```bash
-wt init --help
-wt config --help
-wt config edit --help
-wt config extract --help
-wt config inline --help
-wt profile create --help
-wt doctor --help
-```
-
-For existing config:
-
-```bash
-find . .local -maxdepth 2 -name '.wt.toml' -o -name 'profile.toml' 2>/dev/null
+git rev-parse --path-format=absolute --git-common-dir
+find . "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/wt" -maxdepth 3 \
+  -name '.wt.toml' -o -name 'config.toml' -o -name 'profile.toml' 2>/dev/null
 wt config
 wt doctor
+rg --files | rg '(^|/)(Cargo.toml|Cargo.lock|package.json|pnpm-lock.yaml|yarn.lock|bun.lockb?|pyproject.toml|uv.lock|composer.json|Gemfile|Makefile|justfile|Justfile|deny.toml|rust-toolchain.toml|\.github/workflows/.*\.ya?ml)$'
 ```
 
-Treat `wt config` as the effective source of truth for runtime behavior. The
-files store user intent and overrides; `wt config` shows merged layers plus
-built-in defaults in the shape the user should copy and edit.
+If this is the `wt` repo itself, also read `README.md`, `docs/consistency.md`,
+and `docs/north-star.md` before recommending user-facing model changes.
 
-Inside the `wt` repo, read `README.md` and `docs/consistency.md` before
-changing docs or behavior.
+Read the relevant manifests, project docs, and CI workflows. Check local
+availability for tools that existing config or recommended commands depend on:
+agent CLIs, cmux, provider CLIs, test/lint/audit tools, browsers, secret
+bootstrap tools, and editors.
 
-## Decide
+For env/secret bootstrap, inspect only file names and command availability.
+Never read or print secret file contents such as `.env`.
 
-Classify the request:
+## Decide Ownership
 
-- `new config`: use `wt init`; preview with `--dry-run`.
-- `existing config`: use `wt config`, `wt config edit`, `wt config extract`,
-  or `wt config inline`; do not use `wt init` as a repair tool.
-- `recommendation`: ask only questions that affect config choices.
-- `cleanup`: simplify comments, ordering, and formatting while preserving
-  behavior unless the user asks for behavior changes.
+Choose the file by ownership, not convenience:
 
-Choose ownership:
+- `<git-common-dir>/wt/config.toml`: personal repo config, local paths, local
+  agent commands, private runtime details, personal defaults.
+- `.wt.toml`: project integration config contributors should share.
+- `<git-common-dir>/wt/profiles/<name>/profile.toml`: named runtime profile only
+  when reusable structured profile config is worth the extra file.
 
-- `.local/.wt.toml`: private checkout config, local paths, local agent commands,
-  private runtime details, personal defaults.
-- `.wt.toml`: shared project config for contributors.
-- `.local/profiles/<name>/profile.toml`: named runtime profile only when the
-  user wants reusable structured profile config.
+Do not silently move settings between shared/private ownership. If existing
+config is mature, recommend a minimal patch rather than normalizing it into one
+ideal shape.
 
-Do not silently move settings between shared/private ownership or normalize a
-mature config into one "correct" shape.
+## Recommend Active Config
 
-## New Config
+Recommend active TOML, not a commented tutorial file. Include only settings that
+the project needs or the user explicitly chose.
 
-`wt init` is a starter wizard. Canonical presets: `minimal`, `agent`, `issue`,
-`app`.
+Default recommendation rules:
 
-Set only the choices the user has decided:
+- Keep `[workspace]` when the user benefits from repeatable cmux tabs.
+- Add `[setup]` only when the repo has a real per-worktree install/sync step.
+- Add `[test]` commands that mirror CI and are available locally.
+- Add `[issues]` only when provider issue workflows are used.
+- Add `[site]`, `[workspace.browser]`, and `workspace.post_deps_tabs` only for
+  app/web repos with a local server or URL.
+- Add `[editor]` only when a concrete editor command is useful for wt-managed
+  TOML editing.
+- Add `[worktree]` only for real path/copy/link/context needs.
+- Add `[workflow]` only when future workflow PR/landing policy should differ
+  from built-in defaults.
+- Keep simple agent defaults inline under `[profile.agent]`; use named profiles
+  only when prompt/scaffold/profile reuse is worth the structure.
+- Do not add active `[workspace].colors` when it only restates built-in
+  defaults.
+- Do not add cargo-audit, cargo-deny, browsers, or provider helpers to active
+  config if the tool is not installed, unless the user explicitly wants a config
+  that assumes it will be installed.
+- Do not add framework-habit setup commands just because they are common. Only
+  recommend commands proven by project docs, manifests, CI, existing config, or
+  the user's stated workflow. For example, do not add
+  `php artisan storage:link --force` to a Laravel project unless this repo uses
+  it.
+- Prefer per-worktree `.env` copy only in personal config when `.env` exists and
+  the repo needs local env state. If docs mention a secret bootstrap tool but
+  the tool is missing, recommend `.env` copy over a failing bootstrap command.
+- For `[editor]`, recommend exactly one active command. Useful concrete choices
+  include `vim {{path}}`, `code {{path}}`, `phpstorm {{path}}`, or
+  `pstorm {{path}}`, depending on what the user chose and what is installed.
+- Compact examples are allowed when they clarify a real project choice, but they
+  must be project-shaped alternatives, not a general config manual.
 
-- target: `.local/.wt.toml` or `.wt.toml`
-- preset: `minimal`, `agent`, `issue`, or `app`
-- agent: `codex`, `claude`, `gemini`, or `none`
-- issue provider: `github`, `linear`, or `none`
-- site provider: `none`, `herd`, `valet`, `docker_proxy`, or `traefik`
-- optional: worktree path, workspace tabs/colors, setup/test commands, editor,
-  agent prompts
+## Explain Omissions
 
-Preview before writing:
+For every relevant section that could plausibly be expected, say whether to
+keep, add, change, or omit it.
 
-```bash
-wt init --local --preset agent --agent codex --dry-run
-wt init --local --preset agent --agent codex --yes
-wt doctor
-```
+Cover these when relevant:
 
-Bare `wt init --yes` uses the non-interactive default preset (`minimal`).
-Use `--force` only after inspecting the existing target.
+- `[workspace]`
+- `[setup]`
+- `[test]`
+- `[issues]`
+- `[site]`
+- `[workspace.browser]`
+- `[editor]`
+- `[worktree]`
+- `[workflow]`
+- `[profile.agent]`
+- named profiles
 
-## Existing Config
+The omission rationale should be practical, for example: "CLI repo, no dev
+server", "tool missing locally", "built-in default already covers this", or
+"shared config would leak a personal path".
 
-Use the smallest safe edit:
+## Response Shape
 
-- diagnose with `wt config` and `wt doctor`.
-- use `wt config` output as the reference for what runtime behavior is active.
-- edit the owning file, one scope at a time.
-- use `wt config extract <source>` only when structured config is wanted.
-- use `wt config inline <source>` only when inline config is wanted.
-- use `wt init --dry-run` only as a reference starter shape.
-- preserve user-authored prompt text unless copy editing was requested.
+Use this order:
 
-## Recommendation Questions
+1. Observed facts: project type, CI checks, detected commands, existing
+   effective config, available/missing tools.
+2. Recommended owner file.
+3. Recommended active TOML.
+4. Keep/add/omit rationale.
+5. Unresolved choices or compact project-shaped alternatives, only if needed.
+6. Validation commands.
 
-Prompts:
+Keep the answer concrete. Prefer a short active config block over a long field
+catalog.
 
-- What should every agent read before acting? Examples: `AGENTS.md`,
-  conventions, architecture notes.
-- For issue work, what should happen before coding? Examples: inspect issue
-  context, read docs, make a short plan, run checks.
-- For PR review, what should be prioritized? Examples: correctness,
-  regressions, tests, security, UX consistency, migration risk.
-- What should the completion report include? Examples: checks, risks,
-  conventions applied, files changed, follow-ups.
-- Are there existing prompts or reports worth reusing?
+## Validation
 
-Use `[agent.prompt].common` for shared expectations, mode-specific
-`issue`/`new`/`pr` for differences, and `[agent.prompt.append].common` for
-final-report requirements. Avoid duplicating long common text across modes.
-
-Workspace:
-
-- Which tabs should open immediately?
-- Which tabs should wait for setup via `[workspace].post_deps_tabs`?
-- Do the built-in cmux colors need overrides? Defaults are `task`/`issue`
-  blue, `new` green, and `pr` magenta.
-- Should direct task, issue, new branch, or PR work use distinct cmux colors?
-  Workflow color is workflow-level grouping, not a `[workspace].colors` key.
-
-Use colors as visual hints only; do not encode lifecycle semantics in color
-names. Do not add active `[workspace].colors` just to restate built-in
-defaults; `wt config` shows the effective defaults when `[workspace]` is
-configured. Keep init colors commented unless the user wants an override. Use an
-empty string value, such as `task = ""`, to disable color for a kind. Do not add
-site/dev-server tabs unless the project needs them.
-
-Workflow policy:
-
-- PR mode: `none`, `draft`, or `ready`
-- landing mode: `manual` or `auto`
-
-## Config Cleanup
-
-Prefer a small active config over a tutorial file.
-
-Remove comments that repeat key names, describe defaults already visible through
-`wt config`, or mention old behavior. Keep comments that explain local intent or
-non-obvious tradeoffs.
-
-Preferred section order when it does not fight the existing structure:
-
-1. `[issues]`
-2. `[worktree]`
-3. `[setup]`
-4. `[workflow]`
-5. `[workspace]`
-6. `[site]`
-7. `[agent]`
-8. `[agent.prompt]`
-9. `[agent.prompt.append]`
-
-Keep identity/provider fields before optional tuning fields. Preserve arrays
-and prompt blocks exactly unless the user requested copy editing.
-
-## Workflow Policy
-
-Workflow config is preparation policy for future workflows:
-
-```toml
-[workflow]
-pull_request = "none"  # none | draft | ready
-landing = "manual"     # manual | auto
-```
-
-Built-in defaults are `pull_request = "none"` and `landing = "manual"`.
-Do not silently enable pull request creation or automatic landing.
-
-Changing `[workflow]` affects workflows prepared after the edit. It does not
-reinterpret existing workflow TOML, running agents, review state, merge
-ancestry, cleanup, or TaskRun status.
-
-## Profile Rules
-
-- Keep simple defaults inline under `[profile.agent]`.
-- Use `[profile] name = "<name>"` only to select
-  `.local/profiles/<name>/profile.toml`.
-- Do not combine `[profile] name` with inline `[profile.agent]`,
-  `[profile.worktree]`, `[profile.setup]`, `[profile.workspace]`,
-  `[profile.site]`, or `[profile.test]`.
-- Omitted `--profile` means effective config; do not invent a `default`
-  profile.
-
-## Validate
-
-After config changes:
+After recommending or editing config, validate through the public interface:
 
 ```bash
 wt config
 wt doctor
 ```
 
-Common checks:
+If the recommendation includes named profiles, also run:
 
-- agent does not launch: confirm agent, cmux readiness, and active workspace
-  config in `wt doctor`.
-- issue commands fail: check `[issues] provider` and provider auth outside wt.
-- site URLs are wrong: run `wt site doctor` and verify provider/service state.
-- config differs from expectation: inspect merged layers with `wt config`.
-- workflow behavior differs from expectation: inspect `[workflow]`; it only
-  affects future workflow preparation.
+```bash
+wt config --profile <name>
+```
 
-For skill wiring or wt init behavior changes:
+If this skill file or wt init behavior changes inside the `wt` repo, validate
+with:
 
 ```bash
 ~/dotfiles/install.sh skills plan

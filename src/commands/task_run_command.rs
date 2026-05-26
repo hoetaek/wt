@@ -1,15 +1,25 @@
+use crate::cli::BaseMode;
 use crate::commands::issue;
+use crate::commands::profile_workspace::PromptPolicy;
 use crate::context::Ctx;
 use crate::error::WtError;
+use crate::parallel::{self, ParallelControl};
+use crate::services::git::GitService;
 use crate::setup;
 use crate::task;
 use crate::task_run;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 
 const TASK_RUN_COORDINATOR_HANDOFF_SECTION: &str = r#"## Task Run Coordinator Handoff
 
-Send the Agent Completion Report back to the coordinator cmux surface that started this task run:
+Send the Agent Completion Report back to the coordinator inbox:
+
+```bash
+wt msg send --to coordinator "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
+```
+
+The coordinator inbox target `coordinator` resolves from `WT_COORDINATOR_AGENT_ID`. If the file inbox route is unavailable, send the same report to the fallback cmux surface that started this task run:
 
 ```bash
 cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
@@ -20,13 +30,14 @@ This immediate TaskDocument run has no Workflow orchestration or pull-request ha
 
 After sending the report, wait for the coordinator to review, land, and clean up the task run explicitly.
 
-If the coordinator cmux target is unavailable or stale, leave the same report in this task session and wait."#;
+If neither coordinator route is available, leave the same report in this task session and wait."#;
 
 pub fn run(
     ctx: &Ctx,
     task_args: &[String],
     base_raw: &Option<String>,
     profile: Option<&str>,
+    jobs: usize,
 ) -> Result<()> {
     let selected = if task_args.is_empty() {
         task::select_local_tasks(ctx)?
@@ -37,8 +48,18 @@ pub fn run(
         bail!("No local tasks selected");
     }
 
-    for task in &selected {
-        run_selected_task(ctx, task, base_raw, profile)?;
+    if jobs > 1 && selected.len() > 1 {
+        return run_selected_tasks_parallel(ctx, selected, base_raw, profile, jobs);
+    }
+
+    let task_count = selected.len();
+    for task in selected {
+        let result = run_selected_task(ctx, &task, base_raw, profile, PromptPolicy::Allow, None);
+        if task_count > 1 {
+            result.with_context(|| format!("Task {}", task.key))?;
+        } else {
+            result?;
+        }
     }
 
     Ok(())
@@ -66,6 +87,8 @@ fn run_selected_task(
     selected: &task::SelectedTask,
     base_raw: &Option<String>,
     profile: Option<&str>,
+    prompt_policy: PromptPolicy,
+    base_override: Option<&str>,
 ) -> Result<issue::IssueRunResult> {
     let branch_name = task::prepared_branch_name(&selected.document.branch);
     if branch_name.is_none() && selected.document.origin.is_none() {
@@ -76,33 +99,13 @@ fn run_selected_task(
     let title = selected.document.title_or_key(&selected.key);
 
     if profile.is_some() {
-        let result = issue::run_with_issue_snapshot(
+        let result = run_prepared_task_snapshot(
             ctx,
             base_raw,
             profile,
-            false,
-            issue::PreparedIssueContext {
-                identifier: &identifier,
-                title: &title,
-                branch_name,
-                setup_mode: selected.document.setup_mode(),
-                additional_prompt_scope: None,
-                workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
-                on_start_issue_id: selected
-                    .document
-                    .origin
-                    .as_ref()
-                    .map(|origin| origin.id.as_str()),
-                prompt_intro: "Use this task before changing code.",
-                completion_section: Some(TASK_RUN_COORDINATOR_HANDOFF_SECTION),
-                pre_snapshot_context: None,
-                workspace_label: None,
-                snapshot: issue::IssueSnapshotContext {
-                    path_label: "Task path",
-                    path: &selected.path,
-                    content: &selected.content,
-                },
-            },
+            prompt_policy,
+            base_override,
+            prepared_task_context(selected, &identifier, &title, branch_name),
         );
         let result = match result {
             Ok(result) => result,
@@ -115,41 +118,24 @@ fn run_selected_task(
         return Ok(result);
     }
 
-    let run = task_run::create(
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
+
+    let run = task_run::create_with_coordinator_id(
         ctx,
         &selected.key,
         &selected.document.branch,
         None,
+        coordinator_id,
         task_run::STATUS_PREPARED,
     )?;
 
-    let result = issue::run_with_issue_snapshot(
+    let result = run_prepared_task_snapshot(
         ctx,
         base_raw,
         profile,
-        false,
-        issue::PreparedIssueContext {
-            identifier: &identifier,
-            title: &title,
-            branch_name,
-            setup_mode: selected.document.setup_mode(),
-            additional_prompt_scope: None,
-            workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
-            on_start_issue_id: selected
-                .document
-                .origin
-                .as_ref()
-                .map(|origin| origin.id.as_str()),
-            prompt_intro: "Use this task before changing code.",
-            completion_section: Some(TASK_RUN_COORDINATOR_HANDOFF_SECTION),
-            pre_snapshot_context: None,
-            workspace_label: None,
-            snapshot: issue::IssueSnapshotContext {
-                path_label: "Task path",
-                path: &selected.path,
-                content: &selected.content,
-            },
-        },
+        prompt_policy,
+        base_override,
+        prepared_task_context(selected, &identifier, &title, branch_name),
     );
 
     let result = match result {
@@ -192,6 +178,145 @@ fn run_selected_task(
     Ok(result)
 }
 
+fn run_selected_tasks_parallel(
+    ctx: &Ctx,
+    selected: Vec<task::SelectedTask>,
+    base_raw: &Option<String>,
+    profile: Option<&str>,
+    jobs: usize,
+) -> Result<()> {
+    let base_override = parallel_task_base_override(ctx, base_raw)?;
+    let mut first_error = None;
+    parallel::run_bounded_parallel(
+        selected,
+        jobs,
+        |_| Ok(()),
+        |task| {
+            run_selected_task(
+                ctx,
+                &task,
+                base_raw,
+                profile,
+                PromptPolicy::Deny,
+                base_override.as_deref(),
+            )
+            .with_context(|| format!("Task {}", task.key))
+        },
+        |completion| {
+            if let Err(err) = completion.result
+                && first_error.is_none()
+            {
+                first_error = Some(err);
+            }
+            Ok(ParallelControl::Continue)
+        },
+    )?;
+
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+    Ok(())
+}
+
+fn parallel_task_base_override(ctx: &Ctx, base_raw: &Option<String>) -> Result<Option<String>> {
+    match BaseMode::from_raw(base_raw) {
+        BaseMode::Default | BaseMode::Interactive => {
+            let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+            resolve_task_base_branch(ctx, &git, base_raw).map(Some)
+        }
+        BaseMode::Current | BaseMode::Explicit(_) => Ok(None),
+    }
+}
+
+fn resolve_task_base_branch(
+    ctx: &Ctx,
+    git: &GitService<'_>,
+    base_raw: &Option<String>,
+) -> Result<String> {
+    let base = match BaseMode::from_raw(base_raw) {
+        BaseMode::Explicit(branch) => Ok(branch),
+        BaseMode::Interactive => {
+            let branches = git.list_local_branches()?;
+            if branches.is_empty() {
+                bail!("No local branches found");
+            }
+            let idx = ctx.ui.select("Select base branch", &branches)?;
+            Ok(branches[idx].clone())
+        }
+        BaseMode::Current => git.current_branch(),
+        BaseMode::Default => {
+            let current = git.current_branch()?;
+            ctx.ui.input("Base branch", Some(&current))
+        }
+    }?;
+
+    if base.trim().is_empty() {
+        bail!("Base branch cannot be empty");
+    }
+    Ok(base)
+}
+
+fn prepared_task_context<'a>(
+    selected: &'a task::SelectedTask,
+    identifier: &'a str,
+    title: &'a str,
+    branch_name: Option<&'a str>,
+) -> issue::PreparedIssueContext<'a> {
+    issue::PreparedIssueContext {
+        identifier,
+        title,
+        branch_name,
+        setup_mode: selected.document.setup_mode(),
+        additional_prompt_scope: None,
+        workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
+        on_start_issue_id: selected
+            .document
+            .origin
+            .as_ref()
+            .map(|origin| origin.id.as_str()),
+        prompt_intro: "Use this task before changing code.",
+        completion_section: Some(TASK_RUN_COORDINATOR_HANDOFF_SECTION),
+        pre_snapshot_context: None,
+        workspace_label: None,
+        snapshot: issue::IssueSnapshotContext {
+            path_label: "Task path",
+            path: &selected.path,
+            content: &selected.content,
+        },
+    }
+}
+
+fn run_prepared_task_snapshot(
+    ctx: &Ctx,
+    base_raw: &Option<String>,
+    profile: Option<&str>,
+    prompt_policy: PromptPolicy,
+    base_override: Option<&str>,
+    prepared: issue::PreparedIssueContext<'_>,
+) -> Result<issue::IssueRunResult> {
+    match prompt_policy {
+        PromptPolicy::Allow => {
+            issue::run_with_issue_snapshot(ctx, base_raw, profile, false, prepared)
+        }
+        PromptPolicy::Deny => {
+            if let Some(base_override) = base_override {
+                issue::run_with_issue_snapshot_non_interactive_base_override(
+                    ctx,
+                    base_raw,
+                    profile,
+                    false,
+                    prepared,
+                    base_override,
+                )
+            } else {
+                issue::run_with_issue_snapshot_non_interactive(
+                    ctx, base_raw, profile, false, prepared,
+                )
+            }
+        }
+    }
+}
+
 fn record_task_failure(ctx: &Ctx, selected: &task::SelectedTask, err: &anyhow::Error) {
     let status = if is_cancelled(err) {
         task_run::STATUS_SKIPPED
@@ -199,7 +324,15 @@ fn record_task_failure(ctx: &Ctx, selected: &task::SelectedTask, err: &anyhow::E
         task_run::STATUS_FAILED
     };
     let message = err.to_string();
-    if let Ok(run) = task_run::create(ctx, &selected.key, &selected.document.branch, None, status) {
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
+    if let Ok(run) = task_run::create_with_coordinator_id(
+        ctx,
+        &selected.key,
+        &selected.document.branch,
+        None,
+        coordinator_id,
+        status,
+    ) {
         let _ = task_run::update(ctx, &run.id, status, None, Some(&message));
     }
 }
@@ -209,11 +342,13 @@ fn record_task_profile_success(
     selected: &task::SelectedTask,
     result: &issue::IssueRunResult,
 ) -> Result<()> {
-    task_run::create(
+    let coordinator_id = task_run::launcher_coordinator_id(ctx);
+    task_run::create_with_coordinator_id(
         ctx,
         &selected.key,
         &result.branch_name,
         None,
+        coordinator_id,
         task_run::STATUS_RUNNING,
     )?;
     write_task_branch_from_result(ctx, selected, result)?;
@@ -270,7 +405,7 @@ mod tests {
     }
 
     fn write_empty_profile(root: &Path, name: &str) {
-        let profile_dir = root.join(".local/profiles").join(name);
+        let profile_dir = root.join(".git/wt/profiles").join(name);
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
     }
@@ -285,7 +420,7 @@ mod tests {
     ) -> Result<()> {
         assert!(selected_profiles.is_empty());
         assert!(!matrix);
-        super::run(ctx, task_args, base_raw, profile)
+        super::run(ctx, task_args, base_raw, profile, 1)
     }
 
     fn count_linear_start_updates(calls: &[CommandCall], issue_id: &str) -> usize {
@@ -340,7 +475,7 @@ mod tests {
                         "red".into(),
                     ),
                     (
-                        crate::setup::WORKSPACE_COLOR_KIND_NEW.into(),
+                        crate::setup::WORKSPACE_COLOR_KIND_BRANCH.into(),
                         "green".into(),
                     ),
                 ]),
@@ -370,7 +505,7 @@ mod tests {
     #[test]
     fn duplicate_task_values_are_rejected() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -406,7 +541,7 @@ mod tests {
     #[test]
     fn task_run_with_key_runs_named_task_snapshot() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -428,7 +563,7 @@ mod tests {
         runner.add_response("", true);
         let runner = Arc::new(runner);
 
-        let ctx = Ctx::new(
+        let ctx = Ctx::new_with_options(
             repo.path().to_path_buf(),
             repo.path().to_path_buf(),
             Config {
@@ -442,6 +577,10 @@ mod tests {
                 inner: Arc::clone(&runner),
             }),
             Box::new(MockUi::new()),
+            crate::context::CtxOptions {
+                launcher_coordinator_id: Some("agents/coord-a".into()),
+                ..crate::context::CtxOptions::default()
+            },
         );
 
         run(&ctx, &["add-schema".into()], &None, None, &[], false).unwrap();
@@ -467,12 +606,60 @@ mod tests {
         assert_eq!(runs[0].run.task, "add-schema");
         assert_eq!(runs[0].run.status, task_run::STATUS_RUNNING);
         assert_eq!(runs[0].run.branch, "add-schema");
+        assert_eq!(
+            runs[0].run.coordinator_id.as_deref(),
+            Some("agents/coord-a")
+        );
+
+        let content = std::fs::read_to_string(&runs[0].path).unwrap();
+        assert!(content.contains("coordinator_id = \"agents/coord-a\""));
+    }
+
+    #[test]
+    fn task_run_leaves_coordinator_id_empty_without_launcher_identity() {
+        let repo = tempfile::tempdir().unwrap();
+        let tasks_dir = repo.path().join(".git/wt/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(
+            tasks_dir.join("add-schema.toml"),
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        add_task_worktree_creation_responses(&mut runner, repo.path());
+        let runner = Arc::new(runner);
+
+        let ctx = Ctx::new(
+            repo.path().to_path_buf(),
+            repo.path().to_path_buf(),
+            Config {
+                issues: Some(IssuesConfig {
+                    provider: IssueProviderType::Linear,
+                    gh_user: None,
+                }),
+                ..Config::default()
+            },
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+        );
+
+        run(&ctx, &["add-schema".into()], &None, None, &[], false).unwrap();
+
+        let runs = task_run::list(&ctx).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].run.coordinator_id.is_none());
+
+        let content = std::fs::read_to_string(&runs[0].path).unwrap();
+        assert!(!content.contains("coordinator_id"));
     }
 
     #[test]
     fn task_run_uses_task_workspace_color_for_local_task() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -504,7 +691,7 @@ mod tests {
     #[test]
     fn task_run_uses_task_workspace_color_for_provider_origin_task() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("PROJ-123.toml"),
@@ -552,7 +739,7 @@ id = "PROJ-123"
     #[test]
     fn task_run_prompt_includes_rendered_coordinator_handoff() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -604,7 +791,8 @@ id = "PROJ-123"
                     submit: SubmitMode::None,
                     timeout: 1,
                     send_after: 0,
-                    prompt: HashMap::from([("new".into(), vec!["Existing prompt".into()])]),
+                    prompt: HashMap::from([("branch".into(), vec!["Existing prompt".into()])]),
+                    ..AgentConfig::default()
                 }),
                 ..Config::default()
             },
@@ -626,6 +814,10 @@ id = "PROJ-123"
         let handoff_prompt = send_calls[0].1.last().unwrap();
         assert!(handoff_prompt.contains("## Task Run Coordinator Handoff"));
         assert!(
+            handoff_prompt.find("wt msg send --to coordinator").unwrap()
+                < handoff_prompt.find("fallback cmux surface").unwrap()
+        );
+        assert!(
             handoff_prompt.find("cmux send --workspace").unwrap()
                 < handoff_prompt
                     .find("This immediate TaskDocument run")
@@ -636,13 +828,16 @@ id = "PROJ-123"
             handoff_prompt
                 .contains("cmux send-key --workspace workspace:34 --surface surface:103 enter")
         );
-        assert!(handoff_prompt.contains("If the coordinator cmux target is unavailable or stale"));
-        assert!(!handoff_prompt.contains("Task path: `.local/tasks/add-schema.toml`"));
+        assert!(handoff_prompt.contains("wt msg send --to coordinator \"Agent Completion Report"));
+        assert!(handoff_prompt.contains("resolves from `WT_COORDINATOR_AGENT_ID`"));
+        assert!(handoff_prompt.contains("If the file inbox route is unavailable"));
+        assert!(handoff_prompt.contains("If neither coordinator route is available"));
+        assert!(!handoff_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
         assert!(!handoff_prompt.contains("Create the schema first."));
         assert!(!handoff_prompt.contains("wt workflow complete"));
 
         let task_prompt = send_calls[1].1.last().unwrap();
-        assert!(task_prompt.contains("Task path: `.local/tasks/add-schema.toml`"));
+        assert!(task_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
         assert!(task_prompt.contains("Create the schema first."));
         assert!(task_prompt.contains("Existing prompt"));
     }
@@ -650,7 +845,7 @@ id = "PROJ-123"
     #[test]
     fn task_run_records_failed_when_agent_prompt_delivery_fails() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -701,7 +896,8 @@ id = "PROJ-123"
                     submit: SubmitMode::None,
                     timeout: 1,
                     send_after: 0,
-                    prompt: HashMap::from([("new".into(), vec!["Existing prompt".into()])]),
+                    prompt: HashMap::from([("branch".into(), vec!["Existing prompt".into()])]),
+                    ..AgentConfig::default()
                 }),
                 ..Config::default()
             },
@@ -733,7 +929,7 @@ id = "PROJ-123"
     #[test]
     fn task_run_with_key_records_new_run_after_prior_done() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -803,7 +999,7 @@ id = "PROJ-123"
     #[test]
     fn bare_task_run_selects_local_tasks() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("a-first.toml"),
@@ -869,7 +1065,7 @@ id = "PROJ-123"
     #[test]
     fn task_run_multiple_keys_start_separate_worktrees() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -968,7 +1164,7 @@ id = "PROJ-123"
     #[test]
     fn task_run_updates_task_and_run_branch_from_issue_origin() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("PROJ-123.toml"),
@@ -1023,7 +1219,7 @@ id = "PROJ-123"
         run(&ctx, &["PROJ-123".into()], &None, None, &[], false).unwrap();
 
         let task_content =
-            std::fs::read_to_string(repo.path().join(".local/tasks/PROJ-123.toml")).unwrap();
+            std::fs::read_to_string(repo.path().join(".git/wt/tasks/PROJ-123.toml")).unwrap();
         assert!(task_content.contains("branch = \"alice/proj-123-fix-editor\""));
 
         let latest = task_run::latest_for_task(&ctx, "PROJ-123")
@@ -1050,7 +1246,7 @@ id = "PROJ-123"
     fn task_run_with_provider_origin_and_profile_updates_start_status() {
         let repo = tempfile::tempdir().unwrap();
         write_empty_profile(repo.path(), "codex");
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("PROJ-123.toml"),
@@ -1119,7 +1315,7 @@ id = "PROJ-123"
     fn task_run_with_local_task_and_profile_does_not_touch_issue_provider() {
         let repo = tempfile::tempdir().unwrap();
         write_empty_profile(repo.path(), "codex");
-        let tasks_dir = repo.path().join(".local/tasks");
+        let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),

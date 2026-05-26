@@ -1,11 +1,16 @@
 pub mod cmux;
+pub mod cmux_push;
 pub mod git;
 pub mod github;
+pub mod github_review;
 pub mod herd;
+pub mod identity_locator;
+pub mod inbox_watcher;
 pub mod issues;
 pub mod linear;
 pub mod runtime_binding;
 pub mod site;
+pub mod supervisor_registration;
 pub mod traefik;
 pub mod valet;
 pub mod work;

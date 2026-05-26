@@ -1,8 +1,29 @@
-# wt — Git worktree workspace manager
+# wt — worktree-based agent orchestration harness
+
+`wt`는 AI 코딩 에이전트와 함께 일하는 소프트웨어 엔지니어가 worktree 기반
+agent orchestration harness를 쉽게 셋업하도록 돕는 개인 도구다. GitHub, Linear
+같은 팀 시스템과 통합되지만, 팀원에게 `wt` 사용을 강요하는 팀 표준 도구는 아니다.
+
+## North Star
+
+전체 근거와 모델 방향은 `docs/north-star.md`를 먼저 확인한다.
+
+- `wt`는 능동 주체가 아니다. Agent가 일하고, `wt`는 worktree, 상태, 메시지, setup을 받친다.
+- `wt`는 외부 도구 의존을 강제하지 않는다. cmux와 특정 agent CLI는 교체 가능한 integration이다.
+- `wt`는 stateless CLI다. Daemon을 기본 모델로 두지 않는다.
+- `wt`는 파일 기반 contract를 선호한다. 상태, 메시지, config는 읽고 검증 가능한 파일이어야 한다.
+- `wt`는 위치를 contract로 다룬다. 어디에 무엇이 있는지가 사용자-facing 모델을 설명해야 한다.
+- `wt`는 Git에 commit되는 source를 자동으로 바꾸지 않는다. Tracked file 수정은 명시적 opt-in이 필요하다.
+- `wt`는 1.0 완성점보다 현재 모델의 선명함을 우선한다. Pre-1.0에서는 호환성보다 일관성을 택한다.
 
 ## 버전 관리 기준 (Pre-1.0 SemVer)
 
-| 범위 | 언제 올리나 | 예시 |
+버전 bump는 릴리즈 작업에서만 한다. 기능, 버그 수정, 문서 정리, 리팩터링 같은
+일반 개발 커밋에서는 변경 범위가 무엇이든 `Cargo.toml`/`Cargo.lock`의 version을
+올리지 않는다. 개발 중에는 변경의 SemVer 범위를 릴리즈 판단 근거로만 다루고,
+실제 version 변경은 `release/vX.Y.Z` 브랜치의 릴리즈 PR에서 한 번만 수행한다.
+
+| 범위 | 릴리즈 때 언제 선택하나 | 예시 |
 |------|------------|------|
 | **patch** (0.1.x) | 버그 수정, 내부 로직 변경 | 포트 할당 방식 변경, 에러 메시지 수정 |
 | **minor** (0.x.0) | 새 기능 추가, 설정 포맷 변경, 1.0 전 breaking change | 새 서브커맨드 추가, .wt.toml 스키마 변경, CLI 인터페이스 변경 |
@@ -11,11 +32,12 @@
 아직 `wt`는 1.0에 도달하지 않은 도구로 본다. 사용자-facing CLI, config,
 상태 파일 모델이 안정화되기 전까지는 breaking change도 `0.x.0` minor로 표현한다.
 
-버전은 `Cargo.toml`의 `version` 필드에서 관리한다.
+버전은 `Cargo.toml`의 `version` 필드에서 관리하되, 해당 필드는 릴리즈 PR 밖에서
+변경하지 않는다.
 
 ## 릴리즈 전략
 
-기본 개발 브랜치는 `develop`이고, 일반 개발 커밋에서는 버전을 올리지 않는다.
+기본 개발 브랜치는 `develop`이고, 일반 개발 커밋에서는 절대 버전을 올리지 않는다.
 기능, 버그 수정, 문서 정리는 `develop`으로 통합한다.
 
 `master`는 릴리즈된 코드만 담는 보호 브랜치다. 직접 push, force push, branch 삭제는
@@ -31,9 +53,9 @@ PR body나 review-request comment의 tool-specific reaction/marker는 review 상
 - Codex reaction은 기록할 상태 신호로만 취급한다.
 
 릴리즈할 때는 최신 `develop`에서 `release/vX.Y.Z` 브랜치를 만들고, 그 릴리즈에 포함된
-변경 중 가장 큰 범위에 맞춰 `Cargo.toml`의 version을 한 번 올린다. release 브랜치에서
-검증을 통과시킨 뒤 `master` 대상으로 릴리즈 PR을 만들고, merge 후 `vX.Y.Z` tag와 GitHub
-release를 생성한다.
+변경 중 가장 큰 범위에 맞춰 `Cargo.toml`/`Cargo.lock`의 version을 한 번 올린다. release
+브랜치에서 검증을 통과시킨 뒤 `master` 대상으로 릴리즈 PR을 만들고, merge 후 `vX.Y.Z`
+tag와 GitHub release를 생성한다.
 
 릴리즈 PR이 `master`에 merge되고 tag가 생성되면, version bump commit을 다시 `develop`에
 merge해서 다음 릴리즈 기준점이 두 브랜치에서 어긋나지 않게 한다. CI job 이름이나 보호

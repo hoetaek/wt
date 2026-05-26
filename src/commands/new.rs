@@ -19,7 +19,7 @@ pub fn run(
 ) -> Result<()> {
     if name_words.is_empty() {
         bail!(
-            "wt new starts one ad hoc worktree from branch-name text. Pass branch-name text, or use `wt task run [<task>...]` for prepared local tasks."
+            "wt run branch starts one ad hoc worktree from branch-name text. Pass branch-name text, or use `wt run task [<task>...]` for prepared local tasks."
         );
     }
 
@@ -84,7 +84,7 @@ pub fn run(
         &names.path,
         &names,
         None,
-        setup::WORKSPACE_COLOR_KIND_NEW,
+        setup::WORKSPACE_COLOR_KIND_BRANCH,
         None,
         None,
     )?;
@@ -163,7 +163,7 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
                     &path,
                     &names,
                     None,
-                    setup::WORKSPACE_COLOR_KIND_NEW,
+                    setup::WORKSPACE_COLOR_KIND_BRANCH,
                     None,
                     Some(profile_config),
                 )?;
@@ -180,7 +180,7 @@ fn run_profiles(ctx: &Ctx, branch_name: &str, base: &str, profile: Option<&str>)
             &names.path,
             &names,
             None,
-            setup::WORKSPACE_COLOR_KIND_NEW,
+            setup::WORKSPACE_COLOR_KIND_BRANCH,
             None,
             Some(profile_config),
         )?;
@@ -258,7 +258,7 @@ mod tests {
     }
 
     fn write_empty_profile(root: &Path, name: &str) {
-        let profile_dir = root.join(".local/profiles").join(name);
+        let profile_dir = root.join(".git/wt/profiles").join(name);
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
     }
@@ -294,7 +294,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("wt new starts one ad hoc worktree from branch-name text")
+                .contains("wt run branch starts one ad hoc worktree from branch-name text")
         );
     }
 
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn new_profile_existing_branch_without_worktree_reuses_branch() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
 
@@ -521,7 +521,7 @@ mod tests {
     #[test]
     fn new_profile_branch_delete_failure_is_reported_directly() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
 
@@ -576,7 +576,7 @@ mod tests {
     #[test]
     fn new_profile_path_recreate_reports_branch_delete_failure_directly() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
         std::fs::create_dir_all(repo.path().join("worktrees/my-feature-codex")).unwrap();

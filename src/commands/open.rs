@@ -247,7 +247,7 @@ fn open_worktree(ctx: &Ctx, opened: &OpenedWorktree) -> Result<()> {
             &entry.path,
             &names,
             title.as_deref(),
-            "new",
+            setup::WORKSPACE_COLOR_KIND_BRANCH,
             None,
             profile_config.as_ref(),
         );
@@ -255,27 +255,21 @@ fn open_worktree(ctx: &Ctx, opened: &OpenedWorktree) -> Result<()> {
 
     let template_vars = setup::build_template_vars(ctx, &entry.path, &names, title.as_deref());
     let mut template_vars = template_vars;
-    let site = setup::apply_site_template_vars(config, &mut template_vars);
+    let _site = setup::apply_site_template_vars(config, &mut template_vars);
+    let browser_launch = setup::prepare_browser_launch(config, &entry.path, &mut template_vars)?;
 
     // Open workspace
     if !cmux.is_available() {
         ctx.ui
             .print_step(&format!("Worktree path: {}", entry.path.display()));
-        if let Some(site) = site.as_ref() {
-            setup::open_site_url(ctx, site, None)?;
-        }
+        setup::launch_browser(ctx, browser_launch)?;
         return Ok(());
     }
 
     if let Some(ref ws_config) = config.workspace {
         ctx.ui
             .print_step(&format!("Opening cmux workspace: {}", names.workspace));
-        let command = match &config.agent {
-            Some(agent) => agent
-                .command_line_with_vars(Some(&template_vars))?
-                .unwrap_or_default(),
-            None => String::new(),
-        };
+        let command = setup::agent_launch_command(config.agent.as_ref(), &template_vars)?;
         let ws_handle = cmux.new_workspace(&entry.path, &names.workspace, &command)?;
 
         let panes = cmux.list_panes(&ws_handle)?;
@@ -291,16 +285,11 @@ fn open_worktree(ctx: &Ctx, opened: &OpenedWorktree) -> Result<()> {
             }
         }
 
-        let opened_url = setup::open_workspace_url(ctx, config, &template_vars)?;
-        if let Some(site) = site.as_ref() {
-            setup::open_site_url(ctx, site, opened_url.as_deref())?;
-        }
+        setup::launch_browser(ctx, browser_launch)?;
     } else {
         ctx.ui
             .print_step(&format!("Worktree path: {}", entry.path.display()));
-        if let Some(site) = site.as_ref() {
-            setup::open_site_url(ctx, site, None)?;
-        }
+        setup::launch_browser(ctx, browser_launch)?;
     }
 
     Ok(())
@@ -613,7 +602,8 @@ mod tests {
     #[test]
     fn open_starts_post_deps_tabs_and_opens_workspace_url() {
         use crate::config::{
-            AgentCli, AgentConfig, Config, ReadyMode, SubmitMode, WorkspaceConfig,
+            AgentCli, AgentConfig, Config, ReadyMode, SubmitMode, WorkspaceBrowserConfig,
+            WorkspaceBrowserMode, WorkspaceConfig,
         };
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
@@ -658,8 +648,11 @@ mod tests {
         let config = Config {
             workspace: Some(WorkspaceConfig {
                 post_deps_tabs: vec!["echo {{site_url}} {{api_url}}".into()],
-                open_url: Some("{{site_url}}".into()),
-                open_browser: Some(true),
+                browser: Some(WorkspaceBrowserConfig {
+                    mode: WorkspaceBrowserMode::System,
+                    url: Some("{{site_url}}".into()),
+                    app: None,
+                }),
                 ..WorkspaceConfig::default()
             }),
             agent: Some(AgentConfig {
@@ -676,6 +669,7 @@ mod tests {
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -707,7 +701,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             command_arg,
-            "codex --model repo-feature --cd /tmp/repo-feature"
+            "export WT_AGENT_ID=agents/feature; codex --model repo-feature --cd /tmp/repo-feature"
         );
 
         assert!(!calls.iter().any(|(cmd, args, _)| {
@@ -759,7 +753,7 @@ mod tests {
         }
 
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex");
         fs::create_dir_all(&profile_dir).unwrap();
         fs::write(
             profile_dir.join("profile.toml"),
@@ -808,6 +802,7 @@ args = ["--model", "gpt-5.5"]
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -837,7 +832,10 @@ args = ["--model", "gpt-5.5"]
             .position(|arg| arg == "--command")
             .and_then(|idx| workspace_call.1.get(idx + 1))
             .unwrap();
-        assert_eq!(command_arg, "codex --model gpt-5.5");
+        assert_eq!(
+            command_arg,
+            "export WT_AGENT_ID=agents/feature-codex; codex --model gpt-5.5"
+        );
     }
 
     #[test]
@@ -867,7 +865,7 @@ args = ["--model", "gpt-5.5"]
         }
 
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex-yolo");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex-yolo");
         fs::create_dir_all(&profile_dir).unwrap();
         fs::write(
             profile_dir.join("profile.toml"),
@@ -916,6 +914,7 @@ args = ["--yolo"]
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -945,7 +944,10 @@ args = ["--yolo"]
             .position(|arg| arg == "--command")
             .and_then(|idx| workspace_call.1.get(idx + 1))
             .unwrap();
-        assert_eq!(command_arg, "codex --yolo");
+        assert_eq!(
+            command_arg,
+            "export WT_AGENT_ID=agents/feature-codex-yolo; codex --yolo"
+        );
     }
 
     #[test]
@@ -1008,6 +1010,7 @@ args = ["--yolo"]
                 timeout: 15,
                 send_after: 3,
                 prompt: Default::default(),
+                ..AgentConfig::default()
             }),
             ..Config::default()
         };
@@ -1037,7 +1040,10 @@ args = ["--yolo"]
             .position(|arg| arg == "--command")
             .and_then(|idx| workspace_call.1.get(idx + 1))
             .unwrap();
-        assert_eq!(command_arg, "claude");
+        assert_eq!(
+            command_arg,
+            "export WT_AGENT_ID=agents/feature-codex; claude"
+        );
     }
 
     #[test]

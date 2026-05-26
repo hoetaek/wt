@@ -8,15 +8,15 @@ pub const RESERVED_PROFILE_NAME: &str = "default";
 pub const AGENT_PROMPT_WORKFLOW_SCOPE: &str = "workflow";
 const PROMPT_APPEND_PREFIX: &str = "\u{0}append:";
 pub(super) const PROMPT_COMMON_SCOPE: &str = "common";
-pub(super) const PROMPT_RUNTIME_MODES: [&str; 3] = ["issue", "new", "pr"];
+pub(super) const PROMPT_RUNTIME_MODES: [&str; 3] = ["issue", "branch", "pr"];
 pub const WORKSPACE_COLOR_KIND_ISSUE: &str = "issue";
-pub const WORKSPACE_COLOR_KIND_NEW: &str = "new";
+pub const WORKSPACE_COLOR_KIND_BRANCH: &str = "branch";
 pub const WORKSPACE_COLOR_KIND_PR: &str = "pr";
 pub const WORKSPACE_COLOR_KIND_TASK: &str = "task";
 pub const WORKSPACE_DEFAULT_COLORS: [(&str, &str); 4] = [
     (WORKSPACE_COLOR_KIND_TASK, "blue"),
     (WORKSPACE_COLOR_KIND_ISSUE, "blue"),
-    (WORKSPACE_COLOR_KIND_NEW, "green"),
+    (WORKSPACE_COLOR_KIND_BRANCH, "green"),
     (WORKSPACE_COLOR_KIND_PR, "magenta"),
 ];
 const DEFAULT_SITE_NAME_TEMPLATE: &str = "{{repo}}-{{branch_slug}}";
@@ -24,7 +24,7 @@ const DEFAULT_SITE_ROOT: &str = ".";
 const DEFAULT_TRAEFIK_SITE_TARGET_TEMPLATE: &str = "http://127.0.0.1:{{vite_port}}";
 const DEFAULT_CHROME_DEVTOOLS_USER_DATA_DIR: &str =
     "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}";
-const DEFAULT_CHROME_DEVTOOLS_URL: &str = "{{site_url}}";
+const DEFAULT_WORKSPACE_BROWSER_URL: &str = "{{site_url}}";
 
 pub fn default_workspace_color(kind: &str) -> Option<&'static str> {
     WORKSPACE_DEFAULT_COLORS
@@ -219,8 +219,6 @@ pub struct SiteConfig {
     pub name: Option<String>,
     pub root: Option<String>,
     pub secure: Option<bool>,
-    pub open_browser: Option<bool>,
-    pub browser: Option<String>,
     pub url: Option<String>,
     pub target: Option<String>,
 }
@@ -254,8 +252,6 @@ impl Default for SiteConfig {
             name: None,
             root: None,
             secure: None,
-            open_browser: None,
-            browser: None,
             url: None,
             target: None,
         }
@@ -269,7 +265,6 @@ impl SiteConfig {
             .get_or_insert_with(|| DEFAULT_SITE_NAME_TEMPLATE.into());
         site.root.get_or_insert_with(|| DEFAULT_SITE_ROOT.into());
         site.secure.get_or_insert(true);
-        site.open_browser.get_or_insert(false);
         if site.url.is_none() {
             site.url = Some(default_site_url(site.secure.unwrap_or(true)));
         }
@@ -289,10 +284,6 @@ impl SiteConfig {
 
     pub fn effective_secure(&self) -> bool {
         self.secure.unwrap_or(true)
-    }
-
-    pub fn effective_open_browser(&self) -> bool {
-        self.open_browser.unwrap_or(false)
     }
 
     pub fn effective_url(&self) -> Cow<'_, str> {
@@ -325,16 +316,45 @@ pub enum SiteProvider {
     Traefik,
 }
 
-#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorkspaceConfig {
     pub tabs: Vec<String>,
     pub post_deps_tabs: Vec<String>,
     pub colors: HashMap<String, String>,
-    pub open_url: Option<String>,
-    pub open_browser: Option<bool>,
-    pub browser: Option<String>,
+    pub browser: Option<WorkspaceBrowserConfig>,
     pub chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+struct WorkspaceConfigRaw {
+    tabs: Vec<String>,
+    post_deps_tabs: Vec<String>,
+    colors: HashMap<String, String>,
+    browser: Option<WorkspaceBrowserConfig>,
+    chrome_devtools: Option<WorkspaceChromeDevtoolsConfig>,
+}
+
+impl<'de> Deserialize<'de> for WorkspaceConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = WorkspaceConfigRaw::deserialize(deserializer)?;
+        if raw.colors.contains_key("new") {
+            return Err(D::Error::custom(
+                "[workspace].colors.new is no longer supported; use [workspace].colors.branch for wt run branch",
+            ));
+        }
+
+        Ok(Self {
+            tabs: raw.tabs,
+            post_deps_tabs: raw.post_deps_tabs,
+            colors: raw.colors,
+            browser: raw.browser,
+            chrome_devtools: raw.chrome_devtools,
+        })
+    }
 }
 
 impl WorkspaceConfig {
@@ -375,13 +395,86 @@ impl WorkspaceConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkspaceBrowserConfig {
+    pub mode: WorkspaceBrowserMode,
+    pub url: Option<String>,
+    pub app: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceBrowserMode {
+    None,
+    System,
+    ChromeDevtools,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceBrowserConfigRaw {
+    mode: WorkspaceBrowserMode,
+    url: Option<String>,
+    app: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for WorkspaceBrowserConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = WorkspaceBrowserConfigRaw::deserialize(deserializer)?;
+
+        match raw.mode {
+            WorkspaceBrowserMode::None => {
+                if raw.url.is_some() {
+                    return Err(D::Error::custom(
+                        "[workspace.browser].url is not valid when mode = \"none\"",
+                    ));
+                }
+                if raw.app.is_some() {
+                    return Err(D::Error::custom(
+                        "[workspace.browser].app is not valid when mode = \"none\"",
+                    ));
+                }
+            }
+            WorkspaceBrowserMode::System => {}
+            WorkspaceBrowserMode::ChromeDevtools => {
+                if raw.app.is_some() {
+                    return Err(D::Error::custom(
+                        "[workspace.browser].app is only valid when mode = \"system\"",
+                    ));
+                }
+            }
+        }
+
+        Ok(Self {
+            mode: raw.mode,
+            url: raw.url,
+            app: raw.app,
+        })
+    }
+}
+
+impl WorkspaceBrowserConfig {
+    pub fn effective_url(&self) -> Option<Cow<'_, str>> {
+        match self.mode {
+            WorkspaceBrowserMode::None => None,
+            WorkspaceBrowserMode::System | WorkspaceBrowserMode::ChromeDevtools => {
+                Some(match self.url.as_deref() {
+                    Some(url) => Cow::Borrowed(url),
+                    None => Cow::Borrowed(DEFAULT_WORKSPACE_BROWSER_URL),
+                })
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkspaceChromeDevtoolsConfig {
-    pub enabled: bool,
     pub port: Option<u16>,
     pub user_data_dir: Option<String>,
-    pub url: Option<String>,
 }
 
 impl WorkspaceChromeDevtoolsConfig {
@@ -390,20 +483,9 @@ impl WorkspaceChromeDevtoolsConfig {
             .as_deref()
             .unwrap_or(DEFAULT_CHROME_DEVTOOLS_USER_DATA_DIR)
     }
-
-    pub fn effective_url<'a>(&'a self, workspace: &'a WorkspaceConfig) -> Cow<'a, str> {
-        if let Some(url) = self.url.as_deref() {
-            return Cow::Borrowed(url);
-        }
-
-        match workspace.open_url.as_deref().filter(|url| !url.is_empty()) {
-            Some(url) => Cow::Borrowed(url),
-            None => Cow::Borrowed(DEFAULT_CHROME_DEVTOOLS_URL),
-        }
-    }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub struct AgentConfig {
     pub cli: AgentCli,
     pub args: Vec<String>,
@@ -413,26 +495,14 @@ pub struct AgentConfig {
     pub timeout: u64,
     pub send_after: u64,
     pub prompt: HashMap<String, Vec<String>>,
+    #[doc(hidden)]
+    pub presence: AgentConfigPresence,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct AgentConfigRaw {
-    cli: Option<AgentCli>,
-    args: Vec<String>,
-    command: Option<String>,
-    ready: ReadyMode,
-    submit: SubmitMode,
-    timeout: u64,
-    send_after: u64,
-    #[serde(default, deserialize_with = "deserialize_agent_prompts")]
-    prompt: HashMap<String, Vec<String>>,
-}
-
-impl Default for AgentConfigRaw {
+impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            cli: None,
+            cli: AgentCli::None,
             args: Vec::new(),
             command: None,
             ready: default_agent_ready(),
@@ -440,8 +510,64 @@ impl Default for AgentConfigRaw {
             timeout: default_agent_timeout(),
             send_after: default_agent_send_after(),
             prompt: HashMap::new(),
+            presence: AgentConfigPresence::default(),
         }
     }
+}
+
+impl PartialEq for AgentConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.cli == other.cli
+            && self.args == other.args
+            && self.command == other.command
+            && self.ready == other.ready
+            && self.submit == other.submit
+            && self.timeout == other.timeout
+            && self.send_after == other.send_after
+            && self.prompt == other.prompt
+    }
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AgentConfigPresence {
+    pub cli: bool,
+    pub args: bool,
+    pub command: bool,
+    pub ready: bool,
+    pub submit: bool,
+    pub timeout: bool,
+    pub send_after: bool,
+}
+
+impl AgentConfigPresence {
+    pub fn has_runtime_fields(self) -> bool {
+        self.cli
+            || self.args
+            || self.command
+            || self.ready
+            || self.submit
+            || self.timeout
+            || self.send_after
+    }
+
+    pub fn has_runtime_fields_without_cli(self) -> bool {
+        self.args || self.command || self.ready || self.submit || self.timeout || self.send_after
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct AgentConfigRaw {
+    cli: Option<AgentCli>,
+    args: Option<Vec<String>>,
+    command: Option<String>,
+    ready: Option<ReadyMode>,
+    submit: Option<SubmitMode>,
+    timeout: Option<u64>,
+    send_after: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_agent_prompts")]
+    prompt: HashMap<String, Vec<String>>,
 }
 
 impl<'de> Deserialize<'de> for AgentConfig {
@@ -450,30 +576,32 @@ impl<'de> Deserialize<'de> for AgentConfig {
         D: Deserializer<'de>,
     {
         let raw = AgentConfigRaw::deserialize(deserializer)?;
-        let is_prompt_only_patch = raw.cli.is_none()
-            && raw.args.is_empty()
-            && raw.command.is_none()
-            && raw.ready == default_agent_ready()
-            && raw.submit == default_agent_submit()
-            && raw.timeout == default_agent_timeout()
-            && raw.send_after == default_agent_send_after()
-            && !raw.prompt.is_empty();
+        let presence = AgentConfigPresence {
+            cli: raw.cli.is_some(),
+            args: raw.args.is_some(),
+            command: raw.command.is_some(),
+            ready: raw.ready.is_some(),
+            submit: raw.submit.is_some(),
+            timeout: raw.timeout.is_some(),
+            send_after: raw.send_after.is_some(),
+        };
 
-        if raw.cli.is_none() && !is_prompt_only_patch {
+        if !presence.has_runtime_fields() && raw.prompt.is_empty() {
             return Err(D::Error::custom(
-                "agent.cli is required unless the section only contains agent.prompt or agent.prompt.append",
+                "agent.cli is required unless the section only contains agent.prompt or agent.prompt.append, or inherits agent.cli from a lower-precedence config layer",
             ));
         }
 
         Ok(Self {
             cli: raw.cli.unwrap_or(AgentCli::None),
-            args: raw.args,
+            args: raw.args.unwrap_or_default(),
             command: raw.command,
-            ready: raw.ready,
-            submit: raw.submit,
-            timeout: raw.timeout,
-            send_after: raw.send_after,
+            ready: raw.ready.unwrap_or_else(default_agent_ready),
+            submit: raw.submit.unwrap_or_else(default_agent_submit),
+            timeout: raw.timeout.unwrap_or_else(default_agent_timeout),
+            send_after: raw.send_after.unwrap_or_else(default_agent_send_after),
             prompt: raw.prompt,
+            presence,
         })
     }
 }
@@ -493,6 +621,7 @@ where
                 D::Error::custom("[agent.prompt.append] must be a table of mode prompt arrays")
             })?;
             for (append_mode, append_value) in append {
+                reject_legacy_agent_prompt_mode::<D::Error>(append_mode, true)?;
                 let prompts_to_append = parse_prompt_values::<D::Error>(
                     append_value.clone(),
                     &format!("agent.prompt.append.{append_mode}"),
@@ -502,11 +631,30 @@ where
             continue;
         }
 
+        reject_legacy_agent_prompt_mode::<D::Error>(&mode, false)?;
         let mode_prompts = parse_prompt_values::<D::Error>(value, &format!("agent.prompt.{mode}"))?;
         prompts.insert(mode, mode_prompts);
     }
 
     Ok(prompts)
+}
+
+fn reject_legacy_agent_prompt_mode<E>(mode: &str, append: bool) -> std::result::Result<(), E>
+where
+    E: DeError,
+{
+    if mode != "new" {
+        return Ok(());
+    }
+
+    let key = if append {
+        "[agent.prompt.append].new"
+    } else {
+        "[agent.prompt].new"
+    };
+    Err(E::custom(format!(
+        "{key} is no longer supported; use [agent.prompt].branch or [agent.prompt.append].branch for wt run branch"
+    )))
 }
 
 fn parse_prompt_values<E>(value: toml::Value, key: &str) -> std::result::Result<Vec<String>, E>
@@ -749,6 +897,23 @@ Rules:
 }
 
 impl Config {
+    pub(crate) fn validate_effective_agent(&self) -> anyhow::Result<()> {
+        let Some(agent) = self.agent.as_ref() else {
+            return Ok(());
+        };
+
+        if agent.cli == AgentCli::None
+            && !agent.presence.cli
+            && agent.presence.has_runtime_fields_without_cli()
+        {
+            bail!(
+                "agent.cli is required when [agent] sets args, command, ready, submit, timeout, or send_after without inheriting agent.cli from a lower-precedence config layer"
+            );
+        }
+
+        Ok(())
+    }
+
     pub fn workflow_default_policy(&self) -> WorkflowDefaultPolicy {
         WorkflowDefaultPolicy {
             pull_request: self

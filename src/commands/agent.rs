@@ -1,13 +1,18 @@
+use crate::agent_state::{
+    NewWaitObservation, WaitObservation, WaitObservationStore, WaitObservationSummary,
+};
 use crate::agents::AgentStatus;
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::work::{self, WorkSessionState};
 use crate::task_run;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::time::{Duration, Instant};
+
+pub mod supervisor;
 
 pub fn status(ctx: &Ctx, target: Option<&str>) -> Result<()> {
     let (report, exit_code) = observe_status(ctx, target, "status")?;
@@ -36,6 +41,18 @@ pub fn watch(
             heartbeat: heartbeat_secs.map(duration_from_secs),
         },
     )
+}
+
+pub fn wait_stats(ctx: &Ctx) -> Result<()> {
+    let store = WaitObservationStore::new(ctx.storage_root.wait_observations_jsonl());
+    let mut summary = store.summary()?;
+    summary.path = ctx.storage_root.display_path(store.path());
+    if ctx.is_json() {
+        print_json(&summary)?;
+    } else {
+        print_wait_stats(ctx, &summary);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -88,6 +105,14 @@ fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) ->
         }
 
         if let Some(timeout) = options.timeout.filter(|timeout| elapsed >= *timeout) {
+            record_wait_observation(
+                ctx,
+                &report,
+                "timeout",
+                elapsed,
+                timeout,
+                now.duration_since(last_output_at),
+            )?;
             if ctx.is_json() {
                 print_json_line(&report_with_warning(
                     &report,
@@ -104,6 +129,16 @@ fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) ->
                 .heartbeat
                 .is_some_and(|heartbeat| now.duration_since(last_output_at) >= heartbeat)
         {
+            let unchanged_duration = now.duration_since(last_output_at);
+            let heartbeat = options.heartbeat.expect("heartbeat was checked above");
+            record_wait_observation(
+                ctx,
+                &report,
+                "heartbeat",
+                elapsed,
+                heartbeat,
+                unchanged_duration,
+            )?;
             if ctx.is_json() {
                 print_json_line(&report)?;
             } else {
@@ -400,7 +435,40 @@ fn report_with_warning(report: &AgentStatusReport, warning: String) -> AgentStat
     report
 }
 
-fn print_json(report: &AgentStatusReport) -> Result<()> {
+fn record_wait_observation(
+    ctx: &Ctx,
+    report: &AgentStatusReport,
+    wait_reason: &str,
+    elapsed_duration: Duration,
+    bound_duration: Duration,
+    unchanged_duration: Duration,
+) -> Result<()> {
+    let mut observation = WaitObservation::new_non_idle(NewWaitObservation {
+        wait_reason: wait_reason.into(),
+        elapsed_seconds: elapsed_duration.as_secs(),
+        bound_seconds: bound_duration.as_secs(),
+        unchanged_seconds: unchanged_duration.as_secs(),
+        target: report.target.clone(),
+        branch: report.branch.clone(),
+        agent_kind: report.agent.kind.clone(),
+        agent_state: report.agent.state.clone(),
+    });
+    observation.worktree = report.worktree.clone();
+    observation.task_run_id = report.task_run.id.clone();
+    observation.last_tool = report.agent.last_tool.clone();
+    observation.last_event_at = report.agent.last_event_at.clone();
+    observation.session_id = report.agent.session_id.clone();
+
+    let store = WaitObservationStore::new(ctx.storage_root.wait_observations_jsonl());
+    store.append(&observation).with_context(|| {
+        format!(
+            "Failed to record wait observation in {}",
+            ctx.storage_root.display_path(store.path())
+        )
+    })
+}
+
+fn print_json<T: Serialize>(report: &T) -> Result<()> {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     serde_json::to_writer_pretty(&mut handle, report)?;
@@ -408,12 +476,87 @@ fn print_json(report: &AgentStatusReport) -> Result<()> {
     Ok(())
 }
 
-fn print_json_line(report: &AgentStatusReport) -> Result<()> {
+fn print_json_line<T: Serialize>(report: &T) -> Result<()> {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     serde_json::to_writer(&mut handle, report)?;
     writeln!(handle)?;
     Ok(())
+}
+
+fn print_wait_stats(ctx: &Ctx, summary: &WaitObservationSummary) {
+    ctx.ui
+        .print_plain(&format!("Agent wait stats: {}", summary.path));
+    ctx.ui.print_dim(&format!("  Count: {}", summary.count));
+    ctx.ui
+        .print_dim(&format!("  Sum seconds: {}", summary.sum_seconds));
+    ctx.ui.print_dim(&format!(
+        "  Average seconds: {}",
+        format_average_seconds(summary.average_seconds)
+    ));
+    ctx.ui.print_dim(&format!(
+        "  Min seconds: {}",
+        format_optional_seconds(summary.min_seconds)
+    ));
+    ctx.ui.print_dim(&format!(
+        "  Max seconds: {}",
+        format_optional_seconds(summary.max_seconds)
+    ));
+    if summary.count == 0 {
+        ctx.ui
+            .print_dim("  Empty state: no non-idle wait observations recorded");
+    }
+    if summary.buckets.is_empty() {
+        ctx.ui.print_dim("  Buckets: none");
+    } else {
+        ctx.ui.print_dim("  Buckets:");
+        for (bucket, count) in &summary.buckets {
+            ctx.ui.print_dim(&format!("    - {bucket}: {count}"));
+        }
+    }
+    print_wait_stats_groups(ctx, summary);
+}
+
+fn format_optional_seconds(value: Option<u64>) -> String {
+    value
+        .map(|seconds| seconds.to_string())
+        .unwrap_or_else(|| "none".into())
+}
+
+fn format_average_seconds(value: Option<f64>) -> String {
+    match value {
+        Some(value) if value.fract().abs() < f64::EPSILON => format!("{value:.0}"),
+        Some(value) => format!("{value:.2}"),
+        None => "none".into(),
+    }
+}
+
+fn print_wait_stats_groups(ctx: &Ctx, summary: &WaitObservationSummary) {
+    if summary.count == 0 {
+        return;
+    }
+    ctx.ui.print_dim("  Groups:");
+    print_wait_stats_group(ctx, "wait_reason", &summary.groups.wait_reason);
+    print_wait_stats_group(ctx, "bound_seconds", &summary.groups.bound_seconds);
+    print_wait_stats_group(ctx, "agent_kind", &summary.groups.agent_kind);
+    print_wait_stats_group(ctx, "agent_state", &summary.groups.agent_state);
+}
+
+fn print_wait_stats_group(
+    ctx: &Ctx,
+    label: &str,
+    groups: &BTreeMap<String, crate::agent_state::WaitObservationGroupSummary>,
+) {
+    ctx.ui.print_dim(&format!("    {label}:"));
+    for (value, group) in groups {
+        ctx.ui.print_dim(&format!(
+            "      - {value}: count {}, avg {}s, min {}, max {}",
+            group.count,
+            format_average_seconds(group.average_seconds),
+            format_optional_seconds(group.min_seconds),
+            format_optional_seconds(group.max_seconds)
+        ));
+    }
 }
 
 fn print_text(ctx: &Ctx, report: &AgentStatusReport) {
@@ -917,7 +1060,7 @@ mod tests {
         add_worktree_list(&mut runner, &fixture);
         add_matching_workspace(&mut runner, &fixture);
         add_selected_surface(&mut runner);
-        runner.add_response("Claude Code\nWorking", true);
+        runner.add_response("⏵⏵ bypass permissions on\nWorking", true);
         runner.add_response("claude_code=Running", true);
         runner.add_response(
             r#"{"seq":12,"name":"agent.hook.PreToolUse","occurred_at":"2026-05-16T00:00:12Z","workspace_id":"uuid-workspace-1","surface_id":"uuid-surface-4","payload":{"tool_name":"Read","session_id":"claude-session"}}"#,
@@ -937,9 +1080,9 @@ mod tests {
     #[test]
     fn task_run_target_adds_task_run_metadata() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -967,9 +1110,9 @@ mod tests {
     #[test]
     fn status_without_target_selects_interactive_work_target() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1090,11 +1233,83 @@ mod tests {
     }
 
     #[test]
+    fn watch_recording_timeout_appends_one_non_idle_wait_observation() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_running_observation(&mut runner, &fixture);
+        let ctx = fixture.ctx(runner, OutputMode::Text);
+
+        watch_with_options(
+            &ctx,
+            Some("feature"),
+            WatchOptions {
+                interval: Duration::ZERO,
+                timeout: Some(Duration::ZERO),
+                heartbeat: None,
+            },
+        )
+        .unwrap();
+
+        let observations = read_wait_observations(&fixture);
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0]["wait_class"], "non_idle");
+        assert_eq!(observations[0]["wait_reason"], "timeout");
+        assert_eq!(observations[0]["elapsed_seconds"], 0);
+        assert_eq!(observations[0]["bound_seconds"], 0);
+        assert_eq!(observations[0]["unchanged_seconds"], 0);
+        assert_eq!(observations[0]["agent_state"], "running");
+        assert_eq!(observations[0]["agent_kind"], "codex");
+        assert_eq!(observations[0]["target"], "feature");
+        assert_eq!(observations[0]["last_tool"], "Bash");
+        assert_no_cmux_transport_fields(&observations[0]);
+    }
+
+    #[test]
+    fn wait_observation_record_separates_elapsed_bound_and_unchanged_seconds() {
+        let fixture = Fixture::new();
+        let ctx = fixture.ctx(MockRunner::new(), OutputMode::Text);
+        let report = test_running_report();
+
+        record_wait_observation(
+            &ctx,
+            &report,
+            "heartbeat",
+            Duration::from_secs(125),
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        record_wait_observation(
+            &ctx,
+            &report,
+            "timeout",
+            Duration::from_secs(300),
+            Duration::from_secs(300),
+            Duration::from_secs(140),
+        )
+        .unwrap();
+
+        let observations = read_wait_observations(&fixture);
+        assert_eq!(observations.len(), 2);
+        assert_eq!(observations[0]["wait_reason"], "heartbeat");
+        assert_eq!(observations[0]["elapsed_seconds"], 125);
+        assert_eq!(observations[0]["bound_seconds"], 60);
+        assert_eq!(observations[0]["unchanged_seconds"], 60);
+        assert_eq!(observations[1]["wait_reason"], "timeout");
+        assert_eq!(observations[1]["elapsed_seconds"], 300);
+        assert_eq!(observations[1]["bound_seconds"], 300);
+        assert_eq!(observations[1]["unchanged_seconds"], 140);
+        assert!(observations.iter().all(has_no_cmux_transport_fields));
+    }
+
+    #[test]
     fn watch_heartbeat_prints_unchanged_running_observation() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".local/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1140,6 +1355,50 @@ mod tests {
     }
 
     #[test]
+    fn watch_recording_heartbeat_appends_one_non_idle_wait_observation() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::write(
+            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+        )
+        .unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        runner.add_response("", false);
+        add_running_observation(&mut runner, &fixture);
+        add_running_observation(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        add_selected_surface(&mut runner);
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        let ctx = fixture.ctx(runner, OutputMode::Text);
+
+        watch_with_options(
+            &ctx,
+            Some("run-feature"),
+            WatchOptions {
+                interval: Duration::ZERO,
+                timeout: None,
+                heartbeat: Some(Duration::ZERO),
+            },
+        )
+        .unwrap();
+
+        let observations = read_wait_observations(&fixture);
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0]["wait_class"], "non_idle");
+        assert_eq!(observations[0]["wait_reason"], "heartbeat");
+        assert_eq!(observations[0]["elapsed_seconds"], 0);
+        assert_eq!(observations[0]["bound_seconds"], 0);
+        assert_eq!(observations[0]["unchanged_seconds"], 0);
+        assert_eq!(observations[0]["agent_state"], "running");
+        assert_eq!(observations[0]["task_run_id"], "run-feature");
+        assert_no_cmux_transport_fields(&observations[0]);
+    }
+
+    #[test]
     fn watch_exits_zero_when_agent_is_no_longer_running() {
         let fixture = Fixture::new();
         let mut runner = MockRunner::new();
@@ -1164,6 +1423,32 @@ mod tests {
         let steps = ui.steps.lock().unwrap().join("\n");
         assert!(steps.contains("Agent watch: feature running (codex)"));
         assert!(steps.contains("Agent watch: feature idle (codex)"));
+    }
+
+    #[test]
+    fn watch_recording_idle_observation_does_not_create_non_idle_sample() {
+        let fixture = Fixture::new();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        add_selected_surface(&mut runner);
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        let ctx = fixture.ctx(runner, OutputMode::Text);
+
+        watch_with_options(
+            &ctx,
+            Some("feature"),
+            WatchOptions {
+                interval: Duration::ZERO,
+                timeout: Some(Duration::ZERO),
+                heartbeat: None,
+            },
+        )
+        .unwrap();
+
+        assert!(!wait_observations_path(&fixture).exists());
     }
 
     struct Fixture {
@@ -1196,9 +1481,12 @@ mod tests {
                 CtxOptions {
                     base_config: Config::default(),
                     config_source: crate::config::ConfigSource::Default,
+                    storage_root: None,
                     output_mode,
                     verbosity: 0,
                     quiet: false,
+                    launcher_coordinator_id: None,
+                    coordinator_agent_id: None,
                 },
             )
         }
@@ -1255,5 +1543,65 @@ mod tests {
             r#"{"seq":10,"name":"agent.hook.PreToolUse","occurred_at":"2026-05-16T00:00:10Z","workspace_id":"uuid-workspace-1","surface_id":"uuid-surface-4","payload":{"tool_name":"Bash","session_id":"codex-session"}}"#,
             true,
         );
+    }
+
+    fn wait_observations_path(fixture: &Fixture) -> PathBuf {
+        fixture
+            .repo
+            .join(".git/wt/agent.state/wait-observations.jsonl")
+    }
+
+    fn read_wait_observations(fixture: &Fixture) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(wait_observations_path(fixture))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    fn assert_no_cmux_transport_fields(observation: &serde_json::Value) {
+        assert!(has_no_cmux_transport_fields(observation));
+    }
+
+    fn has_no_cmux_transport_fields(observation: &serde_json::Value) -> bool {
+        observation
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|key| !key.starts_with("cmux_"))
+    }
+
+    fn test_running_report() -> AgentStatusReport {
+        AgentStatusReport {
+            target: "feature".into(),
+            branch: "feature".into(),
+            worktree: Some("/tmp/sample-feature".into()),
+            task_run: TaskRunStatusReport {
+                id: Some("run-feature".into()),
+                status: Some("running".into()),
+                context: Some("direct".into()),
+            },
+            agent: AgentObservationReport {
+                kind: "codex".into(),
+                state: "running".into(),
+                last_tool: Some("Bash".into()),
+                last_event_at: Some("2026-05-16T00:00:10Z".into()),
+                session_id: Some("codex-session".into()),
+                needs_input_since: None,
+                metadata: BTreeMap::new(),
+            },
+            cmux: CmuxObservationReport {
+                state: "terminal_surface_ready".into(),
+                workspace: Some("workspace:1".into()),
+                surface: Some("surface:4".into()),
+                workspace_id: Some("uuid-workspace-1".into()),
+                surface_id: Some("uuid-surface-4".into()),
+                pane: Some("pane:3".into()),
+                window: Some("window:1".into()),
+                workspace_title: Some("feature".into()),
+                candidates: Vec::new(),
+            },
+            warnings: Vec::new(),
+        }
     }
 }

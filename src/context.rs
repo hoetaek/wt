@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::config::{Config, ConfigSource};
+use crate::storage::StorageRoot;
 
 /// Output from running an external command.
 #[derive(Debug, Clone)]
@@ -38,16 +39,61 @@ pub trait UserInterface: Send + Sync {
         true
     }
     fn select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<usize> {
-        let rendered = render_prompt_items(items);
-        self.select(prompt, &rendered)
+        let rows = prompt_items_to_rows(items);
+        self.select_rows(prompt, &rows)
+    }
+    fn select_without_filter(&self, prompt: &str, items: &[String]) -> Result<usize> {
+        let items = items
+            .iter()
+            .cloned()
+            .map(PromptItem::new)
+            .collect::<Vec<_>>();
+        self.select_items_without_filter(prompt, &items)
+    }
+    fn select_items_without_filter(&self, prompt: &str, items: &[PromptItem]) -> Result<usize> {
+        let rows = prompt_items_to_rows(items);
+        self.select_rows_without_filter(prompt, &rows)
+    }
+    fn select_nested_without_filter(&self, prompt: &str, items: &[String]) -> Result<usize> {
+        let items = items
+            .iter()
+            .cloned()
+            .map(PromptItem::new)
+            .collect::<Vec<_>>();
+        self.select_nested_items_without_filter(prompt, &items)
+    }
+    fn select_nested_items_without_filter(
+        &self,
+        prompt: &str,
+        items: &[PromptItem],
+    ) -> Result<usize> {
+        let rows = prompt_items_to_rows(items);
+        self.select_nested_rows_without_filter(prompt, &rows)
     }
     fn multi_select_items(&self, prompt: &str, items: &[PromptItem]) -> Result<Vec<usize>> {
-        let rendered = render_prompt_items(items);
+        let rows = prompt_items_to_rows(items);
+        self.multi_select_rows(prompt, &rows)
+    }
+    fn select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+        let rendered = render_prompt_rows(rows);
+        self.select(prompt, &rendered)
+    }
+    fn select_rows_without_filter(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+        self.select_rows(prompt, rows)
+    }
+    fn select_nested_rows_without_filter(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+        self.select_rows_without_filter(prompt, rows)
+    }
+    fn multi_select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<Vec<usize>> {
+        let rendered = render_prompt_rows(rows);
         self.multi_select(prompt, &rendered)
     }
     fn confirm(&self, prompt: &str, default: bool) -> Result<bool>;
     fn input(&self, prompt: &str, default: Option<&str>) -> Result<String>;
     fn print_step(&self, msg: &str);
+    fn print_plain(&self, msg: &str) {
+        self.print_step(msg);
+    }
     fn print_dim(&self, msg: &str);
     fn print_warning(&self, msg: &str);
     fn print_error(&self, msg: &str);
@@ -57,6 +103,7 @@ pub trait UserInterface: Send + Sync {
 pub struct PromptItem {
     pub label: String,
     pub hint: Option<String>,
+    pub description: Option<String>,
 }
 
 impl PromptItem {
@@ -64,6 +111,7 @@ impl PromptItem {
         Self {
             label: label.into(),
             hint: None,
+            description: None,
         }
     }
 
@@ -72,6 +120,7 @@ impl PromptItem {
         Self {
             label: label.into(),
             hint: non_empty_hint(hint),
+            description: None,
         }
     }
 
@@ -79,11 +128,173 @@ impl PromptItem {
         Self::with_hint(label, join_prompt_hint(parts))
     }
 
+    pub fn with_description(label: impl Into<String>, description: impl Into<String>) -> Self {
+        let mut item = Self::new(label);
+        item.description = non_empty_hint(description.into());
+        item
+    }
+
     pub fn render_plain(&self) -> String {
         match self.hint.as_deref() {
             Some(hint) => format!("{}  {}", self.label, hint),
             None => self.label.clone(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptOption {
+    pub label: String,
+    pub hint: Option<String>,
+    pub description: Option<String>,
+    pub search_text: Vec<String>,
+    pub value_index: Option<usize>,
+    pub selected: bool,
+    pub disabled: bool,
+}
+
+impl PromptOption {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            hint: None,
+            description: None,
+            search_text: Vec::new(),
+            value_index: None,
+            selected: false,
+            disabled: false,
+        }
+    }
+
+    pub fn with_hint(label: impl Into<String>, hint: impl Into<String>) -> Self {
+        let hint = hint.into();
+        Self {
+            label: label.into(),
+            hint: non_empty_hint(hint),
+            description: None,
+            search_text: Vec::new(),
+            value_index: None,
+            selected: false,
+            disabled: false,
+        }
+    }
+
+    pub fn from_hint_parts(label: impl Into<String>, parts: Vec<String>) -> Self {
+        Self::with_hint(label, join_prompt_hint(parts))
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = non_empty_hint(description.into());
+        self
+    }
+
+    pub fn search_text(mut self, text: impl Into<String>) -> Self {
+        if let Some(text) = non_empty_hint(text.into()) {
+            self.search_text.push(text);
+        }
+        self
+    }
+
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    pub fn value_index(mut self, value_index: usize) -> Self {
+        self.value_index = Some(value_index);
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn render_plain(&self) -> String {
+        match self.hint.as_deref() {
+            Some(hint) => format!("{}  {}", self.label, hint),
+            None => self.label.clone(),
+        }
+    }
+}
+
+impl From<PromptItem> for PromptOption {
+    fn from(item: PromptItem) -> Self {
+        Self {
+            label: item.label,
+            hint: item.hint,
+            description: item.description,
+            search_text: Vec::new(),
+            value_index: None,
+            selected: false,
+            disabled: false,
+        }
+    }
+}
+
+impl From<String> for PromptOption {
+    fn from(label: String) -> Self {
+        Self::new(label)
+    }
+}
+
+impl From<&str> for PromptOption {
+    fn from(label: &str) -> Self {
+        Self::new(label)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptSection {
+    pub title: String,
+    pub hint: Option<String>,
+}
+
+impl PromptSection {
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            hint: None,
+        }
+    }
+
+    pub fn with_hint(title: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            hint: non_empty_hint(hint.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptRow {
+    Section(PromptSection),
+    Option(PromptOption),
+}
+
+impl PromptRow {
+    pub fn section(title: impl Into<String>) -> Self {
+        Self::Section(PromptSection::new(title))
+    }
+
+    pub fn section_with_hint(title: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self::Section(PromptSection::with_hint(title, hint))
+    }
+
+    pub fn option(label: impl Into<String>) -> Self {
+        Self::Option(PromptOption::new(label))
+    }
+
+    pub fn option_with_hint(label: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self::Option(PromptOption::with_hint(label, hint))
+    }
+
+    pub fn from_item(item: PromptItem) -> Self {
+        Self::Option(PromptOption::from(item))
+    }
+
+    pub fn from_indexed_item(index: usize, item: PromptItem) -> Self {
+        Self::Option(PromptOption::from(item).value_index(index))
     }
 }
 
@@ -112,6 +323,19 @@ pub fn render_prompt_items(items: &[PromptItem]) -> Vec<String> {
     items.iter().map(PromptItem::render_plain).collect()
 }
 
+pub fn render_prompt_rows(rows: &[PromptRow]) -> Vec<String> {
+    rows.iter()
+        .filter_map(|row| match row {
+            PromptRow::Section(_) => None,
+            PromptRow::Option(option) => Some(option.render_plain()),
+        })
+        .collect()
+}
+
+pub fn prompt_items_to_rows(items: &[PromptItem]) -> Vec<PromptRow> {
+    items.iter().cloned().map(PromptRow::from_item).collect()
+}
+
 fn non_empty_hint(hint: String) -> Option<String> {
     let hint = hint.trim();
     if hint.is_empty() {
@@ -131,9 +355,12 @@ pub enum OutputMode {
 pub struct CtxOptions {
     pub base_config: Config,
     pub config_source: ConfigSource,
+    pub storage_root: Option<StorageRoot>,
     pub output_mode: OutputMode,
     pub verbosity: u8,
     pub quiet: bool,
+    pub launcher_coordinator_id: Option<String>,
+    pub coordinator_agent_id: Option<String>,
 }
 
 impl Default for CtxOptions {
@@ -141,10 +368,63 @@ impl Default for CtxOptions {
         Self {
             base_config: Config::default(),
             config_source: ConfigSource::Default,
+            storage_root: None,
+            output_mode: OutputMode::Text,
+            verbosity: 0,
+            quiet: false,
+            launcher_coordinator_id: None,
+            coordinator_agent_id: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MachineCtxOptions {
+    pub output_mode: OutputMode,
+    pub verbosity: u8,
+    pub quiet: bool,
+}
+
+impl Default for MachineCtxOptions {
+    fn default() -> Self {
+        Self {
             output_mode: OutputMode::Text,
             verbosity: 0,
             quiet: false,
         }
+    }
+}
+
+/// Per-machine context for commands that do not need repository state.
+pub struct MachineCtx<'a> {
+    pub runner: &'a dyn CommandRunner,
+    pub ui: &'a dyn UserInterface,
+    pub output_mode: OutputMode,
+    pub verbosity: u8,
+    pub quiet: bool,
+}
+
+impl<'a> MachineCtx<'a> {
+    pub fn new(runner: &'a dyn CommandRunner, ui: &'a dyn UserInterface) -> Self {
+        Self::new_with_options(runner, ui, MachineCtxOptions::default())
+    }
+
+    pub fn new_with_options(
+        runner: &'a dyn CommandRunner,
+        ui: &'a dyn UserInterface,
+        options: MachineCtxOptions,
+    ) -> Self {
+        Self {
+            runner,
+            ui,
+            output_mode: options.output_mode,
+            verbosity: options.verbosity,
+            quiet: options.quiet,
+        }
+    }
+
+    pub fn is_json(&self) -> bool {
+        self.output_mode == OutputMode::Json
     }
 }
 
@@ -157,11 +437,14 @@ pub struct Ctx {
     pub config: Config,
     pub base_config: Config,
     pub config_source: ConfigSource,
+    pub storage_root: StorageRoot,
     pub runner: Box<dyn CommandRunner>,
     pub ui: Box<dyn UserInterface>,
     pub output_mode: OutputMode,
     pub verbosity: u8,
     pub quiet: bool,
+    pub launcher_coordinator_id: Option<String>,
+    pub coordinator_agent_id: Option<String>,
 }
 
 impl Ctx {
@@ -175,9 +458,12 @@ impl Ctx {
         let options = CtxOptions {
             base_config: config.clone(),
             config_source: ConfigSource::Default,
+            storage_root: None,
             output_mode: OutputMode::Text,
             verbosity: 0,
             quiet: false,
+            launcher_coordinator_id: None,
+            coordinator_agent_id: None,
         };
         Self::new_with_options(repo_root, invocation_root, config, runner, ui, options)
     }
@@ -196,6 +482,9 @@ impl Ctx {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
+        let storage_root = options
+            .storage_root
+            .unwrap_or_else(|| StorageRoot::from_git_common_dir(repo_root.join(".git")));
         Self {
             repo_root,
             invocation_root,
@@ -204,16 +493,31 @@ impl Ctx {
             config,
             base_config: options.base_config,
             config_source: options.config_source,
+            storage_root,
             runner,
             ui,
             output_mode: options.output_mode,
             verbosity: options.verbosity,
             quiet: options.quiet,
+            launcher_coordinator_id: options.launcher_coordinator_id,
+            coordinator_agent_id: options.coordinator_agent_id,
         }
     }
 
     pub fn is_json(&self) -> bool {
         self.output_mode == OutputMode::Json
+    }
+
+    pub fn machine_ctx(&self) -> MachineCtx<'_> {
+        MachineCtx::new_with_options(
+            self.runner.as_ref(),
+            self.ui.as_ref(),
+            MachineCtxOptions {
+                output_mode: self.output_mode,
+                verbosity: self.verbosity,
+                quiet: self.quiet,
+            },
+        )
     }
 }
 
@@ -295,6 +599,8 @@ pub mod mock {
         pub prompts: Mutex<Vec<String>>,
         pub select_items: Mutex<Vec<Vec<String>>>,
         pub multi_select_items: Mutex<Vec<Vec<String>>>,
+        pub select_rows: Mutex<Vec<Vec<PromptRow>>>,
+        pub multi_select_rows: Mutex<Vec<Vec<PromptRow>>>,
         pub steps: Mutex<Vec<String>>,
         pub dims: Mutex<Vec<String>>,
         pub warnings: Mutex<Vec<String>>,
@@ -317,6 +623,8 @@ pub mod mock {
                 prompts: Mutex::new(Vec::new()),
                 select_items: Mutex::new(Vec::new()),
                 multi_select_items: Mutex::new(Vec::new()),
+                select_rows: Mutex::new(Vec::new()),
+                multi_select_rows: Mutex::new(Vec::new()),
                 steps: Mutex::new(Vec::new()),
                 dims: Mutex::new(Vec::new()),
                 warnings: Mutex::new(Vec::new()),
@@ -375,6 +683,16 @@ pub mod mock {
                 .ok_or_else(|| anyhow::anyhow!("MockUi: no multi_select response"))
         }
 
+        fn select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+            self.select_rows.lock().unwrap().push(rows.to_vec());
+            self.select(prompt, &render_prompt_rows(rows))
+        }
+
+        fn multi_select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<Vec<usize>> {
+            self.multi_select_rows.lock().unwrap().push(rows.to_vec());
+            self.multi_select(prompt, &render_prompt_rows(rows))
+        }
+
         fn can_prompt(&self) -> bool {
             self.prompt_available
         }
@@ -408,6 +726,10 @@ pub mod mock {
             self.steps.lock().unwrap().push(msg.into());
         }
 
+        fn print_plain(&self, msg: &str) {
+            self.steps.lock().unwrap().push(msg.into());
+        }
+
         fn print_warning(&self, msg: &str) {
             self.warnings.lock().unwrap().push(msg.into());
         }
@@ -428,6 +750,14 @@ pub mod mock {
             self.as_ref().multi_select(prompt, items)
         }
 
+        fn select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<usize> {
+            self.as_ref().select_rows(prompt, rows)
+        }
+
+        fn multi_select_rows(&self, prompt: &str, rows: &[PromptRow]) -> Result<Vec<usize>> {
+            self.as_ref().multi_select_rows(prompt, rows)
+        }
+
         fn can_prompt(&self) -> bool {
             self.as_ref().can_prompt()
         }
@@ -442,6 +772,10 @@ pub mod mock {
 
         fn print_step(&self, msg: &str) {
             self.as_ref().print_step(msg);
+        }
+
+        fn print_plain(&self, msg: &str) {
+            self.as_ref().print_plain(msg);
         }
 
         fn print_dim(&self, msg: &str) {

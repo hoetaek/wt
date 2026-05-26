@@ -1,8 +1,9 @@
 use crate::commands::{issue, task as task_command};
-use crate::context::{Ctx, PromptItem};
+use crate::context::{Ctx, PromptItem, PromptRow};
 use crate::services::issues::CreateIssueRequest;
 use crate::services::issues::IssueProvider;
 use crate::task;
+use crate::task_run;
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::fs;
@@ -19,6 +20,7 @@ struct PublishResult {
 struct PublishCandidate {
     task_key: String,
     document: task::TaskDocument,
+    latest_run_status: Option<task_run::TaskRunStatus>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,11 +78,8 @@ fn select_publish_task_keys(ctx: &Ctx) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
 
-    let items = candidates
-        .iter()
-        .map(publish_candidate_item)
-        .collect::<Vec<_>>();
-    let selections = ctx.ui.multi_select_items("Tasks to publish", &items)?;
+    let rows = publish_candidate_rows(&candidates);
+    let selections = ctx.ui.multi_select_rows("Tasks to publish", &rows)?;
     let mut keys = Vec::new();
     for idx in selections {
         let candidate = candidates
@@ -92,34 +91,38 @@ fn select_publish_task_keys(ctx: &Ctx) -> Result<Vec<String>> {
 }
 
 fn list_publish_candidates(ctx: &Ctx) -> Result<Vec<PublishCandidate>> {
-    let tasks_dir = ctx.repo_root.join(".local/tasks");
-    if !tasks_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut paths = Vec::new();
-    for entry in
-        fs::read_dir(&tasks_dir).with_context(|| "Failed to read task directory: .local/tasks")?
-    {
-        let path = entry?.path();
-        if path.extension().is_some_and(|ext| ext == "toml") {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-
     let mut candidates = Vec::new();
-    for path in paths {
+    for path in task::task_document_paths(ctx)? {
         let (key, document) = read_publish_candidate(ctx, &path)?;
         if document.origin.is_some() {
             continue;
         }
+        let latest_run_status =
+            task_run::latest_for_task(ctx, &key)?.map(|record| record.run.status);
         candidates.push(PublishCandidate {
             task_key: key,
             document,
+            latest_run_status,
         });
     }
+    candidates.sort_by(|left, right| {
+        publish_candidate_rank(left)
+            .cmp(&publish_candidate_rank(right))
+            .then_with(|| left.task_key.cmp(&right.task_key))
+    });
     Ok(candidates)
+}
+
+fn publish_candidate_rank(candidate: &PublishCandidate) -> u8 {
+    use task_run::TaskRunStatus;
+
+    match candidate.latest_run_status {
+        None => 0,
+        Some(TaskRunStatus::Prepared | TaskRunStatus::Skipped) => 1,
+        Some(TaskRunStatus::Failed) => 2,
+        Some(TaskRunStatus::Running) => 3,
+        Some(TaskRunStatus::Done) => 4,
+    }
 }
 
 fn read_publish_candidate(ctx: &Ctx, path: &Path) -> Result<(String, task::TaskDocument)> {
@@ -142,10 +145,7 @@ fn task_key_from_path(ctx: &Ctx, path: &Path) -> Result<String> {
 }
 
 fn publish_task_relative_path(ctx: &Ctx, path: &Path) -> String {
-    path.strip_prefix(&ctx.repo_root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .into_owned()
+    ctx.storage_root.display_path(path)
 }
 
 #[cfg(test)]
@@ -153,8 +153,66 @@ fn publish_candidate_label(candidate: &PublishCandidate) -> String {
     publish_candidate_item(candidate).render_plain()
 }
 
+#[cfg(test)]
 fn publish_candidate_item(candidate: &PublishCandidate) -> PromptItem {
-    task::task_resource_item(&candidate.task_key, &candidate.document, "origin:none")
+    let mut hint_parts = vec![publish_candidate_state_label(candidate).to_string()];
+    hint_parts.extend(publish_candidate_identity_hint_parts(candidate));
+    PromptItem::from_hint_parts(
+        candidate.document.title_or_key(&candidate.task_key),
+        hint_parts,
+    )
+}
+
+fn publish_candidate_grouped_item(candidate: &PublishCandidate) -> PromptItem {
+    PromptItem::from_hint_parts(
+        candidate.document.title_or_key(&candidate.task_key),
+        publish_candidate_identity_hint_parts(candidate),
+    )
+}
+
+fn publish_candidate_identity_hint_parts(candidate: &PublishCandidate) -> Vec<String> {
+    let mut hint_parts = Vec::new();
+    if let Some(branch) = task::prepared_branch_name(&candidate.document.branch) {
+        hint_parts.push(format!("branch {branch}"));
+    } else {
+        hint_parts.push(format!("task {}", candidate.task_key));
+    }
+    hint_parts
+}
+
+fn publish_candidate_rows(candidates: &[PublishCandidate]) -> Vec<PromptRow> {
+    let mut rows = Vec::new();
+    let mut current_group = None;
+    for (index, candidate) in candidates.iter().enumerate() {
+        let group = publish_candidate_state_label(candidate).to_string();
+        if current_group.as_deref() != Some(group.as_str()) {
+            let count = candidates
+                .iter()
+                .filter(|candidate| publish_candidate_state_label(candidate) == group)
+                .count();
+            rows.push(PromptRow::section_with_hint(
+                group.clone(),
+                format!("{count} {}", pluralize_task(count)),
+            ));
+            current_group = Some(group);
+        }
+        rows.push(PromptRow::from_indexed_item(
+            index,
+            publish_candidate_grouped_item(candidate),
+        ));
+    }
+    rows
+}
+
+fn pluralize_task(count: usize) -> &'static str {
+    if count == 1 { "task" } else { "tasks" }
+}
+
+fn publish_candidate_state_label(candidate: &PublishCandidate) -> &'static str {
+    candidate
+        .latest_run_status
+        .map(|status| status.as_str())
+        .unwrap_or("not started")
 }
 
 fn preflight_task_documents(
@@ -170,6 +228,7 @@ fn preflight_task_documents(
         candidates.push(PublishCandidate {
             task_key: key.clone(),
             document,
+            latest_run_status: None,
         });
     }
 
@@ -351,6 +410,7 @@ mod tests {
     use crate::config::{Config, IssueProviderType, IssuesConfig};
     use crate::context::mock::{MockRunner, MockUi};
     use crate::services::issues::{EnsuredBranch, IssueInfo, IssueListItem};
+    use crate::task_run::{STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING};
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
@@ -434,7 +494,7 @@ mod tests {
     }
 
     fn write_task(root: &std::path::Path, key: &str, content: &str) {
-        let tasks_dir = root.join(".local/tasks");
+        let tasks_dir = root.join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
     }
@@ -483,7 +543,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("Failed to read task: .local/tasks/missing.toml")
+                .contains("Failed to read task: <git-common-dir>/wt/tasks/missing.toml")
         );
     }
 
@@ -539,7 +599,7 @@ mod tests {
                 .id,
             "PROJ-124"
         );
-        assert!(!dir.path().join(".local/task-runs").exists());
+        assert!(!dir.path().join(".git/wt/task-runs").exists());
 
         let dims = ui.dims.lock().unwrap().clone();
         assert!(dims.contains(
@@ -595,7 +655,63 @@ mod tests {
     }
 
     #[test]
-    fn publish_candidate_label_shows_title_key_origin_and_branch() {
+    fn bare_publish_orders_unstarted_tasks_before_started_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "a-running",
+            "title = \"Running\"\nbranch = \"a-running\"\n",
+        );
+        write_task(
+            dir.path(),
+            "b-done",
+            "title = \"Done\"\nbranch = \"b-done\"\n",
+        );
+        write_task(
+            dir.path(),
+            "x-failed",
+            "title = \"Failed\"\nbranch = \"x-failed\"\n",
+        );
+        write_task(
+            dir.path(),
+            "y-prepared",
+            "title = \"Prepared\"\nbranch = \"y-prepared\"\n",
+        );
+        write_task(
+            dir.path(),
+            "z-fresh",
+            "title = \"Fresh\"\nbranch = \"z-fresh\"\n",
+        );
+
+        let mut ui = MockUi::new();
+        ui.add_multi_select(vec![]);
+        let ui = Arc::new(ui);
+        let ctx = ctx_with_config_and_ui(dir.path(), linear_config(), Arc::clone(&ui));
+        task_run::create(&ctx, "a-running", "a-running", None, STATUS_RUNNING).unwrap();
+        task_run::create(&ctx, "b-done", "b-done", None, STATUS_DONE).unwrap();
+        task_run::create(&ctx, "x-failed", "x-failed", None, STATUS_FAILED).unwrap();
+        task_run::create(&ctx, "y-prepared", "y-prepared", None, STATUS_PREPARED).unwrap();
+
+        let keys = select_publish_task_keys(&ctx).unwrap();
+
+        assert!(keys.is_empty());
+        let items = ui.multi_select_items.lock().unwrap();
+        assert_eq!(
+            items[0]
+                .iter()
+                .map(|item| item.split("  ").next().unwrap_or(""))
+                .collect::<Vec<_>>(),
+            vec!["Fresh", "Prepared", "Failed", "Running", "Done"]
+        );
+        let rows = ui.multi_select_rows.lock().unwrap();
+        assert_eq!(
+            section_titles(&rows[0]),
+            vec!["not started", "prepared", "failed", "running", "done"]
+        );
+    }
+
+    #[test]
+    fn publish_candidate_label_shows_publish_state_and_branch_columns() {
         let candidate = PublishCandidate {
             task_key: "add-publish".into(),
             document: task::TaskDocument {
@@ -604,11 +720,12 @@ mod tests {
                 body: String::new(),
                 origin: None,
             },
+            latest_run_status: None,
         };
 
         assert_eq!(
             publish_candidate_label(&candidate),
-            "Add publish  not published | task add-publish | branch team/add-publish"
+            "Add publish  not started | branch team/add-publish"
         );
     }
 
@@ -693,7 +810,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("Failed to read task: .local/tasks/missing-task.toml")
+                .contains("Failed to read task: <git-common-dir>/wt/tasks/missing-task.toml")
         );
         assert!(provider.created_requests().is_empty());
         assert!(
@@ -933,7 +1050,16 @@ mod tests {
 
         let err = format!("{err:#}");
         assert!(err.contains("Provider issue linear:PROJ-123 was created"));
-        assert!(err.contains(".local/tasks/add-publish.toml"));
+        assert!(err.contains("<git-common-dir>/wt/tasks/add-publish.toml"));
         assert!(err.contains("disk is read-only"));
+    }
+
+    fn section_titles(rows: &[PromptRow]) -> Vec<String> {
+        rows.iter()
+            .filter_map(|row| match row {
+                PromptRow::Section(section) => Some(section.title.clone()),
+                PromptRow::Option(_) => None,
+            })
+            .collect()
     }
 }

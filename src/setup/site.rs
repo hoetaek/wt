@@ -3,7 +3,6 @@ use crate::config::{Config, SiteConfig, SiteProvider};
 use crate::context::Ctx;
 use crate::services::site::{SiteService, provider_label};
 use crate::template;
-use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -20,7 +19,6 @@ pub(crate) fn apply_site_template_vars(
     vars.insert("site_url".into(), url.clone());
     let target = render_site_target(&site, vars);
     let root = site.effective_root().into();
-    let open_browser = Some(site.effective_open_browser());
 
     Some(SiteDescriptor {
         provider: site.provider,
@@ -29,8 +27,6 @@ pub(crate) fn apply_site_template_vars(
         root,
         secure,
         target,
-        open_browser,
-        browser: site.browser,
     })
 }
 
@@ -66,27 +62,6 @@ pub(super) fn register_site(ctx: &Ctx, wt_path: &Path, site: &SiteDescriptor) {
             provider_label(&site.provider)
         ));
     }
-}
-
-pub(crate) fn open_site_url(
-    ctx: &Ctx,
-    site: &SiteDescriptor,
-    already_opened: Option<&str>,
-) -> Result<Option<String>> {
-    if !site.open_browser.unwrap_or(false) {
-        return Ok(None);
-    }
-    if already_opened == Some(site.url.as_str()) {
-        return Ok(None);
-    }
-
-    if let Some(app) = site.browser.as_deref() {
-        ctx.runner.run("open", &["-a", app, &site.url], None).ok();
-    } else {
-        ctx.runner.run("open", &[&site.url], None).ok();
-    }
-
-    Ok(Some(site.url.clone()))
 }
 
 fn render_site_name(template_value: &str, vars: &HashMap<String, String>) -> String {

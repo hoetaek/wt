@@ -3,6 +3,7 @@ use super::{apply_workflow_color, is_cancelled, task_issue_closing_references, v
 use crate::commands::issue;
 use crate::config::AGENT_PROMPT_WORKFLOW_SCOPE;
 use crate::context::Ctx;
+use crate::parallel::{self, ParallelControl};
 use crate::setup;
 use crate::task as task_store;
 use crate::task_run::{self, STATUS_FAILED, STATUS_RUNNING};
@@ -19,8 +20,6 @@ use crate::worktree_naming;
 use anyhow::{Result, bail};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::thread;
 
 pub(super) fn run_batch_workflow(
     ctx: &Ctx,
@@ -130,58 +129,40 @@ fn run_batch_workflow_parallel(
         return Ok(!failed.is_empty());
     }
 
-    let worker_count = jobs.max(1);
-    let (tx, rx) = mpsc::channel::<BatchWorkflowCompletion>();
-    let mut next = 0;
-    let mut active = 0;
     let mut cancelled = false;
     let total = metadata.tasks.len();
     let workflow_context = workflow_metadata_prompt_context(metadata);
 
-    thread::scope(|scope| -> Result<()> {
-        loop {
-            while !cancelled && active < worker_count && next < runnable.len() {
-                let state = runnable[next].clone();
-                ctx.ui
-                    .print_step(&starting_workflow_task_message(&state.row.task));
-                task_run::update(ctx, &state.row.run, STATUS_RUNNING, None, None)?;
-                let tx = tx.clone();
-                let base = base.clone();
-                let profile = metadata.profile.clone();
-                let workflow_context = workflow_context.clone();
-                scope.spawn(move || {
-                    let result = run_batch_workflow_task(
-                        ctx,
-                        BatchWorkflowTaskContext {
-                            workflow_path,
-                            state: &state,
-                            base: &base,
-                            policy: &metadata.policy,
-                            profile: profile.as_deref(),
-                            workflow_context: workflow_context.as_deref(),
-                            allow_interactive_prompts: false,
-                            total,
-                        },
-                    );
-                    let _ = tx.send(BatchWorkflowCompletion { state, result });
-                });
-                active += 1;
-                next += 1;
-            }
-
-            if active == 0 {
-                break;
-            }
-
-            let completion = rx
-                .recv()
-                .map_err(|_| anyhow::anyhow!("Workflow batch worker result channel closed"))?;
-            active -= 1;
+    let outcome = parallel::run_bounded_parallel(
+        runnable,
+        jobs,
+        |state| {
+            ctx.ui
+                .print_step(&starting_workflow_task_message(&state.row.task));
+            task_run::update(ctx, &state.row.run, STATUS_RUNNING, None, None)?;
+            Ok(())
+        },
+        |state| {
+            run_batch_workflow_task(
+                ctx,
+                BatchWorkflowTaskContext {
+                    workflow_path,
+                    state: &state,
+                    base: &base,
+                    policy: &metadata.policy,
+                    profile: metadata.profile.as_deref(),
+                    workflow_context: workflow_context.as_deref(),
+                    allow_interactive_prompts: false,
+                    total,
+                },
+            )
+        },
+        |completion| {
             match completion.result {
                 Ok(result) => {
                     record_batch_workflow_success(
                         ctx,
-                        &completion.state,
+                        &completion.item,
                         result,
                         metadata.color.as_deref(),
                     )?;
@@ -189,31 +170,31 @@ fn run_batch_workflow_parallel(
                 Err(err) if is_cancelled(&err) => {
                     record_batch_workflow_failure(
                         ctx,
-                        &completion.state,
+                        &completion.item,
                         task_run::STATUS_SKIPPED,
                         "User cancelled",
                     )?;
                     cancelled = true;
+                    return Ok(ParallelControl::Stop);
                 }
                 Err(err) => {
                     let message = err.to_string();
-                    record_batch_workflow_failure(ctx, &completion.state, STATUS_FAILED, &message)?;
+                    record_batch_workflow_failure(ctx, &completion.item, STATUS_FAILED, &message)?;
                     failed.push(BatchWorkflowFailure {
-                        run: completion.state.row.run.clone(),
+                        run: completion.item.row.run.clone(),
                         error: message,
                     });
                 }
             }
-        }
-
-        Ok(())
-    })?;
+            Ok(ParallelControl::Continue)
+        },
+    )?;
 
     if cancelled {
-        for state in runnable.iter().skip(next) {
+        for state in outcome.pending {
             record_batch_workflow_failure(
                 ctx,
-                state,
+                &state,
                 task_run::STATUS_SKIPPED,
                 "Skipped after user cancellation",
             )?;
@@ -227,11 +208,6 @@ fn run_batch_workflow_parallel(
 struct BatchWorkflowFailure {
     run: String,
     error: String,
-}
-
-struct BatchWorkflowCompletion {
-    state: WorkflowTaskState,
-    result: Result<issue::IssueRunResult>,
 }
 
 enum BatchWorkflowTaskOutcome {

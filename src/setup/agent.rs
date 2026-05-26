@@ -5,6 +5,58 @@ use crate::template;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 
+const WT_AGENT_ID_TEMPLATE_KEY: &str = "wt_agent_id";
+const WT_COORDINATOR_AGENT_ID_TEMPLATE_KEY: &str = "wt_coordinator_agent_id";
+
+pub(crate) fn agent_launch_command(
+    agent: Option<&AgentConfig>,
+    vars: &HashMap<String, String>,
+) -> Result<String> {
+    let Some(agent) = agent else {
+        return Ok(String::new());
+    };
+    let Some(command) = agent.command_line_with_vars(Some(vars))? else {
+        return Ok(String::new());
+    };
+
+    Ok(inject_agent_identity_env(agent, command, vars))
+}
+
+fn inject_agent_identity_env(
+    agent: &AgentConfig,
+    command: String,
+    vars: &HashMap<String, String>,
+) -> String {
+    if agent.cli == AgentCli::None || command.trim().is_empty() {
+        return command;
+    }
+
+    let mut exports = Vec::new();
+    if let Some(agent_id) = vars
+        .get(WT_AGENT_ID_TEMPLATE_KEY)
+        .map(String::as_str)
+        .filter(|agent_id| !agent_id.trim().is_empty())
+    {
+        exports.push(format!("WT_AGENT_ID={}", shell_arg(agent_id)));
+    }
+    if let Some(coordinator_agent_id) = vars
+        .get(WT_COORDINATOR_AGENT_ID_TEMPLATE_KEY)
+        .map(String::as_str)
+        .filter(|agent_id| !agent_id.trim().is_empty())
+    {
+        exports.push(format!(
+            "WT_COORDINATOR_AGENT_ID={}",
+            shell_arg(coordinator_agent_id)
+        ));
+    }
+
+    if exports.is_empty() {
+        return command;
+    }
+
+    format!("export {}; {command}", exports.join(" "))
+}
+
 pub(super) fn bootstrap_agent(
     ctx: &Ctx,
     ws_handle: &str,
@@ -139,6 +191,20 @@ fn send_agent_prompt(
 fn should_submit_with_enter_key(agent: &AgentConfig) -> bool {
     matches!(
         (&agent.submit, &agent.cli),
-        (SubmitMode::Auto, AgentCli::Codex) | (SubmitMode::CarriageReturn, _)
+        (
+            SubmitMode::Auto,
+            AgentCli::Codex | AgentCli::Claude | AgentCli::Gemini,
+        ) | (SubmitMode::CarriageReturn, _)
     )
+}
+
+fn shell_arg(value: &str) -> String {
+    let safe = value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | ':' | '='));
+    if safe && !value.is_empty() {
+        return value.to_string();
+    }
+
+    format!("'{}'", value.replace('\'', "'\\''"))
 }

@@ -1,11 +1,32 @@
 # wt
 
-`wt` is a Git worktree workspace manager for starting ready-to-code branches
-from issues, pull requests, branch-name text, or local task files.
+`wt` is a worktree-based agent orchestration harness for software engineers
+working with AI coding agents.
 
-It creates the worktree, applies repo setup, opens a cmux workspace when
-configured, registers local development sites, and can hand a prepared prompt to
-an agent such as Codex, Claude, or Gemini.
+It starts ready-to-code worktrees from issues, pull requests, branch-name text,
+or local task files; applies repo setup; opens a cmux workspace when configured;
+registers local development sites; and can hand a prepared prompt to an agent
+such as Codex, Claude, or Gemini.
+
+`wt` is a personal tool. It connects to team systems such as GitHub and Linear,
+but the orchestration stays on your machine and does not require team-wide
+adoption.
+
+## Who This Is For
+
+`wt` is for software engineers who are comfortable with Git worktrees and CLI
+workflows, use AI coding agents as part of daily development, and want to shape
+their own parallel-agent workflow without adopting a hosted service, daemon, or
+team-wide tool.
+
+## What wt Is Not
+
+- `wt` is not a team standard tool.
+- `wt` is not an agent runtime; Codex, Claude, Gemini, and similar tools do the
+  agent work.
+- `wt` is not a chatbot or general AI agent framework.
+- `wt` is not a hosted service.
+- `wt` is not a daemon.
 
 ## Install
 
@@ -105,7 +126,7 @@ npx --yes skills@latest add /path/to/wt \
 
 Installing these skills only installs Agent Skills playbooks. It does not
 install the `wt` binary, run `wt init`, write `.wt.toml`, configure providers,
-or create `.local` task/workflow state.
+or create personal `wt` task/workflow state.
 
 ## Requirements
 
@@ -128,27 +149,29 @@ Create or preview config in a target repository:
 
 ```bash
 wt init
-wt init --preset app --dry-run
-wt init --shared --preset issue --issue-provider github --yes
+wt init --dry-run
+wt init --shared --issue-provider github --yes
 wt doctor
+wt doctor --profile codex
 ```
 
 Start work:
 
 ```bash
-wt issue
-wt issue PROJ-123 --base .
-wt pr
-wt pr 42 43
-wt new add profile docs
-wt task run
-wt task run add-profile-docs
+wt run issue
+wt run issue PROJ-123 PROJ-124 --base .
+wt run pr
+wt run pr 42 43
+wt run branch add profile docs
+wt run task
+wt run task add-profile-docs
 ```
 
 Prepare local TaskDocuments without starting work:
 
 ```bash
 wt task list
+wt task list --all
 wt task import PROJ-123
 wt task import
 wt task publish add-profile-docs
@@ -162,22 +185,27 @@ wt workflow task --mode batch add-schema wire-api --base main --title "Ship sear
 wt workflow task --mode matrix --profiles devtools-port,mcp-owned add-profile-docs --base main
 wt workflow issue --mode stack 123 456 789 --base main --pr draft
 wt workflow list
-wt workflow run
+wt run workflow
 wt workflow repair 2026-05-16-001
 wt workflow complete 2026-05-16-001 add-schema --run-next
+wt workflow archive 2026-05-16-001
 ```
 
-Open a read-only local state UI:
+Open a read-only personal state UI:
 
 ```bash
 wt ui --port 8424
 ```
+
+`wt ui` prints the local URL and opens it in the default browser. With `--quiet`,
+it only prints the URL for scripts.
 
 Inspect, observe, message, and clean worktrees:
 
 ```bash
 wt list
 wt inspect
+wt inspect <branch|worktree|task-run-id> --pr
 wt agent status <branch|worktree|task-run-id>
 wt agent watch <branch|worktree|task-run-id>
 wt agent watch <branch|worktree|task-run-id> --timeout 300 --heartbeat 30
@@ -193,23 +221,39 @@ path/name, or direct TaskRun id.
 Land reviewed work with Git or pull requests first. Workflow-linked TaskRuns are
 completed with `wt workflow complete`, not `wt done`.
 
+Pass `--pr` to `wt inspect <target>` when the dossier should include read-only
+pull request review evidence. The PR section is opt-in and does not resolve
+threads, post review comments, request review, edit PRs, mutate wt state, or
+merge.
+
 ## Core Model
 
-- `wt new <words...>` starts an ad hoc branch worktree from branch-name text.
-- `wt issue` starts a worktree from an existing provider issue.
-- `wt pr` opens existing pull request branches as worktrees.
-- `TaskDocument` files in `.local/tasks/<task>.toml` define prepared local work.
-- `wt task list` is the canonical TaskDocument inventory. It lists all valid
-  local TaskDocument files, reports invalid task TOML files, and does not start
-  worktrees, branches, TaskRuns, Workflows, provider issues, or pull requests.
+- `wt run branch <words...>` starts an ad hoc branch worktree from branch-name text.
+- `wt run issue` starts worktrees from selected provider issues; `wt run issue <issue>...` starts explicit issues.
+- `wt run pr` opens existing pull request branches as worktrees.
+- `wt run task` starts one direct TaskRun worktree per selected local TaskDocument.
+- Multi-target `wt run issue`, `wt run pr`, and `wt run task` run with up to 3 jobs by default; pass `--jobs 1` for sequential execution with interactive conflict prompts.
+- `wt run` only starts workspace execution. Cleanup stays under `wt done`,
+  inspection under `wt inspect`, agent observation under `wt agent`, existing
+  branch/worktree opening under `wt open`, and saved workflow lifecycle actions
+  under `wt workflow`.
+- `wt run workflow` starts runnable tasks from saved Workflow files. It does
+  not list, edit, repair, or complete Workflow files.
+- `TaskDocument` files in `<git-common-dir>/wt/tasks/<task>.toml` define prepared local work.
+- `wt task list` shows the actionable local TaskDocument working set: tasks
+  with no TaskRun, or whose latest TaskRun is prepared, failed, or skipped. It
+  hides done and running tasks with a count hint; use `wt task list --all` for
+  the full TaskDocument inventory. Both modes report invalid task TOML files
+  and do not start worktrees, branches, TaskRuns, Workflows, provider issues, or
+  pull requests.
 - `wt task import [<issue>...]` imports provider issues as TaskDocuments,
   records title, branch, body, and `[origin]`, and may materialize the provider
   issue branch first; it does not start worktrees, local branches, TaskRuns,
   Workflows, or pull requests.
-- `wt task run [<task>...]` starts one worktree per selected TaskDocument.
+- `wt run task [<task>...]` starts one worktree per selected TaskDocument.
 - `wt task publish [<task>...]` creates provider issues from TaskDocuments and
   records `[origin]`; it does not start worktrees.
-- `Workflow` files in `.local/workflows/<id>.toml` save coordinated execution.
+- `Workflow` files in `<git-common-dir>/wt/workflows/<id>.toml` save coordinated execution.
   Optional top-level `title`, `body`, and `[origin]` record the larger human
   context for the saved plan. Workflow `[origin]` belongs to the large
   issue-like unit represented by the Workflow; TaskDocument `[origin]` belongs
@@ -219,32 +263,83 @@ completed with `wt workflow complete`, not `wt done`.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid
   Workflow files whether or not they are runnable and reports invalid workflow
   TOML files instead of hiding parse failures.
-- `TaskRun` files in `.local/task-runs/<id>.toml` record execution attempts.
+- `wt workflow archive <workflow>` moves a completed Workflow plus linked
+  done/skipped TaskRuns and uniquely-owned TaskDocuments into
+  `<git-common-dir>/wt/archive/workflows/<workflow-id>/`. Archive is
+  visibility and retention only; it is not a substitute for landing,
+  `wt workflow complete`, or `wt done`.
+- `TaskRun` files in `<git-common-dir>/wt/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
-- `wt ui [--port <port>]` starts a read-only loopback web UI for `.local`
+- `wt ui [--port <port>]` starts a read-only loopback web UI for personal `wt`
   ideas, TaskDocuments, Workflows, TaskRuns, profile summaries, and effective
   config source paths. It serves embedded assets, exposes
   `GET /api/snapshot`, reports invalid TOML records, and does not write state
   or serve arbitrary repo files.
 - `wt inspect [<target>]` is the read-only work dossier for a branch, worktree,
-  or TaskRun.
+  or TaskRun. `wt inspect <target> --pr` adds nested pull request review
+  evidence without changing lifecycle state or exit-code semantics.
 - `wt agent status [<target>]` observes the current agent/cmux state, and
   `wt agent watch [<target>]` polls it. `wt agent watch` prints state
   transitions by default; `--timeout <seconds>` bounds the wait, and
-  `--heartbeat <seconds>` opts into unchanged running reports. Agent state is
-  separate from `TaskRun.status`.
+  `--heartbeat <seconds>` opts into unchanged running reports. Non-idle
+  heartbeat and timeout samples are recorded under local `agent.state`, which
+  stays separate from `TaskRun.status`.
+- `wt setup` configures per-machine wt integration. It detects supported agent
+  CLIs, prompts before installing wt-managed Claude and Codex inbox hooks, and
+  can add shell integration and completion eval lines to the resolved shell rc
+  file. Use `--yes` to accept detected steps, `--dry-run` to preview writes,
+  and `--remove` to remove wt-managed per-machine entries while preserving
+  user-managed hooks, cmux hooks, and unrelated trust state.
+- `wt codex` and `wt claude` launch those agent CLIs with
+  `WT_AGENT_ID=agents/<branch_slug>` and set `WT_COORDINATOR_AGENT_ID` from
+  the launch context when a coordinator identity is available. In the same
+  worktree, pass a leading role such as `wt codex @planner` or
+  `wt claude @reviewer` to use a separate inbox like
+  `agents/<branch_slug>-planner`; role launches never consume the default
+  worktree inbox.
+- `wt as <agent-id> -- <command...>` is the low-level escape hatch for unusual
+  agent commands or scripts that need an explicit inbox identity.
+- `wt msg send --to <agent> <message>` writes a scoped file inbox message under
+  `<git-common-dir>/wt/messages/agents/<agent>/inbox/new/`. The default CLI
+  send scope is `direct`; use `--scope workflow:<id>` for workflow-owned
+  coordinator reports, `--scope task_run:<id>` for TaskRun-owned delivery, and
+  `--scope repo` for repo-local singleton delivery. Workflow and TaskRun
+  ownership belong in explicit message scope metadata, not in `correlates_with`.
+- `wt msg check-inbox` is the hook-compatible consumer. With no `--agent`, it
+  checks the unique non-empty inbox ids from `WT_AGENT_ID` and
+  `WT_COORDINATOR_AGENT_ID`; `--agent <agent>` is an explicit single-inbox
+  override. It claims deliverable direct-scope messages from `inbox/new` or
+  eligible `inbox/retry`, emits hook JSON, and acknowledges them into
+  `inbox/delivered` after stdout is written; it is not a separate unread/read
+  lifecycle.
+- `wt msg list --agent <agent>` is the read-only lifecycle inventory. It counts
+  and summarizes `new`, `claimed`, `delivered`, `retry`, and `failed` messages,
+  including claim owner, lease, attempts, scope, and error metadata when present.
+- `wt msg read --agent <agent> <message-id>` reads one retained lifecycle
+  message without claiming or acknowledging it. Pass `--json` to either
+  inspection command for stable machine-readable output.
 
-`wt workflow` is the canonical prepared-work surface. `single`, `batch`, and
-`stack` are workflow mode values, not separate command surfaces. Use
+`wt workflow` is the canonical prepared-work surface. `single`, `batch`,
+`stack`, and `matrix` are workflow mode values, not separate command surfaces. Use
 `wt inspect` for read-only dossiers and `wt agent status` / `wt agent watch`
 for runtime observation.
 
 ## Coordinator Handoff
 
-Task prompts started by `wt task run` and `wt workflow run` include coordinator
-handoff instructions when cmux coordinates are available. The prompt gives the
-agent a `cmux send --workspace ... --surface ...` report command and a matching
-`cmux send-key ... enter` command.
+Task prompts started by `wt run task` and `wt run workflow` include coordinator
+handoff instructions. Workflow handoffs give the agent the scoped coordinator
+file inbox target, `wt msg send --scope workflow:<id> --to coordinator ...`,
+where `coordinator` normalizes to `agents/coordinator`, so workflow supervisors
+can attribute shared coordinator messages to the owning workflow. The prompt
+also includes fallback cmux coordinates with a `cmux send --workspace ...
+--surface ...` report command and a matching `cmux send-key ... enter` command.
+Direct `wt msg send --to coordinator ...` remains a direct/default-scope
+coordinator message, not workflow-owned delivery.
+
+Workflow supervisors may claim shared `agents/coordinator` inbox messages only
+when the message has explicit matching workflow scope. The recipient address,
+`coordinator` alias normalization, cmux coordinates, or `correlates_with` are
+not enough ownership evidence.
 
 Agents report back in this shape and then keep ownership of review follow-up
 for their task:
@@ -253,7 +348,7 @@ for their task:
 Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>
 ```
 
-Immediate `wt task run` work reports `PR=none`. Workflow tasks follow the
+Immediate `wt run task` work reports `PR=none`. Workflow tasks follow the
 prepared workflow policy. Omit `--pr` to use the effective `[workflow]`
 configuration, pass `--pr none` to report `PR=none`, pass `--pr draft` to create
 a draft PR and leave it draft, or pass `--pr ready` to create a review-ready PR
@@ -287,7 +382,7 @@ threads, comments, and checks. Examples:
 
 1. `--config <path>`
 2. `.wt.toml` as shared project config
-3. `.local/.wt.toml` as private checkout config
+3. `<git-common-dir>/wt/config.toml` as personal repo config
 
 Inspect the effective config:
 
@@ -318,26 +413,29 @@ bypassing dirty-worktree, check, pull-request review, review-thread, or ancestry
 safety gates.
 
 `wt config` prints the effective `[workflow]` policy, including the built-in
-defaults above. `wt init` may include a commented optional `[workflow]` block so
-the policy is discoverable, but generated config does not actively enable PR
-creation or automatic landing by default.
+defaults above. `wt init` writes an explicit starter `[workflow]` policy so the
+PR and landing behavior for newly prepared workflows is visible in the generated
+config.
 
 When `[workspace]` is configured, `wt config` also prints effective workspace
-colors, including built-in defaults. To change or disable a color, copy that
-line into the owning config file and override the value there.
-When `[workspace.chrome_devtools]` is enabled, `wt config` prints the effective
-Chrome user data directory and URL templates. The port is shown only when it is
-configured; otherwise setup reserves an available localhost port at runtime.
+colors, including built-in defaults. `wt init` writes the starter color map;
+edit that line to change or disable a color.
+When `[workspace.browser]` is configured with `mode = "system"` or
+`mode = "chrome_devtools"`, `wt config` prints the effective browser launch URL.
+For Chrome DevTools mode, `wt config` also prints the effective Chrome user data
+directory. The port is shown only when it is configured; otherwise setup
+reserves an available localhost port at runtime.
 
 When an active `[site]` provider is configured, `wt config` prints the site
 defaults runtime setup uses, such as the generated name template, root,
-security, browser-opening behavior, URL template, and Traefik target. A
-disabled `provider = "none"` site section is omitted from effective output.
+security, URL template, and Traefik target. A disabled `provider = "none"` site
+section is omitted from effective output. Browser launch behavior belongs to
+`[workspace.browser]`, not `[site]`.
 When `[editor]` is configured, `wt config` prints the effective editor
 placement default, `cmux_surface`, unless it is overridden.
 
 `wt workflow task` and `wt workflow issue` snapshot the effective workflow
-policy into `.local/workflows/<id>.toml` for the prepared workflow.
+policy into `<git-common-dir>/wt/workflows/<id>.toml` for the prepared workflow.
 `wt workflow show` reads that prepared policy from the workflow file, not from
 the current `.wt.toml`, so later config edits do not rewrite the meaning of
 existing workflow files. An explicit `--pr none|draft|ready` overrides the
@@ -358,21 +456,33 @@ Small private agent config can stay inline:
 
 ```toml
 [profile.agent]
+# Agent CLI used by this inline profile.
 cli = "codex"
+# Extra args passed whenever this agent is launched.
 args = ["--model", "gpt-5.5"]
+
+[profile.agent.prompt]
+# `common` is prepended to issue, branch, and pr prompts.
+common = ["Before editing, identify the intended outcome, the smallest coherent change, and the checks that should prove it."]
+# `issue` applies to `wt run issue`.
+issue = ["Use the linked issue as the contract: extract the user-visible problem, acceptance criteria, constraints, and comments that change scope before coding."]
+# `branch` applies to `wt run branch`.
+branch = ["Use the current branch and local task context as the contract: inspect recent commits and existing diff, then continue only the requested line of work."]
+# `pr` applies to `wt run pr`.
+pr = ["Use review comments, CI failures, and the PR diff as the contract: fix correctness and regressions first, and explain any non-code decisions."]
 
 [workspace]
 tabs = ["lazygit", "nvim"]
-# Workspace colors have built-in defaults; set this only to override.
-# Use "" to disable a color kind.
-# colors = { task = "blue", issue = "blue", new = "green", pr = "magenta" }
+colors = { task = "blue", issue = "blue", branch = "green", pr = "magenta" }
 ```
 
-Agent prompt scopes stay under `[agent.prompt]`. `common` is prepended to
-`issue`, `new`, and `pr` prompts. `workflow` is a separate workflow-started
-task scope: `wt workflow run` sends it after the built-in workflow handoff and
-TaskDocument snapshot, before the existing `issue` or `new` setup-mode prompts.
-It does not apply to direct `wt task run`, `wt issue`, `wt new`, or `wt pr`.
+Agent prompt scopes stay under `[agent.prompt]` in normal config or
+`[profile.agent.prompt]` when a small inline profile is used. `common` is
+prepended to `issue`, `branch`, and `pr` prompts. `workflow` is a separate
+workflow-started task scope: `wt run workflow` sends it after the built-in
+workflow handoff and TaskDocument snapshot, before the existing `issue` or
+`branch` setup-mode prompts.
+It does not apply to direct `wt run task`, `wt run issue`, `wt run branch`, or `wt run pr`.
 
 ```toml
 [agent.prompt]
@@ -385,30 +495,36 @@ workflow = ["Mention the PR state and any remaining review risk in the report."]
 Workspaces can opt into an isolated debuggable Chrome instance during setup:
 
 ```toml
+[workspace.browser]
+mode = "chrome_devtools"
+# url = "{{site_url}}"
+
 [workspace.chrome_devtools]
-enabled = true
 # port = 9222
 # user_data_dir = "{{worktree_parent}}/.chrome-devtools/{{worktree_name}}"
-# url = "{{site_url}}"
 ```
 
-When enabled, `wt` reserves a localhost port, launches Chrome with
-`--remote-debugging-address=127.0.0.1`, and uses a non-default per-worktree user
-data directory under the worktree parent, outside the repository checkout.
+In Chrome DevTools browser mode, `wt` reserves a localhost port, launches Chrome
+with `--remote-debugging-address=127.0.0.1`, and uses a non-default per-worktree
+user data directory under the worktree parent, outside the repository checkout.
 Setup templates, post-deps tabs, local context, and agent bootstrap can use
 `{{chrome_debug_port}}`, `{{chrome_debug_url}}`, and
 `{{chrome_user_data_dir}}`. A localhost Chrome remote debugging endpoint lets
-local processes control that browser instance, so enable it only for workspaces
-where that local access is acceptable.
+local processes control that browser instance, so use this mode only for
+workspaces where that local access is acceptable.
 
 Use named profiles only when prompt files, scaffold files, or reusable runtime
 bundles are needed:
 
 ```bash
 wt profile create codex
-wt config extract .local/.wt.toml
-wt config inline .local/profiles/codex/profile.toml
+wt config extract "$(git rev-parse --git-common-dir)/wt/config.toml"
+wt config inline "$(git rev-parse --git-common-dir)/wt/profiles/codex/profile.toml"
 ```
+
+Named profile `profile.toml` is an override layer: omitted `[agent]` fields
+inherit lower-precedence config, present fields override, and `args = []`
+explicitly clears inherited agent args.
 
 Omitting `--profile` means the effective config. `default` is not a profile
 name.
@@ -418,14 +534,14 @@ mode:
 
 ```bash
 wt workflow task --mode matrix --profiles devtools-port,mcp-owned chrome-devtools-isolation
-wt workflow run
+wt run workflow
 ```
 
 Workflow matrix mode stores `profiles = [...]` in the Workflow TOML and supports
 exactly one local TaskDocument across the named profiles. Profile order is the
 user-provided order. Duplicate names, missing profiles, and reserved `default`
 fail before Workflow files, TaskRuns, or worktrees are created. Direct
-`wt task run` remains the immediate single-worktree path; use `--profile <name>`
+`wt run task` remains the immediate single-worktree path; use `--profile <name>`
 there for one named profile.
 
 ## Command Map
@@ -434,22 +550,27 @@ there for one named profile.
 | --- | --- |
 | `wt init` | Create or preview repository config |
 | `wt doctor` | Check configured providers and local tools |
-| `wt issue` | Start work from a provider issue |
-| `wt pr` | Start worktrees from pull requests |
-| `wt new` | Start work from branch-name text |
-| `wt task list` | List saved local TaskDocuments |
+| `wt run issue` | Start work from one or more provider issues |
+| `wt run pr` | Start worktrees from pull requests |
+| `wt run branch` | Start work from branch-name text |
+| `wt task list` | List actionable local TaskDocuments |
 | `wt task import` | Import provider issues as local TaskDocuments |
-| `wt task run` | Start work from local TaskDocuments |
+| `wt run task` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
-| `wt workflow` | Prepare, inspect, run, and repair saved workflows; complete stack tasks |
-| `wt ui` | Start the read-only local state web UI |
+| `wt workflow` | Prepare, inspect, repair, archive, and complete saved workflows |
+| `wt run workflow` | Start runnable tasks from saved workflows |
+| `wt ui` | Start the read-only personal state web UI |
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |
 | `wt agent status` | Observe the matching task agent surface once |
 | `wt agent watch` | Poll the matching task agent surface, with optional timeout and heartbeat |
+| `wt setup` | Set up or remove per-machine wt integration |
+| `wt codex [@role]` | Launch Codex with a derived worktree agent identity |
+| `wt claude [@role]` | Launch Claude with a derived worktree agent identity |
+| `wt as <agent-id> -- <command...>` | Run any command with an explicit wt agent identity |
 | `wt send` | Send a message to the matching task agent surface |
 | `wt done` | Remove completed or disposable worktrees and branches |
 | `wt config` | Print, edit, extract, or inline config |
-| `wt profile` | List or create named profile configs |
+| `wt profile` | List named profiles (omission default for `wt profile list`) or scaffold a new one with `wt profile create <name>` |
 | `wt site` | Inspect and manage local site provider helpers |
 
 Run `wt <command> --help` for the current contract.

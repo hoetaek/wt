@@ -1,10 +1,10 @@
 use super::resolve_mutating_target;
-use crate::context::{Ctx, PromptItem};
+use crate::context::{Ctx, PromptItem, PromptRow};
+use crate::task_run::STATUS_PREPARED;
 use crate::workflow as workflow_store;
 use crate::workflow::planner::{RunnableWorkflowInfo, runnable_workflow_info};
 use crate::workflow::render::{
-    base_label, shell_arg, workflow_relative_path, workflow_selection_status_counts,
-    workflow_title_label,
+    shell_arg, workflow_relative_path, workflow_selection_status_counts, workflow_title_label,
 };
 use crate::workflow::run::{
     WorkflowTaskState, read_batch_workflow_task_states, read_matrix_workflow_task_states,
@@ -18,6 +18,7 @@ pub(super) struct RunnableWorkflowCandidate {
     pub(super) id: String,
     pub(super) path: PathBuf,
     item: PromptItem,
+    group: String,
     label: String,
 }
 
@@ -38,16 +39,10 @@ fn select_runnable_workflow_path(ctx: &Ctx) -> Result<Option<PathBuf>> {
             ctx.ui.print_warning("No runnable workflows found");
             Ok(None)
         }
-        1 => Ok(Some(candidates[0].path.clone())),
-        _ if !ctx.ui.can_prompt() => {
-            bail!("{}", multiple_runnable_workflows_message(ctx, &candidates))
-        }
+        _ if !ctx.ui.can_prompt() => bail!("{}", runnable_workflows_message(ctx, &candidates)),
         _ => {
-            let items = candidates
-                .iter()
-                .map(|candidate| candidate.item.clone())
-                .collect::<Vec<_>>();
-            let idx = ctx.ui.select_items("Workflow to run", &items)?;
+            let rows = workflow_candidate_rows(&candidates);
+            let idx = ctx.ui.select_rows("Workflow to run", &rows)?;
             let candidate = candidates
                 .get(idx)
                 .ok_or_else(|| anyhow::anyhow!("Selected workflow index out of range: {idx}"))?;
@@ -79,12 +74,14 @@ pub(super) fn list_runnable_workflow_candidates(
         let Some(info) = runnable_workflow_info(&workflow.mode, &states) else {
             continue;
         };
-        let item = workflow_selection_item(ctx, &path, &id, &workflow, &states, &info);
+        let item = workflow_selection_item(ctx, &id, &workflow, &states, &info);
+        let group = workflow_selection_group(&workflow.mode);
         let label = item.render_plain();
         candidates.push(RunnableWorkflowCandidate {
             id,
             path,
             item,
+            group,
             label,
         });
     }
@@ -136,56 +133,82 @@ fn read_workflow_candidate_states(
 
 fn workflow_selection_item(
     ctx: &Ctx,
-    workflow_path: &Path,
     workflow_id: &str,
     metadata: &WorkflowMetadata,
     states: &[WorkflowTaskState],
     info: &RunnableWorkflowInfo,
 ) -> PromptItem {
-    let mut fields = vec![
-        format!("id {workflow_id}"),
-        format!("mode {}", metadata.mode.as_str()),
-    ];
+    let mut fields = vec![metadata.mode.as_str().to_string()];
     match metadata.mode {
         WorkflowMode::Single | WorkflowMode::Batch | WorkflowMode::Matrix => {
             fields.push(format!("runnable {}", info.runnable_count));
+            if states
+                .iter()
+                .any(|state| state.run.status != STATUS_PREPARED)
+            {
+                fields.push(workflow_selection_status_counts(states));
+            }
         }
         WorkflowMode::Stack => {
             if let Some(next_idx) = info.next_idx {
                 let state = &states[next_idx];
-                fields.push(format!("next {} [{}]", state.row.task, state.run.status));
+                let mut next = format!("next {}", state.row.task);
+                if state.run.status != STATUS_PREPARED {
+                    next.push_str(&format!(" [{}]", state.run.status));
+                }
+                fields.push(next);
             }
         }
     }
-    fields.push(format!(
-        "status {}",
-        workflow_selection_status_counts(states)
-    ));
-    fields.push(format!("base {}", base_label(metadata)));
     if let Some(profile) = metadata.profile.as_deref() {
         fields.push(format!("profile {profile}"));
     }
     if !metadata.profiles.is_empty() {
         fields.push(format!("profiles {}", metadata.profiles.join(",")));
     }
-    fields.push(format!(
-        "path {}",
-        workflow_relative_path(ctx, workflow_path)
-    ));
 
     PromptItem::from_hint_parts(workflow_title_label(ctx, workflow_id, metadata), fields)
 }
 
-fn multiple_runnable_workflows_message(
-    ctx: &Ctx,
-    candidates: &[RunnableWorkflowCandidate],
-) -> String {
+fn workflow_candidate_rows(candidates: &[RunnableWorkflowCandidate]) -> Vec<PromptRow> {
+    let mut rows = Vec::new();
+    let mut groups = Vec::<String>::new();
+    for candidate in candidates {
+        if !groups.contains(&candidate.group) {
+            groups.push(candidate.group.clone());
+        }
+    }
+
+    for group in groups {
+        rows.push(PromptRow::section(group.clone()));
+        for (index, candidate) in candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| candidate.group == group)
+        {
+            rows.push(PromptRow::from_indexed_item(index, candidate.item.clone()));
+        }
+    }
+    rows
+}
+
+fn workflow_selection_group(mode: &WorkflowMode) -> String {
+    match mode {
+        WorkflowMode::Single => "single workflows",
+        WorkflowMode::Batch => "batch workflows",
+        WorkflowMode::Stack => "stack workflows",
+        WorkflowMode::Matrix => "matrix workflows",
+    }
+    .to_string()
+}
+
+fn runnable_workflows_message(ctx: &Ctx, candidates: &[RunnableWorkflowCandidate]) -> String {
     let mut rows = candidates
         .iter()
         .take(10)
         .map(|candidate| {
             format!(
-                "  wt workflow run {}  # {}",
+                "  wt run workflow {}  # {}",
                 shell_arg(&candidate.id),
                 workflow_relative_path(ctx, &candidate.path)
             )
@@ -196,8 +219,11 @@ fn multiple_runnable_workflows_message(
         rows.push(format!("  ...(+{} more)", candidates.len() - rows.len()));
     }
 
-    format!(
-        "Multiple runnable workflows found; pass one explicitly:\n{}",
-        rows.join("\n")
-    )
+    let heading = if candidates.len() == 1 {
+        "Runnable workflow found; pass it explicitly:"
+    } else {
+        "Multiple runnable workflows found; pass one explicitly:"
+    };
+
+    format!("{heading}\n{}", rows.join("\n"))
 }

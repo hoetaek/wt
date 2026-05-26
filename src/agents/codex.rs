@@ -38,13 +38,28 @@ fn screen_has_codex_literal_marker(line: &str) -> bool {
     if trim_token(first) != "codex" {
         return false;
     }
-    rest.split_whitespace()
-        .any(|token| is_codex_status_token(token) || is_version_token(token))
+    let Some(next) = rest
+        .split_whitespace()
+        .map(trim_token)
+        .find(|token| !token.is_empty())
+    else {
+        return false;
+    };
+    is_codex_marker_active_token(next) || is_version_token(next)
 }
 
 fn screen_has_codex_model_status_line(line: &str) -> bool {
     let line = line.trim();
-    line.starts_with("gpt-") && line.split_whitespace().any(is_codex_status_token)
+    if !line.starts_with("gpt-") {
+        return false;
+    }
+    let tokens: Vec<&str> = line.split_whitespace().map(trim_token).collect();
+    let has_marker_active = tokens
+        .iter()
+        .any(|token| is_codex_marker_active_token(token));
+    let has_reasoning_effort_anchored = tokens.iter().any(|token| is_reasoning_effort_token(token))
+        && tokens.iter().any(|token| is_codex_status_token(token));
+    has_marker_active || has_reasoning_effort_anchored
 }
 
 fn screen_has_codex_modern_header(line: &str) -> bool {
@@ -67,6 +82,36 @@ fn is_reasoning_effort_token(token: &str) -> bool {
 }
 
 fn is_codex_status_token(token: &str) -> bool {
+    matches!(
+        trim_token(token),
+        "working"
+            | "running"
+            | "thinking"
+            | "exploring"
+            | "starting"
+            | "ready"
+            | "idle"
+            | "waiting"
+            | "failed"
+            | "failure"
+            | "fatal"
+            | "error"
+            | "permission"
+    )
+}
+
+/// Tokens that are strong enough by themselves to anchor a Codex screen marker.
+///
+/// `is_codex_status_token` is intentionally broader because it is also used by
+/// `screen_status` to classify state. Marker recognition has a stricter bar so
+/// that very common words cannot turn ordinary prose into a live Codex surface
+/// candidate. Tokens kept out of this list because they appear too often in
+/// non-agent text: `waiting` ("codex waiting on review" in a lazygit commit
+/// list), `starting` ("gpt-5.5 is a good starting point" in a README).
+/// `ready`/`idle` are retained because they were already marker contributors
+/// before the `waiting` vocabulary extension and reflect a Codex footer label
+/// rather than a token that frequently appears in incidental prose.
+fn is_codex_marker_active_token(token: &str) -> bool {
     matches!(
         trim_token(token),
         "working"
@@ -104,6 +149,63 @@ mod tests {
         let screen = "remove-task-run-source . gpt-5.5 xhigh . Context 94% left . 5h 91%";
 
         assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn codex_model_status_line_with_waiting_is_ui_marker() {
+        let screen = "gpt-5.5 xhigh Waiting for user input";
+
+        assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn codex_model_status_line_without_reasoning_effort_is_not_ui_marker() {
+        // README prose mentioning a model and a status word but no reasoning
+        // effort anchor must not be treated as a live Codex surface.
+        let screen = "gpt-5.5 something waiting elsewhere";
+
+        assert!(!screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn codex_literal_marker_with_active_status_is_ui_marker() {
+        let screen = "codex Working on plan";
+
+        assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn codex_literal_marker_with_waiting_token_alone_is_not_ui_marker() {
+        // The literal `codex` anchor combined with common idle/waiting words is
+        // too weak for marker recognition; it would match `codex waiting on
+        // review` in a lazygit commit list. `waiting` is still kept in the
+        // broader status token list for `screen_status` classification.
+        let screen = "codex waiting on review";
+
+        assert!(!screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn codex_literal_marker_skips_separator_token_before_status() {
+        // `Codex · Working` and `Codex | v0.130.0` use visual separators after
+        // the brand. The marker must look past the empty token (after
+        // trim_token) to find the first meaningful status/version word.
+        assert!(screen_has_codex_ui_marker(Some("Codex · Working")));
+        assert!(screen_has_codex_ui_marker(Some("Codex | v0.130.0")));
+    }
+
+    #[test]
+    fn codex_literal_marker_with_version_is_ui_marker() {
+        let screen = "codex v1.2";
+
+        assert!(screen_has_codex_ui_marker(Some(screen)));
+    }
+
+    #[test]
+    fn waiting_prose_without_codex_anchor_is_not_ui_marker() {
+        let screen = "Task description: waiting on the build to finish";
+
+        assert!(!screen_has_codex_ui_marker(Some(screen)));
     }
 
     #[test]

@@ -214,10 +214,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
-        std::fs::create_dir_all(repo.join(".local/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".git/wt/task-runs")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
-            repo.join(".local/task-runs/run-feature.toml"),
+            repo.join(".git/wt/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();

@@ -94,7 +94,7 @@ pub(super) fn run_stack_workflow(
         Err(err) => {
             let error = err.to_string();
             update_workflow_task_run(ctx, &metadata.tasks[idx], STATUS_FAILED, Some(&error))?;
-            bail!("Workflow stack failed: {}", workflow_path.display())
+            Err(err)
         }
     }
 }

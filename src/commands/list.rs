@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn site_url_uses_matching_profile_config_from_branch_suffix() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".local/profiles/codex");
+        let profile_dir = repo.path().join(".git/wt/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),

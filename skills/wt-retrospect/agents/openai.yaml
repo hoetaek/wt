@@ -1,0 +1,4 @@
+interface:
+  display_name: "WT Retrospect"
+  short_description: "Capture keep/problem/try lessons as a retrospective"
+  default_prompt: "Use $wt-retrospect after $wt-land (or explicit discard) to write keep/problem/try lessons and action candidates in specs/<slug>/11-retrospect.md for spec-backed work, or under <git-common-dir>/wt/retrospectives/ for cross-work/spec-less lessons."

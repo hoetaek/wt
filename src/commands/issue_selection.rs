@@ -1,11 +1,12 @@
 use crate::commands::issue;
-use crate::context::{Ctx, PromptItem};
+use crate::context::{Ctx, PromptItem, PromptRow};
 use crate::services::issues::{IssueListItem, IssueProvider};
 use anyhow::{Result, bail};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SelectedIssue {
     pub(crate) identifier: String,
+    pub(crate) title: String,
     pub(crate) display: String,
 }
 
@@ -33,28 +34,31 @@ pub(crate) fn select_issues_with_provider(
         let item = issue_prompt_item(issue);
         selected.push(SelectedIssue {
             identifier: issue.identifier.clone(),
+            title: issue.title.clone(),
             display: item.render_plain(),
         });
     }
     Ok(selected)
 }
 
-pub(crate) fn select_issue_index(
-    ctx: &Ctx,
-    prompt: &str,
-    issues: &[IssueListItem],
-) -> Result<usize> {
-    let items = issue_prompt_items(issues);
-    ctx.ui.select_items(prompt, &items)
-}
-
 fn select_issue_indices(ctx: &Ctx, prompt: &str, issues: &[IssueListItem]) -> Result<Vec<usize>> {
-    let items = issue_prompt_items(issues);
-    ctx.ui.multi_select_items(prompt, &items)
+    let rows = issue_prompt_rows(issues);
+    ctx.ui.multi_select_rows(prompt, &rows)
 }
 
 fn issue_prompt_items(issues: &[IssueListItem]) -> Vec<PromptItem> {
     issues.iter().map(issue_prompt_item).collect()
+}
+
+fn issue_prompt_rows(issues: &[IssueListItem]) -> Vec<PromptRow> {
+    let mut rows = vec![PromptRow::section("Provider issues")];
+    rows.extend(
+        issue_prompt_items(issues)
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| PromptRow::from_indexed_item(index, item)),
+    );
+    rows
 }
 
 fn issue_prompt_item(issue: &IssueListItem) -> PromptItem {

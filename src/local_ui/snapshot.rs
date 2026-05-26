@@ -1,11 +1,13 @@
 use crate::config::{
-    AgentCli, Config, ConfigSource, IssueProviderType, SiteProvider, WorkflowDefaultLandingPolicy,
-    WorkflowDefaultPullRequestMode,
+    AgentCli, AgentConfig, Config, ConfigSource, EditorPlacement, IssueProviderType, ReadyMode,
+    SetupConfig, SiteProvider, SubmitMode, TestConfig, WorkflowDefaultLandingPolicy,
+    WorkflowDefaultPullRequestMode, WorkspaceConfig, WorktreeConfig,
 };
 use crate::config_render::render_effective_config;
 use crate::context::{
     CmdOutput, CommandRunner, Ctx, CtxOptions, OutputMode, PromptItem, UserInterface,
 };
+use crate::storage::{LegacyLocalStorage, StorageRoot};
 use crate::task::{self, TaskDocument, TaskOrigin};
 use crate::task_run::{self, TaskRunContext, TaskRunRecord, TaskRunStatus};
 use crate::workflow::planner::runnable_workflow_info;
@@ -29,6 +31,7 @@ pub struct SnapshotState {
     config: Config,
     base_config: Config,
     config_source: ConfigSource,
+    storage_root: StorageRoot,
 }
 
 impl SnapshotState {
@@ -40,6 +43,7 @@ impl SnapshotState {
             config: ctx.config.clone(),
             base_config: ctx.base_config.clone(),
             config_source: ctx.config_source.clone(),
+            storage_root: ctx.storage_root.clone(),
         }
     }
 
@@ -51,6 +55,7 @@ impl SnapshotState {
         base_config: Config,
         config_source: ConfigSource,
     ) -> Self {
+        let storage_root = StorageRoot::from_git_common_dir(repo_root.join(".git"));
         Self {
             repo_root,
             invocation_root,
@@ -58,6 +63,7 @@ impl SnapshotState {
             config,
             base_config,
             config_source,
+            storage_root,
         }
     }
 
@@ -71,9 +77,12 @@ impl SnapshotState {
             CtxOptions {
                 base_config: self.base_config.clone(),
                 config_source: self.config_source.clone(),
+                storage_root: Some(self.storage_root.clone()),
                 output_mode: OutputMode::Text,
                 verbosity: 0,
                 quiet: true,
+                launcher_coordinator_id: None,
+                coordinator_agent_id: None,
             },
         )
     }
@@ -116,11 +125,15 @@ struct ConfigSummary {
     effective_text: String,
     source_files: Vec<SourceFileSummary>,
     selected_profile: Option<String>,
+    worktree: Option<WorktreeSummary>,
+    setup: Option<SetupSummary>,
     workflow: WorkflowDefaultSummary,
-    agent: Option<String>,
-    issues: Option<String>,
+    issues: Option<IssuesSummary>,
     site: Option<SiteSummary>,
+    editor: Option<EditorSummary>,
     workspace: Option<WorkspaceSummary>,
+    agent: Option<AgentSummary>,
+    test: Option<TestSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,18 +149,132 @@ struct WorkflowDefaultSummary {
 }
 
 #[derive(Debug, Serialize)]
+struct IssuesSummary {
+    provider: String,
+    gh_user: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorktreeSummary {
+    path: Option<String>,
+    copy: Vec<String>,
+    copy_as: Vec<CopyAsSummary>,
+    link: Vec<String>,
+    inject_local_context: bool,
+    naming: Option<WorktreeNamingSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct CopyAsSummary {
+    from: String,
+    to: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorktreeNamingSummary {
+    command: String,
+    branch: Option<String>,
+    workspace: Option<String>,
+    prompt_configured: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupSummary {
+    deps: Vec<CommandSummary>,
+    env: Vec<KeyValueSummary>,
+    env_files: Vec<EnvFileSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct CommandSummary {
+    run: String,
+    working_dir: Option<String>,
+    if_exists: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct KeyValueSummary {
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+struct EnvFileSummary {
+    path: String,
+    values: Vec<KeyValueSummary>,
+}
+
+#[derive(Debug, Serialize)]
 struct SiteSummary {
     provider: String,
     active: bool,
+    name: String,
+    root: String,
+    secure: bool,
+    url: String,
+    target: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct EditorSummary {
+    command: Option<String>,
+    placement: String,
 }
 
 #[derive(Debug, Serialize)]
 struct WorkspaceSummary {
     tab_count: usize,
+    tabs: Vec<String>,
     post_deps_tab_count: usize,
-    open_url: Option<String>,
-    open_browser: Option<bool>,
+    post_deps_tabs: Vec<String>,
+    browser: Option<WorkspaceBrowserSummary>,
+    chrome_devtools: Option<WorkspaceChromeDevtoolsSummary>,
     color_count: usize,
+    colors: Vec<WorkspaceColorSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkspaceBrowserSummary {
+    mode: String,
+    url: Option<String>,
+    app: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkspaceChromeDevtoolsSummary {
+    port: Option<u16>,
+    user_data_dir: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkspaceColorSummary {
+    kind: String,
+    color: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentSummary {
+    cli: String,
+    args: Vec<String>,
+    command: Option<String>,
+    ready: String,
+    submit: String,
+    timeout: u64,
+    send_after: u64,
+    prompt_modes: Vec<String>,
+    prompt_counts: Vec<PromptModeSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct PromptModeSummary {
+    mode: String,
+    count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct TestSummary {
+    commands: Vec<CommandSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -216,6 +343,7 @@ struct WorkflowSummary {
     task_count: usize,
     task_runs: TaskRunCounts,
     task_run_groups: Vec<WorkflowTaskRunGroup>,
+    relationship_rows: Vec<WorkflowRelationshipRow>,
     runnable: RunnableSummary,
     base_mode: String,
     base: Option<String>,
@@ -224,6 +352,31 @@ struct WorkflowSummary {
     policy: WorkflowPolicySummary,
     updated_at: String,
     state_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowRelationshipRow {
+    index: usize,
+    task: String,
+    parent: Option<String>,
+    profile: Option<String>,
+    run_id: String,
+    task_document: Option<TaskDocumentLinkSummary>,
+    task_document_error: Option<String>,
+    task_run: Option<WorkflowRelationshipTaskRunSummary>,
+    task_run_path: Option<String>,
+    task_run_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowRelationshipTaskRunSummary {
+    id: String,
+    path: String,
+    task: String,
+    branch: String,
+    status: String,
+    group: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -318,11 +471,18 @@ struct ProfileCollection {
 struct ProfileSummary {
     name: String,
     path: String,
-    copy_count: usize,
-    link_count: usize,
+    copy: Vec<String>,
+    copy_as: Vec<CopyAsSummary>,
+    link: Vec<String>,
     agent: String,
     has_site: bool,
     test_count: usize,
+    worktree: Option<WorktreeSummary>,
+    setup: Option<SetupSummary>,
+    site: Option<SiteSummary>,
+    workspace: Option<WorkspaceSummary>,
+    agent_settings: Option<AgentSummary>,
+    test: Option<TestSummary>,
     source_text: Option<String>,
 }
 
@@ -336,6 +496,8 @@ struct RetrospecCollection {
 struct RetrospecSummary {
     key: String,
     path: String,
+    scope: String,
+    spec: Option<String>,
     kind: String,
     title: String,
     outcome: Option<String>,
@@ -373,12 +535,21 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
             root: state.repo_root.display().to_string(),
         },
         sources: SourceSummary {
-            ideas: ".local/ideas".into(),
-            tasks: ".local/tasks".into(),
-            workflows: ".local/workflows".into(),
-            task_runs: ".local/task-runs".into(),
-            profiles: ".local/profiles".into(),
-            retrospecs: ".local/retrospectives".into(),
+            ideas: ctx.storage_root.display_path(&ctx.storage_root.ideas_dir()),
+            tasks: ctx.storage_root.display_path(&ctx.storage_root.tasks_dir()),
+            workflows: ctx
+                .storage_root
+                .display_path(&ctx.storage_root.workflows_dir()),
+            task_runs: ctx
+                .storage_root
+                .display_path(&ctx.storage_root.task_runs_dir()),
+            profiles: ctx
+                .storage_root
+                .display_path(&ctx.storage_root.profiles_dir()),
+            retrospecs: ctx
+                .storage_root
+                .display_path(&ctx.storage_root.retrospectives_dir())
+                + " + <git-common-dir>/wt/specs/*/11-retrospect.md",
             config_paths: config_source_paths(&ctx),
         },
         config: config_summary(&ctx),
@@ -394,6 +565,15 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
 fn collect_ideas(ctx: &Ctx) -> Result<IdeaCollection> {
     let mut items = Vec::new();
     let mut invalid = Vec::new();
+
+    if let Some(legacy) = ctx.storage_root.detect_legacy_ideas(&ctx.repo_root) {
+        invalid.push(legacy_state_invalid_record(
+            ctx,
+            legacy,
+            "legacy-ideas",
+            "ideas",
+        ));
+    }
 
     for path in idea_paths(ctx)? {
         let key = file_stem(&path).unwrap_or_else(|| "idea".into());
@@ -413,14 +593,15 @@ fn collect_ideas(ctx: &Ctx) -> Result<IdeaCollection> {
 }
 
 fn idea_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
-    let ideas_dir = ctx.repo_root.join(".local/ideas");
+    let ideas_dir = ctx.storage_root.ideas_dir();
     if !ideas_dir.exists() {
         return Ok(Vec::new());
     }
 
     let mut paths = Vec::new();
-    for entry in
-        fs::read_dir(&ideas_dir).with_context(|| "Failed to read idea directory: .local/ideas")?
+    let display = ctx.storage_root.display_path(&ideas_dir);
+    for entry in fs::read_dir(&ideas_dir)
+        .with_context(|| format!("Failed to read idea directory: {display}"))?
     {
         let path = entry?.path();
         let ext = path.extension().and_then(|ext| ext.to_str());
@@ -572,6 +753,7 @@ fn workflow_summary(
     let (runnable, state_error) = workflow_runnable(ctx, path, &metadata);
     let presentation_group = workflow_presentation_group(&counts, &runnable, state_error.as_ref());
     let task_run_groups = workflow_task_run_groups(ctx, &metadata);
+    let relationship_rows = workflow_relationship_rows(ctx, &metadata);
     let title = workflow_title_label(ctx, &id, &metadata);
     let body_summary = metadata.body.as_deref().and_then(body_summary);
     let body = non_empty_string(metadata.body);
@@ -596,6 +778,7 @@ fn workflow_summary(
         task_count: metadata.tasks.len(),
         task_runs: counts,
         task_run_groups,
+        relationship_rows,
         runnable,
         base_mode: metadata.base_mode,
         base: metadata.base,
@@ -607,6 +790,100 @@ fn workflow_summary(
         },
         updated_at: metadata.updated_at,
         state_error,
+    }
+}
+
+fn workflow_relationship_rows(
+    ctx: &Ctx,
+    metadata: &WorkflowMetadata,
+) -> Vec<WorkflowRelationshipRow> {
+    if matches!(metadata.mode, WorkflowMode::Matrix) {
+        return metadata
+            .tasks
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, task)| {
+                task.runs
+                    .iter()
+                    .map(move |run| workflow_relationship_row(ctx, idx + 1, task, Some(run)))
+            })
+            .collect();
+    }
+
+    metadata
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(idx, task)| workflow_relationship_row(ctx, idx + 1, task, None))
+        .collect()
+}
+
+fn workflow_relationship_row(
+    ctx: &Ctx,
+    index: usize,
+    task: &workflow::WorkflowTask,
+    profile_run: Option<&workflow::WorkflowTaskRun>,
+) -> WorkflowRelationshipRow {
+    let task_key = task::safe_task_key(&task.task);
+    let (task_document, task_document_error) = linked_task_document(ctx, &task_key);
+    let run_id = profile_run
+        .map(|run| run.run.clone())
+        .unwrap_or_else(|| task.run.clone());
+    let (task_run, task_run_path, task_run_error) = workflow_relationship_task_run(ctx, &run_id);
+
+    WorkflowRelationshipRow {
+        index,
+        task: task_key,
+        parent: task.parent.clone(),
+        profile: profile_run.map(|run| run.profile.clone()),
+        run_id,
+        task_document,
+        task_document_error,
+        task_run,
+        task_run_path,
+        task_run_error,
+    }
+}
+
+fn workflow_relationship_task_run(
+    ctx: &Ctx,
+    run_id: &str,
+) -> (
+    Option<WorkflowRelationshipTaskRunSummary>,
+    Option<String>,
+    Option<String>,
+) {
+    if run_id.trim().is_empty() {
+        return (
+            None,
+            None,
+            Some("Workflow task is missing TaskRun id".into()),
+        );
+    }
+
+    let path = match task_run::resolve(ctx, run_id) {
+        Ok(path) => path,
+        Err(err) => return (None, None, Some(format!("{err:#}"))),
+    };
+    let display_path = relative_path(ctx, &path);
+    match task_run::read(&path) {
+        Ok(run) => {
+            let id = task_run::id_from_path(&path).unwrap_or_else(|_| run_id.to_string());
+            (
+                Some(WorkflowRelationshipTaskRunSummary {
+                    id,
+                    path: display_path.clone(),
+                    task: run.task,
+                    branch: run.branch,
+                    status: run.status.as_str().into(),
+                    group: run.group,
+                    error: run.error,
+                }),
+                Some(display_path),
+                None,
+            )
+        }
+        Err(err) => (None, Some(display_path), Some(format!("{err:#}"))),
     }
 }
 
@@ -891,29 +1168,59 @@ fn task_run_context_summary(ctx: &Ctx, record: &TaskRunRecord) -> TaskRunContext
 }
 
 fn collect_profiles(ctx: &Ctx) -> Result<ProfileCollection> {
-    let inventory = Config::load_profile_inventory(&ctx.repo_root, &ctx.base_config)?;
+    let inventory = Config::load_profile_inventory_from_storage(
+        &ctx.repo_root,
+        &ctx.storage_root,
+        &ctx.base_config,
+    )?;
     let items = inventory
         .profiles
         .into_iter()
-        .map(|profile| ProfileSummary {
-            name: profile.name,
-            path: relative_path(ctx, &profile.path),
-            copy_count: profile.config.worktree.copy.len() + profile.config.worktree.copy_as.len(),
-            link_count: profile.config.worktree.link.len(),
-            agent: profile
-                .config
-                .agent
+        .map(|profile| {
+            let worktree = worktree_summary(&profile.config.worktree);
+            let setup = setup_summary(&profile.config.setup);
+            let site = site_summary(&profile.config);
+            let workspace = workspace_summary(profile.config.workspace.as_ref());
+            let agent_settings = agent_summary(profile.config.agent.as_ref());
+            let test = test_summary(profile.config.test.as_ref());
+            let agent = agent_settings
                 .as_ref()
-                .map(|agent| agent_cli_name(&agent.cli))
-                .unwrap_or("none")
-                .into(),
-            has_site: profile.config.has_site(),
-            test_count: profile
+                .map(|agent| agent.cli.clone())
+                .unwrap_or_else(|| "none".into());
+            let has_site = profile.config.has_site();
+            let test_count = profile
                 .config
                 .test
+                .as_ref()
                 .map(|test| test.commands.len())
-                .unwrap_or(0),
-            source_text: read_known_source_text(ctx, &profile.path),
+                .unwrap_or(0);
+
+            ProfileSummary {
+                name: profile.name,
+                path: relative_path(ctx, &profile.path),
+                copy: profile.config.worktree.copy.clone(),
+                copy_as: profile
+                    .config
+                    .worktree
+                    .copy_as
+                    .iter()
+                    .map(|entry| CopyAsSummary {
+                        from: entry.from.clone(),
+                        to: entry.to.clone(),
+                    })
+                    .collect(),
+                link: profile.config.worktree.link.clone(),
+                agent,
+                has_site,
+                test_count,
+                worktree,
+                setup,
+                site,
+                workspace,
+                agent_settings,
+                test,
+                source_text: read_known_source_text(ctx, &profile.path),
+            }
         })
         .collect();
     let invalid = inventory
@@ -934,10 +1241,22 @@ fn collect_retrospecs(ctx: &Ctx) -> Result<RetrospecCollection> {
     let mut items = Vec::new();
     let mut invalid = Vec::new();
 
+    if let Some(legacy) = ctx
+        .storage_root
+        .detect_legacy_retrospectives(&ctx.repo_root)
+    {
+        invalid.push(legacy_state_invalid_record(
+            ctx,
+            legacy,
+            "legacy-retrospectives",
+            "retrospectives",
+        ));
+    }
+
     for path in retrospec_paths(ctx)? {
-        let key = file_stem(&path).unwrap_or_else(|| "retrospec".into());
+        let (key, scope, spec) = retrospec_identity(ctx, &path);
         let relative_path = relative_path(ctx, &path);
-        match read_retrospec(ctx, &path) {
+        match read_retrospec(ctx, &path, key.clone(), scope, spec) {
             Ok(summary) => items.push(summary),
             Err(err) => invalid.push(InvalidRecord {
                 key,
@@ -952,45 +1271,98 @@ fn collect_retrospecs(ctx: &Ctx) -> Result<RetrospecCollection> {
 }
 
 fn retrospec_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
-    let retrospecs_dir = ctx.repo_root.join(".local/retrospectives");
-    if !retrospecs_dir.exists() {
-        return Ok(Vec::new());
-    }
-
     let mut paths = Vec::new();
-    for entry in fs::read_dir(&retrospecs_dir)
-        .with_context(|| "Failed to read retrospec directory: .local/retrospectives")?
-    {
-        let path = entry?.path();
-        let ext = path.extension().and_then(|ext| ext.to_str());
-        if matches!(ext, Some("toml" | "md" | "markdown")) {
-            paths.push(path);
+
+    let retrospecs_dir = ctx.storage_root.retrospectives_dir();
+    if retrospecs_dir.exists() {
+        let display = ctx.storage_root.display_path(&retrospecs_dir);
+        for entry in fs::read_dir(&retrospecs_dir)
+            .with_context(|| format!("Failed to read retrospec directory: {display}"))?
+        {
+            let path = entry?.path();
+            let ext = path.extension().and_then(|ext| ext.to_str());
+            if matches!(ext, Some("toml" | "md" | "markdown")) {
+                paths.push(path);
+            }
         }
     }
+
+    let specs_dir = ctx.storage_root.specs_dir();
+    if specs_dir.exists() {
+        let display = ctx.storage_root.display_path(&specs_dir);
+        for entry in fs::read_dir(&specs_dir)
+            .with_context(|| format!("Failed to read specs directory: {display}"))?
+        {
+            let path = entry?.path();
+            if path.is_dir() {
+                let retrospec = path.join("11-retrospect.md");
+                if retrospec.exists() {
+                    paths.push(retrospec);
+                }
+            }
+        }
+    }
+
     paths.sort();
     Ok(paths)
 }
 
-fn read_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
+fn retrospec_identity(ctx: &Ctx, path: &Path) -> (String, String, Option<String>) {
+    let specs_dir = ctx.storage_root.specs_dir();
+    if let Ok(relative) = path.strip_prefix(&specs_dir) {
+        let mut components = relative.components();
+        if let Some(spec) = components
+            .next()
+            .and_then(|component| component.as_os_str().to_str())
+        {
+            return (
+                format!("{spec}/11-retrospect"),
+                "spec-local".into(),
+                Some(spec.to_string()),
+            );
+        }
+    }
+
+    (
+        file_stem(path).unwrap_or_else(|| "retrospec".into()),
+        "cross-work".into(),
+        None,
+    )
+}
+
+fn read_retrospec(
+    ctx: &Ctx,
+    path: &Path,
+    key: String,
+    scope: String,
+    spec: Option<String>,
+) -> Result<RetrospecSummary> {
     match path.extension().and_then(|ext| ext.to_str()) {
-        Some("toml") => read_toml_retrospec(ctx, path),
-        Some("md" | "markdown") => read_markdown_retrospec(ctx, path),
+        Some("toml") => read_toml_retrospec(ctx, path, key, scope, spec),
+        Some("md" | "markdown") => read_markdown_retrospec(ctx, path, key, scope, spec),
         _ => bail!("Unsupported retrospec file type: {}", path.display()),
     }
 }
 
-fn read_toml_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
+fn read_toml_retrospec(
+    ctx: &Ctx,
+    path: &Path,
+    key: String,
+    scope: String,
+    spec: Option<String>,
+) -> Result<RetrospecSummary> {
     let relative_path = relative_path(ctx, path);
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read retrospec: {relative_path}"))?;
     let value: toml::Value = toml::from_str(&content)
         .with_context(|| format!("Failed to parse retrospec: {relative_path}"))?;
-    let key = file_stem(path).unwrap_or_else(|| "retrospec".into());
     let title = toml_string(&value, "title").unwrap_or_else(|| key.clone());
     let body = retrospec_body(&value);
     Ok(RetrospecSummary {
         key,
         path: relative_path,
+        scope,
+        spec,
         kind: "toml".into(),
         title,
         outcome: toml_string(&value, "outcome"),
@@ -1003,11 +1375,16 @@ fn read_toml_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
     })
 }
 
-fn read_markdown_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
+fn read_markdown_retrospec(
+    ctx: &Ctx,
+    path: &Path,
+    key: String,
+    scope: String,
+    spec: Option<String>,
+) -> Result<RetrospecSummary> {
     let relative_path = relative_path(ctx, path);
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read retrospec: {relative_path}"))?;
-    let key = file_stem(path).unwrap_or_else(|| "retrospec".into());
     let title = content
         .lines()
         .find_map(|line| line.trim().strip_prefix("# ").map(str::trim))
@@ -1017,6 +1394,8 @@ fn read_markdown_retrospec(ctx: &Ctx, path: &Path) -> Result<RetrospecSummary> {
     Ok(RetrospecSummary {
         key,
         path: relative_path,
+        scope,
+        spec,
         kind: "markdown".into(),
         title,
         outcome: None,
@@ -1133,38 +1512,219 @@ fn config_summary(ctx: &Ctx) -> ConfigSummary {
             .profile
             .as_ref()
             .and_then(|profile| profile.name.clone()),
+        worktree: worktree_summary(&ctx.config.worktree),
+        setup: setup_summary(&ctx.config.setup),
         workflow: WorkflowDefaultSummary {
             pull_request: workflow_default_pull_request(policy.pull_request).into(),
             landing: workflow_default_landing(policy.landing).into(),
         },
-        agent: ctx
-            .config
-            .agent
-            .as_ref()
-            .map(|agent| agent_cli_name(&agent.cli).into()),
-        issues: ctx
-            .config
-            .issues
-            .as_ref()
-            .map(|issues| match issues.provider {
+        issues: ctx.config.issues.as_ref().map(|issues| IssuesSummary {
+            provider: match issues.provider {
                 IssueProviderType::Linear => "linear".into(),
                 IssueProviderType::Github => "github".into(),
-            }),
-        site: ctx.config.site.as_ref().map(|site| SiteSummary {
-            provider: site_provider_name(&site.provider).into(),
-            active: ctx.config.has_site(),
+            },
+            gh_user: issues.gh_user.clone(),
         }),
-        workspace: ctx
-            .config
-            .workspace
+        site: site_summary(&ctx.config),
+        editor: ctx.config.effective_editor().map(|editor| EditorSummary {
+            command: editor.command,
+            placement: editor_placement_name(editor.placement.as_ref()).into(),
+        }),
+        workspace: workspace_summary(ctx.config.workspace.as_ref()),
+        agent: agent_summary(ctx.config.agent.as_ref()),
+        test: test_summary(ctx.config.test.as_ref()),
+    }
+}
+
+fn site_summary(config: &Config) -> Option<SiteSummary> {
+    config.site.as_ref().map(|site| {
+        let site = site.with_effective_defaults();
+        SiteSummary {
+            provider: site_provider_name(&site.provider).into(),
+            active: config.has_site(),
+            name: site.effective_name().into(),
+            root: site.effective_root().into(),
+            secure: site.effective_secure(),
+            url: site.effective_url().into_owned(),
+            target: site.effective_target().map(str::to_string),
+        }
+    })
+}
+
+fn workspace_summary(workspace: Option<&WorkspaceConfig>) -> Option<WorkspaceSummary> {
+    workspace.map(|workspace| WorkspaceSummary {
+        tab_count: workspace.tabs.len(),
+        tabs: workspace.tabs.clone(),
+        post_deps_tab_count: workspace.post_deps_tabs.len(),
+        post_deps_tabs: workspace.post_deps_tabs.clone(),
+        browser: workspace
+            .browser
             .as_ref()
-            .map(|workspace| WorkspaceSummary {
-                tab_count: workspace.tabs.len(),
-                post_deps_tab_count: workspace.post_deps_tabs.len(),
-                open_url: workspace.open_url.clone(),
-                open_browser: workspace.open_browser,
-                color_count: workspace.effective_colors().len(),
+            .map(|browser| WorkspaceBrowserSummary {
+                mode: workspace_browser_mode_name(browser.mode).into(),
+                url: browser.effective_url().map(|url| url.into_owned()),
+                app: browser.app.clone(),
             }),
+        chrome_devtools: workspace.chrome_devtools.as_ref().map(|chrome| {
+            WorkspaceChromeDevtoolsSummary {
+                port: chrome.port,
+                user_data_dir: chrome.effective_user_data_dir().into(),
+            }
+        }),
+        color_count: workspace.effective_colors().len(),
+        colors: workspace
+            .effective_colors()
+            .into_iter()
+            .map(|(kind, color)| WorkspaceColorSummary {
+                kind: kind.into(),
+                color: color.into(),
+            })
+            .collect(),
+    })
+}
+
+fn agent_summary(agent: Option<&AgentConfig>) -> Option<AgentSummary> {
+    agent.map(|agent| {
+        let mut prompt_modes = agent
+            .prompt
+            .keys()
+            .filter_map(|key| {
+                prompt_append_mode_name(key)
+                    .map(|mode| format!("{mode} append"))
+                    .or_else(|| Some(key.clone()))
+            })
+            .collect::<Vec<_>>();
+        prompt_modes.sort();
+        let mut prompt_counts = agent
+            .prompt
+            .iter()
+            .map(|(mode, prompts)| PromptModeSummary {
+                mode: prompt_append_mode_name(mode)
+                    .map(|mode| format!("{mode} append"))
+                    .unwrap_or_else(|| mode.clone()),
+                count: prompts.len(),
+            })
+            .collect::<Vec<_>>();
+        prompt_counts.sort_by(|a, b| a.mode.cmp(&b.mode));
+        AgentSummary {
+            cli: agent_cli_name(&agent.cli).into(),
+            args: agent.args.clone(),
+            command: agent.command.clone(),
+            ready: ready_mode_name(&agent.ready),
+            submit: submit_mode_name(&agent.submit).into(),
+            timeout: agent.timeout,
+            send_after: agent.send_after,
+            prompt_modes,
+            prompt_counts,
+        }
+    })
+}
+
+fn worktree_summary(worktree: &WorktreeConfig) -> Option<WorktreeSummary> {
+    if *worktree == WorktreeConfig::default() {
+        return None;
+    }
+    Some(WorktreeSummary {
+        path: worktree.path.clone(),
+        copy: worktree.copy.clone(),
+        copy_as: worktree
+            .copy_as
+            .iter()
+            .map(|entry| CopyAsSummary {
+                from: entry.from.clone(),
+                to: entry.to.clone(),
+            })
+            .collect(),
+        link: worktree.link.clone(),
+        inject_local_context: worktree.inject_local_context.is_some(),
+        naming: worktree
+            .naming
+            .as_ref()
+            .map(|naming| WorktreeNamingSummary {
+                command: naming.command.clone(),
+                branch: naming.branch.clone(),
+                workspace: naming.workspace.clone(),
+                prompt_configured: !naming.prompt.trim().is_empty(),
+            }),
+    })
+}
+
+fn setup_summary(setup: &SetupConfig) -> Option<SetupSummary> {
+    if *setup == SetupConfig::default() {
+        return None;
+    }
+    let mut env_files = setup
+        .env_files
+        .iter()
+        .map(|(path, values)| EnvFileSummary {
+            path: path.clone(),
+            values: sorted_key_values(values),
+        })
+        .collect::<Vec<_>>();
+    env_files.sort_by(|a, b| a.path.cmp(&b.path));
+    Some(SetupSummary {
+        deps: setup
+            .deps
+            .iter()
+            .map(|dep| CommandSummary {
+                run: dep.run.clone(),
+                working_dir: dep.working_dir.clone(),
+                if_exists: dep.if_exists.clone(),
+                label: None,
+            })
+            .collect(),
+        env: sorted_key_values(&setup.env),
+        env_files,
+    })
+}
+
+fn test_summary(test: Option<&TestConfig>) -> Option<TestSummary> {
+    let test = test?;
+    if *test == TestConfig::default() {
+        return None;
+    }
+    Some(TestSummary {
+        commands: test
+            .commands
+            .iter()
+            .map(|command| CommandSummary {
+                run: command.run.clone(),
+                working_dir: command.working_dir.clone(),
+                if_exists: command.if_exists.clone(),
+                label: command.label.clone(),
+            })
+            .collect(),
+    })
+}
+
+fn sorted_key_values(values: &std::collections::HashMap<String, String>) -> Vec<KeyValueSummary> {
+    let mut values = values
+        .iter()
+        .map(|(key, value)| KeyValueSummary {
+            key: key.clone(),
+            value: value.clone(),
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|a, b| a.key.cmp(&b.key));
+    values
+}
+
+fn prompt_append_mode_name(key: &str) -> Option<&str> {
+    key.strip_prefix("\0append:")
+}
+
+fn editor_placement_name(placement: Option<&EditorPlacement>) -> &'static str {
+    match placement {
+        Some(EditorPlacement::Process) => "process",
+        Some(EditorPlacement::CmuxSurface) | None => "cmux_surface",
+    }
+}
+
+fn workspace_browser_mode_name(mode: crate::config::WorkspaceBrowserMode) -> &'static str {
+    match mode {
+        crate::config::WorkspaceBrowserMode::None => "none",
+        crate::config::WorkspaceBrowserMode::System => "system",
+        crate::config::WorkspaceBrowserMode::ChromeDevtools => "chrome_devtools",
     }
 }
 
@@ -1228,6 +1788,22 @@ fn agent_cli_name(cli: &AgentCli) -> &'static str {
     }
 }
 
+fn ready_mode_name(mode: &ReadyMode) -> String {
+    match mode {
+        ReadyMode::Auto => "auto".into(),
+        ReadyMode::Marker(marker) => marker.clone(),
+    }
+}
+
+fn submit_mode_name(mode: &SubmitMode) -> &'static str {
+    match mode {
+        SubmitMode::Auto => "auto",
+        SubmitMode::Newline => "newline",
+        SubmitMode::CarriageReturn => "carriage_return",
+        SubmitMode::None => "none",
+    }
+}
+
 fn site_provider_name(provider: &SiteProvider) -> &'static str {
     match provider {
         SiteProvider::None => "none",
@@ -1239,10 +1815,28 @@ fn site_provider_name(provider: &SiteProvider) -> &'static str {
 }
 
 fn relative_path(ctx: &Ctx, path: &Path) -> String {
+    if path.starts_with(ctx.storage_root.personal_root()) {
+        return ctx.storage_root.display_path(path);
+    }
+
     path.strip_prefix(&ctx.repo_root)
         .unwrap_or(path)
         .to_string_lossy()
         .into_owned()
+}
+
+fn legacy_state_invalid_record(
+    ctx: &Ctx,
+    legacy: LegacyLocalStorage,
+    key: &str,
+    state_name: &str,
+) -> InvalidRecord {
+    InvalidRecord {
+        key: key.into(),
+        path: relative_path(ctx, legacy.path()),
+        error: legacy.error_message_for(state_name),
+        source_text: None,
+    }
 }
 
 fn file_stem(path: &Path) -> Option<String> {
@@ -1290,21 +1884,24 @@ fn read_known_source_text(ctx: &Ctx, path: &Path) -> Option<String> {
 
 fn is_known_state_or_config_path(relative: &str) -> bool {
     relative == ".wt.toml"
-        || relative == ".local/.wt.toml"
-        || (relative.starts_with(".local/ideas/")
+        || relative == "<git-common-dir>/wt/config.toml"
+        || (relative.starts_with("<git-common-dir>/wt/ideas/")
             && matches!(
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
             ))
-        || (relative.starts_with(".local/retrospectives/")
+        || (relative.starts_with("<git-common-dir>/wt/retrospectives/")
             && matches!(
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
             ))
-        || (relative.starts_with(".local/tasks/") && relative.ends_with(".toml"))
-        || (relative.starts_with(".local/workflows/") && relative.ends_with(".toml"))
-        || (relative.starts_with(".local/task-runs/") && relative.ends_with(".toml"))
-        || (relative.starts_with(".local/profiles/") && relative.ends_with("/profile.toml"))
+        || (relative.starts_with("<git-common-dir>/wt/specs/")
+            && relative.ends_with("/11-retrospect.md"))
+        || (relative.starts_with("<git-common-dir>/wt/tasks/") && relative.ends_with(".toml"))
+        || (relative.starts_with("<git-common-dir>/wt/workflows/") && relative.ends_with(".toml"))
+        || (relative.starts_with("<git-common-dir>/wt/task-runs/") && relative.ends_with(".toml"))
+        || (relative.starts_with("<git-common-dir>/wt/profiles/")
+            && relative.ends_with("/profile.toml"))
 }
 
 fn body_summary(value: &str) -> Option<String> {
@@ -1392,9 +1989,12 @@ impl CommandRunner for NoopRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::IssuesConfig;
     use crate::config::{
-        AgentCli, AgentConfig, ReadyMode, SubmitMode, WorkflowDefaultLandingPolicy,
-        WorkflowDefaultPullRequestMode,
+        AgentCli, AgentConfig, DepCommand, EditorConfig, EditorPlacement, ReadyMode, SiteConfig,
+        SiteProvider, SubmitMode, TestCommand, TestConfig, WorkflowDefaultLandingPolicy,
+        WorkflowDefaultPullRequestMode, WorkspaceBrowserConfig, WorkspaceBrowserMode,
+        WorkspaceChromeDevtoolsConfig, WorkspaceConfig, WorktreeNamingConfig,
     };
     use std::collections::HashMap;
 
@@ -1429,12 +2029,21 @@ mod tests {
             "title = \"Idea\"\nstatus = \"ready\"\ntags = [\"ui\"]\nbody = \"Idea body\"\n",
         );
         write_idea(dir.path(), "bad", "title = [\n");
-        write_profile(dir.path(), "codex", "[agent]\ncli = \"codex\"\n");
+        write_profile(
+            dir.path(),
+            "codex",
+            "[worktree]\ncopy = [\".env\", \".linear.toml\"]\ncopy_as = [{ from = \".local/profiles/codex/scaffold\", to = \".\" }]\nlink = [\".local\"]\n\n[agent]\ncli = \"codex\"\n",
+        );
         write_profile(dir.path(), "bad name", "[agent]\ncli = \"codex\"\n");
         write_retrospec(
             dir.path(),
             "retro",
             "title = \"Retro\"\ndate = \"2026-05-18\"\noutcome = \"landed\"\ntarget = \"demo\"\ntags = [\"ui\"]\n\n[context]\ngoal = \"Retro goal\"\n\n[keep]\nitems = [\"Keep this\"]\n",
+        );
+        write_spec_retrospect(
+            dir.path(),
+            "demo-spec",
+            "# Demo spec retro\n\n## 결과\n- result: landed\n\n## 유지할 점\n- Keep spec context\n",
         );
         write_retrospec(dir.path(), "bad", "title = [\n");
         fs::write(
@@ -1444,23 +2053,86 @@ mod tests {
         .unwrap();
         fs::create_dir_all(dir.path().join(".local")).unwrap();
         fs::write(
-            dir.path().join(".local/.wt.toml"),
+            dir.path().join(".git/wt/config.toml"),
             "[workflow]\nlanding = \"auto\"\n",
         )
         .unwrap();
 
         let mut config = Config::default();
+        config.worktree.copy = vec!["AGENTS.override.md".into()];
+        config.worktree.link = vec![".local".into()];
+        config.worktree.inject_local_context = Some("## Local context\n".into());
+        config.worktree.naming = Some(WorktreeNamingConfig {
+            command: "claude -p".into(),
+            prompt: "Generate a branch slug".into(),
+            branch: Some("{{branch_prefix}}{{english_slug}}".into()),
+            workspace: Some("{{english_slug}}".into()),
+        });
+        config.setup.deps = vec![DepCommand {
+            working_dir: None,
+            run: "npm install".into(),
+            if_exists: Some("package.json".into()),
+        }];
+        config
+            .setup
+            .env
+            .insert("APP_URL".into(), "https://{{site_name}}.test".into());
         config.workflow.pull_request = Some(WorkflowDefaultPullRequestMode::Ready);
         config.workflow.landing = Some(WorkflowDefaultLandingPolicy::Auto);
+        config.issues = Some(IssuesConfig {
+            provider: IssueProviderType::Github,
+            gh_user: Some("alice".into()),
+        });
+        config.site = Some(SiteConfig {
+            provider: SiteProvider::Herd,
+            name: Some("{{repo}}-{{branch_slug}}".into()),
+            root: Some(".".into()),
+            secure: Some(true),
+            url: Some("https://{{site_name}}.test".into()),
+            target: None,
+        });
+        config.editor = EditorConfig {
+            command: Some("nvim {{path}}".into()),
+            placement: Some(EditorPlacement::CmuxSurface),
+        };
+        config.workspace = Some(WorkspaceConfig {
+            tabs: vec!["lazygit".into(), "nvim".into()],
+            post_deps_tabs: vec!["npm run dev".into()],
+            colors: HashMap::from([("task".into(), "blue".into())]),
+            browser: Some(WorkspaceBrowserConfig {
+                mode: WorkspaceBrowserMode::ChromeDevtools,
+                url: Some("{{site_url}}".into()),
+                app: None,
+            }),
+            chrome_devtools: Some(WorkspaceChromeDevtoolsConfig {
+                port: Some(9222),
+                user_data_dir: Some("{{worktree_parent}}/.chrome-devtools".into()),
+            }),
+        });
         config.agent = Some(AgentConfig {
             cli: AgentCli::Codex,
-            args: Vec::new(),
+            args: vec!["--yolo".into()],
             command: None,
             ready: ReadyMode::Auto,
             submit: SubmitMode::Auto,
-            timeout: 15,
-            send_after: 3,
-            prompt: HashMap::new(),
+            timeout: 30,
+            send_after: 2,
+            prompt: HashMap::from([
+                ("branch".into(), vec!["branch prompt".into()]),
+                (
+                    "issue".into(),
+                    vec!["context prompt".into(), "start prompt".into()],
+                ),
+            ]),
+            ..AgentConfig::default()
+        });
+        config.test = Some(TestConfig {
+            commands: vec![TestCommand {
+                working_dir: None,
+                run: "cargo test".into(),
+                if_exists: Some("Cargo.toml".into()),
+                label: Some("Rust tests".into()),
+            }],
         });
         let state = SnapshotState::new(
             dir.path().to_path_buf(),
@@ -1470,7 +2142,7 @@ mod tests {
             Config::default(),
             ConfigSource::Files(vec![
                 dir.path().join(".wt.toml"),
-                dir.path().join(".local/.wt.toml"),
+                dir.path().join(".git/wt/config.toml"),
             ]),
         );
 
@@ -1485,16 +2157,67 @@ mod tests {
         assert_eq!(snapshot.ideas.invalid.len(), 1);
         assert_eq!(snapshot.profiles.items.len(), 1);
         assert_eq!(snapshot.profiles.invalid.len(), 1);
-        assert_eq!(snapshot.retrospecs.items.len(), 1);
+        assert_eq!(snapshot.retrospecs.items.len(), 2);
         assert_eq!(snapshot.retrospecs.invalid.len(), 1);
         assert_eq!(snapshot.config.workflow.pull_request, "ready");
         assert_eq!(snapshot.config.workflow.landing, "auto");
-        assert_eq!(snapshot.config.agent.as_deref(), Some("codex"));
+        let issues = snapshot.config.issues.as_ref().unwrap();
+        assert_eq!(issues.provider, "github");
+        assert_eq!(issues.gh_user.as_deref(), Some("alice"));
+        let worktree = snapshot.config.worktree.as_ref().unwrap();
+        assert_eq!(worktree.copy, vec!["AGENTS.override.md".to_string()]);
+        assert_eq!(worktree.link, vec![".local".to_string()]);
+        assert!(worktree.inject_local_context);
+        let naming = worktree.naming.as_ref().unwrap();
+        assert_eq!(naming.command, "claude -p");
+        assert!(naming.prompt_configured);
+        let setup = snapshot.config.setup.as_ref().unwrap();
+        assert_eq!(setup.deps[0].run, "npm install");
+        assert_eq!(setup.env[0].key, "APP_URL");
+        let site = snapshot.config.site.as_ref().unwrap();
+        assert_eq!(site.provider, "herd");
+        assert_eq!(site.url, "https://{{site_name}}.test");
+        let editor = snapshot.config.editor.as_ref().unwrap();
+        assert_eq!(editor.command.as_deref(), Some("nvim {{path}}"));
+        assert_eq!(editor.placement, "cmux_surface");
+        let workspace = snapshot.config.workspace.as_ref().unwrap();
+        assert_eq!(workspace.tabs, vec!["lazygit", "nvim"]);
+        assert_eq!(workspace.browser.as_ref().unwrap().mode, "chrome_devtools");
+        assert_eq!(
+            workspace.chrome_devtools.as_ref().unwrap().user_data_dir,
+            "{{worktree_parent}}/.chrome-devtools"
+        );
+        let agent = snapshot.config.agent.as_ref().unwrap();
+        assert_eq!(agent.cli, "codex");
+        assert_eq!(agent.args, vec!["--yolo".to_string()]);
+        assert_eq!(agent.ready, "auto");
+        assert_eq!(agent.submit, "auto");
+        assert_eq!(agent.timeout, 30);
+        assert_eq!(agent.send_after, 2);
+        assert_eq!(agent.prompt_counts[0].mode, "branch");
+        assert_eq!(agent.prompt_counts[0].count, 1);
+        assert_eq!(agent.prompt_counts[1].mode, "issue");
+        assert_eq!(agent.prompt_counts[1].count, 2);
+        assert_eq!(
+            snapshot.config.test.as_ref().unwrap().commands[0].run,
+            "cargo test"
+        );
+        let profile = snapshot.profiles.items.first().unwrap();
+        assert_eq!(
+            profile.copy,
+            vec![".env".to_string(), ".linear.toml".to_string()]
+        );
+        assert_eq!(profile.copy_as[0].from, ".local/profiles/codex/scaffold");
+        assert_eq!(profile.copy_as[0].to, ".");
+        assert_eq!(profile.link, vec![".local".to_string()]);
         assert_eq!(
             snapshot.sources.config_paths,
-            vec![".wt.toml", ".local/.wt.toml"]
+            vec![".wt.toml", "<git-common-dir>/wt/config.toml"]
         );
-        assert_eq!(snapshot.tasks.items[0].path, ".local/tasks/demo.toml");
+        assert_eq!(
+            snapshot.tasks.items[0].path,
+            "<git-common-dir>/wt/tasks/demo.toml"
+        );
         assert_eq!(snapshot.tasks.items[0].body.as_deref(), Some("Demo body"));
         assert!(
             snapshot.tasks.items[0]
@@ -1529,6 +2252,16 @@ mod tests {
                 .map(|document| document.body.as_deref()),
             Some(Some("Demo body"))
         );
+        let relationship = &snapshot.workflows.items[0].relationship_rows[0];
+        assert_eq!(relationship.index, 1);
+        assert_eq!(relationship.task, "demo");
+        assert_eq!(relationship.run_id, "run-demo");
+        assert_eq!(relationship.task_document.as_ref().unwrap().title, "Demo");
+        assert_eq!(relationship.task_run.as_ref().unwrap().status, "prepared");
+        assert_eq!(
+            relationship.task_run.as_ref().unwrap().path,
+            "<git-common-dir>/wt/task-runs/run-demo.toml"
+        );
         assert_eq!(
             snapshot.workflows.items[0].body.as_deref(),
             Some("Workflow body")
@@ -1553,45 +2286,227 @@ mod tests {
             snapshot.retrospecs.items[0].body.as_deref(),
             Some("Context\nGoal: Retro goal\n\nKeep\n- Keep this")
         );
+        assert_eq!(snapshot.retrospecs.items[0].scope, "cross-work");
+        assert_eq!(snapshot.retrospecs.items[1].key, "demo-spec/11-retrospect");
+        assert_eq!(snapshot.retrospecs.items[1].scope, "spec-local");
+        assert_eq!(
+            snapshot.retrospecs.items[1].spec.as_deref(),
+            Some("demo-spec")
+        );
+        assert_eq!(
+            snapshot.retrospecs.items[1].path,
+            "<git-common-dir>/wt/specs/demo-spec/11-retrospect.md"
+        );
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
             "state_error"
         );
     }
 
+    #[test]
+    fn snapshot_reports_legacy_repo_root_ideas_as_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_dir = dir.path().join(".local/ideas");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        fs::write(legacy_dir.join("old.toml"), "title = \"Old idea\"\n").unwrap();
+        let state = SnapshotState::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            "repo".into(),
+            Config::default(),
+            Config::default(),
+            ConfigSource::Default,
+        );
+
+        let snapshot = build(&state).unwrap();
+
+        assert!(snapshot.ideas.items.is_empty());
+        assert_eq!(snapshot.ideas.invalid.len(), 1);
+        let invalid = &snapshot.ideas.invalid[0];
+        assert_eq!(invalid.key, "legacy-ideas");
+        assert_eq!(invalid.path, ".local/ideas");
+        assert!(invalid.error.contains("Found legacy repo-root ideas"));
+        assert!(invalid.error.contains("wt does not silently fall back"));
+        assert_eq!(invalid.source_text, None);
+    }
+
+    #[test]
+    fn snapshot_reports_legacy_repo_root_retrospectives_as_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_dir = dir.path().join(".local/retrospectives");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        fs::write(legacy_dir.join("old.toml"), "title = \"Old retro\"\n").unwrap();
+        let state = SnapshotState::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            "repo".into(),
+            Config::default(),
+            Config::default(),
+            ConfigSource::Default,
+        );
+
+        let snapshot = build(&state).unwrap();
+
+        assert!(snapshot.retrospecs.items.is_empty());
+        assert_eq!(snapshot.retrospecs.invalid.len(), 1);
+        let invalid = &snapshot.retrospecs.invalid[0];
+        assert_eq!(invalid.key, "legacy-retrospectives");
+        assert_eq!(invalid.path, ".local/retrospectives");
+        assert!(
+            invalid
+                .error
+                .contains("Found legacy repo-root retrospectives")
+        );
+        assert!(invalid.error.contains("wt does not silently fall back"));
+        assert_eq!(invalid.source_text, None);
+    }
+
+    #[test]
+    fn matrix_relationship_rows_include_every_task_row() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "matrix-a",
+            "title = \"Matrix A\"\nbranch = \"matrix/a\"\nbody = \"A body\"\n",
+        );
+        write_task(
+            dir.path(),
+            "matrix-b",
+            "title = \"Matrix B\"\nbranch = \"matrix/b\"\nbody = \"B body\"\n",
+        );
+        for (run, task, branch) in [
+            ("run-a-codex", "matrix-a", "matrix/a-codex"),
+            ("run-a-claude", "matrix-a", "matrix/a-claude"),
+            ("run-b-codex", "matrix-b", "matrix/b-codex"),
+            ("run-b-claude", "matrix-b", "matrix/b-claude"),
+        ] {
+            write_task_run(
+                dir.path(),
+                run,
+                &format!(
+                    "task = \"{task}\"\nbranch = \"{branch}\"\nstatus = \"prepared\"\ncreated_at = \"2026-05-18T00:00:00Z\"\nupdated_at = \"2026-05-18T00:00:00Z\"\n"
+                ),
+            );
+        }
+
+        let state = SnapshotState::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            "repo".into(),
+            Config::default(),
+            Config::default(),
+            ConfigSource::Default,
+        );
+        let ctx = state.ctx();
+        let metadata = workflow::WorkflowMetadata {
+            title: Some("Matrix demo".into()),
+            body: None,
+            origin: None,
+            mode: workflow::WorkflowMode::Matrix,
+            profile: None,
+            profiles: vec!["codex".into(), "claude".into()],
+            base_mode: "explicit".into(),
+            base: Some("main".into()),
+            color: None,
+            created_at: "2026-05-18T00:00:00Z".into(),
+            updated_at: "2026-05-18T00:00:00Z".into(),
+            policy: workflow::WorkflowPolicy {
+                pull_request: workflow::WorkflowPullRequestMode::None,
+                landing: workflow::WorkflowLandingPolicy::Manual,
+            },
+            tasks: vec![
+                workflow::WorkflowTask {
+                    task: "matrix-a".into(),
+                    run: String::new(),
+                    parent: None,
+                    runs: vec![
+                        workflow::WorkflowTaskRun {
+                            profile: "codex".into(),
+                            run: "run-a-codex".into(),
+                        },
+                        workflow::WorkflowTaskRun {
+                            profile: "claude".into(),
+                            run: "run-a-claude".into(),
+                        },
+                    ],
+                },
+                workflow::WorkflowTask {
+                    task: "matrix-b".into(),
+                    run: String::new(),
+                    parent: None,
+                    runs: vec![
+                        workflow::WorkflowTaskRun {
+                            profile: "codex".into(),
+                            run: "run-b-codex".into(),
+                        },
+                        workflow::WorkflowTaskRun {
+                            profile: "claude".into(),
+                            run: "run-b-claude".into(),
+                        },
+                    ],
+                },
+            ],
+        };
+
+        let rows = workflow_relationship_rows(&ctx, &metadata);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (
+                    row.index,
+                    row.task.as_str(),
+                    row.profile.as_deref(),
+                    row.run_id.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, "matrix-a", Some("codex"), "run-a-codex"),
+                (1, "matrix-a", Some("claude"), "run-a-claude"),
+                (2, "matrix-b", Some("codex"), "run-b-codex"),
+                (2, "matrix-b", Some("claude"), "run-b-claude"),
+            ]
+        );
+    }
+
     fn write_task(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/tasks");
+        let dir = root.join(".git/wt/tasks");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_task_run(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/task-runs");
+        let dir = root.join(".git/wt/task-runs");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_workflow(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/workflows");
+        let dir = root.join(".git/wt/workflows");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_idea(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/ideas");
+        let dir = root.join(".git/wt/ideas");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_profile(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/profiles").join(name);
+        let dir = root.join(".git/wt/profiles").join(name);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("profile.toml"), content).unwrap();
     }
 
     fn write_retrospec(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".local/retrospectives");
+        let dir = root.join(".git/wt/retrospectives");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
+    }
+
+    fn write_spec_retrospect(root: &Path, spec: &str, content: &str) {
+        let dir = root.join(".git/wt/specs").join(spec);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("11-retrospect.md"), content).unwrap();
     }
 }

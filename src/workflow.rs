@@ -136,6 +136,19 @@ pub struct WorkflowRecord {
 }
 
 impl WorkflowMetadata {
+    pub fn empty(slug: &str) -> Self {
+        let mut metadata = Self::new(WorkflowMode::Single, "default", None, Vec::new());
+        metadata.title = Some(format!("워크플로우: {slug}"));
+        metadata.body = Some(
+            "## 목적\n\n\
+- \n\n\
+## 실행 메모\n\n\
+- \n"
+                .to_string(),
+        );
+        metadata
+    }
+
     pub fn new(
         mode: WorkflowMode,
         base_mode: impl Into<String>,
@@ -246,6 +259,7 @@ pub fn list(ctx: &Ctx) -> Result<Vec<WorkflowRecord>> {
 }
 
 pub fn resolve(ctx: &Ctx, target: &str) -> Result<PathBuf> {
+    ensure_no_legacy_workflows(ctx)?;
     if target == "latest" {
         return latest_path(ctx);
     }
@@ -279,25 +293,20 @@ pub fn resolve(ctx: &Ctx, target: &str) -> Result<PathBuf> {
 }
 
 pub fn latest_path(ctx: &Ctx) -> Result<PathBuf> {
-    let mut paths = Vec::new();
-    let workflows_dir = workflows_dir(ctx);
-    if workflows_dir.exists() {
-        for entry in fs::read_dir(&workflows_dir)
-            .with_context(|| "Failed to read workflow directory: .local/workflows")?
-        {
-            let path = entry?.path();
-            if path.extension().is_some_and(|ext| ext == "toml") {
-                paths.push(path);
-            }
-        }
-    }
+    let mut paths = workflow_paths(ctx)?;
     paths.sort();
-    paths
-        .pop()
-        .ok_or_else(|| anyhow::anyhow!("No workflow files found in .local/workflows"))
+    paths.pop().ok_or_else(|| {
+        anyhow::anyhow!(
+            "No workflow files found in {}",
+            ctx.storage_root
+                .display_path(&ctx.storage_root.workflows_dir())
+        )
+    })
 }
 
 pub fn write(ctx: &Ctx, path: &Path, workflow: &mut WorkflowMetadata) -> Result<()> {
+    ensure_no_legacy_workflows(ctx)?;
+    ensure_not_legacy_workflow_path(ctx, path)?;
     ensure_color(ctx, path, workflow)?;
     write_metadata(path, workflow)
 }
@@ -329,9 +338,14 @@ fn ensure_color(ctx: &Ctx, path: &Path, workflow: &mut WorkflowMetadata) -> Resu
 }
 
 pub fn next_available_path(ctx: &Ctx) -> Result<PathBuf> {
+    ensure_no_legacy_workflows(ctx)?;
     let workflows_dir = workflows_dir(ctx);
-    fs::create_dir_all(&workflows_dir)
-        .with_context(|| "Failed to create workflow directory: .local/workflows")?;
+    fs::create_dir_all(&workflows_dir).with_context(|| {
+        format!(
+            "Failed to create workflow directory: {}",
+            ctx.storage_root.display_path(&workflows_dir)
+        )
+    })?;
 
     let date = current_utc_date();
     let mut seq = 1;
@@ -537,7 +551,7 @@ fn validate_matrix_workflow_task(workflow: &WorkflowMetadata, item: &WorkflowTas
     Ok(())
 }
 
-fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
+pub(crate) fn render_workflow_metadata(workflow: &WorkflowMetadata) -> String {
     let mut content = String::new();
     if let Some(title) = workflow.title.as_deref() {
         content.push_str(&format!("title = {}\n", toml_quote(title)));
@@ -621,15 +635,19 @@ fn toml_multiline_string(value: &str) -> String {
 }
 
 pub(crate) fn workflow_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
+    ensure_no_legacy_workflows(ctx)?;
     let workflows_dir = workflows_dir(ctx);
     if !workflows_dir.exists() {
         return Ok(Vec::new());
     }
 
     let mut paths = Vec::new();
-    for entry in fs::read_dir(&workflows_dir)
-        .with_context(|| "Failed to read workflow directory: .local/workflows")?
-    {
+    for entry in fs::read_dir(&workflows_dir).with_context(|| {
+        format!(
+            "Failed to read workflow directory: {}",
+            ctx.storage_root.display_path(&workflows_dir)
+        )
+    })? {
         let path = entry?.path();
         if path.extension().is_some_and(|ext| ext == "toml") {
             paths.push(path);
@@ -644,7 +662,36 @@ pub(crate) fn id_from_path(path: &Path) -> Result<String> {
 }
 
 fn workflows_dir(ctx: &Ctx) -> PathBuf {
-    ctx.repo_root.join(".local/workflows")
+    ctx.storage_root.workflows_dir()
+}
+
+fn ensure_no_legacy_workflows(ctx: &Ctx) -> Result<()> {
+    if let Some(legacy) = ctx.storage_root.detect_legacy_workflows(&ctx.repo_root) {
+        bail!(
+            "Found legacy Workflow storage at {}. Canonical Workflow storage is {}. wt does not silently read .local/workflows; import or repair legacy state explicitly before using this command.",
+            legacy.path().display(),
+            ctx.storage_root.display_path(legacy.canonical_root())
+        );
+    }
+    Ok(())
+}
+
+fn ensure_not_legacy_workflow_path(ctx: &Ctx, path: &Path) -> Result<()> {
+    let absolute_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        ctx.invocation_root.join(path)
+    };
+    let legacy_dir = ctx.repo_root.join(".local/workflows");
+    if absolute_path.starts_with(&legacy_dir) {
+        bail!(
+            "Refusing to write legacy Workflow storage at {}. Canonical Workflow storage is {}.",
+            absolute_path.display(),
+            ctx.storage_root
+                .display_path(&ctx.storage_root.workflows_dir())
+        );
+    }
+    Ok(())
 }
 
 fn workflow_id(path: &Path) -> Result<String> {
@@ -742,7 +789,7 @@ mod tests {
     fn workflow_write_and_read_round_trip_uses_canonical_task_rows() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let path = dir.path().join(".local/workflows/2026-05-16-001.toml");
+        let path = dir.path().join(".git/wt/workflows/2026-05-16-001.toml");
         let mut workflow = WorkflowMetadata {
             title: Some("Workflow state model migration".into()),
             body: Some("Ship the workflow state model migration".into()),
@@ -1282,7 +1329,7 @@ run = "workflow-add-schema"
         assert_eq!(second.workflow.color.as_deref(), Some("crimson"));
         assert_eq!(
             first.path.parent().unwrap(),
-            dir.path().join(".local/workflows")
+            dir.path().join(".git/wt/workflows")
         );
         assert!(first.path < second.path);
 
@@ -1320,7 +1367,7 @@ run = "workflow-add-schema"
     fn resolve_supports_latest_absolute_relative_and_shorthand_paths() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let workflows_dir = dir.path().join(".local/workflows");
+        let workflows_dir = dir.path().join(".git/wt/workflows");
         fs::create_dir_all(&workflows_dir).unwrap();
         let old = workflows_dir.join("2026-05-16-001.toml");
         let new = workflows_dir.join("2026-05-16-002.toml");
@@ -1330,10 +1377,29 @@ run = "workflow-add-schema"
         assert_eq!(resolve(&ctx, "latest").unwrap(), new);
         assert_eq!(resolve(&ctx, old.to_str().unwrap()).unwrap(), old);
         assert_eq!(
-            resolve(&ctx, ".local/workflows/2026-05-16-001.toml").unwrap(),
-            dir.path().join(".local/workflows/2026-05-16-001.toml")
+            resolve(&ctx, ".git/wt/workflows/2026-05-16-001.toml").unwrap(),
+            dir.path().join(".git/wt/workflows/2026-05-16-001.toml")
         );
         assert_eq!(resolve(&ctx, "2026-05-16-001").unwrap(), old);
+    }
+
+    #[test]
+    fn workflow_paths_reject_legacy_local_workflows_without_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let legacy_dir = dir.path().join(".local/workflows");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        fs::write(
+            legacy_dir.join("2026-05-16-001.toml"),
+            valid_workflow_toml("old"),
+        )
+        .unwrap();
+
+        let message = error_report_paths(workflow_paths(&ctx));
+
+        assert!(message.contains("Found legacy Workflow storage"));
+        assert!(message.contains("Canonical Workflow storage is <git-common-dir>/wt/workflows"));
+        assert!(message.contains("does not silently read .local/workflows"));
     }
 
     fn valid_workflow_toml(task_key: &str) -> String {
@@ -1353,6 +1419,10 @@ run = "workflow-{task_key}"
     }
 
     fn error_report(result: Result<WorkflowMetadata>) -> String {
+        format!("{:#}", result.unwrap_err())
+    }
+
+    fn error_report_paths(result: Result<Vec<PathBuf>>) -> String {
         format!("{:#}", result.unwrap_err())
     }
 }
