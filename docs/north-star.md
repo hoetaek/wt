@@ -122,8 +122,8 @@ These are the model directions that should shape upcoming work:
 - Personal storage should live under the Git common directory rather than
   repo-root `.local` state.
 - Activity, inbox messages, and status should remain separate channels.
-- Scope should be modeled as global, team integration, personal, and worktree
-  context.
+- Scope should be modeled as global, team integration, personal, and runtime
+  actor context.
 - Agent adapters must not automatically modify tracked source.
 
 ### Open Decisions
@@ -147,8 +147,8 @@ The target state model has four scopes:
 ~/.config/wt/                  # Global: this machine
 <repo>/.wt.toml                # Team integration config, committed
 <git-common-dir>/wt/           # Personal repo work, not committed
-<git-common-dir>/wt/worktrees/<id>/
-                               # Worktree context inside personal storage
+<git-common-dir>/wt/runtime/agents/<name>/
+                               # Runtime actor context inside personal storage
 ```
 
 Tier 2 is team integration configuration, not shared work data. It describes how
@@ -168,6 +168,15 @@ All worktrees for one repository should resolve the same personal storage root
 through `git rev-parse --git-common-dir`. This avoids symlink conventions and
 repo-root ignore-file patches.
 
+Inside the personal root, the current direction is a four-bucket contract:
+
+```text
+config/       # local config and profiles
+planning/     # ideas, specs, retrospectives
+execution/    # TaskDocuments, Workflows, TaskRuns, archive
+runtime/      # agent-owned inboxes, sessions, supervisors, observations
+```
+
 ## Identity Model Direction
 
 Worktree identity should separate stable machine identity from human labels:
@@ -184,18 +193,15 @@ created_at = "2026-05-19T10:30:45Z"
 - `display_name` is human-facing and may change.
 - `branch` and `path` are recorded facts and may change.
 
-Participants should identify communication actors, not only agents:
+Agent IDs identify communication actors with one agent-name segment:
 
 ```text
 agents/<display_name>
-agents/<display_name>/<role>
-agents/main/coordinator
-humans/user
-systems/ci
+agents/<display_name>-<role>
 ```
 
-When display names collide, participant addressing can fall back to the opaque
-worktree id.
+`runtime/agents/<name>` is the filesystem form of `AgentId` `agents/<name>`.
+When display names collide, agent naming can fall back to the opaque worktree id.
 
 ## Communication Model Direction
 
@@ -203,9 +209,9 @@ Activity, inbox, and status are separate concepts:
 
 | Channel | Writer | Reader | Data | Location |
 | --- | --- | --- | --- | --- |
-| Activity log | Hooks | UI and debugging | Append-only JSONL | `worktrees/<id>/activity.jsonl` |
-| Inbox | Intended sender or delivery owner | Target agent and scope owner | Scoped TOML file queue | `messages/agents/<agent>/inbox/<state>/` |
-| Status | Hooks | Anyone | Single TOML snapshot | `worktrees/<id>/status.toml` |
+| Activity log | Hooks | UI and debugging | Append-only JSONL | `runtime/agents/<name>/activity.jsonl` |
+| Inbox | Intended sender or delivery owner | Target agent and scope owner | Scoped TOML file queue | `runtime/agents/<name>/inbox/<state>/` |
+| Status | Hooks | Anyone | Single TOML snapshot | `runtime/agents/<name>/status.toml` |
 
 Activity is not communication. Hooks may automatically update activity and
 status, but inbox messages should represent intentional signals or defined

@@ -80,5 +80,8 @@ wt agent status <branch|worktree|task-run-id>
 ```
 
 Report: command used, created branch/worktree or workflow, TaskRun id when
-available, next `wt inspect` target. Use `wt agent watch <target>` if waiting
-for a state transition.
+available, next `wt inspect` target, and the recorded worker `agent_id` /
+coordinator route. If inbox delivery will be used, confirm the launched process
+got identity from `wt codex`, `wt claude`, `wt as`, or a live session marker;
+`wt setup` alone only installs hooks and does not bind an already-running
+session. Use `wt agent watch <target>` if waiting for a state transition.

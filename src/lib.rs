@@ -335,9 +335,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             }
             MsgCommand::List { agent } => commands::msg::list(ctx, agent),
             MsgCommand::Read { agent, message_id } => commands::msg::read(ctx, agent, message_id),
-            MsgCommand::CheckInbox { agent, silent: _ } => {
-                commands::msg::check_inbox(ctx, agent.as_deref())
-            }
+            MsgCommand::CheckInbox {
+                agent,
+                hook_event_name,
+                silent: _,
+            } => commands::msg::check_inbox(ctx, agent.as_deref(), hook_event_name.as_deref()),
             MsgCommand::Watch {
                 agent,
                 timeout,

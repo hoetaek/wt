@@ -538,9 +538,18 @@ fn collect_repo_setup_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     }
 
     let required_dirs = [
+        ctx.storage_root.config_dir(),
+        ctx.storage_root.profiles_dir(),
+        ctx.storage_root.planning_dir(),
+        ctx.storage_root.ideas_dir(),
+        ctx.storage_root.specs_dir(),
+        ctx.storage_root.retrospectives_dir(),
+        ctx.storage_root.execution_dir(),
         ctx.storage_root.tasks_dir(),
-        ctx.storage_root.messages_dir(),
+        ctx.storage_root.workflows_dir(),
         ctx.storage_root.task_runs_dir(),
+        ctx.storage_root.archive_dir(),
+        ctx.storage_root.messages_dir(),
         ctx.storage_root.agent_state_dir(),
         ctx.storage_root.worktrees_dir(),
     ];
@@ -1752,7 +1761,6 @@ mod tests {
     fn write_wt_codex_inbox_hook(home: &Path, include_trust: bool) {
         fs::create_dir_all(home).unwrap();
         let hooks_path = home.join("hooks.json");
-        let command = "wt msg check-inbox --silent # wt-agent-hook:codex-inbox";
         fs::write(
             &hooks_path,
             serde_json::to_string_pretty(&json!({
@@ -1760,13 +1768,13 @@ mod tests {
                     "UserPromptSubmit": [{
                         "hooks": [{
                             "type": "command",
-                            "command": command,
+                            "command": "wt msg check-inbox --hook-event-name UserPromptSubmit --silent # wt-agent-hook:codex-inbox",
                         }],
                     }],
                     "PostToolUse": [{
                         "hooks": [{
                             "type": "command",
-                            "command": command,
+                            "command": "wt msg check-inbox --hook-event-name PostToolUse --silent # wt-agent-hook:codex-inbox",
                         }],
                     }],
                 },
@@ -1777,11 +1785,14 @@ mod tests {
 
         let mut content = String::from("[features]\nhooks = true\n");
         if include_trust {
-            for &(_, event_key) in crate::commands::agent_hook::CODEX_HOOK_EVENTS {
+            for &(event_name, event_key) in crate::commands::agent_hook::CODEX_HOOK_EVENTS {
+                let command = format!(
+                    "wt msg check-inbox --hook-event-name {event_name} --silent # wt-agent-hook:codex-inbox"
+                );
                 content.push_str(&format!(
                     "\n[hooks.state.\"{}:{event_key}:0:0\"]\nenabled = true\ntrusted_hash = \"{}\"\n",
                     hooks_path.display(),
-                    crate::commands::agent_hook::codex_command_hook_hash(command, event_key)
+                    crate::commands::agent_hook::codex_command_hook_hash(&command, event_key)
                 ));
             }
         }
@@ -2522,7 +2533,7 @@ mod tests {
     }
 
     fn write_profile_toml(repo_root: &Path, name: &str, body: &str) {
-        let profile_dir = repo_root.join(".git/wt/profiles").join(name);
+        let profile_dir = repo_root.join(".git/wt/config/profiles").join(name);
         fs::create_dir_all(&profile_dir).unwrap();
         fs::write(profile_dir.join("profile.toml"), body).unwrap();
     }

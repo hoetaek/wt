@@ -4,7 +4,7 @@ use crate::context::{Ctx, PromptItem};
 use crate::services::cmux::{CmuxEvent, CmuxProcessInfo, CmuxService, CmuxWorkspace};
 use crate::services::git::{GitService, WorktreeEntry};
 use crate::task_run;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -20,6 +20,7 @@ pub(crate) struct WorkTarget {
     pub(crate) branch: String,
     pub(crate) worktree: Option<PathBuf>,
     pub(crate) task_run: Option<task_run::TaskRunRecord>,
+    pub(crate) warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,6 +129,12 @@ pub(crate) enum WorkTargetError {
 struct WorkTargetCandidate {
     target: WorkTarget,
     matches: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct SelectableWorkTargets {
+    candidates: Vec<SelectableWorkTarget>,
+    warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -262,6 +269,7 @@ pub(crate) fn resolve_target(ctx: &Ctx, target: Option<&str>) -> Result<WorkTarg
                 branch,
                 worktree,
                 task_run: None,
+                warnings: Vec::new(),
             })
         }
         Some(raw) => resolve_explicit_target(ctx, &git, &worktrees, raw),
@@ -277,20 +285,24 @@ pub(crate) fn select_target(
         bail!("{non_interactive_guidance}");
     }
 
-    let candidates = selectable_targets(ctx)?;
-    if candidates.is_empty() {
+    let selectable = selectable_targets(ctx)?;
+    if selectable.candidates.is_empty() {
         bail!("No work targets found");
     }
 
-    let items = candidates
+    let items = selectable
+        .candidates
         .iter()
         .map(|candidate| candidate.item.clone())
         .collect::<Vec<_>>();
     let idx = ctx.ui.select_items(prompt, &items)?;
-    candidates
+    let mut target = selectable
+        .candidates
         .get(idx)
         .map(|candidate| candidate.target.clone())
-        .ok_or_else(|| anyhow::anyhow!("Selected work target index out of range: {idx}"))
+        .ok_or_else(|| anyhow::anyhow!("Selected work target index out of range: {idx}"))?;
+    target.warnings.extend(selectable.warnings);
+    Ok(target)
 }
 
 pub(crate) fn cmux_contacts(ctx: &Ctx, worktree: &Path) -> Result<Vec<CmuxContact>> {
@@ -308,11 +320,11 @@ pub(crate) fn cmux_contacts(ctx: &Ctx, worktree: &Path) -> Result<Vec<CmuxContac
     cmux_contacts_for_workspaces(&cmux, &workspaces)
 }
 
-fn selectable_targets(ctx: &Ctx) -> Result<Vec<SelectableWorkTarget>> {
+fn selectable_targets(ctx: &Ctx) -> Result<SelectableWorkTargets> {
     let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
     let worktrees = git.worktree_list()?;
     let local_branches = git.list_local_branches()?;
-    let task_runs = task_run::list(ctx)?;
+    let task_run_inventory = task_run_inventory_for_work_surfaces(ctx);
     let mut candidates = Vec::new();
 
     let mut branch_names = local_branches.into_iter().collect::<BTreeSet<_>>();
@@ -322,7 +334,8 @@ fn selectable_targets(ctx: &Ctx) -> Result<Vec<SelectableWorkTarget>> {
     }
 
     let mut seen_task_runs = HashSet::new();
-    let mut task_run_candidates = task_runs
+    let mut task_run_candidates = task_run_inventory
+        .records
         .into_iter()
         .filter(|record| seen_task_runs.insert(record.id.clone()))
         .map(|record| task_run_selectable_target(ctx, record, &worktrees))
@@ -331,7 +344,28 @@ fn selectable_targets(ctx: &Ctx) -> Result<Vec<SelectableWorkTarget>> {
     candidates.extend(task_run_candidates);
 
     candidates.sort_by(|left, right| left.sort_key.cmp(&right.sort_key));
-    Ok(candidates)
+    Ok(SelectableWorkTargets {
+        candidates,
+        warnings: task_run_inventory.warnings,
+    })
+}
+
+struct WorkSurfaceTaskRunInventory {
+    records: Vec<task_run::TaskRunRecord>,
+    warnings: Vec<String>,
+}
+
+fn task_run_inventory_for_work_surfaces(ctx: &Ctx) -> WorkSurfaceTaskRunInventory {
+    match task_run::list_lossy(ctx) {
+        Ok(inventory) => WorkSurfaceTaskRunInventory {
+            warnings: task_run::invalid_inventory_warnings(ctx, &inventory.invalid),
+            records: inventory.records,
+        },
+        Err(err) => WorkSurfaceTaskRunInventory {
+            records: Vec::new(),
+            warnings: vec![format!("TaskRun inventory unavailable: {err:#}")],
+        },
+    }
 }
 
 fn branch_selectable_target(branch: &str, worktrees: &[WorktreeEntry]) -> SelectableWorkTarget {
@@ -349,6 +383,7 @@ fn branch_selectable_target(branch: &str, worktrees: &[WorktreeEntry]) -> Select
             branch: branch.to_string(),
             worktree,
             task_run: None,
+            warnings: Vec::new(),
         },
         item,
         sort_key: format!("0:{branch}"),
@@ -376,6 +411,7 @@ fn task_run_selectable_target(
             branch: record.run.branch.clone(),
             worktree,
             task_run: Some(record.clone()),
+            warnings: Vec::new(),
         },
         item: PromptItem::from_hint_parts(record.id.clone(), hint),
         sort_key: format!("1:{}", record.id),
@@ -429,7 +465,13 @@ fn resolve_explicit_target(
         return Err(WorkTargetError::NotFound { target: raw.into() }.into());
     }
 
-    select_work_target(raw, candidates)
+    let mut target = select_work_target(raw, candidates)?;
+    if target.task_run.is_none() {
+        target
+            .warnings
+            .extend(task_run_inventory_for_work_surfaces(ctx).warnings);
+    }
+    Ok(target)
 }
 
 fn is_explicit_path_target(raw: &str) -> bool {
@@ -484,6 +526,7 @@ fn path_target_candidate(ctx: &Ctx, raw: &str, path: PathBuf) -> Result<WorkTarg
             branch: branch.clone(),
             worktree: Some(path.clone()),
             task_run: None,
+            warnings: Vec::new(),
         },
         matches: vec![format!("path {} (branch {})", path.display(), branch)],
     })
@@ -513,7 +556,8 @@ fn task_run_candidate_from_path(
     worktrees: &[WorktreeEntry],
     path: PathBuf,
 ) -> Result<WorkTargetCandidate> {
-    let run = task_run::read(&path)?;
+    let run = task_run::read(&path)
+        .with_context(|| format!("Invalid TaskRun target {}", path.display()))?;
     let id = task_run_id(&path)?;
     let worktree = worktree_for_branch(worktrees, &run.branch);
     Ok(WorkTargetCandidate {
@@ -526,6 +570,7 @@ fn task_run_candidate_from_path(
                 path,
                 run: run.clone(),
             }),
+            warnings: Vec::new(),
         },
         matches: vec![format!("TaskRun {} (branch {})", id, run.branch)],
     })
@@ -559,6 +604,7 @@ fn branch_candidate(raw: &str, worktree: Option<PathBuf>) -> WorkTargetCandidate
             branch: raw.to_string(),
             worktree,
             task_run: None,
+            warnings: Vec::new(),
         },
         matches: vec![detail],
     }
@@ -571,6 +617,7 @@ fn worktree_name_candidate(raw: &str, entry: &WorktreeEntry) -> WorkTargetCandid
             branch: entry.branch.clone(),
             worktree: Some(entry.path.clone()),
             task_run: None,
+            warnings: Vec::new(),
         },
         matches: vec![format!("{} ({})", entry.branch, entry.path.display())],
     }
@@ -1127,9 +1174,9 @@ mod tests {
     #[test]
     fn resolve_target_accepts_task_run_id_target() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1148,6 +1195,32 @@ mod tests {
             Some("run-feature")
         );
         assert_eq!(target.worktree.as_deref(), Some(fixture.worktree.as_path()));
+    }
+
+    #[test]
+    fn resolve_target_rejects_invalid_task_run_id_target() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
+        std::fs::write(
+            fixture
+                .repo
+                .join(".git/wt/execution/task-runs/run-feature.toml"),
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"started\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+        )
+        .unwrap();
+
+        let mut runner = MockRunner::new();
+        add_worktree_list(&mut runner, &fixture);
+        let ctx = fixture.ctx(runner);
+
+        let err = format!(
+            "{:#}",
+            resolve_target(&ctx, Some("run-feature")).unwrap_err()
+        );
+
+        assert!(err.contains("Invalid TaskRun target"));
+        assert!(err.contains("run-feature.toml"));
+        assert!(err.contains("Unknown task run status"));
     }
 
     #[test]
@@ -1191,9 +1264,9 @@ mod tests {
     #[test]
     fn resolve_target_rejects_task_run_id_branch_collision() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1215,9 +1288,9 @@ mod tests {
     #[test]
     fn resolve_target_accepts_explicit_task_run_path_collision() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1226,8 +1299,11 @@ mod tests {
         add_worktree_list(&mut runner, &fixture);
         let ctx = fixture.ctx(runner);
 
-        let target =
-            resolve_target(&ctx, Some("<git-common-dir>/wt/task-runs/run-feature.toml")).unwrap();
+        let target = resolve_target(
+            &ctx,
+            Some("<git-common-dir>/wt/execution/task-runs/run-feature.toml"),
+        )
+        .unwrap();
 
         assert_eq!(target.label, "run-feature");
         assert_eq!(target.branch, "feature");
