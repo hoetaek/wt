@@ -1430,9 +1430,9 @@ running 또는 passed TaskRun이 정확히 하나일 때만 fallback으로 보�
 landing, cleanup을 명시적으로 처리할 때까지 기다린다. cmux 좌표는 현재 transport 정보일
 뿐이므로 TaskDocument나 TaskRun에 저장하지 않는다. file inbox route가 unavailable이면
 agent는 cmux fallback으로 같은 보고를 보내고, 둘 다 unavailable이면 task session에 남기고
-기다린다. Handoff section과 그 안의 task-report/cmux report 명령은 긴 TaskDocument 본문과
-분리된 첫 prompt로 먼저 보내서 terminal prompt가 축약되어도 coordinator route가 앞쪽에
-남게 한다.
+기다린다. Handoff section과 그 안의 task-report/cmux report 명령은 TaskDocument 본문과
+같은 첫 prompt의 앞부분에 둔다. 그래서 agent가 같은 turn 안에서 coordinator route와 작업
+본문을 함께 받으면서도, terminal prompt가 축약될 때 coordinator route가 앞쪽에 남게 한다.
 
 Workflow coordinator handoff는 `stack` 전용 개념이 아니라 `wt run workflow`가 시작하는
 모든 task prompt의 계약이다. Prompt에는 `Workflow Coordinator Handoff` section이 포함되고,
@@ -1446,9 +1446,9 @@ workspace/surface 좌표로 렌더링되는 `cmux send`와 `cmux send-key ... en
 포함한다. cmux 좌표는 현재 transport 정보일 뿐이므로 Workflow file, TaskRun, TaskDocument에
 저장하지 않는다. file inbox route가 unavailable이면 agent는 cmux fallback으로 같은
 `Agent Completion Report`를 보내고, 둘 다 unavailable이면 task session에 남기고 기다린다.
-Handoff section과 그 안의 task-report/cmux report 명령은 긴 TaskDocument 본문과 분리된 첫
-prompt로 먼저 보내서 terminal
-prompt가 축약되어도 coordinator route가 앞쪽에 남게 한다.
+Handoff section과 그 안의 task-report/cmux report 명령은 TaskDocument 본문과 같은 첫
+prompt의 앞부분에 둔다. 그래서 agent가 같은 turn 안에서 coordinator route와 작업 본문을
+함께 받으면서도, terminal prompt가 축약될 때 coordinator route가 앞쪽에 남게 한다.
 사용자 정의 `[agent.prompt.workflow]` prompt가 있으면 이 built-in handoff와 TaskDocument
 snapshot 뒤, 기존 `issue`/`branch` setup-mode prompt 앞에 보낸다.
 
