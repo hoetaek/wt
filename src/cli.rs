@@ -80,7 +80,7 @@ pub enum Commands {
     },
     /// Print shell integration source for ambient worker identity binding
     #[command(
-        long_about = "Print shell integration source for ambient worker identity binding.\n\nAdd `eval \"$(wt shell-init zsh)\"` or `eval \"$(wt shell-init bash)\"` to your shell rc. The generated hook runs `wt env` when the current directory changes so worker worktree shells inherit WT_AGENT_ID and WT_COORDINATOR_AGENT_ID. See docs/architecture.md#shell-integration."
+        long_about = "Print shell integration source for ambient worker identity binding.\n\nAdd `eval \"$(wt shell-init zsh)\"` or `eval \"$(wt shell-init bash)\"` to your shell rc. The generated hook runs `wt env` when the current directory changes so worker worktree shells inherit WT_AGENT_ID. See docs/architecture.md#shell-integration."
     )]
     ShellInit {
         /// Shell to initialize: zsh or bash
@@ -91,20 +91,12 @@ pub enum Commands {
     #[command(
         name = "env",
         hide = true,
-        long_about = "Internal shell-hook command. Print export/unset statements for WT_AGENT_ID and WT_COORDINATOR_AGENT_ID based on the current git worktree branch and matching <git-common-dir>/wt/task-runs records.\n\nThis command is intended to be called by source generated from `wt shell-init <shell>`."
+        long_about = "Internal shell-hook command. Print export/unset statements for WT_AGENT_ID based on the current git worktree branch and matching <git-common-dir>/wt/task-runs records, while clearing removed legacy coordinator routing env.\n\nThis command is intended to be called by source generated from `wt shell-init <shell>`."
     )]
     Env,
-    /// Declare or clear the coordinator identity for the current shell
-    #[command(
-        long_about = "Print shell statements for declaring or clearing the coordinator identity in the current shell.\n\nUse `eval \"$(wt coord use <id>)\"` once per coordinator session, for example `eval \"$(wt coord use my-coord)\"`. `wt coord use` sets WT_AGENT_ID and WT_COORDINATOR_AGENT_ID to the same agent because a coordinator session is its own coordinator.\n\n`wt shell-init <shell>` provides a shell function wrapper so users can run `wt-coord-use my-coord` directly."
-    )]
-    Coord {
-        #[command(subcommand)]
-        command: CoordCommand,
-    },
     /// Declare, clear, or inspect the current session agent identity
     #[command(
-        long_about = "Declare, clear, or inspect the current session agent identity using the current terminal or agent-session anchor.\n\nUse `eval \"$(wt session set <id>)\"` to bind this shell or agent session to WT_AGENT_ID and WT_COORDINATOR_AGENT_ID while also writing a marker that later wt invocations from the same anchor can resolve."
+        long_about = "Declare, clear, or inspect the current session agent identity using the current terminal or agent-session anchor.\n\nUse `eval \"$(wt session set <id>)\"` to bind this shell or agent session to WT_AGENT_ID while also writing a marker that later wt invocations from the same anchor can resolve."
     )]
     Session {
         #[command(subcommand)]
@@ -243,7 +235,7 @@ pub enum Commands {
     },
     /// Launch Codex with the current worktree's wt agent identity
     #[command(
-        long_about = "Launch Codex with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID resolved from the launch context when available.\n\nUse `wt codex` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt codex @planner` or `wt codex @reviewer` to launch a separate inbox like `agents/<branch_slug>-planner`, so multiple agents do not consume each other's messages. Extra Codex arguments are passed through after the optional role."
+        long_about = "Launch Codex with WT_AGENT_ID derived from the current git branch, and clear removed legacy coordinator routing env before the child process starts.\n\nUse `wt codex` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt codex @planner` or `wt codex @reviewer` to launch a separate inbox like `agents/<branch_slug>-planner`, so multiple agents do not consume each other's messages. Extra Codex arguments are passed through after the optional role."
     )]
     Codex {
         /// Optional @role followed by arguments passed to codex
@@ -257,7 +249,7 @@ pub enum Commands {
     },
     /// Launch Claude with the current worktree's wt agent identity
     #[command(
-        long_about = "Launch Claude with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID resolved from the launch context when available.\n\nUse `wt claude` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt claude @coordinator` or `wt claude @reviewer` to launch a separate inbox like `agents/<branch_slug>-coordinator`, so multiple agents do not consume each other's messages. Extra Claude arguments are passed through after the optional role."
+        long_about = "Launch Claude with WT_AGENT_ID derived from the current git branch, and clear removed legacy coordinator routing env before the child process starts.\n\nUse `wt claude` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt claude @coordinator` or `wt claude @reviewer` to launch a separate inbox like `agents/<branch_slug>-coordinator`, so multiple agents do not consume each other's messages. Extra Claude arguments are passed through after the optional role."
     )]
     Claude {
         /// Optional @role followed by arguments passed to claude
@@ -271,7 +263,7 @@ pub enum Commands {
     },
     /// Run any command with an explicit wt agent identity
     #[command(
-        long_about = "Run any command with an explicit WT_AGENT_ID and context-resolved WT_COORDINATOR_AGENT_ID when available.\n\nUse `wt as <AGENT> -- <COMMAND>` as the low-level escape hatch for scripts, unusual agent CLIs, or identities that should not be derived from the current branch. For daily Codex and Claude launches, prefer `wt codex`, `wt codex @planner`, `wt claude`, or `wt claude @reviewer`."
+        long_about = "Run any command with an explicit WT_AGENT_ID, and clear removed legacy coordinator routing env before the child process starts.\n\nUse `wt as <AGENT> -- <COMMAND>` as the low-level escape hatch for scripts, unusual agent CLIs, or identities that should not be derived from the current branch. For daily Codex and Claude launches, prefer `wt codex`, `wt codex @planner`, `wt claude`, or `wt claude @reviewer`."
     )]
     As {
         /// Agent id as NAME or agents/NAME
@@ -297,7 +289,7 @@ pub enum Commands {
     },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use `wt msg check-inbox --silent` from agent hooks so the WT_AGENT_ID inbox is checked; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to agents/<agent> <message>` as a low-level explicit inbox write. Task completion should use `wt task report <message>`, which derives direct or workflow scope from the current TaskRun. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --agent <agent> --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent falls back to WT_AGENT_ID. `wt msg check-inbox --silent` is an internal hook consumer for the WT_AGENT_ID inbox; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -392,24 +384,10 @@ pub enum Commands {
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum CoordCommand {
-    /// Print exports for using this shell as a coordinator
-    #[command(
-        long_about = "Print shell exports for using this shell as a coordinator.\n\nUse `eval \"$(wt coord use <id>)\"` once per coordinator session, for example `eval \"$(wt coord use my-coord)\"`.\n\n`wt shell-init <shell>` provides a shell function wrapper so users can run `wt-coord-use my-coord` directly."
-    )]
-    Use {
-        /// Coordinator agent id as NAME or agents/NAME
-        id: String,
-    },
-    /// Print unsets for clearing the coordinator identity
-    Exit,
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum SessionCommand {
     /// Write a session identity marker and print shell exports
     #[command(
-        long_about = "Write a session identity marker for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set my-coord)\"`, so the current shell gets WT_AGENT_ID and WT_COORDINATOR_AGENT_ID immediately while later wt invocations from the same anchor can resolve the marker."
+        long_about = "Write a session identity marker for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set my-coord)\"`, so the current shell gets WT_AGENT_ID immediately while later wt invocations from the same anchor can resolve the marker."
     )]
     Set {
         /// Agent id as NAME or agents/NAME
@@ -605,10 +583,10 @@ pub enum AgentSupervisorCommand {
 pub enum MsgCommand {
     /// Write one message to an agent inbox
     #[command(
-        long_about = "Write one message to an agent inbox.\n\nUnscoped sends use the direct/default scope. Use `--scope workflow:<id>` for workflow-owned coordinator reports, `--scope task_run:<id>` for TaskRun-owned delivery, or `--scope repo` for repo-local singleton delivery."
+        long_about = "Write one message to an explicit agent inbox.\n\nUnscoped sends use the direct/default scope. Prefer `wt task report <message>` for TaskRun completion reports; use explicit `--scope workflow:<id>`, `--scope task_run:<id>`, or `--scope repo` only as low-level escape hatches."
     )]
     Send {
-        /// Target agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
+        /// Target agent id as NAME or agents/NAME
         #[arg(long)]
         to: String,
         /// Message ownership scope: direct, repo, workflow:<id>, or task_run:<id>
@@ -626,21 +604,22 @@ pub enum MsgCommand {
     },
     /// List lifecycle messages for one agent inbox without claiming them
     List {
-        /// Agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
+        /// Agent id as NAME or agents/NAME
         #[arg(long)]
         agent: String,
     },
     /// Read one lifecycle message by id without changing delivery state
     Read {
-        /// Agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
+        /// Agent id as NAME or agents/NAME
         #[arg(long)]
         agent: String,
         /// Message id without the .toml extension
         message_id: String,
     },
     /// Claim deliverable inbox messages, emit hook JSON, and acknowledge delivery
+    #[command(hide = true)]
     CheckInbox {
-        /// Explicit single agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID; omitted uses WT_AGENT_ID
+        /// Explicit single agent id as NAME or agents/NAME; omitted uses WT_AGENT_ID
         #[arg(long)]
         agent: Option<String>,
         /// Hook mode: exit 0 silently when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup). Intended for agent hooks installed globally; direct CLI use should omit this flag.
@@ -649,10 +628,10 @@ pub enum MsgCommand {
     },
     /// Observe pending or newly-arriving inbox/new messages without claiming them
     #[command(
-        long_about = "Observe pending or newly-arriving inbox/new messages for one agent without claiming, moving, or acknowledging them.\n\n`wt msg watch` arms a filesystem watcher, drains existing .toml messages in mtime order, and exits after emitting pending messages, one new arrival, or a timeout. Omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use --json for newline-delimited JSON rows with the same fields as `wt msg list --json` message records. Use `wt msg list` for a snapshot instead of --timeout 0."
+        long_about = "Observe pending or newly-arriving inbox/new messages for one agent without claiming, moving, or acknowledging them.\n\n`wt msg watch` arms a filesystem watcher, drains existing .toml messages in mtime order, and exits after emitting pending messages, one new arrival, or a timeout. Omitted --agent falls back to WT_AGENT_ID. Use --json for newline-delimited JSON rows with the same fields as `wt msg list --json` message records. Use `wt msg list` for a snapshot instead of --timeout 0."
     )]
     Watch {
-        /// Explicit single agent id as NAME or agents/NAME; omitted tries WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID
+        /// Explicit single agent id as NAME or agents/NAME; omitted uses WT_AGENT_ID
         #[arg(long)]
         agent: Option<String>,
         /// Maximum seconds to wait for a new inbox/new message; must be greater than 0

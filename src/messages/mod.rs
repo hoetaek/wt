@@ -10,8 +10,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 static MESSAGE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 static MESSAGE_TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) const COORDINATOR_AGENT_ALIAS: &str = "coordinator";
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentId(String);
 
@@ -2142,9 +2140,8 @@ mod tests {
             AgentId::parse("agents/codex").unwrap().as_str(),
             "agents/codex"
         );
-        assert_eq!(COORDINATOR_AGENT_ALIAS, "coordinator");
         assert_eq!(
-            AgentId::parse(COORDINATOR_AGENT_ALIAS).unwrap().as_str(),
+            AgentId::parse("coordinator").unwrap().as_str(),
             "agents/coordinator"
         );
     }
@@ -2951,7 +2948,7 @@ mod tests {
     }
 
     #[test]
-    fn coordinator_without_runtime_env_claims_only_direct_messages() {
+    fn coordinator_claims_only_direct_messages_without_scoped_authorization() {
         let temp = TempDir::new().unwrap();
         let store = MessageStore::new(temp.path().join("messages"));
         let scoped = store

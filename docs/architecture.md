@@ -20,7 +20,7 @@ effects.
 | Storage root boundary | `src/storage.rs` | Resolving `<git-common-dir>/wt` with `git rev-parse --git-common-dir`, typed personal-state paths, and legacy `.local` detection text | TaskDocument, TaskRun, Workflow, config/profile schema migration, or silent `.local` fallback |
 | Message state | `src/messages/mod.rs` and `src/commands/msg.rs` | `AgentId`, scoped Message TOML schema, `<git-common-dir>/wt/messages` inbox state paths, address/scope/delivery lifecycle primitives, send/check-inbox delivery, hook JSON rendering | Activity/status logs, agent hook installation, runtime surface launch, cmux screen scraping |
 | Agent runtime observation state | `src/agent_state.rs` | Runtime observation JSONL under `<git-common-dir>/wt/agent.state`, including non-idle wait observation samples and aggregate readers | TaskRun lifecycle status, Workflow/TaskDocument schema, cmux transport ownership, adaptive watch defaults |
-| Agent adapters and launch wrappers | `src/commands/agent_hook.rs`, `src/commands/install.rs`, `src/commands/agent_runtime.rs`, and setup launch env helpers | Claude/Codex hook files, wt-managed hook markers, Codex trust state, `WT_AGENT_ID`/`WT_COORDINATOR_AGENT_ID` launch env binding, short `wt codex`/`wt claude`/`wt as` wrappers | Message schema, inbox storage paths, TaskDocument/TaskRun/Workflow schemas, cmux as message transport |
+| Agent adapters and launch wrappers | `src/commands/agent_hook.rs`, `src/commands/install.rs`, `src/commands/agent_runtime.rs`, and setup launch env helpers | Claude/Codex hook files, wt-managed hook markers, Codex trust state, `WT_AGENT_ID` launch env binding, short `wt codex`/`wt claude`/`wt as` wrappers | Message schema, inbox storage paths, TaskDocument/TaskRun/Workflow schemas, cmux as message transport |
 | Workflow execution planner | `src/commands/workflow.rs` today; extract to `src/workflow/planner.rs` when split | Runnable-workflow selection, single/batch/stack next-step rules, preflight plans, parent-chain calculation | UI printing, cmux calls, issue-provider calls, file serialization |
 | Workflow runner orchestration | `src/commands/workflow.rs` today; extract to `src/workflow/run.rs` when split | Coordinating planner output with `TaskDocument`, `TaskRun`, `issue` start paths, and setup results | Domain schema definitions, config merge policy, provider implementation details |
 | Rendering | `ctx.ui` call sites and prompt builders in command modules today; extract workflow prompt/status text to `src/workflow/render.rs` when split | Human status text, selector labels, agent prompt snapshots, coordinator handoff text | Selector state transitions, filesystem writes, shelling out to tools |
@@ -97,22 +97,19 @@ eval "$(wt shell-init zsh)"
 ```
 
 Use `bash` instead of `zsh` for bash shells. The generated source defines
-`wt-env`, `wt-coord-use`, and `wt-coord-exit`, then registers `wt-env` with
-zsh `chpwd_functions` or bash `PROMPT_COMMAND`. The registration is idempotent:
-re-evaluating the generated source refreshes the function definitions without
-adding duplicate directory-change hooks.
+`wt-env`, then registers it with zsh `chpwd_functions` or bash
+`PROMPT_COMMAND`. The registration is idempotent: re-evaluating the generated
+source refreshes the function definition without adding duplicate
+directory-change hooks.
 
 `wt env` is the internal command called by those hooks. It resolves the current
 directory to the git common dir, reads the current branch, scans
 `<git-common-dir>/wt/task-runs/*.toml`, and picks the most recent TaskRun whose
-`branch` matches. A match exports `WT_AGENT_ID=agents/<branch_slug>` and exports
-`WT_COORDINATOR_AGENT_ID` only when the TaskRun recorded `coordinator_id`;
-without a match, outside a git repo, or on a detached branch, it unsets both
-variables. This prevents identity from leaking after leaving a worker worktree.
-
-Coordinator identity remains explicit. `wt shell-init` provides convenience
-functions for `wt coord use` and `wt coord exit`, but it does not derive a
-coordinator from the repo root or any other cwd.
+`branch` matches. A match exports the TaskRun `agent_id`, falling back to
+`agents/<branch_slug>` for legacy records. Without a match, outside a git repo,
+or on a detached branch, it unsets `WT_AGENT_ID`. Both binding and unbinding
+output also clear the removed legacy coordinator routing variable, preventing
+old shell state from leaking into the current worker identity model.
 
 ## Identity Locator
 
@@ -136,10 +133,10 @@ environment. Only `shell-sid` markers can be verified automatically by PID plus
 start-time liveness.
 
 Runtime identity resolution is layered. Explicit launch environment remains the
-first source: `WT_AGENT_ID` and `WT_COORDINATOR_AGENT_ID` win when present and
-valid. If those are absent, `wt` derives the current anchor key and reads the
-matching marker. If no live marker exists, worker identity falls back to the
-cwd/TaskRun path used by `wt shell-init` and `wt env`.
+first source: `WT_AGENT_ID` wins when present and valid. If it is absent, `wt`
+derives the current anchor key and reads the matching marker. If no live marker
+exists, worker identity falls back to the cwd/TaskRun path used by
+`wt shell-init` and `wt env`.
 
 The agent supervisor is a separate layer. It may use the same resolved identity
 model, but supervisor lifecycle, polling, and recovery policy belong to its own

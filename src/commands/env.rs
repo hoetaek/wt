@@ -9,13 +9,8 @@ use std::process::Command;
 pub fn run(cwd: &Path) -> Result<()> {
     match resolve_binding(cwd)? {
         Some(binding) => {
+            println!("unset WT_COORDINATOR_AGENT_ID;");
             println!("export WT_AGENT_ID={};", binding.agent_id);
-            match binding.coordinator_id {
-                Some(coordinator_id) => {
-                    println!("export WT_COORDINATOR_AGENT_ID={coordinator_id};")
-                }
-                None => println!("unset WT_COORDINATOR_AGENT_ID;"),
-            }
         }
         None => print_unset(),
     }
@@ -25,7 +20,6 @@ pub fn run(cwd: &Path) -> Result<()> {
 #[derive(Debug, PartialEq, Eq)]
 struct EnvBinding {
     agent_id: String,
-    coordinator_id: Option<String>,
 }
 
 fn resolve_binding(cwd: &Path) -> Result<Option<EnvBinding>> {
@@ -49,8 +43,10 @@ fn resolve_binding(cwd: &Path) -> Result<Option<EnvBinding>> {
     };
 
     Ok(Some(EnvBinding {
-        agent_id: format!("agents/{}", WorktreeNames::build_branch_slug(&branch)),
-        coordinator_id: record.run.coordinator_id,
+        agent_id: record
+            .run
+            .agent_id
+            .unwrap_or_else(|| format!("agents/{}", WorktreeNames::build_branch_slug(&branch))),
     }))
 }
 

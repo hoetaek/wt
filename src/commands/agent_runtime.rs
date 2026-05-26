@@ -3,7 +3,6 @@ use crate::error::WtError;
 use crate::messages::AgentId;
 use crate::names::WorktreeNames;
 use crate::services::git::GitService;
-use crate::task_run;
 use anyhow::{Context, Result, bail};
 use std::process::{Command, Stdio};
 
@@ -127,17 +126,12 @@ fn run_process(
     agent: &AgentId,
     label: &str,
 ) -> Result<()> {
-    let coordinator_id = resolve_coordinator_for_launch(ctx, agent)?;
     let mut process = Command::new(command);
     process
         .args(args)
         .current_dir(&ctx.invocation_root)
-        .env("WT_AGENT_ID", agent.as_str());
-    if let Some(coordinator_id) = coordinator_id {
-        process.env("WT_COORDINATOR_AGENT_ID", coordinator_id.as_str());
-    } else {
-        process.env_remove("WT_COORDINATOR_AGENT_ID");
-    }
+        .env("WT_AGENT_ID", agent.as_str())
+        .env_remove("WT_COORDINATOR_AGENT_ID");
 
     let status = process
         .stdin(Stdio::inherit())
@@ -151,42 +145,6 @@ fn run_process(
         Some(code) => Err(WtError::Exit { code }.into()),
         None => Err(WtError::Exit { code: 1 }.into()),
     }
-}
-
-fn resolve_coordinator_for_launch(ctx: &Ctx, _agent: &AgentId) -> Result<Option<AgentId>> {
-    if let Some(coordinator_id) = ctx.launcher_coordinator_id.as_deref() {
-        return Ok(Some(
-            AgentId::parse(coordinator_id).context("Invalid WT_AGENT_ID")?,
-        ));
-    }
-
-    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
-    let branch = match git.current_branch() {
-        Ok(branch) => branch,
-        Err(_) => return Ok(None),
-    };
-
-    let Some(record) = task_run::list(ctx)?
-        .into_iter()
-        .filter(|record| record.run.branch == branch)
-        .max_by(task_run::compare_task_run_records)
-    else {
-        return Ok(None);
-    };
-
-    record
-        .run
-        .coordinator_id
-        .as_deref()
-        .map(|coordinator_id| {
-            AgentId::parse(coordinator_id).with_context(|| {
-                format!(
-                    "Invalid coordinator_id in TaskRun {}: {coordinator_id}",
-                    record.id
-                )
-            })
-        })
-        .transpose()
 }
 
 #[cfg(test)]
@@ -257,13 +215,9 @@ mod tests {
     }
 
     #[test]
-    fn launched_process_gets_runtime_coordinator_from_launcher_identity() {
+    fn launched_process_sets_runtime_agent_identity_and_removes_legacy_coordinator_env() {
         let temp = TempDir::new().unwrap();
-        let ctx = test_ctx(
-            temp.path(),
-            Some("agents/coord-a".into()),
-            MockRunner::new(),
-        );
+        let ctx = test_ctx(temp.path(), MockRunner::new());
         let agent = AgentId::parse("agents/worker").unwrap();
 
         run_process(
@@ -271,7 +225,7 @@ mod tests {
             "sh",
             &[
                 "-c".into(),
-                "test \"$WT_AGENT_ID\" = agents/worker && test \"$WT_COORDINATOR_AGENT_ID\" = agents/coord-a"
+                "test \"$WT_AGENT_ID\" = agents/worker && test -z \"${WT_COORDINATOR_AGENT_ID:-}\""
                     .into(),
             ],
             &agent,
@@ -280,56 +234,7 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn launched_process_removes_coordinator_env_without_context() {
-        let temp = TempDir::new().unwrap();
-        let ctx = test_ctx(temp.path(), None, MockRunner::new());
-        let agent = AgentId::parse("agents/worker").unwrap();
-
-        run_process(
-            &ctx,
-            "sh",
-            &[
-                "-c".into(),
-                "test \"$WT_AGENT_ID\" = agents/worker && test -z \"${WT_COORDINATOR_AGENT_ID+x}\""
-                    .into(),
-            ],
-            &agent,
-            "test shell",
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn launch_resolution_falls_back_to_matching_task_run_coordinator_id() {
-        let temp = TempDir::new().unwrap();
-        let mut runner = MockRunner::new();
-        runner.add_response("feature-a", true);
-        let ctx = test_ctx(temp.path(), None, runner);
-        task_run::create_with_coordinator_id(
-            &ctx,
-            "feature-a",
-            "feature-a",
-            None,
-            Some("agents/coord-from-run"),
-            task_run::STATUS_RUNNING,
-        )
-        .unwrap();
-        let agent = AgentId::parse("agents/feature-a").unwrap();
-
-        let coordinator = resolve_coordinator_for_launch(&ctx, &agent).unwrap();
-
-        assert_eq!(
-            coordinator.as_ref().map(AgentId::as_str),
-            Some("agents/coord-from-run")
-        );
-    }
-
-    fn test_ctx(
-        root: &std::path::Path,
-        launcher_coordinator_id: Option<String>,
-        runner: MockRunner,
-    ) -> Ctx {
+    fn test_ctx(root: &std::path::Path, runner: MockRunner) -> Ctx {
         Ctx::new_with_options(
             root.to_path_buf(),
             root.to_path_buf(),
@@ -339,7 +244,6 @@ mod tests {
             CtxOptions {
                 storage_root: Some(StorageRoot::from_git_common_dir(root.join(".git"))),
                 output_mode: OutputMode::Text,
-                launcher_coordinator_id,
                 ..CtxOptions::default()
             },
         )

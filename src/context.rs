@@ -360,7 +360,6 @@ pub struct CtxOptions {
     pub verbosity: u8,
     pub quiet: bool,
     pub launcher_coordinator_id: Option<String>,
-    pub coordinator_agent_id: Option<String>,
 }
 
 impl Default for CtxOptions {
@@ -373,7 +372,6 @@ impl Default for CtxOptions {
             verbosity: 0,
             quiet: false,
             launcher_coordinator_id: None,
-            coordinator_agent_id: None,
         }
     }
 }
@@ -444,7 +442,6 @@ pub struct Ctx {
     pub verbosity: u8,
     pub quiet: bool,
     pub launcher_coordinator_id: Option<String>,
-    pub coordinator_agent_id: Option<String>,
 }
 
 impl Ctx {
@@ -463,7 +460,6 @@ impl Ctx {
             verbosity: 0,
             quiet: false,
             launcher_coordinator_id: None,
-            coordinator_agent_id: None,
         };
         Self::new_with_options(repo_root, invocation_root, config, runner, ui, options)
     }
@@ -500,7 +496,6 @@ impl Ctx {
             verbosity: options.verbosity,
             quiet: options.quiet,
             launcher_coordinator_id: options.launcher_coordinator_id,
-            coordinator_agent_id: options.coordinator_agent_id,
         }
     }
 

@@ -12,14 +12,6 @@ wt-env() {
   eval "$(wt env)"
 }
 
-wt-coord-use() {
-  eval "$(wt coord use "$@")"
-}
-
-wt-coord-exit() {
-  eval "$(wt coord exit)"
-}
-
 typeset -ga chpwd_functions
 if [[ ${chpwd_functions[(Ie)wt-env]} -eq 0 ]]; then
   chpwd_functions+=(wt-env)
@@ -30,14 +22,6 @@ wt-env
 const BASH_INIT: &str = r#"# wt shell integration: ambient worker identity binding
 wt-env() {
   eval "$(wt env)"
-}
-
-wt-coord-use() {
-  eval "$(wt coord use "$@")"
-}
-
-wt-coord-exit() {
-  eval "$(wt coord exit)"
 }
 
 if declare -p PROMPT_COMMAND 2>/dev/null | grep -q '^declare \-[^ ]*a'; then

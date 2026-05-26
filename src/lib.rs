@@ -53,8 +53,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Version
         | Commands::Completion { .. }
         | Commands::ShellInit { .. }
-        | Commands::Env
-        | Commands::Coord { .. } => Ok(()),
+        | Commands::Env => Ok(()),
         Commands::Session { command } => match command {
             SessionCommand::Set { id } => commands::session::set(ctx, id),
             SessionCommand::Unset => commands::session::unset(ctx),

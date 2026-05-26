@@ -331,10 +331,9 @@ wt msg send --scope workflow:2026-05-20-001 --to agents/coordinator "workflow no
 ```
 
 `wt msg send` writes `meta.from = "agents/user"` unless `WT_AGENT_ID` is set to `agents/<agent>` or
-`<agent>`. Without `--scope`, it writes direct-scope messages to `inbox/new`; direct
-`wt msg send --to coordinator ...` is therefore a direct/default coordinator message and must not be
-treated as workflow-owned delivery. Explicit scoped sends accept `direct`, `repo`,
-`workflow:<id>`, and `task_run:<id>`.
+`<agent>`. Without `--scope`, it writes direct-scope messages to `inbox/new`. Explicit scoped sends
+accept `direct`, `repo`, `workflow:<id>`, and `task_run:<id>`. `agents/coordinator` is an ordinary
+explicit inbox address; it is not dynamically resolved from runtime context.
 
 TaskRun completion reports use the TaskRun-owned report route instead of composing a raw scoped
 message command:
@@ -345,16 +344,12 @@ wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files
 
 For a direct TaskRun, `wt task report` sends direct scope. For a workflow-linked TaskRun, it derives
 `workflow:<id>` from the TaskRun's workflow context and sends from the TaskRun `agent_id` to the
-stored `coordinator_id`. Workflow task prompts must therefore not ask agents to add
-`--scope workflow:<id>` or `--to coordinator` themselves.
+stored `coordinator_id`. Workflow task prompts must therefore not ask agents to manually compose raw
+message scope and recipient arguments themselves.
 
-The user-facing recipient `coordinator` is a context-resolved alias, not a fixed inbox. At `wt msg`
-CLI surfaces it resolves in three steps: `WT_COORDINATOR_AGENT_ID`, then the current anchor marker
-written by `wt session set`, then the cwd/TaskRun identity path used by `wt shell-init`. If all three
-are absent or invalid, the command must fail with setup guidance such as `wt session set <id>`,
-`wt coord use <id>`, or `eval "$(wt shell-init zsh)"`. Existing
-`messages/agents/coordinator/...` state remains ordinary inbox state and is active only for shells
-that explicitly set `WT_COORDINATOR_AGENT_ID` to `agents/coordinator`.
+There is no dynamic `coordinator` recipient alias. Bare `coordinator` is accepted only because
+`AgentId` accepts bare `NAME` and normalizes it to `agents/NAME`; it has the same meaning as the
+ordinary explicit inbox address `agents/coordinator`.
 
 Canonical hook compatibility delivery:
 
@@ -363,22 +358,20 @@ wt msg check-inbox
 ```
 
 Without `--agent`, `check-inbox` reads only `WT_AGENT_ID` and exits successfully with no output when
-there is no runtime agent id or no deliverable message for that agent. `WT_COORDINATOR_AGENT_ID` is
-not an implicit receive binding for workers; it only resolves the `coordinator` alias at explicit
-CLI surfaces. Before rendering hook output `check-inbox` reclaims expired leases according to the
-delivery lifecycle policy, claims deliverable messages from `inbox/new` or eligible `inbox/retry`,
-prints JSON containing `hookSpecificOutput.additionalContext`, and acknowledges the claims into
-`inbox/delivered/` only after stdout is written successfully. Active non-expired claims remain owned
-by their current claimant. This command is a compatibility consumer for agent hooks, not a separate
-unread/read lifecycle.
+there is no runtime agent id or no deliverable message for that agent. Before rendering hook output
+`check-inbox` reclaims expired leases according to the delivery lifecycle policy, claims deliverable
+messages from `inbox/new` or eligible `inbox/retry`, prints JSON containing
+`hookSpecificOutput.additionalContext`, and acknowledges the claims into `inbox/delivered/` only
+after stdout is written successfully. Active non-expired claims remain owned by their current
+claimant. This command is a compatibility consumer for agent hooks, not a separate unread/read
+lifecycle.
 
 For ordinary agent recipients, `check-inbox` claims direct-scope messages. Non-direct scope delivery
 requires explicit ownership evidence. For workflow reports, the ownership evidence is recorded
 TaskRun state: if a TaskRun's `coordinator_id` is the resolved inbox agent and that TaskRun resolves
-to workflow `<id>`, the agent may claim `workflow:<id>` messages. `WT_COORDINATOR_AGENT_ID` may still
-resolve the `coordinator` alias at CLI surfaces that accept aliases, but it is not itself scoped
-ownership evidence. Hook context includes a `scope:` line for non-direct messages so the coordinator
-can distinguish workflow reports from standalone direct messages.
+to workflow `<id>`, the agent may claim `workflow:<id>` messages. Hook context includes a `scope:`
+line for non-direct messages so the coordinator can distinguish workflow reports from standalone
+direct messages.
 
 General workflow-supervisor ownership beyond TaskRun-recorded workflow scopes is not implemented
 yet. Future supervisor identities must define explicit scope ownership before claiming shared
@@ -593,13 +586,13 @@ default timeout `600`, `async = false`를 canonical JSON으로 정렬한 뒤 SHA
 `[features].hooks = true`도 보장한다.
 
 `wt run issue`, `wt run task`, `wt run workflow`는 사용자가 매번 hook을 다시 설치하게 하지 않고, Codex launch 시 cmux
-`new-workspace --command`에 `WT_AGENT_ID=agents/<branch_slug>`를 주입하고, launch context에서
-coordinator identity가 확인될 때만 `WT_COORDINATOR_AGENT_ID=<coordinator-agent-id>`를 함께
-주입해 dispatcher에 agent binding과 coordinator target을 제공해야 한다. `<branch_slug>`는
-scoped message address의 `agents/<agent>` 한 segment 제약과 맞도록 path separator가 없는 값이어야 하고, `wt msg send --to <branch_slug>`와
-`wt msg check-inbox --agent "$WT_AGENT_ID"`가 같은 inbox를 보아야 한다.
-Claude와 future agent CLI도 wt가 process launch를 소유하는 경로에서는 같은
-launch-time `WT_AGENT_ID` shape와 context-derived coordinator binding을 받아야 한다.
+`new-workspace --command`에 먼저 제거된 legacy coordinator routing env를 clear한 뒤
+`WT_AGENT_ID=agents/<branch_slug>`와 필요한 경우 `WT_TASK_RUN_ID`를 주입해야 한다.
+`<branch_slug>`는 scoped message address의 `agents/<agent>` 한 segment 제약과
+맞도록 path separator가 없는 값이어야 하고, `wt msg send --to <branch_slug>`와
+`wt msg check-inbox --agent "$WT_AGENT_ID"`가 같은 inbox를 보아야 한다. Claude와 future agent
+CLI도 wt가 process launch를 소유하는 경로에서는 같은 launch-time `WT_AGENT_ID` shape를 받아야
+한다.
 
 ### Agent Runtime Wrapper
 
@@ -612,10 +605,9 @@ wt claude
 ```
 
 이 두 명령은 현재 git branch에서 `<branch_slug>`를 계산해 `WT_AGENT_ID=agents/<branch_slug>`를
-agent process에 주입한다. Coordinator binding은 launch shell의 `WT_AGENT_ID`가 있으면 그 값을
-사용하고, 재진입한 worker에서는 matching TaskRun의 `coordinator_id`를 사용하며, 둘 다 없으면
-`WT_COORDINATOR_AGENT_ID`를 주입하지 않는다. 사용자가 직접 `codex` 또는 `claude`를 실행하면
-wt는 환경변수를 주입하지 않으며, hook dispatcher는 `WT_AGENT_ID`가 없을 때 조용히 no-op 한다.
+agent process에 주입하고, 제거된 legacy coordinator routing env는 child process에서 제거한다.
+사용자가 직접 `codex` 또는 `claude`를 실행하면 wt는 환경변수를 주입하지 않으며, hook dispatcher는
+`WT_AGENT_ID`가 없을 때 조용히 no-op 한다.
 
 같은 worktree에서 여러 agent를 띄울 때는 첫 positional argument로 role을 명시한다.
 
@@ -636,8 +628,8 @@ wt as <agent-id> -- <command...>
 wt as agents/coordinator -- codex
 ```
 
-`wt as`는 explicit `WT_AGENT_ID`를 그대로 쓰고, 위와 같은 context-derived coordinator binding만
-함께 주입한다. 긴 `wt agent shell --agent <agent> ...` 형태를 최종 UX로 문서화하지 않는다.
+`wt as`는 explicit `WT_AGENT_ID`를 그대로 쓰는 low-level wrapper다. 긴
+`wt agent shell --agent <agent> ...` 형태를 최종 UX로 문서화하지 않는다.
 
 ### Cross-Agent Hook Smoke
 
@@ -1400,8 +1392,8 @@ Workflow coordinator handoff는 `stack` 전용 개념이 아니라 `wt run workf
 기본 보고 route인 `wt task report "Agent Completion Report: ..."` 명령이 먼저 들어간다.
 Workflow-prepared TaskRun은 stable `agent_id`, `coordinator_id`, `coordinator_label`을
 저장하고, `wt task report`는 그 TaskRun context에서 `workflow:<workflow-id>` scope를
-자동으로 적용한다. Prompt는 `--scope workflow:<workflow-id>`나 `--to coordinator`를 agent가
-직접 구성하도록 지시하지 않는다. 같은 section은 fallback으로 현재 coordinator cmux
+자동으로 적용한다. Prompt는 raw message recipient/scope를 agent가 직접 구성하도록 지시하지
+않는다. 같은 section은 fallback으로 현재 coordinator cmux
 workspace/surface 좌표로 렌더링되는 `cmux send`와 `cmux send-key ... enter` 명령도
 포함한다. cmux 좌표는 현재 transport 정보일 뿐이므로 Workflow file, TaskRun, TaskDocument에
 저장하지 않는다. file inbox route가 unavailable이면 agent는 cmux fallback으로 같은

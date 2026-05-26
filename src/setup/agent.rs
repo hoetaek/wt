@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 const WT_AGENT_ID_TEMPLATE_KEY: &str = "wt_agent_id";
 const WT_TASK_RUN_ID_TEMPLATE_KEY: &str = "wt_task_run_id";
-const WT_COORDINATOR_AGENT_ID_TEMPLATE_KEY: &str = "wt_coordinator_agent_id";
 
 pub(crate) fn agent_launch_command(
     agent: Option<&AgentConfig>,
@@ -47,22 +46,14 @@ fn inject_agent_identity_env(
     {
         exports.push(format!("WT_TASK_RUN_ID={}", shell_arg(task_run_id)));
     }
-    if let Some(coordinator_agent_id) = vars
-        .get(WT_COORDINATOR_AGENT_ID_TEMPLATE_KEY)
-        .map(String::as_str)
-        .filter(|agent_id| !agent_id.trim().is_empty())
-    {
-        exports.push(format!(
-            "WT_COORDINATOR_AGENT_ID={}",
-            shell_arg(coordinator_agent_id)
-        ));
-    }
-
     if exports.is_empty() {
-        return command;
+        return format!("unset WT_COORDINATOR_AGENT_ID; {command}");
     }
 
-    format!("export {}; {command}", exports.join(" "))
+    format!(
+        "unset WT_COORDINATOR_AGENT_ID; export {}; {command}",
+        exports.join(" ")
+    )
 }
 
 pub(super) fn bootstrap_agent(
@@ -222,7 +213,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agent_launch_command_injects_task_run_identity_without_empty_coordinator() {
+    fn agent_launch_command_injects_task_run_identity_only() {
         let agent = AgentConfig {
             cli: AgentCli::Codex,
             command: Some("codex".into()),
@@ -231,15 +222,26 @@ mod tests {
         let vars = HashMap::from([
             ("wt_agent_id".into(), "agents/run-1-add-schema".into()),
             ("wt_task_run_id".into(), "run-add-schema".into()),
-            ("wt_coordinator_agent_id".into(), String::new()),
         ]);
 
         let command = agent_launch_command(Some(&agent), &vars).unwrap();
 
         assert_eq!(
             command,
-            "export WT_AGENT_ID=agents/run-1-add-schema WT_TASK_RUN_ID=run-add-schema; codex"
+            "unset WT_COORDINATOR_AGENT_ID; export WT_AGENT_ID=agents/run-1-add-schema WT_TASK_RUN_ID=run-add-schema; codex"
         );
-        assert!(!command.contains("WT_COORDINATOR_AGENT_ID"));
+    }
+
+    #[test]
+    fn agent_launch_command_without_identity_still_clears_legacy_coordinator_env() {
+        let agent = AgentConfig {
+            cli: AgentCli::Codex,
+            command: Some("codex".into()),
+            ..AgentConfig::default()
+        };
+
+        let command = agent_launch_command(Some(&agent), &HashMap::new()).unwrap();
+
+        assert_eq!(command, "unset WT_COORDINATOR_AGENT_ID; codex");
     }
 }

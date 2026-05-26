@@ -291,14 +291,15 @@ merge.
   and `--remove` to remove wt-managed per-machine entries while preserving
   user-managed hooks, cmux hooks, and unrelated trust state.
 - `wt codex` and `wt claude` launch those agent CLIs with
-  `WT_AGENT_ID=agents/<branch_slug>` and set `WT_COORDINATOR_AGENT_ID` from
-  the launch context when a coordinator identity is available. In the same
-  worktree, pass a leading role such as `wt codex @planner` or
+  `WT_AGENT_ID=agents/<branch_slug>`. In the same worktree, pass a leading role
+  such as `wt codex @planner` or
   `wt claude @reviewer` to use a separate inbox like
   `agents/<branch_slug>-planner`; role launches never consume the default
-  worktree inbox.
+  worktree inbox. The wrappers also clear removed legacy coordinator routing env
+  before starting the child process.
 - `wt as <agent-id> -- <command...>` is the low-level escape hatch for unusual
-  agent commands or scripts that need an explicit inbox identity.
+  agent commands or scripts that need an explicit inbox identity; it applies the
+  same legacy coordinator env cleanup as the known-agent wrappers.
 - `wt msg send --to <agent> <message>` writes a scoped file inbox message under
   `<git-common-dir>/wt/messages/agents/<agent>/inbox/new/`. The default CLI
   send scope is `direct`; use `--scope workflow:<id>` for workflow-owned
@@ -306,12 +307,11 @@ merge.
   `--scope repo` for repo-local singleton delivery. Workflow and TaskRun
   ownership belong in explicit message scope metadata, not in `correlates_with`.
 - `wt msg check-inbox` is the hook-compatible consumer. With no `--agent`, it
-  checks the unique non-empty inbox ids from `WT_AGENT_ID` and
-  `WT_COORDINATOR_AGENT_ID`; `--agent <agent>` is an explicit single-inbox
-  override. It claims deliverable direct-scope messages from `inbox/new` or
-  eligible `inbox/retry`, emits hook JSON, and acknowledges them into
-  `inbox/delivered` after stdout is written; it is not a separate unread/read
-  lifecycle.
+  checks the inbox id from `WT_AGENT_ID`; `--agent <agent>` is an explicit
+  single-inbox override. It claims deliverable direct-scope messages from
+  `inbox/new` or eligible `inbox/retry`, emits hook JSON, and acknowledges them
+  into `inbox/delivered` after stdout is written; it is not a separate
+  unread/read lifecycle.
 - `wt msg list --agent <agent>` is the read-only lifecycle inventory. It counts
   and summarizes `new`, `claimed`, `delivered`, `retry`, and `failed` messages,
   including claim owner, lease, attempts, scope, and error metadata when present.
@@ -327,19 +327,21 @@ for runtime observation.
 ## Coordinator Handoff
 
 Task prompts started by `wt run task` and `wt run workflow` include coordinator
-handoff instructions. Workflow handoffs give the agent the scoped coordinator
-file inbox target, `wt msg send --scope workflow:<id> --to coordinator ...`,
-where `coordinator` normalizes to `agents/coordinator`, so workflow supervisors
-can attribute shared coordinator messages to the owning workflow. The prompt
-also includes fallback cmux coordinates with a `cmux send --workspace ...
---surface ...` report command and a matching `cmux send-key ... enter` command.
-Direct `wt msg send --to coordinator ...` remains a direct/default-scope
-coordinator message, not workflow-owned delivery.
+handoff instructions. The normal report route is:
 
-Workflow supervisors may claim shared `agents/coordinator` inbox messages only
-when the message has explicit matching workflow scope. The recipient address,
-`coordinator` alias normalization, cmux coordinates, or `correlates_with` are
-not enough ownership evidence.
+```bash
+wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>"
+```
+
+`wt task report` uses the current TaskRun's stored coordinator route and applies
+direct or workflow scope automatically. Prompts also include fallback cmux
+coordinates with a `cmux send --workspace ... --surface ...` report command and
+a matching `cmux send-key ... enter` command.
+
+Low-level `wt msg send --to agents/<id> ...` remains an explicit file-inbox
+escape hatch. Workflow ownership belongs in message scope or TaskRun routing
+state; recipient address, cmux coordinates, or `correlates_with` are not enough
+ownership evidence.
 
 Agents report back in this shape and then keep ownership of review follow-up
 for their task:

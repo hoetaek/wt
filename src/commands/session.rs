@@ -16,7 +16,6 @@ pub fn set(ctx: &Ctx, id: &str) -> Result<()> {
         identity_locator::current_agent_kind().as_deref(),
     )?;
     println!("export WT_AGENT_ID={};", agent.as_str());
-    println!("export WT_COORDINATOR_AGENT_ID={};", agent.as_str());
     Ok(())
 }
 
@@ -24,7 +23,6 @@ pub fn unset(ctx: &Ctx) -> Result<()> {
     let key = identity_locator::current_anchor_key()?;
     identity_locator::remove_marker(ctx, &key)?;
     println!("unset WT_AGENT_ID;");
-    println!("unset WT_COORDINATOR_AGENT_ID;");
     Ok(())
 }
 

@@ -501,11 +501,6 @@ mod tests {
             vars.get("wt_agent_id").unwrap(),
             "agents/proj-680-document-editor"
         );
-        assert_eq!(
-            vars.get("wt_coordinator_agent_id").unwrap(),
-            "agents/coord-a"
-        );
-        assert_eq!(vars.get("coordinator_msg_target").unwrap(), "coordinator");
         assert_eq!(vars.get("issue_title").unwrap(), "Document editor");
         assert!(vars.contains_key("vite_port"));
         assert!(vars.contains_key("api_port"));
@@ -1643,7 +1638,7 @@ mod tests {
         assert_eq!(
             command_arg,
             &format!(
-                "export WT_AGENT_ID=agents/issue-1-test; codex --model wt-test-agent-command-repo-issue-1-test --cd {}",
+                "unset WT_COORDINATOR_AGENT_ID; export WT_AGENT_ID=agents/issue-1-test; codex --model wt-test-agent-command-repo-issue-1-test --cd {}",
                 wt.display()
             )
         );
@@ -1744,7 +1739,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             command_arg,
-            "export WT_AGENT_ID=agents/issue-1-test; claude"
+            "unset WT_COORDINATOR_AGENT_ID; export WT_AGENT_ID=agents/issue-1-test; claude"
         );
 
         fs::remove_dir_all(&repo).ok();

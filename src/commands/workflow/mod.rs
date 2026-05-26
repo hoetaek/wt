@@ -481,8 +481,6 @@ cli = "none"
         assert!(content.contains("wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
         assert!(content.contains("stored coordinator route and workflow scope"));
         assert!(!content.contains("wt msg send --scope workflow:"));
-        assert!(!content.contains("--to coordinator"));
-        assert!(!content.contains("WT_COORDINATOR_AGENT_ID"));
         assert!(content.contains("If the file inbox route is unavailable"));
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\""));
         assert!(content.contains("{{coordinator_enter_command}}"));
@@ -2222,7 +2220,6 @@ landing = "auto"
         assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains("wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(!content.contains("wt msg send --scope workflow:"));
-        assert!(!content.contains("--to coordinator"));
         assert!(content.contains(
             "wt workflow complete /repo/.git/wt/workflows/2026-05-16-001.toml PROJ-2 --run-next"
         ));
@@ -2413,7 +2410,6 @@ landing = "auto"
         assert!(content.contains("cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}}"));
         assert!(content.contains("wt task report \"Agent Completion Report"));
         assert!(!content.contains("wt msg send --scope workflow:"));
-        assert!(!content.contains("--to coordinator"));
         assert!(content.contains(
             "workflow complete /repo/.git/wt/workflows/2026-05-17-002.toml matrix-task:alpha"
         ));
