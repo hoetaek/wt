@@ -106,7 +106,7 @@ fn step_codex_hooks(
     summary: &mut SetupSummary,
 ) -> Result<()> {
     if options.remove {
-        let installed = agent_hook::codex_wt_managed_hook_present()?;
+        let installed = agent_hook::codex_wt_managed_hook_or_trust_present()?;
         let codex_home = agent_hook::codex_home_dir()?;
         let hooks_path = codex_home.join("hooks.json");
         if !installed {

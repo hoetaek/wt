@@ -3848,6 +3848,180 @@ fn setup_and_remove_are_idempotent() {
 
 #[cfg(unix)]
 #[test]
+fn setup_repairs_claude_when_session_end_hook_is_missing() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let home = temp.path().join("home");
+    let settings_path = home.join(".claude/settings.json");
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+
+    wt_command()
+        .env("HOME", &home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success();
+
+    let mut settings = json_file(&settings_path);
+    settings["hooks"]
+        .as_object_mut()
+        .unwrap()
+        .remove("SessionEnd");
+    std::fs::write(
+        &settings_path,
+        format!("{}\n", serde_json::to_string_pretty(&settings).unwrap()),
+    )
+    .unwrap();
+
+    wt_command()
+        .env("HOME", &home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Claude hook installed"));
+
+    let settings = json_file(&settings_path);
+    assert!(
+        claude_event_commands(&settings, "SessionEnd")
+            .iter()
+            .any(|command| command == CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_repairs_codex_when_hooks_feature_is_disabled() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let config_path = codex_home.join("config.toml");
+    let fake_bin = write_fake_agent(temp.path(), "codex");
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success();
+
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(
+        &config_path,
+        config.replacen("hooks = true", "hooks = false", 1),
+    )
+    .unwrap();
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex hook installed"));
+
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(config_path).unwrap()).unwrap();
+    assert_eq!(config["features"]["hooks"].as_bool(), Some(true));
+
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        let commands = codex_event_commands(&hooks, event_name);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.as_str() == codex_dispatcher_command())
+                .count(),
+            1
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_remove_cleans_stale_codex_trust_without_hooks_and_preserves_other_trust() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let hooks_path = codex_home.join("hooks.json");
+    let config_path = codex_home.join("config.toml");
+    let fake_bin = write_fake_agent(temp.path(), "codex");
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success();
+
+    let stale_prompt_key = format!("{}:user_prompt_submit:0:0", hooks_path.display());
+    let stale_post_tool_key = format!("{}:post_tool_use:0:0", hooks_path.display());
+    let user_key = format!("{}:user_prompt_submit:5:0", hooks_path.display());
+    let cmux_key = format!("{}:post_tool_use:5:0", hooks_path.display());
+    let unrelated_key = format!(
+        "{}:user_prompt_submit:0:0",
+        temp.path().join("other-hooks.json").display()
+    );
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"{config}
+[hooks.state."{user_key}"]
+trusted_hash = "sha256:user"
+
+[hooks.state."{cmux_key}"]
+trusted_hash = "sha256:cmux"
+
+[hooks.state."{unrelated_key}"]
+trusted_hash = "sha256:unrelated"
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::remove_file(&hooks_path).unwrap();
+
+    wt_command()
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .args(["setup", "--remove", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex hook uninstalled"));
+
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(config_path).unwrap()).unwrap();
+    let state = config["hooks"]["state"].as_table().unwrap();
+    assert!(!state.contains_key(&stale_prompt_key));
+    assert!(!state.contains_key(&stale_post_tool_key));
+    assert_eq!(
+        state[&user_key]["trusted_hash"].as_str(),
+        Some("sha256:user")
+    );
+    assert_eq!(
+        state[&cmux_key]["trusted_hash"].as_str(),
+        Some("sha256:cmux")
+    );
+    assert_eq!(
+        state[&unrelated_key]["trusted_hash"].as_str(),
+        Some("sha256:unrelated")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn setup_remove_cleans_partial_wt_managed_hooks() {
     let temp = TempDir::new().unwrap();
     let home = temp.path().join("home");
