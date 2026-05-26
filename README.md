@@ -187,7 +187,7 @@ wt workflow issue --mode stack 123 456 789 --base main --pr draft
 wt workflow list
 wt run workflow
 wt workflow repair 2026-05-16-001
-wt workflow complete 2026-05-16-001 add-schema --run-next
+wt workflow pass 2026-05-16-001 add-schema --run-next
 wt workflow archive 2026-05-16-001
 ```
 
@@ -219,7 +219,7 @@ path/name, or direct TaskRun id.
 
 `wt done` removes worktrees and local branches. It does not merge the branch.
 Land reviewed work with Git or pull requests first. Workflow-linked TaskRuns are
-completed with `wt workflow complete`, not `wt done`.
+passed with `wt workflow pass`, not `wt done`.
 
 Pass `--pr` to `wt inspect <target>` when the dossier should include read-only
 pull request review evidence. The PR section is opt-in and does not resolve
@@ -238,7 +238,7 @@ merge.
   branch/worktree opening under `wt open`, and saved workflow lifecycle actions
   under `wt workflow`.
 - `wt run workflow` starts runnable tasks from saved Workflow files. It does
-  not list, edit, repair, or complete Workflow files.
+  not list, edit, repair, or pass workflow tasks.
 - `TaskDocument` files in `<git-common-dir>/wt/tasks/<task>.toml` define prepared local work.
 - `wt task list` shows the actionable local TaskDocument working set: tasks
   with no TaskRun, or whose latest TaskRun is prepared, failed, or skipped. It
@@ -264,11 +264,11 @@ merge.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid
   Workflow files whether or not they are runnable and reports invalid workflow
   TOML files instead of hiding parse failures.
-- `wt workflow archive <workflow>` moves a completed Workflow plus linked
+- `wt workflow archive <workflow>` moves a passed Workflow plus linked
   passed/skipped TaskRuns and uniquely-owned TaskDocuments into
   `<git-common-dir>/wt/archive/workflows/<workflow-id>/`. Archive is
   visibility and retention only; it is not a substitute for landing,
-  `wt workflow complete`, or `wt done`.
+  `wt workflow pass`, or `wt done`.
 - `TaskRun` files in `<git-common-dir>/wt/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
 - `wt ui [--port <port>]` starts a read-only loopback web UI for personal `wt`
@@ -507,7 +507,7 @@ It does not apply to direct `wt run task`, `wt run issue`, `wt run branch`, or `
 
 ```toml
 [agent.prompt]
-workflow = ["Wait for external PR review before reporting workflow completion."]
+workflow = ["Wait for external PR review before asking the coordinator to pass the workflow task."]
 
 [agent.prompt.append]
 workflow = ["Mention the PR state and any remaining review risk in the report."]
@@ -578,7 +578,7 @@ there for one named profile.
 | `wt task import` | Import provider issues as local TaskDocuments |
 | `wt run task` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
-| `wt workflow` | Prepare, inspect, repair, archive, and complete saved workflows |
+| `wt workflow` | Prepare, inspect, repair, archive, and pass saved workflow tasks |
 | `wt run workflow` | Start runnable tasks from saved workflows |
 | `wt ui` | Start the read-only personal state web UI |
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |

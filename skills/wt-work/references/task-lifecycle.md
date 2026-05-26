@@ -2,7 +2,7 @@
 
 Shared reference for wt skills that touch TaskDocuments, TaskRuns, and
 workflow files (`wt-start`, `wt-coordinate`, `wt-land`). Defines the object
-model, status boundaries, and completion vs cleanup commands.
+model, status boundaries, and pass vs cleanup commands.
 
 ## Object Model
 
@@ -26,15 +26,15 @@ model, status boundaries, and completion vs cleanup commands.
 | State | Means | Does NOT mean |
 |---|---|---|
 | TaskRun `passed` | Current coordinator gate passed | Branch landed or cleanup complete |
-| Agent `idle` | Coordinator should inspect | TaskRun complete |
+| Agent `idle` | Coordinator should inspect | TaskRun passed |
 | Worktree clean | No uncommitted changes | Branch reviewed or landed |
 | Agent `running` | Let it work unless clearly stuck | Active progress proven |
 
-## Completion vs Cleanup
+## Pass vs Cleanup
 
-| Run Type | Completion (before landing) | Cleanup (after landing/discard) |
+| Run Type | Pass (before landing) | Cleanup (after landing/discard) |
 |---|---|---|
-| workflow-linked | `wt workflow complete <workflow> <task> [--run-next]` | `wt done <branch-or-worktree>` |
+| workflow-linked | `wt workflow pass <workflow> <task> [--run-next]` | `wt done <branch-or-worktree>` |
 | direct | (no separate step) | `wt done <branch-or-worktree>` — also marks running direct TaskRuns passed |
 
 `--run-next` applies in stack mode when the next stack task should start
@@ -42,4 +42,4 @@ immediately. For `single`, `batch`, the final stack task, or a stack task
 whose successor should wait, omit it.
 
 `wt done` is cleanup only. Do not use it as a substitute for `wt workflow
-complete`. Cleanup runs after landing is proven or discard intent is explicit.
+pass`. Cleanup runs after landing is proven or discard intent is explicit.

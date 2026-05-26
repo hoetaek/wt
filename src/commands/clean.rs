@@ -401,7 +401,7 @@ fn reject_non_direct_task_run(ctx: &Ctx, record: &TaskRunRecord) -> Result<()> {
     match task_run::resolve_context(ctx, record)? {
         TaskRunContext::Direct => Ok(()),
         TaskRunContext::WorkflowLinked(context) => bail!(
-            "TaskRun {} is workflow-linked to {} task {}. Use `wt inspect {}` for context and complete it with `wt workflow complete {} {}`; `wt done` only accepts direct TaskRun ids.",
+            "TaskRun {} is workflow-linked to {} task {}. Use `wt inspect {}` for context and pass it with `wt workflow pass {} {}`; `wt done` only accepts direct TaskRun ids.",
             record.id,
             context.workflow_id,
             context.task,
@@ -410,7 +410,7 @@ fn reject_non_direct_task_run(ctx: &Ctx, record: &TaskRunRecord) -> Result<()> {
             context.task
         ),
         TaskRunContext::UnresolvedWorkflowGroup { group } => bail!(
-            "TaskRun {} belongs to workflow group {}, but the workflow file was not discovered. Use `wt inspect {}` for context and complete the workflow path instead; `wt done` only accepts direct TaskRun ids.",
+            "TaskRun {} belongs to workflow group {}, but the workflow file was not discovered. Use `wt inspect {}` for context and pass the workflow path instead; `wt done` only accepts direct TaskRun ids.",
             record.id,
             group,
             record.id
@@ -698,7 +698,7 @@ updated_at = "2026-05-18T00:00:00Z"
         let message = format!("{err:#}");
 
         assert!(message.contains("workflow-linked"));
-        assert!(message.contains("wt workflow complete"));
+        assert!(message.contains("wt workflow pass"));
         assert_eq!(
             task_run::read(&run.path).unwrap().status,
             task_run::STATUS_RUNNING

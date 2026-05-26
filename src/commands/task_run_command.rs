@@ -806,7 +806,7 @@ id = "PROJ-123"
         assert!(handoff_prompt.contains("If `wt task report` fails"));
         assert!(!handoff_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
         assert!(!handoff_prompt.contains("Create the schema first."));
-        assert!(!handoff_prompt.contains("wt workflow complete"));
+        assert!(!handoff_prompt.contains("wt workflow pass"));
 
         let task_prompt = send_calls[1].1.last().unwrap();
         assert!(task_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));

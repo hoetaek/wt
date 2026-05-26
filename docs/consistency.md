@@ -801,8 +801,8 @@ profile subset은 direct command가 아니라 Workflow matrix가 소유하며,
 `wt run` namespace는 workspace execution start만 소유한다. Canonical start source는
 `issue`, `pr`, `branch`, `task`, `workflow` 다섯 가지뿐이다. Cleanup은 `wt done`,
 inspection은 `wt inspect`, existing branch/worktree opening은 `wt open`, agent
-observation은 `wt agent status` / `wt agent watch`, workflow file lifecycle과 repair /
-completion은 `wt workflow`가 맡는다. `wt run` 아래에 cleanup, inspect, repair, complete,
+observation은 `wt agent status` / `wt agent watch`, workflow file lifecycle, repair,
+pass는 `wt workflow`가 맡는다. `wt run` 아래에 cleanup, inspect, repair, pass,
 status/watch 같은 in-flight transition을 추가하지 않는다.
 
 `wt run branch <words...>`는 branch-name text에서 바로 ad hoc worktree를 시작한다. 즉시
@@ -1278,7 +1278,7 @@ landing = "manual"
 Workflow policy is intent, not state: actual pull-request review result, merge status,
 ancestry proof, worktree cleanup, branch deletion, TaskRun lifecycle status, and
 TaskDocument cleanup remain outside Workflow policy. `wt inspect`, pull-request state,
-Git commands, workflow completion, and `wt done` continue to own those checks and
+Git commands, `wt workflow pass`, and `wt done` continue to own those checks and
 transitions explicitly.
 
 The built-in config defaults are `pull_request = "none"` and `landing = "manual"`.
@@ -1324,8 +1324,8 @@ state는 Workflow file 하나로 수렴시킨다.
 task들은 독립적이므로 이미 `running`인 TaskRun이 있어도 prepared/failed sibling이 있으면
 workflow는 runnable로 남을 수 있다. `stack` mode workflow는 TaskDocument를 base-to-top
 parent chain으로 실행하고, current `running` TaskRun이 있으면 다음 task를 시작하지 않는다.
-Stack-mode에서 `running`은 agent prompt 전송이 아니라 사용자나 agent의 명시적 completion
-신호를 기다리는 상태다. 완료를 추정해서 다음 task를 시작하지 않는다.
+Stack-mode에서 `running`은 agent prompt 전송이 아니라 coordinator의 명시적 pass
+신호를 기다리는 상태다. Gate 통과를 추정해서 다음 task를 시작하지 않는다.
 
 `wt run workflow`에서 workflow target 생략은 runnable workflow를 고르는 기본 동작이다. 후보가
 하나뿐이어도 selector를 생략하고 바로 실행하지 않는다. 비대화형 shell에서는 명시 workflow
@@ -1335,7 +1335,7 @@ id/path를 넘겨야 한다.
 `prepared` 또는 `failed` task가 있고 현재 `running` task가 없을 때 runnable이다. 명시
 workflow id/path는 automation surface로 남긴다.
 `wt run workflow`는 saved Workflow execution start만 뜻한다. Workflow list/show/edit/repair,
-complete, task/issue preparation은 계속 `wt workflow` namespace에 남고 `run`이 소유하지
+pass, task/issue preparation은 계속 `wt workflow` namespace에 남고 `run`이 소유하지
 않는다.
 
 `wt workflow list`는 `<git-common-dir>/wt/workflows/<id>.toml`에 저장된 Workflow file의 canonical
@@ -1420,7 +1420,7 @@ contract에 포함하지 않는다.
 TaskRun에 저장된 `agent_id`와 `coordinator_id`를 사용해 direct scope 보고를 보낸다. 같은
 section은 fallback으로 현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
 `cmux send-key ... enter` 명령도 포함한다.
-이것은 Workflow orchestration이나 completion command가 아니다. Task-run agent는
+이것은 Workflow orchestration이나 pass command가 아니다. Task-run agent는
 `PR=none`인 `Agent Completion Report`를 coordinator에게 보내고, coordinator가 review,
 landing, cleanup을 명시적으로 처리할 때까지 기다린다. cmux 좌표는 현재 transport 정보일
 뿐이므로 TaskDocument나 TaskRun에 저장하지 않는다. file inbox route가 unavailable이면
@@ -1469,16 +1469,16 @@ TaskRun의 `agent_id`로 `task_run:<id>` scope 메시지를 보내고 TaskRun re
 갱신한다. Pull request review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한
 check를 다시 돌린 뒤 commit/push하고 PR 본문이 stale해졌을 때만 PR 본문과 Agent Completion
 Report를 갱신한다.
-실행자나 coordinator가 `wt inspect`, 필요한 경우 pull request, 보고를 확인한 뒤 workflow
-completion command를 실행할 때 TaskRun 상태가 전이된다. Pull request가 있으면 coordinator는
-workflow completion이나 landing 전에 pull-request review gate를 통과했는지 별도로 확인한다.
+실행자나 coordinator가 `wt inspect`, 필요한 경우 pull request, 보고를 확인한 뒤
+`wt workflow pass`를 실행할 때 TaskRun 상태가 `passed`로 전이된다. Pull request가 있으면
+coordinator는 workflow pass나 landing 전에 pull-request review gate를 통과했는지 별도로 확인한다.
 이 gate는 unresolved thread가 0인지뿐 아니라 최근 reviewer 또는 review-agent 답글, PR comment,
 review-request reaction, check 상태를 포함한다. Review-agent thread는 coordinator 답글 직후
 바로 resolve하지 않고, follow-up을 refresh해서 해결 또는 비조치 동의가 확인된 뒤 resolve한다.
 
 `wt done`은 worktree와 local branch cleanup 명령이다. `done`은 cleanup 신호이고,
-workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch commit을 `master` 같은
-통합 branch에 넣는 Git workflow다. `wt done`이나 workflow completion command가 branch를
+workflow pass는 coordinator gate 통과 신호이며, `merge`/`land`는 branch commit을 `master` 같은
+통합 branch에 넣는 Git workflow다. `wt done`이나 `wt workflow pass`가 branch를
 `master`에 merge했다고 해석하지 않는다. 현재는 별도 `wt land` 명령을 만들지 않고,
 `git switch master`, `git pull --ff-only`, `git merge --ff-only <branch>` 같은 명시적 Git
 단계로 landing을 문서화한다. Stack-mode workflow branch는 workflow가 보여주는 base-to-top
@@ -1487,15 +1487,15 @@ workflow completion은 실행 완료 신호이며, `merge`/`land`는 branch comm
 `wt done <target>`의 explicit cleanup target은 branch, worktree path/name,
 issue-like branch-name shorthand, direct TaskRun id다. Direct TaskRun id는 해당 TaskRun의
 branch를 checked-out worktree로 해석한 뒤 같은 cleanup path를 탄다. Workflow-linked
-TaskRun id는 workflow completion을 우회하지 않도록 거부하고 `wt inspect`와
-`wt workflow complete` 경로를 안내한다. Issue shorthand는 provider issue lookup이 아니라
+TaskRun id는 workflow pass를 우회하지 않도록 거부하고 `wt inspect`와
+`wt workflow pass` 경로를 안내한다. Issue shorthand는 provider issue lookup이 아니라
 현재 branch text에 대한 compatibility shorthand다.
 
 Local task cleanup도 별도 단계다. TaskDocument는 재사용 가능한 work definition이므로
 기본적으로 보존한다. 한 번 실행하고 끝난 task라도 linked TaskRun과 Workflow reference가
-정리되기 전까지 TaskDocument 삭제를 execution completion에 섞지 않는다. 나중에 `wt land`,
+정리되기 전까지 TaskDocument 삭제를 gate pass에 섞지 않는다. 나중에 `wt land`,
 `wt task clean`, `wt run clean`, `wt workflow clean` 같은 명령을 만들더라도 `done`이나
-`complete`에 merge나 task definition 삭제 의미를 섞지 않는다.
+`pass`에 merge나 task definition 삭제 의미를 섞지 않는다.
 
 `wt inspect [<target>]`는 branch, worktree, TaskRun을 읽어서 parent, dirty 상태,
 commit/diff 정보, Agent Completion Report 기대치, 현재 cmux contact를 보여주는 canonical
@@ -1508,9 +1508,9 @@ GitHub auth나 network fetch 없이 local dossier만 출력해야 한다. Agent 
 보여줄 수 있지만, `inspect`의 exit code는 command 자체의 성공/실패만 뜻한다. 관찰된 agent가
 `needs_input`이거나 `failed`여도 그 사실만 출력하고 polling용 exit code로 바꾸지 않는다. PR
 review verdict도 human output과 nested JSON evidence에만 두고 exit-code 의미를 바꾸지 않는다.
-실제 완료 기록은 direct 또는 workflow-linked context별 명령이 맡는다. 직접 `wt run task`가 만든
+실제 gate 통과 기록은 direct 또는 workflow-linked context별 명령이 맡는다. 직접 `wt run task`가 만든
 TaskRun은 review/landing 확인 뒤 `wt done` cleanup이 정리할 수 있고, Workflow file의
-`[[tasks]].run`과 matching `group`으로 연결된 TaskRun은 workflow completion command가 전이한다.
+`[[tasks]].run`과 matching `group`으로 연결된 TaskRun은 `wt workflow pass`가 전이한다.
 
 `wt inspect`에서 `<target>` 생략은 interactive TTY human mode에서 inspectable work target
 selector를 여는 기본 동작이다. `--json`, `--quiet`, 또는 non-TTY automation에서는 selector를
@@ -1525,7 +1525,7 @@ concept owner 아래에 남아야 한다.
 
 `wt send`도 상태 전이 명령이 아니다. `wt inspect`와 같은 target 해석으로 현재 cmux
 surface를 찾아 메시지를 보내는 transport 명령이다. 메시지를 보냈다는 사실을 TaskRun
-상태로 저장하지 않고, 완료 여부는 여전히 TaskRun status와 workflow completion command로만
+상태로 저장하지 않고, gate 통과 여부는 여전히 TaskRun status와 `wt workflow pass`로만
 표현한다.
 
 `wt agent status [<target>]`는 현재 agent/cmux observation surface다. `target`은

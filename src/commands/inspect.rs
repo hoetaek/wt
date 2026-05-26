@@ -1019,14 +1019,14 @@ fn print_next_section(ctx: &Ctx, target: &InspectTarget, workflows: &[WorkflowMa
 
 fn print_workflow_next_step(ctx: &Ctx, workflow: &WorkflowMatch) {
     ctx.ui.print_dim(&format!(
-        "  Complete: when accepted, review the worktree, report, and checks, then run `{}`; land when policy and safety checks allow.",
-        workflow_complete_command(workflow)
+        "  Pass: when accepted, review the worktree, report, and checks, then run `{}`; land when policy and safety checks allow.",
+        workflow_pass_command(workflow)
     ));
 }
 
-fn workflow_complete_command(workflow: &WorkflowMatch) -> String {
+fn workflow_pass_command(workflow: &WorkflowMatch) -> String {
     let mut command = format!(
-        "wt workflow complete {}",
+        "wt workflow pass {}",
         shell_arg(&workflow.path.to_string_lossy())
     );
     if workflow.mode != "single" {
@@ -1212,7 +1212,7 @@ run = "run-unrelated"
         assert!(dims.contains("Commits ahead of parent: 2"));
         assert!(dims.contains("dirty (1 paths)"));
         assert!(dims.contains("PR=<pr>"));
-        assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("wt workflow pass"));
         assert!(dims.contains("--run-next"));
         let warnings = ui.warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Cmux: cmux command not found"));
@@ -1224,11 +1224,11 @@ run = "run-unrelated"
     }
 
     #[test]
-    fn inspect_next_includes_workflow_complete_for_single_workflow() {
+    fn inspect_next_includes_workflow_pass_for_single_workflow() {
         let dims = inspect_next_section_for_mode("single");
 
-        assert!(dims.contains("Complete: when accepted"));
-        assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("Pass: when accepted"));
+        assert!(dims.contains("wt workflow pass"));
         assert!(!dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("review the worktree, report, and checks"));
         assert!(dims.contains("land when policy and safety checks allow"));
@@ -1237,11 +1237,11 @@ run = "run-unrelated"
     }
 
     #[test]
-    fn inspect_next_includes_workflow_complete_for_batch_workflow() {
+    fn inspect_next_includes_workflow_pass_for_batch_workflow() {
         let dims = inspect_next_section_for_mode("batch");
 
-        assert!(dims.contains("Complete: when accepted"));
-        assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("Pass: when accepted"));
+        assert!(dims.contains("wt workflow pass"));
         assert!(dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("review the worktree, report, and checks"));
         assert!(dims.contains("land when policy and safety checks allow"));
@@ -1250,11 +1250,11 @@ run = "run-unrelated"
     }
 
     #[test]
-    fn inspect_next_keeps_stack_workflow_completion_guidance() {
+    fn inspect_next_keeps_stack_workflow_pass_guidance() {
         let dims = inspect_next_section_for_mode("stack");
 
-        assert!(dims.contains("Complete: when accepted"));
-        assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("Pass: when accepted"));
+        assert!(dims.contains("wt workflow pass"));
         assert!(dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("--run-next"));
         assert!(dims.contains("wt done feature"));

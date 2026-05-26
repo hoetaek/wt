@@ -1,11 +1,11 @@
 ---
 name: wt-coordinate
-description: "Use when coordinating running wt work: inspect status, send feedback, review diffs/checks, complete workflow tasks when needed, and hand accepted work to wt-land."
+description: "Use when coordinating running wt work: inspect status, send feedback, review diffs/checks, pass workflow tasks when needed, and hand accepted work to wt-land."
 ---
 
 # WT Coordinate
 
-Coordinate running wt work. Object model, status semantics, and completion vs
+Coordinate running wt work. Object model, status semantics, and pass vs
 cleanup boundaries: see `../wt-work/references/task-lifecycle.md`.
 
 Stay on these responsibilities; do not absorb later phases:
@@ -13,7 +13,7 @@ Stay on these responsibilities; do not absorb later phases:
 | Phase | Owner |
 |---|---|
 | inspect / feedback / spec sync | this skill |
-| `wt workflow complete` for workflow-linked runs | this skill |
+| `wt workflow pass` for workflow-linked runs | this skill |
 | land / merge | `wt-land` |
 | cleanup with `wt done` | `wt-land` |
 
@@ -263,17 +263,17 @@ the parent. Applies to workflow-linked runs after review passes.
 Stack mode with the next task ready:
 
 ```bash
-wt workflow complete <workflow> <task> --run-next
+wt workflow pass <workflow> <task> --run-next
 ```
 
 Single, batch, the final stack task, or a stack task whose successor should
 wait:
 
 ```bash
-wt workflow complete <workflow> <task>
+wt workflow pass <workflow> <task>
 ```
 
-For direct TaskRuns, no separate completion exists before landing — see
+For direct TaskRuns, no separate pass command exists before landing — see
 `task-lifecycle.md`.
 
 ## Handoff
@@ -291,7 +291,7 @@ re-discovery:
 - coordinator id and worker agent id used for inbox messages, when known
 - feedback route used (`wt task review`, TaskRun-scoped `wt msg`, or `wt send`
   fallback) and why
-- stack completion command already run, if any
+- stack pass command already run, if any
 
-Report coordinated branches, feedback sent, completion command, final review
+Report coordinated branches, feedback sent, pass command, final review
 result, checks run, message route, and the exact `wt-land` target.

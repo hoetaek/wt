@@ -13,6 +13,7 @@ use crate::task_run::{STATUS_FAILED, STATUS_PASSED, STATUS_RUNNING, STATUS_SKIPP
 use crate::workflow as workflow_store;
 #[cfg(test)]
 use crate::workflow::planner::parent_for_stack_task;
+use crate::workflow::render::shell_arg;
 #[cfg(test)]
 use crate::workflow::render::{
     render_single_workflow_snapshot, stack_task_already_running_message,
@@ -49,7 +50,7 @@ use display::show_workflow;
 #[cfg(test)]
 use selection::list_runnable_workflow_candidates;
 use selection::resolve_run_workflow_path;
-use stack_completion::complete_workflow;
+use stack_completion::pass_workflow;
 
 pub fn archive(ctx: &Ctx, workflow: &str) -> Result<()> {
     archive::run(ctx, workflow)
@@ -205,8 +206,22 @@ pub fn run(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
     workflow_runner::run_workflow(ctx, &path, jobs)
 }
 
-pub fn complete(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
-    complete_workflow(ctx, workflow, task, run_next)
+pub fn pass(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
+    pass_workflow(ctx, workflow, task, run_next)
+}
+
+pub fn deprecated_complete(workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
+    let mut suggestion = format!("wt workflow pass {}", shell_arg(workflow));
+    if let Some(task) = task {
+        suggestion.push(' ');
+        suggestion.push_str(&shell_arg(task));
+    }
+    if run_next {
+        suggestion.push_str(" --run-next");
+    }
+    bail!(
+        "`wt workflow complete` has been replaced by `wt workflow pass`; run `{suggestion}` instead"
+    )
 }
 
 fn resolve_read_target(ctx: &Ctx, workflow: Option<&str>) -> Result<std::path::PathBuf> {
@@ -486,7 +501,7 @@ cli = "none"
         assert!(content.contains("{{coordinator_enter_command}}"));
         assert!(content.contains("If `wt task report` fails"));
         assert_inbox_route_precedes_cmux_fallback(content);
-        assert!(content.contains("wt workflow complete"));
+        assert!(content.contains("wt workflow pass"));
         assert!(!content.contains("--run-next"));
     }
 
@@ -510,6 +525,15 @@ cli = "none"
                     .find("Workflow policy sets")
                     .unwrap_or(content.len())
         );
+    }
+
+    #[test]
+    fn deprecated_workflow_complete_fails_with_pass_guidance() {
+        let err = deprecated_complete("work flow", Some("task one"), true).unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("`wt workflow complete` has been replaced"));
+        assert!(message.contains("wt workflow pass 'work flow' 'task one' --run-next"));
     }
 
     #[test]
@@ -1439,7 +1463,7 @@ cli = "none"
     }
 
     #[test]
-    fn workflow_complete_marks_one_matrix_profile_run_passed() {
+    fn workflow_pass_marks_one_matrix_profile_run_passed() {
         let dir = tempfile::tempdir().unwrap();
         write_profile(dir.path(), "alpha");
         write_profile(dir.path(), "beta");
@@ -1463,7 +1487,7 @@ cli = "none"
             .unwrap();
         }
 
-        complete(
+        pass(
             &ctx,
             record.path.to_str().unwrap(),
             Some("add-schema:alpha"),
@@ -1887,7 +1911,7 @@ landing = "auto"
     }
 
     #[test]
-    fn workflow_complete_marks_non_stack_workflow_tasks_passed() {
+    fn workflow_pass_marks_non_stack_workflow_tasks_passed() {
         for mode in [WorkflowModeArg::Single, WorkflowModeArg::Batch] {
             let dir = tempfile::tempdir().unwrap();
             let ctx = ctx(dir.path());
@@ -1899,7 +1923,7 @@ landing = "auto"
                 Some("feature"),
             );
 
-            complete(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap();
+            pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap();
 
             assert_eq!(
                 task_run_record(&ctx, &record.workflow.tasks[0].run)
@@ -1911,14 +1935,13 @@ landing = "auto"
     }
 
     #[test]
-    fn workflow_complete_run_next_rejects_non_stack_workflows() {
+    fn workflow_pass_run_next_rejects_non_stack_workflows() {
         for mode in [WorkflowModeArg::Single, WorkflowModeArg::Batch] {
             let dir = tempfile::tempdir().unwrap();
             let ctx = ctx(dir.path());
             let record = prepare_workflow(&ctx, mode, &["feature"]);
 
-            let err =
-                complete(&ctx, record.path.to_str().unwrap(), Some("feature"), true).unwrap_err();
+            let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), true).unwrap_err();
 
             assert!(
                 err.to_string()
@@ -1928,7 +1951,7 @@ landing = "auto"
     }
 
     #[test]
-    fn workflow_complete_rejects_dirty_stack_task_worktree() {
+    fn workflow_pass_rejects_dirty_stack_task_worktree() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -1956,8 +1979,7 @@ landing = "auto"
             Some("feature"),
         );
 
-        let err =
-            complete(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
 
         assert!(err.to_string().contains("uncommitted changes"));
         let run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
@@ -1965,7 +1987,7 @@ landing = "auto"
     }
 
     #[test]
-    fn workflow_complete_rejects_stack_task_without_commits() {
+    fn workflow_pass_rejects_stack_task_without_commits() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -1994,8 +2016,7 @@ landing = "auto"
             Some("feature"),
         );
 
-        let err =
-            complete(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
+        let err = pass(&ctx, record.path.to_str().unwrap(), Some("feature"), false).unwrap_err();
 
         assert!(err.to_string().contains("no commits ahead"));
         let run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
@@ -2124,7 +2145,7 @@ landing = "auto"
     }
 
     #[test]
-    fn workflow_complete_with_run_next_starts_next_stack_task() {
+    fn workflow_pass_with_run_next_starts_next_stack_task() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response(
@@ -2169,7 +2190,7 @@ landing = "auto"
         let first_run = record.workflow.tasks[0].run.clone();
         let second_run = record.workflow.tasks[1].run.clone();
 
-        complete(&ctx, record.path.to_str().unwrap(), Some("schema"), true).unwrap();
+        pass(&ctx, record.path.to_str().unwrap(), Some("schema"), true).unwrap();
         let updated = workflow_store::read(&record.path).unwrap();
 
         assert_eq!(
@@ -2221,7 +2242,7 @@ landing = "auto"
         assert!(content.contains("wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr-url>; Risks or follow-ups=<risks>\""));
         assert!(!content.contains("wt msg send --scope workflow:"));
         assert!(content.contains(
-            "wt workflow complete /repo/.git/wt/workflows/2026-05-16-001.toml PROJ-2 --run-next"
+            "wt workflow pass /repo/.git/wt/workflows/2026-05-16-001.toml PROJ-2 --run-next"
         ));
     }
 
@@ -2278,7 +2299,7 @@ landing = "auto"
     }
 
     #[test]
-    fn workflow_stack_completion_status_messages_quote_shell_args() {
+    fn workflow_stack_pass_status_messages_quote_shell_args() {
         let row = WorkflowTask {
             task: "PROJ weird's task".into(),
             run: "run-2".into(),
@@ -2287,7 +2308,7 @@ landing = "auto"
         };
         let workflow_path = PathBuf::from("/repo/.git/wt/workflows/work flow.toml");
         let expected_command =
-            "wt workflow complete '/repo/.git/wt/workflows/work flow.toml' 'PROJ weird'\\''s task'";
+            "wt workflow pass '/repo/.git/wt/workflows/work flow.toml' 'PROJ weird'\\''s task'";
 
         let already_running = stack_task_already_running_message(&workflow_path, &row);
         let started = started_stack_task_message(&workflow_path, &row);
@@ -2315,7 +2336,7 @@ landing = "auto"
         assert!(content.contains("PR=none"));
         assert!(!content.contains("gh pr create"));
         assert!(content.contains(
-            "wt workflow complete /repo/.git/wt/workflows/2026-05-16-001.toml PROJ-2 --run-next"
+            "wt workflow pass /repo/.git/wt/workflows/2026-05-16-001.toml PROJ-2 --run-next"
         ));
     }
 
@@ -2411,7 +2432,7 @@ landing = "auto"
         assert!(content.contains("wt task report \"Agent Completion Report"));
         assert!(!content.contains("wt msg send --scope workflow:"));
         assert!(content.contains(
-            "workflow complete /repo/.git/wt/workflows/2026-05-17-002.toml matrix-task:alpha"
+            "workflow pass /repo/.git/wt/workflows/2026-05-17-002.toml matrix-task:alpha"
         ));
         assert!(!content.contains("--run-next"));
     }
@@ -2530,9 +2551,7 @@ landing = "auto"
         );
 
         assert_report_only_workflow_handoff(&content);
-        assert!(
-            content.contains("wt workflow complete /repo/.git/wt/workflows/test.toml task:alpha")
-        );
+        assert!(content.contains("wt workflow pass /repo/.git/wt/workflows/test.toml task:alpha"));
     }
 
     #[test]

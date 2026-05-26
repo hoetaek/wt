@@ -15,21 +15,21 @@ enum WorkflowCoordinatorHandoff<'a> {
         pr_base: &'a str,
         pr_base_label: &'static str,
         issue_closing_references: &'a [String],
-        completion: Option<WorkflowCompletion<'a>>,
+        pass: Option<WorkflowPass<'a>>,
     },
 }
 
-struct WorkflowCompletion<'a> {
+struct WorkflowPass<'a> {
     workflow_path: &'a Path,
     row: Option<&'a WorkflowTask>,
     target: Option<String>,
     run_next: bool,
 }
 
-impl WorkflowCompletion<'_> {
-    fn complete_command(&self) -> String {
+impl WorkflowPass<'_> {
+    fn pass_command(&self) -> String {
         let mut command = format!(
-            "wt workflow complete {}",
+            "wt workflow pass {}",
             shell_arg(&self.workflow_path.to_string_lossy())
         );
         if let Some(target) = self.target.as_deref() {
@@ -334,7 +334,7 @@ pub(crate) fn stack_task_already_running_message(
     row: &WorkflowTask,
 ) -> String {
     format!(
-        "Workflow stack task {} is already running. Mark it complete with: wt workflow complete {} {}",
+        "Workflow stack task {} is already running. Mark it passed with: wt workflow pass {} {}",
         workflow_task_label(row),
         shell_arg(&workflow_path.to_string_lossy()),
         shell_arg(workflow_task_label(row))
@@ -343,7 +343,7 @@ pub(crate) fn stack_task_already_running_message(
 
 pub(crate) fn started_stack_task_message(workflow_path: &Path, row: &WorkflowTask) -> String {
     format!(
-        "Started workflow task {}. Mark it complete with: wt workflow complete {} {}",
+        "Started workflow task {}. Mark it passed with: wt workflow pass {} {}",
         workflow_task_label(row),
         shell_arg(&workflow_path.to_string_lossy()),
         shell_arg(workflow_task_label(row))
@@ -480,7 +480,7 @@ pub(crate) fn workflow_single_task_handoff_section(
         pr_base,
         pr_base_label: "workflow base branch",
         issue_closing_references,
-        completion: Some(WorkflowCompletion {
+        pass: Some(WorkflowPass {
             workflow_path,
             row,
             target: None,
@@ -501,7 +501,7 @@ pub(crate) fn workflow_batch_task_handoff_section(
         pr_base,
         pr_base_label: "workflow base branch",
         issue_closing_references,
-        completion: Some(WorkflowCompletion {
+        pass: Some(WorkflowPass {
             workflow_path,
             row: Some(row),
             target: None,
@@ -523,7 +523,7 @@ pub(crate) fn workflow_matrix_task_handoff_section(
         pr_base,
         pr_base_label: "workflow base branch",
         issue_closing_references,
-        completion: Some(WorkflowCompletion {
+        pass: Some(WorkflowPass {
             workflow_path,
             row: Some(row),
             target: Some(format!("{}:{profile}", workflow_task_label(row))),
@@ -544,7 +544,7 @@ pub(crate) fn workflow_stack_task_handoff_section(
         pr_base: validated_parent,
         pr_base_label: "workflow parent branch",
         issue_closing_references,
-        completion: Some(WorkflowCompletion {
+        pass: Some(WorkflowPass {
             workflow_path,
             row: Some(row),
             target: None,
@@ -581,7 +581,7 @@ fn workflow_handoff_policy(
             pr_base,
             pr_base_label,
             issue_closing_references,
-            completion,
+            pass,
         } => {
             let pr_report_value = match policy.pull_request {
                 WorkflowPullRequestMode::None => "none",
@@ -611,11 +611,11 @@ fn workflow_handoff_policy(
                 }
             };
 
-            let after_send = if let Some(completion) = completion {
+            let after_send = if let Some(pass) = pass {
                 format!(
                     "{}\n\nWhen review passes, wait for the coordinator to advance the workflow. The coordinator will run:\n\n```bash\n{}\n```\n\n{}",
                     review_followup(policy),
-                    completion.complete_command(),
+                    pass.pass_command(),
                     landing_wait_text(policy)
                 )
             } else {

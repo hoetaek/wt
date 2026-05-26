@@ -1,6 +1,6 @@
 ---
 name: wt-land
-description: "Use after wt work is reviewed: respect workflow policy, complete workflow-linked tasks when needed, merge, prove ancestry, and clean with `wt done`."
+description: "Use after wt work is reviewed: respect workflow policy, pass workflow-linked tasks when needed, merge, prove ancestry, and clean with `wt done`."
 ---
 
 # WT Land
@@ -10,9 +10,9 @@ use it to monitor active agents or request fixes; use `wt-coordinate` for that.
 
 In the work-sequence model, this skill owns the land/close gate between
 review/sync and retrospect. It proves integration or discard, performs
-applicable completion, and cleans only after that closure is safe.
+applicable workflow pass, and cleans only after that closure is safe.
 
-Object model, status boundaries, and completion vs cleanup commands: see
+Object model, status boundaries, and pass vs cleanup commands: see
 `../wt-work/references/task-lifecycle.md`.
 
 ## Boundaries
@@ -85,19 +85,19 @@ This step applies to workflow-linked runs after review passes. For stack mode,
 use `--run-next` only when the next stack task should start:
 
 ```bash
-wt workflow complete <workflow> <task> --run-next
+wt workflow pass <workflow> <task> --run-next
 ```
 
 For single, batch, the final stack task, or a stack task whose successor should
 wait, omit `--run-next`:
 
 ```bash
-wt workflow complete <workflow> <task>
+wt workflow pass <workflow> <task>
 ```
 
-For direct TaskRuns, no separate completion exists — `wt done` during cleanup
+For direct TaskRuns, no separate pass command exists — `wt done` during cleanup
 also marks running direct TaskRuns passed. See `task-lifecycle.md` for the full
-completion vs cleanup boundary.
+pass vs cleanup boundary.
 
 ## Land
 
@@ -283,7 +283,7 @@ Report:
 
 - branch landed
 - integration branch and merge commit, or already-landed proof
-- completion command used, if any
+- pass command used, if any
 - cleanup command used
 - checks run and remaining gaps
 - remaining related worktrees or branches

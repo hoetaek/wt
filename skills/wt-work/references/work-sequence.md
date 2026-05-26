@@ -38,7 +38,7 @@ Raw intent
 | Execution handoff | `wt-ready` | `09-execution.md`, TaskDocument `계획 (Planning)`, and exact `wt-start` target |
 | Execution launch | `wt-start` | TaskRun/worktree/workflow and inspect target |
 | Review / sync | `wt-coordinate` | reviewed diff/checks and updated `07-design.md`/`08-tasks.md`/`09-execution.md`; `10-review.md` for review evidence and unplanned research |
-| Land / close | `wt-land` | landed branch proof, completion, cleanup |
+| Land / close | `wt-land` | landed branch proof, pass, cleanup |
 | Retrospect | `wt-retrospect` | `11-retrospect.md` for spec-backed work; global `retrospectives/` only for cross-work/spec-less lessons |
 
 ## Audit Questions

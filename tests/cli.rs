@@ -3469,7 +3469,7 @@ fn run_workflow_help_explains_omitted_target_selection() {
         .stdout(predicate::str::contains("Omit WORKFLOW"))
         .stdout(predicate::str::contains("choose from runnable workflows"))
         .stdout(predicate::str::contains(
-            "does not list, edit, repair, or complete",
+            "does not list, edit, repair, or pass workflow tasks",
         ))
         .stdout(predicate::str::contains(
             "omit to select a runnable workflow",
@@ -3509,7 +3509,7 @@ fn workflow_archive_help_explains_visibility_retention_model() {
             "Archive is a visibility and retention action",
         ))
         .stdout(predicate::str::contains("not a substitute for landing"))
-        .stdout(predicate::str::contains("wt workflow complete"))
+        .stdout(predicate::str::contains("wt workflow pass"))
         .stdout(predicate::str::contains("wt done"))
         .stdout(predicate::str::contains("--discard").not());
 }
@@ -5371,7 +5371,7 @@ fn done_help_explains_cleanup_target_contract() {
         .stdout(predicate::str::contains("worktree path/name"))
         .stdout(predicate::str::contains("issue-like branch-name shorthand"))
         .stdout(predicate::str::contains("direct TaskRun id"))
-        .stdout(predicate::str::contains("wt workflow complete"));
+        .stdout(predicate::str::contains("wt workflow pass"));
 }
 
 #[test]

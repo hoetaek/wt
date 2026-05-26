@@ -188,11 +188,16 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             WorkflowCommand::Repair { workflow, apply } => {
                 commands::workflow::repair(ctx, workflow, *apply)
             }
+            WorkflowCommand::Pass {
+                workflow,
+                task,
+                run_next,
+            } => commands::workflow::pass(ctx, workflow, task.as_deref(), *run_next),
             WorkflowCommand::Complete {
                 workflow,
                 task,
                 run_next,
-            } => commands::workflow::complete(ctx, workflow, task.as_deref(), *run_next),
+            } => commands::workflow::deprecated_complete(workflow, task.as_deref(), *run_next),
         },
         Commands::Scaffold {
             feature,

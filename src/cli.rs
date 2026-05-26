@@ -145,7 +145,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Prepare, inspect, edit, repair, archive, or complete workflow tasks
+    /// Prepare, inspect, edit, repair, archive, or pass workflow tasks
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
@@ -196,7 +196,7 @@ pub enum Commands {
     },
     /// Remove worktrees, clean integrations, and delete local branches
     #[command(
-        long_about = "Remove checked-out worktrees, clean integrations, mark matching direct running TaskRuns passed, and delete local branches.\n\nPass branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id. Workflow-linked TaskRun ids are completed with `wt workflow complete`, not `wt done`. Omit TARGETS to choose worktrees interactively."
+        long_about = "Remove checked-out worktrees, clean integrations, mark matching direct running TaskRuns passed, and delete local branches.\n\nPass branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id. Workflow-linked TaskRun ids are passed with `wt workflow pass`, not `wt done`. Omit TARGETS to choose worktrees interactively."
     )]
     Done {
         /// Branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id to remove
@@ -720,7 +720,7 @@ pub enum RunCommand {
     },
     /// Start runnable tasks from a saved workflow
     #[command(
-        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts. In non-interactive shells, pass WORKFLOW explicitly.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff using `wt task report \"Agent Completion Report: ...\"` with workflow scope derived from the TaskRun, plus fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
+        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts. In non-interactive shells, pass WORKFLOW explicitly.\n\nThis does not list, edit, repair, or pass workflow tasks; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff using `wt task report \"Agent Completion Report: ...\"` with workflow scope derived from the TaskRun, plus fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow pass ...` command. Stack prompts include `--run-next`."
     )]
     Workflow {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -835,9 +835,9 @@ pub enum WorkflowCommand {
         long_about = "List all saved <git-common-dir>/wt/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and passed, with indented rows and secondary detail lines."
     )]
     List,
-    /// Move completed workflow state into the frozen archive
+    /// Move passed workflow state into the frozen archive
     #[command(
-        long_about = "Move a completed Workflow out of the active surface into <git-common-dir>/wt/archive/workflows/<workflow-id>/.\n\nArchive is a visibility and retention action: wt workflow list, wt task list, and wt ui stop showing the archived workflow because active inventory reads only typed active directories. It is not a substitute for landing, merge checks, wt workflow complete, or wt done. Only workflows whose linked TaskRuns are passed or skipped can be archived."
+        long_about = "Move a passed Workflow out of the active surface into <git-common-dir>/wt/archive/workflows/<workflow-id>/.\n\nArchive is a visibility and retention action: wt workflow list, wt task list, and wt ui stop showing the archived workflow because active inventory reads only typed active directories. It is not a substitute for landing, merge checks, wt workflow pass, or wt done. Only workflows whose linked TaskRuns are passed or skipped can be archived."
     )]
     Archive {
         /// Workflow key under <git-common-dir>/wt/workflows/<workflow>.toml
@@ -947,13 +947,24 @@ pub enum WorkflowCommand {
         #[arg(long)]
         apply: bool,
     },
-    /// Mark running workflow task runs as complete
+    /// Mark running workflow TaskRuns passed
+    Pass {
+        /// Workflow TOML path or shorthand id
+        workflow: String,
+        /// Running workflow task identifier to pass
+        task: Option<String>,
+        /// Start the next stack-mode workflow task after marking this one passed
+        #[arg(long)]
+        run_next: bool,
+    },
+    /// Legacy migration surface for wt workflow pass
+    #[command(hide = true)]
     Complete {
         /// Workflow TOML path or shorthand id
         workflow: String,
-        /// Running workflow task identifier to complete
+        /// Running workflow task identifier to pass
         task: Option<String>,
-        /// Start the next stack-mode workflow task after marking this one complete
+        /// Start the next stack-mode workflow task after marking this one passed
         #[arg(long)]
         run_next: bool,
     },
@@ -2141,6 +2152,28 @@ mod tests {
     }
 
     #[test]
+    fn workflow_pass_accepts_task_and_run_next() {
+        let cli = parse(&[
+            "wt",
+            "workflow",
+            "pass",
+            "2026-05-17-002",
+            "add-schema",
+            "--run-next",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Pass {
+                    ref workflow,
+                    ref task,
+                    run_next: true,
+                }
+            }) if workflow == "2026-05-17-002" && task.as_deref() == Some("add-schema")
+        ));
+    }
+
+    #[test]
     fn workflow_repair_help_describes_preview_first_contract() {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
@@ -2158,13 +2191,13 @@ mod tests {
         let workflow = run.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_long_help().to_string();
         assert!(help.contains("saved workflow"));
-        assert!(help.contains("does not list, edit, repair, or complete workflow files"));
+        assert!(help.contains("does not list, edit, repair, or pass workflow tasks"));
         assert!(help.contains("Workflow Coordinator Handoff"));
         assert!(help.contains("wt task report"));
         assert!(help.contains("workflow scope derived from the TaskRun"));
         assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("prepared [policy].pull_request"));
-        assert!(help.contains("wt workflow complete"));
+        assert!(help.contains("wt workflow pass"));
     }
 
     #[test]
@@ -2204,15 +2237,14 @@ mod tests {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_help().to_string();
-        assert!(
-            help.contains("Prepare, inspect, edit, repair, archive, or complete workflow tasks")
-        );
+        assert!(help.contains("Prepare, inspect, edit, repair, archive, or pass workflow tasks"));
         assert!(!help.contains("Start runnable tasks from a workflow"));
         assert!(help.contains("archive"));
         assert!(help.contains("repair"));
         assert!(help.contains("task"));
         assert!(help.contains("issue"));
-        assert!(help.contains("complete"));
+        assert!(help.contains("pass"));
+        assert!(!help.contains("complete"));
     }
 
     #[test]

@@ -14,7 +14,7 @@ given context, not just one lifecycle phase.
 
 Before starting the loop, read `references/work-sequence.md` and locate the
 current gate. For lifecycle invariants (TaskDocument/TaskRun/workflow object
-model, status boundaries, completion vs cleanup), see
+model, status boundaries, pass vs cleanup), see
 `references/task-lifecycle.md`. The sequence is not a waterfall; it is a guardrail for deciding
 which lifecycle skill owns the next artifact. If raw intent or context is still
 too vague, run `wt-idea` before `wt-ready`. If the work is already committed to
@@ -34,7 +34,7 @@ Apply these skills in order:
    checks, sync the living spec, and send focused feedback until the work is
    acceptable.
 5. `wt-land`: respect workflow landing policy, perform any applicable
-   completion step, land branches in the right order, prove ancestry, and clean
+   pass step, land branches in the right order, prove ancestry, and clean
    up with `wt done`.
 6. `wt-retrospect`: after each closed work item, capture keep/problem/try
    lessons, action candidates, harness-tuning records, expected vs actual
@@ -50,11 +50,11 @@ lesson.
 
 When moving from one skill phase to the next, load and follow that phase's skill
 body instead of reimplementing its rules from memory. Keep lifecycle boundaries
-explicit: preparation is not launch, TaskRun completion is not landing, cleanup
+explicit: preparation is not launch, TaskRun pass is not landing, cleanup
 happens only after landing or discard intent is proven, and the retrospective is
 written after the work item is closed (landed or explicitly discarded), not in
 the middle of in-flight state.
 
 Report the final lifecycle state: evidence checked, launch command and inspect
-target, review/check result, completion or merge proof, cleanup command, the
+target, review/check result, pass or merge proof, cleanup command, the
 retrospective file path (when written), and any remaining blocker.
