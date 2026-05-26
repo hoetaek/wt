@@ -386,6 +386,14 @@ wt task review <task-run-id> --accept|--reject|--block "<message>"
 `WT_TASK_RUN_ID` matches the scoped TaskRun id. Passing `--agent` to the low-level hook consumer is
 not by itself task-run ownership evidence.
 
+After a file-inbox sender durably writes a message, `wt` may best-effort wake the recipient when it
+can prove a live idle runtime target from canonical state. Task-run-scoped messages wake only when
+the scoped TaskRun's recorded `agent_id` matches `meta.to`; direct messages may wake when exactly
+one running TaskRun owns `meta.to` or when `meta.to` has a live surface session marker. Wake attempts
+are internal delivery help: they do not create another message, do not change message delivery
+state, do not add a user-facing command, and must not make a successful inbox write fail merely
+because cmux/runtime observation is unavailable.
+
 General workflow-supervisor ownership beyond TaskRun-recorded workflow scopes is not implemented
 yet. Future supervisor identities must define explicit scope ownership before claiming shared
 messages; raw recipient address, alias normalization, or `correlates_with` is insufficient ownership

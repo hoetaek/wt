@@ -309,6 +309,10 @@ merge.
 - `wt task review <task-run-id> --accept|--reject|--block <message>` sends
   coordinator feedback to the task agent recorded on that TaskRun with
   `task_run:<id>` scope and records review metadata on the TaskRun.
+- File-inbox senders may best-effort wake the recipient after the message is
+  durably written: if the recipient resolves to an idle live TaskRun or session
+  marker, `wt` nudges that surface to check its inbox. This is internal delivery
+  help, not a separate user-facing command or message lifecycle.
 - `wt msg check-inbox` is the hook-compatible consumer. With no `--agent`, it
   checks the inbox id from `WT_AGENT_ID`; `--agent <agent>` is an explicit
   single-inbox override. It claims deliverable direct-scope messages from

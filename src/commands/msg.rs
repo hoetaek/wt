@@ -4,6 +4,7 @@ use crate::messages::{
     AgentId, HookOutput, Message, MessageDeliveryState, MessageInspectionRecord, MessageInventory,
     MessageInventoryCounts, MessageScope, MessageStore,
 };
+use crate::services::inbox_wake;
 use crate::services::inbox_watcher::InboxWatcher;
 use crate::task_run::{self, TaskRunContext};
 use anyhow::{Context, Result, bail};
@@ -28,6 +29,7 @@ pub(crate) fn send(ctx: &Ctx, to: &str, scope: Option<&str>, message: &[String])
         Some(scope) => store.send_scoped(to.as_str(), scope, &text)?,
         None => store.send(to.as_str(), &text)?,
     };
+    let _wake_result = inbox_wake::wake_sent_message_recipient(ctx, &sent);
 
     if !ctx.quiet {
         println!("{}", ctx.storage_root.display_path(&sent.path));

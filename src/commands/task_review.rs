@@ -1,6 +1,7 @@
 use crate::context::Ctx;
 use crate::messages::{AgentId, MessageScope, MessageStore};
 use crate::services::current_actor;
+use crate::services::inbox_wake;
 use crate::task_run::{self, TaskReviewStatus, TaskRunRecord};
 use anyhow::{Context, Result, bail};
 
@@ -30,6 +31,7 @@ fn run_with_actor(
     let store = MessageStore::new(ctx.storage_root.messages_dir());
     let sent = store.send_scoped_from(from.as_str(), to.as_str(), scope, &text)?;
     task_run::update_review_metadata(&record, status, &sent.id)?;
+    let _wake_result = inbox_wake::wake_sent_message_recipient(ctx, &sent);
 
     if !ctx.quiet {
         println!("{}", ctx.storage_root.display_path(&sent.path));
