@@ -1,4 +1,5 @@
 use crate::context::Ctx;
+use crate::services::current_actor;
 use crate::task as task_store;
 use crate::task_run;
 use crate::workflow::render::workflow_task_label;
@@ -112,6 +113,103 @@ fn read_workflow_task_states(
             })
         })
         .collect()
+}
+
+pub(crate) fn ensure_workflow_task_routes(
+    ctx: &Ctx,
+    workflow_path: &Path,
+    metadata: &WorkflowMetadata,
+) -> Result<()> {
+    let group = task_run::group_from_path(workflow_path)?;
+    let label = workflow_coordinator_label(metadata.title.as_deref(), &group);
+    let mut fallback_coordinator_id = None::<String>;
+
+    for row in &metadata.tasks {
+        if row.runs.is_empty() {
+            ensure_workflow_task_run_route(
+                ctx,
+                &group,
+                row,
+                &row.run,
+                &label,
+                &mut fallback_coordinator_id,
+            )?;
+        } else {
+            for profile_run in &row.runs {
+                ensure_workflow_task_run_route(
+                    ctx,
+                    &group,
+                    row,
+                    &profile_run.run,
+                    &label,
+                    &mut fallback_coordinator_id,
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_workflow_task_run_route(
+    ctx: &Ctx,
+    group: &str,
+    row: &WorkflowTask,
+    run_id: &str,
+    label: &str,
+    fallback_coordinator_id: &mut Option<String>,
+) -> Result<()> {
+    let run_path = task_run::resolve(ctx, run_id).with_context(|| {
+        format!(
+            "Workflow task {} references missing TaskRun {}",
+            workflow_task_label(row),
+            run_id
+        )
+    })?;
+    let run = task_run::read(&run_path)?;
+    validate_workflow_task_run(row, &run)?;
+    validate_workflow_task_run_group(row, &run, group)?;
+    let coordinator_id = workflow_route_coordinator_id(ctx, &run, fallback_coordinator_id)?;
+    let record = task_run::TaskRunRecord {
+        id: run_id.to_string(),
+        path: run_path,
+        run,
+    };
+    task_run::ensure_workflow_routes(&record, &coordinator_id, Some(label))?;
+    Ok(())
+}
+
+fn workflow_route_coordinator_id(
+    ctx: &Ctx,
+    run: &task_run::TaskRun,
+    fallback_coordinator_id: &mut Option<String>,
+) -> Result<String> {
+    if let Some(id) = run
+        .coordinator_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        return Ok(id.to_string());
+    }
+    if fallback_coordinator_id.is_none() {
+        *fallback_coordinator_id = Some(
+            current_actor::resolve_launch_coordinator(ctx)?
+                .as_str()
+                .to_string(),
+        );
+    }
+    Ok(fallback_coordinator_id
+        .as_ref()
+        .expect("fallback coordinator id was just initialized")
+        .clone())
+}
+
+fn workflow_coordinator_label(title: Option<&str>, workflow_id: &str) -> String {
+    match title.map(str::trim).filter(|title| !title.is_empty()) {
+        Some(title) => format!("Coordinator for workflow \"{title}\""),
+        None => format!("Coordinator for workflow {workflow_id}"),
+    }
 }
 
 pub(crate) fn validate_workflow_task_run(

@@ -2237,6 +2237,25 @@ fn msg_check_inbox_emits_hook_json_and_acknowledges_claimed_messages() {
 fn msg_check_inbox_coordinator_delivers_workflow_scoped_messages() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
+    write_task_run_file_with_coordinator(
+        temp.path(),
+        "run-2026-05-20-001-workflow-report",
+        "workflow-report",
+        "workflow-report",
+        "running",
+        "2026-05-20-001",
+        Some("agents/coord-a"),
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-20-001",
+        "batch",
+        "",
+        r#"[[tasks]]
+task = "workflow-report"
+run = "run-2026-05-20-001-workflow-report"
+"#,
+    );
 
     wt_command()
         .args([
@@ -2247,11 +2266,10 @@ fn msg_check_inbox_coordinator_delivers_workflow_scoped_messages() {
             "--scope",
             "workflow:2026-05-20-001",
             "--to",
-            "coordinator",
+            "agents/coord-a",
             "workflow",
             "done",
         ])
-        .env("WT_COORDINATOR_AGENT_ID", "agents/coord-a")
         .assert()
         .success();
 
@@ -2262,9 +2280,8 @@ fn msg_check_inbox_coordinator_delivers_workflow_scoped_messages() {
             "msg",
             "check-inbox",
             "--agent",
-            "coordinator",
+            "agents/coord-a",
         ])
-        .env("WT_COORDINATOR_AGENT_ID", "agents/coord-a")
         .assert()
         .success()
         .get_output()

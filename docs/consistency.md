@@ -327,7 +327,7 @@ Canonical scriptable send:
 ```bash
 wt msg send --to agents/codex "hello"
 wt msg send --to codex "hello"
-wt msg send --scope workflow:2026-05-20-001 --to coordinator "Agent Completion Report: ..."
+wt msg send --scope workflow:2026-05-20-001 --to agents/coordinator "workflow note"
 ```
 
 `wt msg send` writes `meta.from = "agents/user"` unless `WT_AGENT_ID` is set to `agents/<agent>` or
@@ -335,6 +335,18 @@ wt msg send --scope workflow:2026-05-20-001 --to coordinator "Agent Completion R
 `wt msg send --to coordinator ...` is therefore a direct/default coordinator message and must not be
 treated as workflow-owned delivery. Explicit scoped sends accept `direct`, `repo`,
 `workflow:<id>`, and `task_run:<id>`.
+
+TaskRun completion reports use the TaskRun-owned report route instead of composing a raw scoped
+message command:
+
+```bash
+wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>"
+```
+
+For a direct TaskRun, `wt task report` sends direct scope. For a workflow-linked TaskRun, it derives
+`workflow:<id>` from the TaskRun's workflow context and sends from the TaskRun `agent_id` to the
+stored `coordinator_id`. Workflow task prompts must therefore not ask agents to add
+`--scope workflow:<id>` or `--to coordinator` themselves.
 
 The user-facing recipient `coordinator` is a context-resolved alias, not a fixed inbox. At `wt msg`
 CLI surfaces it resolves in three steps: `WT_COORDINATOR_AGENT_ID`, then the current anchor marker
@@ -360,17 +372,18 @@ prints JSON containing `hookSpecificOutput.additionalContext`, and acknowledges 
 by their current claimant. This command is a compatibility consumer for agent hooks, not a separate
 unread/read lifecycle.
 
-For ordinary agent recipients, `check-inbox` only claims direct-scope messages. The active
-coordinator inbox is the agent id named by `WT_COORDINATOR_AGENT_ID`, so
-`wt msg check-inbox --agent coordinator` first resolves that alias and then claims all valid message
-scopes for the resolved recipient: `direct`, `repo`, `workflow:<id>`, and `task_run:<id>`. Hook
-context includes a `scope:` line for non-direct messages so the coordinator can distinguish
-standalone, repo, workflow, and task-run reports.
+For ordinary agent recipients, `check-inbox` claims direct-scope messages. Non-direct scope delivery
+requires explicit ownership evidence. For workflow reports, the ownership evidence is recorded
+TaskRun state: if a TaskRun's `coordinator_id` is the resolved inbox agent and that TaskRun resolves
+to workflow `<id>`, the agent may claim `workflow:<id>` messages. `WT_COORDINATOR_AGENT_ID` may still
+resolve the `coordinator` alias at CLI surfaces that accept aliases, but it is not itself scoped
+ownership evidence. Hook context includes a `scope:` line for non-direct messages so the coordinator
+can distinguish workflow reports from standalone direct messages.
 
-General workflow-supervisor ownership is not implemented yet. Future supervisor identities that are
-not the active coordinator inbox must define explicit scope ownership before claiming shared
-messages; raw recipient address, `WT_COORDINATOR_AGENT_ID`, alias normalization, or `correlates_with`
-is insufficient ownership evidence for that future mechanism.
+General workflow-supervisor ownership beyond TaskRun-recorded workflow scopes is not implemented
+yet. Future supervisor identities must define explicit scope ownership before claiming shared
+messages; raw recipient address, alias normalization, or `correlates_with` is insufficient ownership
+evidence for that future mechanism.
 
 wt-managed Claude/Codex agent hooks register the same inbox check on both `UserPromptSubmit` and
 `PostToolUse`; both events route through the `wt msg check-inbox` claim → hook JSON → acknowledge
@@ -1369,29 +1382,31 @@ contract에 포함하지 않는다.
 
 `wt run task` coordinator handoff는 즉시 TaskDocument 실행 handoff다. `wt run task`가
 시작하는 prompt에는 `Task Run Coordinator Handoff` section이 포함되고, 기본 보고 route인
-`wt msg send --to coordinator ...` 명령이 먼저 들어간다. `coordinator`는 agent process의
-`WT_COORDINATOR_AGENT_ID`로 resolve되는 runtime alias다. 같은 section은 fallback으로
-현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
+`wt task report "Agent Completion Report: ..."` 명령이 먼저 들어간다. `wt task report`는
+TaskRun에 저장된 `agent_id`와 `coordinator_id`를 사용해 direct scope 보고를 보낸다. 같은
+section은 fallback으로 현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
 `cmux send-key ... enter` 명령도 포함한다.
 이것은 Workflow orchestration이나 completion command가 아니다. Task-run agent는
 `PR=none`인 `Agent Completion Report`를 coordinator에게 보내고, coordinator가 review,
-landing, cleanup을 명시적으로 처리할 때까지 기다린다. 좌표는 현재 transport 정보일 뿐이므로
-TaskDocument나 TaskRun에 저장하지 않는다. file inbox route가 unavailable이면 agent는
-cmux fallback으로 같은 보고를 보내고, 둘 다 unavailable이면 task session에 남기고
-기다린다. Handoff section과 그 안의 inbox/cmux report 명령은 긴 TaskDocument 본문과
+landing, cleanup을 명시적으로 처리할 때까지 기다린다. cmux 좌표는 현재 transport 정보일
+뿐이므로 TaskDocument나 TaskRun에 저장하지 않는다. file inbox route가 unavailable이면
+agent는 cmux fallback으로 같은 보고를 보내고, 둘 다 unavailable이면 task session에 남기고
+기다린다. Handoff section과 그 안의 task-report/cmux report 명령은 긴 TaskDocument 본문과
 분리된 첫 prompt로 먼저 보내서 terminal prompt가 축약되어도 coordinator route가 앞쪽에
 남게 한다.
 
 Workflow coordinator handoff는 `stack` 전용 개념이 아니라 `wt run workflow`가 시작하는
 모든 task prompt의 계약이다. Prompt에는 `Workflow Coordinator Handoff` section이 포함되고,
-기본 보고 route인 `wt msg send --scope workflow:<workflow-id> --to coordinator ...` 명령이
-먼저 들어간다. 이 explicit workflow scope가 resolved coordinator inbox message의 workflow
-ownership이다. 같은 section은 fallback으로 현재 coordinator cmux workspace/surface
-좌표로 렌더링되는 `cmux send`와 `cmux send-key ... enter` 명령도 포함한다. 이 inbox
-target과 좌표는 현재 transport 정보일 뿐이므로 Workflow file, TaskRun, TaskDocument에
+기본 보고 route인 `wt task report "Agent Completion Report: ..."` 명령이 먼저 들어간다.
+Workflow-prepared TaskRun은 stable `agent_id`, `coordinator_id`, `coordinator_label`을
+저장하고, `wt task report`는 그 TaskRun context에서 `workflow:<workflow-id>` scope를
+자동으로 적용한다. Prompt는 `--scope workflow:<workflow-id>`나 `--to coordinator`를 agent가
+직접 구성하도록 지시하지 않는다. 같은 section은 fallback으로 현재 coordinator cmux
+workspace/surface 좌표로 렌더링되는 `cmux send`와 `cmux send-key ... enter` 명령도
+포함한다. cmux 좌표는 현재 transport 정보일 뿐이므로 Workflow file, TaskRun, TaskDocument에
 저장하지 않는다. file inbox route가 unavailable이면 agent는 cmux fallback으로 같은
 `Agent Completion Report`를 보내고, 둘 다 unavailable이면 task session에 남기고 기다린다.
-Handoff section과 그 안의 inbox/cmux report 명령은 긴 TaskDocument 본문과 분리된 첫
+Handoff section과 그 안의 task-report/cmux report 명령은 긴 TaskDocument 본문과 분리된 첫
 prompt로 먼저 보내서 terminal
 prompt가 축약되어도 coordinator route가 앞쪽에 남게 한다.
 사용자 정의 `[agent.prompt.workflow]` prompt가 있으면 이 built-in handoff와 TaskDocument

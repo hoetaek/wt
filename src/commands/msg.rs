@@ -5,6 +5,7 @@ use crate::messages::{
     MessageInspectionRecord, MessageInventory, MessageInventoryCounts, MessageScope, MessageStore,
 };
 use crate::services::inbox_watcher::InboxWatcher;
+use crate::task_run::{self, TaskRunContext};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::env;
@@ -128,7 +129,8 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
 
     let store = MessageStore::new(ctx.storage_root.messages_dir());
     for agent in agents {
-        let delivery = store.check_inbox(&agent, ctx.coordinator_agent_id.as_deref())?;
+        let authorized_scopes = authorized_inbox_scopes(ctx, &agent)?;
+        let delivery = store.check_inbox(&agent, &authorized_scopes)?;
         if delivery.is_empty() {
             continue;
         }
@@ -142,6 +144,32 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
         store.acknowledge_inbox_delivery(&delivery)?;
     }
     Ok(())
+}
+
+fn authorized_inbox_scopes(ctx: &Ctx, agent: &str) -> Result<Vec<MessageScope>> {
+    let agent = AgentId::parse(agent)?;
+    let mut scopes = Vec::new();
+    for record in task_run::list(ctx)? {
+        let Some(coordinator_id) = record.run.coordinator_id.as_deref() else {
+            continue;
+        };
+        let Ok(coordinator) = AgentId::parse(coordinator_id) else {
+            continue;
+        };
+        if coordinator.as_str() != agent.as_str() {
+            continue;
+        }
+        if let TaskRunContext::WorkflowLinked(context) = task_run::resolve_context(ctx, &record)? {
+            push_unique_scope(&mut scopes, MessageScope::workflow(context.workflow_id)?);
+        }
+    }
+    Ok(scopes)
+}
+
+fn push_unique_scope(scopes: &mut Vec<MessageScope>, scope: MessageScope) {
+    if !scopes.iter().any(|existing| existing == &scope) {
+        scopes.push(scope);
+    }
 }
 
 pub(crate) fn watch(ctx: &Ctx, agent: Option<&str>, timeout: Duration, json: bool) -> Result<()> {
@@ -581,6 +609,7 @@ mod tests {
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CtxOptions, OutputMode};
     use crate::storage::StorageRoot;
+    use crate::workflow::{self as workflow_store, WorkflowMetadata, WorkflowMode, WorkflowTask};
     use tempfile::TempDir;
 
     #[test]
@@ -606,6 +635,36 @@ mod tests {
         assert!(err.contains("wt coord use <id>"));
         assert!(err.contains("wt session set <id>"));
         assert!(err.contains("wt shell-init zsh"));
+    }
+
+    #[test]
+    fn authorized_inbox_scopes_include_recorded_workflow_coordinator() {
+        let temp = TempDir::new().unwrap();
+        let ctx = test_ctx(temp.path(), None);
+        let record = task_run::create_workflow_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "workflow-1",
+            "agents/coord-a",
+            Some("Coordinator"),
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
+        let workflow_path = ctx.storage_root.workflows_dir().join("workflow-1.toml");
+        let mut workflow = WorkflowMetadata::new(
+            WorkflowMode::Batch,
+            "explicit",
+            Some("main".into()),
+            vec![WorkflowTask::new("add-schema", record.id)],
+        );
+        workflow_store::write(&ctx, &workflow_path, &mut workflow).unwrap();
+
+        let scopes = authorized_inbox_scopes(&ctx, "agents/coord-a").unwrap();
+        let other_scopes = authorized_inbox_scopes(&ctx, "agents/other").unwrap();
+
+        assert_eq!(scopes, vec![MessageScope::workflow("workflow-1").unwrap()]);
+        assert!(other_scopes.is_empty());
     }
 
     fn test_ctx(root: &std::path::Path, coordinator_agent_id: Option<String>) -> Ctx {

@@ -10,7 +10,7 @@ use crate::setup;
 use crate::task;
 use crate::task_run;
 use anyhow::{Context, Result, bail};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 const TASK_RUN_COORDINATOR_HANDOFF_SECTION: &str = r#"## Task Run Coordinator Handoff
 
@@ -260,7 +260,7 @@ fn prepared_task_context<'a>(
         title,
         branch_name,
         setup_mode: selected.document.setup_mode(),
-        template_vars: task_run_template_vars(run),
+        template_vars: task_run::launch_template_vars(run),
         additional_prompt_scope: None,
         workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
         on_start_issue_id: selected
@@ -278,16 +278,6 @@ fn prepared_task_context<'a>(
             content: &selected.content,
         },
     }
-}
-
-fn task_run_template_vars(run: &task_run::TaskRunRecord) -> HashMap<String, String> {
-    let mut vars = HashMap::new();
-    vars.insert("wt_task_run_id".into(), run.id.clone());
-    if let Some(agent_id) = run.run.agent_id.as_deref() {
-        vars.insert("wt_agent_id".into(), agent_id.to_string());
-    }
-    vars.insert("wt_coordinator_agent_id".into(), String::new());
-    vars
 }
 
 fn direct_coordinator_label(title: &str) -> String {

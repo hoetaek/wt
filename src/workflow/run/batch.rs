@@ -376,7 +376,7 @@ fn run_batch_workflow_task(
         title: &title,
         branch_name,
         setup_mode: state.document.setup_mode(),
-        template_vars: HashMap::new(),
+        template_vars: task_run::launch_template_vars_for(&state.run_id, &state.run),
         additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
         workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
         on_start_issue_id: state
