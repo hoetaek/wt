@@ -268,6 +268,7 @@ fn run_single_workflow_task(
             title: &title,
             branch_name,
             setup_mode: state.document.setup_mode(),
+            template_vars: std::collections::HashMap::new(),
             additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: state
@@ -323,6 +324,7 @@ fn run_single_workflow_group(
             title: &title,
             branch_name: Some(&branch),
             setup_mode: setup::WORKSPACE_COLOR_KIND_BRANCH,
+            template_vars: std::collections::HashMap::new(),
             additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: None,

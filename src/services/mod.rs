@@ -1,5 +1,6 @@
 pub mod cmux;
 pub mod cmux_push;
+pub mod current_actor;
 pub mod git;
 pub mod github;
 pub mod github_review;

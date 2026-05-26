@@ -4,22 +4,23 @@ use crate::commands::profile_workspace::PromptPolicy;
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::parallel::{self, ParallelControl};
+use crate::services::current_actor;
 use crate::services::git::GitService;
 use crate::setup;
 use crate::task;
 use crate::task_run;
 use anyhow::{Context, Result, bail};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const TASK_RUN_COORDINATOR_HANDOFF_SECTION: &str = r#"## Task Run Coordinator Handoff
 
 Send the Agent Completion Report back to the coordinator inbox:
 
 ```bash
-wt msg send --to coordinator "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
+wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
 ```
 
-The coordinator inbox target `coordinator` resolves from `WT_COORDINATOR_AGENT_ID`. If the file inbox route is unavailable, send the same report to the fallback cmux surface that started this task run:
+If the file inbox route is unavailable, send the same report to the fallback cmux surface that started this task run:
 
 ```bash
 cmux send --workspace {{coordinator_cmux_workspace}} --surface {{coordinator_cmux_surface}} "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>"
@@ -30,7 +31,7 @@ This immediate TaskDocument run has no Workflow orchestration or pull-request ha
 
 After sending the report, wait for the coordinator to review, land, and clean up the task run explicitly.
 
-If neither coordinator route is available, leave the same report in this task session and wait."#;
+If `wt task report` fails, leave the same report in this task session and wait."#;
 
 pub fn run(
     ctx: &Ctx,
@@ -47,14 +48,23 @@ pub fn run(
     if selected.is_empty() {
         bail!("No local tasks selected");
     }
+    let coordinator = current_actor::resolve_launch_coordinator(ctx)?;
 
     if jobs > 1 && selected.len() > 1 {
-        return run_selected_tasks_parallel(ctx, selected, base_raw, profile, jobs);
+        return run_selected_tasks_parallel(ctx, selected, base_raw, profile, jobs, &coordinator);
     }
 
     let task_count = selected.len();
     for task in selected {
-        let result = run_selected_task(ctx, &task, base_raw, profile, PromptPolicy::Allow, None);
+        let result = run_selected_task(
+            ctx,
+            &task,
+            base_raw,
+            profile,
+            PromptPolicy::Allow,
+            None,
+            &coordinator,
+        );
         if task_count > 1 {
             result.with_context(|| format!("Task {}", task.key))?;
         } else {
@@ -89,6 +99,7 @@ fn run_selected_task(
     profile: Option<&str>,
     prompt_policy: PromptPolicy,
     base_override: Option<&str>,
+    coordinator: &crate::messages::AgentId,
 ) -> Result<issue::IssueRunResult> {
     let branch_name = task::prepared_branch_name(&selected.document.branch);
     if branch_name.is_none() && selected.document.origin.is_none() {
@@ -98,34 +109,13 @@ fn run_selected_task(
     let identifier = selected.document.identifier_or_key(&selected.key);
     let title = selected.document.title_or_key(&selected.key);
 
-    if profile.is_some() {
-        let result = run_prepared_task_snapshot(
-            ctx,
-            base_raw,
-            profile,
-            prompt_policy,
-            base_override,
-            prepared_task_context(selected, &identifier, &title, branch_name),
-        );
-        let result = match result {
-            Ok(result) => result,
-            Err(err) => {
-                record_task_failure(ctx, selected, &err);
-                return Err(err);
-            }
-        };
-        record_task_profile_success(ctx, selected, &result)?;
-        return Ok(result);
-    }
-
-    let coordinator_id = task_run::launcher_coordinator_id(ctx);
-
-    let run = task_run::create_with_coordinator_id(
+    let coordinator_label = direct_coordinator_label(&title);
+    let run = task_run::create_direct_routed(
         ctx,
         &selected.key,
         &selected.document.branch,
-        None,
-        coordinator_id,
+        coordinator.as_str(),
+        Some(&coordinator_label),
         task_run::STATUS_PREPARED,
     )?;
 
@@ -135,7 +125,7 @@ fn run_selected_task(
         profile,
         prompt_policy,
         base_override,
-        prepared_task_context(selected, &identifier, &title, branch_name),
+        prepared_task_context(selected, &identifier, &title, branch_name, &run),
     );
 
     let result = match result {
@@ -184,6 +174,7 @@ fn run_selected_tasks_parallel(
     base_raw: &Option<String>,
     profile: Option<&str>,
     jobs: usize,
+    coordinator: &crate::messages::AgentId,
 ) -> Result<()> {
     let base_override = parallel_task_base_override(ctx, base_raw)?;
     let mut first_error = None;
@@ -199,6 +190,7 @@ fn run_selected_tasks_parallel(
                 profile,
                 PromptPolicy::Deny,
                 base_override.as_deref(),
+                coordinator,
             )
             .with_context(|| format!("Task {}", task.key))
         },
@@ -261,12 +253,14 @@ fn prepared_task_context<'a>(
     identifier: &'a str,
     title: &'a str,
     branch_name: Option<&'a str>,
+    run: &'a task_run::TaskRunRecord,
 ) -> issue::PreparedIssueContext<'a> {
     issue::PreparedIssueContext {
         identifier,
         title,
         branch_name,
         setup_mode: selected.document.setup_mode(),
+        template_vars: task_run_template_vars(run),
         additional_prompt_scope: None,
         workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
         on_start_issue_id: selected
@@ -284,6 +278,20 @@ fn prepared_task_context<'a>(
             content: &selected.content,
         },
     }
+}
+
+fn task_run_template_vars(run: &task_run::TaskRunRecord) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    vars.insert("wt_task_run_id".into(), run.id.clone());
+    if let Some(agent_id) = run.run.agent_id.as_deref() {
+        vars.insert("wt_agent_id".into(), agent_id.to_string());
+    }
+    vars.insert("wt_coordinator_agent_id".into(), String::new());
+    vars
+}
+
+fn direct_coordinator_label(title: &str) -> String {
+    format!("Coordinator for task \"{title}\"")
 }
 
 fn run_prepared_task_snapshot(
@@ -315,55 +323,6 @@ fn run_prepared_task_snapshot(
             }
         }
     }
-}
-
-fn record_task_failure(ctx: &Ctx, selected: &task::SelectedTask, err: &anyhow::Error) {
-    let status = if is_cancelled(err) {
-        task_run::STATUS_SKIPPED
-    } else {
-        task_run::STATUS_FAILED
-    };
-    let message = err.to_string();
-    let coordinator_id = task_run::launcher_coordinator_id(ctx);
-    if let Ok(run) = task_run::create_with_coordinator_id(
-        ctx,
-        &selected.key,
-        &selected.document.branch,
-        None,
-        coordinator_id,
-        status,
-    ) {
-        let _ = task_run::update(ctx, &run.id, status, None, Some(&message));
-    }
-}
-
-fn record_task_profile_success(
-    ctx: &Ctx,
-    selected: &task::SelectedTask,
-    result: &issue::IssueRunResult,
-) -> Result<()> {
-    let coordinator_id = task_run::launcher_coordinator_id(ctx);
-    task_run::create_with_coordinator_id(
-        ctx,
-        &selected.key,
-        &result.branch_name,
-        None,
-        coordinator_id,
-        task_run::STATUS_RUNNING,
-    )?;
-    write_task_branch_from_result(ctx, selected, result)?;
-    Ok(())
-}
-
-fn write_task_branch_from_result(
-    ctx: &Ctx,
-    selected: &task::SelectedTask,
-    result: &issue::IssueRunResult,
-) -> Result<()> {
-    if selected.document.branch != result.canonical_branch_name {
-        task::write_task_branch(ctx, &selected.key, &result.canonical_branch_name)?;
-    }
-    Ok(())
 }
 
 fn is_cancelled(err: &anyhow::Error) -> bool {
@@ -610,13 +569,25 @@ mod tests {
             runs[0].run.coordinator_id.as_deref(),
             Some("agents/coord-a")
         );
+        assert_eq!(
+            runs[0].run.agent_id.as_deref(),
+            Some("agents/run-1-add-schema")
+        );
+        assert_eq!(
+            runs[0].run.coordinator_label.as_deref(),
+            Some("Coordinator for task \"Add schema\"")
+        );
 
         let content = std::fs::read_to_string(&runs[0].path).unwrap();
         assert!(content.contains("coordinator_id = \"agents/coord-a\""));
+        assert!(content.contains("agent_id = \"agents/run-1-add-schema\""));
+        assert!(
+            content.contains("coordinator_label = \"Coordinator for task \\\"Add schema\\\"\"")
+        );
     }
 
     #[test]
-    fn task_run_leaves_coordinator_id_empty_without_launcher_identity() {
+    fn task_run_auto_records_route_fields_without_launcher_identity() {
         let repo = tempfile::tempdir().unwrap();
         let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -650,10 +621,22 @@ mod tests {
 
         let runs = task_run::list(&ctx).unwrap();
         assert_eq!(runs.len(), 1);
-        assert!(runs[0].run.coordinator_id.is_none());
+        assert!(runs[0].run.coordinator_id.is_some());
+        assert_eq!(
+            runs[0].run.agent_id.as_deref(),
+            Some("agents/run-1-add-schema")
+        );
+        assert_eq!(
+            runs[0].run.coordinator_label.as_deref(),
+            Some("Coordinator for task \"Add schema\"")
+        );
 
         let content = std::fs::read_to_string(&runs[0].path).unwrap();
-        assert!(!content.contains("coordinator_id"));
+        assert!(content.contains("coordinator_id = \"agents/"));
+        assert!(content.contains("agent_id = \"agents/run-1-add-schema\""));
+        assert!(
+            content.contains("coordinator_label = \"Coordinator for task \\\"Add schema\\\"\"")
+        );
     }
 
     #[test]
@@ -814,7 +797,7 @@ id = "PROJ-123"
         let handoff_prompt = send_calls[0].1.last().unwrap();
         assert!(handoff_prompt.contains("## Task Run Coordinator Handoff"));
         assert!(
-            handoff_prompt.find("wt msg send --to coordinator").unwrap()
+            handoff_prompt.find("wt task report").unwrap()
                 < handoff_prompt.find("fallback cmux surface").unwrap()
         );
         assert!(
@@ -828,10 +811,11 @@ id = "PROJ-123"
             handoff_prompt
                 .contains("cmux send-key --workspace workspace:34 --surface surface:103 enter")
         );
-        assert!(handoff_prompt.contains("wt msg send --to coordinator \"Agent Completion Report"));
-        assert!(handoff_prompt.contains("resolves from `WT_COORDINATOR_AGENT_ID`"));
+        assert!(handoff_prompt.contains("wt task report \"Agent Completion Report"));
+        assert!(!handoff_prompt.contains("wt msg send --to coordinator"));
+        assert!(!handoff_prompt.contains("WT_COORDINATOR_AGENT_ID"));
         assert!(handoff_prompt.contains("If the file inbox route is unavailable"));
-        assert!(handoff_prompt.contains("If neither coordinator route is available"));
+        assert!(handoff_prompt.contains("If `wt task report` fails"));
         assert!(!handoff_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
         assert!(!handoff_prompt.contains("Create the schema first."));
         assert!(!handoff_prompt.contains("wt workflow complete"));

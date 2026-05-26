@@ -723,7 +723,7 @@ pub enum RunCommand {
     },
     /// Start one worktree per selected local TaskDocument
     #[command(
-        long_about = "Start one worktree per selected <git-common-dir>/wt/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun in <git-common-dir>/wt/task-runs.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator inbox target `coordinator` and fallback cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
+        long_about = "Start one worktree per selected <git-common-dir>/wt/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun in <git-common-dir>/wt/task-runs.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt leads with `wt task report \"Agent Completion Report: ...\"` and includes fallback cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
     )]
     Task {
         /// Local task keys from <git-common-dir>/wt/tasks/<task>.toml
@@ -815,6 +815,15 @@ pub enum TaskCommand {
         /// Local task keys from <git-common-dir>/wt/tasks/<task>.toml
         #[arg(value_name = "TASK")]
         tasks: Vec<String>,
+    },
+    /// Send the current TaskRun completion report to its recorded coordinator
+    #[command(
+        long_about = "Send a report from the current direct TaskRun to the coordinator recorded on that TaskRun.\n\nThe normal task-agent path is `wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\"`. When WT_TASK_RUN_ID is set, wt uses that exact TaskRun. Without WT_TASK_RUN_ID, wt may fall back to the current branch only when exactly one running TaskRun matches. Reports are sent through the file inbox and update TaskRun report metadata."
+    )]
+    Report {
+        /// Report message to send
+        #[arg(value_name = "MESSAGE", num_args = 1..)]
+        message: Vec<String>,
     },
 }
 
@@ -1898,8 +1907,8 @@ mod tests {
         assert!(help.contains("one worktree per selected"));
         assert!(help.contains("direct TaskRun"));
         assert!(help.contains("Omit task keys"));
-        assert!(help.contains("Task Run Coordinator Handoff"));
-        assert!(help.contains("coordinator inbox target `coordinator`"));
+        assert!(help.contains("wt task report"));
+        assert!(help.contains("Agent Completion Report"));
         assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("Task-run agents report PR=none"));
         assert!(help.contains("wt workflow task --mode batch"));
