@@ -163,7 +163,7 @@ mod tests {
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
-    use crate::task_run::{STATUS_DONE, STATUS_RUNNING};
+    use crate::task_run::{STATUS_PASSED, STATUS_RUNNING};
     use anyhow::Result;
     use std::path::Path;
     use std::sync::Arc;
@@ -293,7 +293,7 @@ mod tests {
             "add-schema",
             "agents/coord-a",
             None,
-            STATUS_DONE,
+            STATUS_PASSED,
         )
         .unwrap();
 
@@ -307,7 +307,7 @@ mod tests {
 
         let message = format!("{err:#}");
         assert!(message.contains("requires a running TaskRun"));
-        assert!(message.contains("is done"));
+        assert!(message.contains("is passed"));
     }
 
     #[test]

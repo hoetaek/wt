@@ -96,7 +96,7 @@ wt workflow complete <workflow> <task>
 ```
 
 For direct TaskRuns, no separate completion exists — `wt done` during cleanup
-also marks running direct TaskRuns done. See `task-lifecycle.md` for the full
+also marks running direct TaskRuns passed. See `task-lifecycle.md` for the full
 completion vs cleanup boundary.
 
 ## Land

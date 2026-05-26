@@ -468,7 +468,7 @@ branch = "feature/task-{idx}"
         fs::create_dir_all(&tasks_dir).unwrap();
 
         for key in [
-            "done",
+            "passed",
             "failed",
             "latest-failed",
             "no-run",
@@ -487,7 +487,14 @@ branch = "feature/{key}"
             .unwrap();
         }
 
-        task_run::create(&ctx, "done", "feature/done", None, task_run::STATUS_DONE).unwrap();
+        task_run::create(
+            &ctx,
+            "passed",
+            "feature/passed",
+            None,
+            task_run::STATUS_PASSED,
+        )
+        .unwrap();
         task_run::create(
             &ctx,
             "failed",
@@ -561,10 +568,10 @@ branch = "feature/{key}"
         assert_eq!(
             all_keys,
             [
-                "done",
                 "failed",
                 "latest-failed",
                 "no-run",
+                "passed",
                 "prepared",
                 "running",
                 "skipped"

@@ -1,7 +1,7 @@
 use crate::context::Ctx;
 use crate::task as task_store;
 use crate::task_run::{
-    STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
+    STATUS_FAILED, STATUS_PASSED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
 use crate::workflow::run::WorkflowTaskState;
 use crate::workflow::{
@@ -145,7 +145,7 @@ pub(crate) fn workflow_selection_status_counts(items: &[WorkflowTaskState]) -> S
     let counts = [
         STATUS_PREPARED,
         STATUS_RUNNING,
-        STATUS_DONE,
+        STATUS_PASSED,
         STATUS_FAILED,
         STATUS_SKIPPED,
     ]

@@ -1057,10 +1057,10 @@ execution shape, size class, acceptance checks를 적는다. Provider issue impo
 `wt task list`는 `<git-common-dir>/wt/tasks/<task>.toml`에 저장된 TaskDocument file 중
 actionable working set을 보여주는 canonical read-only list다. Bare `wt task list`는
 `wt run task`의 selectable task semantics를 따른다. TaskRun이 없거나 latest TaskRun status가
-`prepared`, `failed`, `skipped`인 TaskDocument를 보여주고, latest status가 `done` 또는
+`prepared`, `failed`, `skipped`인 TaskDocument를 보여주고, latest status가 `passed` 또는
 `running`인 TaskDocument는 숨긴다. 숨겨진 TaskDocument가 있으면 text output은 count와
 `wt task list --all` 안내를 보여주되 TaskDocument row를 dump하지 않는다. `wt task list --all`은
-full TaskDocument inventory mode이며 done/running TaskDocument까지 포함한다. 두 mode 모두
+full TaskDocument inventory mode이며 passed/running TaskDocument까지 포함한다. 두 mode 모두
 selector의 10-row visible cap을 적용하지 않는다. Text output은 selector와 같은 TaskDocument
 display order인 title, origin/publish state, task key, branch를 bounded column으로 나눠
 보여주고, `provider-origin`과 `local` source group 아래에 둔다. Inventory-only field인 source는
@@ -1172,8 +1172,10 @@ TaskRun 출력에는 쓰지 않는다. `creation_order`는 같은 task의 최신
 초 단위 timestamp 우연성에 기대지 않도록 새 TaskRun마다 증가하는 실행 생성 순서다.
 `creation_order`가 없는 previous TaskRun은 계속 읽되 ordered TaskRun보다 앞에 정렬하고,
 previous끼리는 `created_at`과 id를 fallback으로 쓴다.
-status는 `prepared`, `running`, `done`, `failed`, `skipped`만 canonical이다. 알 수 없는
-status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서 실패시킨다.
+status는 `prepared`, `running`, `passed`, `failed`, `skipped`만 canonical이다. Legacy
+TaskRun TOML의 `status = "done"`은 migration compatibility로만 읽고, 새 TaskRun 출력에는
+쓰지 않는다. 알 수 없는 status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서
+실패시킨다.
 
 통합 실행 상태 모델은 TaskDocument, Workflow, TaskRun의 책임을 나누는 데서 시작한다.
 TaskDocument는 무엇을 할지에 대한 재사용 가능한 slice-level 설명이고, Workflow는
@@ -1341,7 +1343,7 @@ read-only inventory다. `wt run workflow`의 runnable selector가 아니므로 r
 필터링하거나 selector의 10-row visible cap을 적용하지 않는다. `wt workflow show`의 latest
 default도 all-workflow inventory로 확장하지 않는다. Output은 Workflow 자체의 단일
 `status`를 만들지 않고, linked TaskRun에서 파생한 task-run status count/summary와 mode별
-runnable metadata를 보여준다. Human text output은 `runnable`, `waiting`, `done` 같은
+runnable metadata를 보여준다. Human text output은 `runnable`, `waiting`, `passed` 같은
 파생 presentation group 아래에 workflow title, workflow id/mode, TaskRun summary,
 profile/action/policy preview를 compact list row로 둔다. Human reason은 waiting row의
 preview로 보여주되 body summary, raw origin, base, path 같은 상세 필드는 text에서 반복하지
@@ -1556,7 +1558,7 @@ failed, no_session observation은 non-idle wait sample을 만들지 않는다. �
 TaskDocument, cmux transport 좌표에 쓰지 않는다. sample은 watch 시작 이후의 안정된
 `elapsed_seconds`, 사용자가 지정한 heartbeat/timeout bound인 `bound_seconds`, 마지막 출력 이후
 변하지 않은 시간을 나타내는 `unchanged_seconds`를 분리한다. sample 기록 때문에 TaskRun을
-failed, blocked, done, skipped로 전이하지 않고, `wt agent watch`를 delivery loop나 detached
+failed, blocked, passed, skipped로 전이하지 않고, `wt agent watch`를 delivery loop나 detached
 supervisor로 넓히지 않는다. `--heartbeat`와 `--timeout`이 모두 없으면 기록할 heartbeat/timeout
 sample도 없다.
 

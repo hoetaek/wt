@@ -25,7 +25,7 @@ model, status boundaries, and completion vs cleanup commands.
 
 | State | Means | Does NOT mean |
 |---|---|---|
-| TaskRun `done` | Execution attempt closed | Branch landed |
+| TaskRun `passed` | Current coordinator gate passed | Branch landed or cleanup complete |
 | Agent `idle` | Coordinator should inspect | TaskRun complete |
 | Worktree clean | No uncommitted changes | Branch reviewed or landed |
 | Agent `running` | Let it work unless clearly stuck | Active progress proven |
@@ -35,7 +35,7 @@ model, status boundaries, and completion vs cleanup commands.
 | Run Type | Completion (before landing) | Cleanup (after landing/discard) |
 |---|---|---|
 | workflow-linked | `wt workflow complete <workflow> <task> [--run-next]` | `wt done <branch-or-worktree>` |
-| direct | (no separate step) | `wt done <branch-or-worktree>` — also marks running direct TaskRuns done |
+| direct | (no separate step) | `wt done <branch-or-worktree>` — also marks running direct TaskRuns passed |
 
 `--run-next` applies in stack mode when the next stack task should start
 immediately. For `single`, `batch`, the final stack task, or a stack task

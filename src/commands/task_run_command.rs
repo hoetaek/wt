@@ -899,7 +899,7 @@ id = "PROJ-123"
     }
 
     #[test]
-    fn task_run_with_key_records_new_run_after_prior_done() {
+    fn task_run_with_key_records_new_run_after_prior_passed() {
         let repo = tempfile::tempdir().unwrap();
         let tasks_dir = repo.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -938,7 +938,7 @@ id = "PROJ-123"
             "add-schema",
             "add-schema",
             None,
-            task_run::STATUS_DONE,
+            task_run::STATUS_PASSED,
         )
         .unwrap();
 

@@ -1,6 +1,6 @@
 use crate::context::Ctx;
 use crate::task_run::{
-    STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
+    STATUS_FAILED, STATUS_PASSED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
 use crate::workflow as workflow_store;
 use crate::workflow::planner::runnable_workflow_info;
@@ -70,7 +70,7 @@ struct TaskRunSummary {
     total: usize,
     prepared: usize,
     running: usize,
-    done: usize,
+    passed: usize,
     failed: usize,
     skipped: usize,
     missing: usize,
@@ -187,7 +187,7 @@ fn task_run_summary(ctx: &Ctx, metadata: &WorkflowMetadata) -> TaskRunSummary {
         total: workflow_run_count(metadata),
         prepared: 0,
         running: 0,
-        done: 0,
+        passed: 0,
         failed: 0,
         skipped: 0,
         missing: 0,
@@ -198,7 +198,7 @@ fn task_run_summary(ctx: &Ctx, metadata: &WorkflowMetadata) -> TaskRunSummary {
         match task_run_record(ctx, run_id).map(|run| run.status) {
             Some(STATUS_PREPARED) => summary.prepared += 1,
             Some(STATUS_RUNNING) => summary.running += 1,
-            Some(STATUS_DONE) => summary.done += 1,
+            Some(STATUS_PASSED) => summary.passed += 1,
             Some(STATUS_FAILED) => summary.failed += 1,
             Some(STATUS_SKIPPED) => summary.skipped += 1,
             None => summary.missing += 1,
@@ -232,7 +232,7 @@ fn task_run_summary_text(summary: &TaskRunSummary) -> String {
     let parts = [
         ("prepared", summary.prepared),
         ("running", summary.running),
-        ("done", summary.done),
+        ("passed", summary.passed),
         ("failed", summary.failed),
         ("skipped", summary.skipped),
         ("missing", summary.missing),
@@ -338,7 +338,7 @@ fn render_text_lines(report: &WorkflowListReport) -> Vec<String> {
     for group in [
         WorkflowDisplayGroup::Runnable,
         WorkflowDisplayGroup::Waiting,
-        WorkflowDisplayGroup::Done,
+        WorkflowDisplayGroup::Passed,
     ] {
         let rows = report
             .workflows
@@ -391,7 +391,7 @@ fn invalid_workflow_error_summary(error: &str) -> String {
 enum WorkflowDisplayGroup {
     Runnable,
     Waiting,
-    Done,
+    Passed,
 }
 
 impl WorkflowDisplayGroup {
@@ -399,7 +399,7 @@ impl WorkflowDisplayGroup {
         match self {
             Self::Runnable => "runnable",
             Self::Waiting => "waiting",
-            Self::Done => "done",
+            Self::Passed => "passed",
         }
     }
 }
@@ -409,9 +409,9 @@ fn display_group(row: &WorkflowListRow) -> WorkflowDisplayGroup {
         return WorkflowDisplayGroup::Runnable;
     }
 
-    let terminal = row.task_runs.done + row.task_runs.skipped;
+    let terminal = row.task_runs.passed + row.task_runs.skipped;
     if row.state_error.is_none() && row.task_runs.total > 0 && terminal == row.task_runs.total {
-        WorkflowDisplayGroup::Done
+        WorkflowDisplayGroup::Passed
     } else {
         WorkflowDisplayGroup::Waiting
     }
@@ -442,7 +442,7 @@ fn task_run_row_summary(summary: &TaskRunSummary) -> String {
     let counts = [
         ("prepared", summary.prepared),
         ("running", summary.running),
-        ("done", summary.done),
+        ("passed", summary.passed),
         ("failed", summary.failed),
         ("skipped", summary.skipped),
         ("missing", summary.missing),
@@ -476,7 +476,7 @@ fn workflow_action_detail(row: &WorkflowListRow, group: WorkflowDisplayGroup) ->
             "reason {}",
             human_non_runnable_reason(&row.runnable.reason)
         )),
-        WorkflowDisplayGroup::Done => None,
+        WorkflowDisplayGroup::Passed => None,
     }
 }
 
@@ -663,13 +663,13 @@ run = "run-2026-05-18-002-waiting"
 "#,
         );
 
-        write_task(dir.path(), "done-task", "feature/done");
+        write_task(dir.path(), "passed-task", "feature/passed");
         write_task_run(
             dir.path(),
-            "run-2026-05-18-003-done",
-            "done-task",
-            "feature/done",
-            "done",
+            "run-2026-05-18-003-passed",
+            "passed-task",
+            "feature/passed",
+            "passed",
             "2026-05-18-003",
         );
         write_workflow(
@@ -679,8 +679,8 @@ run = "run-2026-05-18-002-waiting"
             r#"profile = "codex"
 "#,
             r#"[[tasks]]
-task = "done-task"
-run = "run-2026-05-18-003-done"
+task = "passed-task"
+run = "run-2026-05-18-003-passed"
 "#,
         );
 
@@ -694,7 +694,7 @@ run = "run-2026-05-18-003-done"
         assert!(rendered.contains("◆ Workflows"));
         assert!(rendered.contains("│ runnable"));
         assert!(rendered.contains("│ waiting"));
-        assert!(rendered.contains("│ done"));
+        assert!(rendered.contains("│ passed"));
         assert!(rendered.contains(
             "│  •  Ship search  id 2026-05-18-001 · mode batch · runs 1 prepared · policy none/manual"
         ));
@@ -702,7 +702,7 @@ run = "run-2026-05-18-003-done"
             "│  •  waiting-task  id 2026-05-18-002 · mode stack · runs 1 running · reason waiting for running task · policy none/manual"
         ));
         assert!(rendered.contains(
-            "│  •  done-task  id 2026-05-18-003 · mode single · runs 1 done · profile codex · policy none/manual"
+            "│  •  passed-task  id 2026-05-18-003 · mode single · runs 1 passed · profile codex · policy none/manual"
         ));
         assert!(!rendered.contains("body Keep search work coordinated."));
         assert!(!rendered.contains("file <git-common-dir>/wt/workflows/2026-05-18-001.toml"));

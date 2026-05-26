@@ -242,7 +242,7 @@ merge.
 - `TaskDocument` files in `<git-common-dir>/wt/tasks/<task>.toml` define prepared local work.
 - `wt task list` shows the actionable local TaskDocument working set: tasks
   with no TaskRun, or whose latest TaskRun is prepared, failed, or skipped. It
-  hides done and running tasks with a count hint; use `wt task list --all` for
+  hides passed and running tasks with a count hint; use `wt task list --all` for
   the full TaskDocument inventory. Both modes report invalid task TOML files
   and do not start worktrees, branches, TaskRuns, Workflows, provider issues, or
   pull requests.
@@ -265,7 +265,7 @@ merge.
   Workflow files whether or not they are runnable and reports invalid workflow
   TOML files instead of hiding parse failures.
 - `wt workflow archive <workflow>` moves a completed Workflow plus linked
-  done/skipped TaskRuns and uniquely-owned TaskDocuments into
+  passed/skipped TaskRuns and uniquely-owned TaskDocuments into
   `<git-common-dir>/wt/archive/workflows/<workflow-id>/`. Archive is
   visibility and retention only; it is not a substitute for landing,
   `wt workflow complete`, or `wt done`.

@@ -77,7 +77,7 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
         if !remove_worktree(ctx, &git, wt_path)? {
             continue;
         }
-        mark_matching_task_runs_done(ctx, entry);
+        mark_matching_task_runs_passed(ctx, entry);
 
         // Clean up leftover directory
         if wt_path.exists() {
@@ -138,7 +138,7 @@ fn remove_worktree(ctx: &Ctx, git: &GitService<'_>, wt_path: &Path) -> Result<bo
     }
 }
 
-fn mark_matching_task_runs_done(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) {
+fn mark_matching_task_runs_passed(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) {
     let runs = match task_run::running_cleanup_matches(ctx, &entry.branch) {
         Ok(runs) => runs,
         Err(err) => {
@@ -148,12 +148,12 @@ fn mark_matching_task_runs_done(ctx: &Ctx, entry: &crate::services::git::Worktre
     };
 
     for record in runs {
-        match task_run::update(ctx, &record.id, task_run::STATUS_DONE, None, None) {
+        match task_run::update(ctx, &record.id, task_run::STATUS_PASSED, None, None) {
             Ok(_) => ctx
                 .ui
-                .print_step(&format!("  TaskRun marked done: {}", record.id)),
+                .print_step(&format!("  TaskRun marked passed: {}", record.id)),
             Err(err) => ctx.ui.print_warning(&format!(
-                "  Failed to mark TaskRun {} done: {err}",
+                "  Failed to mark TaskRun {} passed: {err}",
                 record.id
             )),
         }
@@ -491,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_marks_matching_running_direct_task_runs_done() {
+    fn clean_marks_matching_running_direct_task_runs_passed() {
         let repo = tempfile::tempdir().unwrap();
         let worktree = repo.path().with_file_name("test-repo-add-schema");
         let mut runner = MockRunner::new();
@@ -541,7 +541,7 @@ mod tests {
 
         assert_eq!(
             task_run::read(&direct_run.path).unwrap().status,
-            task_run::STATUS_DONE
+            task_run::STATUS_PASSED
         );
         assert_eq!(
             task_run::read(&grouped_run.path).unwrap().status,
@@ -592,7 +592,7 @@ mod tests {
 
         assert_eq!(
             task_run::read(&run.path).unwrap().status,
-            task_run::STATUS_DONE
+            task_run::STATUS_PASSED
         );
     }
 
@@ -741,7 +741,7 @@ updated_at = "2026-05-18T00:00:00Z"
     }
 
     #[test]
-    fn clean_does_not_mark_task_run_done_when_worktree_remove_fails() {
+    fn clean_does_not_mark_task_run_passed_when_worktree_remove_fails() {
         let repo = tempfile::tempdir().unwrap();
         let worktree = repo.path().with_file_name("test-repo-add-schema");
         let mut runner = MockRunner::new();

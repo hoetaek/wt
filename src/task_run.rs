@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) const STATUS_PREPARED: TaskRunStatus = TaskRunStatus::Prepared;
 pub(crate) const STATUS_RUNNING: TaskRunStatus = TaskRunStatus::Running;
-pub(crate) const STATUS_DONE: TaskRunStatus = TaskRunStatus::Done;
+pub(crate) const STATUS_PASSED: TaskRunStatus = TaskRunStatus::Passed;
 pub(crate) const STATUS_FAILED: TaskRunStatus = TaskRunStatus::Failed;
 pub(crate) const STATUS_SKIPPED: TaskRunStatus = TaskRunStatus::Skipped;
 
@@ -25,7 +25,7 @@ pub(crate) const REVIEW_BLOCKED: TaskReviewStatus = TaskReviewStatus::Blocked;
 pub(crate) enum TaskRunStatus {
     Prepared,
     Running,
-    Done,
+    Passed,
     Failed,
     Skipped,
 }
@@ -35,7 +35,7 @@ impl TaskRunStatus {
         match self {
             Self::Prepared => "prepared",
             Self::Running => "running",
-            Self::Done => "done",
+            Self::Passed => "passed",
             Self::Failed => "failed",
             Self::Skipped => "skipped",
         }
@@ -45,7 +45,7 @@ impl TaskRunStatus {
         match status {
             "prepared" => Ok(Self::Prepared),
             "running" => Ok(Self::Running),
-            "done" => Ok(Self::Done),
+            "passed" | "done" => Ok(Self::Passed),
             "failed" => Ok(Self::Failed),
             "skipped" => Ok(Self::Skipped),
             _ => bail!("Unknown task run status: {status}"),
@@ -1407,6 +1407,31 @@ updated_at = "2026-05-16T00:00:00Z"
     }
 
     #[test]
+    fn read_accepts_legacy_done_status_but_rewrites_passed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.toml");
+
+        std::fs::write(
+            &path,
+            r#"task = "add-schema"
+branch = "add-schema"
+status = "done"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let parsed = read(&path).unwrap();
+        assert_eq!(parsed.status, STATUS_PASSED);
+
+        write(&path, &parsed).unwrap();
+        let content = std::fs::read_to_string(path).unwrap();
+        assert!(content.contains("status = \"passed\""));
+        assert!(!content.contains("status = \"done\""));
+    }
+
+    #[test]
     fn read_rejects_runtime_binding_fields() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("run.toml");
@@ -1434,7 +1459,7 @@ updated_at = "2026-05-16T00:00:00Z"
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
 
-        let first = create(&ctx, "add-schema", "add-schema", None, STATUS_DONE).unwrap();
+        let first = create(&ctx, "add-schema", "add-schema", None, STATUS_PASSED).unwrap();
         let second = create(&ctx, "add-schema", "add-schema", None, STATUS_RUNNING).unwrap();
 
         assert_eq!(first.id, "run-add-schema");
@@ -1444,6 +1469,11 @@ updated_at = "2026-05-16T00:00:00Z"
         assert!(first.path.exists());
         assert!(second.path.exists());
         assert_eq!(list(&ctx).unwrap().len(), 2);
+        assert!(
+            std::fs::read_to_string(first.path)
+                .unwrap()
+                .contains("status = \"passed\"")
+        );
     }
 
     #[test]
@@ -1458,7 +1488,7 @@ updated_at = "2026-05-16T00:00:00Z"
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
         create(&ctx, "add-schema", "add-schema", None, STATUS_SKIPPED).unwrap();
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
-        create(&ctx, "add-schema", "add-schema", None, STATUS_DONE).unwrap();
+        create(&ctx, "add-schema", "add-schema", None, STATUS_PASSED).unwrap();
         assert!(!task_is_selectable(&ctx, "add-schema").unwrap());
     }
 
@@ -1498,7 +1528,7 @@ updated_at = "2026-05-16T00:00:00Z"
 
         write(
             &task_runs_dir.join("z-earlier-id.toml"),
-            &run_with_order("add-schema", STATUS_DONE, Some(1), "2026-05-16T00:00:00Z"),
+            &run_with_order("add-schema", STATUS_PASSED, Some(1), "2026-05-16T00:00:00Z"),
         )
         .unwrap();
         write(
@@ -1522,7 +1552,7 @@ updated_at = "2026-05-16T00:00:00Z"
 
         write(
             &task_runs_dir.join("z-previous.toml"),
-            &run_with_order("add-schema", STATUS_DONE, None, "2026-05-16T00:00:00Z"),
+            &run_with_order("add-schema", STATUS_PASSED, None, "2026-05-16T00:00:00Z"),
         )
         .unwrap();
         write(
@@ -1556,7 +1586,7 @@ updated_at = "2026-05-16T00:00:00Z"
         .unwrap();
         write(
             &task_runs_dir.join("b-previous.toml"),
-            &run_with_order("add-schema", STATUS_DONE, None, "2026-05-16T00:00:02Z"),
+            &run_with_order("add-schema", STATUS_PASSED, None, "2026-05-16T00:00:02Z"),
         )
         .unwrap();
         write(

@@ -909,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn list_local_tasks_omits_tasks_with_completed_runs() {
+    fn list_local_tasks_omits_tasks_with_passed_runs() {
         let dir = tempfile::tempdir().unwrap();
         let tasks_dir = dir.path().join(".git/wt/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -930,7 +930,7 @@ mod tests {
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
         );
-        task_run::create(&ctx, "a-first", "first", None, task_run::STATUS_DONE).unwrap();
+        task_run::create(&ctx, "a-first", "first", None, task_run::STATUS_PASSED).unwrap();
 
         let tasks = list_local_tasks(&ctx).unwrap();
 

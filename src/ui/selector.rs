@@ -1732,7 +1732,7 @@ mod tests {
             SelectorRow::option(7, "Task 7"),
             SelectorRow::section("running"),
             SelectorRow::option(8, "Task 8"),
-            SelectorRow::section("done"),
+            SelectorRow::section("passed"),
         ];
         rows.extend((9..28).map(|index| SelectorRow::option(index, format!("Task {index}"))));
         let mut state = SelectorState::multi(rows);
@@ -1755,7 +1755,7 @@ mod tests {
         );
 
         assert!(mixed_groups.contains("│ skipped"));
-        assert!(single_group.contains("│ done"));
+        assert!(single_group.contains("│ passed"));
         assert_eq!(mixed_groups.lines().count(), single_group.lines().count());
     }
 

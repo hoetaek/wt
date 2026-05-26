@@ -2,7 +2,7 @@ use super::resolve_mutating_target;
 use crate::context::Ctx;
 use crate::services::git::GitService;
 use crate::task as task_store;
-use crate::task_run::STATUS_DONE;
+use crate::task_run::STATUS_PASSED;
 use crate::workflow as workflow_store;
 use crate::workflow::render::workflow_task_label;
 use crate::workflow::run::{
@@ -41,14 +41,14 @@ pub(super) fn complete_workflow(
         }
     }
     for idx in &complete_indices {
-        update_workflow_task_run(ctx, &metadata.tasks[*idx], STATUS_DONE, None)?;
+        update_workflow_task_run(ctx, &metadata.tasks[*idx], STATUS_PASSED, None)?;
     }
     workflow_store::touch(&mut metadata);
     workflow_store::write(ctx, &path, &mut metadata)?;
 
     for idx in complete_indices {
         ctx.ui.print_step(&format!(
-            "Marked {} done",
+            "Marked {} passed",
             workflow_task_label(&metadata.tasks[idx])
         ));
     }
@@ -94,7 +94,7 @@ fn complete_matrix_workflow(
             &state.row,
             profile,
             &state.run_id,
-            STATUS_DONE,
+            STATUS_PASSED,
             Some(&state.run.branch),
             None,
         )?;
@@ -105,7 +105,7 @@ fn complete_matrix_workflow(
     for state in complete {
         let profile = state.profile.as_deref().unwrap_or("<missing-profile>");
         ctx.ui.print_step(&format!(
-            "Marked {}:{profile} done",
+            "Marked {}:{profile} passed",
             workflow_task_label(&state.row)
         ));
     }

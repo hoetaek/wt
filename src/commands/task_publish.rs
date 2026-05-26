@@ -125,7 +125,7 @@ fn publish_candidate_rank(candidate: &PublishCandidate) -> u8 {
         Some(TaskRunStatus::Prepared | TaskRunStatus::Skipped) => 1,
         Some(TaskRunStatus::Failed) => 2,
         Some(TaskRunStatus::Running) => 3,
-        Some(TaskRunStatus::Done) => 4,
+        Some(TaskRunStatus::Passed) => 4,
     }
 }
 
@@ -458,7 +458,7 @@ mod tests {
     use crate::context::mock::MockUi;
     use crate::context::{CmdOutput, CommandRunner};
     use crate::services::issues::{EnsuredBranch, IssueInfo, IssueListItem};
-    use crate::task_run::{STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING};
+    use crate::task_run::{STATUS_FAILED, STATUS_PASSED, STATUS_PREPARED, STATUS_RUNNING};
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
@@ -803,8 +803,8 @@ mod tests {
         );
         write_task(
             dir.path(),
-            "b-done",
-            "title = \"Done\"\nbranch = \"b-done\"\n",
+            "b-passed",
+            "title = \"Passed\"\nbranch = \"b-passed\"\n",
         );
         write_task(
             dir.path(),
@@ -827,7 +827,7 @@ mod tests {
         let ui = Arc::new(ui);
         let ctx = ctx_with_config_and_ui(dir.path(), linear_config(), Arc::clone(&ui));
         task_run::create(&ctx, "a-running", "a-running", None, STATUS_RUNNING).unwrap();
-        task_run::create(&ctx, "b-done", "b-done", None, STATUS_DONE).unwrap();
+        task_run::create(&ctx, "b-passed", "b-passed", None, STATUS_PASSED).unwrap();
         task_run::create(&ctx, "x-failed", "x-failed", None, STATUS_FAILED).unwrap();
         task_run::create(&ctx, "y-prepared", "y-prepared", None, STATUS_PREPARED).unwrap();
 
@@ -840,12 +840,12 @@ mod tests {
                 .iter()
                 .map(|item| item.split("  ").next().unwrap_or(""))
                 .collect::<Vec<_>>(),
-            vec!["Fresh", "Prepared", "Failed", "Running", "Done"]
+            vec!["Fresh", "Prepared", "Failed", "Running", "Passed"]
         );
         let rows = ui.multi_select_rows.lock().unwrap();
         assert_eq!(
             section_titles(&rows[0]),
-            vec!["not started", "prepared", "failed", "running", "done"]
+            vec!["not started", "prepared", "failed", "running", "passed"]
         );
     }
 

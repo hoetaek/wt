@@ -1219,7 +1219,7 @@ fn task_list_help_explains_actionable_default_and_full_inventory() {
             "same selectability rules as wt run task",
         ))
         .stdout(predicate::str::contains("prepared, failed, or skipped"))
-        .stdout(predicate::str::contains("done or running are hidden"))
+        .stdout(predicate::str::contains("passed or running are hidden"))
         .stdout(predicate::str::contains("--all"))
         .stdout(predicate::str::contains(
             "full read-only TaskDocument inventory",
@@ -1236,8 +1236,15 @@ fn task_list_help_explains_actionable_default_and_full_inventory() {
 fn task_list_supports_json_and_reports_invalid_tasks() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    write_task_document(temp.path(), "done", "feature/done");
-    write_task_run_file(temp.path(), "run-done", "done", "feature/done", "done", "");
+    write_task_document(temp.path(), "passed", "feature/passed");
+    write_task_run_file(
+        temp.path(),
+        "run-passed",
+        "passed",
+        "feature/passed",
+        "passed",
+        "",
+    );
     write_task_document(temp.path(), "running", "feature/running");
     write_task_run_file(
         temp.path(),
@@ -1314,7 +1321,7 @@ id = "PROJ-123"
     assert_eq!(invalid.len(), 1);
     assert_eq!(value.as_object().unwrap().len(), 2);
 
-    assert!(tasks.iter().all(|row| row["key"] != "done"));
+    assert!(tasks.iter().all(|row| row["key"] != "passed"));
     assert!(tasks.iter().all(|row| row["key"] != "running"));
     for key in ["failed", "no-run", "prepared", "skipped"] {
         assert!(
@@ -1375,7 +1382,7 @@ id = "PROJ-123"
     assert_eq!(all_tasks.len(), 7);
     assert_eq!(all_invalid.len(), 1);
     assert_eq!(all_value.as_object().unwrap().len(), 2);
-    assert!(all_tasks.iter().any(|row| row["key"] == "done"));
+    assert!(all_tasks.iter().any(|row| row["key"] == "passed"));
     assert!(all_tasks.iter().any(|row| row["key"] == "running"));
 }
 
@@ -1383,8 +1390,15 @@ id = "PROJ-123"
 fn task_list_text_includes_stable_task_fields_and_invalid_warning() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    write_task_document(temp.path(), "done", "feature/done");
-    write_task_run_file(temp.path(), "run-done", "done", "feature/done", "done", "");
+    write_task_document(temp.path(), "passed", "feature/passed");
+    write_task_run_file(
+        temp.path(),
+        "run-passed",
+        "passed",
+        "feature/passed",
+        "passed",
+        "",
+    );
     write_task_document(temp.path(), "running", "feature/running");
     write_task_run_file(
         temp.path(),
@@ -1429,7 +1443,7 @@ id = "PROJ-123"
         .stdout(predicate::str::contains(
             "2 tasks hidden; use wt task list --all to show the full inventory",
         ))
-        .stdout(predicate::str::contains("task done").not())
+        .stdout(predicate::str::contains("task passed").not())
         .stdout(predicate::str::contains("task running").not())
         .stdout(predicate::str::contains("Path:").not())
         .stdout(predicate::str::contains("Summary:").not())
@@ -1442,8 +1456,15 @@ id = "PROJ-123"
 fn task_list_all_text_keeps_full_grouped_inventory() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    write_task_document(temp.path(), "done", "feature/done");
-    write_task_run_file(temp.path(), "run-done", "done", "feature/done", "done", "");
+    write_task_document(temp.path(), "passed", "feature/passed");
+    write_task_run_file(
+        temp.path(),
+        "run-passed",
+        "passed",
+        "feature/passed",
+        "passed",
+        "",
+    );
     write_task_document(temp.path(), "running", "feature/running");
     write_task_run_file(
         temp.path(),
@@ -1481,8 +1502,8 @@ id = "PROJ-123"
         .stdout(predicate::str::contains("│ local"))
         .stdout(predicate::str::contains("task local"))
         .stdout(predicate::str::contains("branch feature/local"))
-        .stdout(predicate::str::contains("task done"))
-        .stdout(predicate::str::contains("branch feature/done"))
+        .stdout(predicate::str::contains("task passed"))
+        .stdout(predicate::str::contains("branch feature/passed"))
         .stdout(predicate::str::contains("task running"))
         .stdout(predicate::str::contains("branch feature/running"))
         .stdout(predicate::str::contains(
@@ -3469,7 +3490,7 @@ fn workflow_list_help_explains_canonical_inventory() {
             "reports invalid workflow TOML files",
         ))
         .stdout(predicate::str::contains(
-            "derived action labels such as runnable, waiting, and done",
+            "derived action labels such as runnable, waiting, and passed",
         ))
         .stdout(predicate::str::contains("<git-common-dir>/wt/workflows"))
         .stdout(predicate::str::contains(legacy_local_path("workflows")).not());
@@ -3639,7 +3660,7 @@ fn workflow_archive_moves_completed_workflow_out_of_active_inventory() {
         "run-archive-unique",
         "archive-unique",
         "archive-unique",
-        "done",
+        "passed",
         "2026-05-20-009",
     );
     write_workflow_file(
@@ -3700,6 +3721,7 @@ run = "run-archive-unique"
         Some("archive/workflows/2026-05-20-009/workflow.toml")
     );
     let task_runs = manifest["task_runs"].as_array().unwrap();
+    assert_eq!(task_runs[0]["status"].as_str(), Some("passed"));
     assert_eq!(
         task_runs[0]["source_path"].as_str(),
         Some("task-runs/run-archive-unique.toml")

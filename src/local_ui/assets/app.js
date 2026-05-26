@@ -341,7 +341,7 @@ const STRINGS = {
     statePrepared: "Prepared",
     stateRunning: "Running",
     stateWaiting: "Waiting",
-    stateDone: "Done",
+    statePassed: "Passed",
     stateSkipped: "Skipped",
     stateFailed: "Failed",
     stateError: "State error",
@@ -655,7 +655,7 @@ const STRINGS = {
     statePrepared: "준비됨",
     stateRunning: "실행 중",
     stateWaiting: "대기",
-    stateDone: "완료",
+    statePassed: "통과",
     stateSkipped: "건너뜀",
     stateFailed: "실패",
     stateError: "상태 오류",
@@ -3315,7 +3315,7 @@ function workflowUiGroup(row) {
   if (workflowNeedsAttention(row)) return "needs_attention";
   if (row.task_runs.running) return "running";
   if (row.presentation_group === "runnable") return "prepared";
-  if (row.presentation_group === "done") return "done";
+  if (row.presentation_group === "passed") return "passed";
   return "waiting";
 }
 
@@ -3589,15 +3589,15 @@ function sortedWorkflows(rows) {
 }
 
 function taskRunStatusOrder(status) {
-  return ["needs_attention", "running", "prepared", "done", "skipped", "failed"].indexOf(status) === -1
+  return ["needs_attention", "running", "prepared", "passed", "skipped", "failed"].indexOf(status) === -1
     ? 99
-    : ["needs_attention", "running", "prepared", "done", "skipped", "failed"].indexOf(status);
+    : ["needs_attention", "running", "prepared", "passed", "skipped", "failed"].indexOf(status);
 }
 
 function workflowGroupOrder(group) {
-  return ["needs_attention", "running", "prepared", "waiting", "done"].indexOf(group) === -1
+  return ["needs_attention", "running", "prepared", "waiting", "passed"].indexOf(group) === -1
     ? 99
-    : ["needs_attention", "running", "prepared", "waiting", "done"].indexOf(group);
+    : ["needs_attention", "running", "prepared", "waiting", "passed"].indexOf(group);
 }
 
 function countBy(rows, mapper) {
@@ -3616,7 +3616,7 @@ function statusColor(status) {
   if (status === "prepared" || status === "ready" || status === "running" || status === "landed") return "green";
   if (status === "failed" || status === "state_error" || status === "needs_attention") return "red";
   if (status === "skipped" || status === "waiting") return "amber";
-  if (status === "done") return "blue";
+  if (status === "passed") return "blue";
   return "";
 }
 
@@ -3630,7 +3630,7 @@ function stateLabel(value) {
     runnable: "statePrepared",
     running: "stateRunning",
     waiting: "stateWaiting",
-    done: "stateDone",
+    passed: "statePassed",
     skipped: "stateSkipped",
     failed: "stateFailed",
     state_error: "stateError",

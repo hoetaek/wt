@@ -402,7 +402,7 @@ struct TaskRunCounts {
     total: usize,
     prepared: usize,
     running: usize,
-    done: usize,
+    passed: usize,
     failed: usize,
     skipped: usize,
     missing: usize,
@@ -946,7 +946,7 @@ fn workflow_task_run_counts(ctx: &Ctx, metadata: &WorkflowMetadata) -> TaskRunCo
         total: workflow_run_ids(metadata).len(),
         prepared: 0,
         running: 0,
-        done: 0,
+        passed: 0,
         failed: 0,
         skipped: 0,
         missing: 0,
@@ -1010,7 +1010,7 @@ fn task_run_status_order(status: &str) -> usize {
     match status {
         "prepared" => 0,
         "running" => 1,
-        "done" => 2,
+        "passed" => 2,
         "skipped" => 3,
         "failed" => 4,
         _ => 5,
@@ -1032,7 +1032,7 @@ fn increment_status_count(counts: &mut TaskRunCounts, status: TaskRunStatus) {
     match status {
         TaskRunStatus::Prepared => counts.prepared += 1,
         TaskRunStatus::Running => counts.running += 1,
-        TaskRunStatus::Done => counts.done += 1,
+        TaskRunStatus::Passed => counts.passed += 1,
         TaskRunStatus::Failed => counts.failed += 1,
         TaskRunStatus::Skipped => counts.skipped += 1,
     }
@@ -1049,8 +1049,8 @@ fn workflow_presentation_group(
     if runnable.runnable {
         return "runnable".into();
     }
-    if counts.total > 0 && counts.done + counts.skipped == counts.total {
-        return "done".into();
+    if counts.total > 0 && counts.passed + counts.skipped == counts.total {
+        return "passed".into();
     }
     "waiting".into()
 }
@@ -2464,6 +2464,44 @@ mod tests {
                 (2, "matrix-b", Some("codex"), "run-b-codex"),
                 (2, "matrix-b", Some("claude"), "run-b-claude"),
             ]
+        );
+    }
+
+    #[test]
+    fn snapshot_groups_terminal_workflow_as_passed() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "passed-task",
+            "title = \"Passed task\"\nbranch = \"feature/passed\"\n",
+        );
+        write_task_run(
+            dir.path(),
+            "run-passed",
+            "task = \"passed-task\"\nbranch = \"feature/passed\"\nstatus = \"passed\"\ngroup = \"passed-workflow\"\ncreated_at = \"2026-05-18T00:00:00Z\"\nupdated_at = \"2026-05-18T00:00:00Z\"\n",
+        );
+        write_workflow(
+            dir.path(),
+            "passed-workflow",
+            "title = \"Passed workflow\"\nmode = \"single\"\nbase_mode = \"explicit\"\nbase = \"main\"\ncreated_at = \"2026-05-18T00:00:00Z\"\nupdated_at = \"2026-05-18T00:00:00Z\"\n\n[policy]\npull_request = \"none\"\nlanding = \"manual\"\n\n[[tasks]]\ntask = \"passed-task\"\nrun = \"run-passed\"\n",
+        );
+        let state = SnapshotState::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            "repo".into(),
+            Config::default(),
+            Config::default(),
+            ConfigSource::Default,
+        );
+
+        let snapshot = build(&state).unwrap();
+
+        assert_eq!(snapshot.task_runs.items[0].status, "passed");
+        assert_eq!(snapshot.workflows.items[0].task_runs.passed, 1);
+        assert_eq!(snapshot.workflows.items[0].presentation_group, "passed");
+        assert_eq!(
+            snapshot.workflows.items[0].task_run_groups[0].status,
+            "passed"
         );
     }
 

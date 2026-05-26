@@ -86,7 +86,7 @@ fn plan_archive(ctx: &Ctx, workflow: &str) -> Result<ArchivePlan> {
     let offenders = unfinished_task_runs(&task_run_refs);
     if !offenders.is_empty() {
         bail!(
-            "Cannot archive workflow {workflow_id}; linked TaskRuns must be done or skipped. Offending runs: {}",
+            "Cannot archive workflow {workflow_id}; linked TaskRuns must be passed or skipped. Offending runs: {}",
             offenders.join(", ")
         );
     }
@@ -297,7 +297,7 @@ fn workflow_task_run_refs(ctx: &Ctx, metadata: &WorkflowMetadata) -> Result<Vec<
 fn unfinished_task_runs(refs: &[TaskRunRef]) -> Vec<String> {
     refs.iter()
         .filter(|reference| {
-            reference.exists && !matches!(reference.status.as_str(), "done" | "skipped")
+            reference.exists && !matches!(reference.status.as_str(), "passed" | "skipped")
         })
         .map(|reference| format!("{} ({})", reference.id, reference.status))
         .collect()
@@ -562,8 +562,8 @@ updated_at = "2026-05-20T00:00:00Z"
     }
 
     #[test]
-    fn archive_allows_only_done_or_skipped_existing_task_runs() {
-        for status in ["done", "skipped"] {
+    fn archive_allows_only_passed_or_skipped_existing_task_runs() {
+        for status in ["passed", "skipped"] {
             let dir = tempfile::tempdir().unwrap();
             let ctx = ctx(dir.path());
             write_task(dir.path(), status);
@@ -604,12 +604,12 @@ updated_at = "2026-05-20T00:00:00Z"
     fn archive_requires_explicit_workflow_key() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        write_task(dir.path(), "done");
-        write_task_run(dir.path(), "run-done", "done", "done", "wf");
+        write_task(dir.path(), "passed");
+        write_task_run(dir.path(), "run-passed", "passed", "passed", "wf");
         write_workflow(
             dir.path(),
             "wf",
-            vec![WorkflowTask::new("done", "run-done")],
+            vec![WorkflowTask::new("passed", "run-passed")],
         );
 
         let latest = format!("{:#}", run(&ctx, "latest").unwrap_err());
@@ -633,7 +633,7 @@ updated_at = "2026-05-20T00:00:00Z"
             ("run-shared", "shared"),
             ("run-missing", "missing"),
         ] {
-            write_task_run(dir.path(), run, task, "done", "wf");
+            write_task_run(dir.path(), run, task, "passed", "wf");
         }
         write_task_run(dir.path(), "run-other", "shared", "prepared", "other");
         write_workflow(

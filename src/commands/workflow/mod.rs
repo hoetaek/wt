@@ -9,7 +9,7 @@ use crate::task::{self as task_store, PreparedTask};
 #[cfg(test)]
 use crate::task_run::{self, STATUS_PREPARED};
 #[cfg(test)]
-use crate::task_run::{STATUS_DONE, STATUS_FAILED, STATUS_RUNNING, STATUS_SKIPPED};
+use crate::task_run::{STATUS_FAILED, STATUS_PASSED, STATUS_RUNNING, STATUS_SKIPPED};
 use crate::workflow as workflow_store;
 #[cfg(test)]
 use crate::workflow::planner::parent_for_stack_task;
@@ -1015,7 +1015,7 @@ cli = "none"
             Box::new(MockRunner::new()),
             Box::new(ui),
         );
-        task_run::create(&ctx, "add-schema", "add-schema", None, STATUS_DONE).unwrap();
+        task_run::create(&ctx, "add-schema", "add-schema", None, STATUS_PASSED).unwrap();
 
         task(
             &ctx,
@@ -1193,7 +1193,7 @@ cli = "none"
         update_task_run(
             &ctx,
             &record.workflow.tasks[0],
-            STATUS_DONE,
+            STATUS_PASSED,
             Some("finished-stack"),
         );
         update_task_run(&ctx, &record.workflow.tasks[1], STATUS_FAILED, None);
@@ -1439,7 +1439,7 @@ cli = "none"
     }
 
     #[test]
-    fn workflow_complete_marks_one_matrix_profile_run_done() {
+    fn workflow_complete_marks_one_matrix_profile_run_passed() {
         let dir = tempfile::tempdir().unwrap();
         write_profile(dir.path(), "alpha");
         write_profile(dir.path(), "beta");
@@ -1473,7 +1473,7 @@ cli = "none"
 
         let alpha = task_run_record(&ctx, &row.runs[0].run).unwrap();
         let beta = task_run_record(&ctx, &row.runs[1].run).unwrap();
-        assert_eq!(alpha.status, STATUS_DONE);
+        assert_eq!(alpha.status, STATUS_PASSED);
         assert_eq!(beta.status, STATUS_RUNNING);
     }
 
@@ -1864,7 +1864,7 @@ landing = "auto"
         task_run::update(
             &ctx,
             &record.workflow.tasks[0].run,
-            STATUS_DONE,
+            STATUS_PASSED,
             Some("schema"),
             None,
         )
@@ -1887,7 +1887,7 @@ landing = "auto"
     }
 
     #[test]
-    fn workflow_complete_marks_non_stack_workflow_tasks_done() {
+    fn workflow_complete_marks_non_stack_workflow_tasks_passed() {
         for mode in [WorkflowModeArg::Single, WorkflowModeArg::Batch] {
             let dir = tempfile::tempdir().unwrap();
             let ctx = ctx(dir.path());
@@ -1905,7 +1905,7 @@ landing = "auto"
                 task_run_record(&ctx, &record.workflow.tasks[0].run)
                     .unwrap()
                     .status,
-                STATUS_DONE
+                STATUS_PASSED
             );
         }
     }
@@ -2174,7 +2174,7 @@ landing = "auto"
 
         assert_eq!(
             task_run_record(&ctx, &first_run).unwrap().status,
-            STATUS_DONE
+            STATUS_PASSED
         );
         assert_eq!(
             task_run_record(&ctx, &second_run).unwrap().status,
@@ -2608,12 +2608,12 @@ landing = "auto"
         let ctx = ctx(dir.path());
 
         let prepared = prepare_workflow(&ctx, WorkflowModeArg::Single, &["ready single"]);
-        let done = prepare_workflow(&ctx, WorkflowModeArg::Single, &["done single"]);
+        let passed = prepare_workflow(&ctx, WorkflowModeArg::Single, &["passed single"]);
         update_task_run(
             &ctx,
-            &done.workflow.tasks[0],
-            STATUS_DONE,
-            Some("done-single"),
+            &passed.workflow.tasks[0],
+            STATUS_PASSED,
+            Some("passed-single"),
         );
         let running = prepare_workflow(&ctx, WorkflowModeArg::Single, &["running single"]);
         update_task_run(
@@ -2642,20 +2642,20 @@ landing = "auto"
             STATUS_RUNNING,
             Some("running-batch"),
         );
-        let done_only = prepare_workflow(
+        let passed_only = prepare_workflow(
             &ctx,
             WorkflowModeArg::Batch,
-            &["done batch", "skipped batch"],
+            &["passed batch", "skipped batch"],
         );
         update_task_run(
             &ctx,
-            &done_only.workflow.tasks[0],
-            STATUS_DONE,
-            Some("done-batch"),
+            &passed_only.workflow.tasks[0],
+            STATUS_PASSED,
+            Some("passed-batch"),
         );
         update_task_run(
             &ctx,
-            &done_only.workflow.tasks[1],
+            &passed_only.workflow.tasks[1],
             STATUS_SKIPPED,
             Some("skipped-batch"),
         );
@@ -2692,24 +2692,24 @@ landing = "auto"
         update_task_run(
             &ctx,
             &retry_second.workflow.tasks[0],
-            STATUS_DONE,
+            STATUS_PASSED,
             Some("finished-stack"),
         );
         update_task_run(&ctx, &retry_second.workflow.tasks[1], STATUS_FAILED, None);
-        let done_only = prepare_workflow(
+        let passed_only = prepare_workflow(
             &ctx,
             WorkflowModeArg::Stack,
-            &["done stack", "skipped stack"],
+            &["passed stack", "skipped stack"],
         );
         update_task_run(
             &ctx,
-            &done_only.workflow.tasks[0],
-            STATUS_DONE,
-            Some("done-stack"),
+            &passed_only.workflow.tasks[0],
+            STATUS_PASSED,
+            Some("passed-stack"),
         );
         update_task_run(
             &ctx,
-            &done_only.workflow.tasks[1],
+            &passed_only.workflow.tasks[1],
             STATUS_SKIPPED,
             Some("skipped-stack"),
         );
@@ -2867,12 +2867,12 @@ landing = "auto"
         let dir = tempfile::tempdir().unwrap();
         let ui = Arc::new(MockUi::new());
         let ctx = ctx_with_ui(dir.path(), Arc::clone(&ui));
-        let workflow = prepare_workflow(&ctx, WorkflowModeArg::Single, &["already done"]);
+        let workflow = prepare_workflow(&ctx, WorkflowModeArg::Single, &["already passed"]);
         update_task_run(
             &ctx,
             &workflow.workflow.tasks[0],
-            STATUS_DONE,
-            Some("already-done"),
+            STATUS_PASSED,
+            Some("already-passed"),
         );
         let run_path = task_run::resolve(&ctx, &workflow.workflow.tasks[0].run).unwrap();
         let workflow_before = fs::read_to_string(&workflow.path).unwrap();

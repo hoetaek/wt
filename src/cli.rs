@@ -196,7 +196,7 @@ pub enum Commands {
     },
     /// Remove worktrees, clean integrations, and delete local branches
     #[command(
-        long_about = "Remove checked-out worktrees, clean integrations, mark matching direct running TaskRuns done, and delete local branches.\n\nPass branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id. Workflow-linked TaskRun ids are completed with `wt workflow complete`, not `wt done`. Omit TARGETS to choose worktrees interactively."
+        long_about = "Remove checked-out worktrees, clean integrations, mark matching direct running TaskRuns passed, and delete local branches.\n\nPass branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id. Workflow-linked TaskRun ids are completed with `wt workflow complete`, not `wt done`. Omit TARGETS to choose worktrees interactively."
     )]
     Done {
         /// Branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id to remove
@@ -760,10 +760,10 @@ pub enum InitSiteProvider {
 pub enum TaskCommand {
     /// List actionable local TaskDocument files
     #[command(
-        long_about = "List actionable <git-common-dir>/wt/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is done or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nEach mode reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
+        long_about = "List actionable <git-common-dir>/wt/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is passed or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nEach mode reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
     )]
     List {
-        /// Show the full TaskDocument inventory, including done and running tasks
+        /// Show the full TaskDocument inventory, including passed and running tasks
         #[arg(long)]
         all: bool,
     },
@@ -832,12 +832,12 @@ pub enum TaskCommand {
 pub enum WorkflowCommand {
     /// List saved workflow files
     #[command(
-        long_about = "List all saved <git-common-dir>/wt/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and done, with indented rows and secondary detail lines."
+        long_about = "List all saved <git-common-dir>/wt/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and passed, with indented rows and secondary detail lines."
     )]
     List,
     /// Move completed workflow state into the frozen archive
     #[command(
-        long_about = "Move a completed Workflow out of the active surface into <git-common-dir>/wt/archive/workflows/<workflow-id>/.\n\nArchive is a visibility and retention action: wt workflow list, wt task list, and wt ui stop showing the archived workflow because active inventory reads only typed active directories. It is not a substitute for landing, merge checks, wt workflow complete, or wt done. Only workflows whose linked TaskRuns are done or skipped can be archived."
+        long_about = "Move a completed Workflow out of the active surface into <git-common-dir>/wt/archive/workflows/<workflow-id>/.\n\nArchive is a visibility and retention action: wt workflow list, wt task list, and wt ui stop showing the archived workflow because active inventory reads only typed active directories. It is not a substitute for landing, merge checks, wt workflow complete, or wt done. Only workflows whose linked TaskRuns are passed or skipped can be archived."
     )]
     Archive {
         /// Workflow key under <git-common-dir>/wt/workflows/<workflow>.toml
