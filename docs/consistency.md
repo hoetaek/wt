@@ -198,6 +198,16 @@ Spec-backed work의 retrospective는 기본적으로 `specs/<slug>/11-retrospect
 spec이 없는 legacy/direct work, 또는 의도적으로 한 spec에 묶이지 않는 회고의 fallback이다.
 새 per-work retrospective를 전역 `retrospectives/` 아래에 만들지 않는다.
 
+`11-retrospect.md`는 작업별 timing record를 포함한다. 최소한 TaskDocument의 expected
+duration, estimate basis, 실제 시작/종료/elapsed, 최초 meaningful signal, 사용한
+`wt agent watch` cadence, `needs_input`/report 전이, 개입 이유, 다음 추정 조정을 적는다.
+Spec-backed workflow는 workflow 전체 요약만 쓰지 말고 task/slice별 timing entry를 둔다.
+Cross-work timing 보정은 `<git-common-dir>/wt/retrospectives/timing.md` 같은 rolling
+retrospective에 축약할 수 있지만, 이것은 여러 작업을 가로지르는 학습 기록이지 per-work
+`11-retrospect.md`의 대체물이 아니다. `agent.state/wait-observations.jsonl`과
+`wt agent wait-stats`는 watch heartbeat/timeout 관측 증거로 인용할 수 있으나, 실제 작업
+소요시간의 canonical source로 보지 않는다.
+
 ### Worktree Identity
 
 Worktree identity는 안정적 id와 human label을 분리한다.
@@ -1003,6 +1013,14 @@ TaskDocument는 작업이 무엇인지를 담는 실행 정의다. `<git-common-
 있는 작업에서는 자세한 requirements/design/tasks prep artifact가
 `<git-common-dir>/wt/specs/<slug>/`에 병렬로 존재할 수 있고, TaskDocument body는 그 경로를
 가리키는 launch summary로 남는다.
+
+`wt scaffold --task`가 만드는 TaskDocument body의 `계획 (Planning)` section은
+agent에게 맡길 작업의 deterministic launch contract다. 새로 준비되는 TaskDocument는 최소한
+expected duration, estimate basis, suggested watch cadence, blocked by/dependency,
+execution shape, size class, acceptance checks를 적는다. Provider issue import처럼 외부
+본문을 그대로 보존하는 TaskDocument는 이 section이 없을 수 있으므로 CLI는 단순 TOML read
+중에 planning body를 자동 생성하거나 provider body를 덮어쓰지 않는다. `wt-ready` /
+`wt-start` coordinator flow가 launch 전에 부족한 planning 정보를 채우는 소유자다.
 
 `wt task list`는 `<git-common-dir>/wt/tasks/<task>.toml`에 저장된 TaskDocument file 중
 actionable working set을 보여주는 canonical read-only list다. Bare `wt task list`는

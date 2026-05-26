@@ -93,6 +93,8 @@ impl TaskDocument {
             body: "## 계획 (Planning)\n\n\
 - 유형 (type): AFK\n\
 - 예상 소요 (expected duration): \n\
+- 예상 근거 (estimate basis): conservative planning guess\n\
+- 권장 watch cadence (suggested watch cadence): launch 45s, steady heartbeat 5-10m\n\
 - 막힘 / 의존성 (blocked by): none\n\
 - 실행 형태 (execution shape): direct\n\
 - 크기 (size class): small\n\
@@ -659,6 +661,19 @@ mod tests {
         };
 
         assert_eq!(task_selection_label(&task), "local-task  branch local-task");
+    }
+
+    #[test]
+    fn empty_task_document_includes_timing_and_watch_planning_fields() {
+        let task = TaskDocument::empty("foo");
+
+        assert!(task.body.contains("## 계획 (Planning)"));
+        assert!(task.body.contains("예상 소요 (expected duration)"));
+        assert!(task.body.contains("예상 근거 (estimate basis)"));
+        assert!(
+            task.body
+                .contains("권장 watch cadence (suggested watch cadence)")
+        );
     }
 
     #[test]

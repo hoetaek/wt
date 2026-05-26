@@ -36,8 +36,10 @@ Apply these skills in order:
 5. `wt-land`: respect workflow landing policy, perform any applicable
    completion step, land branches in the right order, prove ancestry, and clean
    up with `wt done`.
-6. `wt-retrospect`: capture keep/problem/try lessons, action candidates, and
-   harness-tuning records as a TOML retrospective when a useful lesson emerged.
+6. `wt-retrospect`: after each closed work item, capture keep/problem/try
+   lessons, action candidates, harness-tuning records, expected vs actual
+   duration, and watch-cadence evidence. Write the timing entry even when there
+   was no broader lesson.
 
 Carry the user's original context through every phase. Stop only when a
 phase's own guardrail blocks progress, such as unresolved HITL decisions, active

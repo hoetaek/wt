@@ -55,6 +55,12 @@ Useful evidence:
 - current persisted state such as `<git-common-dir>/wt/tasks` and `<git-common-dir>/wt/workflows`
 - command help for user-facing CLI contracts
 - tests or small local experiments for uncertain behavior
+- spec-local retrospectives and the cross-work timing baseline at
+  `<git-common-dir>/wt/retrospectives/timing.md` for similar task type, size,
+  agent/profile, and coordination shape
+- `wt agent wait-stats` as a read-only summary of prior non-idle watch
+  observations; use it as evidence for cadence and uncertainty, not as the
+  source of actual task duration
 - external references only when the user asks or the decision depends on current
   best practice outside the repo
 
@@ -132,15 +138,21 @@ For each slice, record:
 - blocked by
 - execution shape: direct, batch, stack, separate workflow, or direct local edit
 - expected duration before first coordinator review, such as `20m`, `45m`, or
-  `2h`; use a conservative estimate or range when uncertain
+  `2h`; derive this from similar retrospectives when available, otherwise mark
+  it as a conservative planning guess or range
+- estimate basis: previous `11-retrospect.md`, cross-work `timing.md`,
+  `wt agent wait-stats`, user-provided target, or conservative planning guess
+- suggested watch cadence: launch validation and steady heartbeat interval for
+  `wt-coordinate`, based on expected duration and prior timing evidence
 - acceptance checks
 - notes for experiments or tradeoffs that shaped the slice
 
 Record this planning context in the TaskDocument `body` as a text section, not
 as top-level TOML fields (only canonical task fields are accepted). Every
 TaskDocument or workflow task must include an expected duration in its
-`계획 (Planning)` body section before `wt-start`. Prefer Korean human-facing
-labels with the stable English key in parentheses.
+`계획 (Planning)` body section before `wt-start`, plus the estimate basis when
+known. Prefer Korean human-facing labels with the stable English key in
+parentheses.
 
 Example body section:
 
@@ -148,6 +160,8 @@ Example body section:
 ## 계획 (Planning)
 - 유형 (type): AFK
 - 예상 소요 (expected duration): 45m
+- 예상 근거 (estimate basis): conservative planning guess
+- 권장 watch cadence (suggested watch cadence): launch 45s, steady heartbeat 5-10m
 - 막힘 / 의존성 (blocked by): workflow-policy-contract-simplified
 - 실행 형태 (execution shape): stack child
 - 크기 (size class): medium
@@ -372,6 +386,8 @@ idea file existing first.
   - **연결된 workflow TOML**: `<git-common-dir>/wt/workflows/<id>.toml` when
     applicable; `none` otherwise.
   - **wt-start target**: exact command or target for execution launch.
+  - **시간 가정 / watch cadence**: expected duration, estimate basis, launch
+    validation cadence, and steady watch cadence to hand to `wt-coordinate`.
   - **리스크**: anything to watch when execution starts.
 - When mode = `none`, `09-execution.md` may be very brief (one paragraph plus the
   slice → TaskDocument mapping) or omitted entirely.
@@ -491,7 +507,7 @@ Report:
 - selected approach and rejected alternatives
 - output concept
 - slice list with dependencies and chosen execution shape
-- expected duration per slice (firm or conservative planning guess)
+- expected duration per slice, with estimate basis and suggested watch cadence
 - PR/landing policy source: `[workflow]` config, CLI/workflow override, or
   explicit user answer
 - exact next command or target for `wt-start`
