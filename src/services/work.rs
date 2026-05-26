@@ -1127,9 +1127,9 @@ mod tests {
     #[test]
     fn resolve_target_accepts_task_run_id_target() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1191,9 +1191,9 @@ mod tests {
     #[test]
     fn resolve_target_rejects_task_run_id_branch_collision() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1215,9 +1215,9 @@ mod tests {
     #[test]
     fn resolve_target_accepts_explicit_task_run_path_collision() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".git/wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1226,8 +1226,11 @@ mod tests {
         add_worktree_list(&mut runner, &fixture);
         let ctx = fixture.ctx(runner);
 
-        let target =
-            resolve_target(&ctx, Some("<git-common-dir>/wt/task-runs/run-feature.toml")).unwrap();
+        let target = resolve_target(
+            &ctx,
+            Some("<git-common-dir>/wt/execution/task-runs/run-feature.toml"),
+        )
+        .unwrap();
 
         assert_eq!(target.label, "run-feature");
         assert_eq!(target.branch, "feature");

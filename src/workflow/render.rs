@@ -377,7 +377,7 @@ pub(crate) fn workflow_single_task_prompt_content(content: &str) -> String {
     workflow_task_prompt_content(
         content,
         &workflow_single_task_handoff_section(
-            Path::new("/repo/.git/wt/workflows/test.toml"),
+            Path::new("/repo/.git/wt/execution/workflows/test.toml"),
             Some(&WorkflowTask::new("task", "run-task")),
             &default_workflow_policy(),
             TEST_WORKFLOW_BASE,
@@ -394,7 +394,7 @@ pub(crate) fn workflow_single_task_prompt_content_for_policy(
     workflow_task_prompt_content(
         content,
         &workflow_single_task_handoff_section(
-            Path::new("/repo/.git/wt/workflows/test.toml"),
+            Path::new("/repo/.git/wt/execution/workflows/test.toml"),
             Some(&WorkflowTask::new("task", "run-task")),
             policy,
             TEST_WORKFLOW_BASE,
@@ -412,7 +412,7 @@ pub(crate) fn workflow_single_task_prompt_content_for_policy_and_closing_refs(
     workflow_task_prompt_content(
         content,
         &workflow_single_task_handoff_section(
-            Path::new("/repo/.git/wt/workflows/test.toml"),
+            Path::new("/repo/.git/wt/execution/workflows/test.toml"),
             Some(&WorkflowTask::new("task", "run-task")),
             policy,
             TEST_WORKFLOW_BASE,
@@ -427,7 +427,7 @@ pub(crate) fn workflow_batch_task_prompt_content(content: &str) -> String {
     workflow_task_prompt_content(
         content,
         &workflow_batch_task_handoff_section(
-            Path::new("/repo/.git/wt/workflows/test.toml"),
+            Path::new("/repo/.git/wt/execution/workflows/test.toml"),
             &row,
             &default_workflow_policy(),
             TEST_WORKFLOW_BASE,
@@ -445,7 +445,7 @@ pub(crate) fn workflow_batch_task_prompt_content_for_policy(
     workflow_task_prompt_content(
         content,
         &workflow_batch_task_handoff_section(
-            Path::new("/repo/.git/wt/workflows/test.toml"),
+            Path::new("/repo/.git/wt/execution/workflows/test.toml"),
             &row,
             policy,
             TEST_WORKFLOW_BASE,

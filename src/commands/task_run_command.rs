@@ -354,7 +354,7 @@ mod tests {
     }
 
     fn write_empty_profile(root: &Path, name: &str) {
-        let profile_dir = root.join(".git/wt/profiles").join(name);
+        let profile_dir = root.join(".git/wt/config/profiles").join(name);
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
     }
@@ -454,7 +454,7 @@ mod tests {
     #[test]
     fn duplicate_task_values_are_rejected() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -490,7 +490,7 @@ mod tests {
     #[test]
     fn task_run_with_key_runs_named_task_snapshot() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn task_run_auto_records_route_fields_without_launcher_identity() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -632,7 +632,7 @@ mod tests {
     #[test]
     fn task_run_uses_task_workspace_color_for_local_task() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -664,7 +664,7 @@ mod tests {
     #[test]
     fn task_run_uses_task_workspace_color_for_provider_origin_task() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("PROJ-123.toml"),
@@ -712,7 +712,7 @@ id = "PROJ-123"
     #[test]
     fn task_run_prompt_includes_rendered_coordinator_handoff() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -804,12 +804,18 @@ id = "PROJ-123"
         assert!(handoff_prompt.contains("wt task report \"Agent Completion Report"));
         assert!(handoff_prompt.contains("If the file inbox route is unavailable"));
         assert!(handoff_prompt.contains("If `wt task report` fails"));
-        assert!(!handoff_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
+        assert!(
+            !handoff_prompt
+                .contains("Task path: `<git-common-dir>/wt/execution/tasks/add-schema.toml`")
+        );
         assert!(!handoff_prompt.contains("Create the schema first."));
         assert!(!handoff_prompt.contains("wt workflow complete"));
 
         let task_prompt = send_calls[1].1.last().unwrap();
-        assert!(task_prompt.contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
+        assert!(
+            task_prompt
+                .contains("Task path: `<git-common-dir>/wt/execution/tasks/add-schema.toml`")
+        );
         assert!(task_prompt.contains("Create the schema first."));
         assert!(task_prompt.contains("Existing prompt"));
     }
@@ -817,7 +823,7 @@ id = "PROJ-123"
     #[test]
     fn task_run_records_failed_when_agent_prompt_delivery_fails() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -901,7 +907,7 @@ id = "PROJ-123"
     #[test]
     fn task_run_with_key_records_new_run_after_prior_done() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -971,7 +977,7 @@ id = "PROJ-123"
     #[test]
     fn bare_task_run_selects_local_tasks() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("a-first.toml"),
@@ -1037,7 +1043,7 @@ id = "PROJ-123"
     #[test]
     fn task_run_multiple_keys_start_separate_worktrees() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
@@ -1136,7 +1142,7 @@ id = "PROJ-123"
     #[test]
     fn task_run_updates_task_and_run_branch_from_issue_origin() {
         let repo = tempfile::tempdir().unwrap();
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("PROJ-123.toml"),
@@ -1191,7 +1197,8 @@ id = "PROJ-123"
         run(&ctx, &["PROJ-123".into()], &None, None, &[], false).unwrap();
 
         let task_content =
-            std::fs::read_to_string(repo.path().join(".git/wt/tasks/PROJ-123.toml")).unwrap();
+            std::fs::read_to_string(repo.path().join(".git/wt/execution/tasks/PROJ-123.toml"))
+                .unwrap();
         assert!(task_content.contains("branch = \"alice/proj-123-fix-editor\""));
 
         let latest = task_run::latest_for_task(&ctx, "PROJ-123")
@@ -1218,7 +1225,7 @@ id = "PROJ-123"
     fn task_run_with_provider_origin_and_profile_updates_start_status() {
         let repo = tempfile::tempdir().unwrap();
         write_empty_profile(repo.path(), "codex");
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("PROJ-123.toml"),
@@ -1287,7 +1294,7 @@ id = "PROJ-123"
     fn task_run_with_local_task_and_profile_does_not_touch_issue_provider() {
         let repo = tempfile::tempdir().unwrap();
         write_empty_profile(repo.path(), "codex");
-        let tasks_dir = repo.path().join(".git/wt/tasks");
+        let tasks_dir = repo.path().join(".git/wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("add-schema.toml"),
