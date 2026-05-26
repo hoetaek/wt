@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 const WT_AGENT_ID_TEMPLATE_KEY: &str = "wt_agent_id";
+const WT_TASK_RUN_ID_TEMPLATE_KEY: &str = "wt_task_run_id";
 const WT_COORDINATOR_AGENT_ID_TEMPLATE_KEY: &str = "wt_coordinator_agent_id";
 
 pub(crate) fn agent_launch_command(
@@ -38,6 +39,13 @@ fn inject_agent_identity_env(
         .filter(|agent_id| !agent_id.trim().is_empty())
     {
         exports.push(format!("WT_AGENT_ID={}", shell_arg(agent_id)));
+    }
+    if let Some(task_run_id) = vars
+        .get(WT_TASK_RUN_ID_TEMPLATE_KEY)
+        .map(String::as_str)
+        .filter(|task_run_id| !task_run_id.trim().is_empty())
+    {
+        exports.push(format!("WT_TASK_RUN_ID={}", shell_arg(task_run_id)));
     }
     if let Some(coordinator_agent_id) = vars
         .get(WT_COORDINATOR_AGENT_ID_TEMPLATE_KEY)
@@ -207,4 +215,31 @@ fn shell_arg(value: &str) -> String {
     }
 
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_launch_command_injects_task_run_identity_without_empty_coordinator() {
+        let agent = AgentConfig {
+            cli: AgentCli::Codex,
+            command: Some("codex".into()),
+            ..AgentConfig::default()
+        };
+        let vars = HashMap::from([
+            ("wt_agent_id".into(), "agents/run-1-add-schema".into()),
+            ("wt_task_run_id".into(), "run-add-schema".into()),
+            ("wt_coordinator_agent_id".into(), String::new()),
+        ]);
+
+        let command = agent_launch_command(Some(&agent), &vars).unwrap();
+
+        assert_eq!(
+            command,
+            "export WT_AGENT_ID=agents/run-1-add-schema WT_TASK_RUN_ID=run-add-schema; codex"
+        );
+        assert!(!command.contains("WT_COORDINATOR_AGENT_ID"));
+    }
 }

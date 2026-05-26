@@ -1216,10 +1216,8 @@ fn run_task_help_explains_task_execution() {
         .success()
         .stdout(predicate::str::contains("one worktree per selected"))
         .stdout(predicate::str::contains("direct TaskRun"))
-        .stdout(predicate::str::contains("Task Run Coordinator Handoff"))
-        .stdout(predicate::str::contains(
-            "coordinator inbox target `coordinator`",
-        ))
+        .stdout(predicate::str::contains("wt task report"))
+        .stdout(predicate::str::contains("Agent Completion Report"))
         .stdout(predicate::str::contains("Task-run agents report PR=none"))
         .stdout(predicate::str::contains("wt workflow task --mode batch"))
         .stdout(predicate::str::contains("wt workflow task --mode single"))

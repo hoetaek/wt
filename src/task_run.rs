@@ -1,4 +1,5 @@
 use crate::context::Ctx;
+use crate::messages::AgentId;
 use crate::task;
 use crate::workflow::{self, WorkflowMode};
 use anyhow::{Context, Result, bail};
@@ -83,7 +84,11 @@ pub(crate) struct TaskRun {
     pub(crate) group: Option<String>,
     pub(crate) error: Option<String>,
     pub(crate) creation_order: Option<u64>,
+    pub(crate) agent_id: Option<String>,
     pub(crate) coordinator_id: Option<String>,
+    pub(crate) coordinator_label: Option<String>,
+    pub(crate) last_report_message_id: Option<String>,
+    pub(crate) last_reported_at: Option<String>,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
 }
@@ -109,7 +114,15 @@ struct RawTaskRun {
     #[serde(default)]
     creation_order: Option<u64>,
     #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
     coordinator_id: Option<String>,
+    #[serde(default)]
+    coordinator_label: Option<String>,
+    #[serde(default)]
+    last_report_message_id: Option<String>,
+    #[serde(default)]
+    last_reported_at: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -128,7 +141,11 @@ impl TryFrom<RawTaskRun> for TaskRun {
             group: raw.group,
             error: raw.error,
             creation_order: raw.creation_order,
+            agent_id: raw.agent_id,
             coordinator_id: raw.coordinator_id,
+            coordinator_label: raw.coordinator_label,
+            last_report_message_id: raw.last_report_message_id,
+            last_reported_at: raw.last_reported_at,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
         };
@@ -141,6 +158,13 @@ impl TryFrom<RawTaskRun> for TaskRun {
 struct TaskRunCreationOrder {
     #[serde(default)]
     creation_order: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TaskRunRoutes<'a> {
+    agent_id: Option<&'a str>,
+    coordinator_id: Option<&'a str>,
+    coordinator_label: Option<&'a str>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,16 +226,71 @@ pub(crate) fn create_with_coordinator_id(
     coordinator_id: Option<&str>,
     status: TaskRunStatus,
 ) -> Result<TaskRunRecord> {
+    create_with_routes(
+        ctx,
+        task,
+        branch,
+        group,
+        TaskRunRoutes {
+            coordinator_id,
+            ..TaskRunRoutes::default()
+        },
+        status,
+    )
+}
+
+pub(crate) fn create_direct_routed(
+    ctx: &Ctx,
+    task: &str,
+    branch: &str,
+    coordinator_id: &str,
+    coordinator_label: Option<&str>,
+    status: TaskRunStatus,
+) -> Result<TaskRunRecord> {
+    create_with_routes(
+        ctx,
+        task,
+        branch,
+        None,
+        TaskRunRoutes {
+            coordinator_id: Some(coordinator_id),
+            coordinator_label,
+            ..TaskRunRoutes::default()
+        },
+        status,
+    )
+}
+
+fn create_with_routes(
+    ctx: &Ctx,
+    task: &str,
+    branch: &str,
+    group: Option<&str>,
+    routes: TaskRunRoutes<'_>,
+    status: TaskRunStatus,
+) -> Result<TaskRunRecord> {
     let now = current_utc_timestamp();
     let creation_order = next_creation_order(ctx)?;
+    let task_key = task::safe_task_key(task);
+    let agent_id = match routes.agent_id.and_then(optional_string) {
+        Some(agent_id) => Some(agent_id),
+        None if routes.coordinator_id.is_some() && group.is_none() => {
+            Some(generated_task_agent_id(creation_order, &task_key)?)
+        }
+        None => None,
+    };
     let run = TaskRun {
-        task: task::safe_task_key(task),
+        task: task_key,
         branch: branch.to_string(),
         status,
         group: group.and_then(optional_string),
         error: None,
         creation_order: Some(creation_order),
-        coordinator_id: coordinator_id.and_then(optional_string),
+        agent_id,
+        coordinator_id: routes.coordinator_id.and_then(optional_string),
+        coordinator_label: routes.coordinator_label.and_then(optional_string),
+        last_report_message_id: None,
+        last_reported_at: None,
         created_at: now.clone(),
         updated_at: now,
     };
@@ -338,6 +417,24 @@ pub(crate) fn update(
     })
 }
 
+pub(crate) fn update_report_metadata(
+    record: &TaskRunRecord,
+    message_id: &str,
+) -> Result<TaskRunRecord> {
+    let mut run = read(&record.path)?;
+    let now = current_utc_timestamp();
+    run.last_report_message_id = optional_string(message_id);
+    run.last_reported_at = Some(now.clone());
+    run.updated_at = now;
+    write(&record.path, &run)?;
+
+    Ok(TaskRunRecord {
+        id: record.id.clone(),
+        path: record.path.clone(),
+        run,
+    })
+}
+
 pub(crate) fn delete_record(record: &TaskRunRecord) -> Result<()> {
     match fs::remove_file(&record.path) {
         Ok(()) => Ok(()),
@@ -445,11 +542,29 @@ fn write(path: &Path, run: &TaskRun) -> Result<()> {
     if let Some(creation_order) = run.creation_order {
         content.push_str(&format!("creation_order = {creation_order}\n"));
     }
+    if let Some(agent_id) = run.agent_id.as_deref() {
+        content.push_str(&format!("agent_id = {}\n", toml_quote(agent_id)));
+    }
     if let Some(coordinator_id) = run.coordinator_id.as_deref() {
         content.push_str(&format!(
             "coordinator_id = {}\n",
             toml_quote(coordinator_id)
         ));
+    }
+    if let Some(coordinator_label) = run.coordinator_label.as_deref() {
+        content.push_str(&format!(
+            "coordinator_label = {}\n",
+            toml_quote(coordinator_label)
+        ));
+    }
+    if let Some(message_id) = run.last_report_message_id.as_deref() {
+        content.push_str(&format!(
+            "last_report_message_id = {}\n",
+            toml_quote(message_id)
+        ));
+    }
+    if let Some(reported_at) = run.last_reported_at.as_deref() {
+        content.push_str(&format!("last_reported_at = {}\n", toml_quote(reported_at)));
     }
     content.push_str(&format!("created_at = {}\n", toml_quote(&run.created_at)));
     content.push_str(&format!("updated_at = {}\n", toml_quote(&run.updated_at)));
@@ -464,6 +579,9 @@ fn validate_run(run: &TaskRun) -> Result<()> {
     }
     if matches!(run.creation_order, Some(0)) {
         bail!("Task run creation_order must be greater than 0");
+    }
+    if let Some(agent_id) = run.agent_id.as_deref() {
+        AgentId::parse(agent_id).context("Invalid TaskRun agent_id")?;
     }
     Ok(())
 }
@@ -569,6 +687,13 @@ fn task_run_id_base(run: &TaskRun) -> String {
         .map(task::safe_task_key)
         .collect::<Vec<_>>()
         .join("-")
+}
+
+fn generated_task_agent_id(creation_order: u64, task_key: &str) -> Result<String> {
+    let task_key = task::safe_task_key(task_key);
+    AgentId::parse(&format!("agents/run-{creation_order}-{task_key}"))
+        .map(|agent| agent.as_str().to_string())
+        .context("Generated TaskRun agent_id was invalid")
 }
 
 fn validate_legacy_source(source: &str) -> Result<()> {
@@ -818,9 +943,47 @@ mod tests {
 
         let parsed = read(&record.path).unwrap();
         assert_eq!(parsed.coordinator_id.as_deref(), Some("agents/coord-a"));
+        assert_eq!(parsed.agent_id.as_deref(), Some("agents/run-1-add-schema"));
 
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("coordinator_id = \"agents/coord-a\""));
+        assert!(content.contains("agent_id = \"agents/run-1-add-schema\""));
+    }
+
+    #[test]
+    fn direct_routed_task_run_round_trips_label_and_report_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let record = create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            Some("Coordinator for task \"Add schema\""),
+            STATUS_RUNNING,
+        )
+        .unwrap();
+
+        let updated = update_report_metadata(&record, "msg_123").unwrap();
+        let parsed = read(&updated.path).unwrap();
+
+        assert_eq!(parsed.agent_id.as_deref(), Some("agents/run-1-add-schema"));
+        assert_eq!(parsed.coordinator_id.as_deref(), Some("agents/coord-a"));
+        assert_eq!(
+            parsed.coordinator_label.as_deref(),
+            Some("Coordinator for task \"Add schema\"")
+        );
+        assert_eq!(parsed.last_report_message_id.as_deref(), Some("msg_123"));
+        assert!(parsed.last_reported_at.is_some());
+
+        let content = std::fs::read_to_string(updated.path).unwrap();
+        assert!(content.contains("agent_id = \"agents/run-1-add-schema\""));
+        assert!(content.contains("coordinator_id = \"agents/coord-a\""));
+        assert!(
+            content.contains("coordinator_label = \"Coordinator for task \\\"Add schema\\\"\"")
+        );
+        assert!(content.contains("last_report_message_id = \"msg_123\""));
+        assert!(content.contains("last_reported_at = "));
     }
 
     #[test]
@@ -841,6 +1004,10 @@ updated_at = "2026-05-16T00:00:00Z"
 
         let parsed = read(&path).unwrap();
         assert!(parsed.coordinator_id.is_none());
+        assert!(parsed.agent_id.is_none());
+        assert!(parsed.coordinator_label.is_none());
+        assert!(parsed.last_report_message_id.is_none());
+        assert!(parsed.last_reported_at.is_none());
     }
 
     #[test]
@@ -1169,7 +1336,11 @@ updated_at = "2026-05-16T00:00:00Z"
             group: None,
             error: None,
             creation_order,
+            agent_id: None,
             coordinator_id: None,
+            coordinator_label: None,
+            last_report_message_id: None,
+            last_reported_at: None,
             created_at: created_at.into(),
             updated_at: created_at.into(),
         }

@@ -32,6 +32,7 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) title: &'a str,
     pub(crate) branch_name: Option<&'a str>,
     pub(crate) setup_mode: &'a str,
+    pub(crate) template_vars: HashMap<String, String>,
     pub(crate) additional_prompt_scope: Option<&'a str>,
     pub(crate) workspace_color_kind: &'a str,
     pub(crate) on_start_issue_id: Option<&'a str>,
@@ -639,6 +640,7 @@ fn run_resolved_issue<'a>(
     }
 
     let names = issue_worktree_names(ctx, &branch_name, &title, naming.as_ref(), workspace_label)?;
+    let prepared_template_vars = prepared_setup_template_vars(prepared_issue, naming.as_ref());
     let snapshot_config = issue_snapshot.map(|snapshot| {
         profile_config_with_issue_snapshot(
             &ctx.config,
@@ -674,7 +676,7 @@ fn run_resolved_issue<'a>(
                 &names,
                 Some(&title),
                 setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
-                naming.as_ref().map(|n| &n.vars),
+                prepared_template_vars.as_ref(),
                 snapshot_config.as_ref(),
             )?;
             return Ok(vec![IssueRunResult {
@@ -718,7 +720,7 @@ fn run_resolved_issue<'a>(
                     &names,
                     Some(&title),
                     setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
-                    naming.as_ref().map(|n| &n.vars),
+                    prepared_template_vars.as_ref(),
                     snapshot_config.as_ref(),
                 )?;
                 return Ok(vec![IssueRunResult {
@@ -755,7 +757,7 @@ fn run_resolved_issue<'a>(
         &names,
         Some(&title),
         setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
-        naming.as_ref().map(|n| &n.vars),
+        prepared_template_vars.as_ref(),
         snapshot_config.as_ref(),
     )?;
 
@@ -875,7 +877,8 @@ fn run_profiles(
                 .and_then(|issue| issue.workspace_label.as_deref()),
             &profile_workspace,
         );
-        let profile_extra_vars = profile_template_vars(naming, profile_name, issue_snapshot);
+        let profile_extra_vars =
+            profile_template_vars(naming, profile_name, issue_snapshot, options.prepared_issue);
 
         ctx.ui
             .print_step(&format!("Setting up profile: {profile_name}"));
@@ -997,13 +1000,28 @@ fn profile_template_vars(
     naming: Option<&WorktreeNamingResult>,
     profile_name: &str,
     issue_snapshot: Option<&IssueSnapshotContext<'_>>,
+    prepared_issue: Option<&PreparedIssueContext<'_>>,
 ) -> HashMap<String, String> {
     let mut vars = naming.map(|n| n.vars.clone()).unwrap_or_default();
+    if let Some(prepared) = prepared_issue {
+        vars.extend(prepared.template_vars.clone());
+    }
     vars.insert("profile".into(), profile_name.to_string());
     if let Some(snapshot) = issue_snapshot {
         vars.insert("issue_snapshot".into(), snapshot.path.to_string());
     }
     vars
+}
+
+fn prepared_setup_template_vars(
+    prepared_issue: Option<&PreparedIssueContext<'_>>,
+    naming: Option<&WorktreeNamingResult>,
+) -> Option<HashMap<String, String>> {
+    let mut vars = naming.map(|n| n.vars.clone()).unwrap_or_default();
+    if let Some(prepared) = prepared_issue {
+        vars.extend(prepared.template_vars.clone());
+    }
+    (!vars.is_empty()).then_some(vars)
 }
 
 fn profile_config_with_issue_snapshot(
@@ -1773,6 +1791,7 @@ mod tests {
                 title: "Add schema",
                 branch_name: Some("add-schema"),
                 setup_mode: setup::WORKSPACE_COLOR_KIND_ISSUE,
+                template_vars: HashMap::new(),
                 additional_prompt_scope: None,
                 workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: None,
@@ -1842,6 +1861,7 @@ mod tests {
                 title: "Add schema",
                 branch_name: Some("add-schema"),
                 setup_mode: setup::WORKSPACE_COLOR_KIND_ISSUE,
+                template_vars: HashMap::new(),
                 additional_prompt_scope: None,
                 workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: None,

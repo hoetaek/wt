@@ -103,6 +103,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 deprecated_start_command_error("wt task run", "wt run task")
             }
             TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
+            TaskCommand::Report { message } => commands::task_report::run(ctx, message),
         },
         Commands::Workflow { command } => match command {
             WorkflowCommand::List => commands::workflow::list(ctx),
