@@ -31,6 +31,15 @@ impl DocKind {
         }
     }
 
+    pub fn legacy_state_name(self) -> &'static str {
+        match self {
+            Self::Idea => "idea storage",
+            Self::Spec | Self::Retrospect => "spec storage",
+            Self::Task => "TaskDocument storage",
+            Self::Workflow => "Workflow storage",
+        }
+    }
+
     pub fn paths(self, storage: &StorageRoot, slug: &str) -> Vec<PathBuf> {
         match self {
             Self::Idea => vec![storage.ideas_dir().join(format!("{slug}.md"))],
@@ -53,43 +62,46 @@ impl DocKind {
 
     pub fn render(self, slug: &str) -> Vec<(PathBuf, String)> {
         match self {
-            Self::Idea => vec![(PathBuf::from(format!("ideas/{slug}.md")), render_idea(slug))],
+            Self::Idea => vec![(
+                PathBuf::from(format!("planning/ideas/{slug}.md")),
+                render_idea(slug),
+            )],
             Self::Spec => vec![
                 (
-                    PathBuf::from(format!("specs/{slug}/01-intent.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/01-intent.md")),
                     render_spec_intent(slug),
                 ),
                 (
-                    PathBuf::from(format!("specs/{slug}/02-unknowns.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/02-unknowns.md")),
                     render_spec_unknowns(),
                 ),
                 (
-                    PathBuf::from(format!("specs/{slug}/03-context.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/03-context.md")),
                     render_spec_context(),
                 ),
                 (
-                    PathBuf::from(format!("specs/{slug}/04+05+06-requirements.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/04+05+06-requirements.md")),
                     render_spec_requirements(),
                 ),
                 (
-                    PathBuf::from(format!("specs/{slug}/07-design.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/07-design.md")),
                     render_spec_design(),
                 ),
                 (
-                    PathBuf::from(format!("specs/{slug}/08-tasks.md")),
+                    PathBuf::from(format!("planning/specs/{slug}/08-tasks.md")),
                     render_spec_tasks(),
                 ),
             ],
             Self::Task => vec![(
-                PathBuf::from(format!("tasks/{slug}.toml")),
+                PathBuf::from(format!("execution/tasks/{slug}.toml")),
                 render_task_document(&TaskDocument::empty(slug)),
             )],
             Self::Workflow => vec![(
-                PathBuf::from(format!("workflows/{slug}.toml")),
+                PathBuf::from(format!("execution/workflows/{slug}.toml")),
                 render_workflow_metadata(&WorkflowMetadata::empty(slug)),
             )],
             Self::Retrospect => vec![(
-                PathBuf::from(format!("specs/{slug}/11-retrospect.md")),
+                PathBuf::from(format!("planning/specs/{slug}/11-retrospect.md")),
                 render_retrospect(slug),
             )],
         }
@@ -252,31 +264,34 @@ mod tests {
 
         assert_eq!(
             DocKind::Idea.paths(&storage, "foo"),
-            vec![dir.path().join(".git/wt/ideas/foo.md")]
+            vec![dir.path().join(".git/wt/planning/ideas/foo.md")]
         );
         assert_eq!(
             DocKind::Spec.paths(&storage, "foo"),
             vec![
-                dir.path().join(".git/wt/specs/foo/01-intent.md"),
-                dir.path().join(".git/wt/specs/foo/02-unknowns.md"),
-                dir.path().join(".git/wt/specs/foo/03-context.md"),
+                dir.path().join(".git/wt/planning/specs/foo/01-intent.md"),
+                dir.path().join(".git/wt/planning/specs/foo/02-unknowns.md"),
+                dir.path().join(".git/wt/planning/specs/foo/03-context.md"),
                 dir.path()
-                    .join(".git/wt/specs/foo/04+05+06-requirements.md"),
-                dir.path().join(".git/wt/specs/foo/07-design.md"),
-                dir.path().join(".git/wt/specs/foo/08-tasks.md")
+                    .join(".git/wt/planning/specs/foo/04+05+06-requirements.md"),
+                dir.path().join(".git/wt/planning/specs/foo/07-design.md"),
+                dir.path().join(".git/wt/planning/specs/foo/08-tasks.md")
             ]
         );
         assert_eq!(
             DocKind::Task.paths(&storage, "foo"),
-            vec![dir.path().join(".git/wt/tasks/foo.toml")]
+            vec![dir.path().join(".git/wt/execution/tasks/foo.toml")]
         );
         assert_eq!(
             DocKind::Workflow.paths(&storage, "foo"),
-            vec![dir.path().join(".git/wt/workflows/foo.toml")]
+            vec![dir.path().join(".git/wt/execution/workflows/foo.toml")]
         );
         assert_eq!(
             DocKind::Retrospect.paths(&storage, "foo"),
-            vec![dir.path().join(".git/wt/specs/foo/11-retrospect.md")]
+            vec![
+                dir.path()
+                    .join(".git/wt/planning/specs/foo/11-retrospect.md")
+            ]
         );
     }
 
@@ -305,12 +320,12 @@ mod tests {
     fn spec_render_includes_tasks_skeleton() {
         let spec = DocKind::Spec.render("foo");
         assert_eq!(spec.len(), 6);
-        assert_eq!(spec[0].0, PathBuf::from("specs/foo/01-intent.md"));
+        assert_eq!(spec[0].0, PathBuf::from("planning/specs/foo/01-intent.md"));
         assert_eq!(
             spec[3].0,
-            PathBuf::from("specs/foo/04+05+06-requirements.md")
+            PathBuf::from("planning/specs/foo/04+05+06-requirements.md")
         );
-        assert_eq!(spec[5].0, PathBuf::from("specs/foo/08-tasks.md"));
+        assert_eq!(spec[5].0, PathBuf::from("planning/specs/foo/08-tasks.md"));
         assert!(spec[3].1.contains("## 목적 / 성공 기준"));
         assert!(spec[3].1.contains("## 원칙 / 제약"));
         assert!(spec[5].1.contains("## 작업 목록"));

@@ -51,6 +51,7 @@ fn execute(ctx: &Ctx, feature: &str, flags: ScaffoldFlags) -> Result<ScaffoldRep
         });
     }
 
+    ensure_no_legacy_scaffold_roots(ctx, &kinds)?;
     let planned = planned_documents(ctx, &slug, &kinds)?;
     let legacy_conflicts = legacy_spec_conflicts(ctx, &slug, &kinds);
     if !legacy_conflicts.is_empty() {
@@ -149,6 +150,23 @@ fn push_flagged(kinds: &mut Vec<DocKind>, selected: bool, kind: DocKind) {
     if selected {
         kinds.push(kind);
     }
+}
+
+fn ensure_no_legacy_scaffold_roots(ctx: &Ctx, kinds: &[DocKind]) -> Result<()> {
+    for kind in kinds {
+        let legacy = match kind {
+            DocKind::Idea => ctx.storage_root.detect_legacy_ideas(&ctx.repo_root),
+            DocKind::Spec | DocKind::Retrospect => {
+                ctx.storage_root.detect_legacy_specs(&ctx.repo_root)
+            }
+            DocKind::Task => ctx.storage_root.detect_legacy_tasks(&ctx.repo_root),
+            DocKind::Workflow => ctx.storage_root.detect_legacy_workflows(&ctx.repo_root),
+        };
+        if let Some(legacy) = legacy {
+            bail!("{}", legacy.error_message_for(kind.legacy_state_name()));
+        }
+    }
+    Ok(())
 }
 
 fn planned_documents(ctx: &Ctx, slug: &str, kinds: &[DocKind]) -> Result<Vec<PlannedDocument>> {
@@ -328,7 +346,10 @@ mod tests {
 
         assert_eq!(
             relative_files(&ctx),
-            vec!["ideas/foo.md".to_string(), "tasks/foo.toml".to_string()]
+            vec![
+                "execution/tasks/foo.toml".to_string(),
+                "planning/ideas/foo.md".to_string()
+            ]
         );
         assert_eq!(
             fs::read_to_string(ctx.storage_root.ideas_dir().join("foo.md")).unwrap(),
@@ -352,12 +373,12 @@ mod tests {
         assert_eq!(
             relative_files(&ctx),
             vec![
-                "specs/foo/01-intent.md".to_string(),
-                "specs/foo/02-unknowns.md".to_string(),
-                "specs/foo/03-context.md".to_string(),
-                "specs/foo/04+05+06-requirements.md".to_string(),
-                "specs/foo/07-design.md".to_string(),
-                "specs/foo/08-tasks.md".to_string()
+                "planning/specs/foo/01-intent.md".to_string(),
+                "planning/specs/foo/02-unknowns.md".to_string(),
+                "planning/specs/foo/03-context.md".to_string(),
+                "planning/specs/foo/04+05+06-requirements.md".to_string(),
+                "planning/specs/foo/07-design.md".to_string(),
+                "planning/specs/foo/08-tasks.md".to_string()
             ]
         );
         assert_eq!(
@@ -404,7 +425,7 @@ mod tests {
 
         assert_eq!(
             relative_files(&ctx),
-            vec!["specs/foo/11-retrospect.md".to_string()]
+            vec!["planning/specs/foo/11-retrospect.md".to_string()]
         );
         assert_eq!(
             fs::read_to_string(ctx.storage_root.specs_dir().join("foo/11-retrospect.md")).unwrap(),
@@ -430,16 +451,16 @@ mod tests {
         assert_eq!(
             relative_files(&ctx),
             vec![
-                "ideas/foo.md".to_string(),
-                "specs/foo/01-intent.md".to_string(),
-                "specs/foo/02-unknowns.md".to_string(),
-                "specs/foo/03-context.md".to_string(),
-                "specs/foo/04+05+06-requirements.md".to_string(),
-                "specs/foo/07-design.md".to_string(),
-                "specs/foo/08-tasks.md".to_string(),
-                "specs/foo/11-retrospect.md".to_string(),
-                "tasks/foo.toml".to_string(),
-                "workflows/foo.toml".to_string()
+                "execution/tasks/foo.toml".to_string(),
+                "execution/workflows/foo.toml".to_string(),
+                "planning/ideas/foo.md".to_string(),
+                "planning/specs/foo/01-intent.md".to_string(),
+                "planning/specs/foo/02-unknowns.md".to_string(),
+                "planning/specs/foo/03-context.md".to_string(),
+                "planning/specs/foo/04+05+06-requirements.md".to_string(),
+                "planning/specs/foo/07-design.md".to_string(),
+                "planning/specs/foo/08-tasks.md".to_string(),
+                "planning/specs/foo/11-retrospect.md".to_string()
             ]
         );
     }
@@ -456,8 +477,8 @@ mod tests {
         assert_eq!(
             relative_files(&ctx),
             vec![
-                "ideas/foo.md".to_string(),
-                "specs/foo/11-retrospect.md".to_string()
+                "planning/ideas/foo.md".to_string(),
+                "planning/specs/foo/11-retrospect.md".to_string()
             ]
         );
     }
@@ -473,7 +494,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("<git-common-dir>/wt/tasks/foo.toml"));
+        assert!(err.contains("<git-common-dir>/wt/execution/tasks/foo.toml"));
         assert!(!ctx.storage_root.ideas_dir().join("foo.md").exists());
     }
 
@@ -513,7 +534,7 @@ mod tests {
         assert_eq!(json["feature"], "foo");
         assert_eq!(
             json["created"].as_array().unwrap()[0],
-            "<git-common-dir>/wt/specs/foo/11-retrospect.md"
+            "<git-common-dir>/wt/planning/specs/foo/11-retrospect.md"
         );
         assert!(json["skipped"].as_array().unwrap().is_empty());
     }
