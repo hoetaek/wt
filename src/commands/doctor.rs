@@ -53,7 +53,7 @@ pub fn run(ctx: &Ctx, profile: Option<&str>, prune_env_markers: Option<&str>) ->
     check_codex_hook_readiness(ctx, config);
     if let Err(err) = check_session_markers(ctx) {
         ctx.ui
-            .print_warning(&format!("Session markers: scan failed ({err})"));
+            .print_warning(&format!("Identity anchors: scan failed ({err})"));
     }
     if let Err(err) = check_supervisors(ctx) {
         ctx.ui
@@ -551,8 +551,6 @@ fn collect_repo_setup_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
         ctx.storage_root.archive_dir(),
         ctx.storage_root.runtime_dir(),
         ctx.storage_root.runtime_agents_dir(),
-        ctx.storage_root.agent_state_dir(),
-        ctx.storage_root.worktrees_dir(),
     ];
     let missing = required_dirs
         .iter()
@@ -565,6 +563,23 @@ fn collect_repo_setup_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
         checks.push(DoctorCheck::warning(
             "core_dirs",
             format!("missing {}. {WT_INIT_HINT}", missing.join(", ")),
+        ));
+    }
+
+    collect_legacy_runtime_actor_checks(ctx, checks);
+}
+
+fn collect_legacy_runtime_actor_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
+    if let Some(legacy) = ctx.storage_root.detect_legacy_agent_state() {
+        checks.push(DoctorCheck::warning(
+            "legacy_runtime_observations",
+            legacy.error_message_for("runtime observation storage"),
+        ));
+    }
+    if let Some(legacy) = ctx.storage_root.detect_legacy_sessions() {
+        checks.push(DoctorCheck::warning(
+            "legacy_session_anchors",
+            legacy.error_message_for("session anchor storage"),
         ));
     }
 }
@@ -1027,13 +1042,13 @@ struct SessionMarkerScanWarning {
 fn check_session_markers(ctx: &Ctx) -> Result<()> {
     let scan = scan_session_markers(ctx)?;
     ctx.ui.print_step(&format!(
-        "Session markers: scanned={}, stale_cleaned={}, env_keyed_listed={}",
+        "Identity anchors: scanned={}, stale_cleaned={}, env_keyed_listed={}",
         scan.report.scanned, scan.report.stale_cleaned, scan.report.env_keyed_listed_for_review
     ));
 
     for marker in scan.env_keyed {
         ctx.ui.print_warning(&format!(
-            "Session marker requires manual review: {} id={} path={}. Prune with `wt doctor --prune-env-markers {}`.",
+            "Identity anchor requires manual review: {} id={} path={}. Prune with `wt doctor --prune-env-markers {}`.",
             marker.key,
             marker.id,
             marker.path.display(),
@@ -1042,7 +1057,7 @@ fn check_session_markers(ctx: &Ctx) -> Result<()> {
     }
     for warning in scan.warnings {
         ctx.ui.print_warning(&format!(
-            "Session marker skipped: path={} reason={}",
+            "Identity anchor skipped: path={} reason={}",
             warning.path.display(),
             warning.message
         ));
@@ -1102,7 +1117,7 @@ fn scan_supervisors_with(
         } else {
             "stale_replaced"
         };
-        reports.push(supervisor_registration_report(ctx, &registration, status));
+        reports.push(supervisor_registration_report(ctx, &registration, status)?);
     }
 
     Ok(SupervisorScan {
@@ -1129,16 +1144,16 @@ fn supervisor_registration_report(
     ctx: &Ctx,
     registration: &Registration,
     status: &'static str,
-) -> SupervisorRegistrationReport {
-    SupervisorRegistrationReport {
+) -> Result<SupervisorRegistrationReport> {
+    Ok(SupervisorRegistrationReport {
         agent_id: registration.agent_id.clone(),
         pid: registration.pid,
         status,
-        registration_path: registration_path(ctx, &registration.agent_id)
+        registration_path: registration_path(ctx, &registration.agent_id)?
             .display()
             .to_string(),
         log_path: registration.log_path.display().to_string(),
-    }
+    })
 }
 
 fn scan_session_markers(ctx: &Ctx) -> Result<SessionMarkerScan> {
@@ -1170,7 +1185,7 @@ fn scan_session_markers_with(
         env_keyed.push(EnvKeyedMarkerForReview {
             key: key.display(),
             id: marker.id,
-            path: identity_locator::marker_path(ctx, &key),
+            path: entry.path,
         });
     }
 
@@ -1195,13 +1210,13 @@ fn prune_env_marker(ctx: &Ctx, key: &str) -> Result<()> {
     let key = AnchorKey::parse_display(key)?;
     if key.kind == AnchorKind::ShellSid {
         return Err(anyhow!(
-            "`--prune-env-markers` only deletes env-keyed session markers"
+            "`--prune-env-markers` only deletes env-keyed identity anchors"
         ));
     }
     let removed = identity_locator::remove_marker(ctx, &key)
-        .with_context(|| format!("Failed to prune session marker {}", key.display()))?;
+        .with_context(|| format!("Failed to prune identity anchor {}", key.display()))?;
     if !removed {
-        return Err(anyhow!("No session marker found for {}", key.display()));
+        return Err(anyhow!("No identity anchor found for {}", key.display()));
     }
     Ok(())
 }
@@ -1409,6 +1424,8 @@ fn doctor_label(name: &str) -> &str {
         "claude_wt_inbox_hook" => "Claude wt inbox hook",
         "repo_config" => "Repo config",
         "core_dirs" => "Core dirs",
+        "legacy_runtime_observations" => "Legacy runtime observations",
+        "legacy_session_anchors" => "Legacy session anchors",
         _ => name,
     }
 }
@@ -1636,7 +1653,7 @@ mod tests {
     }
 
     fn write_marker_file_at_key(ctx: &Ctx, key: &AnchorKey, marker: &Marker) -> PathBuf {
-        let path = identity_locator::marker_path(ctx, key);
+        let path = identity_locator::marker_path_for_id(ctx, &marker.id, key).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, toml::to_string_pretty(marker).unwrap()).unwrap();
         path
@@ -1647,7 +1664,7 @@ mod tests {
             kind: AnchorKind::Surface,
             value: "BROKEN".into(),
         };
-        let path = identity_locator::marker_path(ctx, &key);
+        let path = identity_locator::marker_path_for_id(ctx, "agents/broken", &key).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "not = [valid").unwrap();
         path
@@ -1668,19 +1685,12 @@ mod tests {
             host_surface_id: None,
             stale_threshold_secs: 900,
             poll_interval_secs: 60,
-            log_path: ctx
-                .storage_root
-                .personal_root()
-                .join("supervisors")
-                .join(format!(
-                    "{}.log",
-                    crate::services::identity_locator::percent_encode(agent_id)
-                )),
+            log_path: crate::services::supervisor_registration::log_path(ctx, agent_id).unwrap(),
         }
     }
 
     fn write_supervisor_fixture(ctx: &Ctx, registration: &Registration) -> PathBuf {
-        let path = registration_path(ctx, &registration.agent_id);
+        let path = registration_path(ctx, &registration.agent_id).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&registration.log_path, "log stays\n").unwrap();
         fs::write(&path, toml::to_string_pretty(registration).unwrap()).unwrap();
@@ -1965,7 +1975,7 @@ mod tests {
 
         let steps = steps.lock().unwrap().join("\n");
         let warnings = warnings.lock().unwrap().join("\n");
-        assert!(steps.contains("Session markers: scanned=1, stale_cleaned=0, env_keyed_listed=1"));
+        assert!(steps.contains("Identity anchors: scanned=1, stale_cleaned=0, env_keyed_listed=1"));
         assert!(warnings.contains("wt doctor --prune-env-markers surface:A22D"));
     }
 
@@ -1980,7 +1990,7 @@ mod tests {
         run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
-        assert!(warnings.contains("Session marker skipped"));
+        assert!(warnings.contains("Identity anchor skipped"));
         assert!(warnings.contains("Failed to parse marker"));
     }
 
@@ -2009,6 +2019,57 @@ mod tests {
         assert_eq!(value["session_markers"]["scanned"], 0);
         assert_eq!(value["session_markers"]["stale_cleaned"], 0);
         assert_eq!(value["session_markers"]["env_keyed_listed_for_review"], 0);
+    }
+
+    #[test]
+    fn repo_setup_warns_about_legacy_runtime_actor_roots() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
+        fs::create_dir_all(ctx.storage_root.legacy_agent_state_dir()).unwrap();
+        fs::create_dir_all(ctx.storage_root.legacy_sessions_dir()).unwrap();
+
+        let mut checks = Vec::new();
+        collect_repo_setup_checks(&ctx, &mut checks);
+
+        let observations = checks
+            .iter()
+            .find(|check| check.name == "legacy_runtime_observations")
+            .expect("missing legacy runtime observations check");
+        assert_eq!(observations.status, "warning");
+        assert!(
+            observations
+                .message
+                .as_deref()
+                .unwrap()
+                .contains(".git/wt/agent.state")
+        );
+        assert!(
+            observations
+                .message
+                .as_deref()
+                .unwrap()
+                .contains(".git/wt/runtime/agents")
+        );
+
+        let sessions = checks
+            .iter()
+            .find(|check| check.name == "legacy_session_anchors")
+            .expect("missing legacy session anchors check");
+        assert_eq!(sessions.status, "warning");
+        assert!(
+            sessions
+                .message
+                .as_deref()
+                .unwrap()
+                .contains(".git/wt/sessions")
+        );
+        assert!(
+            sessions
+                .message
+                .as_deref()
+                .unwrap()
+                .contains(".git/wt/runtime/agents")
+        );
     }
 
     #[test]

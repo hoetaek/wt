@@ -1,4 +1,5 @@
 use crate::context::CommandRunner;
+use crate::messages::AgentId;
 use anyhow::{Context, Result, bail};
 use std::path::{Component, Path, PathBuf};
 
@@ -101,6 +102,23 @@ impl StorageRoot {
         self.runtime_dir().join("agents")
     }
 
+    pub fn runtime_agent_dir(&self, agent_id: &AgentId) -> PathBuf {
+        agent_id.runtime_dir(&self.runtime_dir())
+    }
+
+    pub fn runtime_agent_observations_dir(&self, agent_id: &AgentId) -> PathBuf {
+        self.runtime_agent_dir(agent_id).join("observations")
+    }
+
+    pub fn wait_observations_jsonl(&self, agent_id: &AgentId) -> PathBuf {
+        self.runtime_agent_observations_dir(agent_id)
+            .join(crate::agent_state::WAIT_OBSERVATIONS_FILE)
+    }
+
+    pub fn runtime_agent_anchors_dir(&self, agent_id: &AgentId) -> PathBuf {
+        self.runtime_agent_dir(agent_id).join("anchors")
+    }
+
     pub fn workflow_archive_dir(&self, id: impl AsRef<str>) -> PathBuf {
         self.archive_workflows_dir().join(id.as_ref())
     }
@@ -131,21 +149,12 @@ impl StorageRoot {
         self.personal_root.join("messages")
     }
 
-    pub fn agent_state_dir(&self) -> PathBuf {
+    pub fn legacy_agent_state_dir(&self) -> PathBuf {
         self.personal_root.join("agent.state")
     }
 
-    pub fn wait_observations_jsonl(&self) -> PathBuf {
-        self.agent_state_dir()
-            .join(crate::agent_state::WAIT_OBSERVATIONS_FILE)
-    }
-
-    pub fn worktrees_dir(&self) -> PathBuf {
-        self.personal_root.join("worktrees")
-    }
-
-    pub fn worktree_dir(&self, id: impl AsRef<Path>) -> PathBuf {
-        self.worktrees_dir().join(id)
+    pub fn legacy_sessions_dir(&self) -> PathBuf {
+        self.personal_root.join("sessions")
     }
 
     pub fn detect_legacy_local(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
@@ -219,6 +228,24 @@ impl StorageRoot {
             .is_dir()
             .then_some(LegacyLocalStorage {
                 path: self.legacy_messages_dir(),
+                canonical_root: self.runtime_agents_dir(),
+            })
+    }
+
+    pub fn detect_legacy_agent_state(&self) -> Option<LegacyLocalStorage> {
+        self.legacy_agent_state_dir()
+            .is_dir()
+            .then_some(LegacyLocalStorage {
+                path: self.legacy_agent_state_dir(),
+                canonical_root: self.runtime_agents_dir(),
+            })
+    }
+
+    pub fn detect_legacy_sessions(&self) -> Option<LegacyLocalStorage> {
+        self.legacy_sessions_dir()
+            .is_dir()
+            .then_some(LegacyLocalStorage {
+                path: self.legacy_sessions_dir(),
                 canonical_root: self.runtime_agents_dir(),
             })
     }
@@ -453,20 +480,31 @@ mod tests {
             PathBuf::from("/repo/.git/wt/runtime/agents")
         );
         assert_eq!(
-            storage.agent_state_dir(),
+            storage.legacy_agent_state_dir(),
             PathBuf::from("/repo/.git/wt/agent.state")
         );
         assert_eq!(
-            storage.wait_observations_jsonl(),
-            PathBuf::from("/repo/.git/wt/agent.state/wait-observations.jsonl")
+            storage.legacy_sessions_dir(),
+            PathBuf::from("/repo/.git/wt/sessions")
+        );
+        let agent = AgentId::parse("agents/codex").unwrap();
+        assert_eq!(
+            storage.runtime_agent_dir(&agent),
+            PathBuf::from("/repo/.git/wt/runtime/agents/codex")
         );
         assert_eq!(
-            storage.worktrees_dir(),
-            PathBuf::from("/repo/.git/wt/worktrees")
+            storage.runtime_agent_observations_dir(&agent),
+            PathBuf::from("/repo/.git/wt/runtime/agents/codex/observations")
         );
         assert_eq!(
-            storage.worktree_dir("wt_123"),
-            PathBuf::from("/repo/.git/wt/worktrees/wt_123")
+            storage.wait_observations_jsonl(&agent),
+            PathBuf::from(
+                "/repo/.git/wt/runtime/agents/codex/observations/wait-observations.jsonl"
+            )
+        );
+        assert_eq!(
+            storage.runtime_agent_anchors_dir(&agent),
+            PathBuf::from("/repo/.git/wt/runtime/agents/codex/anchors")
         );
     }
 
@@ -582,6 +620,42 @@ mod tests {
         assert!(
             legacy
                 .error_message_for("message storage")
+                .contains("does not silently fall back")
+        );
+    }
+
+    #[test]
+    fn detects_legacy_runtime_actor_roots_without_fallback() {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(repo.join(".git/wt/agent.state")).unwrap();
+        fs::create_dir_all(repo.join(".git/wt/sessions")).unwrap();
+        let storage = StorageRoot::from_git_common_dir(repo.join(".git"));
+
+        let agent_state = storage.detect_legacy_agent_state().unwrap();
+        assert_eq!(
+            agent_state.path(),
+            repo.join(".git/wt/agent.state").as_path()
+        );
+        assert_eq!(
+            agent_state.canonical_root(),
+            repo.join(".git/wt/runtime/agents").as_path()
+        );
+        assert!(
+            agent_state
+                .error_message_for("runtime observation storage")
+                .contains("does not silently fall back")
+        );
+
+        let sessions = storage.detect_legacy_sessions().unwrap();
+        assert_eq!(sessions.path(), repo.join(".git/wt/sessions").as_path());
+        assert_eq!(
+            sessions.canonical_root(),
+            repo.join(".git/wt/runtime/agents").as_path()
+        );
+        assert!(
+            sessions
+                .error_message_for("session anchor storage")
                 .contains("does not silently fall back")
         );
     }

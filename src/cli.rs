@@ -453,7 +453,7 @@ pub enum AgentCommand {
     },
     /// Poll a task agent's runtime state until it is no longer running, becomes blocked, or reaches a bound
     #[command(
-        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. When --timeout or --heartbeat emits a non-idle sample, wt agent watch appends it to the local <git-common-dir>/wt/agent.state/wait-observations.jsonl file. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
+        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. When --timeout or --heartbeat emits a non-idle sample and the runtime AgentId is known, wt agent watch appends it to <git-common-dir>/wt/runtime/agents/<agent>/observations/wait-observations.jsonl. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
     )]
     Watch {
         /// Branch, worktree path/name, or TaskRun id to watch
@@ -475,12 +475,12 @@ pub enum AgentCommand {
     },
     /// Summarize recorded non-idle wait observations
     #[command(
-        long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch` when heartbeat or timeout samples are emitted. This is read-only: it summarizes <git-common-dir>/wt/agent.state/wait-observations.jsonl with count, sum, average, min, max, bucket, and low-cardinality group data; it does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
+        long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch` when heartbeat or timeout samples are emitted. This is read-only: it summarizes <git-common-dir>/wt/runtime/agents/<agent>/observations/wait-observations.jsonl files with count, sum, average, min, max, bucket, and low-cardinality group data; it does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
     )]
     WaitStats,
     /// Manage opt-in supervisors for agent inbox stale-rescue
     #[command(
-        long_about = "Manage opt-in supervisors for agent inbox stale-rescue.\n\nA supervisor is default-off Layer 3 insurance for one agent identity. It records a local registration under <git-common-dir>/wt/supervisors/ and only intervenes after an inbox/new message has aged past --stale-threshold. Supervisors started with --surface run inside an unfocused cmux surface in the target pane so cmux push delivery stays attached to cmux without creating another workspace; supervisors without --surface use the detached process path. No wt verb starts a supervisor implicitly."
+        long_about = "Manage opt-in supervisors for agent inbox stale-rescue.\n\nA supervisor is default-off Layer 3 insurance for one agent identity. It records local state under <git-common-dir>/wt/runtime/agents/<agent>/supervisor.toml and supervisor.log, and only intervenes after an inbox/new message has aged past --stale-threshold. Supervisors started with --surface run inside an unfocused cmux surface in the target pane so cmux push delivery stays attached to cmux without creating another workspace; supervisors without --surface use the detached process path. No wt verb starts a supervisor implicitly."
     )]
     Supervisor {
         #[command(subcommand)]
@@ -1496,7 +1496,9 @@ mod tests {
         assert!(help.contains("--timeout"));
         assert!(help.contains("--heartbeat"));
         assert!(!help.contains("--record-wait-observations"));
-        assert!(help.contains("<git-common-dir>/wt/agent.state/wait-observations.jsonl"));
+        assert!(help.contains(
+            "<git-common-dir>/wt/runtime/agents/<agent>/observations/wait-observations.jsonl"
+        ));
         assert!(help.contains("When --timeout or --heartbeat emits a non-idle sample"));
         assert!(help.contains("unchanged running observations"));
         assert!(help.contains("Omit TARGET in an interactive terminal"));
@@ -1515,7 +1517,9 @@ mod tests {
 
         assert!(help.contains("non-idle wait observations"));
         assert!(help.contains("read-only"));
-        assert!(help.contains("<git-common-dir>/wt/agent.state/wait-observations.jsonl"));
+        assert!(help.contains(
+            "<git-common-dir>/wt/runtime/agents/<agent>/observations/wait-observations.jsonl"
+        ));
         assert!(help.contains("does not observe agents"));
         assert!(help.contains("mutate TaskRuns"));
     }

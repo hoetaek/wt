@@ -41,13 +41,13 @@ pub fn whoami(ctx: &Ctx, json: bool) -> Result<()> {
 
 fn resolve_report(ctx: &Ctx) -> Result<WhoamiReport> {
     let key = identity_locator::current_anchor_key()?;
-    let marker_path = identity_locator::marker_path(ctx, &key);
     let cmux_workspace_id = (key.kind == AnchorKind::Surface)
         .then(|| env::var("CMUX_WORKSPACE_ID").ok())
         .flatten()
         .filter(|value| !value.trim().is_empty());
 
     if let Some(id) = agent_id_from_env()? {
+        let marker_path = identity_locator::marker_path_for_id(ctx, &id, &key)?;
         return Ok(WhoamiReport {
             id: Some(id),
             source: IdentitySource::Env,
@@ -59,6 +59,7 @@ fn resolve_report(ctx: &Ctx) -> Result<WhoamiReport> {
     }
 
     if let Some(marker) = identity_locator::resolve_identity(ctx)? {
+        let marker_path = identity_locator::marker_path_for_id(ctx, &marker.id, &key)?;
         return Ok(report_from_marker(marker, marker_path, cmux_workspace_id));
     }
 
@@ -66,8 +67,10 @@ fn resolve_report(ctx: &Ctx) -> Result<WhoamiReport> {
         id: None,
         source: IdentitySource::None,
         anchor_kind: anchor_kind_name(&key.kind).into(),
-        anchor_value: key.value,
-        marker_path: marker_path.display().to_string(),
+        anchor_value: key.value.clone(),
+        marker_path: identity_locator::marker_path(ctx, &key)
+            .display()
+            .to_string(),
         cmux_workspace_id,
     })
 }

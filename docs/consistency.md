@@ -101,7 +101,7 @@ Canonical personal storage layout:
     │       ├── activity.jsonl
     │       ├── observations/
     │       │   └── wait-observations.jsonl
-    │       ├── sessions/
+    │       ├── anchors/
     │       ├── status.toml
     │       └── supervisor.{toml,log}
 ```
@@ -118,7 +118,7 @@ The four top-level buckets are the canonical personal-state owners:
 - `execution/` owns launch and run artifacts: TaskDocuments, Workflows, TaskRuns,
   and archive.
 - `runtime/` owns local agent identity and agent-owned runtime state: inbox,
-  activity/status snapshots, session markers, supervisor state, and runtime
+  activity/status snapshots, identity anchors, supervisor state, and runtime
   observation.
 
 `runtime/agents/<name>` is the filesystem projection of `AgentId` `agents/<name>`.
@@ -126,13 +126,20 @@ It is not a second identity grammar. Because canonical `AgentId` values have one
 non-empty segment after `agents/`, no slash escaping is needed for the canonical
 agent directory.
 
-Top-level `messages/`, `agent.state/`, and `worktrees/` are not canonical state
-owners in this model. They may appear only as legacy/migration context until
-implementation paths are moved. New docs, new state owners, and normal code
-must not read from or write to them as canonical paths or equivalent aliases.
-Migration, import, or repair code that still touches a legacy root must
+Top-level `messages/`, `agent.state/`, `sessions/`, and `worktrees/` are not
+canonical state owners in this model. They may appear only as legacy/migration
+context until implementation paths are moved. New docs, new state owners, and
+normal code must not read from or write to them as canonical paths or equivalent
+aliases. Migration, import, or repair code that still touches a legacy root must
 transform the data into one of the four canonical buckets, record the canonical
 result, and leave later code paths on bucket readers.
+
+Legacy `agent.state/` wait observations and `sessions/` markers are runtime
+actor context. `wt doctor` should surface them as legacy roots and `wt init`
+should reject bootstrapping over them; neither command should silently treat
+them as canonical state. The canonical replacements are
+`runtime/agents/<name>/observations/wait-observations.jsonl` and
+`runtime/agents/<name>/anchors/<encoded-anchor-key>.toml`.
 
 ### Idea And Spec Prep
 
@@ -1634,7 +1641,8 @@ agent kind/state, 마지막 tool/session/event, cmux contact/warning을 compact�
 아니라면 observable/not blocked인 0으로 끝난다.
 
 `wt agent watch`는 `--heartbeat`나 `--timeout`으로 non-idle heartbeat/timeout sample을
-emit할 때마다 `<git-common-dir>/wt/runtime/agents/<name>/observations/wait-observations.jsonl`에 append-only JSONL
+emit하고 runtime AgentId가 TaskRun route나 live surface anchor로 확인될 때마다
+`<git-common-dir>/wt/runtime/agents/<name>/observations/wait-observations.jsonl`에 append-only JSONL
 sample로 기록한다. 별도 기록 flag, opt-out flag, config key는 없다. idle, needs_input,
 failed, no_session observation은 non-idle wait sample을 만들지 않는다. 이 state owner는
 `runtime/agents/<name>/observations`이며 runtime observation 자료일 뿐이므로 TaskRun status, Workflow file,

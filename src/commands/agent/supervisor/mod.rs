@@ -4,7 +4,6 @@ use crate::messages::{AgentId, Message, MessageLease, MessageStore};
 use crate::messages::{MessageDeliveryState, MessageInspectionRecord};
 use crate::services::cmux::CmuxService;
 use crate::services::cmux_push::{CmuxPushService, DEFAULT_PAYLOAD_CAP_BYTES, PushKind};
-use crate::services::identity_locator::percent_encode;
 use crate::services::identity_locator::process_start_time;
 use crate::services::inbox_watcher::InboxWatcher;
 use crate::services::supervisor_registration::{
@@ -92,7 +91,7 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
         }
     }
 
-    let log_path = log_path(ctx, agent_id.as_str());
+    let log_path = log_path(ctx, agent_id.as_str())?;
     let supervisor_dir = log_path
         .parent()
         .ok_or_else(|| anyhow!("Supervisor log path has no parent: {}", log_path.display()))?;
@@ -156,7 +155,7 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
             registration.agent_id,
             registration.pid,
             ctx.storage_root
-                .display_path(&registration_path(ctx, &registration.agent_id)),
+                .display_path(&registration_path(ctx, &registration.agent_id)?),
             ctx.storage_root.display_path(&registration.log_path)
         );
     }
@@ -252,11 +251,10 @@ pub fn status(ctx: &Ctx, agent_id: Option<&str>) -> Result<()> {
 
 pub fn logs(ctx: &Ctx, agent_id: &str, options: LogsOptions) -> Result<()> {
     let agent_id = normalize_agent_id(agent_id)?;
-    let log_path = read_registration(ctx, agent_id.as_str())?
-        .map(|registration| registration.log_path)
-        .unwrap_or_else(|| {
-            crate::services::supervisor_registration::log_path(ctx, agent_id.as_str())
-        });
+    let log_path = match read_registration(ctx, agent_id.as_str())? {
+        Some(registration) => registration.log_path,
+        None => crate::services::supervisor_registration::log_path(ctx, agent_id.as_str())?,
+    };
     if options.follow {
         follow_log(&log_path)
     } else {
@@ -272,9 +270,10 @@ pub fn logs(ctx: &Ctx, agent_id: &str, options: LogsOptions) -> Result<()> {
 
 pub fn run(ctx: &Ctx, agent_id: &str, options: RunOptions) -> Result<()> {
     let agent_id = normalize_agent_id(agent_id)?;
-    let log_path = options.log_path.unwrap_or_else(|| {
-        crate::services::supervisor_registration::log_path(ctx, agent_id.as_str())
-    });
+    let log_path = match options.log_path {
+        Some(path) => path,
+        None => crate::services::supervisor_registration::log_path(ctx, agent_id.as_str())?,
+    };
     let registration = read_registration(ctx, agent_id.as_str())?;
     let target_surface_id = options.surface.or_else(|| {
         registration
@@ -334,7 +333,7 @@ pub fn run(ctx: &Ctx, agent_id: &str, options: RunOptions) -> Result<()> {
     let mut watcher = InboxWatcher::new(&inbox_new)?;
     let mut state = SupervisorLoopState::default();
     loop {
-        let stop_path = stop_requested_path(ctx, agent_id.as_str());
+        let stop_path = stop_requested_path(ctx, &agent_id);
         if stop_path.is_file() {
             append_log(
                 &config.log_path,
@@ -987,11 +986,10 @@ fn parse_kind_option(value: &str) -> Result<PushKind> {
     Ok(kind)
 }
 
-fn stop_requested_path(ctx: &Ctx, agent_id: &str) -> PathBuf {
+fn stop_requested_path(ctx: &Ctx, agent_id: &AgentId) -> PathBuf {
     ctx.storage_root
-        .personal_root()
-        .join("supervisors")
-        .join(format!("{}.stop", percent_encode(agent_id)))
+        .runtime_agent_dir(agent_id)
+        .join("supervisor.stop")
 }
 
 fn has_terminal_marker(message: &Message) -> bool {
@@ -1841,8 +1839,8 @@ mod tests {
             &ctx,
             "agents/codex",
             &ctx.storage_root
-                .personal_root()
-                .join("supervisors/test.log"),
+                .runtime_agent_dir(&AgentId::parse("agents/codex").unwrap())
+                .join("supervisor.log"),
             &options,
             900,
             60,
@@ -1894,8 +1892,8 @@ mod tests {
             payload_cap: DEFAULT_PAYLOAD_CAP_BYTES,
             log_path: ctx
                 .storage_root
-                .personal_root()
-                .join("supervisors/test.log"),
+                .runtime_agent_dir(&AgentId::parse("agents/codex").unwrap())
+                .join("supervisor.log"),
         }
     }
 
