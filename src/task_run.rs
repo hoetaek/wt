@@ -67,6 +67,10 @@ impl TaskRunStatus {
     pub(crate) fn is_cleanup_completable(self) -> bool {
         self == Self::Running
     }
+
+    pub(crate) fn is_reportable(self) -> bool {
+        matches!(self, Self::Running | Self::Passed)
+    }
 }
 
 impl fmt::Display for TaskRunStatus {
@@ -104,6 +108,10 @@ impl TaskReviewStatus {
             "blocked" => Ok(Self::Blocked),
             _ => bail!("Unknown task review status: {status}"),
         }
+    }
+
+    pub(crate) fn reopens_passed_task_run(self) -> bool {
+        matches!(self, Self::Rejected | Self::Blocked)
     }
 }
 
@@ -591,6 +599,9 @@ pub(crate) fn update_review_metadata(
     run.last_review_status = Some(status);
     run.last_review_message_id = optional_string(message_id);
     run.last_reviewed_at = Some(now.clone());
+    if run.status == TaskRunStatus::Passed && status.reopens_passed_task_run() {
+        run.status = TaskRunStatus::Running;
+    }
     run.updated_at = now;
     write(&record.path, &run)?;
 

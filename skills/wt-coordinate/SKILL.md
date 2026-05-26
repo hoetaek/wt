@@ -97,7 +97,9 @@ wt inspect <target>
 `WT_AGENT_ID` and writes a session marker for later resolution. A launched
 TaskRun should record `agent_id` and `coordinator_id`; `wt task report` and
 `wt task review` use those TaskRun-owned routes instead of a dynamic
-`coordinator` alias or ambient coordinator env fallback.
+`coordinator` alias or ambient coordinator env fallback. `wt task report`
+remains valid for `running` and `passed` TaskRuns; without `WT_TASK_RUN_ID`, it
+uses branch fallback only when exactly one running or passed TaskRun matches.
 
 Monitor coordinator inbox reports with:
 
@@ -114,6 +116,11 @@ wt task review <task-run-id> --accept "<검토 통과 메시지>"
 wt task review <task-run-id> --reject "<수정 요청>"
 wt task review <task-run-id> --block "<외부 입력 또는 충돌 대기 사유>"
 ```
+
+Late review after pass is normal. `--reject` and `--block` reopen a passed
+TaskRun to `running`, so the agent can continue and report again through the
+same TaskRun route. `--accept` records review metadata only; it does not pass a
+running TaskRun.
 
 For task-specific instructions that should not update review metadata, use the
 low-level durable inbox route with explicit TaskRun scope:

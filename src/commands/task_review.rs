@@ -15,7 +15,7 @@ pub(crate) fn run(
     run_with_actor(ctx, task_run_id, status, message, &from)
 }
 
-fn run_with_actor(
+pub(super) fn run_with_actor(
     ctx: &Ctx,
     task_run_id: &str,
     status: TaskReviewStatus,
@@ -112,7 +112,7 @@ mod tests {
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{Ctx, CtxOptions};
     use crate::storage::StorageRoot;
-    use crate::task_run::STATUS_RUNNING;
+    use crate::task_run::{STATUS_PASSED, STATUS_RUNNING};
 
     fn ctx(root: &std::path::Path) -> Ctx {
         Ctx::new_with_options(
@@ -154,6 +154,7 @@ mod tests {
 
         let updated = task_run::read(&record.path).unwrap();
         let message_id = updated.last_review_message_id.unwrap();
+        assert_eq!(updated.status, STATUS_RUNNING);
         assert_eq!(updated.last_review_status, Some(task_run::REVIEW_ACCEPTED));
         assert!(updated.last_reviewed_at.is_some());
 
@@ -170,6 +171,166 @@ mod tests {
         assert_eq!(
             message.text_content(),
             "Coordinator Review: Status=accepted; Message=looks good"
+        );
+    }
+
+    #[test]
+    fn review_reject_reopens_passed_task_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            Some("Coordinator"),
+            STATUS_PASSED,
+        )
+        .unwrap();
+        let from = AgentId::parse("agents/coord-a").unwrap();
+
+        run_with_actor(
+            &ctx,
+            &record.id,
+            task_run::REVIEW_REJECTED,
+            &["needs changes".into()],
+            &from,
+        )
+        .unwrap();
+
+        let updated = task_run::read(&record.path).unwrap();
+        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.last_review_status, Some(task_run::REVIEW_REJECTED));
+        assert!(updated.last_review_message_id.is_some());
+        assert!(updated.last_reviewed_at.is_some());
+    }
+
+    #[test]
+    fn review_block_reopens_passed_task_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            Some("Coordinator"),
+            STATUS_PASSED,
+        )
+        .unwrap();
+        let from = AgentId::parse("agents/coord-a").unwrap();
+
+        run_with_actor(
+            &ctx,
+            &record.id,
+            task_run::REVIEW_BLOCKED,
+            &["waiting on input".into()],
+            &from,
+        )
+        .unwrap();
+
+        let updated = task_run::read(&record.path).unwrap();
+        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.last_review_status, Some(task_run::REVIEW_BLOCKED));
+    }
+
+    #[test]
+    fn review_accept_keeps_status_metadata_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let running = task_run::create_direct_routed(
+            &ctx,
+            "running-task",
+            "running-task",
+            "agents/coord-a",
+            None,
+            STATUS_RUNNING,
+        )
+        .unwrap();
+        let passed = task_run::create_direct_routed(
+            &ctx,
+            "passed-task",
+            "passed-task",
+            "agents/coord-a",
+            None,
+            STATUS_PASSED,
+        )
+        .unwrap();
+        let from = AgentId::parse("agents/coord-a").unwrap();
+
+        run_with_actor(
+            &ctx,
+            &running.id,
+            task_run::REVIEW_ACCEPTED,
+            &["accepted".into()],
+            &from,
+        )
+        .unwrap();
+        run_with_actor(
+            &ctx,
+            &passed.id,
+            task_run::REVIEW_ACCEPTED,
+            &["accepted".into()],
+            &from,
+        )
+        .unwrap();
+
+        let running = task_run::read(&running.path).unwrap();
+        let passed = task_run::read(&passed.path).unwrap();
+        assert_eq!(running.status, STATUS_RUNNING);
+        assert_eq!(running.last_review_status, Some(task_run::REVIEW_ACCEPTED));
+        assert_eq!(passed.status, STATUS_PASSED);
+        assert_eq!(passed.last_review_status, Some(task_run::REVIEW_ACCEPTED));
+    }
+
+    #[test]
+    fn report_reject_report_loop_uses_same_task_run_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            Some("Coordinator"),
+            STATUS_PASSED,
+        )
+        .unwrap();
+        let from = AgentId::parse("agents/coord-a").unwrap();
+
+        run_with_actor(
+            &ctx,
+            &record.id,
+            task_run::REVIEW_REJECTED,
+            &["needs changes".into()],
+            &from,
+        )
+        .unwrap();
+        crate::commands::task_report::run_with_env(
+            &ctx,
+            &["Agent Completion Report: Summary=fixed".into()],
+            Some(&record.id),
+            Some("agents/run-1-add-schema"),
+        )
+        .unwrap();
+
+        let updated = task_run::read(&record.path).unwrap();
+        let message_id = updated.last_report_message_id.unwrap();
+        assert_eq!(updated.status, STATUS_RUNNING);
+        assert_eq!(updated.last_review_status, Some(task_run::REVIEW_REJECTED));
+        assert!(updated.last_reported_at.is_some());
+
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let message = store
+            .read_for_inspection("agents/coord-a", &message_id)
+            .unwrap()
+            .message
+            .unwrap();
+        assert_eq!(message.meta.from, "agents/run-1-add-schema");
+        assert_eq!(message.meta.to, "agents/coord-a");
+        assert_eq!(
+            message.text_content(),
+            "Agent Completion Report: Summary=fixed"
         );
     }
 

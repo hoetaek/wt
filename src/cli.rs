@@ -797,7 +797,7 @@ pub enum TaskCommand {
     },
     /// Send the current TaskRun completion report to its recorded coordinator
     #[command(
-        long_about = "Send a report from the current TaskRun to the coordinator recorded on that TaskRun.\n\nThe normal task-agent path is `wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\"`. When WT_TASK_RUN_ID is set, wt uses that exact TaskRun. Without WT_TASK_RUN_ID, wt may fall back to the current branch only when exactly one running TaskRun matches. Workflow-linked TaskRuns use their workflow scope automatically. Reports are sent through the file inbox and update TaskRun report metadata."
+        long_about = "Send a report from the current TaskRun to the coordinator recorded on that TaskRun.\n\nThe normal task-agent path is `wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\"`. When WT_TASK_RUN_ID is set, wt uses that exact TaskRun when it is running or passed. Without WT_TASK_RUN_ID, wt may fall back to the current branch only when exactly one running or passed TaskRun matches. Workflow-linked TaskRuns use their workflow scope automatically. Reports are sent through the file inbox and update TaskRun report metadata."
     )]
     Report {
         /// Report message to send
@@ -806,7 +806,7 @@ pub enum TaskCommand {
     },
     /// Send coordinator review feedback to a TaskRun agent
     #[command(
-        long_about = "Send coordinator review feedback to the task agent recorded on a TaskRun.\n\nUse `wt task review <task-run-id> --accept <message>` to accept a report, `--reject` to request changes, or `--block` when the task cannot proceed. Feedback is sent through the file inbox to TaskRun.agent_id with task_run:<id> scope and updates TaskRun review metadata.",
+        long_about = "Send coordinator review feedback to the task agent recorded on a TaskRun.\n\nUse `wt task review <task-run-id> --accept <message>` to accept a report, `--reject` to request changes, or `--block` when the task cannot proceed. Feedback is sent through the file inbox to TaskRun.agent_id with task_run:<id> scope and updates TaskRun review metadata. Rejecting or blocking a passed TaskRun reopens it to running; accepting records metadata only and does not pass a running TaskRun.",
         group(ArgGroup::new("review_status").required(true).args(["accept", "reject", "block"]))
     )]
     Review {

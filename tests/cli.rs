@@ -1575,6 +1575,19 @@ fn task_publish_help_explains_behavior() {
 }
 
 #[test]
+fn task_report_help_explains_reportable_statuses() {
+    wt_command()
+        .args(["task", "report", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("running or passed"))
+        .stdout(predicate::str::contains(
+            "exactly one running or passed TaskRun",
+        ))
+        .stdout(predicate::str::contains("TaskRun report metadata"));
+}
+
+#[test]
 fn task_review_help_explains_behavior() {
     wt_command()
         .args(["task", "review", "--help"])
@@ -1583,6 +1596,8 @@ fn task_review_help_explains_behavior() {
         .stdout(predicate::str::contains("coordinator review feedback"))
         .stdout(predicate::str::contains("TaskRun.agent_id"))
         .stdout(predicate::str::contains("task_run:<id>"))
+        .stdout(predicate::str::contains("reopens it to running"))
+        .stdout(predicate::str::contains("does not pass a running TaskRun"))
         .stdout(predicate::str::contains("--accept"))
         .stdout(predicate::str::contains("--reject"))
         .stdout(predicate::str::contains("--block"));

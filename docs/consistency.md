@@ -342,10 +342,12 @@ message command:
 wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>"
 ```
 
-For a direct running TaskRun, `wt task report` sends direct scope. For a workflow-linked running
-TaskRun, it derives `workflow:<id>` from persisted TaskRun state and sends from the TaskRun
-`agent_id` to the stored `coordinator_id`. Workflow task prompts must therefore not ask agents to
-manually compose raw message scope and recipient arguments themselves.
+For a direct running or passed TaskRun, `wt task report` sends direct scope. For a
+workflow-linked running or passed TaskRun, it derives `workflow:<id>` from persisted TaskRun state
+and sends from the TaskRun `agent_id` to the stored `coordinator_id`. Without
+`WT_TASK_RUN_ID`, branch fallback resolves exactly one running or passed TaskRun and fails with
+candidate ids on ambiguity. Workflow task prompts must therefore not ask agents to manually compose
+raw message scope and recipient arguments themselves.
 
 There is no dynamic `coordinator` recipient alias. Bare `coordinator` is accepted only because
 `AgentId` accepts bare `NAME` and normalizes it to `agents/NAME`; it has the same meaning as the
@@ -382,10 +384,11 @@ wt task review <task-run-id> --accept|--reject|--block "<message>"
 
 `wt task review` sends from the current actor id to the TaskRun's stored `agent_id` using
 `task_run:<task-run-id>` scope. It records `last_review_status`, `last_review_message_id`,
-`last_reviewed_at`, and `updated_at` on the TaskRun. Task-agent hooks may claim
-`task_run:<id>` messages only when both `WT_AGENT_ID` matches `TaskRun.agent_id` and
-`WT_TASK_RUN_ID` matches the scoped TaskRun id. Passing `--agent` to the low-level hook consumer is
-not by itself task-run ownership evidence.
+`last_reviewed_at`, and `updated_at` on the TaskRun. `--reject` and `--block` reopen a passed
+TaskRun to `running` after sending feedback; `--accept` records metadata only and does not pass a
+running TaskRun. Task-agent hooks may claim `task_run:<id>` messages only when both `WT_AGENT_ID`
+matches `TaskRun.agent_id` and `WT_TASK_RUN_ID` matches the scoped TaskRun id. Passing `--agent` to
+the low-level hook consumer is not by itself task-run ownership evidence.
 
 After a file-inbox sender durably writes a message, `wt` may best-effort wake the recipient when it
 can prove a live idle runtime target from canonical state. Task-run-scoped messages wake only when
@@ -1418,8 +1421,10 @@ contract에 포함하지 않는다.
 시작하는 prompt에는 `Task Run Coordinator Handoff` section이 포함되고, 기본 보고 route인
 `wt task report "Agent Completion Report: ..."` 명령이 먼저 들어간다. `wt task report`는
 TaskRun에 저장된 `agent_id`와 `coordinator_id`를 사용해 direct scope 보고를 보낸다. 같은
-section은 fallback으로 현재 coordinator cmux workspace/surface 좌표로 렌더링되는 `cmux send`와
-`cmux send-key ... enter` 명령도 포함한다.
+명령은 TaskRun이 `running` 또는 `passed`일 때 유효하다. `WT_TASK_RUN_ID`가 없으면 현재 branch에서
+running 또는 passed TaskRun이 정확히 하나일 때만 fallback으로 보고 대상을 고르고, 둘 이상이면
+후보 id를 보여주고 실패한다. 같은 section은 fallback으로 현재 coordinator cmux workspace/surface
+좌표로 렌더링되는 `cmux send`와 `cmux send-key ... enter` 명령도 포함한다.
 이것은 Workflow orchestration이나 pass command가 아니다. Task-run agent는
 `PR=none`인 `Agent Completion Report`를 coordinator에게 보내고, coordinator가 review,
 landing, cleanup을 명시적으로 처리할 때까지 기다린다. cmux 좌표는 현재 transport 정보일
@@ -1434,8 +1439,9 @@ Workflow coordinator handoff는 `stack` 전용 개념이 아니라 `wt run workf
 기본 보고 route인 `wt task report "Agent Completion Report: ..."` 명령이 먼저 들어간다.
 Workflow-prepared TaskRun은 stable `agent_id`, `coordinator_id`, `coordinator_label`을
 저장하고, `wt task report`는 그 TaskRun context에서 `workflow:<workflow-id>` scope를
-자동으로 적용한다. Prompt는 raw message recipient/scope를 agent가 직접 구성하도록 지시하지
-않는다. 같은 section은 fallback으로 현재 coordinator cmux
+자동으로 적용한다. 이 report route는 TaskRun이 `running`이거나 `passed`일 때 열려 있다.
+Prompt는 raw message recipient/scope를 agent가 직접 구성하도록 지시하지 않는다. 같은 section은
+fallback으로 현재 coordinator cmux
 workspace/surface 좌표로 렌더링되는 `cmux send`와 `cmux send-key ... enter` 명령도
 포함한다. cmux 좌표는 현재 transport 정보일 뿐이므로 Workflow file, TaskRun, TaskDocument에
 저장하지 않는다. file inbox route가 unavailable이면 agent는 cmux fallback으로 같은
@@ -1466,9 +1472,11 @@ transport일 뿐 상태 전이가 아니다. Review는 항상 coordinator flow�
 task agent에게 전달하는 canonical feedback은
 `wt task review <task-run-id> --accept|--reject|--block "<message>"`이며, 이 명령은
 TaskRun의 `agent_id`로 `task_run:<id>` scope 메시지를 보내고 TaskRun review metadata를
-갱신한다. Pull request review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한
-check를 다시 돌린 뒤 commit/push하고 PR 본문이 stale해졌을 때만 PR 본문과 Agent Completion
-Report를 갱신한다.
+갱신한다. Late review after pass는 정상 flow다. `--reject`와 `--block`은 passed TaskRun을
+`running`으로 되열고, task agent는 같은 TaskRun route로 다시 `wt task report`를 보낼 수
+있다. `--accept`는 metadata-only이며 running TaskRun을 `passed`로 만들지 않는다. Pull request
+review나 coordinator가 전달한 리뷰는 해당 task agent가 반영하고, 필요한 check를 다시 돌린 뒤
+commit/push하고 PR 본문이 stale해졌을 때만 PR 본문과 Agent Completion Report를 갱신한다.
 실행자나 coordinator가 `wt inspect`, 필요한 경우 pull request, 보고를 확인한 뒤
 `wt workflow pass`를 실행할 때 TaskRun 상태가 `passed`로 전이된다. Pull request가 있으면
 coordinator는 workflow pass나 landing 전에 pull-request review gate를 통과했는지 별도로 확인한다.

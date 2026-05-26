@@ -12,7 +12,7 @@ pub(crate) fn run(ctx: &Ctx, message: &[String]) -> Result<()> {
     run_with_env(ctx, message, task_run_id.as_deref(), agent_id.as_deref())
 }
 
-fn run_with_env(
+pub(super) fn run_with_env(
     ctx: &Ctx,
     message: &[String],
     task_run_id: Option<&str>,
@@ -60,19 +60,17 @@ fn resolve_report_task_run(ctx: &Ctx, task_run_id: Option<&str>) -> Result<TaskR
         .context("WT_TASK_RUN_ID is not set and current branch could not be resolved")?;
     let mut candidates = task_run::list(ctx)?
         .into_iter()
-        .filter(|record| {
-            record.run.branch == branch && record.run.status == task_run::STATUS_RUNNING
-        })
+        .filter(|record| record.run.branch == branch && record.run.status.is_reportable())
         .collect::<Vec<_>>();
     candidates.sort_by(task_run::compare_task_run_records);
 
     match candidates.len() {
         1 => Ok(candidates.remove(0)),
         0 => bail!(
-            "wt task report could not resolve a running TaskRun. WT_TASK_RUN_ID is not set and no running TaskRun matches current branch `{branch}`."
+            "wt task report could not resolve a reportable TaskRun. WT_TASK_RUN_ID is not set and no running or passed TaskRun matches current branch `{branch}`."
         ),
         _ => bail!(
-            "wt task report could not resolve exactly one running TaskRun for current branch `{branch}`. Candidate TaskRun ids: {}. Set WT_TASK_RUN_ID to the intended TaskRun id.",
+            "wt task report could not resolve exactly one reportable TaskRun for current branch `{branch}`. Candidate running/passed TaskRun ids: {}. Set WT_TASK_RUN_ID to the intended TaskRun id.",
             candidates
                 .iter()
                 .map(|record| record.id.as_str())
@@ -83,9 +81,9 @@ fn resolve_report_task_run(ctx: &Ctx, task_run_id: Option<&str>) -> Result<TaskR
 }
 
 fn ensure_reportable_status(record: &TaskRunRecord) -> Result<()> {
-    if record.run.status != task_run::STATUS_RUNNING {
+    if !record.run.status.is_reportable() {
         bail!(
-            "wt task report requires a running TaskRun. TaskRun {} is {}.",
+            "wt task report requires a running or passed TaskRun. TaskRun {} is {}.",
             record.id,
             record.run.status
         );
@@ -163,7 +161,7 @@ mod tests {
     use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CommandRunner, Ctx};
-    use crate::task_run::{STATUS_PASSED, STATUS_RUNNING};
+    use crate::task_run::{STATUS_FAILED, STATUS_PASSED, STATUS_RUNNING};
     use anyhow::Result;
     use std::path::Path;
     use std::sync::Arc;
@@ -283,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn report_rejects_explicit_non_running_task_run() {
+    fn report_allows_explicit_passed_task_run() {
         let dir = tempfile::tempdir().unwrap();
         let runner = Arc::new(MockRunner::new());
         let ctx = ctx(dir.path(), runner);
@@ -297,6 +295,46 @@ mod tests {
         )
         .unwrap();
 
+        run_with_env(
+            &ctx,
+            &["Agent Completion Report: Summary=late update".into()],
+            Some(&record.id),
+            Some("agents/run-1-add-schema"),
+        )
+        .unwrap();
+
+        let updated = task_run::read(&record.path).unwrap();
+        let message_id = updated.last_report_message_id.unwrap();
+        assert!(updated.last_reported_at.is_some());
+        assert_eq!(updated.status, STATUS_PASSED);
+
+        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let message = store
+            .read_for_inspection("agents/coord-a", &message_id)
+            .unwrap()
+            .message
+            .unwrap();
+        assert_eq!(
+            message.text_content(),
+            "Agent Completion Report: Summary=late update"
+        );
+    }
+
+    #[test]
+    fn report_rejects_explicit_non_reportable_task_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = Arc::new(MockRunner::new());
+        let ctx = ctx(dir.path(), runner);
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            None,
+            STATUS_FAILED,
+        )
+        .unwrap();
+
         let err = run_with_env(
             &ctx,
             &["Agent Completion Report: Summary=done".into()],
@@ -306,8 +344,8 @@ mod tests {
         .unwrap_err();
 
         let message = format!("{err:#}");
-        assert!(message.contains("requires a running TaskRun"));
-        assert!(message.contains("is passed"));
+        assert!(message.contains("requires a running or passed TaskRun"));
+        assert!(message.contains("is failed"));
     }
 
     #[test]
@@ -340,7 +378,45 @@ mod tests {
     }
 
     #[test]
-    fn report_branch_fallback_fails_on_ambiguous_running_task_runs() {
+    fn report_branch_fallback_uses_single_reportable_task_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_response("feature", true);
+        let runner = Arc::new(runner);
+        let ctx = ctx(dir.path(), Arc::clone(&runner));
+        let record = task_run::create_direct_routed(
+            &ctx,
+            "first",
+            "feature",
+            "agents/coord-a",
+            None,
+            STATUS_PASSED,
+        )
+        .unwrap();
+        task_run::create_direct_routed(
+            &ctx,
+            "failed",
+            "feature",
+            "agents/coord-a",
+            None,
+            STATUS_FAILED,
+        )
+        .unwrap();
+
+        run_with_env(
+            &ctx,
+            &["Agent Completion Report: Summary=late report".into()],
+            None,
+            None,
+        )
+        .unwrap();
+
+        let updated = task_run::read(&record.path).unwrap();
+        assert!(updated.last_report_message_id.is_some());
+    }
+
+    #[test]
+    fn report_branch_fallback_fails_on_ambiguous_reportable_task_runs() {
         let dir = tempfile::tempdir().unwrap();
         let mut runner = MockRunner::new();
         runner.add_response("feature", true);
@@ -361,7 +437,7 @@ mod tests {
             "feature",
             "agents/coord-a",
             None,
-            STATUS_RUNNING,
+            STATUS_PASSED,
         )
         .unwrap();
 
@@ -374,7 +450,8 @@ mod tests {
         .unwrap_err();
 
         let message = format!("{err:#}");
-        assert!(message.contains("could not resolve exactly one running TaskRun"));
+        assert!(message.contains("could not resolve exactly one reportable TaskRun"));
+        assert!(message.contains("Candidate running/passed TaskRun ids"));
         assert!(message.contains("run-first"));
         assert!(message.contains("run-second"));
     }

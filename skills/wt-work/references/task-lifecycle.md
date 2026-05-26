@@ -41,5 +41,10 @@ model, status boundaries, and pass vs cleanup commands.
 immediately. For `single`, `batch`, the final stack task, or a stack task
 whose successor should wait, omit it.
 
+Late review can reopen a passed TaskRun. Use `wt task review <task-run-id>
+--reject ...` or `--block ...` to send scoped feedback and transition
+`passed` back to `running`; the task agent then reports again with
+`wt task report`.
+
 `wt done` is cleanup only. Do not use it as a substitute for `wt workflow
 pass`. Cleanup runs after landing is proven or discard intent is explicit.

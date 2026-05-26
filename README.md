@@ -342,10 +342,12 @@ handoff instructions. The normal report route is:
 wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>"
 ```
 
-`wt task report` uses the current running TaskRun's stored coordinator route and
-applies direct or workflow scope from TaskRun state automatically. Prompts also
-include fallback cmux coordinates with a `cmux send --workspace ... --surface ...`
-report command and a matching `cmux send-key ... enter` command.
+`wt task report` uses the current running or passed TaskRun's stored coordinator
+route and applies direct or workflow scope from TaskRun state automatically.
+Without `WT_TASK_RUN_ID`, branch fallback resolves exactly one running or passed
+TaskRun and fails on ambiguity. Prompts also include fallback cmux coordinates
+with a `cmux send --workspace ... --surface ...` report command and a matching
+`cmux send-key ... enter` command.
 
 Low-level `wt msg send --to agents/<id> ...` remains an explicit file-inbox
 escape hatch. Workflow ownership belongs in message scope or TaskRun routing
@@ -367,7 +369,10 @@ wt task review <task-run-id> --accept|--reject|--block "<message>"
 
 The feedback is addressed to the TaskRun's stored task-agent route with
 `task_run:<id>` scope, and updates the TaskRun's latest review status, message
-id, and timestamp.
+id, and timestamp. Late review after pass is normal: `--reject` and `--block`
+reopen a passed TaskRun to `running` so the task agent can report again through
+the same route. `--accept` records metadata only and does not pass a running
+TaskRun.
 
 Immediate `wt run task` work reports `PR=none`. Workflow tasks follow the
 prepared workflow policy. Omit `--pr` to use the effective `[workflow]`
