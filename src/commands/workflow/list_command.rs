@@ -98,6 +98,39 @@ struct InvalidWorkflowRow {
     error: String,
 }
 
+#[derive(Debug)]
+pub(crate) struct ActiveWorkflowInventoryIssue {
+    pub id: String,
+    pub path: String,
+    pub error: String,
+}
+
+pub(crate) fn active_inventory_issues(ctx: &Ctx) -> Result<Vec<ActiveWorkflowInventoryIssue>> {
+    let mut issues = Vec::new();
+
+    for path in workflow_store::workflow_paths(ctx)? {
+        let id = workflow_store::id_from_path(&path)?;
+        match workflow_store::read(&path) {
+            Ok(metadata) => {
+                if let Err(err) = read_workflow_states(ctx, &path, &metadata) {
+                    issues.push(ActiveWorkflowInventoryIssue {
+                        id,
+                        path: workflow_relative_path(ctx, &path),
+                        error: format!("{err:#}"),
+                    });
+                }
+            }
+            Err(err) => issues.push(ActiveWorkflowInventoryIssue {
+                id,
+                path: workflow_relative_path(ctx, &path),
+                error: format!("{err:#}"),
+            }),
+        }
+    }
+
+    Ok(issues)
+}
+
 fn collect(ctx: &Ctx) -> Result<WorkflowListReport> {
     let mut workflows = Vec::new();
     let mut invalid_workflows = Vec::new();

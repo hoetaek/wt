@@ -289,7 +289,7 @@ pub enum Commands {
     },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/runtime/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to agents/<agent> <message>` as a low-level explicit inbox write. Task completion should use `wt task report <message>`, which derives direct or workflow scope from the current TaskRun; coordinator feedback should use `wt task review <task-run-id> --accept|--reject|--block <message>`, which sends task_run:<id> scope to the recorded task agent. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --agent <agent> --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent falls back to WT_AGENT_ID. `wt msg check-inbox --silent` is an internal hook consumer for the implicit inbox resolved from WT_AGENT_ID, then the current live session marker; missing both exits successfully with no output. `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages and authorized workflow/task_run scoped messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/runtime/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to agents/<agent> <message>` as a low-level explicit inbox write. Task completion should use `wt task report <message>`, which derives direct or workflow scope from the current TaskRun; coordinator feedback should use `wt task review <task-run-id> --accept|--reject|--block <message>`, which sends task_run:<id> scope to the recorded task agent. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --agent <agent> --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent falls back to WT_AGENT_ID. `wt msg check-inbox --silent` is an internal hook consumer for the implicit inbox resolved from WT_AGENT_ID, then the current live identity anchor; missing both exits successfully with no output. `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages and authorized workflow/task_run scoped messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -317,9 +317,9 @@ pub enum Commands {
         /// Run checks against the effective config for <git-common-dir>/wt/config/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
-        /// Delete one env-keyed session marker by display key, for example surface:A22D...
-        #[arg(long, value_name = "KEY")]
-        prune_env_markers: Option<String>,
+        /// Delete one env-keyed identity anchor by display key, for example surface:A22D...
+        #[arg(long = "prune-env-anchors", value_name = "KEY")]
+        prune_env_anchors: Option<String>,
     },
     /// Print, edit, or refactor wt config files
     #[command(
@@ -385,15 +385,15 @@ pub enum Commands {
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum SessionCommand {
-    /// Write a session identity marker and print shell exports
+    /// Write a session identity anchor and print shell exports
     #[command(
-        long_about = "Write a session identity marker for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set my-coord)\"`, so the current shell gets WT_AGENT_ID immediately while later wt invocations from the same anchor can resolve the marker."
+        long_about = "Write a session identity anchor for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set my-coord)\"`, so the current shell gets WT_AGENT_ID immediately while later wt invocations from the same anchor can resolve the identity anchor."
     )]
     Set {
         /// Agent id as NAME or agents/NAME
         id: String,
     },
-    /// Remove the current session identity marker and print shell unsets
+    /// Remove the current session identity anchor and print shell unsets
     Unset,
     /// Print the current session identity resolution
     Whoami {
@@ -619,7 +619,7 @@ pub enum MsgCommand {
     /// Claim deliverable inbox messages, emit hook JSON, and acknowledge delivery
     #[command(hide = true)]
     CheckInbox {
-        /// Explicit single agent id as NAME or agents/NAME; omitted uses WT_AGENT_ID, then the current live session marker
+        /// Explicit single agent id as NAME or agents/NAME; omitted uses WT_AGENT_ID, then the current live identity anchor
         #[arg(long)]
         agent: Option<String>,
         /// Internal hook event name supplied by wt-managed hook templates; omitted preserves the compatible UserPromptSubmit default
@@ -1132,7 +1132,7 @@ mod tests {
             cli.command,
             Some(Commands::Doctor {
                 profile: None,
-                prune_env_markers: None
+                prune_env_anchors: None
             })
         ));
     }
@@ -1145,7 +1145,7 @@ mod tests {
             cli.command,
             Some(Commands::Doctor {
                 profile: None,
-                prune_env_markers: None
+                prune_env_anchors: None
             })
         ));
     }
@@ -2535,7 +2535,7 @@ mod tests {
             cli.command,
             Some(Commands::Doctor {
                 profile: None,
-                prune_env_markers: None
+                prune_env_anchors: None
             })
         ));
     }
@@ -2547,19 +2547,19 @@ mod tests {
             cli.command,
             Some(Commands::Doctor {
                 profile: Some(ref profile),
-                prune_env_markers: None,
+                prune_env_anchors: None,
             }) if profile == "codex"
         ));
     }
 
     #[test]
-    fn doctor_accepts_prune_env_markers_flag() {
-        let cli = parse(&["wt", "doctor", "--prune-env-markers", "surface:A22D"]);
+    fn doctor_accepts_prune_env_anchors_flag() {
+        let cli = parse(&["wt", "doctor", "--prune-env-anchors", "surface:A22D"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Doctor {
                 profile: None,
-                prune_env_markers: Some(ref key),
+                prune_env_anchors: Some(ref key),
             }) if key == "surface:A22D"
         ));
     }

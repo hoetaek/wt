@@ -679,7 +679,7 @@ fn no_args_prints_help_successfully() {
 }
 
 #[test]
-fn session_set_writes_marker_and_prints_exports() {
+fn session_set_writes_identity_anchor_and_prints_exports() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -700,10 +700,10 @@ fn session_set_writes_marker_and_prints_exports() {
     let files = toml_files(&anchor_dir(temp.path(), "my-coord"));
     assert_eq!(files.len(), 1);
     let content = std::fs::read_to_string(&files[0]).unwrap();
-    let marker: toml::Value = toml::from_str(&content).unwrap();
-    assert_eq!(marker["id"].as_str(), Some("agents/my-coord"));
-    assert_eq!(marker["anchor_kind"].as_str(), Some("surface"));
-    assert_eq!(marker["anchor_value"].as_str(), Some("surface-1"));
+    let identity_anchor: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(identity_anchor["id"].as_str(), Some("agents/my-coord"));
+    assert_eq!(identity_anchor["anchor_kind"].as_str(), Some("surface"));
+    assert_eq!(identity_anchor["anchor_value"].as_str(), Some("surface-1"));
 }
 
 #[test]
@@ -737,7 +737,7 @@ fn session_set_rejects_invalid_ids_without_stdout() {
 }
 
 #[test]
-fn session_whoami_reports_marker_and_json() {
+fn session_whoami_reports_identity_anchor_and_json() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -761,10 +761,10 @@ fn session_whoami_reports_marker_and_json() {
         .assert()
         .success()
         .stdout(predicate::str::contains("id: agents/my-coord"))
-        .stdout(predicate::str::contains("source: marker"))
+        .stdout(predicate::str::contains("source: identity-anchor"))
         .stdout(predicate::str::contains("anchor_kind: surface"))
         .stdout(predicate::str::contains("anchor_value: surface-1"))
-        .stdout(predicate::str::contains("marker: "))
+        .stdout(predicate::str::contains("identity_anchor: "))
         .stdout(predicate::str::contains("cmux_workspace_id: workspace:1"));
 
     let output = wt_command()
@@ -783,11 +783,11 @@ fn session_whoami_reports_marker_and_json() {
         .clone();
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["id"].as_str(), Some("agents/my-coord"));
-    assert_eq!(value["source"].as_str(), Some("marker"));
+    assert_eq!(value["source"].as_str(), Some("identity-anchor"));
     assert_eq!(value["anchor_kind"].as_str(), Some("surface"));
     assert_eq!(value["anchor_value"].as_str(), Some("surface-1"));
     assert!(
-        value["marker_path"]
+        value["identity_anchor_path"]
             .as_str()
             .unwrap()
             .contains(".git/wt/runtime/agents/my-coord/anchors")
@@ -795,7 +795,7 @@ fn session_whoami_reports_marker_and_json() {
 }
 
 #[test]
-fn session_unset_removes_marker_and_whoami_reports_none() {
+fn session_unset_removes_identity_anchor_and_whoami_reports_none() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -831,7 +831,7 @@ fn session_unset_removes_marker_and_whoami_reports_none() {
 }
 
 #[test]
-fn session_whoami_reports_corrupt_marker_but_unset_can_recover() {
+fn session_whoami_reports_corrupt_identity_anchor_but_unset_can_recover() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -857,7 +857,7 @@ fn session_whoami_reports_corrupt_marker_but_unset_can_recover() {
         .assert()
         .failure()
         .stdout("")
-        .stderr(predicate::str::contains("Failed to parse marker"));
+        .stderr(predicate::str::contains("Failed to parse identity anchor"));
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "session", "unset"])
@@ -1701,7 +1701,7 @@ fn msg_help_explains_agent_inbox_contract() {
         .stdout(predicate::str::contains("hook JSON"))
         .stdout(predicate::str::contains("Explicit single agent id"))
         .stdout(predicate::str::contains("WT_AGENT_ID"))
-        .stdout(predicate::str::contains("current live session marker"));
+        .stdout(predicate::str::contains("current live identity anchor"));
 
     wt_command()
         .args(["msg", "list", "--help"])
@@ -2425,7 +2425,7 @@ run = "run-2026-05-20-001-workflow-report"
 }
 
 #[test]
-fn task_report_workflow_scope_delivers_to_current_marker_coordinator_inbox() {
+fn task_report_workflow_scope_delivers_to_current_identity_anchor_coordinator_inbox() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     write_task_run_file_with_routes(
@@ -2957,7 +2957,7 @@ fn msg_check_empty_inbox_exits_quietly() {
 }
 
 #[test]
-fn msg_check_inbox_without_agent_and_no_marker_exits_quietly_without_creating_marker() {
+fn msg_check_inbox_no_agent_no_anchor_exits_quietly_without_creating_anchor() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -3009,7 +3009,7 @@ fn msg_check_inbox_without_agent_uses_wt_agent_id_env() {
 }
 
 #[test]
-fn msg_check_inbox_without_agent_uses_current_live_session_marker() {
+fn msg_check_inbox_without_agent_uses_current_live_identity_anchor() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -3069,7 +3069,7 @@ fn msg_check_inbox_without_agent_uses_current_live_session_marker() {
 }
 
 #[test]
-fn msg_check_inbox_without_agent_ignores_non_current_session_marker() {
+fn msg_check_inbox_without_agent_ignores_non_current_identity_anchor() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -3120,7 +3120,7 @@ fn msg_check_inbox_without_agent_ignores_non_current_session_marker() {
 }
 
 #[test]
-fn msg_check_inbox_without_agent_prefers_wt_agent_id_over_session_marker() {
+fn msg_check_inbox_without_agent_prefers_wt_agent_id_over_identity_anchor() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 

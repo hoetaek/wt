@@ -134,7 +134,7 @@ aliases. Migration, import, or repair code that still touches a legacy root must
 transform the data into one of the four canonical buckets, record the canonical
 result, and leave later code paths on bucket readers.
 
-Legacy `agent.state/` wait observations and `sessions/` markers are runtime
+Legacy `agent.state/` wait observations and `sessions/` identity anchors are runtime
 actor context. `wt doctor` should surface them as legacy roots and `wt init`
 should reject bootstrapping over them; neither command should silently treat
 them as canonical state. The canonical replacements are
@@ -426,8 +426,8 @@ wt msg check-inbox
 ```
 
 Without `--agent`, `check-inbox` first reads valid `WT_AGENT_ID`. If that env is absent, it resolves
-the current live session marker and reads that marker id's inbox. If neither source exists, it exits
-successfully with no output and does not create a marker. Before rendering hook output `check-inbox`
+the current live identity anchor and reads that anchor id's inbox. If neither source exists, it exits
+successfully with no output and does not create an identity anchor. Before rendering hook output `check-inbox`
 reclaims expired leases according to the delivery lifecycle policy, claims deliverable messages from
 `inbox/new` or eligible `inbox/retry`, prints JSON containing
 `hookSpecificOutput.additionalContext`, and acknowledges the claims into `inbox/delivered/` only
@@ -462,7 +462,7 @@ the low-level hook consumer is not by itself task-run ownership evidence.
 After a file-inbox sender durably writes a message, `wt` may best-effort wake the recipient when it
 can prove a live idle runtime target from canonical state. Task-run-scoped messages wake only when
 the scoped TaskRun's recorded `agent_id` matches `meta.to`; direct messages may wake when exactly
-one running TaskRun owns `meta.to` or when `meta.to` has a live surface session marker. Wake attempts
+one running TaskRun owns `meta.to` or when `meta.to` has a live surface identity anchor. Wake attempts
 are internal delivery help: they do not create another message, do not change message delivery
 state, do not add a user-facing command, and must not make a successful inbox write fail merely
 because cmux/runtime observation is unavailable.
@@ -646,7 +646,7 @@ Claude Code inbox polling adapter는 `wt setup`의 내부 step이다. 이 step�
 `wt msg check-inbox --hook-event-name <event> --silent`를 non-blocking shell wrapper로
 실행한다. 성공한 delivery의 stdout hook JSON은 그대로 보존하고, 실패 stderr는 agent UI에
 드러내지 않으며 command status는 0으로 끝난다. Receive identity는 `check-inbox` 계약에 따라
-`WT_AGENT_ID`, current live session marker, no-op 순서로 결정된다.
+`WT_AGENT_ID`, current live identity anchor, no-op 순서로 결정된다.
 
 ```bash
 wt msg check-inbox --hook-event-name UserPromptSubmit --silent 2>/dev/null || true
@@ -673,7 +673,7 @@ id에 영구로 묶이면 안 된다. 두 event의 기본 hook command는
 `wt msg check-inbox --hook-event-name <event> --silent`를 non-blocking shell wrapper로
 실행한다. 성공한 delivery의 stdout hook JSON은 그대로 보존하고, 실패 stderr는 agent UI에
 드러내지 않으며 command status는 0으로 끝난다. Receive identity는 `check-inbox` 계약에 따라
-`WT_AGENT_ID`, current live session marker, no-op 순서로 결정된다.
+`WT_AGENT_ID`, current live identity anchor, no-op 순서로 결정된다.
 
 ```bash
 wt msg check-inbox --hook-event-name PostToolUse --silent 2>/dev/null || true
@@ -708,7 +708,7 @@ wt claude
 이 두 명령은 현재 git branch에서 `<branch_slug>`를 계산해 `WT_AGENT_ID=agents/<branch_slug>`를
 agent process에 주입하고, 제거된 legacy coordinator routing env는 child process에서 제거한다.
 사용자가 직접 `codex` 또는 `claude`를 실행하면 wt는 환경변수를 주입하지 않는다. 이 경우 hook
-dispatcher는 current live session marker가 있으면 그 marker inbox를 읽고, marker도 없으면
+dispatcher는 current live identity anchor가 있으면 그 anchor inbox를 읽고, anchor도 없으면
 조용히 no-op 한다.
 
 같은 worktree에서 여러 agent를 띄울 때는 첫 positional argument로 role을 명시한다.

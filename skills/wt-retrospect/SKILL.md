@@ -173,7 +173,7 @@ next_adjustment = ""
 [evidence]
 key_observations = ["..."]       # concrete facts established during the loop
 commands_that_proved_things = ["..."]
-experiments = ["<git-common-dir>/wt/experiments/<name>.md"]
+experiments = ["<git-common-dir>/wt/planning/specs/<slug>/10-review.md"]
 prs = ["#<n>", ...]              # optional
 
 [keep]

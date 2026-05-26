@@ -504,10 +504,10 @@ fn wait_observation_agent_id(ctx: &Ctx, work: &work::Work) -> Result<Option<Agen
         kind: AnchorKind::Surface,
         value: surface_id.to_string(),
     };
-    let Some(marker) = identity_locator::read_marker(ctx, &key)? else {
+    let Some(anchor) = identity_locator::read_identity_anchor(ctx, &key)? else {
         return Ok(None);
     };
-    Ok(AgentId::parse(&marker.id).ok())
+    Ok(AgentId::parse(&anchor.id).ok())
 }
 
 fn wait_observation_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
@@ -1379,7 +1379,7 @@ mod tests {
         add_worktree_list(&mut runner, &fixture);
         add_running_observation(&mut runner, &fixture);
         let ctx = fixture.ctx(runner, OutputMode::Text);
-        identity_locator::write_marker(
+        identity_locator::write_identity_anchor(
             &ctx,
             &AnchorKey {
                 kind: AnchorKind::Surface,

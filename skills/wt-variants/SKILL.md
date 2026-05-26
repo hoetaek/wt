@@ -22,7 +22,7 @@ Object model and TaskRun semantics: see
 - one profile-specific TaskRun/worktree/branch per variant
 
 The workflow TOML stores `profiles = [...]` and `[[tasks.runs]]` mappings. The
-variant instructions live in `<git-common-dir>/wt/profiles/<name>/profile.toml` or
+variant instructions live in `<git-common-dir>/wt/config/profiles/<name>/profile.toml` or
 `prompts/workflow.append.md`, not in the workflow file.
 
 ## Boundaries
@@ -48,7 +48,7 @@ git status --short --branch
 find . -maxdepth 2 -name AGENTS.md -o -name AGENTS.override.md
 sed -n '90,115p' docs/consistency.md 2>/dev/null || true
 common_dir="$(git rev-parse --git-common-dir)"
-find "$common_dir/wt/ideas" "$common_dir/wt/tasks" "$common_dir/wt/workflows" -maxdepth 1 -type f 2>/dev/null | sort
+find "$common_dir/wt/planning/ideas" "$common_dir/wt/execution/tasks" "$common_dir/wt/execution/workflows" -maxdepth 1 -type f 2>/dev/null | sort
 wt config 2>/dev/null || ./target/debug/wt config 2>/dev/null || true
 ```
 
@@ -67,7 +67,7 @@ three profiles that only reword the same instruction.
 
 ## TaskDocument
 
-Create one shared task in `<git-common-dir>/wt/tasks/<key>.toml`.
+Create one shared task in `<git-common-dir>/wt/execution/tasks/<key>.toml`.
 
 The task body should include:
 
@@ -83,7 +83,7 @@ each run must follow its selected profile.
 
 ## Profiles
 
-Create one profile per variant under `<git-common-dir>/wt/profiles/<profile>/profile.toml`.
+Create one profile per variant under `<git-common-dir>/wt/config/profiles/<profile>/profile.toml`.
 
 Each matrix profile must include an explicit `[agent]` section copied from the
 current effective config or chosen deliberately for the run. Do not rely on a
@@ -151,7 +151,7 @@ Then verify:
 
 ```bash
 ./target/debug/wt workflow show <workflow-id>
-sed -n '1,180p' "$(git rev-parse --git-common-dir)/wt/workflows/<workflow-id>.toml"
+sed -n '1,180p' "$(git rev-parse --git-common-dir)/wt/execution/workflows/<workflow-id>.toml"
 ```
 
 The workflow should store the profile names and one `[[tasks.runs]]` entry per

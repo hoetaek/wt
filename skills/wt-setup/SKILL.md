@@ -55,10 +55,10 @@ Never read or print secret file contents such as `.env`.
 
 Choose the file by ownership, not convenience:
 
-- `<git-common-dir>/wt/config.toml`: personal repo config, local paths, local
+- `<git-common-dir>/wt/config/local.toml`: personal repo config, local paths, local
   agent commands, private runtime details, personal defaults.
 - `.wt.toml`: project integration config contributors should share.
-- `<git-common-dir>/wt/profiles/<name>/profile.toml`: named runtime profile only
+- `<git-common-dir>/wt/config/profiles/<name>/profile.toml`: named runtime profile only
   when reusable structured profile config is worth the extra file.
 
 Do not silently move settings between shared/private ownership. If existing

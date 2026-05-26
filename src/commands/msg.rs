@@ -286,10 +286,10 @@ fn inbox_agents_from_context(ctx: &Ctx) -> Result<Vec<String>> {
         return Ok(vec![agent.as_str().to_string()]);
     }
 
-    let Some(marker) = identity_locator::resolve_identity(ctx)? else {
+    let Some(anchor) = identity_locator::resolve_identity(ctx)? else {
         return Ok(Vec::new());
     };
-    let agent = AgentId::parse(&marker.id).context("Invalid live session marker agent id")?;
+    let agent = AgentId::parse(&anchor.id).context("Invalid live identity anchor agent id")?;
     Ok(vec![agent.as_str().to_string()])
 }
 

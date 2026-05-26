@@ -1,7 +1,10 @@
 use crate::commands::agent_hook;
+use crate::commands::workflow;
 use crate::config::{AgentCli, Config, IssueProviderType, SiteProvider};
 use crate::context::Ctx;
-use crate::services::identity_locator::{self, AnchorKey, AnchorKind, Marker, MarkerLiveness};
+use crate::services::identity_locator::{
+    self, AnchorKey, AnchorKind, IdentityAnchor, IdentityAnchorLiveness,
+};
 use crate::services::supervisor_registration::{
     Registration, list_registrations, read_registration, registration_path, remove_registration,
     supervisor_is_alive,
@@ -26,11 +29,11 @@ const CODEX_CMUX_HOOK_EVENTS: [(&str, &str); 5] = [
     ("UserPromptSubmit", "user_prompt_submit"),
 ];
 
-pub fn run(ctx: &Ctx, profile: Option<&str>, prune_env_markers: Option<&str>) -> Result<()> {
+pub fn run(ctx: &Ctx, profile: Option<&str>, prune_env_anchors: Option<&str>) -> Result<()> {
     let resolved = resolve_config(ctx, profile)?;
     let config = resolved.config();
-    if let Some(key) = prune_env_markers {
-        prune_env_marker(ctx, key)?;
+    if let Some(key) = prune_env_anchors {
+        prune_env_anchor(ctx, key)?;
     }
 
     if ctx.is_json() {
@@ -51,7 +54,8 @@ pub fn run(ctx: &Ctx, profile: Option<&str>, prune_env_markers: Option<&str>) ->
     check_per_machine_setup(ctx, config);
     check_repo_setup(ctx);
     check_codex_hook_readiness(ctx, config);
-    if let Err(err) = check_session_markers(ctx) {
+    check_active_workflow_inventory(ctx);
+    if let Err(err) = check_identity_anchors(ctx) {
         ctx.ui
             .print_warning(&format!("Identity anchors: scan failed ({err})"));
     }
@@ -83,13 +87,14 @@ fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorRepo
     collect_per_machine_setup_checks(ctx, config, &mut checks);
     collect_repo_setup_checks(ctx, &mut checks);
     collect_codex_hook_readiness_checks(config, &mut checks);
-    let session_markers = match scan_session_markers(ctx) {
+    collect_active_workflow_inventory_checks(ctx, &mut checks);
+    let identity_anchors = match scan_identity_anchors(ctx) {
         Ok(scan) => {
             for warning in scan.warnings {
                 checks.push(DoctorCheck::warning(
-                    "session_markers",
+                    "identity_anchors",
                     format!(
-                        "skipped marker {}: {}",
+                        "skipped identity anchor {}: {}",
                         warning.path.display(),
                         warning.message
                     ),
@@ -99,10 +104,10 @@ fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorRepo
         }
         Err(err) => {
             checks.push(DoctorCheck::warning(
-                "session_markers",
+                "identity_anchors",
                 format!("scan failed: {err}"),
             ));
-            SessionMarkerReport {
+            IdentityAnchorReport {
                 scanned: 0,
                 stale_cleaned: 0,
                 env_keyed_listed_for_review: 0,
@@ -128,7 +133,7 @@ fn build_report(ctx: &Ctx, config: &Config, profile: Option<&str>) -> DoctorRepo
     DoctorReport {
         profile: profile.map(str::to_string),
         checks,
-        session_markers,
+        identity_anchors,
         supervisors,
     }
 }
@@ -166,12 +171,12 @@ struct DoctorReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     profile: Option<String>,
     checks: Vec<DoctorCheck>,
-    session_markers: SessionMarkerReport,
+    identity_anchors: IdentityAnchorReport,
     supervisors: SupervisorReport,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct SessionMarkerReport {
+struct IdentityAnchorReport {
     scanned: usize,
     stale_cleaned: usize,
     env_keyed_listed_for_review: usize,
@@ -567,6 +572,55 @@ fn collect_repo_setup_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
     }
 
     collect_legacy_runtime_actor_checks(ctx, checks);
+}
+
+fn check_active_workflow_inventory(ctx: &Ctx) {
+    match workflow::active_inventory_issues(ctx) {
+        Ok(issues) if issues.is_empty() => ctx.ui.print_step("Active workflow inventory: ok"),
+        Ok(issues) => {
+            ctx.ui.print_warning(&format!(
+                "Active workflow inventory: {} issue(s). Run `wt workflow list` and archive or repair affected workflows.",
+                issues.len()
+            ));
+            for issue in issues {
+                ctx.ui.print_warning(&format!(
+                    "Active workflow inventory issue: {} path={} reason={}",
+                    issue.id, issue.path, issue.error
+                ));
+            }
+        }
+        Err(err) => ctx
+            .ui
+            .print_warning(&format!("Active workflow inventory: scan failed ({err})")),
+    }
+}
+
+fn collect_active_workflow_inventory_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
+    match workflow::active_inventory_issues(ctx) {
+        Ok(issues) if issues.is_empty() => checks.push(DoctorCheck::ok(
+            "active_workflow_inventory",
+            Some("ok".into()),
+        )),
+        Ok(issues) => {
+            checks.push(DoctorCheck::warning(
+                "active_workflow_inventory",
+                format!(
+                    "{} issue(s); run `wt workflow list` and archive or repair affected workflows.",
+                    issues.len()
+                ),
+            ));
+            for issue in issues {
+                checks.push(DoctorCheck::warning(
+                    "active_workflow_inventory",
+                    format!("{} path={} reason={}", issue.id, issue.path, issue.error),
+                ));
+            }
+        }
+        Err(err) => checks.push(DoctorCheck::warning(
+            "active_workflow_inventory",
+            format!("scan failed: {err}"),
+        )),
+    }
 }
 
 fn collect_legacy_runtime_actor_checks(ctx: &Ctx, checks: &mut Vec<DoctorCheck>) {
@@ -1020,39 +1074,39 @@ fn check_github_cli(ctx: &Ctx, config: &Config) {
 }
 
 #[derive(Clone, Debug)]
-struct SessionMarkerScan {
-    report: SessionMarkerReport,
-    env_keyed: Vec<EnvKeyedMarkerForReview>,
-    warnings: Vec<SessionMarkerScanWarning>,
+struct IdentityAnchorScan {
+    report: IdentityAnchorReport,
+    env_keyed: Vec<EnvKeyedAnchorForReview>,
+    warnings: Vec<IdentityAnchorScanWarning>,
 }
 
 #[derive(Clone, Debug)]
-struct EnvKeyedMarkerForReview {
+struct EnvKeyedAnchorForReview {
     key: String,
     id: String,
     path: PathBuf,
 }
 
 #[derive(Clone, Debug)]
-struct SessionMarkerScanWarning {
+struct IdentityAnchorScanWarning {
     path: PathBuf,
     message: String,
 }
 
-fn check_session_markers(ctx: &Ctx) -> Result<()> {
-    let scan = scan_session_markers(ctx)?;
+fn check_identity_anchors(ctx: &Ctx) -> Result<()> {
+    let scan = scan_identity_anchors(ctx)?;
     ctx.ui.print_step(&format!(
         "Identity anchors: scanned={}, stale_cleaned={}, env_keyed_listed={}",
         scan.report.scanned, scan.report.stale_cleaned, scan.report.env_keyed_listed_for_review
     ));
 
-    for marker in scan.env_keyed {
+    for anchor in scan.env_keyed {
         ctx.ui.print_warning(&format!(
-            "Identity anchor requires manual review: {} id={} path={}. Prune with `wt doctor --prune-env-markers {}`.",
-            marker.key,
-            marker.id,
-            marker.path.display(),
-            marker.key
+            "Identity anchor requires manual review: {} id={} path={}. Prune with `wt doctor --prune-env-anchors {}`.",
+            anchor.key,
+            anchor.id,
+            anchor.path.display(),
+            anchor.key
         ));
     }
     for warning in scan.warnings {
@@ -1156,41 +1210,41 @@ fn supervisor_registration_report(
     })
 }
 
-fn scan_session_markers(ctx: &Ctx) -> Result<SessionMarkerScan> {
-    scan_session_markers_with(ctx, identity_locator::marker_is_live)
+fn scan_identity_anchors(ctx: &Ctx) -> Result<IdentityAnchorScan> {
+    scan_identity_anchors_with(ctx, identity_locator::identity_anchor_is_live)
 }
 
-fn scan_session_markers_with(
+fn scan_identity_anchors_with(
     ctx: &Ctx,
-    marker_is_live: impl Fn(&Marker) -> Result<MarkerLiveness>,
-) -> Result<SessionMarkerScan> {
-    let (markers, warnings) = identity_locator::list_markers_with_warnings(ctx)?;
-    let scanned = markers.len();
+    identity_anchor_is_live: impl Fn(&IdentityAnchor) -> Result<IdentityAnchorLiveness>,
+) -> Result<IdentityAnchorScan> {
+    let (anchors, warnings) = identity_locator::list_identity_anchors_with_warnings(ctx)?;
+    let scanned = anchors.len();
     let mut stale_cleaned = 0;
     let mut env_keyed = Vec::new();
 
-    for entry in markers {
-        let marker = entry.marker;
-        let key = marker_anchor_key(&marker);
-        if marker.anchor_kind == AnchorKind::ShellSid {
-            if marker_is_live(&marker)? == MarkerLiveness::NotLive {
+    for entry in anchors {
+        let anchor = entry.anchor;
+        let key = identity_anchor_key(&anchor);
+        if anchor.anchor_kind == AnchorKind::ShellSid {
+            if identity_anchor_is_live(&anchor)? == IdentityAnchorLiveness::NotLive {
                 fs::remove_file(&entry.path).with_context(|| {
-                    format!("Failed to remove marker: {}", entry.path.display())
+                    format!("Failed to remove identity anchor: {}", entry.path.display())
                 })?;
                 stale_cleaned += 1;
             }
             continue;
         }
 
-        env_keyed.push(EnvKeyedMarkerForReview {
+        env_keyed.push(EnvKeyedAnchorForReview {
             key: key.display(),
-            id: marker.id,
+            id: anchor.id,
             path: entry.path,
         });
     }
 
-    Ok(SessionMarkerScan {
-        report: SessionMarkerReport {
+    Ok(IdentityAnchorScan {
+        report: IdentityAnchorReport {
             scanned,
             stale_cleaned,
             env_keyed_listed_for_review: env_keyed.len(),
@@ -1198,7 +1252,7 @@ fn scan_session_markers_with(
         env_keyed,
         warnings: warnings
             .into_iter()
-            .map(|warning| SessionMarkerScanWarning {
+            .map(|warning| IdentityAnchorScanWarning {
                 path: warning.path,
                 message: warning.message,
             })
@@ -1206,14 +1260,14 @@ fn scan_session_markers_with(
     })
 }
 
-fn prune_env_marker(ctx: &Ctx, key: &str) -> Result<()> {
+fn prune_env_anchor(ctx: &Ctx, key: &str) -> Result<()> {
     let key = AnchorKey::parse_display(key)?;
     if key.kind == AnchorKind::ShellSid {
         return Err(anyhow!(
-            "`--prune-env-markers` only deletes env-keyed identity anchors"
+            "`--prune-env-anchors` only deletes env-keyed identity anchors"
         ));
     }
-    let removed = identity_locator::remove_marker(ctx, &key)
+    let removed = identity_locator::remove_identity_anchor(ctx, &key)
         .with_context(|| format!("Failed to prune identity anchor {}", key.display()))?;
     if !removed {
         return Err(anyhow!("No identity anchor found for {}", key.display()));
@@ -1221,10 +1275,10 @@ fn prune_env_marker(ctx: &Ctx, key: &str) -> Result<()> {
     Ok(())
 }
 
-fn marker_anchor_key(marker: &Marker) -> AnchorKey {
+fn identity_anchor_key(anchor: &IdentityAnchor) -> AnchorKey {
     AnchorKey {
-        kind: marker.anchor_kind.clone(),
-        value: marker.anchor_value.clone(),
+        kind: anchor.anchor_kind.clone(),
+        value: anchor.anchor_value.clone(),
     }
 }
 
@@ -1424,6 +1478,7 @@ fn doctor_label(name: &str) -> &str {
         "claude_wt_inbox_hook" => "Claude wt inbox hook",
         "repo_config" => "Repo config",
         "core_dirs" => "Core dirs",
+        "active_workflow_inventory" => "Active workflow inventory",
         "legacy_runtime_observations" => "Legacy runtime observations",
         "legacy_session_anchors" => "Legacy session anchors",
         _ => name,
@@ -1647,26 +1702,59 @@ mod tests {
         )
     }
 
-    fn write_marker_file(ctx: &Ctx, marker: &Marker) -> PathBuf {
-        let key = marker_anchor_key(marker);
-        write_marker_file_at_key(ctx, &key, marker)
+    fn write_identity_anchor_file(ctx: &Ctx, anchor: &IdentityAnchor) -> PathBuf {
+        let key = identity_anchor_key(anchor);
+        write_identity_anchor_file_at_key(ctx, &key, anchor)
     }
 
-    fn write_marker_file_at_key(ctx: &Ctx, key: &AnchorKey, marker: &Marker) -> PathBuf {
-        let path = identity_locator::marker_path_for_id(ctx, &marker.id, key).unwrap();
+    fn write_identity_anchor_file_at_key(
+        ctx: &Ctx,
+        key: &AnchorKey,
+        anchor: &IdentityAnchor,
+    ) -> PathBuf {
+        let path = identity_locator::identity_anchor_path_for_id(ctx, &anchor.id, key).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, toml::to_string_pretty(marker).unwrap()).unwrap();
+        fs::write(&path, toml::to_string_pretty(anchor).unwrap()).unwrap();
         path
     }
 
-    fn write_malformed_marker_file(ctx: &Ctx) -> PathBuf {
+    fn write_malformed_identity_anchor_file(ctx: &Ctx) -> PathBuf {
         let key = AnchorKey {
             kind: AnchorKind::Surface,
             value: "BROKEN".into(),
         };
-        let path = identity_locator::marker_path_for_id(ctx, "agents/broken", &key).unwrap();
+        let path =
+            identity_locator::identity_anchor_path_for_id(ctx, "agents/broken", &key).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "not = [valid").unwrap();
+        path
+    }
+
+    fn write_workflow_with_missing_task(ctx: &Ctx) -> PathBuf {
+        let workflows_dir = ctx.storage_root.workflows_dir();
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let path = workflows_dir.join("broken-workflow.toml");
+        fs::write(
+            &path,
+            r#"
+title = "Broken workflow"
+mode = "single"
+base_mode = "explicit"
+base = "develop"
+created_at = "2026-05-26T00:00:00Z"
+updated_at = "2026-05-26T00:00:00Z"
+
+[policy]
+pull_request = "none"
+landing = "manual"
+
+[[tasks]]
+task = "missing-task"
+run = "run-missing-task"
+parent = "develop"
+"#,
+        )
+        .unwrap();
         path
     }
 
@@ -1697,8 +1785,8 @@ mod tests {
         path
     }
 
-    fn marker_fixture(kind: AnchorKind, value: &str, id: &str) -> Marker {
-        Marker {
+    fn identity_anchor_fixture(kind: AnchorKind, value: &str, id: &str) -> IdentityAnchor {
+        IdentityAnchor {
             id: id.into(),
             anchor_kind: kind,
             anchor_value: value.into(),
@@ -1818,16 +1906,16 @@ mod tests {
     }
 
     #[test]
-    fn session_marker_scan_cleans_dead_shell_sid_marker() {
+    fn identity_anchor_scan_cleans_dead_shell_sid_anchor() {
         let temp = TempDir::new().unwrap();
         let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
         let mut stale =
-            marker_fixture(AnchorKind::ShellSid, "999999:100.000000000", "agents/stale");
+            identity_anchor_fixture(AnchorKind::ShellSid, "999999:100.000000000", "agents/stale");
         stale.liveness_pid = Some(999999);
         stale.liveness_start_time = Some("100.000000000".into());
-        let path = write_marker_file(&ctx, &stale);
+        let path = write_identity_anchor_file(&ctx, &stale);
 
-        let scan = scan_session_markers(&ctx).unwrap();
+        let scan = scan_identity_anchors(&ctx).unwrap();
 
         assert_eq!(scan.report.scanned, 1);
         assert_eq!(scan.report.stale_cleaned, 1);
@@ -1835,20 +1923,20 @@ mod tests {
     }
 
     #[test]
-    fn session_marker_scan_cleans_shell_sid_start_time_mismatch() {
+    fn identity_anchor_scan_cleans_shell_sid_start_time_mismatch() {
         let temp = TempDir::new().unwrap();
         let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
         let pid = std::process::id() as i32;
-        let mut reused = marker_fixture(
+        let mut reused = identity_anchor_fixture(
             AnchorKind::ShellSid,
             &format!("{pid}:reused"),
             "agents/reused",
         );
         reused.liveness_pid = Some(pid);
         reused.liveness_start_time = Some("definitely-not-this-process-start-time".into());
-        let path = write_marker_file(&ctx, &reused);
+        let path = write_identity_anchor_file(&ctx, &reused);
 
-        let scan = scan_session_markers(&ctx).unwrap();
+        let scan = scan_identity_anchors(&ctx).unwrap();
 
         assert_eq!(scan.report.scanned, 1);
         assert_eq!(scan.report.stale_cleaned, 1);
@@ -1856,7 +1944,7 @@ mod tests {
     }
 
     #[test]
-    fn session_marker_scan_deletes_scanned_path_not_payload_path() {
+    fn identity_anchor_scan_deletes_scanned_path_not_payload_path() {
         let temp = TempDir::new().unwrap();
         let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
         let scanned_key = AnchorKey {
@@ -1867,28 +1955,28 @@ mod tests {
             kind: AnchorKind::ShellSid,
             value: "222:200.000000000".into(),
         };
-        let mut stale_payload = marker_fixture(
+        let mut stale_payload = identity_anchor_fixture(
             AnchorKind::ShellSid,
             "222:200.000000000",
             "agents/stale-payload",
         );
         stale_payload.liveness_pid = Some(222);
         stale_payload.liveness_start_time = Some("200.000000000".into());
-        let mut protected = marker_fixture(
+        let mut protected = identity_anchor_fixture(
             AnchorKind::ShellSid,
             "222:200.000000000",
             "agents/protected",
         );
         protected.liveness_pid = Some(222);
         protected.liveness_start_time = Some("200.000000000".into());
-        let scanned_path = write_marker_file_at_key(&ctx, &scanned_key, &stale_payload);
-        let protected_path = write_marker_file_at_key(&ctx, &payload_key, &protected);
+        let scanned_path = write_identity_anchor_file_at_key(&ctx, &scanned_key, &stale_payload);
+        let protected_path = write_identity_anchor_file_at_key(&ctx, &payload_key, &protected);
 
-        let scan = scan_session_markers_with(&ctx, |marker| {
-            if marker.id == "agents/protected" {
-                Ok(MarkerLiveness::Live)
+        let scan = scan_identity_anchors_with(&ctx, |anchor| {
+            if anchor.id == "agents/protected" {
+                Ok(IdentityAnchorLiveness::Live)
             } else {
-                Ok(MarkerLiveness::NotLive)
+                Ok(IdentityAnchorLiveness::NotLive)
             }
         })
         .unwrap();
@@ -1900,15 +1988,16 @@ mod tests {
     }
 
     #[test]
-    fn session_marker_scan_preserves_live_shell_sid_marker() {
+    fn identity_anchor_scan_preserves_live_shell_sid_anchor() {
         let temp = TempDir::new().unwrap();
         let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
-        let mut live = marker_fixture(AnchorKind::ShellSid, "42:200.000000000", "agents/live");
+        let mut live =
+            identity_anchor_fixture(AnchorKind::ShellSid, "42:200.000000000", "agents/live");
         live.liveness_pid = Some(42);
         live.liveness_start_time = Some("200.000000000".into());
-        let path = write_marker_file(&ctx, &live);
+        let path = write_identity_anchor_file(&ctx, &live);
 
-        let scan = scan_session_markers_with(&ctx, |_| Ok(MarkerLiveness::Live)).unwrap();
+        let scan = scan_identity_anchors_with(&ctx, |_| Ok(IdentityAnchorLiveness::Live)).unwrap();
 
         assert_eq!(scan.report.scanned, 1);
         assert_eq!(scan.report.stale_cleaned, 0);
@@ -1916,13 +2005,13 @@ mod tests {
     }
 
     #[test]
-    fn session_marker_scan_lists_env_keyed_marker_without_deleting() {
+    fn identity_anchor_scan_lists_env_keyed_anchor_without_deleting() {
         let temp = TempDir::new().unwrap();
         let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
-        let marker = marker_fixture(AnchorKind::Surface, "A22D", "agents/coord");
-        let path = write_marker_file(&ctx, &marker);
+        let anchor = identity_anchor_fixture(AnchorKind::Surface, "A22D", "agents/coord");
+        let path = write_identity_anchor_file(&ctx, &anchor);
 
-        let scan = scan_session_markers(&ctx).unwrap();
+        let scan = scan_identity_anchors(&ctx).unwrap();
 
         assert_eq!(scan.report.scanned, 1);
         assert_eq!(scan.report.stale_cleaned, 0);
@@ -1932,29 +2021,33 @@ mod tests {
     }
 
     #[test]
-    fn session_marker_scan_skips_malformed_marker_and_continues() {
+    fn identity_anchor_scan_skips_malformed_anchor_and_continues() {
         let temp = TempDir::new().unwrap();
         let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
-        write_malformed_marker_file(&ctx);
-        let marker = marker_fixture(AnchorKind::Surface, "A22D", "agents/coord");
-        let path = write_marker_file(&ctx, &marker);
+        write_malformed_identity_anchor_file(&ctx);
+        let anchor = identity_anchor_fixture(AnchorKind::Surface, "A22D", "agents/coord");
+        let path = write_identity_anchor_file(&ctx, &anchor);
 
-        let scan = scan_session_markers(&ctx).unwrap();
+        let scan = scan_identity_anchors(&ctx).unwrap();
 
         assert_eq!(scan.report.scanned, 1);
         assert_eq!(scan.report.stale_cleaned, 0);
         assert_eq!(scan.report.env_keyed_listed_for_review, 1);
         assert_eq!(scan.warnings.len(), 1);
-        assert!(scan.warnings[0].message.contains("Failed to parse marker"));
+        assert!(
+            scan.warnings[0]
+                .message
+                .contains("Failed to parse identity anchor")
+        );
         assert!(path.exists());
     }
 
     #[test]
-    fn doctor_prune_env_markers_deletes_named_marker() {
+    fn doctor_prune_env_anchors_deletes_named_anchor() {
         let temp = TempDir::new().unwrap();
         let ctx = ctx_with_storage(&temp, OutputMode::Text, RecordingUi::new());
-        let marker = marker_fixture(AnchorKind::Surface, "A22D", "agents/coord");
-        let path = write_marker_file(&ctx, &marker);
+        let anchor = identity_anchor_fixture(AnchorKind::Surface, "A22D", "agents/coord");
+        let path = write_identity_anchor_file(&ctx, &anchor);
 
         run(&ctx, None, Some("surface:A22D")).unwrap();
 
@@ -1962,43 +2055,43 @@ mod tests {
     }
 
     #[test]
-    fn doctor_text_output_reports_session_marker_counts_and_hint() {
+    fn doctor_text_output_reports_identity_anchor_counts_and_hint() {
         let temp = TempDir::new().unwrap();
         let ui = RecordingUi::new();
         let steps = Arc::clone(&ui.steps);
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with_storage(&temp, OutputMode::Text, ui);
-        let marker = marker_fixture(AnchorKind::Surface, "A22D", "agents/coord");
-        write_marker_file(&ctx, &marker);
+        let anchor = identity_anchor_fixture(AnchorKind::Surface, "A22D", "agents/coord");
+        write_identity_anchor_file(&ctx, &anchor);
 
         run(&ctx, None, None).unwrap();
 
         let steps = steps.lock().unwrap().join("\n");
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(steps.contains("Identity anchors: scanned=1, stale_cleaned=0, env_keyed_listed=1"));
-        assert!(warnings.contains("wt doctor --prune-env-markers surface:A22D"));
+        assert!(warnings.contains("wt doctor --prune-env-anchors surface:A22D"));
     }
 
     #[test]
-    fn doctor_text_output_warns_when_session_marker_scan_fails() {
+    fn doctor_text_output_warns_when_identity_anchor_scan_fails() {
         let temp = TempDir::new().unwrap();
         let ui = RecordingUi::new();
         let warnings = Arc::clone(&ui.warnings);
         let ctx = ctx_with_storage(&temp, OutputMode::Text, ui);
-        write_malformed_marker_file(&ctx);
+        write_malformed_identity_anchor_file(&ctx);
 
         run(&ctx, None, None).unwrap();
 
         let warnings = warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Identity anchor skipped"));
-        assert!(warnings.contains("Failed to parse marker"));
+        assert!(warnings.contains("Failed to parse identity anchor"));
     }
 
     #[test]
-    fn doctor_json_report_warns_when_session_marker_scan_fails() {
+    fn doctor_json_report_warns_when_identity_anchor_scan_fails() {
         let temp = TempDir::new().unwrap();
         let ctx = ctx_with_storage(&temp, OutputMode::Json, RecordingUi::new());
-        write_malformed_marker_file(&ctx);
+        write_malformed_identity_anchor_file(&ctx);
 
         let report = build_report(&ctx, &ctx.config, None);
         let value = serde_json::to_value(&report).unwrap();
@@ -2007,18 +2100,49 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|check| check["name"] == "session_markers")
-            .expect("missing session_markers warning check");
+            .find(|check| check["name"] == "identity_anchors")
+            .expect("missing identity_anchors warning check");
         assert_eq!(check["status"], "warning");
         assert!(
             check["message"]
                 .as_str()
                 .unwrap()
-                .contains("skipped marker")
+                .contains("skipped identity anchor")
         );
-        assert_eq!(value["session_markers"]["scanned"], 0);
-        assert_eq!(value["session_markers"]["stale_cleaned"], 0);
-        assert_eq!(value["session_markers"]["env_keyed_listed_for_review"], 0);
+        assert_eq!(value["identity_anchors"]["scanned"], 0);
+        assert_eq!(value["identity_anchors"]["stale_cleaned"], 0);
+        assert_eq!(value["identity_anchors"]["env_keyed_listed_for_review"], 0);
+    }
+
+    #[test]
+    fn doctor_json_warns_about_active_workflow_inventory_issues() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ctx_with_storage(&temp, OutputMode::Json, RecordingUi::new());
+        write_workflow_with_missing_task(&ctx);
+
+        let report = build_report(&ctx, &ctx.config, None);
+        let value = serde_json::to_value(&report).unwrap();
+        let checks = value["checks"].as_array().unwrap();
+
+        let summary = checks
+            .iter()
+            .find(|check| {
+                check["name"] == "active_workflow_inventory"
+                    && check["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("1 issue(s)"))
+            })
+            .expect("missing active workflow inventory summary warning");
+        assert_eq!(summary["status"], "warning");
+        assert!(checks.iter().any(|check| {
+            check["name"] == "active_workflow_inventory"
+                && check["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("broken-workflow"))
+                && check["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("missing-task"))
+        }));
     }
 
     #[test]
@@ -2733,6 +2857,6 @@ provider = "linear"
             "expected no profile field when none selected, got {value}"
         );
         assert!(value["checks"].is_array());
-        assert_eq!(value["session_markers"]["scanned"], 0);
+        assert_eq!(value["identity_anchors"]["scanned"], 0);
     }
 }

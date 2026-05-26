@@ -128,7 +128,7 @@ old shell state from leaking into the current worker identity model.
 
 The identity locator owns post-hoc binding from the current terminal or agent
 session to a flat `AgentId`. Its source-of-truth module is
-`src/services/identity_locator/`, and its durable marker location is
+`src/services/identity_locator/`, and its durable identity anchor location is
 `<git-common-dir>/wt/runtime/agents/<name>/anchors/<encoded-anchor-key>.toml`.
 
 Anchor keys are derived in priority order:
@@ -138,27 +138,27 @@ Anchor keys are derived in priority order:
 3. `CODEX_THREAD_ID` as `codex-thread:<value>`
 4. POSIX shell session id plus process start time as `shell-sid:<sid>:<start_time>`
 
-Marker files store the resolved `id`, `anchor_kind`, `anchor_value`, optional
+Identity anchor records store the resolved `id`, `anchor_kind`, `anchor_value`, optional
 shell liveness fields, optional `anchor_agent_kind`, the creating `cwd`, and
-timestamps. Env-keyed markers are cheap locator records: `wt doctor` may list
+timestamps. Env-keyed identity anchors are cheap locator records: `wt doctor` may list
 them for manual review, but it must not infer staleness from its own process
-environment. Only `shell-sid` markers can be verified automatically by PID plus
+environment. Only `shell-sid` identity anchors can be verified automatically by PID plus
 start-time liveness.
 
 Runtime identity resolution is layered. Explicit launch environment remains the
 first source: `WT_AGENT_ID` wins when present and valid. If it is absent, `wt`
-derives the current anchor key and reads the matching marker. If no live marker
+derives the current anchor key and reads the matching identity anchor. If no live identity anchor
 exists, worker identity falls back to the cwd/TaskRun path used by
 `wt shell-init` and `wt env`.
 
 Hook inbox receive identity intentionally stops earlier: implicit
-`wt msg check-inbox` uses `WT_AGENT_ID`, then the current live session marker,
-then no-op. It does not use cwd/TaskRun fallback and does not auto-create a
-marker.
+`wt msg check-inbox` uses `WT_AGENT_ID`, then the current live identity anchor,
+then no-op. It does not use cwd/TaskRun fallback and does not auto-create an
+identity anchor.
 
 The agent supervisor is a separate layer. It may use the same resolved identity
 model, but supervisor lifecycle, polling, and recovery policy belong to its own
-spec and must not turn marker files into process supervision state.
+spec and must not turn identity anchor records into process supervision state.
 Development spec: `.git/wt/planning/specs/detached-agent-supervisor/`; runtime contract:
 the Supervisor section below and `docs/consistency.md` Supervisor Lifecycle.
 
@@ -175,7 +175,7 @@ push delivery are hosted in an unfocused cmux surface in the target pane;
 no-surface supervisors may use the detached process path.
 
 Supervisor runtime behavior belongs to `src/commands/agent/supervisor/` and
-cmux push helpers, not to identity markers or runtime observation. `wt doctor` owns
+cmux push helpers, not to identity anchors or runtime observation. `wt doctor` owns
 registration garbage collection: it verifies the registered PID plus start time,
 keeps live supervisors, removes stale registration files, and leaves logs for
 post-mortem review. Session cleanup is adapter-specific: Claude Code can install

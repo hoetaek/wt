@@ -88,8 +88,8 @@ Inbox delivery depends on a resolvable recipient identity. Do not treat
 `wt setup` as an identity fix: setup installs per-machine hooks and shell
 integration, but it does not retroactively bind an already-running agent
 session. Hook delivery through `wt msg check-inbox` resolves only
-`WT_AGENT_ID`, then the current live session marker, then no-ops; it does not
-create a marker or fall back to cwd/TaskRun inference.
+`WT_AGENT_ID`, then the current live identity anchor, then no-ops; it does not
+create an identity anchor or fall back to cwd/TaskRun inference.
 
 Before relying on inbox reports, verify coordinator identity and the TaskRun
 route:
@@ -103,8 +103,8 @@ wt inspect <target>
 
 `wt session set <id>` prints shell exports; use
 `eval "$(wt session set <id>)"` so the current coordinator shell receives
-`WT_AGENT_ID` and writes a session marker for later resolution. For an
-already-open agent session, write the marker only when you know the exact
+`WT_AGENT_ID` and writes an identity anchor for later resolution. For an
+already-open agent session, write the identity anchor only when you know the exact
 intended agent id from `wt inspect`; otherwise relaunch through `wt codex`,
 `wt claude`, or `wt as <agent-id> -- <command...>` so launch-time
 `WT_AGENT_ID` is unambiguous. A launched TaskRun should record `agent_id` and
@@ -167,7 +167,7 @@ after the inbox route has been tried and one of these is true:
 
 - the agent remains idle after the short wake-observation window
 - the worker is `needs_input` and hooks are not delivering
-- `wt session whoami` reports no id for the live target and no exact marker can
+- `wt session whoami` reports no id for the live target and no exact identity anchor can
   be safely set
 - the TaskRun `agent_id` or delivery route is missing, invalid, or ambiguous
 - immediate prompt-level attention is explicitly more important than preserving
@@ -246,7 +246,7 @@ Drift-resolution rule: when implementation and spec disagree, update the spec.
 Do not let code silently diverge. If a decision changes mid-flight, the spec
 is where it lands. `04+05+06-requirements.md` carries the approved purpose and
 requirements — surface needed changes to the user rather than rewriting it
-silently. wt CLI does not treat `specs/` as executable state, so spec edits are
+silently. wt CLI does not treat `planning/specs/` as executable state, so spec edits are
 coordinator-driven file edits.
 
 Make the rationale visible:
@@ -267,7 +267,7 @@ prompt-level attention, or the inbox route is not reliable for this run.
 If unplanned research happens during the run — a domain term that needed a
 definition, a convention that was not surveyed, an external example that
 changed the approach, or an internal fact that was not inventoried — log it
-under a `## Mid-process discoveries` section in `specs/<slug>/10-review.md`
+under a `## Mid-process discoveries` section in `planning/specs/<slug>/10-review.md`
 instead of silently absorbing it.
 
 Format: one entry per discovery, dated, with a category tag (`domain` /

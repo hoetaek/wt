@@ -6,11 +6,11 @@ model, status boundaries, and pass vs cleanup commands.
 
 ## Object Model
 
-- **TaskDocument**: `<git-common-dir>/wt/tasks/<task>.toml`. Stores intent —
+- **TaskDocument**: `<git-common-dir>/wt/execution/tasks/<task>.toml`. Stores intent —
   what the work is. Body must include a `계획 (Planning)` section with an
   `expected duration` line before launch. The estimate is a human-facing
   planning line in the body, not a top-level TOML field.
-- **TaskRun**: `<git-common-dir>/wt/task-runs/<id>.toml`. Records one execution
+- **TaskRun**: `<git-common-dir>/wt/execution/task-runs/<id>.toml`. Records one execution
   attempt — status, branch, group, error, timestamps. Does not store intent.
 - **workflow file**: saved orchestration for `single`, `batch`, `stack`, or
   `matrix` execution. The workflow file carries the mode; TaskRuns do not.

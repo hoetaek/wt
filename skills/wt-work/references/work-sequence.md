@@ -27,7 +27,7 @@ Raw intent
 
 | Gate | Primary skill | Artifact |
 |---|---|---|
-| Raw intent | `wt-idea`, or first minutes of `wt-ready` | `ideas/<slug>.{md,toml}` or `specs/<slug>/01-intent.md` |
+| Raw intent | `wt-idea`, or first minutes of `wt-ready` | `planning/ideas/<slug>.{md,toml}` or `planning/specs/<slug>/01-intent.md` |
 | Unknown surfacing | `wt-idea`, or `wt-ready` when entered directly | idea body or `02-unknowns.md` with blocking-now markers |
 | Context / reference exploration | `wt-idea`, or `wt-ready` for bounded prep research | idea body or `03-context.md` driven by the unknowns list |
 | Purpose / success criteria | `wt-ready` | `04+05+06-requirements.md` story/context |
@@ -39,7 +39,7 @@ Raw intent
 | Execution launch | `wt-start` | TaskRun/worktree/workflow and inspect target |
 | Review / sync | `wt-coordinate` | reviewed diff/checks and updated `07-design.md`/`08-tasks.md`/`09-execution.md`; `10-review.md` for review evidence and unplanned research |
 | Land / close | `wt-land` | landed branch proof, pass, cleanup |
-| Retrospect | `wt-retrospect` | `11-retrospect.md` for spec-backed work; global `retrospectives/` only for cross-work/spec-less lessons |
+| Retrospect | `wt-retrospect` | `11-retrospect.md` for spec-backed work; global `planning/retrospectives/` only for cross-work/spec-less lessons |
 
 ## Audit Questions
 
@@ -73,7 +73,7 @@ facts from assumptions again, and only then resume the downstream gates that
 depended on what changed.
 
 This loop is normal, not a failure mode. Log each return to
-`<git-common-dir>/wt/specs/<slug>/10-review.md` so `wt-retrospect` can classify
+`<git-common-dir>/wt/planning/specs/<slug>/10-review.md` so `wt-retrospect` can classify
 which surfacing category was missed and sharpen the next run's checklist.
 
 ## Practical Rule

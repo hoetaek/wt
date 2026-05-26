@@ -3,7 +3,7 @@ use crate::context::Ctx;
 use crate::messages::{AgentId, Message, MessageScopeKind, SentMessage};
 use crate::services::cmux::CmuxService;
 use crate::services::cmux_push::{CmuxPushService, PushKind};
-use crate::services::identity_locator::{self, AnchorKind, Marker};
+use crate::services::identity_locator::{self, AnchorKind, IdentityAnchor};
 use crate::services::runtime_binding::RuntimeBindingResolver;
 use crate::task_run;
 use anyhow::Result;
@@ -25,7 +25,7 @@ fn wake_message_recipient(ctx: &Ctx, message: &Message) -> Result<bool> {
             return Ok(true);
         }
     }
-    wake_idle_session_marker_agent(ctx, &recipient)
+    wake_idle_identity_anchor_agent(ctx, &recipient)
 }
 
 fn task_run_scope_recipient(ctx: &Ctx, message: &Message) -> Result<Option<String>> {
@@ -95,31 +95,31 @@ fn wake_idle_task_run_agent(ctx: &Ctx, task_run_id: &str) -> Result<bool> {
     Ok(true)
 }
 
-fn wake_idle_session_marker_agent(ctx: &Ctx, recipient: &AgentId) -> Result<bool> {
-    let mut markers = identity_locator::list_markers(ctx)?
+fn wake_idle_identity_anchor_agent(ctx: &Ctx, recipient: &AgentId) -> Result<bool> {
+    let mut anchors = identity_locator::list_identity_anchors(ctx)?
         .into_iter()
-        .filter(|marker| marker.id == recipient.as_str())
+        .filter(|anchor| anchor.id == recipient.as_str())
         .collect::<Vec<_>>();
-    markers.sort_by(|left, right| left.updated_at.cmp(&right.updated_at));
-    markers.reverse();
+    anchors.sort_by(|left, right| left.updated_at.cmp(&right.updated_at));
+    anchors.reverse();
 
-    for marker in markers {
-        if wake_idle_surface_marker(ctx, &marker)? {
+    for anchor in anchors {
+        if wake_idle_surface_identity_anchor(ctx, &anchor)? {
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-fn wake_idle_surface_marker(ctx: &Ctx, marker: &Marker) -> Result<bool> {
-    if marker.anchor_kind != AnchorKind::Surface {
+fn wake_idle_surface_identity_anchor(ctx: &Ctx, anchor: &IdentityAnchor) -> Result<bool> {
+    if anchor.anchor_kind != AnchorKind::Surface {
         return Ok(false);
     }
     let cmux = CmuxService::new(ctx.runner.as_ref());
     if !cmux.is_available() {
         return Ok(false);
     }
-    let Some(location) = cmux.find_surface_location(&marker.anchor_value)? else {
+    let Some(location) = cmux.find_surface_location(&anchor.anchor_value)? else {
         return Ok(false);
     };
     let screen = cmux.read_screen_lines(
@@ -230,16 +230,16 @@ mod tests {
     }
 
     #[test]
-    fn wakes_direct_recipient_with_surface_marker() {
+    fn wakes_direct_recipient_with_surface_identity_anchor() {
         let dir = tempfile::tempdir().unwrap();
         let mut mock = MockRunner::new();
         mock.add_command("cmux");
-        add_surface_marker_observation(&mut mock, dir.path(), "Idle");
+        add_surface_identity_anchor_observation(&mut mock, dir.path(), "Idle");
         mock.add_response("", true);
         mock.add_response("", true);
         let runner = Arc::new(mock);
         let ctx = ctx(dir.path(), runner.clone());
-        identity_locator::write_marker(
+        identity_locator::write_identity_anchor(
             &ctx,
             &identity_locator::AnchorKey {
                 kind: AnchorKind::Surface,
@@ -326,7 +326,7 @@ mod tests {
         runner.add_response("", true);
     }
 
-    fn add_surface_marker_observation(
+    fn add_surface_identity_anchor_observation(
         runner: &mut MockRunner,
         worktree: &std::path::Path,
         status: &str,

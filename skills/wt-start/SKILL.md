@@ -18,7 +18,7 @@ distinction: see `../wt-work/references/task-lifecycle.md`.
 git status --short --branch
 git worktree list
 common_dir="$(git rev-parse --git-common-dir)"
-find "$common_dir/wt/tasks" "$common_dir/wt/task-runs" "$common_dir/wt/workflows" -maxdepth 1 -type f 2>/dev/null | sort
+find "$common_dir/wt/execution/tasks" "$common_dir/wt/execution/task-runs" "$common_dir/wt/execution/workflows" -maxdepth 1 -type f 2>/dev/null | sort
 wt doctor
 ```
 
@@ -82,6 +82,6 @@ wt agent status <branch|worktree|task-run-id>
 Report: command used, created branch/worktree or workflow, TaskRun id when
 available, next `wt inspect` target, and the recorded worker `agent_id` /
 coordinator route. If inbox delivery will be used, confirm the launched process
-got identity from `wt codex`, `wt claude`, `wt as`, or a live session marker;
+got identity from `wt codex`, `wt claude`, `wt as`, or a live identity anchor;
 `wt setup` alone only installs hooks and does not bind an already-running
 session. Use `wt agent watch <target>` if waiting for a state transition.

@@ -8,27 +8,27 @@ use std::hash::{Hash, Hasher};
 pub(crate) fn resolve_launch_coordinator(ctx: &Ctx) -> Result<AgentId> {
     if let Some(value) = ctx.launcher_coordinator_id.as_deref() {
         return AgentId::parse(value)
-            .context("Invalid launch coordinator agent id from WT_AGENT_ID or session marker");
+            .context("Invalid launch coordinator agent id from WT_AGENT_ID or identity anchor");
     }
 
     match identity_locator::resolve_identity(ctx) {
-        Ok(Some(marker)) => {
-            return AgentId::parse(&marker.id)
-                .context("Invalid launch coordinator agent id from live session marker");
+        Ok(Some(anchor)) => {
+            return AgentId::parse(&anchor.id)
+                .context("Invalid launch coordinator agent id from live identity anchor");
         }
         Ok(None) => {}
         Err(err) => {
             return Err(err).context(
-                "Failed to resolve launch coordinator from live session marker before auto-create",
+                "Failed to resolve launch coordinator from live identity anchor before auto-create",
             );
         }
     }
 
     let key = identity_locator::current_anchor_key().with_context(|| {
-        "Could not resolve launch coordinator agent id. Tried WT_AGENT_ID, live session marker, and auto-created marker for the current terminal or agent anchor."
+        "Could not resolve launch coordinator agent id. Tried WT_AGENT_ID, live identity anchor, and auto-created identity anchor for the current terminal or agent anchor."
     })?;
     let generated = generated_agent_id_for_anchor(&key)?;
-    let marker = identity_locator::write_marker(
+    let anchor = identity_locator::write_identity_anchor(
         ctx,
         &key,
         generated.as_str(),
@@ -36,11 +36,11 @@ pub(crate) fn resolve_launch_coordinator(ctx: &Ctx) -> Result<AgentId> {
     )
     .with_context(|| {
         format!(
-            "Failed to auto-create launch coordinator marker for {}",
+            "Failed to auto-create launch coordinator identity anchor for {}",
             key.display()
         )
     })?;
-    AgentId::parse(&marker.id).context("Invalid auto-created launch coordinator agent id")
+    AgentId::parse(&anchor.id).context("Invalid auto-created launch coordinator agent id")
 }
 
 fn generated_agent_id_for_anchor(key: &AnchorKey) -> Result<AgentId> {
@@ -97,7 +97,7 @@ mod tests {
     }
 
     #[test]
-    fn launch_coordinator_auto_creates_marker_for_current_anchor() {
+    fn launch_coordinator_auto_creates_identity_anchor_for_current_anchor() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::new_with_options(
             dir.path().to_path_buf(),
@@ -113,9 +113,11 @@ mod tests {
 
         let agent = resolve_launch_coordinator(&ctx).unwrap();
         let key = identity_locator::current_anchor_key().unwrap();
-        let marker = identity_locator::read_marker(&ctx, &key).unwrap().unwrap();
+        let anchor = identity_locator::read_identity_anchor(&ctx, &key)
+            .unwrap()
+            .unwrap();
 
-        assert_eq!(marker.id, agent.as_str());
+        assert_eq!(anchor.id, agent.as_str());
         assert!(
             agent.as_str().starts_with("agents/surface-")
                 || agent.as_str().starts_with("agents/claude-")

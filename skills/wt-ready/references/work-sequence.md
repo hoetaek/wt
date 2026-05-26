@@ -26,10 +26,10 @@ AI-DLC maps more broadly to `Inception -> Construction -> Operations`. For wt,
 the operational mapping is:
 
 ```text
-ideas/<slug>.{md,toml}
--> specs/<slug>/{01-intent.md,02-unknowns.md,03-context.md,04+05+06-requirements.md,07-design.md,08-tasks.md,09-execution.md?,10-review.md?,11-retrospect.md?}
--> tasks/<slug>.toml and/or workflows/<id>.toml
--> task-runs/<id>.toml
+planning/ideas/<slug>.{md,toml}
+-> planning/specs/<slug>/{01-intent.md,02-unknowns.md,03-context.md,04+05+06-requirements.md,07-design.md,08-tasks.md,09-execution.md?,10-review.md?,11-retrospect.md?}
+-> execution/tasks/<slug>.toml and/or execution/workflows/<id>.toml
+-> execution/task-runs/<id>.toml
 -> review, land, retrospect
 ```
 
@@ -38,8 +38,8 @@ ideas/<slug>.{md,toml}
 Owner: `wt-idea`, or the first minutes of `wt-ready` when the user skips idea
 capture.
 
-Artifact: `ideas/<slug>.{md,toml}` when the thought is exploratory; otherwise
-`specs/<slug>/01-intent.md` or a short raw-intent note in the TaskDocument body.
+Artifact: `planning/ideas/<slug>.{md,toml}` when the thought is exploratory; otherwise
+`planning/specs/<slug>/01-intent.md` or a short raw-intent note in the TaskDocument body.
 
 Gate to next step:
 
@@ -58,7 +58,7 @@ Return here when:
 
 Owner: `wt-idea`, or `wt-ready` when entered directly without prior idea capture.
 
-Artifact: idea body section, or `specs/<slug>/02-unknowns.md`, listing unknowns
+Artifact: idea body section, or `planning/specs/<slug>/02-unknowns.md`, listing unknowns
 by category — domain concepts, standards/conventions, external facts, internal
 facts — with each item marked `blocking now` or `useful later`.
 
@@ -78,7 +78,7 @@ Gate to next step:
 Return here when:
 
 - A new unknown surfaces mid-work and is researched on the spot — surfacing
-  was incomplete. Log it under `specs/<slug>/10-review.md` so
+  was incomplete. Log it under `planning/specs/<slug>/10-review.md` so
   `wt-retrospect` can diagnose which category was missed next time.
 - Repeated unplanned research detours start interrupting drafting or
   implementation.
@@ -89,7 +89,7 @@ Owner: `wt-idea` for exploratory research, `wt-ready` when reference gathering
 is needed before committed prep.
 
 Artifact: idea body sections for references/options/tradeoffs, or
-`specs/<slug>/03-context.md`.
+`planning/specs/<slug>/03-context.md`.
 
 Purpose: use the Unknown surfacing list as the research agenda, then sharpen
 raw intent before forcing purpose, requirements, or output form. This is where
@@ -117,7 +117,7 @@ Return here when:
 
 Owner: `wt-idea` for exploration, `wt-ready` for committed prep.
 
-Artifact: idea body, then `specs/<slug>/04+05+06-requirements.md` user story
+Artifact: idea body, then `planning/specs/<slug>/04+05+06-requirements.md` user story
 and problem context.
 
 Gate to next step:
@@ -136,7 +136,7 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: `specs/<slug>/04+05+06-requirements.md`.
+Artifact: `planning/specs/<slug>/04+05+06-requirements.md`.
 
 Gate to next step:
 
@@ -186,7 +186,7 @@ Return here when:
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
 invalidate assumptions.
 
-Artifact: `specs/<slug>/07-design.md`.
+Artifact: `planning/specs/<slug>/07-design.md`.
 
 Gate to next step:
 
@@ -207,7 +207,7 @@ Return here when:
 
 Owner: `wt-ready`.
 
-Artifact: `specs/<slug>/08-tasks.md`, optional `09-execution.md`,
+Artifact: `planning/specs/<slug>/08-tasks.md`, optional `09-execution.md`,
 TaskDocuments, and saved Workflow TOML when needed.
 
 Gate to next step:
@@ -276,8 +276,8 @@ Return here when:
 Owner: `wt-retrospect`, normally called by `wt-work` after landing or explicit
 discard.
 
-Artifact: `specs/<slug>/11-retrospect.md` for spec-backed work, or
-`<git-common-dir>/wt/retrospectives/YYYY-MM-DD-<slug>.toml` for cross-work or
+Artifact: `planning/specs/<slug>/11-retrospect.md` for spec-backed work, or
+`<git-common-dir>/wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` for cross-work or
 spec-less retrospectives.
 
 Gate to future work:

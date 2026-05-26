@@ -56,6 +56,12 @@ pub fn archive(ctx: &Ctx, workflow: &str) -> Result<()> {
     archive::run(ctx, workflow)
 }
 
+pub(crate) fn active_inventory_issues(
+    ctx: &Ctx,
+) -> Result<Vec<list_command::ActiveWorkflowInventoryIssue>> {
+    list_command::active_inventory_issues(ctx)
+}
+
 pub fn list(ctx: &Ctx) -> Result<()> {
     list_command::run(ctx)
 }
