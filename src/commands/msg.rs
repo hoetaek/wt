@@ -4,8 +4,8 @@ use crate::messages::{
     AgentId, HookOutput, Message, MessageDeliveryState, MessageInspectionRecord, MessageInventory,
     MessageInventoryCounts, MessageScope, MessageStore,
 };
-use crate::services::inbox_wake;
 use crate::services::inbox_watcher::InboxWatcher;
+use crate::services::{identity_locator, inbox_wake};
 use crate::task_run;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -251,18 +251,16 @@ fn resolve_agent_arg(_ctx: &Ctx, input: &str) -> Result<AgentId> {
     AgentId::parse(input)
 }
 
-fn inbox_agents_from_context(_ctx: &Ctx) -> Result<Vec<String>> {
-    let mut agents = Vec::new();
-    match env::var("WT_AGENT_ID") {
-        Ok(value) => {
-            if !value.is_empty() {
-                agents.push(value);
-            }
-        }
-        Err(env::VarError::NotPresent) => {}
-        Err(env::VarError::NotUnicode(_)) => bail!("Invalid WT_AGENT_ID: value is not Unicode"),
+fn inbox_agents_from_context(ctx: &Ctx) -> Result<Vec<String>> {
+    if let Some(agent) = env_agent_id("WT_AGENT_ID")? {
+        return Ok(vec![agent.as_str().to_string()]);
     }
-    Ok(agents)
+
+    let Some(marker) = identity_locator::resolve_identity(ctx)? else {
+        return Ok(Vec::new());
+    };
+    let agent = AgentId::parse(&marker.id).context("Invalid live session marker agent id")?;
+    Ok(vec![agent.as_str().to_string()])
 }
 
 fn resolve_watch_agent(ctx: &Ctx, agent: Option<&str>) -> Result<AgentId> {

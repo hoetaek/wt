@@ -138,6 +138,11 @@ derives the current anchor key and reads the matching marker. If no live marker
 exists, worker identity falls back to the cwd/TaskRun path used by
 `wt shell-init` and `wt env`.
 
+Hook inbox receive identity intentionally stops earlier: implicit
+`wt msg check-inbox` uses `WT_AGENT_ID`, then the current live session marker,
+then no-op. It does not use cwd/TaskRun fallback and does not auto-create a
+marker.
+
 The agent supervisor is a separate layer. It may use the same resolved identity
 model, but supervisor lifecycle, polling, and recovery policy belong to its own
 spec and must not turn marker files into process supervision state.
