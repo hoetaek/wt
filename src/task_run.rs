@@ -336,6 +336,53 @@ pub(crate) fn launch_template_vars_for(id: &str, run: &TaskRun) -> HashMap<Strin
     vars
 }
 
+pub(crate) fn ensure_workflow_routes(
+    record: &TaskRunRecord,
+    coordinator_id: &str,
+    coordinator_label: Option<&str>,
+) -> Result<TaskRunRecord> {
+    let coordinator_id = AgentId::parse(coordinator_id)
+        .context("Invalid coordinator id for workflow TaskRun route repair")?;
+    let mut run = read(&record.path)?;
+    let mut changed = false;
+
+    if run
+        .coordinator_id
+        .as_deref()
+        .and_then(optional_string)
+        .is_none()
+    {
+        run.coordinator_id = Some(coordinator_id.as_str().to_string());
+        changed = true;
+    }
+    if run.agent_id.as_deref().and_then(optional_string).is_none() {
+        run.agent_id = Some(generated_task_agent_id_for_record(&run, &record.id)?);
+        changed = true;
+    }
+    if run
+        .coordinator_label
+        .as_deref()
+        .and_then(optional_string)
+        .is_none()
+    {
+        if let Some(label) = coordinator_label.and_then(optional_string) {
+            run.coordinator_label = Some(label);
+            changed = true;
+        }
+    }
+
+    if changed {
+        run.updated_at = current_utc_timestamp();
+        write(&record.path, &run)?;
+    }
+
+    Ok(TaskRunRecord {
+        id: record.id.clone(),
+        path: record.path.clone(),
+        run,
+    })
+}
+
 pub(crate) fn read(path: &Path) -> Result<TaskRun> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read task run: {}", path.display()))?;
@@ -731,6 +778,15 @@ fn generated_task_agent_id(creation_order: u64, task_key: &str) -> Result<String
         .context("Generated TaskRun agent_id was invalid")
 }
 
+fn generated_task_agent_id_for_record(run: &TaskRun, record_id: &str) -> Result<String> {
+    match run.creation_order {
+        Some(order) => generated_task_agent_id(order, &run.task),
+        None => AgentId::parse(&format!("agents/{}", task::safe_task_key(record_id)))
+            .map(|agent| agent.as_str().to_string())
+            .context("Generated legacy TaskRun agent_id was invalid"),
+    }
+}
+
 fn validate_legacy_source(source: &str) -> Result<()> {
     match source {
         "new" | "batch" | "stack" => Ok(()),
@@ -1019,6 +1075,63 @@ mod tests {
         );
         assert!(content.contains("last_report_message_id = \"msg_123\""));
         assert!(content.contains("last_reported_at = "));
+    }
+
+    #[test]
+    fn ensure_workflow_routes_repairs_legacy_run_without_overwriting_coordinator() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_runs_dir = dir.path().join(".git/wt/task-runs");
+        std::fs::create_dir_all(&task_runs_dir).unwrap();
+        let path = task_runs_dir.join("run-workflow-legacy.toml");
+        let run = TaskRun {
+            task: "legacy-task".into(),
+            branch: "legacy-task".into(),
+            status: STATUS_PREPARED,
+            group: Some("workflow-1".into()),
+            error: None,
+            creation_order: Some(42),
+            agent_id: None,
+            coordinator_id: Some("agents/coord-existing".into()),
+            coordinator_label: None,
+            last_report_message_id: None,
+            last_reported_at: None,
+            created_at: "2026-05-16T00:00:00Z".into(),
+            updated_at: "2026-05-16T00:00:00Z".into(),
+        };
+        write(&path, &run).unwrap();
+        let record = TaskRunRecord {
+            id: "run-workflow-legacy".into(),
+            path,
+            run,
+        };
+
+        let repaired = ensure_workflow_routes(
+            &record,
+            "agents/coord-new",
+            Some("Coordinator for workflow \"Legacy\""),
+        )
+        .unwrap();
+
+        assert_eq!(
+            repaired.run.agent_id.as_deref(),
+            Some("agents/run-42-legacy-task")
+        );
+        assert_eq!(
+            repaired.run.coordinator_id.as_deref(),
+            Some("agents/coord-existing")
+        );
+        assert_eq!(
+            repaired.run.coordinator_label.as_deref(),
+            Some("Coordinator for workflow \"Legacy\"")
+        );
+        assert_ne!(repaired.run.updated_at, "2026-05-16T00:00:00Z");
+
+        let content = std::fs::read_to_string(repaired.path).unwrap();
+        assert!(content.contains("agent_id = \"agents/run-42-legacy-task\""));
+        assert!(content.contains("coordinator_id = \"agents/coord-existing\""));
+        assert!(
+            content.contains("coordinator_label = \"Coordinator for workflow \\\"Legacy\\\"\"")
+        );
     }
 
     #[test]

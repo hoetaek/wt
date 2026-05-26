@@ -169,6 +169,7 @@ pub(crate) fn prepare_workflow(
 
 pub(crate) fn run_workflow(ctx: &Ctx, workflow_path: &Path, jobs: usize) -> Result<()> {
     let mut metadata = workflow_store::read(workflow_path)?;
+    state::ensure_workflow_task_routes(ctx, workflow_path, &metadata)?;
     match metadata.mode {
         WorkflowMode::Single => run_single_workflow(ctx, workflow_path, &mut metadata),
         WorkflowMode::Batch => run_batch_workflow(ctx, workflow_path, &mut metadata, jobs),

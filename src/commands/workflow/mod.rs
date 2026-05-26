@@ -433,6 +433,29 @@ cli = "none"
             .collect()
     }
 
+    fn rewrite_as_legacy_workflow_route(ctx: &Ctx, run_id: &str) {
+        let path = task_run::resolve(ctx, run_id).unwrap();
+        let run = task_run::read(&path).unwrap();
+        let mut content = format!(
+            "task = \"{}\"\nbranch = \"{}\"\nstatus = \"{}\"\n",
+            run.task, run.branch, run.status
+        );
+        if let Some(group) = run.group.as_deref() {
+            content.push_str(&format!("group = \"{group}\"\n"));
+        }
+        if let Some(creation_order) = run.creation_order {
+            content.push_str(&format!("creation_order = {creation_order}\n"));
+        }
+        if let Some(coordinator_id) = run.coordinator_id.as_deref() {
+            content.push_str(&format!("coordinator_id = \"{coordinator_id}\"\n"));
+        }
+        content.push_str(&format!(
+            "created_at = \"{}\"\nupdated_at = \"{}\"\n",
+            run.created_at, run.updated_at
+        ));
+        fs::write(path, content).unwrap();
+    }
+
     fn assert_workflow_runs_have_routes(ctx: &Ctx, expected: usize) {
         let runs = task_run::list(ctx).unwrap();
         assert_eq!(runs.len(), expected);
@@ -633,6 +656,76 @@ cli = "none"
         .unwrap();
 
         assert_workflow_runs_have_routes(&ctx, 2);
+    }
+
+    #[test]
+    fn workflow_run_repairs_legacy_task_run_routes_before_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        write_profile(dir.path(), "alpha");
+        write_task(
+            dir.path(),
+            "add-schema",
+            "title = \"Add schema\"\nbranch = \"add-schema\"\nbody = \"Create the schema first.\"\n",
+        );
+
+        let mut runner = MockRunner::new();
+        runner.add_response("", false); // profile branch local_branch_exists
+        runner.add_response("", true); // worktree_add_new_branch
+        runner.add_response("", true); // parent local_branch_exists
+        runner.add_response("", true); // set parent config
+        let runner = Arc::new(runner);
+        let ctx = Ctx::new_with_options(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(SharedRunner {
+                inner: Arc::clone(&runner),
+            }),
+            Box::new(MockUi::new()),
+            crate::context::CtxOptions {
+                launcher_coordinator_id: Some("agents/coord-workflow".into()),
+                ..crate::context::CtxOptions::default()
+            },
+        );
+        let base = Some("main".into());
+        super::task(
+            &ctx,
+            &["add-schema".into()],
+            TaskOptions {
+                mode: WorkflowModeArg::Matrix,
+                profile: None,
+                profiles: &["alpha".into()],
+                title: Some("Workflow routing"),
+                body: None,
+                body_file: None,
+                origin_provider: None,
+                origin_id: None,
+                base: &base,
+                pr: None,
+            },
+        )
+        .unwrap();
+        let record = workflow_store::list(&ctx).unwrap().remove(0);
+        let run_id = &record.workflow.tasks[0].runs[0].run;
+        rewrite_as_legacy_workflow_route(&ctx, run_id);
+        assert!(task_run_record(&ctx, run_id).unwrap().agent_id.is_none());
+
+        run(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
+
+        let repaired = task_run_record(&ctx, run_id).unwrap();
+        assert_eq!(repaired.status, STATUS_RUNNING);
+        assert_eq!(
+            repaired.agent_id.as_deref(),
+            Some("agents/run-1-add-schema")
+        );
+        assert_eq!(
+            repaired.coordinator_id.as_deref(),
+            Some("agents/coord-workflow")
+        );
+        assert_eq!(
+            repaired.coordinator_label.as_deref(),
+            Some("Coordinator for workflow \"Workflow routing\"")
+        );
     }
 
     #[test]
