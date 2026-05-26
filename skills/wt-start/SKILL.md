@@ -56,7 +56,9 @@ For provider issues, use `wt workflow issue --mode <single|batch|stack> ...`.
 ## Start Rules
 
 - Prefer explicit task keys in scripts; omit only for interactive selection.
-- Verify every selected task body has `계획 (Planning)` with `expected duration`. If missing, return to `wt-ready`.
+- Verify every selected task body has `계획 (Planning)` with `expected duration`,
+  `estimate basis`, and suggested watch cadence. If missing, return to
+  `wt-ready`.
 - Verify the handoff has acceptance checks, size class, output concept or workflow rationale, and PR/landing policy source. If missing, return to `wt-ready`.
 - `--base .` for current branch, `--base <branch>` for explicit base, bare `--base` for interactive base selection.
 - Direct execution is `wt run task`; workflow commands only for saved workflow execution.

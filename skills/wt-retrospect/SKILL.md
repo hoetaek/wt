@@ -1,6 +1,6 @@
 ---
 name: wt-retrospect
-description: "Use after wt work has landed, been intentionally discarded, or stopped at a reusable blocked gate to capture keep/problem/try lessons and action candidates as a TOML retrospective. Triggers: 'retrospect', 'retrospective 작성', or end of a wt-work loop."
+description: "Use after wt work has landed, been intentionally discarded, or stopped at a reusable blocked gate to capture keep/problem/try lessons, timing estimate accuracy, watch cadence, and action candidates. Triggers: 'retrospect', 'retrospective 작성', or end of a wt-work loop."
 ---
 
 # WT Retrospect
@@ -24,8 +24,9 @@ loop stops at an earlier gate and the blocker itself is worth preserving.
 - When the user references `specs/<slug>/11-retrospect.md` or cross-work
   `<git-common-dir>/wt/retrospectives/`.
 
-Skip this skill when no useful keep/problem/try emerged. A retrospect that
-restates the diff is noise.
+Write a timing entry for every closed work item, even when no broader
+keep/problem/try lesson emerged. If no useful keep/problem/try emerged, keep
+those sections short; a retrospect that restates the diff is noise.
 
 ## Retrospect Types
 
@@ -94,6 +95,21 @@ For spec-backed work, use Markdown in `11-retrospect.md` with these sections:
 - result:
 - proof:
 
+## Time / watch
+- task:
+- TaskRun:
+- branch / worktree:
+- agent / profile:
+- expected duration:
+- estimate basis:
+- started / ended / actual duration:
+- first meaningful signal:
+- watch strategy:
+- observed watch evidence:
+- intervention / feedback:
+- cadence judgment:
+- next estimate adjustment:
+
 ## Keep
 -
 
@@ -142,6 +158,15 @@ blocked_gate = ""                 # required for outcome = "blocked"
 # prs_landed, manual_unsticks_before_fix, post_merge_review_findings, etc.
 # Skip metrics that are not meaningful for this kind of work.
 
+[timing]
+expected_duration = ""
+estimate_basis = ""
+actual_duration = ""
+first_meaningful_signal = ""
+watch_cadence = ""
+cadence_judgment = ""
+next_adjustment = ""
+
 [evidence]
 key_observations = ["..."]       # concrete facts established during the loop
 commands_that_proved_things = ["..."]
@@ -180,6 +205,50 @@ target_section = "<heading, anchor, or line range inside target_file>"
 change = "<what the edit should say or constrain, in one or two sentences>"
 rationale = "<why this belongs in target_file rather than a one-off reminder>"
 status = "proposed"                # or "applied" / "rejected"
+```
+
+## Timing Evidence
+
+Read enough local evidence to avoid inventing timing:
+
+- TaskDocument `계획 (Planning)` for expected duration, estimate basis, size
+  class, execution shape, and acceptance checks
+- `09-execution.md` for launch shape and risks
+- `10-review.md` for review findings, mid-process discoveries, and coordinator
+  observations
+- TaskRun, workflow row, branch, worktree, and agent ids from `wt inspect`
+- inbox reports and message ids used during coordination
+- git commit range and first/last commit timestamps when useful
+- checks run and final result
+- `wt agent wait-stats` and, only when necessary, the raw
+  `<git-common-dir>/wt/agent.state/wait-observations.jsonl`
+
+`agent.state` is supporting evidence for wait/watch behavior, not the source of
+truth for actual task duration. It records non-idle samples only when
+`wt agent watch` emits a heartbeat or timeout sample. If no watch sample exists,
+write that explicitly instead of backfilling from memory.
+
+Separate launch validation from stuck detection. A short post-launch poll such
+as a 45-second status/watch check proves that the run started; it does not prove
+the agent is stuck when the task estimate is much larger. For a 2h conservative
+planning guess, use longer steady cadence such as 10-15 minute heartbeat unless
+there is concrete stalled evidence.
+
+## Rolling Timing Baseline
+
+After each task timing entry, update the cross-work timing baseline when the
+result teaches anything about future estimates or watch cadence:
+
+```bash
+<git-common-dir>/wt/retrospectives/timing.md
+```
+
+This file is a rolling calibration note, not a replacement for per-work
+`11-retrospect.md`. Keep it small enough for `wt-ready` and `wt-coordinate` to
+read quickly. Recommended columns:
+
+```text
+| date | slug/task | type | size | agent/profile | expected | actual | first signal | watch cadence | result | next adjustment |
 ```
 
 ## Writing Rules

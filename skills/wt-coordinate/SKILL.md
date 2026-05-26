@@ -28,17 +28,54 @@ Capture TaskRun id/status/context/workflow/branch/parent, worktree path and
 dirty state, commits and diff against parent, cmux workspace/surface and
 runtime status. Scripts: `wt --json agent status <target>`.
 
-If status is `running`, let the agent work unless clearly stuck. After
-assigning work, prefer a quiet heartbeat:
+If status is `running`, let the agent work unless clearly stuck. Separate
+launch validation from steady monitoring. A short post-launch poll is fine to
+confirm that the run is observable:
 
 ```bash
-wt agent watch <target> --heartbeat 120
+wt agent watch <target> --interval 5 --timeout 45 --heartbeat 45
 ```
 
-Use a shorter heartbeat only when debugging a suspected stall, waiting after
-focused feedback, or expecting an immediate transition. If status is
-`needs_input`, send feedback. If status is `idle`, review the worktree instead
-of polling.
+Do not treat the absence of commits or reports during that short launch window
+as stuck evidence. Before choosing the steady watch cadence, read the
+TaskDocument `계획 (Planning)` expected duration, `09-execution.md` risks, and
+recent timing retrospectives when available:
+
+```bash
+common_dir="$(git rev-parse --git-common-dir)"
+find "$common_dir/wt/specs" "$common_dir/wt/retrospectives" -type f \( -name '11-retrospect.md' -o -name 'timing.md' \) 2>/dev/null
+wt agent wait-stats
+```
+
+`wt agent wait-stats` summarizes `agent.state` wait observations and can inform
+cadence, but it is not an adaptive default engine and does not replace the task
+estimate or coordinator judgment.
+
+Use a structure like this for steady monitoring:
+
+| Expected duration | Default steady watch |
+|---|---|
+| <= 20m or post-feedback | `--interval 10 --heartbeat 120-300` |
+| 20-60m | `--interval 20 --heartbeat 300-600` |
+| 1-3h | `--interval 30 --heartbeat 600-900` |
+| > 3h | `--interval 60 --heartbeat 900-1800` |
+
+For example, a 2h conservative planning guess usually deserves a 10-15 minute
+heartbeat after launch validation, not repeated sub-minute probing:
+
+```bash
+wt agent watch <target> --interval 30 --heartbeat 900
+```
+
+Use a shorter cadence only when debugging a suspected stall, waiting after
+focused feedback, the expected duration is short, or an immediate transition is
+expected. If status is `needs_input`, send feedback. If status is `idle`, review
+the worktree instead of polling.
+
+Record the chosen watch strategy for `wt-retrospect`: expected duration and
+basis, launch-validation command, steady heartbeat/interval/timeout, first
+meaningful signal time, state transitions, reports, and any nudges sent because
+the cadence looked wrong.
 
 ## Review
 
@@ -151,6 +188,8 @@ re-discovery:
 - prepared workflow landing policy from `wt workflow show` (workflow work)
 - worktree path and dirty/clean state
 - checks run and known gaps
+- expected duration, chosen watch cadence, first meaningful signal, and actual
+  elapsed time when known
 - stack completion command already run, if any
 
 Report coordinated branches, feedback sent, completion command, final review

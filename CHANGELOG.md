@@ -8,6 +8,8 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.42.0 - 2026-05-26
+
 - Changed `wt msg check-inbox --agent coordinator` to claim coordinator inbox
   messages across all scopes, including workflow- and task-run-scoped
   completion reports, while ordinary agent inbox checks remain direct-scope
@@ -22,22 +24,16 @@ minor version instead of moving to `x.0.0`.
   coordinator handoff prompts now use workflow-scoped coordinator inbox fallback
   commands so shared `agents/coordinator` messages can be attributed to the
   owning workflow.
-- Bumped the package version to `0.41.0` because scoped message sending extends
-  the user-facing CLI and workflow handoff contract while `wt` is still pre-1.0.
 
 - Added read-only message lifecycle inspection with `wt msg list --agent <agent>`
   and `wt msg read --agent <agent> <message-id>`. The commands report retained
   `new`, `claimed`, `delivered`, `retry`, and `failed` messages without claiming
   or acknowledging them, including JSON output for coordinator diagnostics.
-- Bumped the package version to `0.40.0` because message lifecycle inspection
-  adds user-facing CLI subcommands while `wt` is still pre-1.0.
 
 - Migrated `wt msg check-inbox` onto the scoped message delivery lifecycle. Hook
   delivery now reclaims expired leases, claims deliverable direct-scope messages,
   emits hook JSON on stdout, and acknowledges successful output into
   `inbox/delivered` without stealing active claims.
-- Bumped the package version to `0.39.0` because the file inbox persisted state
-  and hook delivery contract changed while `wt` is still pre-1.0.
 - Changed generated task and workflow coordinator handoff prompts to present
   `wt msg send --to coordinator ...` as the default report route, with cmux
   send coordinates retained as the fallback route when the file inbox is
@@ -52,38 +48,28 @@ minor version instead of moving to `x.0.0`.
   hooks. `wt setup` detects supported agent CLIs on PATH and installs the
   matching Claude/Codex `WT_AGENT_ID` dispatcher hooks, while `wt setup --remove`
   removes only wt-managed hook entries.
-- Bumped the package version to `0.38.0` because the unified setup/removal
-  surface extends the user-facing CLI surface.
 
 - Added short agent runtime wrappers: `wt codex`, `wt claude`, and
   `wt as <agent-id> -- <command...>`. The known-agent wrappers derive
   `WT_AGENT_ID=agents/<branch_slug>` from the current worktree and support
   same-worktree role identities such as `wt codex @planner`, which uses
   `agents/<branch_slug>-planner` instead of consuming the default inbox.
-- Bumped the package version to `0.37.0` because the new root-level agent
-  launch commands extend the user-facing CLI surface.
 
 - Refactored `wt agent hook install claude` to install a worktree-local
   `WT_AGENT_ID` dispatcher hook by default, matching the Codex runtime identity
   model while preserving `--agent <agent>` as a manual/test override.
-- Bumped the package version to `0.36.3` because the Claude hook adapter CLI now
-  separates hook installation from per-run agent identity binding.
 
 - Added the `coordinator` message target for task and workflow handoffs. Task
   agents launched with coordinator context receive
   `WT_COORDINATOR_AGENT_ID=<coordinator-agent-id>`, and generated handoff
   prompts include the `wt msg send --to coordinator ...` route alongside the
   existing cmux send coordinates.
-- Bumped the package version to `0.36.2` because coordinator inbox routing
-  changes the user-facing task/workflow handoff contract.
 
 - Bound wt-launched agent workspace commands to the file-inbox runtime identity
   by injecting `WT_AGENT_ID=agents/<branch_slug>` into the cmux
   `new-workspace --command` string. Codex uses this for the user-level dispatcher
   hook, and Claude/future agent CLIs receive the same launch-time environment
   shape wherever wt controls process launch.
-- Bumped the package version to `0.36.1` because the launch-time agent identity
-  binding fixes the runtime behavior promised by the Codex dispatcher adapter.
 
 - Added `wt agent hook install codex` and `wt agent hook uninstall codex` for
   Codex inbox delivery through a user-level `hooks.json` `UserPromptSubmit`
@@ -93,8 +79,6 @@ minor version instead of moving to `x.0.0`.
   enables Codex hooks, preserves existing cmux/non-wt hooks and trust entries,
   and removes only wt-managed Codex hook/trust entries on uninstall. `--agent`
   remains only as a manual/test override.
-- Bumped the package version to `0.36.0` because the Codex hook adapter adds a
-  new user-facing CLI subcommand while `wt` is still pre-1.0.
 
 - Added `wt agent hook install claude --agent <agent>` and
   `wt agent hook uninstall claude --agent <agent>` for Claude Code inbox
@@ -103,8 +87,6 @@ minor version instead of moving to `x.0.0`.
   plus the per-worktree Git exclude file, preserves non-wt Claude hooks, rejects
   tracked local settings, and installs the hook command
   `wt msg check-inbox --agent <agent>` with a shell-comment wt marker.
-- Bumped the package version to `0.35.0` because the Claude hook adapter adds a
-  new user-facing CLI subcommand while `wt` is still pre-1.0.
 
 - Added `wt msg send --to <agent> <message>` and
   `wt msg check-inbox --agent <agent>` as the file-based agent inbox MVP. Messages
@@ -117,9 +99,7 @@ minor version instead of moving to `x.0.0`.
   canonical commands, while legacy start forms fail with migration guidance
   instead of acting as aliases. Help, completions, docs, generated messages,
   config examples, and repo-local agent guidance now describe `run` narrowly as
-  starting workspace execution. This breaking pre-1.0 CLI/config/agent-guidance
-  cutover should be released with a `0.x.0` minor version bump on the release
-  branch.
+  starting workspace execution.
 
 - Added an explicit `wt profile list` subcommand that reads the
   `<git-common-dir>/wt/profiles/<name>/profile.toml` inventory through the

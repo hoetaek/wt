@@ -212,6 +212,20 @@ fn render_retrospect(slug: &str) -> String {
 - target: \n\
 - result: \n\
 - proof: \n\n\
+## 시간 / Watch 회고\n\
+- 작업 (task): \n\
+- TaskRun: \n\
+- branch / worktree: \n\
+- agent / profile: \n\
+- 예상 소요 (expected duration): \n\
+- 예상 근거 (estimate basis): \n\
+- 시작 / 종료 / 실제 소요: \n\
+- 최초 meaningful signal: \n\
+- watch 전략: launch validation / steady heartbeat / timeout\n\
+- 실제 watch 관측: \n\
+- 개입 / feedback: \n\
+- cadence 판단: \n\
+- 다음 추정 조정: \n\n\
 ## 유지할 점\n\
 - \n\n\
 ## 문제\n\
@@ -273,6 +287,12 @@ mod tests {
         assert!(task[0].1.contains("title = \"작업: foo\""));
         assert!(task[0].1.contains("branch = \"foo\""));
         assert!(task[0].1.contains("## 계획 (Planning)"));
+        assert!(task[0].1.contains("예상 근거 (estimate basis)"));
+        assert!(
+            task[0]
+                .1
+                .contains("권장 watch cadence (suggested watch cadence)")
+        );
 
         let workflow = DocKind::Workflow.render("foo");
         assert_eq!(workflow.len(), 1);
@@ -305,5 +325,15 @@ mod tests {
         assert!(idea[0].1.contains("## 맥락 / 레퍼런스 탐색"));
         assert!(idea[0].1.contains("## 목적 / 성공 기준"));
         assert!(!idea[0].1.contains("Outcome / problem"));
+    }
+
+    #[test]
+    fn retrospect_render_includes_timing_and_watch_fields() {
+        let retrospect = DocKind::Retrospect.render("foo");
+        assert_eq!(retrospect.len(), 1);
+        assert!(retrospect[0].1.contains("## 시간 / Watch 회고"));
+        assert!(retrospect[0].1.contains("예상 소요 (expected duration)"));
+        assert!(retrospect[0].1.contains("watch 전략"));
+        assert!(retrospect[0].1.contains("cadence 판단"));
     }
 }
