@@ -25,8 +25,7 @@ const GIT_LOCAL_ENV_KEYS: &[&str] = &[
     "GIT_COMMON_DIR",
 ];
 
-const CLAUDE_INBOX_HOOK_COMMAND: &str =
-    "wt msg check-inbox --silent 2>/dev/null || true # wt-agent-hook:claude-inbox";
+const CLAUDE_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:claude-inbox";
 const CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND: &str = "if [ -n \"${WT_AGENT_ID:-}\" ]; then wt agent supervisor stop --owned-by \"$WT_AGENT_ID\"; fi # wt-agent-hook:claude-supervisor-session-end";
 const CODEX_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 const MANAGED_INBOX_HOOK_EVENTS: &[(&str, &str)] = &[
@@ -612,8 +611,16 @@ fn codex_managed_inbox_commands(hooks: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-fn codex_dispatcher_command() -> String {
-    format!("wt msg check-inbox --silent 2>/dev/null || true {CODEX_INBOX_HOOK_MARKER}")
+fn claude_inbox_hook_command(event_name: &str) -> String {
+    format!(
+        "wt msg check-inbox --hook-event-name {event_name} --silent 2>/dev/null || true {CLAUDE_INBOX_HOOK_MARKER}"
+    )
+}
+
+fn codex_dispatcher_command(event_name: &str) -> String {
+    format!(
+        "wt msg check-inbox --hook-event-name {event_name} --silent 2>/dev/null || true {CODEX_INBOX_HOOK_MARKER}"
+    )
 }
 
 #[test]
@@ -2214,6 +2221,51 @@ fn msg_check_inbox_emits_hook_json_and_acknowledges_claimed_messages() {
     let message: toml::Value = toml::from_str(&content).unwrap();
     assert_eq!(message["delivery"]["state"].as_str(), Some("delivered"));
     assert_eq!(message["delivery"]["attempts"].as_integer(), Some(1));
+}
+
+#[test]
+fn msg_check_inbox_uses_internal_hook_event_name_when_supplied() {
+    for event_name in ["UserPromptSubmit", "PostToolUse"] {
+        let temp = TempDir::new().unwrap();
+        git_init(temp.path());
+
+        wt_command()
+            .args([
+                "-C",
+                temp.path().to_str().unwrap(),
+                "msg",
+                "send",
+                "--to",
+                "agents/codex",
+                "event",
+                event_name,
+            ])
+            .assert()
+            .success();
+
+        let output = wt_command()
+            .args([
+                "-C",
+                temp.path().to_str().unwrap(),
+                "msg",
+                "check-inbox",
+                "--agent",
+                "agents/codex",
+                "--hook-event-name",
+                event_name,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+
+        let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(
+            value["hookSpecificOutput"]["hookEventName"].as_str(),
+            Some(event_name)
+        );
+    }
 }
 
 #[test]
@@ -4095,10 +4147,11 @@ fn setup_installs_detected_claude_and_codex_hooks() {
 
     let settings = json_file(&home.join(".claude/settings.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        let expected = claude_inbox_hook_command(event_name);
         assert!(
             claude_event_commands(&settings, event_name)
                 .iter()
-                .any(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
+                .any(|command| command == &expected)
         );
     }
     assert!(
@@ -4110,7 +4163,10 @@ fn setup_installs_detected_claude_and_codex_hooks() {
 
     let hooks = json_file(&codex_home.join("hooks.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert!(codex_event_commands(&hooks, event_name).contains(&codex_dispatcher_command()));
+        assert!(
+            codex_event_commands(&hooks, event_name)
+                .contains(&codex_dispatcher_command(event_name))
+        );
     }
 }
 
@@ -4224,7 +4280,7 @@ trusted_hash = "sha256:cmux"
         hooks["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
         Some("cmux hooks codex stop")
     );
-    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
+    assert!(codex_managed_inbox_commands(&hooks).is_empty());
 
     let config: toml::Value =
         toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml")).unwrap()).unwrap();
@@ -4258,10 +4314,11 @@ fn setup_and_remove_are_idempotent() {
     let settings = json_file(&home.join(".claude/settings.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
         let commands = claude_event_commands(&settings, event_name);
+        let expected = claude_inbox_hook_command(event_name);
         assert_eq!(
             commands
                 .iter()
-                .filter(|command| command.as_str() == CLAUDE_INBOX_HOOK_COMMAND)
+                .filter(|command| command.as_str() == expected.as_str())
                 .count(),
             1
         );
@@ -4276,10 +4333,11 @@ fn setup_and_remove_are_idempotent() {
     let hooks = json_file(&codex_home.join("hooks.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
         let commands = codex_event_commands(&hooks, event_name);
+        let expected = codex_dispatcher_command(event_name);
         assert_eq!(
             commands
                 .iter()
-                .filter(|command| command.as_str() == codex_dispatcher_command())
+                .filter(|command| command.as_str() == expected.as_str())
                 .count(),
             1
         );
@@ -4303,7 +4361,7 @@ fn setup_and_remove_are_idempotent() {
 
     assert!(!home.join(".claude/settings.json").exists());
     let hooks = json_file(&codex_home.join("hooks.json"));
-    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
+    assert!(codex_managed_inbox_commands(&hooks).is_empty());
 }
 
 #[cfg(unix)]
@@ -4394,10 +4452,11 @@ fn setup_repairs_codex_when_hooks_feature_is_disabled() {
     let hooks = json_file(&codex_home.join("hooks.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
         let commands = codex_event_commands(&hooks, event_name);
+        let expected = codex_dispatcher_command(event_name);
         assert_eq!(
             commands
                 .iter()
-                .filter(|command| command.as_str() == codex_dispatcher_command())
+                .filter(|command| command.as_str() == expected.as_str())
                 .count(),
             1
         );
@@ -4512,7 +4571,7 @@ fn setup_remove_cleans_partial_wt_managed_hooks() {
                 "UserPromptSubmit": [{
                     "hooks": [{
                         "type": "command",
-                        "command": codex_dispatcher_command()
+                        "command": codex_dispatcher_command("UserPromptSubmit")
                     }]
                 }]
             }
@@ -4554,7 +4613,7 @@ fn setup_remove_preserves_codex_user_trust_after_index_shift() {
                     "hooks": [
                         {
                             "type": "command",
-                            "command": codex_dispatcher_command()
+                            "command": codex_dispatcher_command("UserPromptSubmit")
                         },
                         {
                             "type": "command",
@@ -4566,7 +4625,7 @@ fn setup_remove_preserves_codex_user_trust_after_index_shift() {
                     {
                         "hooks": [{
                             "type": "command",
-                            "command": codex_dispatcher_command()
+                            "command": codex_dispatcher_command("PostToolUse")
                         }]
                     },
                     {
@@ -5217,12 +5276,12 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
     let claude_settings = json_file(&home.join(".claude/settings.json"));
     let claude_hook = claude_managed_inbox_commands(&claude_settings)
         .into_iter()
-        .find(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
+        .find(|command| command == &claude_inbox_hook_command("UserPromptSubmit"))
         .unwrap();
     let codex_hooks = json_file(&codex_home.join("hooks.json"));
     let codex_hook = codex_managed_inbox_commands(&codex_hooks)
         .into_iter()
-        .find(|command| command == &codex_dispatcher_command())
+        .find(|command| command == &codex_dispatcher_command("UserPromptSubmit"))
         .unwrap();
 
     wt_command()
@@ -5260,6 +5319,10 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
         String::from_utf8_lossy(&codex_delivery.stderr)
     );
     let codex_json: serde_json::Value = serde_json::from_slice(&codex_delivery.stdout).unwrap();
+    assert_eq!(
+        codex_json["hookSpecificOutput"]["hookEventName"].as_str(),
+        Some("UserPromptSubmit")
+    );
     let codex_context = codex_json["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
@@ -5303,6 +5366,10 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
         String::from_utf8_lossy(&claude_delivery.stderr)
     );
     let claude_json: serde_json::Value = serde_json::from_slice(&claude_delivery.stdout).unwrap();
+    assert_eq!(
+        claude_json["hookSpecificOutput"]["hookEventName"].as_str(),
+        Some("UserPromptSubmit")
+    );
     let claude_context = claude_json["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
@@ -5325,7 +5392,7 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
         .success();
     assert!(!home.join(".claude/settings.json").exists());
     let codex_hooks = json_file(&codex_home.join("hooks.json"));
-    assert!(!codex_managed_inbox_commands(&codex_hooks).contains(&codex_dispatcher_command()));
+    assert!(codex_managed_inbox_commands(&codex_hooks).is_empty());
 }
 
 #[test]

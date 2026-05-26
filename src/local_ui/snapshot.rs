@@ -1056,25 +1056,22 @@ fn workflow_presentation_group(
 }
 
 fn collect_task_runs(ctx: &Ctx) -> Result<TaskRunCollection> {
-    let mut items = Vec::new();
-    let mut invalid = Vec::new();
-
-    for path in task_run::task_run_paths(ctx)? {
-        let id = task_run::id_from_path(&path).unwrap_or_else(|_| "task-run".into());
-        let relative_path = relative_path(ctx, &path);
-        match task_run::read(&path) {
-            Ok(run) => {
-                let record = TaskRunRecord { id, path, run };
-                items.push(task_run_summary(ctx, &record));
-            }
-            Err(err) => invalid.push(InvalidRecord {
-                key: id,
-                path: relative_path,
-                error: format!("{err:#}"),
-                source_text: read_known_source_text(ctx, &path),
-            }),
-        }
-    }
+    let inventory = task_run::list_lossy(ctx)?;
+    let items = inventory
+        .records
+        .iter()
+        .map(|record| task_run_summary(ctx, record))
+        .collect();
+    let invalid = inventory
+        .invalid
+        .into_iter()
+        .map(|record| InvalidRecord {
+            key: record.id,
+            path: relative_path(ctx, &record.path),
+            error: record.error,
+            source_text: read_known_source_text(ctx, &record.path),
+        })
+        .collect();
 
     Ok(TaskRunCollection { items, invalid })
 }

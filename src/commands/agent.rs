@@ -348,6 +348,11 @@ impl CmuxCandidateReport {
 
 fn warnings_for_work(work: &work::Work) -> Vec<String> {
     let mut warnings = Vec::new();
+    for warning in &work.target.warnings {
+        if !warnings.contains(warning) {
+            warnings.push(warning.clone());
+        }
+    }
     if let Some(warning) = work.state.warning.as_ref() {
         warnings.push(warning.clone());
     }
@@ -847,6 +852,40 @@ mod tests {
     }
 
     #[test]
+    fn status_branch_target_warns_about_unrelated_invalid_task_run() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::write(
+            fixture.repo.join(".git/wt/task-runs/run-broken.toml"),
+            "task = \"broken\"\nbranch = \"unrelated\"\nstatus = \"started\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+        )
+        .unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        add_selected_surface(&mut runner);
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            fixture.repo.clone(),
+            fixture.repo.clone(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui.clone()),
+        );
+
+        status(&ctx, Some("feature")).unwrap();
+
+        let steps = ui.steps.lock().unwrap().join("\n");
+        let warnings = ui.warnings.lock().unwrap().join("\n");
+        assert!(steps.contains("Agent status: feature"));
+        assert!(warnings.contains("TaskRun inventory skipped invalid record"));
+        assert!(warnings.contains("run-broken.toml"));
+    }
+
+    #[test]
     fn needs_input_maps_to_exit_code_two_and_records_since_time() {
         let fixture = Fixture::new();
         let mut runner = MockRunner::new();
@@ -1116,6 +1155,11 @@ mod tests {
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
+        std::fs::write(
+            fixture.repo.join(".git/wt/task-runs/run-broken.toml"),
+            "task = \"broken\"\nbranch = \"unrelated\"\nstatus = \"started\"\ncreated_at = \"2026-05-16T00:00:01Z\"\nupdated_at = \"2026-05-16T00:00:01Z\"\n",
+        )
+        .unwrap();
         let mut runner = MockRunner::new();
         runner.add_command("cmux");
         add_worktree_list(&mut runner, &fixture);
@@ -1144,6 +1188,9 @@ mod tests {
         assert!(items[0].iter().any(|item| item.contains("feature")));
         assert!(items[0].iter().any(|item| item.contains("run-feature")));
         assert!(steps.contains("Agent status: feature"));
+        let warnings = ui.warnings.lock().unwrap().join("\n");
+        assert!(warnings.contains("TaskRun inventory skipped invalid record"));
+        assert!(warnings.contains("run-broken.toml"));
     }
 
     #[test]

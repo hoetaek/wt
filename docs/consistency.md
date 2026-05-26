@@ -366,6 +366,9 @@ reclaims expired leases according to the delivery lifecycle policy, claims deliv
 after stdout is written successfully. Active non-expired claims remain owned by their current
 claimant. This command is a compatibility consumer for agent hooks, not a separate unread/read
 lifecycle.
+Omitted hook event name preserves the compatible `UserPromptSubmit` output default; wt-managed
+hook templates pass an internal event name argument so `UserPromptSubmit` and `PostToolUse` outputs
+match the event that invoked the hook.
 
 For ordinary agent recipients, `check-inbox` claims direct-scope messages. Non-direct scope delivery
 requires explicit ownership evidence. For workflow reports, the ownership evidence is recorded
@@ -569,19 +572,19 @@ Shell rc target은 zsh에서 `$ZDOTDIR/.zshrc`를 우선하고 `$ZDOTDIR`가 없
 Claude Code inbox polling adapter는 `wt setup`의 내부 step이다. 이 step은 user-level
 `$CLAUDE_HOME/settings.json` 또는 `~/.claude/settings.json`에 `UserPromptSubmit`,
 `PostToolUse`, `SessionEnd` hook dispatcher를 추가한다. inbox event의 Hook command는
-`wt msg check-inbox --silent`를 non-blocking shell wrapper로 실행한다. 성공한 delivery의 stdout
-hook JSON은 그대로 보존하고, 실패 stderr는 agent UI에 드러내지 않으며 command status는 0으로
-끝난다. Receive identity는 `check-inbox` 계약에 따라 `WT_AGENT_ID`, current live session marker,
-no-op 순서로 결정된다.
+`wt msg check-inbox --hook-event-name <event> --silent`를 non-blocking shell wrapper로
+실행한다. 성공한 delivery의 stdout hook JSON은 그대로 보존하고, 실패 stderr는 agent UI에
+드러내지 않으며 command status는 0으로 끝난다. Receive identity는 `check-inbox` 계약에 따라
+`WT_AGENT_ID`, current live session marker, no-op 순서로 결정된다.
 
 ```bash
-wt msg check-inbox --silent 2>/dev/null || true
+wt msg check-inbox --hook-event-name UserPromptSubmit --silent 2>/dev/null || true
 ```
 
 Generated command string은 wt-managed entry를 구분하기 위한 marker를 `#` 뒤에 둔다.
 Claude Code가 shell command로 실행할 때 `#` 뒤 marker는 shell comment로 처리되므로
-`wt msg check-inbox`의 인자로 전달되지 않는다. 이 동작은 CLI integration test로
-검증한다.
+marker는 `wt msg check-inbox`의 인자로 전달되지 않는다. Hook event name은 marker 앞의
+hidden/internal 인자로 전달되며, 이 동작은 CLI integration test로 검증한다.
 
 Reinstall은 managed event마다 wt-managed dispatcher hook을 하나씩만 남기는 idempotent
 operation이다. `SessionEnd`에는 owned supervisor cleanup hook을 하나만 남긴다.
@@ -595,13 +598,14 @@ per-machine setup이 수정하지 않는다.
 Codex inbox polling adapter는 `wt setup`의 내부 step이다. 현재 Codex는 project-local `.codex/hooks.json` discovery를
 신뢰할 수 없으므로 user-level `$CODEX_HOME/hooks.json` 또는 `~/.codex/hooks.json`에만
 `UserPromptSubmit`과 `PostToolUse` hook dispatcher를 추가한다. User-level hook은 특정 agent
-id에 영구로 묶이면 안 된다. 두 event의 기본 hook command는 `wt msg check-inbox --silent`를
-non-blocking shell wrapper로 실행한다. 성공한 delivery의 stdout hook JSON은 그대로 보존하고,
-실패 stderr는 agent UI에 드러내지 않으며 command status는 0으로 끝난다. Receive identity는
-`check-inbox` 계약에 따라 `WT_AGENT_ID`, current live session marker, no-op 순서로 결정된다.
+id에 영구로 묶이면 안 된다. 두 event의 기본 hook command는
+`wt msg check-inbox --hook-event-name <event> --silent`를 non-blocking shell wrapper로
+실행한다. 성공한 delivery의 stdout hook JSON은 그대로 보존하고, 실패 stderr는 agent UI에
+드러내지 않으며 command status는 0으로 끝난다. Receive identity는 `check-inbox` 계약에 따라
+`WT_AGENT_ID`, current live session marker, no-op 순서로 결정된다.
 
 ```bash
-wt msg check-inbox --silent 2>/dev/null || true
+wt msg check-inbox --hook-event-name PostToolUse --silent 2>/dev/null || true
 ```
 
 Codex는 user-level custom hook을 실행하기 전에 matching trust state를 요구한다. `wt setup`은
@@ -1176,6 +1180,11 @@ status는 `prepared`, `running`, `passed`, `failed`, `skipped`만 canonical이�
 TaskRun TOML의 `status = "done"`은 migration compatibility로만 읽고, 새 TaskRun 출력에는
 쓰지 않는다. 알 수 없는 status나 workflow mode 값은 조용히 해석하지 않고 파싱 단계에서
 실패시킨다.
+다만 branch/worktree 중심의 read-only surface는 unrelated malformed TaskRun 하나 때문에
+valid branch/worktree dossier를 잃지 않도록 partial TaskRun inventory를 사용할 수 있다. 이때
+invalid TaskRun file은 warning이나 JSON invalid-record field로 명시해야 하며, malformed
+TaskRun id를 직접 target으로 지정한 경우에는 여전히 그 파일의 parse/validation error로
+실패해야 한다.
 
 통합 실행 상태 모델은 TaskDocument, Workflow, TaskRun의 책임을 나누는 데서 시작한다.
 TaskDocument는 무엇을 할지에 대한 재사용 가능한 slice-level 설명이고, Workflow는
