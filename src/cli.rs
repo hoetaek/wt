@@ -27,6 +27,8 @@ Explore:
   wt run -h        start surfaces
   wt task -h       TaskDocument commands
   wt workflow -h   workflow lifecycle
+  wt ui -h         read-only personal state web UI
+  wt studio -h     write-capable authoring web surface
   wt agent -h      agent observation
   wt msg -h        agent inbox messages
   wt help <cmd>    any other command
@@ -283,6 +285,15 @@ pub enum Commands {
         long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <git-common-dir>/wt ideas, spec-local and cross-work retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
     )]
     Ui {
+        /// Port to bind on 127.0.0.1; 0 selects an available port
+        #[arg(long, default_value_t = 0, value_name = "PORT")]
+        port: u16,
+    },
+    /// Start the write-capable authoring web surface
+    #[command(
+        long_about = "Start the write-capable wt studio authoring surface. The server binds only to 127.0.0.1, prints a one-time /auth URL, and opens it in the default browser unless --quiet is set. Studio serves a Vite-built Preact frontend embedded in the wt binary. API routes require the session cookie and a matching Origin header; this first skeleton exposes only GET /api/ping and does not add mutation routes."
+    )]
+    Studio {
         /// Port to bind on 127.0.0.1; 0 selects an available port
         #[arg(long, default_value_t = 0, value_name = "PORT")]
         port: u16,
