@@ -3597,6 +3597,69 @@ fn msg_uses_git_common_runtime_inbox_from_linked_worktree() {
 }
 
 #[test]
+fn run_workflow_requires_coordinator_session_when_agent_env_unset() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "workflow",
+            "missing",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "wt workflow run requires a coordinator session.",
+        ))
+        .stderr(predicate::str::contains("eval \"$(wt session set"));
+}
+
+#[test]
+fn run_workflow_requires_coordinator_session_when_agent_env_empty() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "workflow",
+            "missing",
+        ])
+        .env("WT_AGENT_ID", "")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "wt workflow run requires a coordinator session.",
+        ))
+        .stderr(predicate::str::contains("eval \"$(wt session set"));
+}
+
+#[test]
+fn run_workflow_with_agent_env_reaches_workflow_resolution() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "workflow",
+            "missing",
+        ])
+        .env("WT_AGENT_ID", "agents/coordinator")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Workflow not found"))
+        .stderr(predicate::str::contains("wt workflow run requires a coordinator session").not());
+}
+
+#[test]
 fn run_workflow_help_explains_omitted_target_selection() {
     wt_command()
         .args(["run", "workflow", "--help"])

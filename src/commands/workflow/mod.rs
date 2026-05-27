@@ -37,6 +37,7 @@ use crate::workflow::{
     WorkflowTask,
 };
 use anyhow::{Result, bail};
+use std::env;
 use std::path::{Path, PathBuf};
 
 mod archive;
@@ -206,10 +207,34 @@ pub fn repair(ctx: &Ctx, workflow: &str, apply: bool) -> Result<()> {
 }
 
 pub fn run(ctx: &Ctx, workflow: Option<&str>, jobs: usize) -> Result<()> {
+    require_coordinator_session_for_workflow_run()?;
+    run_after_coordinator_session_check(ctx, workflow, jobs)
+}
+
+fn run_after_coordinator_session_check(
+    ctx: &Ctx,
+    workflow: Option<&str>,
+    jobs: usize,
+) -> Result<()> {
     let Some(path) = resolve_run_workflow_path(ctx, workflow)? else {
         return Ok(());
     };
     workflow_runner::run_workflow(ctx, &path, jobs)
+}
+
+fn require_coordinator_session_for_workflow_run() -> Result<()> {
+    let has_agent_id =
+        env::var_os("WT_AGENT_ID").is_some_and(|value| !value.to_string_lossy().trim().is_empty());
+    if has_agent_id {
+        return Ok(());
+    }
+
+    bail!(
+        "wt workflow run requires a coordinator session.\n\
+         Set WT_AGENT_ID in this shell first, for example:\n\n\
+             eval \"$(wt session set coordinator)\"\n\n\
+         You can pick any semantic name (coordinator, lead-claude, wt-fix-foo, ...)."
+    )
 }
 
 pub fn pass(ctx: &Ctx, workflow: &str, task: Option<&str>, run_next: bool) -> Result<()> {
@@ -738,7 +763,7 @@ cli = "none"
         rewrite_as_legacy_workflow_route(&ctx, run_id);
         assert!(task_run_record(&ctx, run_id).unwrap().agent_id.is_none());
 
-        run(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
+        run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
 
         let repaired = task_run_record(&ctx, run_id).unwrap();
         assert_eq!(repaired.status, STATUS_RUNNING);
@@ -1189,7 +1214,8 @@ cli = "none"
         .path;
         std::fs::create_dir_all(first_worktree).unwrap();
 
-        let err = run(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap_err();
+        let err = run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1)
+            .unwrap_err();
 
         assert!(err.to_string().contains("Workflow batch failed"));
         let first_run = task_run_record(&ctx, &record.workflow.tasks[0].run).unwrap();
@@ -1228,7 +1254,8 @@ cli = "none"
         );
         update_task_run(&ctx, &record.workflow.tasks[1], STATUS_FAILED, None);
 
-        let err = run(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap_err();
+        let err = run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1)
+            .unwrap_err();
         let message = err.to_string();
 
         assert!(
@@ -1433,7 +1460,7 @@ cli = "none"
         let record =
             prepare_matrix_workflow(&ctx, &["add-schema".into()], &strings(&["alpha", "beta"]));
 
-        run(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
+        run_after_coordinator_session_check(&ctx, Some(record.path.to_str().unwrap()), 1).unwrap();
 
         let calls = runner.calls.lock().unwrap();
         let added_branches = calls
@@ -2906,7 +2933,7 @@ landing = "auto"
         let workflow_before = fs::read_to_string(&workflow.path).unwrap();
         let run_before = fs::read_to_string(&run_path).unwrap();
 
-        run(&ctx, None, 1).unwrap();
+        run_after_coordinator_session_check(&ctx, None, 1).unwrap();
 
         assert_eq!(
             ui.warnings.lock().unwrap().as_slice(),
