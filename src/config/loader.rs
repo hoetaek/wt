@@ -298,7 +298,10 @@ impl Config {
         }
         let mut config = merge_config(base, profile_config);
         config.profile = None;
-        apply_profile_conventions(profile_dir, &mut config)?;
+        let warnings = apply_profile_conventions(profile_dir, &mut config)?;
+        for warning in &warnings {
+            eprintln!("warning: {warning}");
+        }
         finalize_config_common_prompt_scope(&mut config);
         config.validate_effective_agent()?;
         Ok(config)
