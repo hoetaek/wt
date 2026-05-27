@@ -99,6 +99,7 @@ function App() {
   const [draft, setDraft] = useState<EditorDraft>(emptyDraft);
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [planStatus, setPlanStatus] = useState<PlanStatus>("idle");
+  const [baselineStale, setBaselineStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -110,7 +111,8 @@ function App() {
   const displaySlug = mode === "create" ? draft.slug.trim() || "new-task" : selected?.key || draft.slug;
   const displayTitle = draft.title.trim() || "제목 없는 TaskDocument";
   const currentPath = mode === "update" && selected ? selected.path : targetPath(mode, draft, selected);
-  const cleanUpdateDraft = mode === "update" && selected ? draftsEqual(draft, draftFromItem(selected)) : false;
+  const cleanUpdateDraft =
+    mode === "update" && selected && !baselineStale ? draftsEqual(draft, draftFromItem(selected)) : false;
   const planSignature = useMemo(() => planRequestSignature(mode, currentPath, draft), [currentPath, draft, mode]);
   const latestPlanSignature = useRef(planSignature);
   const recoveryPlanController = useRef<AbortController | null>(null);
@@ -188,6 +190,7 @@ function App() {
     try {
       const next = await api<Inventory>("/api/task-documents", { method: "POST" });
       setInventory(next);
+      setBaselineStale(false);
       const fallbackPath = next.items[0]?.path || "";
       const resolvedPath = nextSelectedPath ?? selectedPath;
       const nextPath = next.items.some((item) => item.path === resolvedPath) ? resolvedPath : fallbackPath;
@@ -208,6 +211,7 @@ function App() {
 
   function selectCreate() {
     setMode("create");
+    setBaselineStale(false);
     resetPlanState();
     setError("");
     setDraft(emptyDraft);
@@ -218,6 +222,7 @@ function App() {
     if (!item) return;
     setMode("update");
     setSelectedPath(path);
+    setBaselineStale(false);
     resetPlanState();
     setError("");
     setDraft(draftFromItem(item));
@@ -297,6 +302,7 @@ function App() {
       const apiErr = err as ApiFailure;
       setError(apiErr.diff ? `${apiErr.message}\n\n${apiErr.diff}` : errorMessage(err));
       if (apiErr.status === 409) {
+        setBaselineStale(true);
         setPlan(null);
         triggerConflictRecoveryPlan();
       }
