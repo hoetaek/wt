@@ -1,4 +1,5 @@
 use crate::context::{CmdOutput, CommandRunner};
+use crate::services::cmux::cmux_send_args;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
@@ -143,20 +144,6 @@ fn push_to_surface_in_workspace_unchecked(
             )
         }
     }
-}
-
-fn cmux_send_args<'a>(
-    command: &'a str,
-    surface_id: &'a str,
-    workspace: Option<&'a str>,
-    payload: &'a str,
-) -> Vec<&'a str> {
-    let mut args = vec![command, "--surface", surface_id];
-    if let Some(workspace) = workspace {
-        args.extend(["--workspace", workspace]);
-    }
-    args.push(payload);
-    args
 }
 
 fn run_cmux(runner: &dyn CommandRunner, args: &[&str], verb: &str) -> Result<()> {
@@ -313,10 +300,13 @@ mod tests {
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].1, vec!["send", "--surface", "surface:4", "hello"]);
+        assert_eq!(
+            calls[0].1,
+            vec!["send", "--surface", "surface:4", "--", "hello"]
+        );
         assert_eq!(
             calls[1].1,
-            vec!["send-key", "--surface", "surface:4", "enter"]
+            vec!["send-key", "--surface", "surface:4", "--", "enter"]
         );
     }
 
@@ -344,6 +334,7 @@ mod tests {
                 "surface:4",
                 "--workspace",
                 "workspace:2",
+                "--",
                 "hello"
             ]
         );
@@ -355,6 +346,7 @@ mod tests {
                 "surface:4",
                 "--workspace",
                 "workspace:2",
+                "--",
                 "enter"
             ]
         );
@@ -370,7 +362,7 @@ mod tests {
         let calls = runner.calls.lock().unwrap();
         assert_eq!(
             calls[0].1,
-            vec!["send", "--surface", "surface:4", "hello\\n"]
+            vec!["send", "--surface", "surface:4", "--", "hello\\n"]
         );
     }
 

@@ -1826,6 +1826,7 @@ mod tests {
                 "surface:0",
                 "--workspace",
                 "workspace:1",
+                "--",
                 "enter"
             ]
         );
@@ -1919,6 +1920,7 @@ mod tests {
                 "surface:0",
                 "--workspace",
                 "workspace:1",
+                "--",
                 "enter"
             ]
         );
@@ -2012,6 +2014,7 @@ mod tests {
                 "surface:0",
                 "--workspace",
                 "workspace:1",
+                "--",
                 "enter"
             ]
         );

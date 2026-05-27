@@ -373,6 +373,7 @@ mod tests {
                         "surface:4",
                         "--workspace",
                         "workspace:1",
+                        "--",
                         "Check your wt inbox.",
                     ]
         }));
@@ -385,6 +386,7 @@ mod tests {
                         "surface:4",
                         "--workspace",
                         "workspace:1",
+                        "--",
                         "enter",
                     ]
         }));
