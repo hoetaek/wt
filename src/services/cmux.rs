@@ -11,8 +11,11 @@ static CMUX_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub(crate) const PASTE_SUBMIT_SETTLE: Duration = Duration::from_millis(500);
 pub(crate) const CODEX_PASTE_MARKER_TIMEOUT: Duration = Duration::from_secs(3);
 pub(crate) const CODEX_PASTE_MARKER_POLL: Duration = Duration::from_millis(100);
+#[allow(dead_code)]
 const CODEX_PASTE_MARKER: &str = "[Pasted Content ";
+#[allow(dead_code)]
 const CODEX_LONG_PROMPT_MIN_BYTES: usize = 1000;
+#[allow(dead_code)]
 const CODEX_LONG_PROMPT_MIN_LINES: usize = 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +141,7 @@ pub(crate) fn unique_cmux_buffer_name(prefix: &str, surface: &str) -> String {
     format!("{prefix}-{suffix}-{}-{nanos}-{counter}", std::process::id())
 }
 
+#[allow(dead_code)]
 pub(crate) fn codex_prompt_expects_pasted_content_marker(prompt: &str) -> bool {
     prompt.len() >= CODEX_LONG_PROMPT_MIN_BYTES
         || prompt.lines().count() >= CODEX_LONG_PROMPT_MIN_LINES

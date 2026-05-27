@@ -243,13 +243,7 @@ mod tests {
         let steps = ui.steps.lock().unwrap().join("\n");
         assert!(steps.contains("Sent message to surface:4 on workspace:1"));
         let calls = runner.calls.lock().unwrap();
-        assert_paste_submit(
-            &calls,
-            "wt-codex-surface-4-",
-            "surface:4",
-            "workspace:1",
-            "hello agent",
-        );
+        assert_codex_send_submit(&calls, "surface:4", "workspace:1", "hello agent");
     }
 
     #[test]
@@ -384,13 +378,7 @@ mod tests {
         let steps = ui.steps.lock().unwrap().join("\n");
         assert!(steps.contains("Sent message to surface:4 on workspace:1"));
         let calls = runner.calls.lock().unwrap();
-        assert_paste_submit(
-            &calls,
-            "wt-codex-surface-4-",
-            "surface:4",
-            "workspace:1",
-            "hello agent",
-        );
+        assert_codex_send_submit(&calls, "surface:4", "workspace:1", "hello agent");
     }
 
     #[test]
@@ -940,6 +928,38 @@ mod tests {
             cmd == "cmux"
                 && args.first().is_some_and(|arg| arg == "send")
                 && args.last().is_some_and(|arg| arg == text)
+        }));
+    }
+
+    fn assert_codex_send_submit(calls: &[CommandCall], surface: &str, workspace: &str, text: &str) {
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux"
+                && args.iter().map(String::as_str).collect::<Vec<_>>()
+                    == vec![
+                        "send",
+                        "--surface",
+                        surface,
+                        "--workspace",
+                        workspace,
+                        "--",
+                        text,
+                    ]
+        }));
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux"
+                && args.iter().map(String::as_str).collect::<Vec<_>>()
+                    == vec![
+                        "send-key",
+                        "--surface",
+                        surface,
+                        "--workspace",
+                        workspace,
+                        "--",
+                        "enter",
+                    ]
+        }));
+        assert!(!calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux" && args.first().is_some_and(|arg| arg == "set-buffer")
         }));
     }
 }

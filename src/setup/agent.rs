@@ -1,9 +1,7 @@
 use crate::config::{AgentCli, AgentConfig, SubmitMode};
 use crate::context::Ctx;
-use crate::services::cmux::{
-    CmuxService, PASTE_SUBMIT_SETTLE, codex_prompt_expects_pasted_content_marker,
-    unique_cmux_buffer_name,
-};
+use crate::services::cmux::{CmuxService, PASTE_SUBMIT_SETTLE, unique_cmux_buffer_name};
+use crate::services::cmux_push::{CODEX_IN_PROMPT_NEWLINE_KEY, codex_prompt_lines};
 use crate::template;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
@@ -203,18 +201,14 @@ fn send_codex_prompt(
     ws_handle: &str,
     prompt: &str,
 ) -> Result<()> {
-    let buffer = unique_cmux_buffer_name("wt-codex", surface);
-    cmux.set_buffer(&buffer, prompt)?;
-    cmux.paste_buffer(surface, ws_handle, &buffer)?;
-    if codex_prompt_expects_pasted_content_marker(prompt)
-        && cmux.wait_for_codex_pasted_content_marker(surface, ws_handle)?
-    {
-        cmux.send_key(surface, ws_handle, "enter")?;
-        return Ok(());
+    let lines = codex_prompt_lines(prompt);
+    for (i, line) in lines.iter().enumerate() {
+        cmux.send(surface, ws_handle, line)?;
+        if i + 1 < lines.len() {
+            cmux.send_key(surface, ws_handle, CODEX_IN_PROMPT_NEWLINE_KEY)?;
+        }
     }
-    std::thread::sleep(PASTE_SUBMIT_SETTLE);
-    cmux.send_key(surface, ws_handle, "enter")?;
-    Ok(())
+    cmux.send_key(surface, ws_handle, "enter")
 }
 
 fn send_pasted_prompt_then_enter(
