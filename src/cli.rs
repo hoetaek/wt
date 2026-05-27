@@ -6,32 +6,49 @@ const ROOT_HELP_TEMPLATE: &str = "\
 
 {usage-heading} {usage}
 
-Common:
-  run      Start workspace execution from issue, PR, branch text, task, or workflow
+Start Work:
+  run issue [ISSUE]       Start from provider issue
+  run pr [PR]             Start from pull request
+  run branch <TEXT>       Start ad hoc branch work
+  run task [TASK]...      Start local TaskDocuments
+  run workflow [WORKFLOW] Start saved Workflow tasks
+
+Manage Work:
   open     Open an existing worktree or branch
   inspect  Read a work dossier
   done     Clean completed work
   list     Show current wt state
 
-Prepared Work:
+Prepare:
+  scaffold  Create idea/spec/task/workflow skeletons
   task      Manage local TaskDocuments
   workflow  Prepare and coordinate saved workflow tasks
 
-Setup:
-  init    이 저장소에 맞는 config 추천 wizard 시작
-  config  Print, edit, or refactor config
-  setup   Install or remove per-machine integration
-  doctor  Check config and local tools
+Coordinate Agents:
+  agent    Observe task-agent runtime state
+  msg      Send and inspect agent inbox messages
+  send     Send a live cmux prompt message
+  session  Manage current agent identity
 
-Explore:
-  wt run -h        start surfaces
-  wt task -h       TaskDocument commands
-  wt workflow -h   workflow lifecycle
-  wt ui -h         read-only personal state web UI
-  wt studio -h     write-capable authoring web surface
-  wt agent -h      agent observation
-  wt msg -h        agent inbox messages
-  wt help <cmd>    any other command
+Run Agents:
+  codex   Launch Codex with wt agent identity
+  claude  Launch Claude with wt agent identity
+  as      Run any command with explicit WT_AGENT_ID
+
+Setup:
+  init        Start the config recommendation wizard
+  config      Print, edit, or refactor config
+  profile     List or manage named profile configs
+  setup       Install or remove per-machine integration
+  doctor      Check config and local tools
+
+Tools:
+  ui          Start the read-only personal state web UI
+  studio      Start the write-capable authoring surface
+  site        Inspect and manage local site helpers
+  shell-init  Print shell integration source
+  completion  Generate shell completions
+  version     Print wt version
 
 Options:
 {options}{after-help}";
@@ -42,28 +59,28 @@ Options:
     version,
     about = "Worktree-based agent orchestration harness",
     help_template = ROOT_HELP_TEMPLATE,
-    after_help = "Start workspace execution with: wt run issue, wt run pr, wt run branch, wt run task, wt run workflow.\nUse wt open for existing branches or worktrees; use wt workflow for saved workflow files and lifecycle actions."
+    after_help = "Examples:\n  $ wt init\n  $ wt run issue 123\n  $ wt run pr 42\n  $ wt run branch \"fix login\"\n  $ wt run task\n  $ wt run workflow release-stack\n  $ wt inspect <target> --pr\n  $ wt agent watch <target> --heartbeat 300\n  $ wt run -h\n  $ wt help <cmd>"
 )]
 pub struct Cli {
-    /// DIR에서 wt 실행
+    /// Run wt from DIR
     #[arg(short = 'C', long = "directory", global = true, value_name = "DIR")]
     pub directory: Option<PathBuf>,
-    /// wt config를 읽는 명령에서 사용할 config 파일
+    /// Read wt config from PATH
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
-    /// 진단 출력 자세히 보기 (-v, -vv)
+    /// Show more diagnostics (-v, -vv)
     #[arg(short, long, action = ArgAction::Count, global = true, conflicts_with = "quiet")]
     pub verbose: u8,
-    /// 일반 status 출력 숨기기
+    /// Hide routine status output
     #[arg(short, long, global = true)]
     pub quiet: bool,
-    /// 터미널 색상 사용 시점
+    /// When to use terminal colors
     #[arg(long, value_enum, default_value_t = ColorMode::Auto, global = true)]
     pub color: ColorMode,
-    /// 터미널 색상 끄기
+    /// Disable terminal colors
     #[arg(long = "no-color", global = true, conflicts_with = "color")]
     pub no_color: bool,
-    /// 지원하는 명령에서 machine-readable JSON 출력
+    /// Output JSON for supported commands
     #[arg(long, global = true)]
     pub json: bool,
     #[command(subcommand)]
@@ -1075,6 +1092,9 @@ mod tests {
             .find(&start_marker)
             .unwrap_or_else(|| panic!("missing heading {heading}"))
             + start_marker.len();
+        if next_heading.is_empty() {
+            return &help[start..];
+        }
         let end_marker = format!("\n\n{next_heading}:\n");
         let end = help[start..]
             .find(&end_marker)
@@ -2426,39 +2446,78 @@ mod tests {
     fn root_help_prioritizes_common_commands() {
         let help = Cli::command().render_long_help().to_string();
 
-        for heading in ["Common:", "Prepared Work:", "Setup:", "Explore:"] {
+        for heading in [
+            "Start Work:",
+            "Manage Work:",
+            "Prepare:",
+            "Coordinate Agents:",
+            "Run Agents:",
+            "Setup:",
+            "Tools:",
+            "Examples:",
+        ] {
             assert!(help.contains(heading), "missing heading {heading}");
         }
         assert!(!help.contains("\nCommands:\n"));
 
-        let common = root_help_section(&help, "Common", "Prepared Work");
-        for command in ["run", "open", "list", "inspect", "done"] {
-            assert_section_contains_command(common, command);
+        let start_work = root_help_section(&help, "Start Work", "Manage Work");
+        for command in [
+            "run issue",
+            "run pr",
+            "run branch",
+            "run task",
+            "run workflow",
+        ] {
+            assert_section_contains_command(start_work, command);
         }
-        assert!(!common.contains("\n  ui"));
 
-        let prepared_work = root_help_section(&help, "Prepared Work", "Setup");
-        for command in ["task", "workflow"] {
-            assert_section_contains_command(prepared_work, command);
+        let manage_work = root_help_section(&help, "Manage Work", "Prepare");
+        for command in ["open", "list", "inspect", "done"] {
+            assert_section_contains_command(manage_work, command);
         }
-        assert!(!prepared_work.contains("\n  scaffold"));
+        assert!(!manage_work.contains("\n  ui"));
 
-        let setup = root_help_section(&help, "Setup", "Explore");
-        for command in ["init", "config", "setup", "doctor"] {
+        let prepare = root_help_section(&help, "Prepare", "Coordinate Agents");
+        for command in ["scaffold", "task", "workflow"] {
+            assert_section_contains_command(prepare, command);
+        }
+
+        let coordinate_agents = root_help_section(&help, "Coordinate Agents", "Run Agents");
+        for command in ["agent", "msg", "send", "session"] {
+            assert_section_contains_command(coordinate_agents, command);
+        }
+
+        let run_agents = root_help_section(&help, "Run Agents", "Setup");
+        for command in ["codex", "claude", "as"] {
+            assert_section_contains_command(run_agents, command);
+        }
+
+        let setup = root_help_section(&help, "Setup", "Tools");
+        for command in ["init", "config", "profile", "setup", "doctor"] {
             assert_section_contains_command(setup, command);
         }
-        assert!(!setup.contains("\n  profile"));
         assert!(!setup.contains("\n  shell-init"));
 
-        let explore = root_help_section(&help, "Explore", "Options");
+        let tools = root_help_section(&help, "Tools", "Options");
         for command in [
-            "wt run -h",
-            "wt task -h",
-            "wt workflow -h",
-            "wt agent -h",
-            "wt msg -h",
+            "ui",
+            "studio",
+            "site",
+            "shell-init",
+            "completion",
+            "version",
         ] {
-            assert!(explore.contains(command), "missing explore hint {command}");
+            assert_section_contains_command(tools, command);
+        }
+
+        let examples = root_help_section(&help, "Examples", "");
+        for command in [
+            "wt run issue",
+            "wt run pr",
+            "wt run workflow",
+            "wt help <cmd>",
+        ] {
+            assert!(examples.contains(command), "missing example {command}");
         }
     }
 

@@ -674,7 +674,8 @@ fn no_args_prints_help_successfully() {
         .stdout(predicate::str::contains("new").not())
         .stdout(predicate::str::contains("agent"))
         .stdout(predicate::str::contains("wt help <cmd>"))
-        .stdout(predicate::str::contains("\n  ui").not());
+        .stdout(predicate::str::contains("Examples:"))
+        .stdout(predicate::str::contains("\n  ui"));
 }
 
 #[test]
