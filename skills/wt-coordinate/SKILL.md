@@ -17,6 +17,29 @@ Stay on these responsibilities; do not absorb later phases:
 | land / merge | `wt-land` |
 | cleanup with `wt done` | `wt-land` |
 
+## Start With Tab Name
+
+Before inspection, if running inside cmux, first rename the current tab. This is
+the first coordination action, so the user can identify what this coordinator is
+doing before any longer inspection or watch command starts.
+
+Use Korean for the visible tab name. Prefer a short user-facing task phrase over
+raw branch, workflow, or TaskRun slugs. Naming rules:
+
+- Format: `조율: <한글 작업명>`.
+- Keep the name scannable, usually 18 characters or fewer after `조율:`.
+- Use nouns or noun phrases, not status prose. Good: `조율: 리뷰 라우팅`,
+  `조율: 스택 검토`, `조율: 릴리즈 준비`.
+- Include an id or slug only when it is needed to disambiguate similar runs, and
+  put it at the end: `조율: 리뷰 라우팅 run-42`.
+
+```bash
+cmux rename-tab --surface "$(cmux identify | jq -r .caller.surface_ref)" "조율: <한글 작업명>"
+```
+
+Use `caller`, not `focused`; `focused` is the user's current tab, not yours. If
+the command shows that this shell is not inside cmux, continue with inspection.
+
 ## Inspect
 
 ```bash
@@ -28,10 +51,6 @@ Capture TaskRun id/status/context/workflow/branch/parent, worktree path and
 dirty state, commits and diff against parent, coordinator id when recorded,
 default worker inbox identity when it can be derived, cmux workspace/surface,
 and runtime status. Scripts: `wt --json agent status <target>`.
-
-If running inside cmux, rename the current tab to reflect the workflow:
-`cmux rename-tab --surface $(cmux identify | jq -r .caller.surface_ref) "<workflow/task>"`.
-Use `caller`, not `focused` — `focused` is the user's current tab, not yours.
 
 If status is `running`, let the agent work unless clearly stuck. Separate
 launch validation from steady monitoring. A short post-launch poll is fine to
