@@ -29,6 +29,10 @@ dirty state, commits and diff against parent, coordinator id when recorded,
 default worker inbox identity when it can be derived, cmux workspace/surface,
 and runtime status. Scripts: `wt --json agent status <target>`.
 
+If running inside cmux, rename the current tab to reflect the workflow:
+`cmux rename-tab --surface $(cmux identify | jq -r .caller.surface_ref) "<workflow/task>"`.
+Use `caller`, not `focused` — `focused` is the user's current tab, not yours.
+
 If status is `running`, let the agent work unless clearly stuck. Separate
 launch validation from steady monitoring. A short post-launch poll is fine to
 confirm that the run is observable:
