@@ -1,125 +1,128 @@
-:root {
-  color: #182026;
-  background: #f5f7f8;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SFMono-Regular", monospace;
+  --color-studio-accent: #3b82f6;
+  --ease-studio: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 * {
   box-sizing: border-box;
 }
 
-body {
-  margin: 0;
+html {
   min-width: 320px;
-  min-height: 100vh;
+  background: #f5f5f4;
+  color-scheme: light dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 
-.studio-shell {
-  display: grid;
-  gap: 24px;
-  width: min(1040px, calc(100vw - 32px));
-  margin: 0 auto;
-  padding: 48px 0;
-}
-
-.studio-header {
-  display: grid;
-  gap: 8px;
-}
-
-.eyebrow,
-.summary,
-.empty-state p {
+body {
+  min-height: 100dvh;
   margin: 0;
-  color: #5a646e;
+  background: #f5f5f4;
+  color: #111827;
+  font-family: var(--font-sans);
 }
 
-.eyebrow {
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
+button,
+input,
+textarea {
+  font: inherit;
 }
 
-h1,
-h2 {
-  margin: 0;
-  letter-spacing: 0;
+button {
+  cursor: pointer;
 }
 
-h1 {
-  font-size: 3.8rem;
-  line-height: 1;
+button:disabled {
+  cursor: not-allowed;
 }
 
-h2 {
-  font-size: 1.1rem;
+input,
+textarea {
+  outline: none;
 }
 
-.summary {
-  max-width: 620px;
-  font-size: 1rem;
-  line-height: 1.5;
+textarea {
+  resize: vertical;
 }
 
-.panel {
-  display: grid;
-  gap: 18px;
-  padding: 20px;
-  border: 1px solid #d7dde3;
-  border-radius: 8px;
-  background: #ffffff;
+::selection {
+  background: rgb(59 130 246 / 0.18);
 }
 
-.panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+.studio-noise {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.28;
+  background-image: radial-gradient(circle, rgb(0 0 0 / 0.12) 0.55px, transparent 0.7px);
+  background-size: 12px 12px;
+  mask-image: radial-gradient(circle at center, black, transparent 84%);
 }
 
-.status {
-  flex: none;
-  padding: 4px 8px;
-  border: 1px solid #b8c8bd;
-  border-radius: 999px;
-  color: #2d5a3b;
-  background: #eef7f0;
-  font-size: 0.78rem;
-  font-weight: 700;
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(4rem);
+  filter: blur(12px);
+  transition:
+    opacity 800ms var(--ease-studio),
+    transform 800ms var(--ease-studio),
+    filter 800ms var(--ease-studio);
 }
 
-.empty-state {
-  display: grid;
-  gap: 6px;
-  min-height: 180px;
-  align-content: center;
-  padding: 24px;
-  border: 1px dashed #c2cad2;
-  border-radius: 8px;
-  color: #28323a;
-  background: #f8faf9;
+[data-reveal="visible"] {
+  opacity: 1;
+  transform: translateY(0);
+  filter: blur(0);
 }
 
-.empty-state strong {
-  font-size: 1rem;
-}
-
-@media (max-width: 640px) {
-  .studio-shell {
-    width: min(100vw - 24px, 1040px);
-    padding: 28px 0;
+@keyframes studio-spring {
+  0% {
+    opacity: 0;
+    transform: scale(0.96) translateY(1rem);
   }
 
-  h1 {
-    font-size: 2.4rem;
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  html {
+    background: #0a0a0a;
   }
 
-  .panel-header {
-    align-items: flex-start;
-    flex-direction: column;
+  body {
+    background: #0a0a0a;
+    color: #f8fafc;
+  }
+
+  .studio-noise {
+    opacity: 0.2;
+    background-image: radial-gradient(circle, rgb(255 255 255 / 0.16) 0.55px, transparent 0.7px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+    filter: none;
   }
 }

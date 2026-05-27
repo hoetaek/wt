@@ -1,12 +1,13 @@
 use crate::context::{Ctx, PromptItem, PromptRow};
+use crate::storage::StorageRoot;
 use crate::task_run;
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TaskDocument {
     #[serde(default)]
@@ -19,7 +20,7 @@ pub(crate) struct TaskDocument {
     pub(crate) origin: Option<TaskOrigin>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TaskOrigin {
     pub(crate) provider: String,
@@ -205,16 +206,30 @@ pub(crate) fn list_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
 }
 
 pub(crate) fn list_local_task_documents(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
+    list_task_documents(&ctx.storage_root, &ctx.repo_root)
+}
+
+pub(crate) fn list_task_documents(
+    storage_root: &StorageRoot,
+    repo_root: &Path,
+) -> Result<Vec<SelectedTask>> {
     let mut tasks = Vec::new();
-    for path in task_document_paths(ctx)? {
-        tasks.push(read_task_document_path(ctx, &path)?);
+    for path in task_document_paths_for(storage_root, repo_root)? {
+        tasks.push(read_task_document_path_from_store(storage_root, &path)?);
     }
     Ok(tasks)
 }
 
 pub(crate) fn task_document_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
-    ensure_no_legacy_tasks(ctx)?;
-    let tasks_dir = ctx.storage_root.tasks_dir();
+    task_document_paths_for(&ctx.storage_root, &ctx.repo_root)
+}
+
+pub(crate) fn task_document_paths_for(
+    storage_root: &StorageRoot,
+    repo_root: &Path,
+) -> Result<Vec<PathBuf>> {
+    ensure_task_document_store_available(storage_root, repo_root)?;
+    let tasks_dir = storage_root.tasks_dir();
     if !tasks_dir.exists() {
         return Ok(Vec::new());
     }
@@ -223,7 +238,7 @@ pub(crate) fn task_document_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
     for entry in fs::read_dir(&tasks_dir).with_context(|| {
         format!(
             "Failed to read task directory: {}",
-            ctx.storage_root.display_path(&tasks_dir)
+            storage_root.display_path(&tasks_dir)
         )
     })? {
         let path = entry?.path();
@@ -246,12 +261,19 @@ pub(crate) fn task_key_from_path(path: &Path) -> Result<String> {
 }
 
 pub(crate) fn read_task_document_path(ctx: &Ctx, path: &Path) -> Result<SelectedTask> {
-    read_selected_task(ctx, path.to_path_buf())
+    read_task_document_path_from_store(&ctx.storage_root, path)
+}
+
+pub(crate) fn read_task_document_path_from_store(
+    storage_root: &StorageRoot,
+    path: &Path,
+) -> Result<SelectedTask> {
+    read_selected_task(storage_root, path.to_path_buf())
 }
 
 pub(crate) fn read_task_document(ctx: &Ctx, key: &str) -> Result<TaskDocument> {
-    ensure_no_legacy_tasks(ctx)?;
-    let path = task_path(ctx, key);
+    ensure_task_document_store_available(&ctx.storage_root, &ctx.repo_root)?;
+    let path = task_path_for(&ctx.storage_root, key);
     let display_path = ctx.storage_root.display_path(&path);
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read task: {display_path}"))?;
@@ -261,9 +283,17 @@ pub(crate) fn read_task_document(ctx: &Ctx, key: &str) -> Result<TaskDocument> {
 }
 
 pub(crate) fn read_task_file(ctx: &Ctx, key: &str) -> Result<(TaskDocument, String, String)> {
-    ensure_no_legacy_tasks(ctx)?;
-    let absolute_path = task_path(ctx, key);
-    let path = ctx.storage_root.display_path(&absolute_path);
+    read_task_file_from_store(&ctx.storage_root, &ctx.repo_root, key)
+}
+
+pub(crate) fn read_task_file_from_store(
+    storage_root: &StorageRoot,
+    repo_root: &Path,
+    key: &str,
+) -> Result<(TaskDocument, String, String)> {
+    ensure_task_document_store_available(storage_root, repo_root)?;
+    let absolute_path = task_path_for(storage_root, key);
+    let path = storage_root.display_path(&absolute_path);
     let content = fs::read_to_string(&absolute_path)
         .with_context(|| format!("Failed to read task: {path}"))?;
     let task: TaskDocument =
@@ -272,24 +302,33 @@ pub(crate) fn read_task_file(ctx: &Ctx, key: &str) -> Result<(TaskDocument, Stri
 }
 
 pub(crate) fn write_task_document(ctx: &Ctx, key: &str, task: &TaskDocument) -> Result<()> {
-    ensure_no_legacy_tasks(ctx)?;
-    let tasks_dir = ctx.storage_root.tasks_dir();
+    write_task_document_content(ctx, key, &render_task_document(task))
+}
+
+pub(crate) fn write_task_document_content(ctx: &Ctx, key: &str, content: &str) -> Result<()> {
+    write_task_document_content_to_store(&ctx.storage_root, &ctx.repo_root, key, content)
+}
+
+pub(crate) fn write_task_document_content_to_store(
+    storage_root: &StorageRoot,
+    repo_root: &Path,
+    key: &str,
+    content: &str,
+) -> Result<()> {
+    ensure_task_document_store_available(storage_root, repo_root)?;
+    let tasks_dir = storage_root.tasks_dir();
     fs::create_dir_all(&tasks_dir)?;
-    write_task_document_atomically(
-        &tasks_dir,
-        &task_path(ctx, key),
-        &render_task_document(task),
-    )
+    write_task_document_atomically(&tasks_dir, &task_path_for(storage_root, key), content)
 }
 
 pub(crate) fn write_new_task_document(ctx: &Ctx, key: &str, task: &TaskDocument) -> Result<()> {
-    ensure_no_legacy_tasks(ctx)?;
+    ensure_task_document_store_available(&ctx.storage_root, &ctx.repo_root)?;
     let tasks_dir = ctx.storage_root.tasks_dir();
     fs::create_dir_all(&tasks_dir)?;
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(task_path(ctx, key))
+        .open(task_path_for(&ctx.storage_root, key))
         .with_context(|| format!("Task already exists: {}", task_relative_path(key)))?;
     file.write_all(render_task_document(task).as_bytes())?;
     Ok(())
@@ -318,22 +357,25 @@ pub(crate) fn prepared_branch_name(branch: &str) -> Option<&str> {
 }
 
 pub(crate) fn task_exists(ctx: &Ctx, key: &str) -> Result<bool> {
-    ensure_no_legacy_tasks(ctx)?;
-    Ok(task_path(ctx, key).exists())
+    ensure_task_document_store_available(&ctx.storage_root, &ctx.repo_root)?;
+    Ok(task_path_for(&ctx.storage_root, key).exists())
 }
 
-fn task_path(ctx: &Ctx, key: &str) -> PathBuf {
-    ctx.storage_root
+pub(crate) fn task_path_for(storage_root: &StorageRoot, key: &str) -> PathBuf {
+    storage_root
         .tasks_dir()
         .join(format!("{}.toml", safe_task_key(key)))
 }
 
-fn ensure_no_legacy_tasks(ctx: &Ctx) -> Result<()> {
-    if let Some(legacy) = ctx.storage_root.detect_legacy_tasks(&ctx.repo_root) {
+pub(crate) fn ensure_task_document_store_available(
+    storage_root: &StorageRoot,
+    repo_root: &Path,
+) -> Result<()> {
+    if let Some(legacy) = storage_root.detect_legacy_tasks(repo_root) {
         bail!(
             "Found legacy TaskDocument storage at {}. Canonical TaskDocument storage is {}. wt does not silently read legacy task storage; import or repair legacy state explicitly before using this command.",
             legacy.path().display(),
-            ctx.storage_root.display_path(legacy.canonical_root())
+            storage_root.display_path(legacy.canonical_root())
         );
     }
     Ok(())
@@ -416,8 +458,8 @@ fn create_task_temp_file(tasks_dir: &Path, _final_path: &Path) -> Result<(PathBu
     )
 }
 
-fn read_selected_task(ctx: &Ctx, path: PathBuf) -> Result<SelectedTask> {
-    let relative_path = ctx.storage_root.display_path(&path);
+fn read_selected_task(storage_root: &StorageRoot, path: PathBuf) -> Result<SelectedTask> {
+    let relative_path = storage_root.display_path(&path);
     let key = task_key_from_path(&path)?;
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read task: {relative_path}"))?;
