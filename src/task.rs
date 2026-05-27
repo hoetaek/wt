@@ -928,6 +928,32 @@ mod tests {
         assert!(err.contains("<repo-root>/.wt/execution/tasks"));
     }
 
+    #[test]
+    fn task_store_rejects_legacy_git_common_tasks_without_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_tasks_dir = dir.path().join(".git/wt/tasks");
+        std::fs::create_dir_all(&legacy_tasks_dir).unwrap();
+        std::fs::write(
+            legacy_tasks_dir.join("foo.toml"),
+            "title = \"Legacy\"\nbranch = \"legacy\"\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let err = list_local_task_documents(&ctx).unwrap_err().to_string();
+
+        assert!(err.contains("Found legacy TaskDocument storage"));
+        assert!(err.contains(".git/wt/tasks"));
+        assert!(err.contains("<repo-root>/.wt/execution/tasks"));
+        assert!(!err.contains("No task files found"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn write_task_document_preserves_existing_file_permissions() {

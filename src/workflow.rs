@@ -1416,6 +1416,28 @@ run = "workflow-add-schema"
     }
 
     #[test]
+    fn workflow_paths_reject_legacy_git_common_workflows_without_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let legacy_dir = dir.path().join(".git/wt/workflows");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        fs::write(
+            legacy_dir.join("2026-x.toml"),
+            valid_workflow_toml("legacy"),
+        )
+        .unwrap();
+
+        let message = error_report_paths(workflow_paths(&ctx));
+
+        assert!(message.contains("Found legacy Workflow storage"));
+        assert!(message.contains(".git/wt/workflows"));
+        assert!(
+            message.contains("Canonical Workflow storage is <repo-root>/.wt/execution/workflows")
+        );
+        assert!(message.contains("does not silently read legacy Workflow storage"));
+    }
+
+    #[test]
     fn workflow_write_rejects_normalized_legacy_workflow_path() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());

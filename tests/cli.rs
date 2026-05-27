@@ -1506,6 +1506,31 @@ id = "PROJ-123"
 }
 
 #[test]
+fn task_list_rejects_legacy_git_common_tasks_without_empty_fallback() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let legacy_tasks = temp.path().join(".git/wt/tasks");
+    std::fs::create_dir_all(&legacy_tasks).unwrap();
+    std::fs::write(
+        legacy_tasks.join("foo.toml"),
+        "title = \"Legacy\"\nbranch = \"legacy\"\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "task", "list"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains(
+            "Found legacy TaskDocument storage",
+        ))
+        .stderr(predicate::str::contains(".git/wt/tasks"))
+        .stderr(predicate::str::contains("<repo-root>/.wt/execution/tasks"))
+        .stderr(predicate::str::contains("No task files found").not());
+}
+
+#[test]
 fn task_list_all_text_keeps_full_grouped_inventory() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());

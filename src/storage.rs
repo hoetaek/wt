@@ -15,6 +15,14 @@ pub struct StorageRoot {
 pub struct LegacyLocalStorage {
     path: PathBuf,
     canonical_root: PathBuf,
+    source: LegacyStorageSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LegacyStorageSource {
+    RepoRootLocal,
+    RepoRootWtFlat,
+    GitCommonWt,
 }
 
 impl StorageRoot {
@@ -175,23 +183,35 @@ impl StorageRoot {
 
     pub fn detect_legacy_local(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
         let path = repo_root.as_ref().join(".local");
-        if !path.is_dir() || !legacy_local_contains_wt_state(&path) {
-            return None;
+        if path.is_dir() && legacy_local_contains_wt_state(&path) {
+            return Some(LegacyLocalStorage::repo_root_local(
+                path,
+                self.personal_root.clone(),
+            ));
         }
-        Some(LegacyLocalStorage {
-            path,
-            canonical_root: self.personal_root.clone(),
-        })
+
+        let path = self.legacy_git_common_personal_root();
+        if path.is_dir() && legacy_git_common_contains_wt_state(&path) {
+            return Some(LegacyLocalStorage::git_common_wt(
+                path,
+                self.personal_root.clone(),
+            ));
+        }
+
+        None
     }
 
     pub fn detect_legacy_config(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
         self.detect_legacy_personal_file("config.toml", self.config_toml())
+            .or_else(|| self.detect_legacy_git_common_file("config.toml", self.config_toml()))
+            .or_else(|| self.detect_legacy_git_common_dir("config", self.config_toml()))
             .or_else(|| {
                 let path = repo_root.as_ref().join(".local/.wt.toml");
-                path.is_file().then_some(LegacyLocalStorage {
-                    path,
-                    canonical_root: self.config_toml(),
-                })
+                path.is_file()
+                    .then_some(LegacyLocalStorage::repo_root_local(
+                        path,
+                        self.config_toml(),
+                    ))
             })
     }
 
@@ -199,70 +219,118 @@ impl StorageRoot {
         &self,
         repo_root: impl AsRef<Path>,
     ) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(repo_root, "profiles", self.profiles_dir())
+        self.detect_legacy_child(
+            repo_root,
+            "profiles",
+            &["profiles", "config/profiles"],
+            self.profiles_dir(),
+        )
     }
 
     pub fn detect_legacy_tasks(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(repo_root, "tasks", self.tasks_dir())
+        self.detect_legacy_child(
+            repo_root,
+            "tasks",
+            &["tasks", "execution/tasks"],
+            self.tasks_dir(),
+        )
     }
 
     pub fn detect_legacy_task_runs(
         &self,
         repo_root: impl AsRef<Path>,
     ) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(repo_root, "task-runs", self.task_runs_dir())
+        self.detect_legacy_child(
+            repo_root,
+            "task-runs",
+            &[
+                "task-runs",
+                "task_runs",
+                "execution/task-runs",
+                "execution/task_runs",
+            ],
+            self.task_runs_dir(),
+        )
     }
 
     pub fn detect_legacy_workflows(
         &self,
         repo_root: impl AsRef<Path>,
     ) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(repo_root, "workflows", self.workflows_dir())
+        self.detect_legacy_child(
+            repo_root,
+            "workflows",
+            &["workflows", "execution/workflows"],
+            self.workflows_dir(),
+        )
     }
 
     pub fn detect_legacy_ideas(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(repo_root, "ideas", self.ideas_dir())
+        self.detect_legacy_child(
+            repo_root,
+            "ideas",
+            &["ideas", "planning/ideas"],
+            self.ideas_dir(),
+        )
     }
 
     pub fn detect_legacy_specs(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(repo_root, "specs", self.specs_dir())
+        self.detect_legacy_child(
+            repo_root,
+            "specs",
+            &["specs", "planning/specs"],
+            self.specs_dir(),
+        )
     }
 
     pub fn detect_legacy_retrospectives(
         &self,
         repo_root: impl AsRef<Path>,
     ) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(repo_root, "retrospectives", self.retrospectives_dir())
+        self.detect_legacy_child(
+            repo_root,
+            "retrospectives",
+            &["retrospectives", "planning/retrospectives"],
+            self.retrospectives_dir(),
+        )
     }
 
     pub fn detect_legacy_archive(&self, repo_root: impl AsRef<Path>) -> Option<LegacyLocalStorage> {
-        self.detect_legacy_child(repo_root, "archive", self.archive_dir())
+        self.detect_legacy_child(
+            repo_root,
+            "archive",
+            &["archive", "execution/archive"],
+            self.archive_dir(),
+        )
     }
 
     pub fn detect_legacy_messages(&self) -> Option<LegacyLocalStorage> {
-        self.legacy_messages_dir()
-            .is_dir()
-            .then_some(LegacyLocalStorage {
-                path: self.legacy_messages_dir(),
-                canonical_root: self.runtime_agents_dir(),
+        self.detect_legacy_personal_dir("messages", self.runtime_agents_dir())
+            .or_else(|| {
+                self.detect_legacy_git_common_dirs(
+                    &["messages", "runtime/agents"],
+                    self.runtime_agents_dir(),
+                )
             })
     }
 
     pub fn detect_legacy_agent_state(&self) -> Option<LegacyLocalStorage> {
-        self.legacy_agent_state_dir()
-            .is_dir()
-            .then_some(LegacyLocalStorage {
-                path: self.legacy_agent_state_dir(),
-                canonical_root: self.runtime_agents_dir(),
+        self.detect_legacy_personal_dir("agent.state", self.runtime_agents_dir())
+            .or_else(|| {
+                self.detect_legacy_git_common_dirs(
+                    &["agent.state", "agent_state", "runtime/agents"],
+                    self.runtime_agents_dir(),
+                )
             })
     }
 
     pub fn detect_legacy_sessions(&self) -> Option<LegacyLocalStorage> {
-        self.legacy_sessions_dir()
-            .is_dir()
-            .then_some(LegacyLocalStorage {
-                path: self.legacy_sessions_dir(),
-                canonical_root: self.runtime_agents_dir(),
+        self.detect_legacy_personal_dir("sessions", self.runtime_agents_dir())
+            .or_else(|| {
+                self.detect_legacy_git_common_dirs(
+                    &["sessions", "runtime/agents"],
+                    self.runtime_agents_dir(),
+                )
             })
     }
 
@@ -270,15 +338,17 @@ impl StorageRoot {
         &self,
         repo_root: impl AsRef<Path>,
         child: &str,
+        git_common_children: &[&str],
         canonical_root: PathBuf,
     ) -> Option<LegacyLocalStorage> {
         self.detect_legacy_personal_dir(child, canonical_root.clone())
             .or_else(|| {
+                self.detect_legacy_git_common_dirs(git_common_children, canonical_root.clone())
+            })
+            .or_else(|| {
                 let path = repo_root.as_ref().join(".local").join(child);
-                path.is_dir().then_some(LegacyLocalStorage {
-                    path,
-                    canonical_root,
-                })
+                path.is_dir()
+                    .then_some(LegacyLocalStorage::repo_root_local(path, canonical_root))
             })
     }
 
@@ -288,10 +358,8 @@ impl StorageRoot {
         canonical_root: PathBuf,
     ) -> Option<LegacyLocalStorage> {
         let path = self.personal_root.join(child);
-        path.is_dir().then_some(LegacyLocalStorage {
-            path,
-            canonical_root,
-        })
+        path.is_dir()
+            .then_some(LegacyLocalStorage::repo_root_wt_flat(path, canonical_root))
     }
 
     fn detect_legacy_personal_file(
@@ -300,10 +368,42 @@ impl StorageRoot {
         canonical_root: PathBuf,
     ) -> Option<LegacyLocalStorage> {
         let path = self.personal_root.join(child);
-        path.is_file().then_some(LegacyLocalStorage {
-            path,
-            canonical_root,
-        })
+        path.is_file()
+            .then_some(LegacyLocalStorage::repo_root_wt_flat(path, canonical_root))
+    }
+
+    fn detect_legacy_git_common_dirs(
+        &self,
+        children: &[&str],
+        canonical_root: PathBuf,
+    ) -> Option<LegacyLocalStorage> {
+        children
+            .iter()
+            .find_map(|child| self.detect_legacy_git_common_dir(child, canonical_root.clone()))
+    }
+
+    fn detect_legacy_git_common_dir(
+        &self,
+        child: &str,
+        canonical_root: PathBuf,
+    ) -> Option<LegacyLocalStorage> {
+        let path = self.legacy_git_common_personal_root().join(child);
+        path.is_dir()
+            .then_some(LegacyLocalStorage::git_common_wt(path, canonical_root))
+    }
+
+    fn detect_legacy_git_common_file(
+        &self,
+        child: &str,
+        canonical_root: PathBuf,
+    ) -> Option<LegacyLocalStorage> {
+        let path = self.legacy_git_common_personal_root().join(child);
+        path.is_file()
+            .then_some(LegacyLocalStorage::git_common_wt(path, canonical_root))
+    }
+
+    fn legacy_git_common_personal_root(&self) -> PathBuf {
+        self.git_common_dir.join("wt")
     }
 
     pub fn display_path(&self, path: &Path) -> String {
@@ -328,6 +428,30 @@ fn repo_root_from_git_common_dir(git_common_dir: &Path) -> PathBuf {
 }
 
 impl LegacyLocalStorage {
+    fn repo_root_local(path: PathBuf, canonical_root: PathBuf) -> Self {
+        Self {
+            path,
+            canonical_root,
+            source: LegacyStorageSource::RepoRootLocal,
+        }
+    }
+
+    fn repo_root_wt_flat(path: PathBuf, canonical_root: PathBuf) -> Self {
+        Self {
+            path,
+            canonical_root,
+            source: LegacyStorageSource::RepoRootWtFlat,
+        }
+    }
+
+    fn git_common_wt(path: PathBuf, canonical_root: PathBuf) -> Self {
+        Self {
+            path,
+            canonical_root,
+            source: LegacyStorageSource::GitCommonWt,
+        }
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -337,19 +461,43 @@ impl LegacyLocalStorage {
     }
 
     pub fn error_message(&self) -> String {
-        format!(
-            "Found legacy repo-root .local storage at {}. Canonical wt personal storage is {}. wt does not silently fall back to .local; import or repair legacy state explicitly before using this command.",
-            self.path.display(),
-            self.canonical_root.display()
-        )
+        match self.source {
+            LegacyStorageSource::RepoRootLocal => format!(
+                "Found legacy repo-root .local storage at {}. Canonical wt personal storage is {}. wt does not silently fall back to .local; import or repair legacy state explicitly before using this command.",
+                self.path.display(),
+                self.canonical_root.display()
+            ),
+            LegacyStorageSource::RepoRootWtFlat => format!(
+                "Found legacy flat <repo-root>/.wt storage at {}. Canonical wt personal storage is {}. wt does not silently fall back to legacy storage; import or repair legacy state explicitly before using this command.",
+                self.path.display(),
+                self.canonical_root.display()
+            ),
+            LegacyStorageSource::GitCommonWt => format!(
+                "Found legacy git-common .git/wt storage at {}. Canonical wt personal storage is {}. wt does not silently fall back to .git/wt; import or repair legacy state explicitly before using this command.",
+                self.path.display(),
+                self.canonical_root.display()
+            ),
+        }
     }
 
     pub fn error_message_for(&self, state_name: &str) -> String {
-        format!(
-            "Found legacy wt personal {state_name} at {}. Canonical wt personal {state_name} is {}. wt does not silently fall back to legacy storage; import or repair legacy state explicitly before using this command.",
-            self.path.display(),
-            self.canonical_root.display()
-        )
+        match self.source {
+            LegacyStorageSource::RepoRootLocal => format!(
+                "Found legacy wt personal {state_name} in repo-root .local storage at {}. Canonical wt personal {state_name} is {}. wt does not silently fall back to .local; import or repair legacy state explicitly before using this command.",
+                self.path.display(),
+                self.canonical_root.display()
+            ),
+            LegacyStorageSource::RepoRootWtFlat => format!(
+                "Found legacy wt personal {state_name} at {}. Canonical wt personal {state_name} is {}. wt does not silently fall back to legacy storage; import or repair legacy state explicitly before using this command.",
+                self.path.display(),
+                self.canonical_root.display()
+            ),
+            LegacyStorageSource::GitCommonWt => format!(
+                "Found legacy wt personal {state_name} in git-common .git/wt storage at {}. Canonical wt personal {state_name} is {}. wt does not silently fall back to .git/wt; import or repair legacy state explicitly before using this command.",
+                self.path.display(),
+                self.canonical_root.display()
+            ),
+        }
     }
 }
 
@@ -385,6 +533,31 @@ fn legacy_local_contains_wt_state(path: &Path) -> bool {
             "workflows",
             "task-runs",
             "archive",
+        ]
+        .iter()
+        .any(|child| path.join(child).is_dir())
+}
+
+fn legacy_git_common_contains_wt_state(path: &Path) -> bool {
+    path.join("config.toml").is_file()
+        || [
+            "config",
+            "profiles",
+            "planning",
+            "ideas",
+            "specs",
+            "retrospectives",
+            "execution",
+            "tasks",
+            "workflows",
+            "task-runs",
+            "task_runs",
+            "archive",
+            "runtime",
+            "messages",
+            "agent.state",
+            "agent_state",
+            "sessions",
         ]
         .iter()
         .any(|child| path.join(child).is_dir())
@@ -640,6 +813,106 @@ mod tests {
     }
 
     #[test]
+    fn detects_legacy_git_common_tasks_without_fallback() {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(repo.join(".git/wt/tasks")).unwrap();
+        fs::write(repo.join(".git/wt/tasks/foo.toml"), "title = \"Old\"\n").unwrap();
+        let storage = StorageRoot::from_git_common_dir(repo.join(".git"));
+
+        let legacy = storage.detect_legacy_tasks(&repo).unwrap();
+
+        assert_eq!(legacy.path(), repo.join(".git/wt/tasks").as_path());
+        assert_eq!(
+            legacy.canonical_root(),
+            repo.join(".wt/execution/tasks").as_path()
+        );
+        let message = legacy.error_message_for("TaskDocument storage");
+        assert!(message.contains("git-common .git/wt"));
+        assert!(message.contains("does not silently fall back to .git/wt"));
+        assert!(message.contains("import or repair legacy state explicitly"));
+    }
+
+    #[test]
+    fn detects_legacy_git_common_workflows_without_fallback() {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(repo.join(".git/wt/workflows")).unwrap();
+        fs::write(
+            repo.join(".git/wt/workflows/2026-x.toml"),
+            "mode = \"single\"\n",
+        )
+        .unwrap();
+        let storage = StorageRoot::from_git_common_dir(repo.join(".git"));
+
+        let legacy = storage.detect_legacy_workflows(&repo).unwrap();
+
+        assert_eq!(legacy.path(), repo.join(".git/wt/workflows").as_path());
+        assert_eq!(
+            legacy.canonical_root(),
+            repo.join(".wt/execution/workflows").as_path()
+        );
+        let message = legacy.error_message_for("Workflow storage");
+        assert!(message.contains("git-common .git/wt"));
+        assert!(message.contains("does not silently fall back to .git/wt"));
+        assert!(message.contains("import or repair legacy state explicitly"));
+    }
+
+    #[test]
+    fn detects_legacy_git_common_state_children_without_fallback() {
+        assert_detects_git_common_dir(
+            "config",
+            |storage| storage.config_toml(),
+            |storage, repo| storage.detect_legacy_config(repo),
+        );
+        assert_detects_git_common_dir(
+            "profiles",
+            |storage| storage.profiles_dir(),
+            |storage, repo| storage.detect_legacy_profiles(repo),
+        );
+        assert_detects_git_common_dir(
+            "task_runs",
+            |storage| storage.task_runs_dir(),
+            |storage, repo| storage.detect_legacy_task_runs(repo),
+        );
+        assert_detects_git_common_dir(
+            "ideas",
+            |storage| storage.ideas_dir(),
+            |storage, repo| storage.detect_legacy_ideas(repo),
+        );
+        assert_detects_git_common_dir(
+            "specs",
+            |storage| storage.specs_dir(),
+            |storage, repo| storage.detect_legacy_specs(repo),
+        );
+        assert_detects_git_common_dir(
+            "retrospectives",
+            |storage| storage.retrospectives_dir(),
+            |storage, repo| storage.detect_legacy_retrospectives(repo),
+        );
+        assert_detects_git_common_dir(
+            "archive",
+            |storage| storage.archive_dir(),
+            |storage, repo| storage.detect_legacy_archive(repo),
+        );
+        assert_detects_git_common_dir(
+            "messages",
+            |storage| storage.runtime_agents_dir(),
+            |storage, _repo| storage.detect_legacy_messages(),
+        );
+        assert_detects_git_common_dir(
+            "agent_state",
+            |storage| storage.runtime_agents_dir(),
+            |storage, _repo| storage.detect_legacy_agent_state(),
+        );
+        assert_detects_git_common_dir(
+            "sessions",
+            |storage| storage.runtime_agents_dir(),
+            |storage, _repo| storage.detect_legacy_sessions(),
+        );
+    }
+
+    #[test]
     fn detects_legacy_message_storage_without_fallback() {
         let temp = TempDir::new().unwrap();
         let repo = temp.path().join("repo");
@@ -759,5 +1032,27 @@ mod tests {
 
     fn path_str(path: &Path) -> &str {
         path.to_str().unwrap()
+    }
+
+    fn assert_detects_git_common_dir(
+        child: &str,
+        canonical_root: impl Fn(&StorageRoot) -> PathBuf,
+        detect: impl Fn(&StorageRoot, &Path) -> Option<LegacyLocalStorage>,
+    ) {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        let legacy_dir = repo.join(".git/wt").join(child);
+        fs::create_dir_all(&legacy_dir).unwrap();
+        let storage = StorageRoot::from_git_common_dir(repo.join(".git"));
+
+        let legacy = detect(&storage, &repo).unwrap();
+
+        assert_eq!(legacy.path(), legacy_dir.as_path());
+        assert_eq!(legacy.canonical_root(), canonical_root(&storage).as_path());
+        assert!(
+            legacy
+                .error_message_for("test storage")
+                .contains("does not silently fall back to .git/wt")
+        );
     }
 }
