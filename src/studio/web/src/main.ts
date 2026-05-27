@@ -113,6 +113,7 @@ function App() {
   const cleanUpdateDraft = mode === "update" && selected ? draftsEqual(draft, draftFromItem(selected)) : false;
   const planSignature = useMemo(() => planRequestSignature(mode, currentPath, draft), [currentPath, draft, mode]);
   const latestPlanSignature = useRef(planSignature);
+  const recoveryPlanController = useRef<AbortController | null>(null);
   latestPlanSignature.current = planSignature;
   const status = statusDescriptor(planStatus, plan);
   const detailMetrics = useMemo(
@@ -122,6 +123,13 @@ function App() {
 
   useEffect(() => {
     void loadInventory();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      recoveryPlanController.current?.abort();
+      recoveryPlanController.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -140,6 +148,8 @@ function App() {
       if (latestPlanSignature.current !== signature) {
         return;
       }
+      recoveryPlanController.current?.abort();
+      recoveryPlanController.current = null;
       setPlanStatus("planning");
       setError("");
       void planDraft(controller.signal, signature);
@@ -197,8 +207,7 @@ function App() {
 
   function selectCreate() {
     setMode("create");
-    setPlan(null);
-    setPlanStatus("idle");
+    resetPlanState();
     setError("");
     setDraft(emptyDraft);
   }
@@ -208,13 +217,36 @@ function App() {
     if (!item) return;
     setMode("update");
     setSelectedPath(path);
-    setPlan(null);
-    setPlanStatus("idle");
+    resetPlanState();
     setError("");
     setDraft(draftFromItem(item));
   }
 
-  async function planDraft(signal: AbortSignal, signature: string) {
+  function resetPlanState() {
+    recoveryPlanController.current?.abort();
+    recoveryPlanController.current = null;
+    setPlan(null);
+    setPlanStatus("idle");
+  }
+
+  function triggerConflictRecoveryPlan() {
+    recoveryPlanController.current?.abort();
+    const controller = new AbortController();
+    recoveryPlanController.current = controller;
+    const signature = latestPlanSignature.current;
+    setPlanStatus("planning");
+    void planDraft(controller.signal, signature, { failureStatus: "stale" }).finally(() => {
+      if (recoveryPlanController.current === controller) {
+        recoveryPlanController.current = null;
+      }
+    });
+  }
+
+  async function planDraft(
+    signal: AbortSignal,
+    signature: string,
+    options: { failureStatus?: PlanStatus } = {}
+  ) {
     try {
       const response = await api<PlanResponse>("/api/task-documents/plan", {
         method: "POST",
@@ -229,6 +261,7 @@ function App() {
         return;
       }
       setPlan(response);
+      setError("");
       setPlanStatus("idle");
     } catch (err) {
       if (isAbortError(err) || latestPlanSignature.current !== signature) {
@@ -236,7 +269,7 @@ function App() {
       }
       setError(errorMessage(err));
       setPlan(null);
-      setPlanStatus("idle");
+      setPlanStatus(options.failureStatus ?? "idle");
     }
   }
 
@@ -264,7 +297,7 @@ function App() {
       setError(apiErr.diff ? `${apiErr.message}\n\n${apiErr.diff}` : errorMessage(err));
       if (apiErr.status === 409) {
         setPlan(null);
-        setPlanStatus("stale");
+        triggerConflictRecoveryPlan();
       }
     } finally {
       setBusy(false);
@@ -279,8 +312,7 @@ function App() {
       }
       return next;
     });
-    setPlan(null);
-    setPlanStatus("idle");
+    resetPlanState();
   }
 
   return h("main", { class: "relative min-h-[100dvh] overflow-hidden px-4 py-12 text-neutral-950 dark:text-neutral-50 sm:py-16" }, [
