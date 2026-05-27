@@ -526,7 +526,7 @@ mod tests {
     }
 
     fn write_task(root: &Path, key: &str) {
-        let tasks_dir = root.join(".git/wt/execution/tasks");
+        let tasks_dir = root.join(".wt/execution/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
         fs::write(
             tasks_dir.join(format!("{key}.toml")),
@@ -541,7 +541,7 @@ body = "Task body"
     }
 
     fn write_task_run(root: &Path, id: &str, task: &str, status: &str, group: &str) {
-        let task_runs_dir = root.join(".git/wt/execution/task-runs");
+        let task_runs_dir = root.join(".wt/execution/task-runs");
         fs::create_dir_all(&task_runs_dir).unwrap();
         fs::write(
             task_runs_dir.join(format!("{id}.toml")),
@@ -562,7 +562,7 @@ updated_at = "2026-05-20T00:00:00Z"
     fn write_workflow(root: &Path, id: &str, tasks: Vec<WorkflowTask>) {
         let ctx = ctx(root);
         let path = root
-            .join(".git/wt/execution/workflows")
+            .join(".wt/execution/workflows")
             .join(format!("{id}.toml"));
         let mut workflow =
             WorkflowMetadata::new(WorkflowMode::Batch, "explicit", Some("main".into()), tasks);
@@ -586,7 +586,7 @@ updated_at = "2026-05-20T00:00:00Z"
             run(&ctx, "wf").unwrap();
             assert!(
                 dir.path()
-                    .join(".git/wt/execution/archive/workflows/wf/manifest.toml")
+                    .join(".wt/execution/archive/workflows/wf/manifest.toml")
                     .exists()
             );
         }
@@ -608,7 +608,7 @@ updated_at = "2026-05-20T00:00:00Z"
         assert!(report.contains("run-failed (failed)"));
         assert!(
             !dir.path()
-                .join(".git/wt/execution/archive/workflows/wf")
+                .join(".wt/execution/archive/workflows/wf")
                 .exists()
         );
     }
@@ -631,14 +631,10 @@ updated_at = "2026-05-20T00:00:00Z"
         assert!(with_extension.contains("Workflow key must be a file stem"));
         let with_path = format!(
             "{:#}",
-            run(&ctx, ".git/wt/execution/workflows/wf.toml").unwrap_err()
+            run(&ctx, ".wt/execution/workflows/wf.toml").unwrap_err()
         );
         assert!(with_path.contains("Workflow key must be a file stem"));
-        assert!(
-            dir.path()
-                .join(".git/wt/execution/workflows/wf.toml")
-                .exists()
-        );
+        assert!(dir.path().join(".wt/execution/workflows/wf.toml").exists());
     }
 
     #[test]
@@ -651,7 +647,7 @@ updated_at = "2026-05-20T00:00:00Z"
             "wf",
             vec![WorkflowTask::new("legacy-task", "run-legacy")],
         );
-        let legacy_tasks = dir.path().join(".git/wt/tasks");
+        let legacy_tasks = dir.path().join(".wt/tasks");
         fs::create_dir_all(&legacy_tasks).unwrap();
         fs::write(
             legacy_tasks.join("legacy-task.toml"),
@@ -665,11 +661,11 @@ body = "Task body"
         let error = run(&ctx, "wf").unwrap_err();
         let report = format!("{error:#}");
         assert!(report.contains("Found legacy wt personal TaskDocument storage"));
-        assert!(report.contains(".git/wt/tasks"));
-        assert!(report.contains(".git/wt/execution/tasks"));
+        assert!(report.contains(".wt/tasks"));
+        assert!(report.contains(".wt/execution/tasks"));
         assert!(
             !dir.path()
-                .join(".git/wt/execution/archive/workflows/wf")
+                .join(".wt/execution/archive/workflows/wf")
                 .exists()
         );
     }
@@ -706,21 +702,13 @@ body = "Task body"
 
         run(&ctx, "wf").unwrap();
 
-        let archive = dir.path().join(".git/wt/execution/archive/workflows/wf");
+        let archive = dir.path().join(".wt/execution/archive/workflows/wf");
         assert!(archive.join("workflow.toml").exists());
         assert!(archive.join("tasks/unique.toml").exists());
         assert!(!archive.join("tasks/shared.toml").exists());
         assert!(!archive.join("tasks/missing.toml").exists());
-        assert!(
-            !dir.path()
-                .join(".git/wt/execution/tasks/unique.toml")
-                .exists()
-        );
-        assert!(
-            dir.path()
-                .join(".git/wt/execution/tasks/shared.toml")
-                .exists()
-        );
+        assert!(!dir.path().join(".wt/execution/tasks/unique.toml").exists());
+        assert!(dir.path().join(".wt/execution/tasks/shared.toml").exists());
 
         let manifest: ArchiveManifest =
             toml::from_str(&fs::read_to_string(archive.join("manifest.toml")).unwrap()).unwrap();

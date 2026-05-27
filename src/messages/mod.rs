@@ -2191,15 +2191,15 @@ mod tests {
     #[test]
     fn agent_id_path_helpers_project_runtime_inbox_paths() {
         let agent = AgentId::parse("codex").unwrap();
-        let runtime_root = Path::new("/repo/.git/wt/runtime");
+        let runtime_root = Path::new("/repo/.wt/runtime");
 
         assert_eq!(
             agent.runtime_dir(runtime_root),
-            PathBuf::from("/repo/.git/wt/runtime/agents/codex")
+            PathBuf::from("/repo/.wt/runtime/agents/codex")
         );
         assert_eq!(
             agent.inbox_state_dir(runtime_root, MessageDeliveryState::New),
-            PathBuf::from("/repo/.git/wt/runtime/agents/codex/inbox/new")
+            PathBuf::from("/repo/.wt/runtime/agents/codex/inbox/new")
         );
     }
 

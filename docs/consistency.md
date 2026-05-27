@@ -35,8 +35,8 @@
 | --- | --- | --- | --- |
 | 1 | 글로벌 | `~/.config/wt/` | 내 머신 전체 |
 | 2 | 팀 연동 설정 | `<repo>/.wt.toml` | git commit |
-| 3 | 개인 작업 | `<git-common-dir>/wt/` | commit 불가, 머신 로컬 |
-| 4 | runtime actor context | `<git-common-dir>/wt/runtime/agents/<name>/` | Tier 3 안의 하위 state |
+| 3 | 개인 작업 | `<repo-root>/.wt/` | commit 불가, 머신 로컬 |
+| 4 | runtime actor context | `<repo-root>/.wt/runtime/agents/<name>/` | Tier 3 안의 하위 state |
 
 Tier 2는 팀이 이미 사용하는 시스템과 어떻게 통합하는지의 설정이다. 팀이 공유하는 작업
 데이터가 아니다. Idea, Spec, TaskDocument, Workflow, TaskRun, 메시지, activity,
@@ -53,14 +53,23 @@ global < team integration < personal < command-line flags
 
 ### Personal Storage
 
-Personal storage의 canonical root는 `<git-common-dir>/wt/`다. `wt`는
-`git rev-parse --git-common-dir`로 이 위치를 찾고, 모든 worktree가 같은 personal storage를
-공유하게 한다.
+Personal storage의 canonical root는 `<repo-root>/.wt/`다. 이 결정의 source는
+`<repo-root>/.wt/planning/specs/personal-storage-repo-root/`이며, 목적은 세 가지다.
+
+- `.git/` namespace는 Git 자신의 metadata 자리로 비워 둔다.
+- `.wt/...`는 `.git/wt/...`보다 짧고 사용자가 직접 열어 보기 쉽다.
+- Claude Code 같은 agent harness가 `.git/` write permission friction 없이 wt state를 다룰 수 있다.
+
+한 repository의 모든 worktree가 같은 personal storage를 보는 contract는 유지한다. 메커니즘만
+바뀐다: main repo에는 real directory `<repo-root>/.wt/`를 두고, linked worktree에는
+`.wt -> <main-repo>/.wt` symlink를 둔다. `wt setup`과 wt가 만든 worktree는 이 symlink를
+보장해야 한다. Ignore는 팀 `.gitignore`가 아니라 clone-local `.git/info/exclude`에 `.wt/`
+패턴을 넣어 처리한다.
 
 Canonical personal storage layout:
 
 ```text
-<git-common-dir>/wt/
+<repo-root>/.wt/
 ├── config/
 │   ├── local.toml
 │   └── profiles/
@@ -106,10 +115,9 @@ Canonical personal storage layout:
     │       └── supervisor.{toml,log}
 ```
 
-Repo-root `.local` state is not canonical. 새 코드와 새 문서는 위 layout의
-`<git-common-dir>/wt/...` 경로를 primary state로 읽고 쓴다. 이전 repo-root local state를
-다뤄야 하면 명시적 import/repair 명령으로 다루고, silent fallback이나 alias처럼 동작시키지
-않는다.
+Repo-root `.local` state and legacy `.git/wt/` state are not canonical. 새 코드와 새 문서는
+위 layout의 `<repo-root>/.wt/...` 경로를 primary state로 읽고 쓴다. 이전 storage를 다뤄야
+하면 명시적 import/repair 명령으로 다루고, silent fallback이나 alias처럼 동작시키지 않는다.
 
 The four top-level buckets are the canonical personal-state owners:
 
@@ -144,7 +152,7 @@ them as canonical state. The canonical replacements are
 ### Idea And Spec Prep
 
 Idea는 kill-able exploration이고 Spec은 실행하기로 결정한 작업의 prep artifact다.
-`wt-idea`는 `<git-common-dir>/wt/planning/ideas/<slug>.{md,toml}`에 쓴다. Format은 자유로운
+`wt-idea`는 `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}`에 쓴다. Format은 자유로운
 Markdown이거나 TOML body일 수 있다. Idea는 committed-work status가 없고, 언제든 삭제하거나
 다시 쓸 수 있다. Idea 삭제나 재작성은 다른 component가 관찰해야 하는 state transition이
 아니다.
@@ -156,7 +164,7 @@ commit gate다. `wt` state tree를 읽는 사람은 `planning/ideas/` 아래의 
 `planning/specs/<slug>/` 아래의 committed prep work를 directory 위치만으로 구분할 수 있어야
 한다.
 
-TaskDocument는 계속 `<git-common-dir>/wt/execution/tasks/<slug>.toml`에 있는 launch unit이다. 그
+TaskDocument는 계속 `<repo-root>/.wt/execution/tasks/<slug>.toml`에 있는 launch unit이다. 그
 body는 `planning/specs/<slug>/` relative path를 참조할 수 있지만 TaskDocument schema는 바뀌지
 않는다. Spec은 intent, unknowns, context, requirements, design, tasks, execution handoff,
 review/sync, retrospect를 담는 긴 human/AI artifact이고, TaskDocument는 `wt run task`와
@@ -214,7 +222,7 @@ dependency를 적고, dependency가 없는 item은 parallel 가능하다고 표�
 `planning/specs/<slug>/09-execution.md`는 `08-tasks.md`에서 드러난 slice graph를 어떤 execution shape로
 실행할지와 그 이유, `wt-start` target, TaskDocument path, optional saved Workflow TOML path,
 PR/landing policy, acceptance checks를 prose로 기록하는 lazy prep/execution artifact다. 실제
-saved execution plan은 계속 `<git-common-dir>/wt/execution/workflows/<id>.toml`에 있고,
+saved execution plan은 계속 `<repo-root>/.wt/execution/workflows/<id>.toml`에 있고,
 `09-execution.md`는 executable Workflow TOML이 아니다.
 
 Canonical `08-tasks.md` slice graph → execution decision mapping:
@@ -227,7 +235,7 @@ Canonical `08-tasks.md` slice graph → execution decision mapping:
 | One task × multiple profiles | `matrix` |
 | One direct slice only, or mixed-lifecycle slices | `none` (spec prep judgment; not persisted as Workflow mode) |
 
-`none`은 `<git-common-dir>/wt/execution/workflows/<id>.toml`에 저장되는 Workflow `mode` 값이 아니라 spec
+`none`은 `<repo-root>/.wt/execution/workflows/<id>.toml`에 저장되는 Workflow `mode` 값이 아니라 spec
 prep 판단이다. 이 값은 direct `wt run task`로 충분하거나, slice들이 서로 다른 lifecycle에서
 실행되어 하나의 saved Workflow로 표현하면 오히려 모델이 흐려지는 경우를 뜻한다.
 
@@ -239,7 +247,7 @@ mid-process discoveries는 `planning/specs/<slug>/10-review.md`에 기록한다.
 drift하면 조용히 갈라지게 두지 말고 spec을 업데이트해 다시 맞춘다.
 
 Spec-backed work의 retrospective는 기본적으로 `planning/specs/<slug>/11-retrospect.md`에 둔다.
-`<git-common-dir>/wt/planning/retrospectives/`는 여러 work item을 가로지르는 cross-work learning,
+`<repo-root>/.wt/planning/retrospectives/`는 여러 work item을 가로지르는 cross-work learning,
 spec이 없는 legacy/direct work, 또는 의도적으로 한 spec에 묶이지 않는 회고의 fallback이다.
 새 per-work retrospective를 전역 `retrospectives/` 아래에 만들지 않는다.
 
@@ -247,7 +255,7 @@ spec이 없는 legacy/direct work, 또는 의도적으로 한 spec에 묶이지 
 duration, estimate basis, 실제 시작/종료/elapsed, 최초 meaningful signal, 사용한
 `wt agent watch` cadence, `needs_input`/report 전이, 개입 이유, 다음 추정 조정을 적는다.
 Spec-backed workflow는 workflow 전체 요약만 쓰지 말고 task/slice별 timing entry를 둔다.
-Cross-work timing 보정은 `<git-common-dir>/wt/planning/retrospectives/timing.md` 같은 rolling
+Cross-work timing 보정은 `<repo-root>/.wt/planning/retrospectives/timing.md` 같은 rolling
 retrospective에 축약할 수 있지만, 이것은 여러 작업을 가로지르는 학습 기록이지 per-work
 `11-retrospect.md`의 대체물이 아니다. `runtime/agents/<name>/observations/wait-observations.jsonl`과
 `wt agent wait-stats`는 watch heartbeat/timeout 관측 증거로 인용할 수 있으나, 실제 작업
@@ -258,7 +266,7 @@ retrospective에 축약할 수 있지만, 이것은 여러 작업을 가로지�
 Worktree facts are not a canonical state owner. Git owns the checked-out
 worktree list; `wt` records branch/path/worktree facts only inside the planning,
 execution, or runtime record that needs them. New state must not create
-`<git-common-dir>/wt/worktrees/<id>/` as a fourth personal-state owner.
+`<repo-root>/.wt/worktrees/<id>/` as a fourth personal-state owner.
 
 When a record needs a stable worktree-ish identity, it separates opaque identity
 from human label:
@@ -277,7 +285,7 @@ updated_at = "2026-05-19T10:30:45Z"
 변경될 수 있다. `branch`와 `path`는 현재 Git/worktree 사실을 기록한 값이며 변경될 수 있다.
 Agent identity is the communication actor identity. `AgentId` remains
 `agents/<name>`; its canonical runtime directory is
-`<git-common-dir>/wt/runtime/agents/<name>/`. When a worktree display name is
+`<repo-root>/.wt/runtime/agents/<name>/`. When a worktree display name is
 safe and unique enough for an agent inbox, `agents/<display_name>` can be the
 agent id. Here "safe" means the display name is non-empty, contains no `/` or
 control characters, already fits the one-segment `AgentId` grammar, and is
@@ -360,11 +368,11 @@ ownership, claim, or routing metadata. Workflow ownership always comes from `[sc
 Canonical physical layout is state-directory based:
 
 ```text
-<git-common-dir>/wt/runtime/agents/<name>/inbox/new/<message-id>.toml
-<git-common-dir>/wt/runtime/agents/<name>/inbox/claimed/<message-id>.toml
-<git-common-dir>/wt/runtime/agents/<name>/inbox/delivered/<message-id>.toml
-<git-common-dir>/wt/runtime/agents/<name>/inbox/retry/<message-id>.toml
-<git-common-dir>/wt/runtime/agents/<name>/inbox/failed/<message-id>.toml
+<repo-root>/.wt/runtime/agents/<name>/inbox/new/<message-id>.toml
+<repo-root>/.wt/runtime/agents/<name>/inbox/claimed/<message-id>.toml
+<repo-root>/.wt/runtime/agents/<name>/inbox/delivered/<message-id>.toml
+<repo-root>/.wt/runtime/agents/<name>/inbox/retry/<message-id>.toml
+<repo-root>/.wt/runtime/agents/<name>/inbox/failed/<message-id>.toml
 ```
 
 Here `<name>` is the single name segment from `AgentId` `agents/<name>`. The
@@ -507,7 +515,7 @@ The three message attention layers are:
 | Layer 2 | `wt agent watch` | Runtime observation of a specific agent target. |
 | Layer 3 | `wt agent supervisor ...` | Stale-rescue push after `inbox/new/` age exceeds threshold. |
 
-Supervisor registrations live at `<git-common-dir>/wt/runtime/agents/<name>/supervisor.toml`; logs
+Supervisor registrations live at `<repo-root>/.wt/runtime/agents/<name>/supervisor.toml`; logs
 live beside them as `supervisor.log`. `<name>` is the filesystem segment from
 `AgentId` `agents/<name>`, so supervisor state stays inside the same runtime
 agent owner as inbox/activity/status state. Surface-backed supervisors also record the cmux
@@ -528,7 +536,7 @@ host_pane_id = "pane:3"
 host_surface_id = "surface:73"
 stale_threshold_secs = 900
 poll_interval_secs = 60
-log_path = "/repo/.git/wt/runtime/agents/codex/supervisor.log"
+log_path = "/repo/.wt/runtime/agents/codex/supervisor.log"
 ```
 
 `target_surface_id`, `target_agent_kind`, `host_workspace_id`, `host_pane_id`, and
@@ -596,7 +604,7 @@ inventory model. This is message inventory; runtime observation stays under `wt 
 
 Agent adapter가 자동으로 쓸 수 있는 곳:
 
-- `<git-common-dir>/wt/...`
+- `<repo-root>/.wt/...`
 - per-worktree Git exclude file (`git rev-parse --git-path info/exclude`)
 - 이미 untracked이고 excluded인 adapter file
 
@@ -626,7 +634,7 @@ user-level settings hook, Codex user-level hook/trust state, shell integration e
 default No prompt를 거치며, `--yes`는 감지된 step을 모두 수락하고, `--dry-run`은 쓰지 않고
 변경 의도만 출력한다.
 
-`wt setup --remove`는 wt-managed per-machine entry만 제거한다. `<git-common-dir>/wt/`,
+`wt setup --remove`는 wt-managed per-machine entry만 제거한다. `<repo-root>/.wt/`,
 `.wt.toml`, worktree, tracked source, wt binary는 제거 대상이 아니다. 사용자가 작성한 hook,
 cmux hook, unrelated Codex trust state는 보존한다.
 
@@ -794,7 +802,7 @@ section과 명시적으로 선택한 integration만 하나의 config plan으로 
 `[profile.agent]`로 쓸 수는 있지만, agent runtime을 구조화하고 재사용하는 책임은 계속
 `profile`에 둔다.
 
-`workflow`는 `<git-common-dir>/wt/execution/workflows` 아래에 저장되는 prepared execution plan이다.
+`workflow`는 `<repo-root>/.wt/execution/workflows` 아래에 저장되는 prepared execution plan이다.
 사용자는 어떤 task들을 어떤 실행 shape로 시작하고 이어갈지를 workflow로 다룬다.
 Canonical command surface는 `wt workflow`다.
 
@@ -805,7 +813,7 @@ TaskDocument를 실행하고, `batch`는 같은 base에서 여러 독립 branch�
 TaskDocument를 named profile 목록으로 확장한다.
 
 `batch`, `stack`, `matrix`는 workflow mode 값으로 남지만 top-level 상태 파일 noun이나 command
-namespace가 아니다. 새 상태 파일은 `<git-common-dir>/wt/execution/workflows` 아래에만 만들고, batch/stack
+namespace가 아니다. 새 상태 파일은 `<repo-root>/.wt/execution/workflows` 아래에만 만들고, batch/stack
 전용 상태 디렉터리는 새 코드가 읽거나 쓰는 상태 위치가 아니다. 별도 top-level command
 surface를 `wt workflow` 옆에 남기면 두 command surface가 모두 canonical처럼 보이므로
 새 CLI parser와 dispatch는 canonical `wt workflow`만 노출한다.
@@ -827,7 +835,7 @@ Workflow color는 같은 workflow가 연 cmux workspace들을 시각적으로 �
 기록한다. 색상은 mode나 task의 의미가 아니라 workflow-level 표시다.
 
 `wt config` 출력은 runtime behavior를 판단하는 effective source of truth다. `.wt.toml`,
-`<git-common-dir>/wt/config/local.toml`, profile file은 사용자 intent와 override를 저장하고, `wt config`는
+`<repo-root>/.wt/config/local.toml`, profile file은 사용자 intent와 override를 저장하고, `wt config`는
 merge된 layer, convention file, built-in default를 사용자가 복사해 수정할 수 있는 형태로
 보여준다. 명령 구현은 user-facing default를 각 call site에서 새로 해석하지 말고 config
 모델의 effective accessor나 effective policy snapshot을 거쳐 적용해야 한다.
@@ -903,8 +911,8 @@ profile이 작업 묶음인지 다시 추론해야 한다. 이런 혼동은 기�
 
 ### Config Merge Semantics
 
-`wt config`는 `.wt.toml` (shared) → `<git-common-dir>/wt/config/local.toml` (personal) →
-named profile (`<git-common-dir>/wt/config/profiles/<name>/`) 순서로 layer를 합쳐
+`wt config`는 `.wt.toml` (shared) → `<repo-root>/.wt/config/local.toml` (personal) →
+named profile (`<repo-root>/.wt/config/profiles/<name>/`) 순서로 layer를 합쳐
 effective config을 만든다. 같은 코드 경로(`merge_config`)가 모든 layer에 적용되므로
 layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 방식이 다르고, 그 차이를
 사용자가 예측할 수 있어야 한다. 다음 표가 canonical 규칙이다.
@@ -1073,7 +1081,7 @@ Detected integration이 없어서 prompt가 생략되는 step도 “감지된 si
 않는다”는 의미를 보여줘야 한다. 선택지가 작고 검색할 대상이 아닌 결정은 filter 없는 selector를 쓴다. Target 결정은
 `개인 설정 파일`과 `팀 공유 설정`이라는 선택지로 보여주며, 예/아니오 prompt로 두 개념을 숨기지 않는다.
 소유 범위 설명만으로 모호하면 target hint에 실제 위치를 보여준다. 개인 설정 파일은
-`<git-common-dir>/wt/config/local.toml`이고 보통 `.git/wt/config/local.toml`에 해당한다는 예시를 같이 보여준다.
+`<repo-root>/.wt/config/local.toml`이고 보통 `./.wt/config/local.toml`에 해당한다는 예시를 같이 보여준다.
 팀 공유 설정은 `./.wt.toml`로 보여준다. 실제 절대 경로는 preview에서
 보여준다. 개발 환경 설정 결정은 `감지한 개발 설정 저장`,
 `기존 설정 파일 값 유지하기`, `개발 설정 직접 고르기`, `자동화 없이 최소 설정` 같은
@@ -1120,7 +1128,7 @@ TTY가 아니면 `--yes` 또는 충분한 explicit flag 조합처럼 prompt 없�
 TOML content를 preview하고 파일을 쓰지 않는다.
 
 Generated output은 여전히 사용자가 선택한 config 파일 하나에만 쓴다. `.wt.toml`과
-`<git-common-dir>/wt/config/local.toml` 중 하나를 선택하고, 답한 설정은 그 파일에만 쓴다. 다른 config 파일,
+`<repo-root>/.wt/config/local.toml` 중 하나를 선택하고, 답한 설정은 그 파일에만 쓴다. 다른 config 파일,
 named profile directory, prompt/scaffold 파일은 `wt init`의 부수 효과로 만들지 않는다.
 그런 구조가 필요하면 `wt config extract`나 `wt profile create`로 드러낸다. 나중에 scaffold
 generation을 추가하더라도 별도의 명시적 choice로 다뤄야 한다.
@@ -1144,18 +1152,18 @@ profile convention file merge를 모두 끝낸 뒤 최종 effective config에서
 TaskDocument origin에 따라 `issue` 또는 `branch`를 사용하므로 기존 setup-mode prompt도
 함께 적용된다. `common`은 `workflow`로 펼치지 않는다. Workflow task는 이미 `issue` 또는
 `branch` prompt를 받기 때문에 `common`을 `workflow`에도 펼치면 같은 공통 지시가 중복된다.
-Profile convention file은 `<git-common-dir>/wt/config/profiles/<name>/prompts/workflow.md`와
-`<git-common-dir>/wt/config/profiles/<name>/prompts/workflow.append.md`를 같은 scope로 읽는다.
+Profile convention file은 `<repo-root>/.wt/config/profiles/<name>/prompts/workflow.md`와
+`<repo-root>/.wt/config/profiles/<name>/prompts/workflow.append.md`를 같은 scope로 읽는다.
 
 ### State Is Explicit
 *North star: [Scope Model Direction](north-star.md#scope-model-direction).*
 
 저장되는 상태는 사용자가 이해할 수 있는 상태여야 한다.
 
-TaskDocument는 작업이 무엇인지를 담는 실행 정의다. `<git-common-dir>/wt/execution/tasks/<task>.toml`
+TaskDocument는 작업이 무엇인지를 담는 실행 정의다. `<repo-root>/.wt/execution/tasks/<task>.toml`
 아래에 title, branch, body, origin처럼 실행과 무관하게 읽을 수 있는 정보를 둔다. Spec이
 있는 작업에서는 자세한 requirements/design/tasks prep artifact가
-`<git-common-dir>/wt/planning/specs/<slug>/`에 병렬로 존재할 수 있고, TaskDocument body는 그 경로를
+`<repo-root>/.wt/planning/specs/<slug>/`에 병렬로 존재할 수 있고, TaskDocument body는 그 경로를
 가리키는 launch summary로 남는다.
 
 `wt scaffold --task`가 만드는 TaskDocument body의 `계획 (Planning)` section은
@@ -1166,7 +1174,7 @@ execution shape, size class, acceptance checks를 적는다. Provider issue impo
 중에 planning body를 자동 생성하거나 provider body를 덮어쓰지 않는다. `wt-ready` /
 `wt-start` coordinator flow가 launch 전에 부족한 planning 정보를 채우는 소유자다.
 
-`wt task list`는 `<git-common-dir>/wt/execution/tasks/<task>.toml`에 저장된 TaskDocument file 중
+`wt task list`는 `<repo-root>/.wt/execution/tasks/<task>.toml`에 저장된 TaskDocument file 중
 actionable working set을 보여주는 canonical read-only list다. Bare `wt task list`는
 `wt run task`의 selectable task semantics를 따른다. TaskRun이 없거나 latest TaskRun status가
 `prepared`, `failed`, `skipped`인 TaskDocument를 보여주고, latest status가 `passed` 또는
@@ -1190,7 +1198,7 @@ TaskDocument import는 configured issue provider의 기존 issue를 local task �
 가져오는 side effect다. Canonical command shape는 `wt task import` 또는
 `wt task import <issue>...`다. Bare `wt task import`는 provider issue를
 multi-select로 고르게 하고, 명시 issue id는 scriptable path로 남긴다. `import`는
-`<git-common-dir>/wt/execution/tasks/<safe-issue-id>.toml`에 title, branch, body, `[origin]`을 기록한다.
+`<repo-root>/.wt/execution/tasks/<safe-issue-id>.toml`에 title, branch, body, `[origin]`을 기록한다.
 이때 branch는 `wt run issue <issue>`가 사용할 provider issue branch와 같은 값이어야 하며,
 필요하면 provider branch를 먼저 materialize한다. GitHub에서는 linked branch가 없을 때
 `gh issue develop`을 호출할 수 있다. Import는 provider branch materialization 외에는
@@ -1202,7 +1210,7 @@ Provider가 branch를 공급하거나 materialize할 수 없으면 branch가 빈
 Import ambiguity는 local TaskDocument write 전에 실패해야 한다. Configured issue
 provider가 없으면 실패한다. 같은 invocation 안의 duplicate issue id는 실패한다. Provider
 조회 뒤 canonical issue id가 같은 task key로 수렴하는 경우도 실패한다. Import 대상
-`<git-common-dir>/wt/execution/tasks/<safe-issue-id>.toml`이 이미 있으면 local edits를 보존하기 위해 실패하고,
+`<repo-root>/.wt/execution/tasks/<safe-issue-id>.toml`이 이미 있으면 local edits를 보존하기 위해 실패하고,
 조용히 덮어쓰거나 merge하지 않는다. Replace/update가 필요하다면 별도의 명시 옵션과
 help/test/documentation이 먼저 필요하다.
 
@@ -1211,7 +1219,7 @@ side effect다. Canonical command shape는 `wt task publish` 또는
 `wt task publish <task>...`다. Bare `wt task publish`는 아직 `[origin]`이 없는 local
 TaskDocument를 multi-select로 고르게 하고, 명시 task key는 scriptable path로 남긴다.
 `publish`는 각 task의 provider issue 생성, provider-keyed `branch` rewrite, 그리고
-`<git-common-dir>/wt/execution/tasks/<task>.toml`의 `origin` 업데이트가 모두 끝났을 때만 해당 task를
+`<repo-root>/.wt/execution/tasks/<task>.toml`의 `origin` 업데이트가 모두 끝났을 때만 해당 task를
 성공으로 보고한다. 일부만 끝난 상태를 성공으로 보고하지 않는다. `origin`은 external issue와의
 durable link이지, 아직 publish해야 한다는 pending request가 아니다. 성공 output은 생성된
 provider issue와 함께 old branch와 new branch를 보여줘야 한다.
@@ -1274,7 +1282,7 @@ setup은 만들지 않는다는 점, duplicate ids나 existing TaskDocument coll
 실패한다는 점, branch를 materialize할 수 없으면 incomplete TaskDocument를 쓰지 않고
 실패한다는 점을 보여줘야 한다.
 
-TaskRun은 그 작업을 한 번 실행한 인스턴스다. `<git-common-dir>/wt/execution/task-runs/<id>.toml` 아래에
+TaskRun은 그 작업을 한 번 실행한 인스턴스다. `<repo-root>/.wt/execution/task-runs/<id>.toml` 아래에
 task, branch, status, group, error, creation_order, route fields, report/review metadata,
 created_at, updated_at을 저장한다.
 `group`은 Workflow file stem과 맞는 workflow-linked run을 식별하는 link이고, 직접
@@ -1299,7 +1307,7 @@ TaskDocument는 무엇을 할지에 대한 재사용 가능한 slice-level 설�
 workflow-level `title`, `body`, optional `[origin]`과 그 task set을 어떤 실행 shape로
 이어갈지에 대한 저장된 계획이며, TaskRun은 TaskDocument 하나를 한 번 실행한 기록이다.
 
-Workflow 준비는 `<git-common-dir>/wt/execution/workflows/<id>.toml` 하나와 각 task의 TaskDocument/TaskRun link를
+Workflow 준비는 `<repo-root>/.wt/execution/workflows/<id>.toml` 하나와 각 task의 TaskDocument/TaskRun link를
 만든다. Workflow의 canonical task 목록은 `[[tasks]]`이고, 각 row는 task key, linked
 TaskRun id, stack-mode parent처럼 orchestration에 필요한 link와 실행 지시만 저장한다.
 Workflow row는 status/error를 따로 가지지 않고, branch 이름도 복사하지 않는다. 실행
@@ -1328,8 +1336,8 @@ are ready for review immediately. Boolean `--pull-request` and boolean
 
 Workflow policy is a preparation preference in `.wt.toml`, while a Workflow file is the
 prepared execution plan for one run. Preparing a workflow reads the effective config
-from `.wt.toml` plus `<git-common-dir>/wt/config/local.toml`, applies any explicit command-line override, and
-writes the resulting policy snapshot into `<git-common-dir>/wt/execution/workflows/<id>.toml`. Later edits to
+from `.wt.toml` plus `<repo-root>/.wt/config/local.toml`, applies any explicit command-line override, and
+writes the resulting policy snapshot into `<repo-root>/.wt/execution/workflows/<id>.toml`. Later edits to
 `.wt.toml` do not reinterpret already prepared workflows.
 
 Canonical config shape:
@@ -1409,15 +1417,15 @@ unless it is preserving an existing explicit workflow policy from the target con
 `wt workflow show` displays the prepared policy snapshot from the workflow file, not the
 current `.wt.toml` value.
 
-This model changes both `.wt.toml` config shape and `<git-common-dir>/wt/execution/workflows` state shape, so
+This model changes both `.wt.toml` config shape and `<repo-root>/.wt/execution/workflows` state shape, so
 implementing parser/runtime behavior is a pre-1.0 minor user-facing change. Replacing
 workflow `objective` with workflow-level `title`, `body`, and optional `[origin]` also
-changes the `<git-common-dir>/wt/execution/workflows` state shape and `wt workflow task` / `wt workflow issue`
+changes the `<repo-root>/.wt/execution/workflows` state shape and `wt workflow task` / `wt workflow issue`
 preparation surface, so it belongs in the same pre-1.0 minor model-change category.
 Ordinary development commits still do not bump `Cargo.toml`; the release branch owns the
 eventual version bump.
 
-Workflow-level `title`/`body`/`[origin]` are saved to `<git-common-dir>/wt/execution/workflows/<id>.toml` as
+Workflow-level `title`/`body`/`[origin]` are saved to `<repo-root>/.wt/execution/workflows/<id>.toml` as
 top-level Workflow metadata. They appear in `wt workflow show` and workflow-started agent
 prompts as context, but do not change runnable selection, TaskRun lifecycle, landing
 policy, cleanup behavior, provider issue status transitions, provider sync, or PR
@@ -1430,9 +1438,9 @@ Bare `wt workflow task --mode <mode>`는 기존 local TaskDocument를 multi-sele
 명시 task argument는 scriptable path이며, 선택과 명시 argument를 한 command에서 섞는
 두 번째 task source를 만들지 않는다.
 
-`<git-common-dir>/wt/execution/workflows`는 `<git-common-dir>/wt/batches`와 `<git-common-dir>/wt/stacks`를 대체한다. 이유는 batch와 stack이
+`<repo-root>/.wt/execution/workflows`는 `<repo-root>/.wt/batches`와 `<repo-root>/.wt/stacks`를 대체한다. 이유는 batch와 stack이
 저장소 noun이 아니라 하나의 Workflow 안에서 고르는 execution mode이기 때문이다. 새
-기능이 `<git-common-dir>/wt/batches`나 `<git-common-dir>/wt/stacks`에 상태를 계속 추가하면 사용자는 같은 준비 작업을
+기능이 `<repo-root>/.wt/batches`나 `<repo-root>/.wt/stacks`에 상태를 계속 추가하면 사용자는 같은 준비 작업을
 workflow, batch file, stack file 중 무엇으로 읽어야 하는지 다시 배워야 한다. 새 canonical
 state는 Workflow file 하나로 수렴시킨다.
 
@@ -1455,7 +1463,7 @@ workflow id/path는 automation surface로 남긴다.
 pass, task/issue preparation은 계속 `wt workflow` namespace에 남고 `run`이 소유하지
 않는다.
 
-`wt workflow list`는 `<git-common-dir>/wt/execution/workflows/<id>.toml`에 저장된 Workflow file의 canonical
+`wt workflow list`는 `<repo-root>/.wt/execution/workflows/<id>.toml`에 저장된 Workflow file의 canonical
 read-only inventory다. `wt run workflow`의 runnable selector가 아니므로 runnable workflow만
 필터링하거나 selector의 10-row visible cap을 적용하지 않는다. `wt workflow show`의 latest
 default도 all-workflow inventory로 확장하지 않는다. Output은 Workflow 자체의 단일
@@ -1473,13 +1481,13 @@ text warning 또는 JSON `invalid_workflows`로 보고한다. Batch/stack은 계
 command를 추가하지 않는다. `wt task list`는 symmetry command가 아니라 별도 TaskDocument
 inventory surface이며 Workflow, TaskRun, branch, worktree 목록 의미를 갖지 않는다.
 `wt profile list`는 named profile inventory를 위한 canonical surface이고,
-`<git-common-dir>/wt/config/profiles/<name>/profile.toml`을 config/profile loader로 읽어 정렬된 valid
+`<repo-root>/.wt/config/profiles/<name>/profile.toml`을 config/profile loader로 읽어 정렬된 valid
 profile 목록과 함께 invalid profile 레코드를 text warning 또는 JSON
 `invalid_profiles`로 보고한다. Bare `wt profile`은 omission default로 `wt profile list`를
 호출하며, 두 surface는 모두 `wt profile --help`와 `wt profile list --help`에 명시한다.
 `default`는 reserved이므로 valid profile로 표시하지 않는다.
 
-`wt ui [--port <PORT>]`는 `<git-common-dir>/wt`와 wt config state를 읽기 쉽게 보는 read-only local web
+`wt ui [--port <PORT>]`는 `<repo-root>/.wt`와 wt config state를 읽기 쉽게 보는 read-only local web
 UI다. 이 명령은 `127.0.0.1`에만 bind하고, port `0`은 available port 선택을 뜻하며, 시작
 후 URL을 출력한 뒤 default browser로 그 URL을 연다. `--quiet`에서는 script-friendly stdout
 contract를 위해 URL만 출력하고 browser를 열지 않는다.
@@ -1489,10 +1497,10 @@ retrospectives, profile summaries, effective config summary/source paths를 한 
 반환한다.
 
 `wt ui`는 inventory lens이지 새로운 state owner가 아니다. Ideas는
-`<git-common-dir>/wt/planning/ideas`, Specs는 `<git-common-dir>/wt/planning/specs`, TaskDocument는 계속
-`<git-common-dir>/wt/execution/tasks`, Workflow는 `<git-common-dir>/wt/execution/workflows`, TaskRun은
-`<git-common-dir>/wt/execution/task-runs`, config/profile layering은 `.wt.toml`,
-`<git-common-dir>/wt/config/local.toml`, `<git-common-dir>/wt/config/profiles`가 source of truth다. UI
+`<repo-root>/.wt/planning/ideas`, Specs는 `<repo-root>/.wt/planning/specs`, TaskDocument는 계속
+`<repo-root>/.wt/execution/tasks`, Workflow는 `<repo-root>/.wt/execution/workflows`, TaskRun은
+`<repo-root>/.wt/execution/task-runs`, config/profile layering은 `.wt.toml`,
+`<repo-root>/.wt/config/local.toml`, `<repo-root>/.wt/config/profiles`가 source of truth다. UI
 board group은 linked TaskRun 상태와 runnable metadata에서 파생한 presentation일 뿐이고,
 Workflow나 TaskDocument에 새 status/column 값을 쓰지 않는다. Parse/validation failure는
 snapshot과 UI에 invalid record로 드러내며, invalid TOML을 조용히 숨기지 않는다.
@@ -1514,8 +1522,8 @@ Write-capable web editing belongs to a separate `wt studio` surface. `wt studio`
 place for canvas/form editing such as creating a Workflow, adding or removing TaskDocument nodes,
 editing TaskDocument fields, changing Workflow task order/edges, and preparing execution from that
 edited plan. Studio writes still use the same source-of-truth files: TaskDocuments in
-`<git-common-dir>/wt/execution/tasks`, Workflows in `<git-common-dir>/wt/execution/workflows`, personal config in
-`<git-common-dir>/wt/config/local.toml`, and profiles in `<git-common-dir>/wt/config/profiles`. TaskRun remains an
+`<repo-root>/.wt/execution/tasks`, Workflows in `<repo-root>/.wt/execution/workflows`, personal config in
+`<repo-root>/.wt/config/local.toml`, and profiles in `<repo-root>/.wt/config/profiles`. TaskRun remains an
 execution record and is read-only in Studio except through explicit lifecycle commands that already
 own TaskRun mutation.
 
@@ -1537,12 +1545,12 @@ The Studio bootstrap layer exposes non-mutating routes such as the embedded page
 authenticated `GET /api/ping`; mutation routes are added only with an operation-specific contract.
 No Studio mutation route may write outside an
 explicit allowlist for the state type it owns; TaskDocument writes are limited to
-`<git-common-dir>/wt/execution/tasks/*.toml` unless a later consistency update defines another
+`<repo-root>/.wt/execution/tasks/*.toml` unless a later consistency update defines another
 canonical allowlist.
 
 Studio TaskDocument editing is a plan/apply contract over the canonical TaskDocument store, not a
 new schema. `POST /api/task-documents/plan` accepts a TaskDocument path under
-`<git-common-dir>/wt/execution/tasks/<slug>.toml` and either a structured TaskDocument candidate or
+`<repo-root>/.wt/execution/tasks/<slug>.toml` and either a structured TaskDocument candidate or
 raw candidate TOML. Structured candidates are first rendered to normalized TaskDocument TOML; raw
 candidate TOML is preserved. A create plan treats `before` as the empty string and returns `after` as
 that normalized or raw candidate TOML. An update plan reads the current disk file through the
@@ -1563,7 +1571,7 @@ current disk content, current fingerprint, and a unified diff from planned `befo
 so the user can re-plan.
 
 The TaskDocument mutation allowlist is exact: Studio may write only
-`<git-common-dir>/wt/execution/tasks/<slug>.toml`, where `<slug>` is the same safe task key form used
+`<repo-root>/.wt/execution/tasks/<slug>.toml`, where `<slug>` is the same safe task key form used
 by the TaskDocument store. Absolute paths, parent traversal such as `../escape`, nested paths, and
 non-TaskDocument file names fail with 4xx before validation or write. Studio must continue to use
 the TaskDocument state-owner reader/writer and must not scrape `wt ui` snapshot DTOs or CLI text
@@ -1729,7 +1737,7 @@ agent kind/state, 마지막 tool/session/event, cmux contact/warning을 compact�
 
 `wt agent watch`는 `--heartbeat`나 `--timeout`으로 non-idle heartbeat/timeout sample을
 emit하고 runtime AgentId가 TaskRun route나 live surface anchor로 확인될 때마다
-`<git-common-dir>/wt/runtime/agents/<name>/observations/wait-observations.jsonl`에 append-only JSONL
+`<repo-root>/.wt/runtime/agents/<name>/observations/wait-observations.jsonl`에 append-only JSONL
 sample로 기록한다. 별도 기록 flag, opt-out flag, config key는 없다. idle, needs_input,
 failed, no_session observation은 non-idle wait sample을 만들지 않는다. 이 state owner는
 `runtime/agents/<name>/observations`이며 runtime observation 자료일 뿐이므로 TaskRun status, Workflow file,
@@ -1740,7 +1748,7 @@ failed, blocked, passed, skipped로 전이하지 않고, `wt agent watch`를 del
 supervisor로 넓히지 않는다. `--heartbeat`와 `--timeout`이 모두 없으면 기록할 heartbeat/timeout
 sample도 없다.
 
-`wt agent wait-stats`는 `<git-common-dir>/wt/runtime/agents/<name>/observations/wait-observations.jsonl`을 읽는
+`wt agent wait-stats`는 `<repo-root>/.wt/runtime/agents/<name>/observations/wait-observations.jsonl`을 읽는
 read-only summary surface다. count, sum, average, min, max, bucket과 `wait_reason`,
 `bound_seconds`, `agent_kind`, `agent_state` 같은 low-cardinality group aggregate를 보여줄 수
 있지만 agent를 새로 관찰하거나 cmux에 접속하거나 TaskRun/Workflow state를 수정하지 않는다. 이
@@ -1827,7 +1835,7 @@ action을 대신 실행하지 않는다.
 user-facing 정리는 `0.x.0` minor로 올리고, 버그 수정이나 내부 로직 변경은 `0.x.y`
 patch로 올린다.
 예를 들어 prepared-task 실행 표면을 `wt run task`로 수렴시키거나, saved orchestration을
-`wt workflow`와 `<git-common-dir>/wt/execution/workflows`로 수렴시키는 변경은 CLI와 상태
+`wt workflow`와 `<repo-root>/.wt/execution/workflows`로 수렴시키는 변경은 CLI와 상태
 파일 계약을 바꾸므로 patch가 아니라 pre-1.0 minor 변경이다.
 
 다만 version bump는 일반 개발 커밋마다 하지 않는다. 버전 변경은 릴리즈 작업에서만

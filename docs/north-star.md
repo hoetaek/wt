@@ -119,7 +119,7 @@ These are the model directions that should shape upcoming work:
 - Stateless CLI remains the default.
 - File-based state and messages are the durable contract.
 - cmux is a transport and surface detail, not canonical task or workflow state.
-- Personal storage should live under the Git common directory rather than
+- Personal storage should live under repo-root `.wt/`, not inside `.git/` or
   repo-root `.local` state.
 - Activity, inbox messages, and status should remain separate channels.
 - Scope should be modeled as global, team integration, personal, and runtime
@@ -146,8 +146,8 @@ The target state model has four scopes:
 ```text
 ~/.config/wt/                  # Global: this machine
 <repo>/.wt.toml                # Team integration config, committed
-<git-common-dir>/wt/           # Personal repo work, not committed
-<git-common-dir>/wt/runtime/agents/<name>/
+<repo-root>/.wt/               # Personal repo work, not committed
+<repo-root>/.wt/runtime/agents/<name>/
                                # Runtime actor context inside personal storage
 ```
 
@@ -164,9 +164,16 @@ global < team integration < personal < command-line flags
 `wt config` should show where each effective value came from. Debuggability is
 part of the contract.
 
-All worktrees for one repository should resolve the same personal storage root
-through `git rev-parse --git-common-dir`. This avoids symlink conventions and
-repo-root ignore-file patches.
+All worktrees for one repository should resolve the same personal storage root.
+The canonical mechanism is a real `<repo-root>/.wt/` directory in the main repo
+and a `.wt` symlink from each linked worktree to that directory. `.git/info/exclude`
+owns the clone-local ignore rule so the team `.gitignore` remains untouched.
+
+This intentionally reverses the earlier Git-common-dir direction. The decision
+source is `<repo-root>/.wt/planning/specs/personal-storage-repo-root/`: `.git/`
+should remain Git's namespace, `.wt/...` is shorter to type and inspect, and
+agent harnesses can read/write repo-root `.wt/` without `.git/` permission
+friction.
 
 Inside the personal root, the current direction is a four-bucket contract:
 
@@ -261,7 +268,7 @@ policy is strict:
 
 Allowed automatic writes:
 
-- files under `<git-common-dir>/wt/`,
+- files under `<repo-root>/.wt/`,
 - per-worktree Git exclude files from `git rev-parse --git-path info/exclude`,
 - untracked adapter files that are already excluded.
 
@@ -332,7 +339,7 @@ Each step should make the model clearer:
 1. Lock identity across README, Cargo metadata, CLI help, and agent guidance.
 2. Move the four-scope model into `docs/consistency.md`.
 3. Introduce a storage-root abstraction.
-4. Move personal storage toward the Git common directory.
+4. Relocate personal storage to repo-root `.wt/` with clone-local ignore.
 5. Add global config and worktree registry.
 6. Add message bus and agent hooks.
 7. Isolate cmux behind runtime/surface boundaries.

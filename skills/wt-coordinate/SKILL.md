@@ -66,13 +66,13 @@ TaskDocument `계획 (Planning)` expected duration, `09-execution.md` risks, and
 recent timing retrospectives when available:
 
 ```bash
-common_dir="$(git rev-parse --git-common-dir)"
-find "$common_dir/wt/planning/specs" "$common_dir/wt/planning/retrospectives" -type f \( -name '11-retrospect.md' -o -name 'timing.md' \) 2>/dev/null
+repo_root="$(git rev-parse --show-toplevel)"
+find "$repo_root/.wt/planning/specs" "$repo_root/.wt/planning/retrospectives" -type f \( -name '11-retrospect.md' -o -name 'timing.md' \) 2>/dev/null
 wt agent wait-stats
 ```
 
 `wt agent wait-stats` summarizes runtime agent wait observations under
-`<git-common-dir>/wt/runtime/agents/<agent>/observations/wait-observations.jsonl`
+`<repo-root>/.wt/runtime/agents/<agent>/observations/wait-observations.jsonl`
 and can inform cadence, but it is not an adaptive default engine and does not
 replace the task estimate or coordinator judgment.
 
@@ -255,14 +255,14 @@ or validate a live surface; confirm the surface is the agent prompt first.
 ## Sync the Spec
 
 `wt-ready` produces a numbered spec at
-`<git-common-dir>/wt/planning/specs/<slug>/`. The spec is not frozen at launch. Findings
+`<repo-root>/.wt/planning/specs/<slug>/`. The spec is not frozen at launch. Findings
 often invalidate an assumption in `07-design.md`, prove an item in
 `08-tasks.md` is too coarse or mis-scoped, or show that the chosen execution
 shape in `09-execution.md` has drifted.
 
 Edit `07-design.md`, `08-tasks.md`, `09-execution.md`, and `10-review.md` in
 place during the run. The TaskDocument at
-`<git-common-dir>/wt/execution/tasks/<slug>.toml` is the canonical launch
+`<repo-root>/.wt/execution/tasks/<slug>.toml` is the canonical launch
 context for the wt CLI and is not rewritten here; only the spec artifact moves.
 
 Drift-resolution rule: when implementation and spec disagree, update the spec.

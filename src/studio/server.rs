@@ -269,7 +269,7 @@ fn content_type(path: &str) -> &'static str {
     }
 }
 
-const TASK_DOCUMENT_PATH_PREFIX: &str = "<git-common-dir>/wt/execution/tasks/";
+const TASK_DOCUMENT_PATH_PREFIX: &str = "<repo-root>/.wt/execution/tasks/";
 
 #[derive(Debug, Serialize)]
 struct TaskDocumentInventoryResponse {
@@ -545,7 +545,7 @@ fn resolve_task_document_path(
     if path.is_absolute() || has_disallowed_path_component(path) {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
-            "TaskDocument path must stay under <git-common-dir>/wt/execution/tasks",
+            "TaskDocument path must stay under <repo-root>/.wt/execution/tasks",
         ));
     }
 
@@ -925,7 +925,7 @@ mod tests {
     #[tokio::test]
     async fn task_document_plan_update_uses_disk_before_and_candidate_after() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".git/wt/execution/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
         let before = "title = \"Old\"\nbranch = \"edit-task\"\nbody = \"\"\"old\"\"\"\n";
         fs::write(tasks_dir.join("edit-task.toml"), before).unwrap();
@@ -997,7 +997,7 @@ mod tests {
         assert!(applied["fingerprint"]["mtime_ns"].is_string());
         assert_eq!(applied["fingerprint"]["hash"].as_str().unwrap().len(), 64);
         let written =
-            fs::read_to_string(dir.path().join(".git/wt/execution/tasks/create-me.toml")).unwrap();
+            fs::read_to_string(dir.path().join(".wt/execution/tasks/create-me.toml")).unwrap();
         assert_eq!(written, plan["after"].as_str().unwrap());
 
         let ctx = Ctx::new(
@@ -1015,7 +1015,7 @@ mod tests {
     #[tokio::test]
     async fn task_document_apply_rejects_stale_precondition_with_current_diff() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".git/wt/execution/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
         let original = "title = \"Original\"\nbranch = \"stale\"\n";
         fs::write(tasks_dir.join("stale.toml"), original).unwrap();
@@ -1127,7 +1127,7 @@ mod tests {
         assert_eq!(apply_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert!(
             !dir.path()
-                .join(".git/wt/execution/tasks/bad-schema.toml")
+                .join(".wt/execution/tasks/bad-schema.toml")
                 .exists()
         );
     }

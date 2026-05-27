@@ -590,7 +590,7 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".git/wt/config/profiles/codex");
+        let profile_dir = dir.path().join(".wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),
@@ -653,7 +653,7 @@ cli = "codex"
         }
 
         let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".git/wt/config/profiles/claude");
+        let claude_dir = dir.path().join(".wt/config/profiles/claude");
         std::fs::create_dir_all(&claude_dir).unwrap();
         std::fs::write(
             claude_dir.join("profile.toml"),
@@ -661,7 +661,7 @@ cli = "codex"
         )
         .unwrap();
 
-        let codex_dir = dir.path().join(".git/wt/config/profiles/codex");
+        let codex_dir = dir.path().join(".wt/config/profiles/codex");
         std::fs::create_dir_all(&codex_dir).unwrap();
         std::fs::write(codex_dir.join("profile.toml"), "[agent]\ncli = \"codex\"\n").unwrap();
 
@@ -744,11 +744,11 @@ cli = "codex"
         }
 
         let dir = tempfile::tempdir().unwrap();
-        let valid_dir = dir.path().join(".git/wt/config/profiles/codex");
+        let valid_dir = dir.path().join(".wt/config/profiles/codex");
         std::fs::create_dir_all(&valid_dir).unwrap();
         std::fs::write(valid_dir.join("profile.toml"), "[agent]\ncli = \"codex\"\n").unwrap();
 
-        let invalid_dir = dir.path().join(".git/wt/config/profiles/broken");
+        let invalid_dir = dir.path().join(".wt/config/profiles/broken");
         std::fs::create_dir_all(&invalid_dir).unwrap();
         std::fs::write(
             invalid_dir.join("profile.toml"),
@@ -800,7 +800,7 @@ cli = "codex"
         };
         assert!(run(&ctx, Some(&command)).is_ok());
 
-        let profile_dir = dir.path().join(".git/wt/config/profiles/baseline");
+        let profile_dir = dir.path().join(".wt/config/profiles/baseline");
         assert!(profile_dir.join("profile.toml").exists());
         assert!(profile_dir.join("prompts/issue.md").exists());
         assert!(profile_dir.join("prompts/branch.md").exists());
@@ -849,7 +849,7 @@ cli = "codex"
 
         let skill = std::fs::read_to_string(
             dir.path()
-                .join(".git/wt/config/profiles/baseline/scaffold/.codex/skills/start/SKILL.md"),
+                .join(".wt/config/profiles/baseline/scaffold/.codex/skills/start/SKILL.md"),
         )
         .unwrap();
         assert!(skill.contains("GitHub 이슈"));
@@ -895,7 +895,7 @@ cli = "codex"
         )
         .unwrap();
 
-        let profile_dir = dir.path().join(".git/wt/config/profiles/claude-plan");
+        let profile_dir = dir.path().join(".wt/config/profiles/claude-plan");
         assert!(profile_dir.join("scaffold/CLAUDE.local.md").exists());
         assert!(profile_dir.join("scaffold/.claude/agents").is_dir());
         assert!(profile_dir.join("scaffold/.claude/commands").is_dir());
@@ -925,7 +925,7 @@ cli = "codex"
     #[test]
     fn create_rejects_duplicate() {
         let dir = tempfile::tempdir().unwrap();
-        let profile_dir = dir.path().join(".git/wt/config/profiles/tdd");
+        let profile_dir = dir.path().join(".wt/config/profiles/tdd");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),

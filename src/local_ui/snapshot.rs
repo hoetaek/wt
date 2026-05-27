@@ -548,7 +548,7 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
             retrospecs: ctx
                 .storage_root
                 .display_path(&ctx.storage_root.retrospectives_dir())
-                + " + <git-common-dir>/wt/planning/specs/*/11-retrospect.md",
+                + " + <repo-root>/.wt/planning/specs/*/11-retrospect.md",
             config_paths: config_source_paths(&ctx),
         },
         config: config_summary(&ctx),
@@ -1888,26 +1888,25 @@ fn read_known_source_text(ctx: &Ctx, path: &Path) -> Option<String> {
 
 fn is_known_state_or_config_path(relative: &str) -> bool {
     relative == ".wt.toml"
-        || relative == "<git-common-dir>/wt/config/local.toml"
-        || (relative.starts_with("<git-common-dir>/wt/planning/ideas/")
+        || relative == "<repo-root>/.wt/config/local.toml"
+        || (relative.starts_with("<repo-root>/.wt/planning/ideas/")
             && matches!(
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
             ))
-        || (relative.starts_with("<git-common-dir>/wt/planning/retrospectives/")
+        || (relative.starts_with("<repo-root>/.wt/planning/retrospectives/")
             && matches!(
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
             ))
-        || (relative.starts_with("<git-common-dir>/wt/planning/specs/")
+        || (relative.starts_with("<repo-root>/.wt/planning/specs/")
             && relative.ends_with("/11-retrospect.md"))
-        || (relative.starts_with("<git-common-dir>/wt/execution/tasks/")
+        || (relative.starts_with("<repo-root>/.wt/execution/tasks/") && relative.ends_with(".toml"))
+        || (relative.starts_with("<repo-root>/.wt/execution/workflows/")
             && relative.ends_with(".toml"))
-        || (relative.starts_with("<git-common-dir>/wt/execution/workflows/")
+        || (relative.starts_with("<repo-root>/.wt/execution/task-runs/")
             && relative.ends_with(".toml"))
-        || (relative.starts_with("<git-common-dir>/wt/execution/task-runs/")
-            && relative.ends_with(".toml"))
-        || (relative.starts_with("<git-common-dir>/wt/config/profiles/")
+        || (relative.starts_with("<repo-root>/.wt/config/profiles/")
             && relative.ends_with("/profile.toml"))
 }
 
@@ -2060,7 +2059,7 @@ mod tests {
         .unwrap();
         fs::create_dir_all(dir.path().join(".local")).unwrap();
         fs::write(
-            dir.path().join(".git/wt/config/local.toml"),
+            dir.path().join(".wt/config/local.toml"),
             "[workflow]\nlanding = \"auto\"\n",
         )
         .unwrap();
@@ -2149,7 +2148,7 @@ mod tests {
             Config::default(),
             ConfigSource::Files(vec![
                 dir.path().join(".wt.toml"),
-                dir.path().join(".git/wt/config/local.toml"),
+                dir.path().join(".wt/config/local.toml"),
             ]),
         );
 
@@ -2219,11 +2218,11 @@ mod tests {
         assert_eq!(profile.link, vec![".local".to_string()]);
         assert_eq!(
             snapshot.sources.config_paths,
-            vec![".wt.toml", "<git-common-dir>/wt/config/local.toml"]
+            vec![".wt.toml", "<repo-root>/.wt/config/local.toml"]
         );
         assert_eq!(
             snapshot.tasks.items[0].path,
-            "<git-common-dir>/wt/execution/tasks/demo.toml"
+            "<repo-root>/.wt/execution/tasks/demo.toml"
         );
         assert_eq!(snapshot.tasks.items[0].body.as_deref(), Some("Demo body"));
         assert!(
@@ -2267,7 +2266,7 @@ mod tests {
         assert_eq!(relationship.task_run.as_ref().unwrap().status, "prepared");
         assert_eq!(
             relationship.task_run.as_ref().unwrap().path,
-            "<git-common-dir>/wt/execution/task-runs/run-demo.toml"
+            "<repo-root>/.wt/execution/task-runs/run-demo.toml"
         );
         assert_eq!(
             snapshot.workflows.items[0].body.as_deref(),
@@ -2302,7 +2301,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.retrospecs.items[1].path,
-            "<git-common-dir>/wt/planning/specs/demo-spec/11-retrospect.md"
+            "<repo-root>/.wt/planning/specs/demo-spec/11-retrospect.md"
         );
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
@@ -2514,43 +2513,43 @@ mod tests {
     }
 
     fn write_task(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/execution/tasks");
+        let dir = root.join(".wt/execution/tasks");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_task_run(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/execution/task-runs");
+        let dir = root.join(".wt/execution/task-runs");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_workflow(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/execution/workflows");
+        let dir = root.join(".wt/execution/workflows");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_idea(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/planning/ideas");
+        let dir = root.join(".wt/planning/ideas");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_profile(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/config/profiles").join(name);
+        let dir = root.join(".wt/config/profiles").join(name);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("profile.toml"), content).unwrap();
     }
 
     fn write_retrospec(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/planning/retrospectives");
+        let dir = root.join(".wt/planning/retrospectives");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_spec_retrospect(root: &Path, spec: &str, content: &str) {
-        let dir = root.join(".git/wt/planning/specs").join(spec);
+        let dir = root.join(".wt/planning/specs").join(spec);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("11-retrospect.md"), content).unwrap();
     }
