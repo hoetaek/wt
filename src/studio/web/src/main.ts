@@ -1,5 +1,4 @@
 import {
-  ArrowUpRight,
   ArrowsClockwise,
   CheckCircle,
   FileText,
@@ -10,7 +9,7 @@ import {
 } from "@phosphor-icons/react";
 import clsx from "clsx";
 import { h, render, type ComponentChildren } from "preact";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import "./style.css";
 
 type TaskOrigin = {
@@ -55,6 +54,7 @@ type PlanResponse = {
 };
 
 type Mode = "create" | "update";
+type PlanStatus = "idle" | "planning" | "stale";
 
 type EditorDraft = {
   slug: string;
@@ -71,11 +71,11 @@ type DetailMetric = { label: string; value: string };
 const StudioList = List as unknown as IconComponent;
 const StudioPlus = Plus as unknown as IconComponent;
 const StudioRefresh = ArrowsClockwise as unknown as IconComponent;
-const StudioArrow = ArrowUpRight as unknown as IconComponent;
 const StudioFile = FileText as unknown as IconComponent;
 const StudioSave = FloppyDisk as unknown as IconComponent;
 const StudioWarning = WarningCircle as unknown as IconComponent;
 const StudioCheck = CheckCircle as unknown as IconComponent;
+const PLAN_DEBOUNCE_MS = 500;
 
 const emptyDraft: EditorDraft = {
   slug: "new-task",
@@ -98,8 +98,9 @@ function App() {
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [draft, setDraft] = useState<EditorDraft>(emptyDraft);
   const [plan, setPlan] = useState<PlanResponse | null>(null);
+  const [planStatus, setPlanStatus] = useState<PlanStatus>("idle");
+  const [baselineStale, setBaselineStale] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("TaskDocument 불러오는 중");
   const [error, setError] = useState("");
 
   const selected = useMemo(
@@ -110,15 +111,57 @@ function App() {
   const displaySlug = mode === "create" ? draft.slug.trim() || "new-task" : selected?.key || draft.slug;
   const displayTitle = draft.title.trim() || "제목 없는 TaskDocument";
   const currentPath = mode === "update" && selected ? selected.path : targetPath(mode, draft, selected);
-  const canPlan = !busy && draftIssues.length === 0;
+  const cleanUpdateDraft =
+    mode === "update" && selected && !baselineStale ? draftsEqual(draft, draftFromItem(selected)) : false;
+  const planSignature = useMemo(() => planRequestSignature(mode, currentPath, draft), [currentPath, draft, mode]);
+  const latestPlanSignature = useRef(planSignature);
+  const recoveryPlanController = useRef<AbortController | null>(null);
+  latestPlanSignature.current = planSignature;
+  const status = statusDescriptor(planStatus, plan);
   const detailMetrics = useMemo(
-    () => buildDetailMetrics(currentPath, draft, selected, plan, draftIssues),
-    [currentPath, draft, selected, plan, draftIssues]
+    () => buildDetailMetrics(currentPath, draft, selected, plan, draftIssues, planStatus),
+    [currentPath, draft, selected, plan, draftIssues, planStatus]
   );
 
   useEffect(() => {
     void loadInventory();
   }, []);
+
+  useEffect(() => {
+    return () => {
+      recoveryPlanController.current?.abort();
+      recoveryPlanController.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (mode === "update" && !selected) {
+      resetPlanState();
+      return;
+    }
+    if (cleanUpdateDraft || draftIssues.length > 0) {
+      resetPlanState();
+      return;
+    }
+
+    const controller = new AbortController();
+    const signature = planSignature;
+    const timer = window.setTimeout(() => {
+      if (latestPlanSignature.current !== signature) {
+        return;
+      }
+      recoveryPlanController.current?.abort();
+      recoveryPlanController.current = null;
+      setPlanStatus("planning");
+      setError("");
+      void planDraft(controller.signal, signature);
+    }, PLAN_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [cleanUpdateDraft, draftIssues.length, mode, planSignature, selected]);
 
   useEffect(() => {
     const nodes = Array.from(document.querySelectorAll<HTMLElement>("[data-reveal]"));
@@ -141,28 +184,26 @@ function App() {
     return () => observer.disconnect();
   }, [inventory.items.length, plan?.diff, error]);
 
-  async function loadInventory(nextSelectedPath?: string) {
+  async function loadInventory(nextSelectedPath?: string, modeOverride?: Mode) {
     setBusy(true);
     setError("");
     try {
       const next = await api<Inventory>("/api/task-documents", { method: "POST" });
       setInventory(next);
+      setBaselineStale(false);
       const fallbackPath = next.items[0]?.path || "";
       const resolvedPath = nextSelectedPath ?? selectedPath;
       const nextPath = next.items.some((item) => item.path === resolvedPath) ? resolvedPath : fallbackPath;
       setSelectedPath(nextPath);
-      if (mode === "update") {
+      const loadMode = modeOverride ?? mode;
+      if (loadMode === "update") {
         const nextSelected = next.items.find((item) => item.path === nextPath);
         if (nextSelected) {
           setDraft(draftFromItem(nextSelected));
         }
       }
-      setMessage(
-        next.items.length === 0 ? "디스크에 TaskDocument 없음" : `TaskDocument ${next.items.length}개 불러옴`
-      );
     } catch (err) {
       setError(errorMessage(err));
-      setMessage("목록 불러오기 실패");
     } finally {
       setBusy(false);
     }
@@ -170,7 +211,8 @@ function App() {
 
   function selectCreate() {
     setMode("create");
-    setPlan(null);
+    setBaselineStale(false);
+    resetPlanState();
     setError("");
     setDraft(emptyDraft);
   }
@@ -180,32 +222,60 @@ function App() {
     if (!item) return;
     setMode("update");
     setSelectedPath(path);
-    setPlan(null);
+    setBaselineStale(false);
+    resetPlanState();
     setError("");
     setDraft(draftFromItem(item));
   }
 
-  async function planDraft() {
-    if (!canPlan) return;
-    setBusy(true);
-    setError("");
+  function resetPlanState() {
+    recoveryPlanController.current?.abort();
+    recoveryPlanController.current = null;
     setPlan(null);
+    setPlanStatus("idle");
+  }
+
+  function triggerConflictRecoveryPlan() {
+    recoveryPlanController.current?.abort();
+    const controller = new AbortController();
+    recoveryPlanController.current = controller;
+    const signature = latestPlanSignature.current;
+    setPlanStatus("planning");
+    void planDraft(controller.signal, signature, { failureStatus: "stale" }).finally(() => {
+      if (recoveryPlanController.current === controller) {
+        recoveryPlanController.current = null;
+      }
+    });
+  }
+
+  async function planDraft(
+    signal: AbortSignal,
+    signature: string,
+    options: { failureStatus?: PlanStatus } = {}
+  ) {
     try {
       const response = await api<PlanResponse>("/api/task-documents/plan", {
         method: "POST",
+        signal,
         body: JSON.stringify({
           path: targetPath(mode, draft, selected),
           mode,
           document: documentFromDraft(draft)
         })
       });
+      if (latestPlanSignature.current !== signature) {
+        return;
+      }
       setPlan(response);
-      setMessage(response.valid ? "Plan 준비됨" : "Plan 검증 오류");
+      setError("");
+      setPlanStatus("idle");
     } catch (err) {
+      if (isAbortError(err) || latestPlanSignature.current !== signature) {
+        return;
+      }
       setError(errorMessage(err));
-      setMessage("Plan 실패");
-    } finally {
-      setBusy(false);
+      setPlan(null);
+      setPlanStatus(options.failureStatus ?? "idle");
     }
   }
 
@@ -223,15 +293,19 @@ function App() {
           precondition: plan.precondition
         })
       });
-      setMessage("디스크에 적용됨");
       setPlan(null);
+      setPlanStatus("idle");
       setMode("update");
       setSelectedPath(plan.path);
-      await loadInventory(plan.path);
+      await loadInventory(plan.path, "update");
     } catch (err) {
       const apiErr = err as ApiFailure;
       setError(apiErr.diff ? `${apiErr.message}\n\n${apiErr.diff}` : errorMessage(err));
-      setMessage("Apply 실패");
+      if (apiErr.status === 409) {
+        setBaselineStale(true);
+        setPlan(null);
+        triggerConflictRecoveryPlan();
+      }
     } finally {
       setBusy(false);
     }
@@ -245,7 +319,7 @@ function App() {
       }
       return next;
     });
-    setPlan(null);
+    resetPlanState();
   }
 
   return h("main", { class: "relative min-h-[100dvh] overflow-hidden px-4 py-12 text-neutral-950 dark:text-neutral-50 sm:py-16" }, [
@@ -295,7 +369,10 @@ function App() {
             ]),
             h("div", { class: "flex flex-wrap gap-2" }, [
               h(MetaPill, { label: mode === "create" ? "생성 Plan" : "수정 Plan" }),
-              h(MetaPill, { label: plan?.valid ? "유효한 Diff" : "Plan 대기", tone: plan?.valid ? "blue" : "neutral" }),
+              h(MetaPill, {
+                label: planSummaryLabel(planStatus, plan),
+                tone: planStatus === "stale" ? "amber" : planStatus === "planning" || plan?.valid ? "blue" : "neutral"
+              }),
               inventory.invalid.length > 0 && h(MetaPill, { label: `오류 ${inventory.invalid.length}개`, tone: "amber" })
             ]),
             h("dl", { class: "grid gap-4 text-sm text-neutral-500 dark:text-neutral-400" }, detailMetrics.map((item) => metric(item.label, item.value)))
@@ -327,7 +404,9 @@ function App() {
               h("p", { class: eyebrow }, "편집기"),
               h("h2", { class: "mt-4 text-3xl font-medium tracking-normal text-neutral-950 dark:text-neutral-50" }, "Apply 전 Plan")
             ]),
-            h("span", { class: statusClass(error, plan) }, error ? "오류" : message)
+            h("span", { "aria-live": "polite", "aria-atomic": "true" }, [
+              h("span", { class: statusClass(status.tone, status.pulse) }, status.label)
+            ])
           ]),
           h("div", { class: "grid gap-4 md:grid-cols-2" }, [
             h(Field, {
@@ -369,12 +448,11 @@ function App() {
           ]),
           draftIssues.length > 0 && h(ValidationList, { items: draftIssues }),
           h("div", { class: "flex flex-col gap-3 pt-2 sm:flex-row" }, [
-            h(ActionButton, { label: "Plan", iconComponent: StudioArrow, onClick: planDraft, disabled: !canPlan }),
             h(ActionButton, {
               label: "Apply",
               iconComponent: StudioSave,
               onClick: applyPlan,
-              disabled: busy || !plan?.valid,
+              disabled: busy || planStatus === "planning" || !plan?.valid,
               tone: "primary"
             })
           ])
@@ -619,14 +697,15 @@ function buildDetailMetrics(
   draft: EditorDraft,
   selected: TaskDocumentItem | null,
   plan: PlanResponse | null,
-  draftIssues: string[]
+  draftIssues: string[],
+  planStatus: PlanStatus
 ): DetailMetric[] {
   const origin = selected?.document.origin || documentFromDraft(draft).origin;
   const metrics: DetailMetric[] = [
     { label: "대상", value: currentPath },
     { label: "Branch", value: draft.branch.trim() || draft.slug.trim() || "task" },
     { label: "Body", value: bodySummary(draft.body) },
-    { label: "검증", value: validationSummary(plan, draftIssues) }
+    { label: "검증", value: validationSummary(plan, draftIssues, planStatus) }
   ];
 
   if (origin?.provider || origin?.id) {
@@ -646,14 +725,30 @@ function bodySummary(body: string) {
   return `${chars.toLocaleString("ko-KR")}자 / ${lines.toLocaleString("ko-KR")}줄`;
 }
 
-function validationSummary(plan: PlanResponse | null, draftIssues: string[]) {
+function validationSummary(plan: PlanResponse | null, draftIssues: string[], planStatus: PlanStatus) {
   if (draftIssues.length > 0) {
     return `입력 오류 ${draftIssues.length}개`;
+  }
+  if (planStatus === "planning") {
+    return "Plan 갱신 중";
+  }
+  if (planStatus === "stale") {
+    return "Stale";
   }
   if (!plan) {
     return "Plan 대기";
   }
   return plan.valid ? "검증 통과" : `검증 오류 ${plan.validation_errors.length}개`;
+}
+
+function planSummaryLabel(planStatus: PlanStatus, plan: PlanResponse | null) {
+  if (planStatus === "planning") {
+    return "Plan 갱신 중";
+  }
+  if (planStatus === "stale") {
+    return "Stale";
+  }
+  return plan?.valid ? "유효한 Diff" : "Plan 대기";
 }
 
 function formatKoreanMtime(mtimeNs?: string | null) {
@@ -692,6 +787,17 @@ function draftFromItem(item: TaskDocumentItem): EditorDraft {
   };
 }
 
+function draftsEqual(left: EditorDraft, right: EditorDraft) {
+  return (
+    left.slug === right.slug &&
+    left.title === right.title &&
+    left.branch === right.branch &&
+    left.body === right.body &&
+    left.originProvider === right.originProvider &&
+    left.originId === right.originId
+  );
+}
+
 function documentFromDraft(draft: EditorDraft): TaskDocument {
   const slug = draft.slug.trim() || "task";
   const origin =
@@ -726,12 +832,34 @@ function targetPath(mode: Mode, draft: EditorDraft, selected: TaskDocumentItem |
   return slug.endsWith(".toml") ? slug : `${slug}.toml`;
 }
 
-function statusClass(error: string, plan: PlanResponse | null) {
+function planRequestSignature(mode: Mode, path: string, draft: EditorDraft) {
+  return JSON.stringify({
+    path,
+    mode,
+    draft
+  });
+}
+
+function statusDescriptor(planStatus: PlanStatus, plan: PlanResponse | null) {
+  if (planStatus === "stale") {
+    return { label: "Stale (재plan 필요)", tone: "amber" as const };
+  }
+  if (planStatus === "planning") {
+    return { label: "Plan 갱신 중", tone: "blue" as const, pulse: true };
+  }
+  if (plan?.valid) {
+    return { label: "적용 가능", tone: "blue" as const };
+  }
+  return { label: "미저장", tone: "neutral" as const };
+}
+
+function statusClass(tone: "blue" | "amber" | "neutral", pulse?: boolean) {
   return clsx(
     "inline-flex w-fit rounded-full px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] ring-1",
-    error
+    pulse && "studio-status-pulse",
+    tone === "amber"
       ? "bg-amber-400/10 text-amber-700 ring-amber-500/20 dark:text-amber-300"
-      : plan?.valid
+      : tone === "blue"
         ? "bg-studio-accent/10 text-studio-accent ring-studio-accent/20"
         : "bg-black/[0.04] text-neutral-500 ring-black/5 dark:bg-white/[0.04] dark:text-neutral-400 dark:ring-white/10"
   );
@@ -760,6 +888,10 @@ async function api<T = unknown>(path: string, options: RequestInit): Promise<T> 
 
 function errorMessage(err: unknown) {
   return err instanceof Error ? err.message : String(err);
+}
+
+function isAbortError(err: unknown) {
+  return err instanceof DOMException && err.name === "AbortError";
 }
 
 function formValue(event: Event) {
