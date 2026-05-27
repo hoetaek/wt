@@ -1482,6 +1482,27 @@ edited plan. Studio writes still use the same source-of-truth files: TaskDocumen
 execution record and is read-only in Studio except through explicit lifecycle commands that already
 own TaskRun mutation.
 
+`wt studio [--port <PORT>]` starts a separate loopback web server from `wt ui`. It binds only to
+`127.0.0.1`, treats port `0` as available-port allocation, prints a one-time
+`http://127.0.0.1:<port>/auth?token=...` URL, and opens that URL in the default browser unless
+`--quiet` is set. The `/auth` endpoint accepts the minted 256-bit session token once, sets an
+`HttpOnly; SameSite=Strict; Path=/` cookie, and redirects to `/`. Every `/api/*` route must require
+both that session cookie and an `Origin` header matching the bound `http://127.0.0.1:<port>` origin;
+failed auth returns 401 and must not touch files.
+
+Unlike `wt ui`, Studio may use a frontend build pipeline. The canonical Studio frontend location is
+`src/studio/web/` with Vite, Preact, and TypeScript. `cargo build` runs `npm ci && npm run build`
+when the frontend inputs are stale, fails clearly if `node` or `npm` is unavailable, and embeds the
+resulting `src/studio/web/dist/` assets in the `wt` binary with `include_dir!`. Runtime use of
+`wt studio` must not depend on Node.
+
+The initial Studio skeleton exposes only non-mutating bootstrap routes such as the embedded page,
+`/auth`, and authenticated `GET /api/ping`. It establishes the command, build, server, and auth
+contracts before TaskDocument plan/apply routes land. No Studio mutation route may write outside an
+explicit allowlist for the state type it owns; TaskDocument writes are limited to
+`<git-common-dir>/wt/execution/tasks/*.toml` unless a later consistency update defines another
+canonical allowlist.
+
 `wt studio` mutations must have a visible draft state, validation errors, and a preview of the exact
 state-file changes before apply. Applying a studio edit requires an explicit mutation contract with
 path allowlist, same-origin/token policy, and operation-specific validation; it must not scrape CLI

@@ -15,6 +15,7 @@ pub mod scaffold;
 pub mod services;
 pub mod setup;
 pub mod storage;
+pub mod studio;
 pub mod task;
 pub mod task_run;
 pub mod template;
@@ -329,6 +330,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         }
         Commands::As { agent, command } => commands::agent_runtime::run_as(ctx, agent, command),
         Commands::Ui { port } => commands::ui::run(ctx, *port),
+        Commands::Studio { port } => commands::studio::run(ctx, *port),
         Commands::Msg { command } => match command {
             MsgCommand::Send { to, scope, message } => {
                 commands::msg::send(ctx, to, scope.as_deref(), message)

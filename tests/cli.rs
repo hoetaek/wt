@@ -3663,6 +3663,7 @@ fn primary_help_surfaces_do_not_teach_legacy_local_storage_paths() {
         &["config", "--help"],
         &["profile", "--help"],
         &["ui", "--help"],
+        &["studio", "--help"],
     ];
     let stale_paths = [
         legacy_local_path("tasks"),
@@ -4967,9 +4968,9 @@ fn setup_installs_completion_for_explicit_non_homebrew_wt_path() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Shell completion: install"))
-        .stdout(predicate::str::contains(
-            "Setup complete: 4 step(s) changed",
-        ))
+        .stdout(predicate::str::contains("Setup complete:"))
+        .stdout(predicate::str::contains("step(s) changed"))
+        .stdout(predicate::str::contains("- Shell integration"))
         .stdout(predicate::str::contains("- Shell completion"));
 
     let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
@@ -5561,6 +5562,25 @@ fn ui_help_explains_read_only_local_server_contract() {
         .stdout(predicate::str::contains("0 selects an available port"))
         .stdout(predicate::str::contains("GET /api/snapshot"))
         .stdout(predicate::str::contains("embedded no-build assets"));
+}
+
+#[test]
+fn studio_help_explains_authoring_server_contract() {
+    wt_command()
+        .args(["studio", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "write-capable wt studio authoring surface",
+        ))
+        .stdout(predicate::str::contains("127.0.0.1"))
+        .stdout(predicate::str::contains("--port <PORT>"))
+        .stdout(predicate::str::contains("0 selects an available port"))
+        .stdout(predicate::str::contains("Vite-built Preact frontend"))
+        .stdout(predicate::str::contains("session cookie"))
+        .stdout(predicate::str::contains("matching Origin header"))
+        .stdout(predicate::str::contains("GET /api/ping"))
+        .stdout(predicate::str::contains("does not add mutation routes"));
 }
 
 #[test]

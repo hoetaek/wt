@@ -27,6 +27,7 @@ pub mod session;
 pub mod setup;
 pub mod shell_init;
 pub mod site;
+pub mod studio;
 pub mod task;
 pub mod task_list;
 pub mod task_publish;
