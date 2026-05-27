@@ -66,6 +66,7 @@ type EditorDraft = {
 };
 
 type IconComponent = (props: Record<string, unknown>) => ComponentChildren;
+type DetailMetric = { label: string; value: string };
 
 const StudioList = List as unknown as IconComponent;
 const StudioPlus = Plus as unknown as IconComponent;
@@ -98,7 +99,7 @@ function App() {
   const [draft, setDraft] = useState<EditorDraft>(emptyDraft);
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("Loading TaskDocuments");
+  const [message, setMessage] = useState("TaskDocument 불러오는 중");
   const [error, setError] = useState("");
 
   const selected = useMemo(
@@ -107,9 +108,13 @@ function App() {
   );
   const draftIssues = useMemo(() => validateDraft(mode, draft), [draft, mode]);
   const displaySlug = mode === "create" ? draft.slug.trim() || "new-task" : selected?.key || draft.slug;
-  const displayTitle = draft.title.trim() || "Untitled TaskDocument";
+  const displayTitle = draft.title.trim() || "제목 없는 TaskDocument";
   const currentPath = mode === "update" && selected ? selected.path : targetPath(mode, draft, selected);
   const canPlan = !busy && draftIssues.length === 0;
+  const detailMetrics = useMemo(
+    () => buildDetailMetrics(currentPath, draft, selected, plan, draftIssues),
+    [currentPath, draft, selected, plan, draftIssues]
+  );
 
   useEffect(() => {
     void loadInventory();
@@ -153,11 +158,11 @@ function App() {
         }
       }
       setMessage(
-        next.items.length === 0 ? "No TaskDocuments on disk" : `${next.items.length} TaskDocuments loaded`
+        next.items.length === 0 ? "디스크에 TaskDocument 없음" : `TaskDocument ${next.items.length}개 불러옴`
       );
     } catch (err) {
       setError(errorMessage(err));
-      setMessage("Inventory failed");
+      setMessage("목록 불러오기 실패");
     } finally {
       setBusy(false);
     }
@@ -195,10 +200,10 @@ function App() {
         })
       });
       setPlan(response);
-      setMessage(response.valid ? "Plan ready" : "Plan has validation errors");
+      setMessage(response.valid ? "Plan 준비됨" : "Plan 검증 오류");
     } catch (err) {
       setError(errorMessage(err));
-      setMessage("Plan failed");
+      setMessage("Plan 실패");
     } finally {
       setBusy(false);
     }
@@ -218,7 +223,7 @@ function App() {
           precondition: plan.precondition
         })
       });
-      setMessage("Applied to disk");
+      setMessage("디스크에 적용됨");
       setPlan(null);
       setMode("update");
       setSelectedPath(plan.path);
@@ -226,7 +231,7 @@ function App() {
     } catch (err) {
       const apiErr = err as ApiFailure;
       setError(apiErr.diff ? `${apiErr.message}\n\n${apiErr.diff}` : errorMessage(err));
-      setMessage("Apply failed");
+      setMessage("Apply 실패");
     } finally {
       setBusy(false);
     }
@@ -243,19 +248,19 @@ function App() {
     setPlan(null);
   }
 
-  return h("main", { class: "relative min-h-[100dvh] overflow-hidden px-4 py-24 text-neutral-950 dark:text-neutral-50" }, [
+  return h("main", { class: "relative min-h-[100dvh] overflow-hidden px-4 py-12 text-neutral-950 dark:text-neutral-50 sm:py-16" }, [
     h("div", { class: "studio-noise", "aria-hidden": "true" }),
     h(
       "header",
       {
         class:
-          "sticky top-6 z-20 mx-auto mb-24 flex w-full max-w-7xl items-center justify-between rounded-full bg-white/70 px-3 py-3 shadow-[0_20px_50px_-28px_rgba(0,0,0,0.28)] ring-1 ring-black/5 backdrop-blur-xl dark:bg-neutral-950/70 dark:ring-white/10",
+          "sticky top-4 z-20 mx-auto mb-12 flex w-full max-w-7xl items-center justify-between rounded-full bg-white/70 px-3 py-3 shadow-[0_20px_50px_-28px_rgba(0,0,0,0.28)] ring-1 ring-black/5 backdrop-blur-xl dark:bg-neutral-950/70 dark:ring-white/10 md:mb-16",
         "data-reveal": ""
       },
       [
         h("button", {
           type: "button",
-          "aria-label": drawerOpen ? "Hide TaskDocument index" : "Show TaskDocument index",
+          "aria-label": drawerOpen ? "TaskDocument 목록 숨기기" : "TaskDocument 목록 보이기",
           onClick: () => setDrawerOpen((open) => !open),
           class: clsx(
             "group flex h-12 w-12 items-center justify-center rounded-full bg-black/[0.04] text-neutral-700 ring-1 ring-black/5 active:scale-[0.98] dark:bg-white/[0.08] dark:text-neutral-200 dark:ring-white/10",
@@ -264,11 +269,11 @@ function App() {
         }, icon(StudioList, "h-5 w-5 group-hover:translate-x-1 group-hover:-translate-y-px " + transition)),
         h("div", { class: "text-center" }, [
           h("p", { class: "text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-500 dark:text-neutral-400" }, "wt studio"),
-          h("p", { class: "mt-1 text-sm font-medium text-neutral-800 dark:text-neutral-100" }, "TaskDocument authoring")
+          h("p", { class: "mt-1 text-sm font-medium text-neutral-800 dark:text-neutral-100" }, "TaskDocument 작성")
         ]),
         h("div", { class: "flex items-center gap-2" }, [
-          h(IconButton, { label: "New", iconComponent: StudioPlus, onClick: selectCreate }),
-          h(IconButton, { label: "Refresh", iconComponent: StudioRefresh, onClick: () => void loadInventory(), disabled: busy })
+          h(IconButton, { label: "새로 만들기", iconComponent: StudioPlus, onClick: selectCreate }),
+          h(IconButton, { label: "새로고침", iconComponent: StudioRefresh, onClick: () => void loadInventory(), disabled: busy })
         ])
       ]
     ),
@@ -276,7 +281,7 @@ function App() {
       h("aside", { class: "md:col-span-5" }, [
         h("div", { class: "flex min-h-[42rem] flex-col justify-between gap-12 py-4" }, [
           h("div", { class: "space-y-8" }, [
-            h("p", { class: eyebrow }, mode === "create" ? "New draft" : "Selected"),
+            h("p", { class: eyebrow }, mode === "create" ? "새 초안" : "선택됨"),
             h("div", {}, [
               h(
                 "h1",
@@ -289,21 +294,17 @@ function App() {
               h("p", { class: "mt-6 max-w-[34ch] text-base leading-7 text-neutral-500 dark:text-neutral-400" }, displayTitle)
             ]),
             h("div", { class: "flex flex-wrap gap-2" }, [
-              h(MetaPill, { label: mode === "create" ? "create plan" : "update plan" }),
-              h(MetaPill, { label: plan?.valid ? "valid diff" : "awaiting plan", tone: plan?.valid ? "blue" : "neutral" }),
-              inventory.invalid.length > 0 && h(MetaPill, { label: `${inventory.invalid.length} invalid`, tone: "amber" })
+              h(MetaPill, { label: mode === "create" ? "생성 Plan" : "수정 Plan" }),
+              h(MetaPill, { label: plan?.valid ? "유효한 Diff" : "Plan 대기", tone: plan?.valid ? "blue" : "neutral" }),
+              inventory.invalid.length > 0 && h(MetaPill, { label: `오류 ${inventory.invalid.length}개`, tone: "amber" })
             ]),
-            h("dl", { class: "grid gap-4 text-sm text-neutral-500 dark:text-neutral-400" }, [
-              metric("Target", currentPath),
-              metric("Branch", draft.branch.trim() || displaySlug),
-              metric("Hash", selected?.fingerprint.hash.slice(0, 12) || "new file")
-            ])
+            h("dl", { class: "grid gap-4 text-sm text-neutral-500 dark:text-neutral-400" }, detailMetrics.map((item) => metric(item.label, item.value)))
           ]),
           drawerOpen &&
             h(Bezel, { className: "animate-[studio-spring_700ms_var(--ease-studio)_both]" }, [
               h("div", { class: "flex items-center justify-between gap-4" }, [
                 h("div", {}, [
-                  h("p", { class: eyebrow }, "Disk"),
+                  h("p", { class: eyebrow }, "디스크"),
                   h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, `${inventory.items.length} TaskDocuments`)
                 ]),
                 h("button", {
@@ -323,10 +324,10 @@ function App() {
         h(Bezel, {}, [
           h("div", { class: "flex flex-col gap-6 md:flex-row md:items-center md:justify-between" }, [
             h("div", {}, [
-              h("p", { class: eyebrow }, "Editor"),
-              h("h2", { class: "mt-4 text-3xl font-medium tracking-normal text-neutral-950 dark:text-neutral-50" }, "Plan before apply")
+              h("p", { class: eyebrow }, "편집기"),
+              h("h2", { class: "mt-4 text-3xl font-medium tracking-normal text-neutral-950 dark:text-neutral-50" }, "Apply 전 Plan")
             ]),
-            h("span", { class: statusClass(error, plan) }, error ? "Error" : message)
+            h("span", { class: statusClass(error, plan) }, error ? "오류" : message)
           ]),
           h("div", { class: "grid gap-4 md:grid-cols-2" }, [
             h(Field, {
@@ -392,7 +393,7 @@ function TaskList(props: {
   selectUpdate: (path: string) => void;
 }) {
   if (props.inventory.items.length === 0) {
-    return h("p", { class: "mt-6 text-sm leading-6 text-neutral-500 dark:text-neutral-400" }, "No TaskDocuments are available on disk.");
+    return h("p", { class: "mt-6 text-sm leading-6 text-neutral-500 dark:text-neutral-400" }, "디스크에 TaskDocument가 없습니다.");
   }
   return h("div", { class: "mt-6 grid max-h-[24rem] gap-2 overflow-auto pr-1" }, [
     ...props.inventory.items.map((item) => {
@@ -419,7 +420,7 @@ function TaskList(props: {
     }),
     props.inventory.invalid.length > 0 &&
       h("div", { class: "mt-4 rounded-[1.25rem] bg-amber-400/10 p-4 text-sm text-amber-700 ring-1 ring-amber-500/20 dark:text-amber-300" }, [
-        h("div", { class: "flex items-center gap-2 font-medium" }, [icon(StudioWarning, "h-4 w-4"), "Invalid TaskDocuments"]),
+        h("div", { class: "flex items-center gap-2 font-medium" }, [icon(StudioWarning, "h-4 w-4"), "오류 TaskDocuments"]),
         ...props.inventory.invalid.map((item) =>
           h("p", { key: item.path, class: "mt-2 [overflow-wrap:anywhere] text-xs leading-5" }, `${item.path}: ${item.error}`)
         )
@@ -546,7 +547,7 @@ function MetaPill(props: { label: string; tone?: "blue" | "amber" | "neutral" })
 
 function ValidationList(props: { items: string[] }) {
   return h("div", { class: "rounded-[1.25rem] bg-amber-400/10 p-4 text-sm text-amber-700 ring-1 ring-amber-500/20 dark:text-amber-300" }, [
-    h("div", { class: "flex items-center gap-2 font-medium" }, [icon(StudioWarning, "h-4 w-4"), "Validation"]),
+    h("div", { class: "flex items-center gap-2 font-medium" }, [icon(StudioWarning, "h-4 w-4"), "검증"]),
     h("ul", { class: "mt-2 grid gap-1 border-l border-amber-500/30 pl-3" }, props.items.map((item) => h("li", { key: item }, item)))
   ]);
 }
@@ -558,7 +559,7 @@ function MessagePanel(props: { message: string; tone: "error" }) {
     [
       h("div", { class: "flex items-center gap-3 text-amber-700 dark:text-amber-300" }, [
         h("span", { class: "grid h-10 w-10 place-items-center rounded-full bg-amber-400/10 ring-1 ring-amber-500/20" }, icon(StudioWarning, "h-5 w-5")),
-        h("strong", { class: "font-medium" }, "External change or validation issue")
+        h("strong", { class: "font-medium" }, "외부 변경 또는 검증 문제")
       ]),
       h("pre", { class: "overflow-auto whitespace-pre-wrap font-mono text-sm leading-6 text-neutral-700 dark:text-neutral-300" }, props.message)
     ]
@@ -566,14 +567,14 @@ function MessagePanel(props: { message: string; tone: "error" }) {
 }
 
 function PlanPreview(props: { plan: PlanResponse }) {
-  const lines = (props.plan.diff || "No file changes").split("\n");
+  const lines = (props.plan.diff || "변경 사항 없음").split("\n");
   return h(Bezel, { className: "animate-[studio-spring_700ms_var(--ease-studio)_both]" }, [
     h("div", { class: "flex flex-col gap-4 md:flex-row md:items-center md:justify-between" }, [
       h("div", {}, [
-        h("p", { class: eyebrow }, "Plan preview"),
+        h("p", { class: eyebrow }, "Plan 미리보기"),
         h("div", { class: "mt-4 flex items-center gap-3" }, [
           h("span", { class: "grid h-10 w-10 place-items-center rounded-full bg-studio-accent/10 text-studio-accent ring-1 ring-studio-accent/20" }, icon(props.plan.valid ? StudioCheck : StudioWarning, "h-5 w-5")),
-          h("strong", { class: "text-lg font-medium text-neutral-950 dark:text-neutral-50" }, props.plan.valid ? "Valid plan" : "Invalid plan")
+          h("strong", { class: "text-lg font-medium text-neutral-950 dark:text-neutral-50" }, props.plan.valid ? "유효한 Plan" : "유효하지 않은 Plan")
         ])
       ]),
       h("p", { class: "max-w-[34ch] [overflow-wrap:anywhere] text-sm leading-6 text-neutral-500 dark:text-neutral-400" }, props.plan.path)
@@ -582,7 +583,7 @@ function PlanPreview(props: { plan: PlanResponse }) {
     h("div", { class: "overflow-hidden rounded-[1.5rem] bg-neutral-950 text-neutral-100 ring-1 ring-black/10 dark:bg-black dark:ring-white/10" }, [
       h("div", { class: "flex items-center justify-between px-5 py-3 text-[10px] uppercase tracking-[0.2em] text-neutral-400" }, [
         h("span", {}, "Unified diff"),
-        h("span", {}, props.plan.operation)
+        h("span", {}, operationLabel(props.plan.operation))
       ]),
       h("pre", { class: "max-h-[30rem] overflow-auto px-0 pb-5 font-mono text-sm leading-6" }, lines.map((line, index) => diffLine(line, index)))
     ])
@@ -607,10 +608,73 @@ function diffLine(line: string, index: number) {
 }
 
 function metric(label: string, value: string) {
-  return h("div", {}, [
+  return h("div", { key: label }, [
     h("dt", { class: "text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-400 dark:text-neutral-500" }, label),
     h("dd", { class: "mt-1 [overflow-wrap:anywhere] text-neutral-700 dark:text-neutral-300" }, value)
   ]);
+}
+
+function buildDetailMetrics(
+  currentPath: string,
+  draft: EditorDraft,
+  selected: TaskDocumentItem | null,
+  plan: PlanResponse | null,
+  draftIssues: string[]
+): DetailMetric[] {
+  const origin = selected?.document.origin || documentFromDraft(draft).origin;
+  const metrics: DetailMetric[] = [
+    { label: "대상", value: currentPath },
+    { label: "Branch", value: draft.branch.trim() || draft.slug.trim() || "task" },
+    { label: "Body", value: bodySummary(draft.body) },
+    { label: "검증", value: validationSummary(plan, draftIssues) }
+  ];
+
+  if (origin?.provider || origin?.id) {
+    metrics.push({ label: "Origin provider", value: origin.provider || "없음" });
+    metrics.push({ label: "Origin id", value: origin.id || "없음" });
+    return metrics;
+  }
+
+  metrics.push({ label: "Modified", value: formatKoreanMtime(selected?.fingerprint.mtime_ns) });
+  metrics.push({ label: "Hash", value: selected?.fingerprint.hash.slice(0, 12) || "새 파일" });
+  return metrics;
+}
+
+function bodySummary(body: string) {
+  const chars = body.length;
+  const lines = body.length === 0 ? 0 : body.split(/\r\n|\r|\n/).length;
+  return `${chars.toLocaleString("ko-KR")}자 / ${lines.toLocaleString("ko-KR")}줄`;
+}
+
+function validationSummary(plan: PlanResponse | null, draftIssues: string[]) {
+  if (draftIssues.length > 0) {
+    return `입력 오류 ${draftIssues.length}개`;
+  }
+  if (!plan) {
+    return "Plan 대기";
+  }
+  return plan.valid ? "검증 통과" : `검증 오류 ${plan.validation_errors.length}개`;
+}
+
+function formatKoreanMtime(mtimeNs?: string | null) {
+  if (!mtimeNs) {
+    return "새 파일";
+  }
+  try {
+    const ms = Number(BigInt(mtimeNs) / 1_000_000n);
+    return new Intl.DateTimeFormat("ko-KR", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(new Date(ms));
+  } catch {
+    return "수정 시각 없음";
+  }
+}
+
+function operationLabel(operation: PlanResponse["operation"]) {
+  return operation === "create" ? "생성" : "수정";
 }
 
 function icon(IconComponent: IconComponent, className: string) {
@@ -645,11 +709,11 @@ function documentFromDraft(draft: EditorDraft): TaskDocument {
 function validateDraft(mode: Mode, draft: EditorDraft) {
   const issues = [];
   if (mode === "create" && !/^[a-z0-9-]+$/.test(draft.slug.trim())) {
-    issues.push("Slug must use lowercase letters, numbers, and hyphens.");
+    issues.push("Slug는 소문자, 숫자, 하이픈만 사용할 수 있습니다.");
   }
   const titleLength = draft.title.trim().length;
   if (titleLength === 0 || titleLength > 120) {
-    issues.push("Title must be 1 to 120 characters.");
+    issues.push("Title은 1~120자여야 합니다.");
   }
   return issues;
 }
