@@ -134,11 +134,11 @@ function App() {
 
   useEffect(() => {
     if (mode === "update" && !selected) {
-      setPlanStatus("idle");
+      resetPlanState();
       return;
     }
     if (cleanUpdateDraft || draftIssues.length > 0) {
-      setPlanStatus("idle");
+      resetPlanState();
       return;
     }
 
@@ -182,7 +182,7 @@ function App() {
     return () => observer.disconnect();
   }, [inventory.items.length, plan?.diff, error]);
 
-  async function loadInventory(nextSelectedPath?: string) {
+  async function loadInventory(nextSelectedPath?: string, modeOverride?: Mode) {
     setBusy(true);
     setError("");
     try {
@@ -192,7 +192,8 @@ function App() {
       const resolvedPath = nextSelectedPath ?? selectedPath;
       const nextPath = next.items.some((item) => item.path === resolvedPath) ? resolvedPath : fallbackPath;
       setSelectedPath(nextPath);
-      if (mode === "update") {
+      const loadMode = modeOverride ?? mode;
+      if (loadMode === "update") {
         const nextSelected = next.items.find((item) => item.path === nextPath);
         if (nextSelected) {
           setDraft(draftFromItem(nextSelected));
@@ -291,7 +292,7 @@ function App() {
       setPlanStatus("idle");
       setMode("update");
       setSelectedPath(plan.path);
-      await loadInventory(plan.path);
+      await loadInventory(plan.path, "update");
     } catch (err) {
       const apiErr = err as ApiFailure;
       setError(apiErr.diff ? `${apiErr.message}\n\n${apiErr.diff}` : errorMessage(err));
