@@ -9,7 +9,6 @@ use std::process::Command;
 pub fn run(cwd: &Path) -> Result<()> {
     match resolve_binding(cwd)? {
         Some(binding) => {
-            println!("unset WT_COORDINATOR_AGENT_ID;");
             println!("export WT_AGENT_ID={};", binding.agent_id);
         }
         None => print_unset(),
@@ -120,7 +119,6 @@ fn git_output(cwd: &Path, args: &[&str]) -> Result<Option<String>> {
 
 fn print_unset() {
     println!("unset WT_AGENT_ID;");
-    println!("unset WT_COORDINATOR_AGENT_ID;");
 }
 
 #[cfg(test)]

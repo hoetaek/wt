@@ -1638,7 +1638,7 @@ mod tests {
         assert_eq!(
             command_arg,
             &format!(
-                "unset WT_COORDINATOR_AGENT_ID; export WT_AGENT_ID=agents/issue-1-test; codex --model wt-test-agent-command-repo-issue-1-test --cd {}",
+                "export WT_AGENT_ID=agents/issue-1-test; codex --model wt-test-agent-command-repo-issue-1-test --cd {}",
                 wt.display()
             )
         );
@@ -1739,7 +1739,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             command_arg,
-            "unset WT_COORDINATOR_AGENT_ID; export WT_AGENT_ID=agents/issue-1-test; claude"
+            "export WT_AGENT_ID=agents/issue-1-test; claude"
         );
 
         fs::remove_dir_all(&repo).ok();

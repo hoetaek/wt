@@ -47,13 +47,10 @@ fn inject_agent_identity_env(
         exports.push(format!("WT_TASK_RUN_ID={}", shell_arg(task_run_id)));
     }
     if exports.is_empty() {
-        return format!("unset WT_COORDINATOR_AGENT_ID; {command}");
+        return command;
     }
 
-    format!(
-        "unset WT_COORDINATOR_AGENT_ID; export {}; {command}",
-        exports.join(" ")
-    )
+    format!("export {}; {command}", exports.join(" "))
 }
 
 pub(super) fn bootstrap_agent(
@@ -228,12 +225,12 @@ mod tests {
 
         assert_eq!(
             command,
-            "unset WT_COORDINATOR_AGENT_ID; export WT_AGENT_ID=agents/run-1-add-schema WT_TASK_RUN_ID=run-add-schema; codex"
+            "export WT_AGENT_ID=agents/run-1-add-schema WT_TASK_RUN_ID=run-add-schema; codex"
         );
     }
 
     #[test]
-    fn agent_launch_command_without_identity_still_clears_legacy_coordinator_env() {
+    fn agent_launch_command_without_identity_returns_bare_command() {
         let agent = AgentConfig {
             cli: AgentCli::Codex,
             command: Some("codex".into()),
@@ -242,6 +239,6 @@ mod tests {
 
         let command = agent_launch_command(Some(&agent), &HashMap::new()).unwrap();
 
-        assert_eq!(command, "unset WT_COORDINATOR_AGENT_ID; codex");
+        assert_eq!(command, "codex");
     }
 }

@@ -130,8 +130,7 @@ fn run_process(
     process
         .args(args)
         .current_dir(&ctx.invocation_root)
-        .env("WT_AGENT_ID", agent.as_str())
-        .env_remove("WT_COORDINATOR_AGENT_ID");
+        .env("WT_AGENT_ID", agent.as_str());
 
     let status = process
         .stdin(Stdio::inherit())
@@ -215,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn launched_process_sets_runtime_agent_identity_and_removes_legacy_coordinator_env() {
+    fn launched_process_sets_runtime_agent_identity() {
         let temp = TempDir::new().unwrap();
         let ctx = test_ctx(temp.path(), MockRunner::new());
         let agent = AgentId::parse("agents/worker").unwrap();
@@ -223,11 +222,7 @@ mod tests {
         run_process(
             &ctx,
             "sh",
-            &[
-                "-c".into(),
-                "test \"$WT_AGENT_ID\" = agents/worker && test -z \"${WT_COORDINATOR_AGENT_ID:-}\""
-                    .into(),
-            ],
+            &["-c".into(), "test \"$WT_AGENT_ID\" = agents/worker".into()],
             &agent,
             "test shell",
         )

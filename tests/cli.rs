@@ -191,7 +191,6 @@ fn write_fake_agent(path: &Path, name: &str) -> std::path::PathBuf {
         &agent,
         r#"#!/bin/sh
 printf 'WT_AGENT_ID=%s\n' "${WT_AGENT_ID:-}"
-printf 'WT_COORDINATOR_AGENT_ID=%s\n' "${WT_COORDINATOR_AGENT_ID:-}"
 printf 'ARGS=%s\n' "$*"
 printf 'PWD=%s\n' "$PWD"
 "#,
@@ -931,7 +930,7 @@ fn env_prints_worker_binding_for_matching_task_run() {
         .args(["env"])
         .assert()
         .success()
-        .stdout("unset WT_COORDINATOR_AGENT_ID;\nexport WT_AGENT_ID=agents/feat-env;\n")
+        .stdout("export WT_AGENT_ID=agents/feat-env;\n")
         .stderr("");
 }
 
@@ -961,7 +960,7 @@ fn env_prints_worker_binding_for_matching_task_run_without_extra_route() {
         .args(["env"])
         .assert()
         .success()
-        .stdout("unset WT_COORDINATOR_AGENT_ID;\nexport WT_AGENT_ID=agents/feat-env;\n")
+        .stdout("export WT_AGENT_ID=agents/feat-env;\n")
         .stderr("");
 }
 
@@ -1015,7 +1014,7 @@ fn env_unsets_identity_without_matching_task_run() {
         .args(["env"])
         .assert()
         .success()
-        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stdout("unset WT_AGENT_ID;\n")
         .stderr("");
 }
 
@@ -1028,7 +1027,7 @@ fn env_unsets_identity_outside_git_repo() {
         .args(["env"])
         .assert()
         .success()
-        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stdout("unset WT_AGENT_ID;\n")
         .stderr("");
 }
 
@@ -5251,13 +5250,11 @@ fn codex_wrapper_sets_default_agent_id_from_current_worktree_branch() {
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "codex"])
         .env("PATH", path_with_fake_bin(&fake_bin))
-        .env("WT_COORDINATOR_AGENT_ID", "agents/stale")
         .assert()
         .success()
         .stdout(predicate::str::contains(
             "WT_AGENT_ID=agents/feat-add-schema\n",
-        ))
-        .stdout(predicate::str::contains("WT_COORDINATOR_AGENT_ID=\n"));
+        ));
 }
 
 #[cfg(unix)]
@@ -5277,13 +5274,11 @@ fn codex_wrapper_role_uses_distinct_same_worktree_agent_id() {
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "codex", "@planner"])
         .env("PATH", path_with_fake_bin(&fake_bin))
-        .env("WT_COORDINATOR_AGENT_ID", "agents/stale")
         .assert()
         .success()
         .stdout(predicate::str::contains(
             "WT_AGENT_ID=agents/feat-add-schema-planner\n",
         ))
-        .stdout(predicate::str::contains("WT_COORDINATOR_AGENT_ID=\n"))
         .stdout(predicate::str::contains("WT_AGENT_ID=agents/feat-add-schema\n").not());
 }
 
@@ -5304,13 +5299,11 @@ fn claude_wrapper_role_uses_distinct_same_worktree_agent_id() {
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "claude", "@reviewer"])
         .env("PATH", path_with_fake_bin(&fake_bin))
-        .env("WT_COORDINATOR_AGENT_ID", "agents/stale")
         .assert()
         .success()
         .stdout(predicate::str::contains(
             "WT_AGENT_ID=agents/feat-add-schema-reviewer\n",
-        ))
-        .stdout(predicate::str::contains("WT_COORDINATOR_AGENT_ID=\n"));
+        ));
 }
 
 #[cfg(unix)]
@@ -5333,13 +5326,11 @@ fn as_wrapper_uses_explicit_agent_id_for_arbitrary_command() {
             "there",
         ])
         .env("PATH", path_with_fake_bin(&fake_bin))
-        .env("WT_COORDINATOR_AGENT_ID", "agents/stale")
         .assert()
         .success()
         .stdout(predicate::str::contains(
             "WT_AGENT_ID=agents/manual-reviewer\n",
         ))
-        .stdout(predicate::str::contains("WT_COORDINATOR_AGENT_ID=\n"))
         .stdout(predicate::str::contains("ARGS=hello there\n"));
 }
 
