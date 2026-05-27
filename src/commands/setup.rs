@@ -840,7 +840,7 @@ fn ensure_personal_storage(_ctx: &MachineCtx<'_>, plan: &PersonalStoragePlan) ->
     Ok(changed)
 }
 
-fn ensure_real_directory(path: &Path) -> Result<bool> {
+pub(crate) fn ensure_real_directory(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink() {
@@ -877,7 +877,7 @@ fn ensure_real_directory(path: &Path) -> Result<bool> {
     Ok(true)
 }
 
-fn ensure_personal_storage_symlink(link: &Path, target: &Path) -> Result<bool> {
+pub(crate) fn ensure_personal_storage_symlink(link: &Path, target: &Path) -> Result<bool> {
     if symlink_points_to(link, target)? {
         return Ok(false);
     }

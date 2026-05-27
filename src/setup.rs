@@ -27,6 +27,7 @@ pub(crate) use browser::{launch_browser, prepare_browser_launch};
 pub(crate) use env_template::build_template_vars;
 pub(crate) use site::apply_site_template_vars;
 
+use crate::commands::setup as setup_command;
 use crate::config::{Config, SiteProvider};
 pub(crate) use crate::config::{
     WORKSPACE_COLOR_KIND_BRANCH, WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_PR,
@@ -34,7 +35,7 @@ pub(crate) use crate::config::{
 };
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -124,6 +125,8 @@ pub(crate) fn run_setup_with_workspace_color_kind(
     let options = SetupOptions::default();
     let config = config_override.unwrap_or(&ctx.config);
 
+    ensure_worktree_personal_storage(ctx, wt_path)?;
+
     copy_files(ctx, config, wt_path)?;
     link_files(ctx, config, wt_path)?;
 
@@ -177,6 +180,59 @@ pub(crate) fn run_setup_with_workspace_color_kind(
     Ok(())
 }
 
+fn ensure_worktree_personal_storage(ctx: &Ctx, wt_path: &Path) -> Result<()> {
+    let main_personal_root = ctx.storage_root.personal_root();
+    setup_command::ensure_real_directory(main_personal_root).with_context(|| {
+        format!(
+            "Failed to prepare main repo wt personal storage at {}",
+            main_personal_root.display()
+        )
+    })?;
+
+    if equivalent_paths(wt_path, &ctx.repo_root) {
+        return Ok(());
+    }
+
+    if !wt_path.is_dir() {
+        return missing_worktree_personal_storage_dir(wt_path);
+    }
+
+    let worktree_personal_path = wt_path.join(".wt");
+    setup_command::ensure_personal_storage_symlink(&worktree_personal_path, main_personal_root)
+        .with_context(|| {
+            format!(
+                "Failed to prepare linked worktree wt personal storage: {} -> {}",
+                worktree_personal_path.display(),
+                main_personal_root.display()
+            )
+        })?;
+
+    Ok(())
+}
+
+fn equivalent_paths(left: &Path, right: &Path) -> bool {
+    comparable_path(left) == comparable_path(right)
+}
+
+fn comparable_path(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| crate::storage::normalize_path_lexically(path))
+}
+
+#[cfg(test)]
+fn missing_worktree_personal_storage_dir(_wt_path: &Path) -> Result<()> {
+    // Command tests mock `git worktree add` without its filesystem side effect.
+    // The focused setup tests cover symlink creation once the worktree exists.
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn missing_worktree_personal_storage_dir(wt_path: &Path) -> Result<()> {
+    anyhow::bail!(
+        "Cannot prepare linked worktree personal storage at {}: worktree directory does not exist",
+        wt_path.display()
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +268,52 @@ mod tests {
             Box::new(SharedMockRunner { inner: runner }),
             Box::new(MockUi::new()),
         )
+    }
+
+    fn test_ctx_for_repo(repo: PathBuf) -> Ctx {
+        Ctx::new(
+            repo.clone(),
+            repo,
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        )
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn worktree_setup_creates_personal_storage_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let wt = dir.path().join("repo-feature");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        let ctx = test_ctx_for_repo(repo.clone());
+
+        ensure_worktree_personal_storage(&ctx, &wt).unwrap();
+
+        let main_personal_root = repo.join(".wt");
+        let link = wt.join(".wt");
+        assert!(main_personal_root.is_dir());
+        assert_eq!(fs::read_link(&link).unwrap(), main_personal_root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn worktree_setup_rejects_existing_non_symlink_personal_storage_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let wt = dir.path().join("repo-feature");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(wt.join(".wt")).unwrap();
+        let ctx = test_ctx_for_repo(repo);
+
+        let err = ensure_worktree_personal_storage(&ctx, &wt).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Failed to prepare linked worktree wt personal storage")
+        );
     }
 
     fn agent_config(cli: AgentCli) -> AgentConfig {
