@@ -308,7 +308,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
         let wt = dir.path().join("worktree");
-        let scaffold = repo.join(".git/wt/config/profiles/codex/scaffold");
+        let scaffold = repo.join(".wt/config/profiles/codex/scaffold");
         fs::create_dir_all(scaffold.join(".codex/skills/start")).unwrap();
         fs::create_dir_all(&wt).unwrap();
         fs::write(scaffold.join("AGENTS.override.md"), "instructions\n").unwrap();
@@ -320,7 +320,7 @@ mod tests {
 
         let mut config = Config::default();
         config.worktree.copy_as = vec![CopyAsEntry {
-            from: ".git/wt/config/profiles/codex/scaffold".into(),
+            from: ".wt/config/profiles/codex/scaffold".into(),
             to: ".".into(),
         }];
 

@@ -175,13 +175,13 @@ fn one_line(value: &str) -> String {
 fn print_text(ctx: &Ctx, report: &TaskListReport) {
     if report.tasks.is_empty() && report.invalid_tasks.is_empty() && report.hidden_task_count == 0 {
         ctx.ui
-            .print_plain("No tasks found in <git-common-dir>/wt/execution/tasks");
+            .print_plain("No tasks found in <repo-root>/.wt/execution/tasks");
         return;
     }
 
     if report.tasks.is_empty() && report.invalid_tasks.is_empty() && !report.full_inventory {
         ctx.ui
-            .print_plain("No actionable tasks found in <git-common-dir>/wt/execution/tasks");
+            .print_plain("No actionable tasks found in <repo-root>/.wt/execution/tasks");
     }
 
     for line in render_text_lines(report) {
@@ -390,7 +390,7 @@ mod tests {
     fn collect_lists_valid_tasks_and_reports_invalid_files() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
-        let tasks_dir = dir.path().join(".git/wt/execution/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
         fs::write(
             tasks_dir.join("local.toml"),
@@ -423,7 +423,7 @@ id = "PROJ-123"
         assert_eq!(report.tasks[0].key, "PROJ-123");
         assert_eq!(
             report.tasks[0].path,
-            "<git-common-dir>/wt/execution/tasks/PROJ-123.toml"
+            "<repo-root>/.wt/execution/tasks/PROJ-123.toml"
         );
         assert_eq!(report.tasks[0].publish_state, "published");
         assert_eq!(report.tasks[0].source, "provider-origin");
@@ -438,7 +438,7 @@ id = "PROJ-123"
     fn collect_does_not_apply_selector_visible_cap() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
-        let tasks_dir = dir.path().join(".git/wt/execution/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
 
         for idx in 1..=11 {
@@ -464,7 +464,7 @@ branch = "feature/task-{idx}"
     fn collect_default_uses_task_selectability_and_all_keeps_inventory() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path(), OutputMode::Json);
-        let tasks_dir = dir.path().join(".git/wt/execution/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
 
         for key in [

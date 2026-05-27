@@ -799,7 +799,7 @@ mod tests {
         let ctx = ctx(dir.path());
         let path = dir
             .path()
-            .join(".git/wt/execution/workflows/2026-05-16-001.toml");
+            .join(".wt/execution/workflows/2026-05-16-001.toml");
         let mut workflow = WorkflowMetadata {
             title: Some("Workflow state model migration".into()),
             body: Some("Ship the workflow state model migration".into()),
@@ -1339,7 +1339,7 @@ run = "workflow-add-schema"
         assert_eq!(second.workflow.color.as_deref(), Some("crimson"));
         assert_eq!(
             first.path.parent().unwrap(),
-            dir.path().join(".git/wt/execution/workflows")
+            dir.path().join(".wt/execution/workflows")
         );
         assert!(first.path < second.path);
 
@@ -1377,7 +1377,7 @@ run = "workflow-add-schema"
     fn resolve_supports_latest_absolute_relative_and_shorthand_paths() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let workflows_dir = dir.path().join(".git/wt/execution/workflows");
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
         fs::create_dir_all(&workflows_dir).unwrap();
         let old = workflows_dir.join("2026-05-16-001.toml");
         let new = workflows_dir.join("2026-05-16-002.toml");
@@ -1387,9 +1387,9 @@ run = "workflow-add-schema"
         assert_eq!(resolve(&ctx, "latest").unwrap(), new);
         assert_eq!(resolve(&ctx, old.to_str().unwrap()).unwrap(), old);
         assert_eq!(
-            resolve(&ctx, ".git/wt/execution/workflows/2026-05-16-001.toml").unwrap(),
+            resolve(&ctx, ".wt/execution/workflows/2026-05-16-001.toml").unwrap(),
             dir.path()
-                .join(".git/wt/execution/workflows/2026-05-16-001.toml")
+                .join(".wt/execution/workflows/2026-05-16-001.toml")
         );
         assert_eq!(resolve(&ctx, "2026-05-16-001").unwrap(), old);
     }
@@ -1410,8 +1410,7 @@ run = "workflow-add-schema"
 
         assert!(message.contains("Found legacy Workflow storage"));
         assert!(
-            message
-                .contains("Canonical Workflow storage is <git-common-dir>/wt/execution/workflows")
+            message.contains("Canonical Workflow storage is <repo-root>/.wt/execution/workflows")
         );
         assert!(message.contains("does not silently read legacy Workflow storage"));
     }
@@ -1422,7 +1421,7 @@ run = "workflow-add-schema"
         let ctx = ctx(dir.path());
         let path = dir
             .path()
-            .join(".git/wt/execution/../workflows/2026-05-16-001.toml");
+            .join(".wt/execution/../workflows/2026-05-16-001.toml");
         let mut workflow = WorkflowMetadata::new(
             WorkflowMode::Single,
             "explicit",
@@ -1434,8 +1433,8 @@ run = "workflow-add-schema"
         let report = format!("{error:#}");
 
         assert!(report.contains("Refusing to write legacy Workflow storage"));
-        assert!(report.contains(".git/wt/execution/../workflows/2026-05-16-001.toml"));
-        assert!(!dir.path().join(".git/wt/workflows").exists());
+        assert!(report.contains(".wt/execution/../workflows/2026-05-16-001.toml"));
+        assert!(!dir.path().join(".wt/workflows").exists());
     }
 
     fn valid_workflow_toml(task_key: &str) -> String {

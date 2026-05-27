@@ -1138,22 +1138,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
-        std::fs::create_dir_all(repo.join(".git/wt/execution/tasks")).unwrap();
-        std::fs::create_dir_all(repo.join(".git/wt/execution/task-runs")).unwrap();
-        std::fs::create_dir_all(repo.join(".git/wt/execution/workflows")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/tasks")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/workflows")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/tasks/feature.toml"),
+            repo.join(".wt/execution/tasks/feature.toml"),
             "title = \"Feature\"\nbranch = \"feature\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/task-runs/run-feature.toml"),
+            repo.join(".wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ngroup = \"2026-05-17-001\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/workflows/2026-05-17-001.toml"),
+            repo.join(".wt/execution/workflows/2026-05-17-001.toml"),
             r#"title = "Ship feature workflow"
 body = """Coordinate inspect rendering without letting this deliberately verbose workflow body dominate the inspect dossier output or hide useful metadata. Hidden tail should not render."""
 mode = "stack"
@@ -1178,7 +1178,7 @@ parent = "main"
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/workflows/2026-05-17-099.toml"),
+            repo.join(".wt/execution/workflows/2026-05-17-099.toml"),
             r#"objective = "Old workflow"
 mode = "batch"
 base_mode = "explicit"
@@ -1241,7 +1241,7 @@ run = "run-unrelated"
         assert!(dims.contains("TaskRun route: task_agent=missing, coordinator=missing"));
         assert!(dims.contains("TaskRun report: not reported"));
         assert!(dims.contains("TaskRun review: not reviewed"));
-        assert!(dims.contains("Task: <git-common-dir>/wt/execution/tasks/feature.toml (Feature)"));
+        assert!(dims.contains("Task: <repo-root>/.wt/execution/tasks/feature.toml (Feature)"));
         assert!(dims.contains("Workflow: Ship feature workflow"));
         assert!(dims.contains("id=2026-05-17-001"));
         assert!(dims.contains("body=Coordinate inspect rendering"));
@@ -1255,9 +1255,11 @@ run = "run-unrelated"
         assert!(dims.contains("--run-next"));
         let warnings = ui.warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Cmux: cmux command not found"));
-        assert!(warnings.contains(
-            "Skipping workflow <git-common-dir>/wt/execution/workflows/2026-05-17-099.toml"
-        ));
+        assert!(
+            warnings.contains(
+                "Skipping workflow <repo-root>/.wt/execution/workflows/2026-05-17-099.toml"
+            )
+        );
         assert!(warnings.contains("uses removed `objective`"));
     }
 
@@ -1318,7 +1320,7 @@ run = "run-unrelated"
         };
         let workflow = WorkflowMatch {
             id: "2026-05-17-001".into(),
-            path: repo.join(".git/wt/execution/workflows/2026-05-17-001.toml"),
+            path: repo.join(".wt/execution/workflows/2026-05-17-001.toml"),
             mode: mode.into(),
             title: "Feature workflow".into(),
             body_summary: None,
@@ -1338,31 +1340,31 @@ run = "run-unrelated"
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-workspace");
-        std::fs::create_dir_all(repo.join(".git/wt/execution/tasks")).unwrap();
-        std::fs::create_dir_all(repo.join(".git/wt/execution/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/tasks")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/tasks/add-schema.toml"),
+            repo.join(".wt/execution/tasks/add-schema.toml"),
             "title = \"Add schema\"\nbranch = \"add-schema\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/tasks/publish-issues.toml"),
+            repo.join(".wt/execution/tasks/publish-issues.toml"),
             "title = \"Publish issues\"\nbranch = \"publish-issues\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/task-runs/run-add-schema.toml"),
+            repo.join(".wt/execution/task-runs/run-add-schema.toml"),
             "task = \"add-schema\"\nbranch = \"team-run\"\nstatus = \"running\"\ncreation_order = 1\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/task-runs/run-publish-issues.toml"),
+            repo.join(".wt/execution/task-runs/run-publish-issues.toml"),
             "task = \"publish-issues\"\nbranch = \"team-run\"\nstatus = \"running\"\ncreation_order = 2\ncreated_at = \"2026-05-16T00:00:01Z\"\nupdated_at = \"2026-05-16T00:00:01Z\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/task-runs/run-broken.toml"),
+            repo.join(".wt/execution/task-runs/run-broken.toml"),
             "task = \"broken\"\nbranch = \"unrelated\"\nstatus = \"started\"\ncreated_at = \"2026-05-16T00:00:02Z\"\nupdated_at = \"2026-05-16T00:00:02Z\"\n",
         )
         .unwrap();
@@ -1398,10 +1400,10 @@ run = "run-unrelated"
         assert!(dims.contains("TaskRun: run-add-schema"));
         assert!(dims.contains("TaskRun: run-publish-issues"));
         assert!(
-            dims.contains("Task: <git-common-dir>/wt/execution/tasks/add-schema.toml (Add schema)")
+            dims.contains("Task: <repo-root>/.wt/execution/tasks/add-schema.toml (Add schema)")
         );
         assert!(dims.contains(
-            "Task: <git-common-dir>/wt/execution/tasks/publish-issues.toml (Publish issues)"
+            "Task: <repo-root>/.wt/execution/tasks/publish-issues.toml (Publish issues)"
         ));
         let warnings = ui.warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("TaskRun inventory skipped invalid record"));
@@ -1413,10 +1415,10 @@ run = "run-unrelated"
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
-        std::fs::create_dir_all(repo.join(".git/wt/execution/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/task-runs/run-feature.toml"),
+            repo.join(".wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1484,16 +1486,16 @@ run = "run-unrelated"
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
-        std::fs::create_dir_all(repo.join(".git/wt/execution/tasks")).unwrap();
-        std::fs::create_dir_all(repo.join(".git/wt/execution/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/tasks")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/tasks/feature.toml"),
+            repo.join(".wt/execution/tasks/feature.toml"),
             "title = \"Feature\"\nbranch = \"feature\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/execution/task-runs/run-feature.toml"),
+            repo.join(".wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ngroup = \"stack-1\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1573,7 +1575,7 @@ run = "run-unrelated"
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
-        std::fs::create_dir_all(repo.join(".git/wt/execution/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
 
         let mut runner = MockRunner::new();
@@ -1639,7 +1641,7 @@ run = "run-unrelated"
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
-        std::fs::create_dir_all(repo.join(".git/wt/execution/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
 
         let mut runner = MockRunner::new();

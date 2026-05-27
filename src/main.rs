@@ -147,7 +147,8 @@ fn build_ctx(cli: &Cli, command: &Commands) -> Result<(Ctx, ConfigSource)> {
     let git = GitService::new(&runner, working_dir.as_deref());
     let invocation_root = git.repo_root()?;
     let repo_root = git.canonical_repo_root()?;
-    let storage_root = wt::storage::StorageRoot::resolve(&runner, Some(&invocation_root))?;
+    let storage_root =
+        wt::storage::StorageRoot::resolve(&runner, Some(&invocation_root), &repo_root)?;
     let config_base = working_dir.as_deref().unwrap_or(&current_dir);
 
     let (base_config, config, config_source) = if matches!(command, Commands::Init { .. }) {

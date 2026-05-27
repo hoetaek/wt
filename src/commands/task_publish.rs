@@ -637,7 +637,7 @@ mod tests {
     }
 
     fn write_task(root: &std::path::Path, key: &str, content: &str) {
-        let tasks_dir = root.join(".git/wt/execution/tasks");
+        let tasks_dir = root.join(".wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
     }
@@ -686,7 +686,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("Failed to read task: <git-common-dir>/wt/execution/tasks/missing.toml")
+                .contains("Failed to read task: <repo-root>/.wt/execution/tasks/missing.toml")
         );
     }
 
@@ -732,7 +732,7 @@ mod tests {
         assert_eq!(task_a.origin.as_ref().unwrap().id, "PROJ-123");
         assert_eq!(task_b.branch, "proj-124-task-b");
         assert_eq!(task_b.origin.as_ref().unwrap().id, "PROJ-124");
-        assert!(!dir.path().join(".git/wt/execution/task-runs").exists());
+        assert!(!dir.path().join(".wt/execution/task-runs").exists());
 
         let dims = ui.dims.lock().unwrap().clone();
         assert!(dims.contains(&"  Published: task-a -> linear:PROJ-123 (branch task-a -> proj-123-task-a), task-b -> linear:PROJ-124 (branch task-b -> proj-124-task-b)".to_string()));
@@ -947,9 +947,10 @@ mod tests {
 
         let err = publish_with_fake_provider(&ctx, &tasks, &provider).unwrap_err();
 
-        assert!(err.to_string().contains(
-            "Failed to read task: <git-common-dir>/wt/execution/tasks/missing-task.toml"
-        ));
+        assert!(
+            err.to_string()
+                .contains("Failed to read task: <repo-root>/.wt/execution/tasks/missing-task.toml")
+        );
         assert!(provider.created_requests().is_empty());
         assert!(
             task::read_task_document(&ctx, "task-a")
@@ -1325,7 +1326,7 @@ mod tests {
 
         let err = format!("{err:#}");
         assert!(err.contains("Provider issue linear:PROJ-123 was created"));
-        assert!(err.contains("<git-common-dir>/wt/execution/tasks/add-publish.toml"));
+        assert!(err.contains("<repo-root>/.wt/execution/tasks/add-publish.toml"));
         assert!(err.contains("disk is read-only"));
     }
 

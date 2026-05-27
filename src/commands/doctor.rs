@@ -2165,14 +2165,14 @@ parent = "develop"
                 .message
                 .as_deref()
                 .unwrap()
-                .contains(".git/wt/agent.state")
+                .contains(".wt/agent.state")
         );
         assert!(
             observations
                 .message
                 .as_deref()
                 .unwrap()
-                .contains(".git/wt/runtime/agents")
+                .contains(".wt/runtime/agents")
         );
 
         let sessions = checks
@@ -2185,14 +2185,14 @@ parent = "develop"
                 .message
                 .as_deref()
                 .unwrap()
-                .contains(".git/wt/sessions")
+                .contains(".wt/sessions")
         );
         assert!(
             sessions
                 .message
                 .as_deref()
                 .unwrap()
-                .contains(".git/wt/runtime/agents")
+                .contains(".wt/runtime/agents")
         );
     }
 
@@ -2719,7 +2719,7 @@ parent = "develop"
     }
 
     fn write_profile_toml(repo_root: &Path, name: &str, body: &str) {
-        let profile_dir = repo_root.join(".git/wt/config/profiles").join(name);
+        let profile_dir = repo_root.join(".wt/config/profiles").join(name);
         fs::create_dir_all(&profile_dir).unwrap();
         fs::write(profile_dir.join("profile.toml"), body).unwrap();
     }

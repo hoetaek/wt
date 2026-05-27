@@ -18,7 +18,11 @@ pub struct LegacyLocalStorage {
 }
 
 impl StorageRoot {
-    pub fn resolve(runner: &dyn CommandRunner, cwd: Option<&Path>) -> Result<Self> {
+    pub fn resolve(
+        runner: &dyn CommandRunner,
+        cwd: Option<&Path>,
+        repo_root: impl AsRef<Path>,
+    ) -> Result<Self> {
         let out = runner
             .run("git", GIT_COMMON_DIR_ARGS, cwd)
             .context("Failed to run git rev-parse --git-common-dir")?;
@@ -34,12 +38,24 @@ impl StorageRoot {
             bail!("Failed to resolve wt personal storage: git common dir was empty");
         }
 
-        Ok(Self::from_git_common_dir(git_common_dir))
+        Ok(Self::from_git_common_dir_and_repo_root(
+            git_common_dir,
+            repo_root,
+        ))
     }
 
     pub fn from_git_common_dir(git_common_dir: impl Into<PathBuf>) -> Self {
         let git_common_dir = git_common_dir.into();
-        let personal_root = git_common_dir.join("wt");
+        let repo_root = repo_root_from_git_common_dir(&git_common_dir);
+        Self::from_git_common_dir_and_repo_root(git_common_dir, repo_root)
+    }
+
+    pub fn from_git_common_dir_and_repo_root(
+        git_common_dir: impl Into<PathBuf>,
+        repo_root: impl AsRef<Path>,
+    ) -> Self {
+        let git_common_dir = git_common_dir.into();
+        let personal_root = repo_root.as_ref().join(".wt");
         Self {
             git_common_dir,
             personal_root,
@@ -291,17 +307,24 @@ impl StorageRoot {
     }
 
     pub fn display_path(&self, path: &Path) -> String {
-        if let Ok(relative) = path.strip_prefix(&self.git_common_dir) {
+        if let Ok(relative) = path.strip_prefix(&self.personal_root) {
             let relative = relative.to_string_lossy();
             if relative.is_empty() {
-                "<git-common-dir>".into()
+                "<repo-root>/.wt".into()
             } else {
-                format!("<git-common-dir>/{relative}")
+                format!("<repo-root>/.wt/{relative}")
             }
         } else {
             path.display().to_string()
         }
     }
+}
+
+fn repo_root_from_git_common_dir(git_common_dir: &Path) -> PathBuf {
+    git_common_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| git_common_dir.to_path_buf())
 }
 
 impl LegacyLocalStorage {
@@ -434,77 +457,72 @@ mod tests {
         let storage = StorageRoot::from_git_common_dir(&git_common_dir);
 
         assert_eq!(storage.git_common_dir(), git_common_dir.as_path());
-        assert_eq!(storage.personal_root(), Path::new("/repo/.git/wt"));
+        assert_eq!(storage.personal_root(), Path::new("/repo/.wt"));
         assert_eq!(
             storage.config_toml(),
-            PathBuf::from("/repo/.git/wt/config/local.toml")
+            PathBuf::from("/repo/.wt/config/local.toml")
         );
         assert_eq!(
             storage.profiles_dir(),
-            PathBuf::from("/repo/.git/wt/config/profiles")
+            PathBuf::from("/repo/.wt/config/profiles")
         );
         assert_eq!(
             storage.ideas_dir(),
-            PathBuf::from("/repo/.git/wt/planning/ideas")
+            PathBuf::from("/repo/.wt/planning/ideas")
         );
         assert_eq!(
             storage.specs_dir(),
-            PathBuf::from("/repo/.git/wt/planning/specs")
+            PathBuf::from("/repo/.wt/planning/specs")
         );
         assert_eq!(
             storage.retrospectives_dir(),
-            PathBuf::from("/repo/.git/wt/planning/retrospectives")
+            PathBuf::from("/repo/.wt/planning/retrospectives")
         );
         assert_eq!(
             storage.tasks_dir(),
-            PathBuf::from("/repo/.git/wt/execution/tasks")
+            PathBuf::from("/repo/.wt/execution/tasks")
         );
         assert_eq!(
             storage.workflows_dir(),
-            PathBuf::from("/repo/.git/wt/execution/workflows")
+            PathBuf::from("/repo/.wt/execution/workflows")
         );
         assert_eq!(
             storage.task_runs_dir(),
-            PathBuf::from("/repo/.git/wt/execution/task-runs")
+            PathBuf::from("/repo/.wt/execution/task-runs")
         );
         assert_eq!(
             storage.archive_dir(),
-            PathBuf::from("/repo/.git/wt/execution/archive")
+            PathBuf::from("/repo/.wt/execution/archive")
         );
-        assert_eq!(
-            storage.runtime_dir(),
-            PathBuf::from("/repo/.git/wt/runtime")
-        );
+        assert_eq!(storage.runtime_dir(), PathBuf::from("/repo/.wt/runtime"));
         assert_eq!(
             storage.runtime_agents_dir(),
-            PathBuf::from("/repo/.git/wt/runtime/agents")
+            PathBuf::from("/repo/.wt/runtime/agents")
         );
         assert_eq!(
             storage.legacy_agent_state_dir(),
-            PathBuf::from("/repo/.git/wt/agent.state")
+            PathBuf::from("/repo/.wt/agent.state")
         );
         assert_eq!(
             storage.legacy_sessions_dir(),
-            PathBuf::from("/repo/.git/wt/sessions")
+            PathBuf::from("/repo/.wt/sessions")
         );
         let agent = AgentId::parse("agents/codex").unwrap();
         assert_eq!(
             storage.runtime_agent_dir(&agent),
-            PathBuf::from("/repo/.git/wt/runtime/agents/codex")
+            PathBuf::from("/repo/.wt/runtime/agents/codex")
         );
         assert_eq!(
             storage.runtime_agent_observations_dir(&agent),
-            PathBuf::from("/repo/.git/wt/runtime/agents/codex/observations")
+            PathBuf::from("/repo/.wt/runtime/agents/codex/observations")
         );
         assert_eq!(
             storage.wait_observations_jsonl(&agent),
-            PathBuf::from(
-                "/repo/.git/wt/runtime/agents/codex/observations/wait-observations.jsonl"
-            )
+            PathBuf::from("/repo/.wt/runtime/agents/codex/observations/wait-observations.jsonl")
         );
         assert_eq!(
             storage.runtime_agent_anchors_dir(&agent),
-            PathBuf::from("/repo/.git/wt/runtime/agents/codex/anchors")
+            PathBuf::from("/repo/.wt/runtime/agents/codex/anchors")
         );
     }
 
@@ -522,9 +540,9 @@ mod tests {
         );
 
         let runner = CleanGitRunner;
-        let main_storage = StorageRoot::resolve(&runner, Some(&repo)).unwrap();
-        let linked_storage = StorageRoot::resolve(&runner, Some(&linked)).unwrap();
-        let expected_personal_root = fs::canonicalize(repo.join(".git")).unwrap().join("wt");
+        let main_storage = StorageRoot::resolve(&runner, Some(&repo), &repo).unwrap();
+        let linked_storage = StorageRoot::resolve(&runner, Some(&linked), &repo).unwrap();
+        let expected_personal_root = repo.join(".wt");
 
         assert_eq!(
             main_storage.personal_root(),
@@ -538,6 +556,24 @@ mod tests {
     }
 
     #[test]
+    fn display_path_uses_repo_root_wt_placeholder() {
+        let storage = StorageRoot::from_git_common_dir("/repo/.git");
+
+        assert_eq!(
+            storage.display_path(Path::new("/repo/.wt/execution/tasks/demo.toml")),
+            "<repo-root>/.wt/execution/tasks/demo.toml"
+        );
+        assert_eq!(
+            storage.display_path(Path::new("/repo/.wt")),
+            "<repo-root>/.wt"
+        );
+        assert_eq!(
+            storage.display_path(Path::new("/repo/.git/wt/execution/tasks/demo.toml")),
+            "/repo/.git/wt/execution/tasks/demo.toml"
+        );
+    }
+
+    #[test]
     fn detects_legacy_local_without_fallback() {
         let temp = TempDir::new().unwrap();
         let repo = temp.path().join("repo");
@@ -548,7 +584,7 @@ mod tests {
         let legacy = storage.detect_legacy_local(&repo).unwrap();
 
         assert_eq!(legacy.path(), repo.join(".local").as_path());
-        assert_eq!(legacy.canonical_root(), repo.join(".git/wt").as_path());
+        assert_eq!(legacy.canonical_root(), repo.join(".wt").as_path());
         assert!(
             legacy
                 .error_message()
@@ -577,8 +613,8 @@ mod tests {
             PathBuf::from("a/c")
         );
         assert_eq!(
-            normalize_path_lexically(Path::new("/repo/.git/wt/execution/../workflows/new.toml")),
-            PathBuf::from("/repo/.git/wt/workflows/new.toml")
+            normalize_path_lexically(Path::new("/repo/.wt/execution/../workflows/new.toml")),
+            PathBuf::from("/repo/.wt/workflows/new.toml")
         );
     }
 
@@ -586,15 +622,15 @@ mod tests {
     fn detects_legacy_flat_personal_roots_without_fallback() {
         let temp = TempDir::new().unwrap();
         let repo = temp.path().join("repo");
-        fs::create_dir_all(repo.join(".git/wt/tasks")).unwrap();
+        fs::create_dir_all(repo.join(".wt/tasks")).unwrap();
         let storage = StorageRoot::from_git_common_dir(repo.join(".git"));
 
         let legacy = storage.detect_legacy_tasks(&repo).unwrap();
 
-        assert_eq!(legacy.path(), repo.join(".git/wt/tasks").as_path());
+        assert_eq!(legacy.path(), repo.join(".wt/tasks").as_path());
         assert_eq!(
             legacy.canonical_root(),
-            repo.join(".git/wt/execution/tasks").as_path()
+            repo.join(".wt/execution/tasks").as_path()
         );
         assert!(
             legacy
@@ -607,15 +643,15 @@ mod tests {
     fn detects_legacy_message_storage_without_fallback() {
         let temp = TempDir::new().unwrap();
         let repo = temp.path().join("repo");
-        fs::create_dir_all(repo.join(".git/wt/messages/agents/codex/inbox/new")).unwrap();
+        fs::create_dir_all(repo.join(".wt/messages/agents/codex/inbox/new")).unwrap();
         let storage = StorageRoot::from_git_common_dir(repo.join(".git"));
 
         let legacy = storage.detect_legacy_messages().unwrap();
 
-        assert_eq!(legacy.path(), repo.join(".git/wt/messages").as_path());
+        assert_eq!(legacy.path(), repo.join(".wt/messages").as_path());
         assert_eq!(
             legacy.canonical_root(),
-            repo.join(".git/wt/runtime/agents").as_path()
+            repo.join(".wt/runtime/agents").as_path()
         );
         assert!(
             legacy
@@ -628,18 +664,15 @@ mod tests {
     fn detects_legacy_runtime_actor_roots_without_fallback() {
         let temp = TempDir::new().unwrap();
         let repo = temp.path().join("repo");
-        fs::create_dir_all(repo.join(".git/wt/agent.state")).unwrap();
-        fs::create_dir_all(repo.join(".git/wt/sessions")).unwrap();
+        fs::create_dir_all(repo.join(".wt/agent.state")).unwrap();
+        fs::create_dir_all(repo.join(".wt/sessions")).unwrap();
         let storage = StorageRoot::from_git_common_dir(repo.join(".git"));
 
         let agent_state = storage.detect_legacy_agent_state().unwrap();
-        assert_eq!(
-            agent_state.path(),
-            repo.join(".git/wt/agent.state").as_path()
-        );
+        assert_eq!(agent_state.path(), repo.join(".wt/agent.state").as_path());
         assert_eq!(
             agent_state.canonical_root(),
-            repo.join(".git/wt/runtime/agents").as_path()
+            repo.join(".wt/runtime/agents").as_path()
         );
         assert!(
             agent_state
@@ -648,10 +681,10 @@ mod tests {
         );
 
         let sessions = storage.detect_legacy_sessions().unwrap();
-        assert_eq!(sessions.path(), repo.join(".git/wt/sessions").as_path());
+        assert_eq!(sessions.path(), repo.join(".wt/sessions").as_path());
         assert_eq!(
             sessions.canonical_root(),
-            repo.join(".git/wt/runtime/agents").as_path()
+            repo.join(".wt/runtime/agents").as_path()
         );
         assert!(
             sessions
@@ -677,7 +710,7 @@ mod tests {
             }
         }
 
-        let err = StorageRoot::resolve(&FailingRunner, None).unwrap_err();
+        let err = StorageRoot::resolve(&FailingRunner, None, Path::new("/repo")).unwrap_err();
 
         assert!(err.to_string().contains("git rev-parse --git-common-dir"));
         assert!(err.to_string().contains("fatal: not a git repository"));
