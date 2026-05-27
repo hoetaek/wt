@@ -94,6 +94,24 @@ textarea {
   }
 }
 
+@keyframes studio-chip-pulse {
+  0%,
+  100% {
+    opacity: 0.78;
+    transform: scale(0.985);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.015);
+  }
+}
+
+.studio-status-pulse {
+  animation: studio-chip-pulse 1600ms var(--ease-studio) infinite;
+  transform-origin: center;
+}
+
 @media (prefers-color-scheme: dark) {
   html {
     background: #0a0a0a;
