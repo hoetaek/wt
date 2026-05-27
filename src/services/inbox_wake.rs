@@ -389,10 +389,10 @@ mod tests {
                         "--workspace",
                         "workspace:1",
                         "--",
-                        "escape",
+                        "enter",
                     ]
         }));
-        assert!(calls.iter().any(|(cmd, args, _)| {
+        assert!(!calls.iter().any(|(cmd, args, _)| {
             cmd == "cmux"
                 && args.iter().map(String::as_str).collect::<Vec<_>>()
                     == vec![
@@ -402,7 +402,7 @@ mod tests {
                         "--workspace",
                         "workspace:1",
                         "--",
-                        "enter",
+                        "escape",
                     ]
         }));
     }

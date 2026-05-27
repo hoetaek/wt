@@ -1,6 +1,7 @@
 use crate::config::{AgentCli, AgentConfig, SubmitMode};
 use crate::context::Ctx;
 use crate::services::cmux::CmuxService;
+use crate::services::cmux_push::{CODEX_IN_PROMPT_NEWLINE_KEY, codex_prompt_lines};
 use crate::template;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
@@ -172,14 +173,15 @@ fn send_agent_prompt(
     agent: &AgentConfig,
     rendered: String,
 ) -> Result<()> {
-    if should_submit_with_enter_key(agent) {
+    if should_submit_codex_with_enter_key(agent) {
+        let prompt = rendered.trim_end_matches(['\n', '\r']);
+        return send_codex_prompt(cmux, surface, ws_handle, prompt);
+    }
+
+    if should_submit_non_codex_with_enter_key(agent) {
         let prompt = rendered.trim_end_matches(['\n', '\r']).to_string();
         cmux.send(surface, ws_handle, &prompt)?;
         std::thread::sleep(std::time::Duration::from_millis(500));
-        if should_escape_before_enter_key(agent) {
-            cmux.send_key(surface, ws_handle, "escape")?;
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
         cmux.send_key(surface, ws_handle, "enter")?;
         return Ok(());
     }
@@ -188,20 +190,37 @@ fn send_agent_prompt(
     cmux.send(surface, ws_handle, &prompt)
 }
 
-fn should_submit_with_enter_key(agent: &AgentConfig) -> bool {
+fn send_codex_prompt(
+    cmux: &CmuxService,
+    surface: &str,
+    ws_handle: &str,
+    prompt: &str,
+) -> Result<()> {
+    let lines = codex_prompt_lines(prompt);
+    for (i, line) in lines.iter().enumerate() {
+        cmux.send(surface, ws_handle, line)?;
+        if i + 1 < lines.len() {
+            cmux.send_key(surface, ws_handle, CODEX_IN_PROMPT_NEWLINE_KEY)?;
+        }
+    }
+    cmux.send_key(surface, ws_handle, "enter")
+}
+
+fn should_submit_non_codex_with_enter_key(agent: &AgentConfig) -> bool {
     matches!(
         (&agent.submit, &agent.cli),
-        (
-            SubmitMode::Auto,
-            AgentCli::Codex | AgentCli::Claude | AgentCli::Gemini,
-        ) | (SubmitMode::CarriageReturn, _)
+        (SubmitMode::Auto, AgentCli::Claude | AgentCli::Gemini)
+            | (
+                SubmitMode::CarriageReturn,
+                AgentCli::Claude | AgentCli::Gemini | AgentCli::None,
+            )
     )
 }
 
-fn should_escape_before_enter_key(agent: &AgentConfig) -> bool {
+fn should_submit_codex_with_enter_key(agent: &AgentConfig) -> bool {
     matches!(
         (&agent.submit, &agent.cli),
-        (SubmitMode::Auto, AgentCli::Codex)
+        (SubmitMode::Auto, AgentCli::Codex) | (SubmitMode::CarriageReturn, AgentCli::Codex)
     )
 }
 

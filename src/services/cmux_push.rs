@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 pub const DEFAULT_PAYLOAD_CAP_BYTES: usize = 1024;
+pub(crate) const CODEX_IN_PROMPT_NEWLINE_KEY: &str = "shift-enter";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushKind {
@@ -127,16 +128,7 @@ fn push_to_surface_in_workspace_unchecked(
     text: &str,
 ) -> Result<()> {
     match kind {
-        PushKind::Codex => {
-            let send_args = cmux_send_args("send", surface_id, workspace, text);
-            run_cmux(runner, &send_args, "send")?;
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            let escape_args = cmux_send_args("send-key", surface_id, workspace, "escape");
-            run_cmux(runner, &escape_args, "send-key")?;
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
-            run_cmux(runner, &enter_args, "send-key")
-        }
+        PushKind::Codex => push_codex_prompt(runner, surface_id, workspace, text),
         PushKind::Claude => {
             let text = format!("{text}\\n");
             let send_args = cmux_send_args("send", surface_id, workspace, &text);
@@ -148,6 +140,60 @@ fn push_to_surface_in_workspace_unchecked(
             )
         }
     }
+}
+
+fn push_codex_prompt(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: Option<&str>,
+    text: &str,
+) -> Result<()> {
+    let lines = codex_prompt_lines(text);
+    for (i, line) in lines.iter().enumerate() {
+        let send_args = cmux_send_args("send", surface_id, workspace, line);
+        run_cmux(runner, &send_args, "send")?;
+        if i + 1 < lines.len() {
+            let newline_args = cmux_send_args(
+                "send-key",
+                surface_id,
+                workspace,
+                CODEX_IN_PROMPT_NEWLINE_KEY,
+            );
+            run_cmux(runner, &newline_args, "send-key")?;
+        }
+    }
+
+    let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
+    run_cmux(runner, &enter_args, "send-key")
+}
+
+pub(crate) fn codex_prompt_lines(text: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\n' => {
+                lines.push(&text[start..i]);
+                i += 1;
+                start = i;
+            }
+            b'\r' => {
+                lines.push(&text[start..i]);
+                i += 1;
+                if i < bytes.len() && bytes[i] == b'\n' {
+                    i += 1;
+                }
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+
+    lines.push(&text[start..]);
+    lines
 }
 
 fn run_cmux(runner: &dyn CommandRunner, args: &[&str], verb: &str) -> Result<()> {
@@ -295,26 +341,67 @@ mod tests {
     use crate::context::mock::MockRunner;
 
     #[test]
-    fn codex_push_sends_text_escape_then_enter() {
+    fn codex_push_sends_single_line_then_enter() {
         let mut runner = MockRunner::new();
-        runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
 
         push_to_surface(&runner, "surface:4", PushKind::Codex, "hello").unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 3);
+        assert_eq!(calls.len(), 2);
         assert_eq!(
             calls[0].1,
             vec!["send", "--surface", "surface:4", "--", "hello"]
         );
         assert_eq!(
             calls[1].1,
-            vec!["send-key", "--surface", "surface:4", "--", "escape"]
+            vec!["send-key", "--surface", "surface:4", "--", "enter"]
+        );
+    }
+
+    #[test]
+    fn codex_push_sends_multiline_text_with_shift_enter_between_lines() {
+        let mut runner = MockRunner::new();
+        for _ in 0..6 {
+            runner.add_response("", true);
+        }
+
+        push_to_surface(&runner, "surface:4", PushKind::Codex, "hello\n\nworld").unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 6);
+        assert_eq!(
+            calls[0].1,
+            vec!["send", "--surface", "surface:4", "--", "hello"]
         );
         assert_eq!(
-            calls[2].1,
+            calls[1].1,
+            vec![
+                "send-key",
+                "--surface",
+                "surface:4",
+                "--",
+                CODEX_IN_PROMPT_NEWLINE_KEY
+            ]
+        );
+        assert_eq!(calls[2].1, vec!["send", "--surface", "surface:4", "--", ""]);
+        assert_eq!(
+            calls[3].1,
+            vec![
+                "send-key",
+                "--surface",
+                "surface:4",
+                "--",
+                CODEX_IN_PROMPT_NEWLINE_KEY
+            ]
+        );
+        assert_eq!(
+            calls[4].1,
+            vec!["send", "--surface", "surface:4", "--", "world"]
+        );
+        assert_eq!(
+            calls[5].1,
             vec!["send-key", "--surface", "surface:4", "--", "enter"]
         );
     }
@@ -322,7 +409,6 @@ mod tests {
     #[test]
     fn codex_push_in_workspace_passes_workspace_to_send_commands() {
         let mut runner = MockRunner::new();
-        runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
 
@@ -336,6 +422,7 @@ mod tests {
             .unwrap();
 
         let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
         assert_eq!(
             calls[0].1,
             vec![
@@ -357,21 +444,16 @@ mod tests {
                 "--workspace",
                 "workspace:2",
                 "--",
-                "escape"
-            ]
-        );
-        assert_eq!(
-            calls[2].1,
-            vec![
-                "send-key",
-                "--surface",
-                "surface:4",
-                "--workspace",
-                "workspace:2",
-                "--",
                 "enter"
             ]
         );
+    }
+
+    #[test]
+    fn codex_prompt_lines_splits_lf_crlf_and_empty_payloads() {
+        assert_eq!(codex_prompt_lines(""), vec![""]);
+        assert_eq!(codex_prompt_lines("a\nb\n"), vec!["a", "b", ""]);
+        assert_eq!(codex_prompt_lines("a\r\nb\rc"), vec!["a", "b", "c"]);
     }
 
     #[test]
