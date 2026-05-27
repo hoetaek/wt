@@ -83,6 +83,16 @@ impl<'a> CmuxPushService<'a> {
         validate_payload(text, self.payload_cap)?;
         push_to_surface_in_workspace_unchecked(self.runner, surface_id, workspace, kind, text)
     }
+
+    pub fn submit_to_surface_in_workspace(
+        &self,
+        surface_id: &str,
+        workspace: Option<&str>,
+        kind: PushKind,
+        text: &str,
+    ) -> Result<()> {
+        push_to_surface_in_workspace_unchecked(self.runner, surface_id, workspace, kind, text)
+    }
 }
 
 pub fn detect_target_kind(runner: &dyn CommandRunner, surface_id: &str) -> Result<PushKind> {

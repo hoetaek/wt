@@ -1,5 +1,7 @@
+use crate::agents::AgentKind;
 use crate::context::Ctx;
 use crate::services::cmux::CmuxService;
+use crate::services::cmux_push::{CmuxPushService, PushKind};
 use crate::services::runtime_binding::{RuntimeBinding, RuntimeBindingResolver};
 use crate::services::work::CmuxContact;
 use anyhow::{Result, bail};
@@ -15,11 +17,23 @@ pub fn run(ctx: &Ctx, target: &str, message: &[String], no_enter: bool) -> Resul
     let binding = resolver.revalidate(&binding)?;
     let contact = &binding.contact;
 
-    let cmux = CmuxService::new(ctx.runner.as_ref());
-    cmux.send(&contact.surface, &contact.workspace, &text)?;
     if !no_enter {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        cmux.send_key(&contact.surface, &contact.workspace, "enter")?;
+        if let Some(kind) = push_kind(contact.state.agent_kind) {
+            CmuxPushService::new(ctx.runner.as_ref()).submit_to_surface_in_workspace(
+                &contact.surface,
+                Some(&contact.workspace),
+                kind,
+                &text,
+            )?;
+        } else {
+            let cmux = CmuxService::new(ctx.runner.as_ref());
+            cmux.send(&contact.surface, &contact.workspace, &text)?;
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            cmux.send_key(&contact.surface, &contact.workspace, "enter")?;
+        }
+    } else {
+        let cmux = CmuxService::new(ctx.runner.as_ref());
+        cmux.send(&contact.surface, &contact.workspace, &text)?;
     }
 
     ctx.ui.print_step(&format!(
@@ -27,6 +41,14 @@ pub fn run(ctx: &Ctx, target: &str, message: &[String], no_enter: bool) -> Resul
         contact.surface, contact.workspace
     ));
     Ok(())
+}
+
+fn push_kind(agent_kind: AgentKind) -> Option<PushKind> {
+    match agent_kind {
+        AgentKind::ClaudeCode => Some(PushKind::Claude),
+        AgentKind::Codex => Some(PushKind::Codex),
+        AgentKind::Shell | AgentKind::Unknown => None,
+    }
 }
 
 fn resolve_runtime_binding(
@@ -150,8 +172,21 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::context::Ctx;
-    use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::mock::{CommandCall, MockRunner, MockUi};
+    use crate::context::{CmdOutput, CommandRunner};
+    use anyhow::Result;
+    use std::path::Path;
     use std::sync::Arc;
+
+    impl CommandRunner for Arc<MockRunner> {
+        fn run(&self, cmd: &str, args: &[&str], cwd: Option<&Path>) -> Result<CmdOutput> {
+            self.as_ref().run(cmd, args, cwd)
+        }
+
+        fn has_command(&self, cmd: &str) -> bool {
+            self.as_ref().has_command(cmd)
+        }
+    }
 
     #[test]
     fn send_resolves_target_and_submits_message_to_cmux_surface() {
@@ -192,14 +227,14 @@ mod tests {
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
         add_revalidated_live_contact(&mut runner, &worktree, "surface:4", "uuid-surface-4");
-        runner.add_response("", true);
-        runner.add_response("", true);
+        add_paste_submit_responses(&mut runner);
+        let runner = Arc::new(runner);
         let ui = Arc::new(MockUi::new());
         let ctx = Ctx::new(
             repo,
             worktree,
             Config::default(),
-            Box::new(runner),
+            Box::new(runner.clone()),
             Box::new(ui.clone()),
         );
 
@@ -207,6 +242,78 @@ mod tests {
 
         let steps = ui.steps.lock().unwrap().join("\n");
         assert!(steps.contains("Sent message to surface:4 on workspace:1"));
+        let calls = runner.calls.lock().unwrap();
+        assert_paste_submit(
+            &calls,
+            "wt-codex-surface-4-",
+            "surface:4",
+            "workspace:1",
+            "hello agent",
+        );
+    }
+
+    #[test]
+    fn send_to_claude_uses_paste_buffer_submit_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("sample");
+        let worktree = dir.path().join("sample-feature");
+        std::fs::create_dir_all(&worktree).unwrap();
+
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        runner.add_response(
+            &format!(
+                "worktree {}\nHEAD abc\nbranch refs/heads/master\n\nworktree {}\nHEAD def\nbranch refs/heads/feature\n\n",
+                repo.display(),
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response(
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
+        runner.add_response(
+            &format!(
+                r#"{{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{{"id":"uuid-workspace-1","ref":"workspace:1","title":"feature","current_directory":"{}"}}]}}"#,
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("pane:3", true);
+        runner.add_response("surface:4", true);
+        runner.add_response(
+            r#"{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"uuid-surface-4","selected_surface_ref":"surface:4"}]}"#,
+            true,
+        );
+        add_no_surface_processes(&mut runner);
+        runner.add_response("⏵⏵ accept edits on", true);
+        runner.add_response("claude_code=Idle", true);
+        runner.add_response("", true);
+        add_revalidated_claude_contact(&mut runner, &worktree, "surface:4", "uuid-surface-4");
+        add_paste_submit_responses(&mut runner);
+        let runner = Arc::new(runner);
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            repo,
+            worktree,
+            Config::default(),
+            Box::new(runner.clone()),
+            Box::new(ui.clone()),
+        );
+
+        run(&ctx, "feature", &["hello".into(), "agent".into()], false).unwrap();
+
+        let steps = ui.steps.lock().unwrap().join("\n");
+        assert!(steps.contains("Sent message to surface:4 on workspace:1"));
+        let calls = runner.calls.lock().unwrap();
+        assert_paste_submit(
+            &calls,
+            "wt-claude-surface-4-",
+            "surface:4",
+            "workspace:1",
+            "hello agent",
+        );
     }
 
     #[test]
@@ -255,14 +362,14 @@ mod tests {
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
         add_revalidated_live_contact(&mut runner, &worktree, "surface:4", "uuid-surface-4");
-        runner.add_response("", true);
-        runner.add_response("", true);
+        add_paste_submit_responses(&mut runner);
+        let runner = Arc::new(runner);
         let ui = Arc::new(MockUi::new());
         let ctx = Ctx::new(
             repo,
             worktree,
             Config::default(),
-            Box::new(runner),
+            Box::new(runner.clone()),
             Box::new(ui.clone()),
         );
 
@@ -276,6 +383,14 @@ mod tests {
 
         let steps = ui.steps.lock().unwrap().join("\n");
         assert!(steps.contains("Sent message to surface:4 on workspace:1"));
+        let calls = runner.calls.lock().unwrap();
+        assert_paste_submit(
+            &calls,
+            "wt-codex-surface-4-",
+            "surface:4",
+            "workspace:1",
+            "hello agent",
+        );
     }
 
     #[test]
@@ -451,8 +566,7 @@ mod tests {
         runner.add_response("", true);
         runner.add_response("zsh %", true);
         add_revalidated_live_contact(&mut runner, &worktree, "surface:5", "uuid-surface-5");
-        runner.add_response("", true);
-        runner.add_response("", true);
+        add_paste_submit_responses(&mut runner);
         let ui = Arc::new(MockUi::new());
         let ctx = Ctx::new(
             repo,
@@ -510,8 +624,7 @@ mod tests {
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
         add_revalidated_live_contact(&mut runner, &worktree, "surface:5", "uuid-surface-5");
-        runner.add_response("", true);
-        runner.add_response("", true);
+        add_paste_submit_responses(&mut runner);
         let ui = Arc::new(MockUi::new());
         let ctx = Ctx::new(
             repo,
@@ -569,8 +682,7 @@ mod tests {
         runner.add_response("codex=Idle", true);
         runner.add_response("", true);
         add_revalidated_live_contact(&mut runner, &worktree, "surface:5", "uuid-surface-5");
-        runner.add_response("", true);
-        runner.add_response("", true);
+        add_paste_submit_responses(&mut runner);
         let ui = Arc::new(MockUi::new());
         let ctx = Ctx::new(
             repo,
@@ -688,8 +800,7 @@ mod tests {
         runner.add_response("", true);
         runner.add_response("Codex Ready", true);
         add_revalidated_live_contact(&mut runner, &worktree, "surface:5", "uuid-surface-5");
-        runner.add_response("", true);
-        runner.add_response("", true);
+        add_paste_submit_responses(&mut runner);
         let mut ui = MockUi::new();
         ui.add_select(1);
         let ui = Arc::new(ui);
@@ -740,10 +851,95 @@ mod tests {
         runner.add_response("", true);
     }
 
+    fn add_revalidated_claude_contact(
+        runner: &mut MockRunner,
+        worktree: &std::path::Path,
+        surface: &str,
+        surface_id: &str,
+    ) {
+        runner.add_response(
+            r#"{"windows":[{"id":"uuid-window-1","ref":"window:1"}]}"#,
+            true,
+        );
+        runner.add_response(
+            &format!(
+                r#"{{"window_id":"uuid-window-1","window_ref":"window:1","workspaces":[{{"id":"uuid-workspace-1","ref":"workspace:1","title":"feature","current_directory":"{}"}}]}}"#,
+                worktree.display()
+            ),
+            true,
+        );
+        runner.add_response("pane:3", true);
+        runner.add_response(surface, true);
+        runner.add_response(
+            &format!(
+                r#"{{"workspace_id":"uuid-workspace-1","workspace_ref":"workspace:1","panes":[{{"id":"uuid-pane-3","ref":"pane:3","selected_surface_id":"{surface_id}","selected_surface_ref":"{surface}"}}]}}"#
+            ),
+            true,
+        );
+        add_no_surface_processes(runner);
+        runner.add_response("⏵⏵ accept edits on", true);
+        runner.add_response("claude_code=Idle", true);
+        runner.add_response("", true);
+    }
+
     fn add_no_surface_processes(runner: &mut MockRunner) {
         runner.add_response(
             r#"{"windows":[{"workspaces":[{"panes":[{"surfaces":[]}]}]}]}"#,
             true,
         );
+    }
+
+    fn add_paste_submit_responses(runner: &mut MockRunner) {
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
+    }
+
+    fn assert_paste_submit(
+        calls: &[CommandCall],
+        buffer_prefix: &str,
+        surface: &str,
+        workspace: &str,
+        text: &str,
+    ) {
+        let set_buffer = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "cmux" && args.first().is_some_and(|arg| arg == "set-buffer")
+            })
+            .expect("expected cmux set-buffer call");
+        assert!(set_buffer.1[2].starts_with(buffer_prefix));
+        assert_eq!(set_buffer.1.last().unwrap(), text);
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux"
+                && args.iter().map(String::as_str).collect::<Vec<_>>()
+                    == vec![
+                        "paste-buffer",
+                        "--name",
+                        set_buffer.1[2].as_str(),
+                        "--surface",
+                        surface,
+                        "--workspace",
+                        workspace,
+                    ]
+        }));
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux"
+                && args.iter().map(String::as_str).collect::<Vec<_>>()
+                    == vec![
+                        "send-key",
+                        "--surface",
+                        surface,
+                        "--workspace",
+                        workspace,
+                        "--",
+                        "enter",
+                    ]
+        }));
+        assert!(!calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux"
+                && args.first().is_some_and(|arg| arg == "send")
+                && args.last().is_some_and(|arg| arg == text)
+        }));
     }
 }

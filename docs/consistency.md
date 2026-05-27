@@ -572,7 +572,9 @@ Codex does not expose an equivalent SessionEnd hook today. Codex operators shoul
 supervisors manually with the same command before closing a session.
 
 Supervisor cmux push payloads are ASCII-only and bounded by the supervisor payload cap. The default
-payload cap follows the cmux push service default. Submit patterns are kind-specific:
+payload cap follows the cmux push service default. Agent-targeted cmux prompt submit paths
+(`agent.prompts`, inbox wake/push, and `wt send` without `--no-enter`) use the same kind-specific
+submit patterns:
 
 | Agent kind | cmux submit pattern |
 | --- | --- |
