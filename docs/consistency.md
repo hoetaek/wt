@@ -576,7 +576,7 @@ payload cap follows the cmux push service default. Submit patterns are kind-spec
 
 | Agent kind | cmux submit pattern |
 | --- | --- |
-| `claude` | Inline newline payload. |
+| `claude` | `set-buffer`, `paste-buffer`, short settle, then `send-key enter`. |
 | `codex` | `set-buffer`, `paste-buffer`, wait for Codex folded-paste marker on long prompts, then `send-key enter`. |
 
 Canonical read-only message lifecycle inspection:

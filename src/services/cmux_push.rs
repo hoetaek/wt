@@ -1,6 +1,6 @@
 use crate::context::{CmdOutput, CommandRunner};
 use crate::services::cmux::{
-    CODEX_PASTE_MARKER_POLL, CODEX_PASTE_MARKER_TIMEOUT, CODEX_SHORT_PASTE_SETTLE,
+    CODEX_PASTE_MARKER_POLL, CODEX_PASTE_MARKER_TIMEOUT, PASTE_SUBMIT_SETTLE,
     cmux_paste_buffer_args, cmux_send_args, cmux_set_buffer_args,
     codex_prompt_expects_pasted_content_marker, screen_has_codex_pasted_content_marker,
     unique_cmux_buffer_name,
@@ -133,11 +133,7 @@ fn push_to_surface_in_workspace_unchecked(
 ) -> Result<()> {
     match kind {
         PushKind::Codex => push_codex_prompt(runner, surface_id, workspace, text),
-        PushKind::Claude => {
-            let text = format!("{text}\\n");
-            let send_args = cmux_send_args("send", surface_id, workspace, &text);
-            run_cmux(runner, &send_args, "send")
-        }
+        PushKind::Claude => push_pasted_prompt(runner, surface_id, workspace, "wt-claude", text),
         PushKind::Unknown => {
             bail!(
                 "Cannot push to cmux surface {surface_id}: target agent kind is unknown. Pass --kind claude or --kind codex."
@@ -165,7 +161,24 @@ fn push_codex_prompt(
             return run_cmux(runner, &enter_args, "send-key");
         }
     }
-    std::thread::sleep(CODEX_SHORT_PASTE_SETTLE);
+    std::thread::sleep(PASTE_SUBMIT_SETTLE);
+    let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
+    run_cmux(runner, &enter_args, "send-key")
+}
+
+fn push_pasted_prompt(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: Option<&str>,
+    buffer_prefix: &str,
+    text: &str,
+) -> Result<()> {
+    let buffer = unique_cmux_buffer_name(buffer_prefix, surface_id);
+    let set_buffer_args = cmux_set_buffer_args(&buffer, text);
+    run_cmux(runner, &set_buffer_args, "set-buffer")?;
+    let paste_buffer_args = cmux_paste_buffer_args(surface_id, workspace, &buffer);
+    run_cmux(runner, &paste_buffer_args, "paste-buffer")?;
+    std::thread::sleep(PASTE_SUBMIT_SETTLE);
     let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
     run_cmux(runner, &enter_args, "send-key")
 }
@@ -492,16 +505,42 @@ mod tests {
     }
 
     #[test]
-    fn claude_push_sends_inline_newline() {
+    fn claude_push_sets_pastes_buffer_then_enters() {
         let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        runner.add_response("", true);
         runner.add_response("", true);
 
         push_to_surface(&runner, "surface:4", PushKind::Claude, "hello").unwrap();
 
         let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].1[0], "set-buffer");
+        assert_eq!(calls[0].1[1], "--name");
+        assert!(calls[0].1[2].starts_with("wt-claude-surface-4-"));
         assert_eq!(
             calls[0].1,
-            vec!["send", "--surface", "surface:4", "--", "hello\\n"]
+            vec![
+                "set-buffer",
+                "--name",
+                calls[0].1[2].as_str(),
+                "--",
+                "hello"
+            ]
+        );
+        assert_eq!(
+            calls[1].1,
+            vec![
+                "paste-buffer",
+                "--name",
+                calls[0].1[2].as_str(),
+                "--surface",
+                "surface:4"
+            ]
+        );
+        assert_eq!(
+            calls[2].1,
+            vec!["send-key", "--surface", "surface:4", "--", "enter"]
         );
     }
 

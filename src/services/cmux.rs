@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static CMUX_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
-pub(crate) const CODEX_SHORT_PASTE_SETTLE: Duration = Duration::from_millis(500);
+pub(crate) const PASTE_SUBMIT_SETTLE: Duration = Duration::from_millis(500);
 pub(crate) const CODEX_PASTE_MARKER_TIMEOUT: Duration = Duration::from_secs(3);
 pub(crate) const CODEX_PASTE_MARKER_POLL: Duration = Duration::from_millis(100);
 const CODEX_PASTE_MARKER: &str = "[Pasted Content ";

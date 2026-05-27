@@ -1956,7 +1956,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_agent_waits_for_claude_ready_and_submits_with_enter_key() {
+    fn bootstrap_agent_waits_for_claude_ready_and_submits_with_paste_buffer() {
         use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode};
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
@@ -1982,6 +1982,7 @@ mod tests {
         runner.add_response("pane:0", true);
         runner.add_response("surface:0", true);
         runner.add_response("ready ❯", true);
+        runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
         let runner = Arc::new(runner);
@@ -2017,22 +2018,40 @@ mod tests {
         let calls = runner.calls.lock().unwrap();
         let cmux_calls: Vec<&(String, Vec<String>, Option<PathBuf>)> =
             calls.iter().filter(|(cmd, _, _)| cmd == "cmux").collect();
-        let send_idx = cmux_calls
+        let set_buffer_idx = cmux_calls
             .iter()
-            .position(|(_, args, _)| args.first().is_some_and(|a| a == "send"))
-            .expect("expected cmux send call");
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "set-buffer"))
+            .expect("expected cmux set-buffer call");
+        let paste_buffer_idx = cmux_calls
+            .iter()
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "paste-buffer"))
+            .expect("expected cmux paste-buffer call");
         let send_key_idx = cmux_calls
             .iter()
             .position(|(_, args, _)| args.first().is_some_and(|a| a == "send-key"))
             .expect("expected cmux send-key call");
         assert!(
-            send_idx < send_key_idx,
-            "send must precede send-key for claude auto submit"
+            set_buffer_idx < paste_buffer_idx && paste_buffer_idx < send_key_idx,
+            "set-buffer and paste-buffer must precede send-key for claude auto submit"
         );
-        let send_call = cmux_calls[send_idx];
+        let set_buffer_call = cmux_calls[set_buffer_idx];
+        assert!(set_buffer_call.1[2].starts_with("wt-claude-surface-0-"));
         assert_eq!(
-            send_call.1.last().unwrap(),
+            set_buffer_call.1.last().unwrap(),
             "claude start http://127.0.0.1:15002 on surface:0"
+        );
+        let paste_buffer_call = cmux_calls[paste_buffer_idx];
+        assert_eq!(
+            paste_buffer_call.1,
+            vec![
+                "paste-buffer",
+                "--name",
+                set_buffer_call.1[2].as_str(),
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1"
+            ]
         );
         let send_key_call = cmux_calls[send_key_idx];
         assert_eq!(

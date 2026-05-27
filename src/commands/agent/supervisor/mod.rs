@@ -1653,6 +1653,8 @@ mod tests {
         let mut runner = MockRunner::new();
         runner.add_response(r#"{"surfaces":[]}"#, true);
         runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
         let ctx = test_ctx_with_runner(&dir, runner);
         let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let first = store
@@ -1715,6 +1717,8 @@ mod tests {
             false,
         );
         runner.add_response(r#"{"surfaces":[]}"#, true);
+        runner.add_response("", true);
+        runner.add_response("", true);
         runner.add_response("", true);
         let ctx = test_ctx_with_runner(&dir, runner);
         let store = MessageStore::new(ctx.storage_root.runtime_dir());

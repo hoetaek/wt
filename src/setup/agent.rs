@@ -1,7 +1,7 @@
 use crate::config::{AgentCli, AgentConfig, SubmitMode};
 use crate::context::Ctx;
 use crate::services::cmux::{
-    CODEX_SHORT_PASTE_SETTLE, CmuxService, codex_prompt_expects_pasted_content_marker,
+    CmuxService, PASTE_SUBMIT_SETTLE, codex_prompt_expects_pasted_content_marker,
     unique_cmux_buffer_name,
 };
 use crate::template;
@@ -180,6 +180,11 @@ fn send_agent_prompt(
         return send_codex_prompt(cmux, surface, ws_handle, prompt);
     }
 
+    if should_submit_claude_with_enter_key(agent) {
+        let prompt = rendered.trim_end_matches(['\n', '\r']);
+        return send_pasted_prompt_then_enter(cmux, surface, ws_handle, "wt-claude", prompt);
+    }
+
     if should_submit_with_enter_key(agent) {
         let prompt = rendered.trim_end_matches(['\n', '\r']).to_string();
         cmux.send(surface, ws_handle, &prompt)?;
@@ -207,7 +212,22 @@ fn send_codex_prompt(
         cmux.send_key(surface, ws_handle, "enter")?;
         return Ok(());
     }
-    std::thread::sleep(CODEX_SHORT_PASTE_SETTLE);
+    std::thread::sleep(PASTE_SUBMIT_SETTLE);
+    cmux.send_key(surface, ws_handle, "enter")?;
+    Ok(())
+}
+
+fn send_pasted_prompt_then_enter(
+    cmux: &CmuxService,
+    surface: &str,
+    ws_handle: &str,
+    buffer_prefix: &str,
+    prompt: &str,
+) -> Result<()> {
+    let buffer = unique_cmux_buffer_name(buffer_prefix, surface);
+    cmux.set_buffer(&buffer, prompt)?;
+    cmux.paste_buffer(surface, ws_handle, &buffer)?;
+    std::thread::sleep(PASTE_SUBMIT_SETTLE);
     cmux.send_key(surface, ws_handle, "enter")?;
     Ok(())
 }
@@ -215,10 +235,10 @@ fn send_codex_prompt(
 fn should_submit_with_enter_key(agent: &AgentConfig) -> bool {
     matches!(
         (&agent.submit, &agent.cli),
-        (SubmitMode::Auto, AgentCli::Claude | AgentCli::Gemini,)
+        (SubmitMode::Auto, AgentCli::Gemini)
             | (
                 SubmitMode::CarriageReturn,
-                AgentCli::Claude | AgentCli::Gemini | AgentCli::None
+                AgentCli::Gemini | AgentCli::None
             )
     )
 }
@@ -227,6 +247,13 @@ fn should_submit_codex_with_enter_key(agent: &AgentConfig) -> bool {
     matches!(
         (&agent.submit, &agent.cli),
         (SubmitMode::Auto, AgentCli::Codex) | (SubmitMode::CarriageReturn, AgentCli::Codex)
+    )
+}
+
+fn should_submit_claude_with_enter_key(agent: &AgentConfig) -> bool {
+    matches!(
+        (&agent.submit, &agent.cli),
+        (SubmitMode::Auto, AgentCli::Claude) | (SubmitMode::CarriageReturn, AgentCli::Claude)
     )
 }
 
