@@ -176,6 +176,10 @@ fn send_agent_prompt(
         let prompt = rendered.trim_end_matches(['\n', '\r']).to_string();
         cmux.send(surface, ws_handle, &prompt)?;
         std::thread::sleep(std::time::Duration::from_millis(500));
+        if should_escape_before_enter_key(agent) {
+            cmux.send_key(surface, ws_handle, "escape")?;
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
         cmux.send_key(surface, ws_handle, "enter")?;
         return Ok(());
     }
@@ -191,6 +195,13 @@ fn should_submit_with_enter_key(agent: &AgentConfig) -> bool {
             SubmitMode::Auto,
             AgentCli::Codex | AgentCli::Claude | AgentCli::Gemini,
         ) | (SubmitMode::CarriageReturn, _)
+    )
+}
+
+fn should_escape_before_enter_key(agent: &AgentConfig) -> bool {
+    matches!(
+        (&agent.submit, &agent.cli),
+        (SubmitMode::Auto, AgentCli::Codex)
     )
 }
 

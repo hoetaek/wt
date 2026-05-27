@@ -130,8 +130,12 @@ fn push_to_surface_in_workspace_unchecked(
         PushKind::Codex => {
             let send_args = cmux_send_args("send", surface_id, workspace, text);
             run_cmux(runner, &send_args, "send")?;
-            let send_key_args = cmux_send_args("send-key", surface_id, workspace, "enter");
-            run_cmux(runner, &send_key_args, "send-key")
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let escape_args = cmux_send_args("send-key", surface_id, workspace, "escape");
+            run_cmux(runner, &escape_args, "send-key")?;
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
+            run_cmux(runner, &enter_args, "send-key")
         }
         PushKind::Claude => {
             let text = format!("{text}\\n");
@@ -291,21 +295,26 @@ mod tests {
     use crate::context::mock::MockRunner;
 
     #[test]
-    fn codex_push_sends_text_then_enter() {
+    fn codex_push_sends_text_escape_then_enter() {
         let mut runner = MockRunner::new();
+        runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
 
         push_to_surface(&runner, "surface:4", PushKind::Codex, "hello").unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 2);
+        assert_eq!(calls.len(), 3);
         assert_eq!(
             calls[0].1,
             vec!["send", "--surface", "surface:4", "--", "hello"]
         );
         assert_eq!(
             calls[1].1,
+            vec!["send-key", "--surface", "surface:4", "--", "escape"]
+        );
+        assert_eq!(
+            calls[2].1,
             vec!["send-key", "--surface", "surface:4", "--", "enter"]
         );
     }
@@ -313,6 +322,7 @@ mod tests {
     #[test]
     fn codex_push_in_workspace_passes_workspace_to_send_commands() {
         let mut runner = MockRunner::new();
+        runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
 
@@ -340,6 +350,18 @@ mod tests {
         );
         assert_eq!(
             calls[1].1,
+            vec![
+                "send-key",
+                "--surface",
+                "surface:4",
+                "--workspace",
+                "workspace:2",
+                "--",
+                "escape"
+            ]
+        );
+        assert_eq!(
+            calls[2].1,
             vec![
                 "send-key",
                 "--surface",

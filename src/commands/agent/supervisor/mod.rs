@@ -1511,6 +1511,7 @@ mod tests {
         );
         runner.add_response("", true);
         runner.add_response("", true);
+        runner.add_response("", true);
         let ctx = test_ctx_with_runner(&dir, runner);
         let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
@@ -1579,6 +1580,7 @@ mod tests {
             r#"{"surfaces":[{"surface":"surface:4","env":{"CMUX_AGENT_LAUNCH_KIND":"codex"}}]}"#,
             true,
         );
+        runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
         let ctx = test_ctx_with_runner(&dir, runner);
