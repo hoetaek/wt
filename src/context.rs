@@ -376,11 +376,12 @@ impl Default for CtxOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineCtxOptions {
     pub output_mode: OutputMode,
     pub verbosity: u8,
     pub quiet: bool,
+    pub working_dir: Option<PathBuf>,
 }
 
 impl Default for MachineCtxOptions {
@@ -389,6 +390,7 @@ impl Default for MachineCtxOptions {
             output_mode: OutputMode::Text,
             verbosity: 0,
             quiet: false,
+            working_dir: None,
         }
     }
 }
@@ -400,6 +402,7 @@ pub struct MachineCtx<'a> {
     pub output_mode: OutputMode,
     pub verbosity: u8,
     pub quiet: bool,
+    pub working_dir: Option<PathBuf>,
 }
 
 impl<'a> MachineCtx<'a> {
@@ -418,6 +421,7 @@ impl<'a> MachineCtx<'a> {
             output_mode: options.output_mode,
             verbosity: options.verbosity,
             quiet: options.quiet,
+            working_dir: options.working_dir,
         }
     }
 
@@ -511,6 +515,7 @@ impl Ctx {
                 output_mode: self.output_mode,
                 verbosity: self.verbosity,
                 quiet: self.quiet,
+                working_dir: Some(self.invocation_root.clone()),
             },
         )
     }

@@ -119,7 +119,8 @@ fn try_main() -> Result<()> {
 
 fn run_setup_command(cli: &Cli, command: &Commands) -> Result<()> {
     let current_dir = std::env::current_dir()?;
-    let _working_dir = resolve_directory(&current_dir, cli.directory.as_deref())?;
+    let working_dir =
+        resolve_directory(&current_dir, cli.directory.as_deref())?.unwrap_or(current_dir);
     let runner = RealRunner;
     let ui = TerminalUi::with_decoration(cli.quiet, use_decorative_output(cli));
     let output_mode = if cli.json {
@@ -134,6 +135,7 @@ fn run_setup_command(cli: &Cli, command: &Commands) -> Result<()> {
             output_mode,
             verbosity: cli.verbose,
             quiet: cli.quiet,
+            working_dir: Some(working_dir),
         },
     );
     wt::dispatch_machine(&ctx, command)

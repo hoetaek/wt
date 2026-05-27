@@ -4511,6 +4511,147 @@ fn setup_and_remove_are_idempotent() {
 
 #[cfg(unix)]
 #[test]
+fn setup_prepares_personal_storage_in_main_repo() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Personal storage: install"))
+        .stdout(predicate::str::contains("add `/.wt` to info/exclude"));
+
+    assert!(temp.path().join(".wt").is_dir());
+    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
+    assert_eq!(exclude.lines().filter(|line| *line == "/.wt").count(), 1);
+
+    let ignored = git_command()
+        .args(["check-ignore", "-v", ".wt/whatever"])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(
+        ignored.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&ignored.stdout),
+        String::from_utf8_lossy(&ignored.stderr)
+    );
+    assert!(String::from_utf8_lossy(&ignored.stdout).contains(".git/info/exclude"));
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Personal storage: none - info/exclude already excludes .wt; .wt/ directory ready",
+        ));
+
+    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
+    assert_eq!(exclude.lines().filter(|line| *line == "/.wt").count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_prepares_personal_storage_symlink_in_linked_worktree() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    let linked = temp.path().join("linked");
+    std::fs::create_dir(&repo).unwrap();
+    git_init(&repo);
+    git_commit(&repo);
+    let status = git_command()
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            linked.to_str().unwrap(),
+            "HEAD",
+        ])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .args(["-C", linked.to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Personal storage: install"))
+        .stdout(predicate::str::contains("symlink to"));
+
+    let main_storage = repo.join(".wt");
+    let linked_storage = linked.join(".wt");
+    assert!(main_storage.is_dir());
+    assert!(
+        std::fs::symlink_metadata(&linked_storage)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let link_target = std::fs::read_link(&linked_storage).unwrap();
+    let absolute_target = if link_target.is_absolute() {
+        link_target
+    } else {
+        linked.join(link_target)
+    };
+    assert_eq!(
+        std::fs::canonicalize(absolute_target).unwrap(),
+        std::fs::canonicalize(&main_storage).unwrap()
+    );
+
+    let ignored = git_command()
+        .args(["check-ignore", "-v", ".wt"])
+        .current_dir(&linked)
+        .output()
+        .unwrap();
+    assert!(
+        ignored.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&ignored.stdout),
+        String::from_utf8_lossy(&ignored.stderr)
+    );
+    let ignored_stdout = String::from_utf8_lossy(&ignored.stdout);
+    assert!(ignored_stdout.contains(".git/info/exclude"));
+    assert!(ignored_stdout.contains("/.wt"));
+
+    let status = git_command()
+        .args(["status", "--short", "--untracked-files=all"])
+        .current_dir(&linked)
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    assert!(!String::from_utf8_lossy(&status.stdout).contains(".wt"));
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .args(["-C", linked.to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Personal storage: none"))
+        .stdout(predicate::str::contains(
+            "linked worktree .wt symlink verified",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
 fn setup_repairs_claude_when_session_end_hook_is_missing() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());

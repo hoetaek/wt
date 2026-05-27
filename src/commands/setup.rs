@@ -1,11 +1,16 @@
 use crate::cli::ShellInitShell;
 use crate::commands::agent_hook;
 use crate::context::MachineCtx;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+
+// No trailing slash: linked worktrees use `.wt` as a symlink, and Git
+// directory-only ignore patterns do not ignore the symlink itself.
+const PERSONAL_STORAGE_EXCLUDE_LINE: &str = "/.wt";
 
 #[derive(Debug, Clone, Copy)]
 pub struct SetupOptions {
@@ -85,6 +90,7 @@ enum SetupNoticeLevel {
 }
 
 enum SetupOperation {
+    EnsurePersonalStorage(PersonalStoragePlan),
     InstallClaudeHooks,
     RemoveClaudeHooks,
     InstallCodexHooks,
@@ -98,6 +104,16 @@ impl SetupOperation {
     fn is_applyable(&self) -> bool {
         !matches!(self, Self::Noop)
     }
+}
+
+#[derive(Clone)]
+struct PersonalStoragePlan {
+    current_root: PathBuf,
+    main_repo_root: PathBuf,
+    exclude_path: PathBuf,
+    main_personal_root: PathBuf,
+    worktree_personal_path: PathBuf,
+    linked_worktree: bool,
 }
 
 pub fn run(ctx: &MachineCtx<'_>, options: SetupOptions) -> Result<()> {
@@ -126,6 +142,7 @@ fn build_setup_plan(ctx: &MachineCtx<'_>, options: SetupOptions) -> Result<Setup
     let mut notices = Vec::new();
     let mut steps = Vec::new();
 
+    steps.push(plan_personal_storage(ctx, options)?);
     steps.push(plan_claude_hooks(ctx, options)?);
     steps.push(plan_codex_hooks(ctx, options)?);
     let shell_target = plan_shell_target(ctx, options, &mut notices)?;
@@ -141,6 +158,170 @@ fn build_setup_plan(ctx: &MachineCtx<'_>, options: SetupOptions) -> Result<Setup
         steps,
         notices,
     })
+}
+
+fn plan_personal_storage(ctx: &MachineCtx<'_>, options: SetupOptions) -> Result<SetupStepPlan> {
+    if options.remove {
+        return Ok(noop_step(
+            "Personal storage",
+            Vec::new(),
+            "preserved by --remove",
+        ));
+    }
+
+    let Some(plan) = resolve_personal_storage_plan(ctx)? else {
+        return Ok(SetupStepPlan {
+            label: "Personal storage",
+            targets: Vec::new(),
+            action: SetupAction::Skip,
+            status: "not inside a git worktree".into(),
+            notices: Vec::new(),
+            prompt: None,
+            operation: SetupOperation::Noop,
+        });
+    };
+
+    let exclude_ready = line_present(&plan.exclude_path, PERSONAL_STORAGE_EXCLUDE_LINE)?;
+    let main_dir_ready = real_directory_ready(&plan.main_personal_root)?;
+    let symlink_ready = !plan.linked_worktree
+        || symlink_points_to(&plan.worktree_personal_path, &plan.main_personal_root)?;
+
+    let status = personal_storage_status(&plan, exclude_ready, main_dir_ready, symlink_ready);
+    let targets = personal_storage_targets(&plan);
+
+    if exclude_ready && main_dir_ready && symlink_ready {
+        return Ok(noop_step("Personal storage", targets, status));
+    }
+
+    Ok(SetupStepPlan {
+        label: "Personal storage",
+        targets,
+        action: SetupAction::Install,
+        status,
+        notices: Vec::new(),
+        prompt: Some(format!(
+            "Prepare wt personal storage for {}?",
+            plan.current_root.display()
+        )),
+        operation: SetupOperation::EnsurePersonalStorage(plan),
+    })
+}
+
+fn resolve_personal_storage_plan(ctx: &MachineCtx<'_>) -> Result<Option<PersonalStoragePlan>> {
+    if !ctx.runner.has_command("git") {
+        return Ok(None);
+    }
+
+    let cwd = ctx.working_dir.as_deref();
+    let Some(current_root) = git_path_optional(ctx, &["rev-parse", "--show-toplevel"], cwd)? else {
+        return Ok(None);
+    };
+    let git_common_dir = git_path_required(
+        ctx,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd,
+    )?;
+    let main_repo_root = git_common_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Failed to resolve wt personal storage: git common dir has no parent: {}",
+                git_common_dir.display()
+            )
+        })?;
+    let exclude_path = git_common_dir.join("info/exclude");
+    let main_personal_root = main_repo_root.join(".wt");
+    let worktree_personal_path = current_root.join(".wt");
+    let linked_worktree = !equivalent_paths(&current_root, &main_repo_root);
+
+    Ok(Some(PersonalStoragePlan {
+        current_root,
+        main_repo_root,
+        exclude_path,
+        main_personal_root,
+        worktree_personal_path,
+        linked_worktree,
+    }))
+}
+
+fn git_path_optional(
+    ctx: &MachineCtx<'_>,
+    args: &[&str],
+    cwd: Option<&Path>,
+) -> Result<Option<PathBuf>> {
+    let output = ctx
+        .runner
+        .run("git", args, cwd)
+        .with_context(|| format!("Failed to execute: git {}", args.join(" ")))?;
+    if !output.success || output.stdout.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(PathBuf::from(output.stdout.trim())))
+}
+
+fn git_path_required(ctx: &MachineCtx<'_>, args: &[&str], cwd: Option<&Path>) -> Result<PathBuf> {
+    let output = ctx
+        .runner
+        .run("git", args, cwd)
+        .with_context(|| format!("Failed to execute: git {}", args.join(" ")))?;
+    if !output.success || output.stdout.trim().is_empty() {
+        bail!(
+            "Failed to resolve wt personal storage with `git {}`: {}",
+            args.join(" "),
+            command_error(&output.stdout, &output.stderr)
+        );
+    }
+    Ok(PathBuf::from(output.stdout.trim()))
+}
+
+fn command_error(stdout: &str, stderr: &str) -> String {
+    if stderr.trim().is_empty() {
+        stdout.trim().to_string()
+    } else {
+        stderr.trim().to_string()
+    }
+}
+
+fn personal_storage_targets(plan: &PersonalStoragePlan) -> Vec<PathBuf> {
+    let mut targets = vec![plan.exclude_path.clone(), plan.main_personal_root.clone()];
+    if plan.linked_worktree {
+        targets.push(plan.worktree_personal_path.clone());
+    }
+    targets
+}
+
+fn personal_storage_status(
+    plan: &PersonalStoragePlan,
+    exclude_ready: bool,
+    main_dir_ready: bool,
+    symlink_ready: bool,
+) -> String {
+    let mut parts = Vec::new();
+    parts.push(if exclude_ready {
+        "info/exclude already excludes .wt".into()
+    } else {
+        format!("add `{PERSONAL_STORAGE_EXCLUDE_LINE}` to info/exclude")
+    });
+    parts.push(if main_dir_ready {
+        ".wt/ directory ready".into()
+    } else {
+        format!("create {}", plan.main_personal_root.display())
+    });
+    if plan.linked_worktree {
+        parts.push(if symlink_ready {
+            "linked worktree .wt symlink verified".into()
+        } else {
+            format!(
+                "create {} symlink to {}",
+                plan.worktree_personal_path.display(),
+                plan.main_personal_root.display()
+            )
+        });
+    } else {
+        parts.push(format!("main repo root: {}", plan.main_repo_root.display()));
+    }
+    parts.join("; ")
 }
 
 fn plan_claude_hooks(ctx: &MachineCtx<'_>, options: SetupOptions) -> Result<SetupStepPlan> {
@@ -609,6 +790,7 @@ fn apply_setup_plan(
 
 fn apply_setup_operation(ctx: &MachineCtx<'_>, operation: &SetupOperation) -> Result<bool> {
     match operation {
+        SetupOperation::EnsurePersonalStorage(plan) => ensure_personal_storage(ctx, plan),
         SetupOperation::InstallClaudeHooks => {
             agent_hook::install_claude(ctx, None)?;
             Ok(true)
@@ -634,6 +816,107 @@ fn apply_setup_operation(ctx: &MachineCtx<'_>, operation: &SetupOperation) -> Re
             Ok(true)
         }
         SetupOperation::Noop => Ok(false),
+    }
+}
+
+fn ensure_personal_storage(_ctx: &MachineCtx<'_>, plan: &PersonalStoragePlan) -> Result<bool> {
+    let mut changed = false;
+
+    if !line_present(&plan.exclude_path, PERSONAL_STORAGE_EXCLUDE_LINE)? {
+        append_exact_line(&plan.exclude_path, PERSONAL_STORAGE_EXCLUDE_LINE)?;
+        changed = true;
+    }
+
+    if ensure_real_directory(&plan.main_personal_root)? {
+        changed = true;
+    }
+
+    if plan.linked_worktree
+        && ensure_personal_storage_symlink(&plan.worktree_personal_path, &plan.main_personal_root)?
+    {
+        changed = true;
+    }
+
+    Ok(changed)
+}
+
+fn ensure_real_directory(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                bail!(
+                    "Cannot prepare wt personal storage at {}: expected a real directory, found a symlink",
+                    path.display()
+                );
+            }
+            if metadata.is_dir() {
+                return Ok(false);
+            }
+            bail!(
+                "Cannot prepare wt personal storage at {}: path exists and is not a directory",
+                path.display()
+            );
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to inspect wt personal storage directory: {}",
+                    path.display()
+                )
+            });
+        }
+    }
+
+    fs::create_dir_all(path).with_context(|| {
+        format!(
+            "Failed to create wt personal storage directory: {}",
+            path.display()
+        )
+    })?;
+    Ok(true)
+}
+
+fn ensure_personal_storage_symlink(link: &Path, target: &Path) -> Result<bool> {
+    if symlink_points_to(link, target)? {
+        return Ok(false);
+    }
+
+    match fs::symlink_metadata(link) {
+        Ok(_) => {
+            bail!(
+                "Cannot create wt personal storage symlink at {}: path already exists and does not point to {}",
+                link.display(),
+                target.display()
+            );
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to inspect linked worktree personal storage path: {}",
+                    link.display()
+                )
+            });
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).with_context(|| {
+            format!(
+                "Failed to create wt personal storage symlink: {} -> {}",
+                link.display(),
+                target.display()
+            )
+        })?;
+        Ok(true)
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (link, target);
+        bail!("wt setup cannot create linked-worktree personal storage symlinks on this platform")
     }
 }
 
@@ -764,19 +1047,76 @@ fn shell_name(shell: ShellInitShell) -> &'static str {
     }
 }
 
+fn real_directory_ready(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.is_dir() && !metadata.file_type().is_symlink()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "Failed to inspect wt personal storage directory: {}",
+                path.display()
+            )
+        }),
+    }
+}
+
+fn symlink_points_to(link: &Path, target: &Path) -> Result<bool> {
+    let metadata = match fs::symlink_metadata(link) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to inspect linked worktree personal storage path: {}",
+                    link.display()
+                )
+            });
+        }
+    };
+
+    if !metadata.file_type().is_symlink() {
+        return Ok(false);
+    }
+
+    let linked_to = fs::read_link(link).with_context(|| {
+        format!(
+            "Failed to read linked worktree personal storage symlink: {}",
+            link.display()
+        )
+    })?;
+    let absolute_target = if linked_to.is_absolute() {
+        linked_to
+    } else {
+        link.parent().unwrap_or(Path::new(".")).join(linked_to)
+    };
+
+    Ok(equivalent_paths(&absolute_target, target))
+}
+
+fn equivalent_paths(left: &Path, right: &Path) -> bool {
+    comparable_path(left) == comparable_path(right)
+}
+
+fn comparable_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| crate::storage::normalize_path_lexically(path))
+}
+
 fn line_present(path: &Path, line: &str) -> Result<bool> {
     if !path.exists() {
         return Ok(false);
     }
     let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read shell rc file: {}", path.display()))?;
+        .with_context(|| format!("Failed to read setup target file: {}", path.display()))?;
     Ok(content.lines().any(|existing| existing == line))
 }
 
 fn append_exact_line(path: &Path, line: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| {
-            format!("Failed to create shell rc directory: {}", parent.display())
+            format!(
+                "Failed to create setup target directory: {}",
+                parent.display()
+            )
         })?;
     }
     let mut content = fs::read_to_string(path).unwrap_or_default();
@@ -786,12 +1126,12 @@ fn append_exact_line(path: &Path, line: &str) -> Result<()> {
     content.push_str(line);
     content.push('\n');
     fs::write(path, content)
-        .with_context(|| format!("Failed to write shell rc file: {}", path.display()))
+        .with_context(|| format!("Failed to write setup target file: {}", path.display()))
 }
 
 fn remove_exact_line(path: &Path, line: &str) -> Result<()> {
     let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read shell rc file: {}", path.display()))?;
+        .with_context(|| format!("Failed to read setup target file: {}", path.display()))?;
     let mut updated = content
         .lines()
         .filter(|existing| *existing != line)
@@ -801,7 +1141,7 @@ fn remove_exact_line(path: &Path, line: &str) -> Result<()> {
         updated.push('\n');
     }
     fs::write(path, updated)
-        .with_context(|| format!("Failed to write shell rc file: {}", path.display()))
+        .with_context(|| format!("Failed to write setup target file: {}", path.display()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

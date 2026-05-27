@@ -222,7 +222,7 @@ pub enum Commands {
     },
     /// Set up or remove per-machine wt integration
     #[command(
-        long_about = "Set up or remove per-machine wt integration.\n\n`wt setup` detects supported local agent CLIs, renders a structured plan of target files and planned actions, prompts before installing wt-managed Claude and Codex inbox hooks, and can add shell integration and completion eval lines to the resolved shell rc file. Use --yes to apply detected steps without prompting, --dry-run to preview the plan without writing files, and --remove to remove wt-managed per-machine entries."
+        long_about = "Set up or remove per-machine wt integration.\n\n`wt setup` detects supported local agent CLIs, renders a structured plan of target files and planned actions, prepares repo-local personal storage when run inside a git worktree, prompts before installing wt-managed Claude and Codex inbox hooks, and can add shell integration and completion eval lines to the resolved shell rc file. Use --yes to apply detected steps without prompting, --dry-run to preview the plan without writing files, and --remove to remove wt-managed per-machine entries."
     )]
     Setup {
         /// Accept every detected setup step without prompting
