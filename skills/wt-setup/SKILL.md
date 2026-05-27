@@ -32,8 +32,8 @@ would change the config.
 Run these before giving a concrete recommendation:
 
 ```bash
-git rev-parse --path-format=absolute --git-common-dir
-find . "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/wt" -maxdepth 3 \
+git rev-parse --path-format=absolute --show-toplevel
+find . "$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null)/.wt" -maxdepth 3 \
   -name '.wt.toml' -o -name 'config.toml' -o -name 'profile.toml' 2>/dev/null
 wt config
 wt doctor
@@ -55,10 +55,10 @@ Never read or print secret file contents such as `.env`.
 
 Choose the file by ownership, not convenience:
 
-- `<git-common-dir>/wt/config/local.toml`: personal repo config, local paths, local
+- `<repo-root>/.wt/config/local.toml`: personal repo config, local paths, local
   agent commands, private runtime details, personal defaults.
 - `.wt.toml`: project integration config contributors should share.
-- `<git-common-dir>/wt/config/profiles/<name>/profile.toml`: named runtime profile only
+- `<repo-root>/.wt/config/profiles/<name>/profile.toml`: named runtime profile only
   when reusable structured profile config is worth the extra file.
 
 Do not silently move settings between shared/private ownership. If existing
@@ -141,9 +141,9 @@ restate the matrix here.
 
 Run this triangulation pass:
 
-1. **Read every config file that exists.** `.wt.toml`, `<git-common-dir>/wt/config/local.toml`,
-   and every `<git-common-dir>/wt/config/profiles/*/profile.toml`. Also list
-   `<git-common-dir>/wt/config/profiles/*/scaffold/` and `prompts/` to see what
+1. **Read every config file that exists.** `.wt.toml`, `<repo-root>/.wt/config/local.toml`,
+   and every `<repo-root>/.wt/config/profiles/*/profile.toml`. Also list
+   `<repo-root>/.wt/config/profiles/*/scaffold/` and `prompts/` to see what
    the profile expects to inject.
 2. **Read the user's intent.** What did the user just paste, ask for, or
    describe? If unclear, ask one targeted question — do not guess.
@@ -153,7 +153,7 @@ Run this triangulation pass:
 For every divergence, propose a concrete fix. Common divergences to check
 explicitly:
 
-- **Profile dormancy.** `<git-common-dir>/wt/config/profiles/<name>/` exists
+- **Profile dormancy.** `<repo-root>/.wt/config/profiles/<name>/` exists
   (with `profile.toml`, `scaffold/`, or `prompts/`) but `wt config` shows no
   `copy_as` pointing into that scaffold and no prompts from
   `profile.toml`/`prompts/*.md`. Cause: `.wt.toml`/`local.toml` is missing
@@ -168,7 +168,7 @@ explicitly:
   `[agent.prompt]`) and delete the inline block.
 - **Scaffold drift.** `[profile] name = "<name>"` is set and `wt config` shows
   the `copy_as` scaffold entry, but `scaffold/` is empty or missing the files
-  the user expects. Fix: populate `<git-common-dir>/wt/config/profiles/<name>/scaffold/`
+  the user expects. Fix: populate `<repo-root>/.wt/config/profiles/<name>/scaffold/`
   with the actual files the worktree should receive, then re-run `wt config`.
 - **Prompt file vs inline collision.** `profile.toml` defines
   `[agent.prompt].<mode>` and the same profile has `prompts/<mode>.md`.

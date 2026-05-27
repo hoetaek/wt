@@ -21,7 +21,7 @@ conversion, `wt-start` for execution, `wt-coordinate` for running work, and
 
 An idea is exploration. It is allowed to die.
 
-- An idea file at `<git-common-dir>/wt/planning/ideas/<slug>.{md,toml}` may be deleted,
+- An idea file at `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}` may be deleted,
   rewritten, or abandoned at any time without any state transition that other
   components observe.
 - No downstream consumer (wt CLI, wt-ready, wt-start, workflows) depends on an
@@ -41,13 +41,13 @@ Inspect local truth before asking questions:
 ```bash
 git status --short --branch
 find . -maxdepth 2 -name AGENTS.md -o -name AGENTS.override.md
-common_dir="$(git rev-parse --git-common-dir)"
-find "$common_dir/wt/planning/ideas" "$common_dir/wt/execution/tasks" "$common_dir/wt/execution/workflows" -maxdepth 1 -type f 2>/dev/null | sort
-find "$common_dir/wt/planning/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
+repo_root="$(git rev-parse --show-toplevel)"
+find "$repo_root/.wt/planning/ideas" "$repo_root/.wt/execution/tasks" "$repo_root/.wt/execution/workflows" -maxdepth 1 -type f 2>/dev/null | sort
+find "$repo_root/.wt/planning/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
 wt config 2>/dev/null || true
 ```
 
-Never read secret files such as `.env`. If `<git-common-dir>/wt/planning/ideas` does not exist,
+Never read secret files such as `.env`. If `<repo-root>/.wt/planning/ideas` does not exist,
 create it only when saving a new idea.
 
 ## Capture Standard
@@ -111,12 +111,12 @@ External (useful later):
 - 같은 문제를 푼 다른 도구(예: jj, sapling)의 명령 모양.
 
 Internal (blocking now):
-- 현재 .wt.toml / <git-common-dir>/wt/config/local.toml에 비슷한 옵션이 이미 있는가?
+- 현재 .wt.toml / <repo-root>/.wt/config/local.toml에 비슷한 옵션이 이미 있는가?
 ```
 
 When a new unknown surfaces *after* this step (during ready/start/coordinate),
 that is a signal Surfacing was incomplete; the runtime owner logs it under
-`<git-common-dir>/wt/planning/specs/<slug>/10-review.md` so the retrospective can
+`<repo-root>/.wt/planning/specs/<slug>/10-review.md` so the retrospective can
 diagnose the missed category.
 
 ## Evidence Gathering
@@ -127,8 +127,8 @@ the user direct clarifying questions and inventory user/team-held materials
 reaching outward. Then search the repository before creating anything new:
 
 ```bash
-common_dir="$(git rev-parse --git-common-dir)"
-rg -n "<keyword>|<related term>" "$common_dir/wt/planning/ideas" "$common_dir/wt/execution/tasks" docs app resources tests 2>/dev/null
+repo_root="$(git rev-parse --show-toplevel)"
+rg -n "<keyword>|<related term>" "$repo_root/.wt/planning/ideas" "$repo_root/.wt/execution/tasks" docs app resources tests 2>/dev/null
 ```
 
 Use external research only when the user asks for best practices, the idea
@@ -177,11 +177,11 @@ is no `converted` status: promotion deletes the idea file and creates
 
 ## File Format
 
-Store ideas in `<git-common-dir>/wt/planning/ideas/<slug>.{md,toml}`. Use lowercase ASCII
+Store ideas in `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}`. Use lowercase ASCII
 kebab-case slugs. Pick the extension by what fits the body best:
 
 To seed an empty Markdown skeleton, run `wt scaffold <slug> --idea`. It writes
-`<git-common-dir>/wt/planning/ideas/<slug>.md` with the canonical section headings. To
+`<repo-root>/.wt/planning/ideas/<slug>.md` with the canonical section headings. To
 use `.toml` instead, write the file by hand using the schema below.
 
 - `.md` for free-form Markdown notes when prose, links, and loose structure
@@ -189,7 +189,7 @@ use `.toml` instead, write the file by hand using the schema below.
 - `.toml` when you want a few simple top-level fields plus a `body` string.
 
 If an idea already exists at either extension, update that file instead of
-creating a duplicate. Do not write into `<git-common-dir>/wt/planning/specs/` from this
+creating a duplicate. Do not write into `<repo-root>/.wt/planning/specs/` from this
 skill; that directory is `wt-ready`'s output.
 
 TOML shape, when you choose `.toml`. Use only simple top-level fields and put
@@ -277,12 +277,12 @@ End with:
 - exact next skill invocation or target, for example:
 
 ```text
-$wt-ready <git-common-dir>/wt/planning/ideas/<slug>.md
+$wt-ready <repo-root>/.wt/planning/ideas/<slug>.md
 ```
 
 When `wt-ready` is later invoked on the idea and the user commits, `wt-ready`
 will remove this idea file and create numbered prep artifacts under
-`<git-common-dir>/wt/planning/specs/<slug>/`. That promotion is not done from inside
+`<repo-root>/.wt/planning/specs/<slug>/`. That promotion is not done from inside
 `wt-idea`.
 
 If the user asked only for a list or review of ideas, do not write files unless

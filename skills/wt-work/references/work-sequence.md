@@ -73,7 +73,7 @@ facts from assumptions again, and only then resume the downstream gates that
 depended on what changed.
 
 This loop is normal, not a failure mode. Log each return to
-`<git-common-dir>/wt/planning/specs/<slug>/10-review.md` so `wt-retrospect` can classify
+`<repo-root>/.wt/planning/specs/<slug>/10-review.md` so `wt-retrospect` can classify
 which surfacing category was missed and sharpen the next run's checklist.
 
 ## Practical Rule
