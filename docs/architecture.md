@@ -15,23 +15,23 @@ effects.
 | Layer | Source of truth | Owns | Must not own |
 | --- | --- | --- | --- |
 | CLI command orchestration | `src/commands/*.rs`, especially `src/commands/workflow.rs` | Argument-level flow, interactive selection, high-level calls into stores, planners, services, and setup | Persisted schemas, TOML parsing rules, provider command details, long rendering templates |
-| Task state | `src/task.rs` and `src/task_run.rs` | `TaskDocument` under `<git-common-dir>/wt/execution/tasks` and `TaskRun` under `<git-common-dir>/wt/execution/task-runs` | Workflow mode semantics, cmux coordinates, branch landing state |
-| Workflow state store | `src/workflow.rs` today | `WorkflowMode`, `WorkflowMetadata`, `WorkflowTask`, `<git-common-dir>/wt/execution/workflows` paths, validation, read/write/list/resolve, TOML rendering for workflow files | Starting worktrees, prompting agents, selecting runnable workflows, mutating TaskRun status beyond store validation |
-| Storage root boundary | `src/storage.rs` | Resolving `<git-common-dir>/wt` with `git rev-parse --git-common-dir`, typed bucketed personal-state paths, and legacy `.local` detection text | TaskDocument, TaskRun, Workflow, config/profile schema migration, or silent `.local` fallback |
-| Message state | `src/messages/mod.rs` and `src/commands/msg.rs` | `AgentId`, scoped Message TOML schema, `<git-common-dir>/wt/runtime/agents/<name>/inbox` state paths, address/scope/delivery lifecycle primitives, send/check-inbox delivery, hook JSON rendering | Activity/status logs, agent hook installation, runtime surface launch, cmux screen scraping |
-| Agent runtime observation state | `src/agent_state.rs` | Runtime observation JSONL under `<git-common-dir>/wt/runtime/agents/<name>/observations`, including non-idle wait observation samples and aggregate readers | TaskRun lifecycle status, Workflow/TaskDocument schema, cmux transport ownership, adaptive watch defaults |
+| Task state | `src/task.rs` and `src/task_run.rs` | `TaskDocument` under `<repo-root>/.wt/execution/tasks` and `TaskRun` under `<repo-root>/.wt/execution/task-runs` | Workflow mode semantics, cmux coordinates, branch landing state |
+| Workflow state store | `src/workflow.rs` today | `WorkflowMode`, `WorkflowMetadata`, `WorkflowTask`, `<repo-root>/.wt/execution/workflows` paths, validation, read/write/list/resolve, TOML rendering for workflow files | Starting worktrees, prompting agents, selecting runnable workflows, mutating TaskRun status beyond store validation |
+| Storage root boundary | `src/storage.rs` | Resolving repo-root personal storage, linked-worktree `.wt` symlink targets, typed bucketed personal-state paths, and legacy `.local` / `.git/wt` detection text | TaskDocument, TaskRun, Workflow, config/profile schema migration, or silent legacy fallback |
+| Message state | `src/messages/mod.rs` and `src/commands/msg.rs` | `AgentId`, scoped Message TOML schema, `<repo-root>/.wt/runtime/agents/<name>/inbox` state paths, address/scope/delivery lifecycle primitives, send/check-inbox delivery, hook JSON rendering | Activity/status logs, agent hook installation, runtime surface launch, cmux screen scraping |
+| Agent runtime observation state | `src/agent_state.rs` | Runtime observation JSONL under `<repo-root>/.wt/runtime/agents/<name>/observations`, including non-idle wait observation samples and aggregate readers | TaskRun lifecycle status, Workflow/TaskDocument schema, cmux transport ownership, adaptive watch defaults |
 | Agent adapters and launch wrappers | `src/commands/agent_hook.rs`, `src/commands/install.rs`, `src/commands/agent_runtime.rs`, and setup launch env helpers | Claude/Codex hook files, wt-managed hook markers, Codex trust state, `WT_AGENT_ID` launch env binding, short `wt codex`/`wt claude`/`wt as` wrappers | Message schema, inbox storage paths, TaskDocument/TaskRun/Workflow schemas, cmux as message transport |
 | Workflow execution planner | `src/commands/workflow.rs` today; extract to `src/workflow/planner.rs` when split | Runnable-workflow selection, single/batch/stack next-step rules, preflight plans, parent-chain calculation | UI printing, cmux calls, issue-provider calls, file serialization |
 | Workflow runner orchestration | `src/commands/workflow.rs` today; extract to `src/workflow/run.rs` when split | Coordinating planner output with `TaskDocument`, `TaskRun`, `issue` start paths, and setup results | Domain schema definitions, config merge policy, provider implementation details |
 | Rendering | `ctx.ui` call sites and prompt builders in command modules today; extract workflow prompt/status text to `src/workflow/render.rs` when split | Human status text, selector labels, agent prompt snapshots, coordinator handoff text | Selector state transitions, filesystem writes, shelling out to tools |
 | Inline selector engine | `src/ui/selector.rs` or `src/ui/selector/*` when introduced | Selector row model, pure keyboard/filter/selection state transitions, visible-window calculation, selected-summary rendering, hidden-row counts, and the small terminal adapter for raw mode/redraw/cleanup | Domain candidate construction, command validation, persisted state schemas, provider calls, workflow/task lifecycle |
-| Config layering | `src/config/` | Config schema, `.wt.toml` and `<git-common-dir>/wt/config/local.toml` load order, profile resolution, profile convention overlays, prompt merge/finalization | Worktree creation, site registration, TaskDocument/TaskRun/Workflow state |
+| Config layering | `src/config/` | Config schema, `.wt.toml` and `<repo-root>/.wt/config/local.toml` load order, profile resolution, profile convention overlays, prompt merge/finalization | Worktree creation, site registration, TaskDocument/TaskRun/Workflow state |
 | Setup side effects | `src/setup.rs` and `src/setup/*` | `run_setup` orchestration plus side-effect modules for files, env/template variables, site registration, cmux workspace runtime, agent bootstrap, dependency commands, post-deps tabs, background tests, local context injection, and setup summary | Config precedence, workflow planning, task state ownership |
 | External services | `src/services/*` | Shell/tool boundaries for Git, GitHub, Linear, cmux, Herd, Valet, Docker proxy, Traefik, issue providers, and work-session observation | CLI policy, persisted wt state schemas, UX concept naming |
 
 ## Canonical State
 
-All personal state lives under `<git-common-dir>/wt/` in four canonical buckets:
+All personal state lives under `<repo-root>/.wt/` in four canonical buckets:
 `config/`, `planning/`, `execution/`, and `runtime/`. Architecture ownership
 should name the domain owner inside those buckets rather than adding new
 top-level roots. Legacy flat roots such as `messages/`, `agent.state/`,
@@ -45,13 +45,13 @@ record, and leave later code paths on canonical bucket readers. This mirrors the
 Personal Storage contract in [docs/consistency.md](consistency.md).
 
 `TaskDocument` is the reusable work definition. Its source-of-truth module is
-`src/task.rs`, and its durable location is `<git-common-dir>/wt/execution/tasks/<task>.toml`. It owns
+`src/task.rs`, and its durable location is `<repo-root>/.wt/execution/tasks/<task>.toml`. It owns
 title, branch, body, and optional origin. It does not own execution status,
 workflow membership, profile choice, or cmux transport data.
 
 `TaskRun` is one execution instance of a `TaskDocument`. Its source-of-truth
 module is `src/task_run.rs`, and its durable location is
-`<git-common-dir>/wt/execution/task-runs/<id>.toml`. It owns task, branch, status, group, error,
+`<repo-root>/.wt/execution/task-runs/<id>.toml`. It owns task, branch, status, group, error,
 creation_order, and timestamps. Workflow mode stays on `Workflow`; legacy
 TaskRun `source` values are read-only for migration compatibility and are not
 written as canonical state. It records execution state, not branch landing or
@@ -59,7 +59,7 @@ review state.
 
 `Workflow` is the saved prepared-work plan. Its current source-of-truth module
 is `src/workflow.rs`, and its durable location is
-`<git-common-dir>/wt/execution/workflows/<id>.toml`. It owns title, body, optional workflow-level
+`<repo-root>/.wt/execution/workflows/<id>.toml`. It owns title, body, optional workflow-level
 origin for the larger issue-like unit, mode, base, profile, color, timestamps,
 workflow-level effective policy, and `[[tasks]]` rows linking TaskDocuments to
 TaskRuns. It does not copy task branch names, task status fields, TaskDocument
@@ -72,7 +72,7 @@ and provider start hooks are derived from TaskDocument origin only unless a
 separate policy explicitly changes that contract.
 
 `batch` and `stack` are Workflow modes. New prepared-work state belongs in
-`<git-common-dir>/wt/execution/workflows` with `mode = "single" | "batch" | "stack"`. Batch/stack
+`<repo-root>/.wt/execution/workflows` with `mode = "single" | "batch" | "stack"`. Batch/stack
 state directories are not ownership points, and top-level batch/stack command
 shells should not exist beside the canonical `wt workflow` surface.
 
@@ -82,13 +82,13 @@ coordinates to open workspaces or print handoff instructions. `wt` owns
 TaskDocument, TaskRun, and Workflow state. cmux workspace or surface coordinates
 are transport details and must not become persisted task or workflow state.
 Messages are also canonical wt state, not cmux transport data. Agent-to-agent
-communication should go through `<git-common-dir>/wt/runtime/agents` and
+communication should go through `<repo-root>/.wt/runtime/agents` and
 `src/messages/mod.rs`; cmux may remain a human-visible surface and an optional
 handoff route, but it must not be required for inbox delivery.
 
 `Message` is the file-based agent inbox record. Its source-of-truth module is
 `src/messages/mod.rs`, and its durable location is
-`<git-common-dir>/wt/runtime/agents/<name>/inbox/<state>/<message-id>.toml`.
+`<repo-root>/.wt/runtime/agents/<name>/inbox/<state>/<message-id>.toml`.
 It owns message ids, sender and target `AgentId`s, address/scope/delivery TOML
 shape, send-time normalization, state-directory ordering and transitions, and
 hook JSON rendering. `wt msg list` and `wt msg read` are read-only inspection
@@ -117,7 +117,7 @@ directory-change hooks.
 
 `wt env` is the internal command called by those hooks. It resolves the current
 directory to the git common dir, reads the current branch, scans
-`<git-common-dir>/wt/execution/task-runs/*.toml`, and picks the most recent TaskRun whose
+`<repo-root>/.wt/execution/task-runs/*.toml`, and picks the most recent TaskRun whose
 `branch` matches. A match exports the TaskRun `agent_id`, falling back to
 `agents/<branch_slug>` for legacy records. Without a match, outside a git repo,
 or on a detached branch, it unsets `WT_AGENT_ID`. Both binding and unbinding
@@ -129,7 +129,7 @@ old shell state from leaking into the current worker identity model.
 The identity locator owns post-hoc binding from the current terminal or agent
 session to a flat `AgentId`. Its source-of-truth module is
 `src/services/identity_locator/`, and its durable identity anchor location is
-`<git-common-dir>/wt/runtime/agents/<name>/anchors/<encoded-anchor-key>.toml`.
+`<repo-root>/.wt/runtime/agents/<name>/anchors/<encoded-anchor-key>.toml`.
 
 Anchor keys are derived in priority order:
 
@@ -159,14 +159,14 @@ identity anchor.
 The agent supervisor is a separate layer. It may use the same resolved identity
 model, but supervisor lifecycle, polling, and recovery policy belong to its own
 spec and must not turn identity anchor records into process supervision state.
-Development spec: `.git/wt/planning/specs/detached-agent-supervisor/`; runtime contract:
+Development spec: `<repo-root>/.wt/planning/specs/detached-agent-supervisor/`; runtime contract:
 the Supervisor section below and `docs/consistency.md` Supervisor Lifecycle.
 
 ## Supervisor
 
 The supervisor is a default-off Layer 3 stale-rescue process for one resolved
 agent identity. Registration and lifecycle state live under
-`<git-common-dir>/wt/runtime/agents/<name>/`; `supervisor.toml` records the
+`<repo-root>/.wt/runtime/agents/<name>/`; `supervisor.toml` records the
 registered PID, PID start time, owner (`started_by`), target cmux surface, agent
 kind, optional cmux host surface/pane/workspace, `stale_threshold_secs`,
 `poll_interval_secs`, and log path. `supervisor.log` remains beside the
@@ -185,7 +185,7 @@ SessionEnd hook surface.
 
 Runtime observation is the local agent observation state owner. Its
 source-of-truth module is `src/agent_state.rs`, and its first durable location is
-`<git-common-dir>/wt/runtime/agents/<name>/observations/wait-observations.jsonl`. It owns append-only
+`<repo-root>/.wt/runtime/agents/<name>/observations/wait-observations.jsonl`. It owns append-only
 non-idle wait samples recorded by `wt agent watch` heartbeat/timeout bounds and read-only
 summary aggregation for `wt agent wait-stats`. It does not own `TaskRun.status`,
 Workflow or TaskDocument lifecycle, cmux workspace/surface transport state,
@@ -210,7 +210,7 @@ Keep `src/workflow.rs` as the Workflow state facade. If it grows, turn it into a
 
 - `src/workflow/model.rs`: `WorkflowMode`, `WorkflowMetadata`,
   `WorkflowTask`, `WorkflowRecord`, and pure validation of workflow shape.
-- `src/workflow/store.rs`: `<git-common-dir>/wt/execution/workflows` path resolution, read, list,
+- `src/workflow/store.rs`: `<repo-root>/.wt/execution/workflows` path resolution, read, list,
   create, write, migration-only target shortcuts while they exist, and
   workflow-file TOML rendering.
 - `src/workflow/planner.rs`: runnable rules for single, batch, and stack modes,
@@ -222,8 +222,8 @@ Keep `src/workflow.rs` as the Workflow state facade. If it grows, turn it into a
   and coordinator handoff text.
 
 Task state follows the same direction at smaller scale: `src/task.rs` owns
-`TaskDocument` and `<git-common-dir>/wt/execution/tasks` TOML read/write rules, and `src/task_run.rs`
-owns TaskRun and `<git-common-dir>/wt/execution/task-runs` TOML read/write rules. If either grows,
+`TaskDocument` and `<repo-root>/.wt/execution/tasks` TOML read/write rules, and `src/task_run.rs`
+owns TaskRun and `<repo-root>/.wt/execution/task-runs` TOML read/write rules. If either grows,
 split it into `model.rs` and `store.rs` under a directory module without moving
 schema ownership back into command modules.
 
@@ -237,9 +237,9 @@ should not duplicate merge rules or inspect profile directories directly.
 
 Workflow preparation policy is config, not Workflow state, until a workflow is
 prepared. `src/config/` should own parsing and merging `[workflow]` from
-`.wt.toml` and `<git-common-dir>/wt/config/local.toml`, including built-in defaults for
+`.wt.toml` and `<repo-root>/.wt/config/local.toml`, including built-in defaults for
 `pull_request` and `landing`; workflow preparation should materialize the
-effective values into `<git-common-dir>/wt/execution/workflows/<id>.toml` for that run. Workflow state
+effective values into `<repo-root>/.wt/execution/workflows/<id>.toml` for that run. Workflow state
 owns the prepared policy snapshot shown by `wt workflow show`, not the config
 precedence rules that produced it.
 

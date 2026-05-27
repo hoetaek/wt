@@ -84,7 +84,7 @@ fn load_all_profiles(ctx: &Ctx) -> Result<Vec<(String, Config)>> {
     let profiles =
         Config::load_profiles_from_storage(&ctx.repo_root, &ctx.storage_root, &ctx.base_config)?;
     if profiles.is_empty() {
-        bail!("No profile configs found in <git-common-dir>/wt/config/profiles/*/profile.toml");
+        bail!("No profile configs found in <repo-root>/.wt/config/profiles/*/profile.toml");
     }
     Ok(profiles)
 }

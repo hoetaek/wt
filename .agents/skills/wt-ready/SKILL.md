@@ -19,11 +19,11 @@ Inspect local truth before asking questions:
 ```bash
 git status --short --branch
 find . -maxdepth 2 -name AGENTS.md -o -name AGENTS.override.md
-common_dir="$(git rev-parse --git-common-dir)"
+repo_root="$(git rev-parse --show-toplevel)"
 # execution/tasks, execution/workflows, planning/ideas hold flat files;
 # planning/specs holds one directory per slug.
-find "$common_dir/wt/execution/tasks" "$common_dir/wt/execution/workflows" "$common_dir/wt/planning/ideas" -maxdepth 1 -type f 2>/dev/null | sort
-find "$common_dir/wt/planning/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
+find "$repo_root/.wt/execution/tasks" "$repo_root/.wt/execution/workflows" "$repo_root/.wt/planning/ideas" -maxdepth 1 -type f 2>/dev/null | sort
+find "$repo_root/.wt/planning/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
 ```
 
 For `wt` itself, read `docs/consistency.md` before proposing model, CLI,
@@ -52,12 +52,12 @@ how something works, verify it against the repo when it is cheap.
 Useful evidence:
 
 - docs and glossary terms that define the domain model
-- current config shape and local overrides such as `.wt.toml` / `<git-common-dir>/wt/config/local.toml`
-- current persisted state such as `<git-common-dir>/wt/execution/tasks` and `<git-common-dir>/wt/execution/workflows`
+- current config shape and local overrides such as `.wt.toml` / `<repo-root>/.wt/config/local.toml`
+- current persisted state such as `<repo-root>/.wt/execution/tasks` and `<repo-root>/.wt/execution/workflows`
 - command help for user-facing CLI contracts
 - tests or small local experiments for uncertain behavior
 - spec-local retrospectives and the cross-work timing baseline at
-  `<git-common-dir>/wt/planning/retrospectives/timing.md` for similar task type, size,
+  `<repo-root>/.wt/planning/retrospectives/timing.md` for similar task type, size,
   agent/profile, and coordination shape
 - `wt agent wait-stats` as a read-only summary of prior non-idle watch
   observations; use it as evidence for cadence and uncertainty, not as the
@@ -200,7 +200,7 @@ Example body order:
 ## 필수 준수 (Hard constraints)
 - Design language: Soft Structuralism + Geist + Phosphor Light. 금지: Inter,
   generic border. 정본: `<spec-path>/07-design.md` "Design language" 절.
-- Security: write 는 `<git-common-dir>/wt/execution/tasks/*.toml` 만.
+- Security: write 는 `<repo-root>/.wt/execution/tasks/*.toml` 만.
 - 회귀: `wt ui` 손대지 않음. `Cargo.toml` version 변경 금지.
 - Base: develop (master 아님).
 
@@ -208,7 +208,7 @@ Example body order:
 - ...
 ```
 
-Background reason: empirically (`<git-common-dir>/wt/planning/specs/wt-studio-authoring-surface/11-retrospect.md`)
+Background reason: empirically (`<repo-root>/.wt/planning/specs/wt-studio-authoring-surface/11-retrospect.md`)
 visual-grade constraints buried in the lower half of a long task body are
 silently dropped by the first agent turn even when the spec file fully states
 them. Top-of-body placement is the cheap structural fix.
@@ -251,7 +251,7 @@ separate workflows over a false parent chain.
 
 ### Derive workflow mode from `08-tasks.md`
 
-When a spec exists at `<git-common-dir>/wt/planning/specs/<slug>/`, derive the execution
+When a spec exists at `<repo-root>/.wt/planning/specs/<slug>/`, derive the execution
 shape from `08-tasks.md`. Read the slice graph (dependencies, parallel groups,
 shared base, lifecycle) and consult the canonical mapping below to pick a
 workflow mode. Then record the choice and the reasoning in
@@ -271,7 +271,7 @@ Then act on the chosen mode:
 
 - `single` / `batch` / `stack` — create the workflow TOML via
   `wt workflow task --mode <mode> ...` at
-  `<git-common-dir>/wt/execution/workflows/<id>.toml`. Record its path in `09-execution.md`
+  `<repo-root>/.wt/execution/workflows/<id>.toml`. Record its path in `09-execution.md`
   under "Linked workflow TOML".
 - `matrix` — create the workflow TOML via
   `wt workflow task --mode matrix <task> --profiles <profile-a>,<profile-b> ...`.
@@ -282,7 +282,7 @@ Then act on the chosen mode:
 
 ## Workflow Policy
 
-Treat `.wt.toml` / `<git-common-dir>/wt/config/local.toml` `[workflow]` as workflow preparation
+Treat `.wt.toml` / `<repo-root>/.wt/config/local.toml` `[workflow]` as workflow preparation
 policy and workflow TOML as the prepared run's effective policy snapshot.
 
 Read existing workflow policy when present. If policy is missing, stale, or
@@ -336,7 +336,7 @@ are unchanged.
 When `wt-ready` is invoked and the user commits to preparing the work, an
 existing idea file is promoted, not copied:
 
-- `rm <git-common-dir>/wt/planning/ideas/<slug>.{md,toml}` — the visible commit gate
+- `rm <repo-root>/.wt/planning/ideas/<slug>.{md,toml}` — the visible commit gate
   that distinguishes exploration from committed prep.
 - `wt scaffold <slug> --spec` — seeds `01-intent.md`, `02-unknowns.md`,
   `03-context.md`, `04+05+06-requirements.md`, `07-design.md`, and
@@ -426,7 +426,7 @@ idea file existing first.
     shared base, lifecycle, parallel groups).
   - **슬라이스 → TaskDocument 매핑**: how `08-tasks.md` slices became one or
     more TaskDocuments (or direct local edits), with paths.
-  - **연결된 workflow TOML**: `<git-common-dir>/wt/execution/workflows/<id>.toml` when
+  - **연결된 workflow TOML**: `<repo-root>/.wt/execution/workflows/<id>.toml` when
     applicable; `none` otherwise.
   - **wt-start target**: exact command or target for execution launch.
   - **시간 가정 / watch cadence**: expected duration, estimate basis, launch
@@ -435,7 +435,7 @@ idea file existing first.
 - When mode = `none`, `09-execution.md` may be very brief (one paragraph plus the
   slice → TaskDocument mapping) or omitted entirely.
 - The executable workflow is still the TOML at
-  `<git-common-dir>/wt/execution/workflows/<id>.toml`, created via
+  `<repo-root>/.wt/execution/workflows/<id>.toml`, created via
   `wt workflow task --mode ...`. `09-execution.md` is prose only and never
   replaces the TOML.
 
@@ -535,7 +535,7 @@ drift is the cheapest defect to fix during grilling.
 End with one of these concrete outputs:
 
 - spec deliverables prepared (or promoted from `planning/ideas/`) at
-  `<git-common-dir>/wt/planning/specs/<slug>/`, recording the chosen execution shape
+  `<repo-root>/.wt/planning/specs/<slug>/`, recording the chosen execution shape
 - existing TaskDocuments/workflow ready, with the exact `wt-start` target
 - new TaskDocument TOML files prepared
 - a saved workflow prepared (mode, base, order, policy)

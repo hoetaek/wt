@@ -169,7 +169,7 @@ impl Config {
         Ok(config)
     }
 
-    /// Discover profile configs: <git-common-dir>/wt/config/profiles/{name}/profile.toml
+    /// Discover profile configs: <repo-root>/.wt/config/profiles/{name}/profile.toml
     pub fn load_profiles(repo_root: &Path, base: &Self) -> anyhow::Result<Vec<(String, Self)>> {
         let storage_root = default_storage_root(repo_root);
         Self::load_profiles_from_storage(repo_root, &storage_root, base)
@@ -292,7 +292,7 @@ impl Config {
         let profile_config = Self::load_file(&profile_dir.join("profile.toml"))?;
         if profile_config.profile.is_some() {
             bail!(
-                "[profile] is only valid in .wt.toml or <git-common-dir>/wt/config/local.toml, not in {}",
+                "[profile] is only valid in .wt.toml or <repo-root>/.wt/config/local.toml, not in {}",
                 profile_dir.join("profile.toml").display()
             );
         }

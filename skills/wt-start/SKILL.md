@@ -17,8 +17,8 @@ distinction: see `../wt-work/references/task-lifecycle.md`.
 ```bash
 git status --short --branch
 git worktree list
-common_dir="$(git rev-parse --git-common-dir)"
-find "$common_dir/wt/execution/tasks" "$common_dir/wt/execution/task-runs" "$common_dir/wt/execution/workflows" -maxdepth 1 -type f 2>/dev/null | sort
+repo_root="$(git rev-parse --show-toplevel)"
+find "$repo_root/.wt/execution/tasks" "$repo_root/.wt/execution/task-runs" "$repo_root/.wt/execution/workflows" -maxdepth 1 -type f 2>/dev/null | sort
 wt doctor
 ```
 
@@ -73,8 +73,8 @@ Capture the inspect target:
 
 ```bash
 git worktree list
-common_dir="$(git rev-parse --git-common-dir)"
-find "$common_dir/wt/task-runs" -maxdepth 1 -type f 2>/dev/null | sort
+repo_root="$(git rev-parse --show-toplevel)"
+find "$repo_root/.wt/execution/task-runs" -maxdepth 1 -type f 2>/dev/null | sort
 wt inspect <branch|worktree|task-run-id>
 wt agent status <branch|worktree|task-run-id>
 ```

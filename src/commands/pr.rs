@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn pr_with_profile_uses_profile_config_for_setup() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".git/wt/config/profiles/codex-yolo");
+        let profile_dir = repo.path().join(".wt/config/profiles/codex-yolo");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),

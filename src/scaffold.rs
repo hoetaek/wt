@@ -264,34 +264,31 @@ mod tests {
 
         assert_eq!(
             DocKind::Idea.paths(&storage, "foo"),
-            vec![dir.path().join(".git/wt/planning/ideas/foo.md")]
+            vec![dir.path().join(".wt/planning/ideas/foo.md")]
         );
         assert_eq!(
             DocKind::Spec.paths(&storage, "foo"),
             vec![
-                dir.path().join(".git/wt/planning/specs/foo/01-intent.md"),
-                dir.path().join(".git/wt/planning/specs/foo/02-unknowns.md"),
-                dir.path().join(".git/wt/planning/specs/foo/03-context.md"),
+                dir.path().join(".wt/planning/specs/foo/01-intent.md"),
+                dir.path().join(".wt/planning/specs/foo/02-unknowns.md"),
+                dir.path().join(".wt/planning/specs/foo/03-context.md"),
                 dir.path()
-                    .join(".git/wt/planning/specs/foo/04+05+06-requirements.md"),
-                dir.path().join(".git/wt/planning/specs/foo/07-design.md"),
-                dir.path().join(".git/wt/planning/specs/foo/08-tasks.md")
+                    .join(".wt/planning/specs/foo/04+05+06-requirements.md"),
+                dir.path().join(".wt/planning/specs/foo/07-design.md"),
+                dir.path().join(".wt/planning/specs/foo/08-tasks.md")
             ]
         );
         assert_eq!(
             DocKind::Task.paths(&storage, "foo"),
-            vec![dir.path().join(".git/wt/execution/tasks/foo.toml")]
+            vec![dir.path().join(".wt/execution/tasks/foo.toml")]
         );
         assert_eq!(
             DocKind::Workflow.paths(&storage, "foo"),
-            vec![dir.path().join(".git/wt/execution/workflows/foo.toml")]
+            vec![dir.path().join(".wt/execution/workflows/foo.toml")]
         );
         assert_eq!(
             DocKind::Retrospect.paths(&storage, "foo"),
-            vec![
-                dir.path()
-                    .join(".git/wt/planning/specs/foo/11-retrospect.md")
-            ]
+            vec![dir.path().join(".wt/planning/specs/foo/11-retrospect.md")]
         );
     }
 

@@ -494,7 +494,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("<git-common-dir>/wt/execution/tasks/foo.toml"));
+        assert!(err.contains("<repo-root>/.wt/execution/tasks/foo.toml"));
         assert!(!ctx.storage_root.ideas_dir().join("foo.md").exists());
     }
 
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(json["feature"], "foo");
         assert_eq!(
             json["created"].as_array().unwrap()[0],
-            "<git-common-dir>/wt/planning/specs/foo/11-retrospect.md"
+            "<repo-root>/.wt/planning/specs/foo/11-retrospect.md"
         );
         assert!(json["skipped"].as_array().unwrap().is_empty());
     }

@@ -277,7 +277,7 @@ Owner: `wt-retrospect`, normally called by `wt-work` after landing or explicit
 discard.
 
 Artifact: `planning/specs/<slug>/11-retrospect.md` for spec-backed work, or
-`<git-common-dir>/wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` for cross-work or
+`<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` for cross-work or
 spec-less retrospectives.
 
 Gate to future work:
