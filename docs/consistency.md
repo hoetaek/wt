@@ -1533,12 +1533,41 @@ when the frontend inputs are stale, fails clearly if `node` or `npm` is unavaila
 resulting `src/studio/web/dist/` assets in the `wt` binary with `include_dir!`. Runtime use of
 `wt studio` must not depend on Node.
 
-The initial Studio skeleton exposes only non-mutating bootstrap routes such as the embedded page,
-`/auth`, and authenticated `GET /api/ping`. It establishes the command, build, server, and auth
-contracts before TaskDocument plan/apply routes land. No Studio mutation route may write outside an
+The Studio bootstrap layer exposes non-mutating routes such as the embedded page, `/auth`, and
+authenticated `GET /api/ping`; mutation routes are added only with an operation-specific contract.
+No Studio mutation route may write outside an
 explicit allowlist for the state type it owns; TaskDocument writes are limited to
 `<git-common-dir>/wt/execution/tasks/*.toml` unless a later consistency update defines another
 canonical allowlist.
+
+Studio TaskDocument editing is a plan/apply contract over the canonical TaskDocument store, not a
+new schema. `POST /api/task-documents/plan` accepts a TaskDocument path under
+`<git-common-dir>/wt/execution/tasks/<slug>.toml` and either a structured TaskDocument candidate or
+raw candidate TOML. Structured candidates are first rendered to normalized TaskDocument TOML; raw
+candidate TOML is preserved. A create plan treats `before` as the empty string and returns `after` as
+that normalized or raw candidate TOML. An update plan reads the current disk file through the
+TaskDocument owner path and returns `before` exactly as disk content and `after` exactly as the
+candidate TOML that apply would write. Every plan returns a unified diff, validation status,
+validation errors, and a file precondition containing the observed mtime and SHA-256 hash.
+The mtime is serialized as a decimal string so browser clients preserve the exact nanosecond value.
+
+`POST /api/task-documents/apply` accepts only the exact path, `before`, `after`, and precondition
+from a prior plan. Apply re-validates `after` as TaskDocument TOML before writing; invalid
+TaskDocument schema is rejected and must not touch disk. Apply succeeds only when the current disk
+content, mtime, and hash still match the plan precondition. On success it writes atomically via a
+temporary file in the TaskDocument directory followed by rename, then returns the new mtime and hash.
+Within one Studio server process, TaskDocument apply operations are serialized before this
+precondition recheck so concurrent applies cannot both pass the same observed file state.
+If the precondition is stale because an external editor changed the file, apply returns 409 with the
+current disk content, current fingerprint, and a unified diff from planned `before` to current disk
+so the user can re-plan.
+
+The TaskDocument mutation allowlist is exact: Studio may write only
+`<git-common-dir>/wt/execution/tasks/<slug>.toml`, where `<slug>` is the same safe task key form used
+by the TaskDocument store. Absolute paths, parent traversal such as `../escape`, nested paths, and
+non-TaskDocument file names fail with 4xx before validation or write. Studio must continue to use
+the TaskDocument state-owner reader/writer and must not scrape `wt ui` snapshot DTOs or CLI text
+output to derive mutation state.
 
 `wt studio` mutations must have a visible draft state, validation errors, and a preview of the exact
 state-file changes before apply. Applying a studio edit requires an explicit mutation contract with
