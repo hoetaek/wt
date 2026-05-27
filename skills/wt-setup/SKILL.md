@@ -133,6 +133,12 @@ Before recommending changes, reconcile three views: what files declare, what
 `wt config` actually resolves, and what the user intends. Many setups fail
 silently because the resolved effective config diverges from the written intent.
 
+The canonical merge rules per section (REPLACE / extend / dedupe / append /
+wholesale-section behavior) live in
+[`docs/consistency.md` → Config Merge Semantics](../../docs/consistency.md#config-merge-semantics).
+Cite that table when explaining why a value disappeared or duplicated; do not
+restate the matrix here.
+
 Run this triangulation pass:
 
 1. **Read every config file that exists.** `.wt.toml`, `<git-common-dir>/wt/config/local.toml`,
@@ -164,6 +170,14 @@ explicitly:
   the `copy_as` scaffold entry, but `scaffold/` is empty or missing the files
   the user expects. Fix: populate `<git-common-dir>/wt/config/profiles/<name>/scaffold/`
   with the actual files the worktree should receive, then re-run `wt config`.
+- **Prompt file vs inline collision.** `profile.toml` defines
+  `[agent.prompt].<mode>` and the same profile has `prompts/<mode>.md`.
+  Behavior: file wins, stderr emits `warning: [agent.prompt].<mode> from
+  profile.toml is overridden by .../prompts/<mode>.md`. Fix: pick one source
+  for the replace prompt. If the user wants both ("inline as base, file as
+  override"), the warning is informational and no fix is needed — that pattern
+  is supported. `prompts/<mode>.append.md` is not a conflict; it layers on top
+  of either source.
 - **Effective ≠ files in another way.** Any setting the user clearly intended
   (a prompt, a tab, a command) is absent from `wt config`. Trace which file
   owns it and why the merge dropped it (wrong section, wrong owner file,

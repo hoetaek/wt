@@ -901,6 +901,43 @@ checkout을 제외하고 `existing`(이미 별도 worktree가 있음), `local`(l
 이 개념들이 섞이면 사용자는 workflow가 실행환경인지, mode가 상태 파일 noun인지,
 profile이 작업 묶음인지 다시 추론해야 한다. 이런 혼동은 기능 추가보다 먼저 제거한다.
 
+### Config Merge Semantics
+
+`wt config`는 `.wt.toml` (shared) → `<git-common-dir>/wt/config/local.toml` (personal) →
+named profile (`<git-common-dir>/wt/config/profiles/<name>/`) 순서로 layer를 합쳐
+effective config을 만든다. 같은 코드 경로(`merge_config`)가 모든 layer에 적용되므로
+layer 차이로 동작이 달라지지 않는다. 다만 섹션마다 합치는 방식이 다르고, 그 차이를
+사용자가 예측할 수 있어야 한다. 다음 표가 canonical 규칙이다.
+
+| 섹션 / 필드 | 동작 | 의미 |
+|---|---|---|
+| `worktree.path`, `worktree.inject_local_context`, `worktree.naming` | REPLACE (later wins if set) | 단일 값. 윗 layer가 명시하면 아랫 layer를 덮어쓴다. |
+| `worktree.copy`, `worktree.link`, `workspace.tabs`, `workspace.post_deps_tabs` | extend, value-level dedupe | 윗 layer가 항목을 추가한다. 같은 문자열은 한 번만 나온다. |
+| `worktree.copy_as` | extend, `(from, to)` 쌍 dedupe | 같은 from/to 쌍은 한 번만. 다른 from이면 둘 다 살아남는다. |
+| `setup.deps` | extend (현재 dedupe 없음) | 같은 dep을 두 layer가 적으면 두 번 실행된다. dep script는 idempotent하게 짠다. |
+| `setup.env`, `setup.env_files[path]`, `workspace.colors` | HashMap extend (key-level overwrite) | 같은 key를 윗 layer가 덮어쓴다. |
+| `workflow.pull_request`, `workflow.landing`, `editor.command`, `editor.placement`, `workspace.browser`, `workspace.chrome_devtools` | REPLACE if Some | Option 필드. 윗 layer가 set하면 덮어쓴다. |
+| `workspace` (Option 섹션) | deep-merge (both Some) | 두 layer가 모두 `[workspace]`를 가지면 필드별로 위 규칙대로 합친다. |
+| `site`, `test`, `issues` (Option 섹션) | wholesale REPLACE if Some | 윗 layer가 `[site]`/`[test]`/`[issues]`를 가지면 아랫 layer의 같은 섹션이 통째로 사라진다. 한 필드만 바꾸려면 base의 모든 필드를 다시 적는다. |
+| `agent.{cli, args, command, ready, submit, timeout, send_after}` | per-field presence-based REPLACE | 윗 layer가 명시한 필드만 덮어쓴다. |
+| `agent.prompt[mode]` | REPLACE per mode unless `[agent.prompt.append].<mode>` | 같은 mode를 적으면 덮어쓴다. append-key form은 기존 prompt에 `\n\n`으로 이어붙인다. |
+
+Named profile에는 profile.toml 외에 두 가지 convention이 더 있다.
+
+| 위치 | 동작 |
+|---|---|
+| `<profile>/scaffold/` | 디렉토리 존재만으로 `copy_as = [{from: <abs>, to: "."}]` 자동 push. 워크트리 생성 시 워크트리 루트에 복사된다. |
+| `<profile>/prompts/<mode>.md` | `agent.prompt[mode]`를 **REPLACE**. profile.toml의 inline `[agent.prompt].<mode>`가 같이 있으면 파일이 이기고 stderr에 warning이 찍힌다. |
+| `<profile>/prompts/<mode>.append.md` | `agent.prompt[mode]`에 append. inline replace와 충돌이 아니다. |
+
+`[profile] name = "<name>"`이 `.wt.toml`이나 `local.toml`에 없고 CLI `--profile`도 없으면
+profile convention(`scaffold/`, `prompts/`)은 effective config에 합쳐지지 않는다. 함정을
+피하려면 둘 중 하나는 명시한다.
+
+`[profile] name`과 inline `[profile.agent]`, `[profile.worktree]`, `[profile.setup]`,
+`[profile.workspace]`, `[profile.site]`, `[profile.test]`를 같이 쓸 수 없다. parse 단계에서
+hard error로 막는다. 한 곳만 골라서 적는다.
+
 ### Omission Means Default Behavior
 *North star: [Direction-Driven Design](north-star.md#direction-driven-design).*
 
