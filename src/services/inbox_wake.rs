@@ -204,6 +204,7 @@ mod tests {
         add_codex_worktree_observation(&mut mock, dir.path(), "add-schema", "Idle");
         mock.add_response("", true);
         mock.add_response("", true);
+        mock.add_response("", true);
         let runner = Arc::new(mock);
         let ctx = ctx(dir.path(), runner.clone());
         let record = task_run::create_direct_routed(
@@ -235,6 +236,7 @@ mod tests {
         let mut mock = MockRunner::new();
         mock.add_command("cmux");
         add_surface_identity_anchor_observation(&mut mock, dir.path(), "Idle");
+        mock.add_response("", true);
         mock.add_response("", true);
         mock.add_response("", true);
         let runner = Arc::new(mock);
@@ -375,6 +377,19 @@ mod tests {
                         "workspace:1",
                         "--",
                         "Check your wt inbox.",
+                    ]
+        }));
+        assert!(calls.iter().any(|(cmd, args, _)| {
+            cmd == "cmux"
+                && args.iter().map(String::as_str).collect::<Vec<_>>()
+                    == vec![
+                        "send-key",
+                        "--surface",
+                        "surface:4",
+                        "--workspace",
+                        "workspace:1",
+                        "--",
+                        "escape",
                     ]
         }));
         assert!(calls.iter().any(|(cmd, args, _)| {

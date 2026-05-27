@@ -1747,7 +1747,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_agent_waits_for_codex_ready_and_submits_with_enter_key() {
+    fn bootstrap_agent_waits_for_codex_ready_and_submits_with_escape_then_enter_key() {
         use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode};
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
@@ -1773,6 +1773,7 @@ mod tests {
         runner.add_response("pane:0", true);
         runner.add_response("surface:0", true);
         runner.add_response("ready ›", true);
+        runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
         let runner = Arc::new(runner);
@@ -1814,12 +1815,25 @@ mod tests {
             send_call.1.last().unwrap(),
             "start http://127.0.0.1:15001 on surface:0"
         );
-        let send_key_call = calls
+        let send_key_calls = calls
             .iter()
-            .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send-key"))
-            .expect("expected cmux send-key call");
+            .filter(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send-key"))
+            .collect::<Vec<_>>();
+        assert_eq!(send_key_calls.len(), 2);
         assert_eq!(
-            send_key_call.1,
+            send_key_calls[0].1,
+            vec![
+                "send-key",
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1",
+                "--",
+                "escape"
+            ]
+        );
+        assert_eq!(
+            send_key_calls[1].1,
             vec![
                 "send-key",
                 "--surface",
