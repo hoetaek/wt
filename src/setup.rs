@@ -1849,7 +1849,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_agent_waits_for_codex_ready_and_submits_with_escape_then_enter_key() {
+    fn bootstrap_agent_waits_for_codex_ready_and_submits_with_paste_buffer() {
         use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode};
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
@@ -1909,33 +1909,40 @@ mod tests {
         bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &vars).unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        let send_call = calls
+        let set_buffer_call = calls
             .iter()
-            .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send"))
-            .expect("expected cmux send call");
+            .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "set-buffer"))
+            .expect("expected cmux set-buffer call");
+        assert!(set_buffer_call.1[2].starts_with("wt-codex-surface-0-"));
         assert_eq!(
-            send_call.1.last().unwrap(),
+            set_buffer_call.1.last().unwrap(),
             "start http://127.0.0.1:15001 on surface:0"
+        );
+        let paste_buffer_call = calls
+            .iter()
+            .find(|(cmd, args, _)| {
+                cmd == "cmux" && args.first().is_some_and(|a| a == "paste-buffer")
+            })
+            .expect("expected cmux paste-buffer call");
+        assert_eq!(
+            paste_buffer_call.1,
+            vec![
+                "paste-buffer",
+                "--name",
+                set_buffer_call.1[2].as_str(),
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1"
+            ]
         );
         let send_key_calls = calls
             .iter()
             .filter(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send-key"))
             .collect::<Vec<_>>();
-        assert_eq!(send_key_calls.len(), 2);
+        assert_eq!(send_key_calls.len(), 1);
         assert_eq!(
             send_key_calls[0].1,
-            vec![
-                "send-key",
-                "--surface",
-                "surface:0",
-                "--workspace",
-                "workspace:1",
-                "--",
-                "escape"
-            ]
-        );
-        assert_eq!(
-            send_key_calls[1].1,
             vec![
                 "send-key",
                 "--surface",

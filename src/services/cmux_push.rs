@@ -1,5 +1,10 @@
 use crate::context::{CmdOutput, CommandRunner};
-use crate::services::cmux::cmux_send_args;
+use crate::services::cmux::{
+    CODEX_PASTE_MARKER_POLL, CODEX_PASTE_MARKER_TIMEOUT, CODEX_SHORT_PASTE_SETTLE,
+    cmux_paste_buffer_args, cmux_send_args, cmux_set_buffer_args,
+    codex_prompt_expects_pasted_content_marker, screen_has_codex_pasted_content_marker,
+    unique_cmux_buffer_name,
+};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
@@ -127,16 +132,7 @@ fn push_to_surface_in_workspace_unchecked(
     text: &str,
 ) -> Result<()> {
     match kind {
-        PushKind::Codex => {
-            let send_args = cmux_send_args("send", surface_id, workspace, text);
-            run_cmux(runner, &send_args, "send")?;
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            let escape_args = cmux_send_args("send-key", surface_id, workspace, "escape");
-            run_cmux(runner, &escape_args, "send-key")?;
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
-            run_cmux(runner, &enter_args, "send-key")
-        }
+        PushKind::Codex => push_codex_prompt(runner, surface_id, workspace, text),
         PushKind::Claude => {
             let text = format!("{text}\\n");
             let send_args = cmux_send_args("send", surface_id, workspace, &text);
@@ -147,6 +143,61 @@ fn push_to_surface_in_workspace_unchecked(
                 "Cannot push to cmux surface {surface_id}: target agent kind is unknown. Pass --kind claude or --kind codex."
             )
         }
+    }
+}
+
+fn push_codex_prompt(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: Option<&str>,
+    text: &str,
+) -> Result<()> {
+    let buffer = unique_cmux_buffer_name("wt-codex", surface_id);
+    let set_buffer_args = cmux_set_buffer_args(&buffer, text);
+    run_cmux(runner, &set_buffer_args, "set-buffer")?;
+    let paste_buffer_args = cmux_paste_buffer_args(surface_id, workspace, &buffer);
+    run_cmux(runner, &paste_buffer_args, "paste-buffer")?;
+    if let Some(workspace) = workspace {
+        if codex_prompt_expects_pasted_content_marker(text)
+            && wait_for_codex_pasted_content_marker(runner, surface_id, workspace)?
+        {
+            let enter_args = cmux_send_args("send-key", surface_id, Some(workspace), "enter");
+            return run_cmux(runner, &enter_args, "send-key");
+        }
+    }
+    std::thread::sleep(CODEX_SHORT_PASTE_SETTLE);
+    let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
+    run_cmux(runner, &enter_args, "send-key")
+}
+
+fn wait_for_codex_pasted_content_marker(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: &str,
+) -> Result<bool> {
+    let deadline = std::time::Instant::now() + CODEX_PASTE_MARKER_TIMEOUT;
+    loop {
+        let out = runner.run(
+            "cmux",
+            &[
+                "read-screen",
+                "--surface",
+                surface_id,
+                "--workspace",
+                workspace,
+            ],
+            None,
+        )?;
+        if !out.success {
+            bail!("cmux read-screen failed: {}", command_error(&out));
+        }
+        if screen_has_codex_pasted_content_marker(&out.stdout) {
+            return Ok(true);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(CODEX_PASTE_MARKER_POLL);
     }
 }
 
@@ -295,7 +346,7 @@ mod tests {
     use crate::context::mock::MockRunner;
 
     #[test]
-    fn codex_push_sends_text_escape_then_enter() {
+    fn codex_push_sets_pastes_buffer_then_enters() {
         let mut runner = MockRunner::new();
         runner.add_response("", true);
         runner.add_response("", true);
@@ -305,13 +356,28 @@ mod tests {
 
         let calls = runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].1[0], "set-buffer");
+        assert_eq!(calls[0].1[1], "--name");
+        assert!(calls[0].1[2].starts_with("wt-codex-surface-4-"));
         assert_eq!(
             calls[0].1,
-            vec!["send", "--surface", "surface:4", "--", "hello"]
+            vec![
+                "set-buffer",
+                "--name",
+                calls[0].1[2].as_str(),
+                "--",
+                "hello"
+            ]
         );
         assert_eq!(
             calls[1].1,
-            vec!["send-key", "--surface", "surface:4", "--", "escape"]
+            vec![
+                "paste-buffer",
+                "--name",
+                calls[0].1[2].as_str(),
+                "--surface",
+                "surface:4"
+            ]
         );
         assert_eq!(
             calls[2].1,
@@ -336,14 +402,16 @@ mod tests {
             .unwrap();
 
         let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].1[0], "set-buffer");
+        assert_eq!(calls[0].1[1], "--name");
+        assert!(calls[0].1[2].starts_with("wt-codex-surface-4-"));
         assert_eq!(
             calls[0].1,
             vec![
-                "send",
-                "--surface",
-                "surface:4",
-                "--workspace",
-                "workspace:2",
+                "set-buffer",
+                "--name",
+                calls[0].1[2].as_str(),
                 "--",
                 "hello"
             ]
@@ -351,17 +419,66 @@ mod tests {
         assert_eq!(
             calls[1].1,
             vec![
+                "paste-buffer",
+                "--name",
+                calls[0].1[2].as_str(),
+                "--surface",
+                "surface:4",
+                "--workspace",
+                "workspace:2"
+            ]
+        );
+        assert_eq!(
+            calls[2].1,
+            vec![
                 "send-key",
                 "--surface",
                 "surface:4",
                 "--workspace",
                 "workspace:2",
                 "--",
-                "escape"
+                "enter"
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_push_in_workspace_waits_for_long_prompt_marker() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("› ## Task[Pasted Content 1639 chars]", true);
+        runner.add_response("", true);
+        let long_prompt = (1..=60)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        CmuxPushService::new(&runner)
+            .push_to_surface_in_workspace(
+                "surface:4",
+                Some("workspace:2"),
+                PushKind::Codex,
+                &long_prompt,
+            )
+            .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0].1[0], "set-buffer");
+        assert_eq!(calls[1].1[0], "paste-buffer");
+        assert_eq!(
+            calls[2].1,
+            vec![
+                "read-screen",
+                "--surface",
+                "surface:4",
+                "--workspace",
+                "workspace:2"
             ]
         );
         assert_eq!(
-            calls[2].1,
+            calls[3].1,
             vec![
                 "send-key",
                 "--surface",
