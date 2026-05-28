@@ -315,6 +315,10 @@ fn resolve_watch_agent(ctx: &Ctx, agent: Option<&str>) -> Result<AgentId> {
         return Ok(agent);
     }
 
+    if let Some(anchor) = identity_locator::resolve_identity(ctx)? {
+        return AgentId::parse(&anchor.id).context("Invalid live identity anchor agent id");
+    }
+
     bail!(
         "wt msg watch could not resolve an agent id. Pass --agent <agent>, set WT_AGENT_ID, or launch through `wt as`, `wt codex`, or `wt claude`."
     )
