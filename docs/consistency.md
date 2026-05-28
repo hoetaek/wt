@@ -160,7 +160,7 @@ Markdown이거나 TOML body일 수 있다. Idea는 committed-work status가 없�
 아니다.
 
 `wt-ready`가 idea를 받고 사용자가 실행에 commit하면 idea는 spec으로 promotion된다.
-Promotion은 `planning/ideas/<slug>.{md,toml}`을 제거하고 numbered work-sequence artifact를
+Promotion은 `planning/ideas/<slug>.{md,toml}`을 제거하고 numbered LEAF artifact를
 `planning/specs/<slug>/` 아래에 만드는 동작이다. 이 directory location change가 visible
 commit gate다. `wt` state tree를 읽는 사람은 `planning/ideas/` 아래의 exploration과
 `planning/specs/<slug>/` 아래의 committed prep work를 directory 위치만으로 구분할 수 있어야

@@ -8,7 +8,7 @@ description: "Use after wt work is reviewed: respect workflow policy, pass workf
 Use this skill after `wt-coordinate` review says the work is acceptable. Do not
 use it to monitor active agents or request fixes; use `wt-coordinate` for that.
 
-In the work-sequence model, this skill owns the land/close gate between
+In the LEAF model, this skill owns the land/close step between
 review/sync and retrospect. It proves integration or discard, performs
 applicable workflow pass, and cleans only after that closure is safe.
 

@@ -76,28 +76,27 @@ name 2-4 plausible frames, record why each fits or fails, and then either:
 continue to purpose/success criteria, return to `wt-idea`, or ask one HITL
 question that chooses the next exploration direction.
 
-## Work Sequence
+## LEAF Work
 
 Before promoting an idea, writing specs, or preparing TaskDocuments, identify
-where the work currently sits in the EDGE phases from
-`references/work-sequence.md`: Explore (intent/context), Demonstrate
-(purpose/requirements/wireframe), Generalize (design/tasks/handoff), or
-Evolve (review/retrospect). Do not treat the
+where the work currently sits in `references/leaf-work.md`: Learn
+(intent/context), Example (purpose/requirements/wireframe), Architect
+(design/tasks/handoff), or Feedback (review/retrospect). Do not treat the
 sequence as a waterfall; use it as a set of gates that prevent skipping from
 vague intent straight to runnable work.
 
 If a user enters `wt-ready` directly with implementation-shaped wording,
 reconstruct the missing intent, purpose/success criteria, and output
-form first. If Explore is incomplete, gather unknowns and context before
-Demonstrate. If Demonstrate is incomplete, stop at requirements or wireframe
-instead of design. If the Generalize gates are incomplete, stop at design, task
-graph, or execution handoff instead of fabricating a TaskDocument.
+form first. If Learn is incomplete, gather unknowns and context before Example.
+If Example is incomplete, stop at requirements or wireframe instead of design.
+If the Architect gates are incomplete, stop at design, task graph, or execution
+handoff instead of fabricating a TaskDocument.
 
-Once the current one-sentence intent is available, show a compact EDGE route
+Once the current one-sentence intent is available, show a compact LEAF route
 preview before deep prep. Phrase each phase as a question about this specific
-intent: what to learn in Explore, what cheap concrete case to validate in
-Demonstrate, what rules/tasks to extract in Generalize, and what to review or
-learn in Evolve. This is orientation, not a fixed plan.
+intent: what to learn in Learn, what cheap example to validate in Example, what
+design/tasks/handoff to architect in Architect, and what to review or learn in
+Feedback. This is orientation, not a fixed plan.
 
 Gate transitions require explicit user approval. The agent may propose that
 unknowns are surfaced, context is adequate, requirements are settled, a
@@ -184,7 +183,7 @@ boundaries, state model, command/config shape, data contracts, interaction
 rules, or visual system rules.
 
 Loops are expected. If the visual mockup exposes missing data or context, return
-to Explore. If it exposes missing behavior, return to requirements. If design
+to Learn. If it exposes missing behavior, return to requirements. If design
 cannot generalize the case without inventing rules, return to Gate 6 and add a
 better concrete case.
 
@@ -387,7 +386,7 @@ Prepared wt work uses three canonical locations under the planning/execution buc
 
 - `planning/ideas/<slug>.{md,toml}` — kill-able exploration captured by `wt-idea`. Free-form
   Markdown or TOML. May be deleted at any time. No commitment.
-- `planning/specs/<slug>/` — committed prep artifact. Holds numbered work-sequence files:
+- `planning/specs/<slug>/` — committed prep artifact. Holds numbered LEAF files:
   `01-intent.md`, `02-unknowns.md`, `03-context.md`,
   `04+05-requirements.md` or collapsed `04+05+06-requirements.md`,
   optional `06-wireframe.md` / `06-wireframe/`, `07-design.md`, `08-tasks.md`,
@@ -491,7 +490,7 @@ idea file existing first.
 
 - Start from the passed wireframe case or explicitly note that the wireframe was
   collapsed for tiny work.
-- Generalize the passed concrete case into reusable decisions, affected
+- Turn the passed concrete case into reusable decisions, affected
   components, state and data contracts, interaction rules, responsive rules,
   visual system rules when relevant, and constraints.
 - For brownfield work, optionally include a Static Model (Purpose, Components,

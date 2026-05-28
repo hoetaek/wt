@@ -8,7 +8,7 @@ description: "Use before wt-ready for vague ideas or future wt work: capture con
 Use this skill to capture and enrich ideas before they are ready for
 `wt-ready`. The goal is to preserve enough evidence and context that a later
 `wt-ready` pass can turn the idea into the best available task/workflow plan.
-In the work-sequence model, this skill owns raw intent, unknown surfacing, and
+In the LEAF model, this skill owns Learn: raw intent, unknown surfacing, and
 context/reference exploration before the work commits to a spec, TaskDocument,
 or workflow.
 
@@ -273,7 +273,7 @@ End with:
 - evidence checked
 - duplicates or related artifacts found
 - why it is or is not ready for `wt-ready`
-- the missing work-sequence gate when it is not ready
+- the missing LEAF gate when it is not ready
 - exact next skill invocation or target, for example:
 
 ```text

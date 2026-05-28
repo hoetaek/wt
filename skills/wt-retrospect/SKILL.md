@@ -11,7 +11,7 @@ or skill guidance can learn from. Do not use it to track in-flight state — tha
 belongs in `<repo-root>/.wt/execution/tasks`,
 `<repo-root>/.wt/execution/task-runs`, and
 `<repo-root>/.wt/execution/workflows`.
-In the work-sequence model, this skill owns the final retrospect gate after
+In the LEAF model, this skill owns the final retrospect gate after
 landing or explicit discard. It can also record a blocked-loop lesson when the
 loop stops at an earlier gate and the blocker itself is worth preserving.
 
@@ -263,7 +263,7 @@ read quickly. Recommended columns:
   problems are out of scope or already addressed elsewhere.
 - Make `try` items adoptable. If the change belongs in a skill body, say so;
   if it belongs in `wt` code, say so; if it is a coordinator habit, say so.
-- For `outcome = "blocked"`, name the missing gate using the work-sequence
+- For `outcome = "blocked"`, name the missing gate using the LEAF
   vocabulary. Keep active execution details in TaskRun/Workflow state; the
   retrospective should explain what should change next time.
 - Use `action_candidates` for items that should turn into work later. Each
@@ -305,7 +305,7 @@ Target files commonly include, but are not limited to:
 - Profile prompts under `<repo-root>/.wt/config/profiles/<name>/prompts/`.
 
 When the finished work item had specs,
-`<repo-root>/.wt/planning/specs/<slug>/` may contain numbered work-sequence
+`<repo-root>/.wt/planning/specs/<slug>/` may contain numbered LEAF
 files from `wt-ready`. Cite them in `evidence` or in the `rationale` of a
 `[[harness_tuning]]` entry when the lesson points at the spec template itself
 (e.g. "the EARS statement in 04+05+06-requirements.md proved ambiguous; tighten
@@ -318,12 +318,12 @@ the wt-ready template").
      branch is still active and can continue normally, stop and let the matching
      lifecycle skill finish first.
    - Blocked lesson: confirm the `wt-work` loop is stopped at a named
-     work-sequence gate and the blocker is a reusable lesson. Do not write one
+     LEAF gate and the blocker is a reusable lesson. Do not write one
      for ordinary waiting, active agent work, or a routine review round.
 2. Decide scope: one file or split + cross-link.
 3. For `outcome = "blocked"`, set `kind = "blocked-gate"` unless a more
    specific kind is still useful, and fill `context.blocked_gate` with the
-   work-sequence gate name.
+   LEAF gate name.
 4. Diagnose Unknown surfacing misses, if the spec has them:
    - If `<repo-root>/.wt/planning/specs/<slug>/10-review.md` has a
      `## Mid-process discoveries` section, read it. Each entry is a research

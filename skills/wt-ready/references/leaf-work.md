@@ -1,8 +1,8 @@
-# Work Sequence
+# LEAF Work
 
-EDGE (Explore -> Demonstrate -> Generalize -> Evolve) validates the user's
-real intent with cheap concrete cases before committing to costly solutions,
-then feeds execution lessons back into the next iteration.
+LEAF (Learn -> Example -> Architect -> Feedback) validates the user's real
+intent with cheap examples before committing to costly solutions, then feeds
+review lessons back into the next iteration.
 
 Use this reference to decide what artifact `wt-ready` should produce next. The
 sequence is not a rigid waterfall. It is a set of gates: each step reduces a
@@ -11,33 +11,34 @@ different kind of uncertainty before the work becomes runnable.
 ## Summary
 
 ```text
-Explore:     1 Intent
+Learn:       1 Intent
        -> 2 Unknown surfacing
        -> 3 Context / reference exploration
 
-Demonstrate: 4 Purpose / success criteria
+Example:     4 Purpose / success criteria
        -> 5 Requirements / principles
        -> 6 Wireframe with mock data
 
-Generalize:  7 Design
+Architect:   7 Design
        -> 8 Task graph
        -> 9 Execution handoff
 
-Evolve:     10 Review / sync
+Feedback:   10 Review / sync record
        -> 11 Retrospect
 ```
 
-For `wt-ready`, Explore is either inherited from `wt-idea` or reconstructed
-when the user enters prep directly. `wt-ready` mainly owns Demonstrate and the
-Generalize preparation gates: purpose, requirements, wireframe, design, task
-graph, and handoff. Evolve is owned later by `wt-coordinate` and
-`wt-retrospect`, but `wt-ready` must leave artifacts that are easy to sync and
-learn from.
+For `wt-ready`, Learn is either inherited from `wt-idea` or reconstructed
+when the user enters prep directly. `wt-ready` mainly owns Example and the
+Architect preparation gates: purpose, requirements, wireframe, design, task
+graph, and handoff. Later `wt-start`, `wt-coordinate`, and `wt-land` continue
+Architect by creating, checking, and integrating the result. Feedback is owned
+by `wt-retrospect`, using review evidence and spec drift captured during
+coordination.
 
-Once Gate 1 has a current one-sentence intent, show the user a compact EDGE
+Once Gate 1 has a current one-sentence intent, show the user a compact LEAF
 route preview. Phrase each phase as a question about that intent: what to learn
-in Explore, what cheap concrete case to validate in Demonstrate, what
-rules/tasks to extract in Generalize, and what to review or learn in Evolve.
+in Learn, what cheap example to validate in Example, what design/tasks/handoff
+to architect in Architect, and what to review or learn in Feedback.
 Keep it as orientation, not a fixed plan.
 
 Kiro's spec-driven workflow maps to
@@ -57,7 +58,7 @@ planning/ideas/<slug>.{md,toml}
 -> review, land, retrospect
 ```
 
-## 1. Intent (Explore)
+## 1. Intent (Learn)
 
 Owner: `wt-idea`, or the first minutes of `wt-ready` when the user skips idea
 capture.
@@ -81,7 +82,7 @@ Return here when:
 - The request is only a symptom, preference, or implementation hunch.
 - Multiple unrelated ideas are mixed together.
 
-## 2. Unknown surfacing (Explore)
+## 2. Unknown surfacing (Learn)
 
 Owner: `wt-idea`, or `wt-ready` when entered directly without prior idea capture.
 
@@ -110,7 +111,7 @@ Return here when:
 - Repeated unplanned research detours start interrupting drafting or
   implementation.
 
-## 3. Context / reference exploration (Explore)
+## 3. Context / reference exploration (Learn)
 
 Owner: `wt-idea` for exploratory research, `wt-ready` when reference gathering
 is needed before committed prep.
@@ -140,7 +141,7 @@ Return here when:
 - The user needs examples before they can say what they want.
 - There are too many possible product/document/workflow shapes.
 
-## 4. Purpose / success criteria (Demonstrate)
+## 4. Purpose / success criteria (Example)
 
 Owner: `wt-idea` for exploration, `wt-ready` for committed prep.
 
@@ -159,7 +160,7 @@ Return here when:
 - The implementation is named but the benefit is unclear.
 - A task would need the agent to invent product intent.
 
-## 5. Requirements / principles (Demonstrate)
+## 5. Requirements / principles (Example)
 
 Owner: `wt-ready`.
 
@@ -189,7 +190,7 @@ Return here when:
   prototype, docs change, or implementation PR is the right next artifact.
 - Acceptance checks cannot be stated.
 
-## 6. Wireframe with mock data (Demonstrate)
+## 6. Wireframe with mock data (Example)
 
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
 show that the validated structure was wrong.
@@ -252,11 +253,11 @@ Return here when:
   from the wireframe alone.
 - An artifact-specific wireframe was started before the text-first structure
   passed.
-- The visual mockup exposes missing context or data; return to Explore.
+- The visual mockup exposes missing context or data; return to Learn.
 - The concrete case exposes missing behavior or acceptance criteria; return to
   Gate 5 Requirements.
 
-## 7. Design (Generalize)
+## 7. Design (Architect)
 
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
 invalidate assumptions.
@@ -292,7 +293,7 @@ Return here when:
 - The design cannot generalize without inventing missing cases; return to Gate
   6 and add another concrete case.
 
-## 8. Task graph (Generalize)
+## 8. Task graph (Architect)
 
 Owner: `wt-ready`.
 
@@ -318,12 +319,16 @@ Return here when:
 - A slice is too large to review or too small to justify its own branch.
 - The proposed stack is only a packaging choice, not a dependency claim.
 
-## 9. Execution handoff (Generalize)
+## 9. Execution handoff (Architect)
 
 Owner: `wt-ready` prepares; `wt-start` launches.
 
 Artifact: `09-execution.md`, TaskDocument body `계획 (Planning)` section,
 optional Workflow policy snapshot, and exact `wt-start` target.
+
+In generic LEAF work, Gate 9 is the result or execution artifact itself. In
+`wt-ready`, Gate 9 is deliberately narrower: it prepares the runnable handoff
+because the actual implementation result is produced after `wt-start`.
 
 Gate to next step:
 
@@ -337,9 +342,10 @@ Return here when:
 - The next command is ambiguous.
 - Required expected duration, policy, or acceptance checks are missing.
 
-## 10. Review / sync (Evolve)
+## 10. Review / sync record (Feedback material)
 
-Owner: `wt-coordinate`.
+Owner: `wt-coordinate` records the evidence while doing Architect execution;
+`wt-retrospect` consumes it as Feedback material.
 
 Artifact: reviewed diff/check evidence, updated `07-design.md`,
 `08-tasks.md`, `09-execution.md`, and `10-review.md` when execution reality
@@ -360,7 +366,7 @@ Return here when:
 - Implementation reveals a requirement or design assumption was wrong.
 - The diff is too broad for the prepared task and needs re-slicing.
 
-## 11. Retrospect (Evolve)
+## 11. Retrospect (Feedback)
 
 Owner: `wt-retrospect`, normally called by `wt-work` after landing or explicit
 discard.
