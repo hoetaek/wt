@@ -36,7 +36,7 @@ preparation. Implementation belongs in a wt task/workflow branch.
 
 ## Gather Evidence
 
-If raw intent and unknowns are not yet surfaced (e.g., the user skipped
+If intent and unknowns are not yet surfaced (e.g., the user skipped
 `wt-idea` and entered ready directly), run a brief Unknown Surfacing pass
 before evidence gathering. Use the four categories from `wt-idea` — domain
 concepts, standards/conventions, external facts, internal facts — and mark
@@ -70,7 +70,7 @@ URL, command output), **flagged assumption** (still to validate), or
 **inventoried material** (user/team already holds it). Assumptions must not
 ride along as facts into the next gate.
 
-When raw intent is still soft, use bounded context/reference exploration before
+When intent is still soft, use bounded context/reference exploration before
 forcing purpose or requirements. Gather enough local or external examples to
 name 2-4 plausible frames, record why each fits or fails, and then either:
 continue to purpose/success criteria, return to `wt-idea`, or ask one HITL
@@ -79,18 +79,25 @@ question that chooses the next exploration direction.
 ## Work Sequence
 
 Before promoting an idea, writing specs, or preparing TaskDocuments, identify
-where the work currently sits in `references/work-sequence.md`: Discover
-(intent/context), Shape (purpose/requirements/wireframe), Execute prep
-(design/tasks/handoff), or Improve (review/retrospect). Do not treat the
+where the work currently sits in the EDGE phases from
+`references/work-sequence.md`: Explore (intent/context), Demonstrate
+(purpose/requirements/wireframe), Generalize (design/tasks/handoff), or
+Evolve (review/retrospect). Do not treat the
 sequence as a waterfall; use it as a set of gates that prevent skipping from
 vague intent straight to runnable work.
 
 If a user enters `wt-ready` directly with implementation-shaped wording,
-reconstruct the missing raw intent, purpose/success criteria, and output
-form first. If Discover is incomplete, gather unknowns and context before
-Shape. If Shape is incomplete, stop at requirements or wireframe instead of
-design. If Execute prep is incomplete, stop at design, task graph, or execution
-handoff instead of fabricating a TaskDocument.
+reconstruct the missing intent, purpose/success criteria, and output
+form first. If Explore is incomplete, gather unknowns and context before
+Demonstrate. If Demonstrate is incomplete, stop at requirements or wireframe
+instead of design. If the Generalize gates are incomplete, stop at design, task
+graph, or execution handoff instead of fabricating a TaskDocument.
+
+Once the current one-sentence intent is available, show a compact EDGE route
+preview before deep prep. Phrase each phase as a question about this specific
+intent: what to learn in Explore, what cheap concrete case to validate in
+Demonstrate, what rules/tasks to extract in Generalize, and what to review or
+learn in Evolve. This is orientation, not a fixed plan.
 
 Gate transitions require explicit user approval. The agent may propose that
 unknowns are surfaced, context is adequate, requirements are settled, a
@@ -144,12 +151,18 @@ operator workflow, important states, or system constraints are missing, return
 to `02-unknowns.md` / `03-context.md` instead of letting design discover the
 structure late.
 
+Run cheap iterations before expensive generalization. Gate 6 validates a
+concrete case; Gate 7 generalizes the case into reusable design rules.
+
 Wireframe does not mean UI only. Use the artifact form that fits the output:
 
-1. Start with a text-first wireframe: ASCII layout, command transcript,
+1. Group requirements into the pages, flows, states, commands, or document
+   sections they will appear in. For UI/web work, write the representative user
+   journey before drawing.
+2. Start with a text-first wireframe: ASCII layout, command transcript,
    sequence sketch, table/state matrix, or outline with representative mock
    data. This pass must succeed before design or medium-specific wireframing.
-2. If needed, add an artifact-specific wireframe:
+3. If needed, add an artifact-specific wireframe:
    - UI / app flow: rough screens or HTML with realistic records, empty states,
      error states, and visual treatment for the concrete approved case.
    - CLI / config: expected command transcript, generated TOML, and failure
@@ -169,6 +182,11 @@ confirm that it fits. If an artifact-specific wireframe is needed, that concrete
 case must also pass before `07-design.md` generalizes it into component
 boundaries, state model, command/config shape, data contracts, interaction
 rules, or visual system rules.
+
+Loops are expected. If the visual mockup exposes missing data or context, return
+to Explore. If it exposes missing behavior, return to requirements. If design
+cannot generalize the case without inventing rules, return to Gate 6 and add a
+better concrete case.
 
 For user-facing, ambiguous, or high-risk flows, add a cold reader check. Show
 only the wireframe, mock data, labels, and visible sequence to a blind reader.
@@ -221,6 +239,49 @@ Example body section:
 ```
 
 Prefer several narrow slices over one broad task.
+
+### TaskDocument body placement
+
+The agent reads task body top-down and often acts before reaching the end. Place
+**hard constraints the agent must not miss** in the top of the body, not at the
+bottom. In particular, when a slice carries any of these:
+
+- Design language or visual-grade requirements (specific fonts, banned fonts,
+  layout archetype, container/shadow rules, motion easing, allowlisted icon
+  set)
+- Security envelope (path allowlist, sandbox boundary, secret handling)
+- Cross-cutting prohibitions (e.g. "do not touch `wt ui`", "do not bump
+  `Cargo.toml` version", "do not introduce dependency X")
+- Base-branch / parent-branch restriction (especially when the agent might
+  default to a different base)
+
+place them in a dedicated top-level section that appears within the first ~30
+lines of the body — **immediately after `## 계획 (Planning)`, before `## 맥락`**
+— and reference the canonical spec/contract by path so the agent can pull
+detail without scrolling.
+
+Example body order:
+
+```text
+## 계획 (Planning)
+- ...
+
+## 필수 준수 (Hard constraints)
+- Design language: Soft Structuralism + Geist + Phosphor Light. 금지: Inter,
+  generic border. 정본: `<spec-path>/07-design.md` "Design language" 절.
+- Security: write 는 `<repo-root>/.wt/execution/tasks/*.toml` 만.
+- 회귀: `wt ui` 손대지 않음. `Cargo.toml` version 변경 금지.
+- Base: develop (master 아님).
+
+## 맥락
+- ...
+```
+
+Background reason: empirically
+(`<repo-root>/.wt/planning/specs/wt-studio-authoring-surface/11-retrospect.md`),
+visual-grade constraints buried in the lower half of a long task body are
+silently dropped by the first agent turn even when the spec file fully states
+them. Top-of-body placement is the cheap structural fix.
 
 ### Task and PR size budget
 
@@ -409,8 +470,9 @@ idea file existing first.
 
 `06-wireframe.md` or `06-wireframe/`:
 
-- Validate structure and workflow before design, starting with a text-first
-  wireframe that uses realistic mock data or representative examples.
+- Validate a concrete case before design. Start by grouping requirements into
+  pages, flows, states, commands, or document sections, then create a
+  text-first wireframe with realistic mock data or representative examples.
 - Record the context adequacy check: which unknowns were resolved, which facts
   or examples from `03-context.md` support the structure, and which states are
   intentionally deferred.
@@ -429,9 +491,9 @@ idea file existing first.
 
 - Start from the passed wireframe case or explicitly note that the wireframe was
   collapsed for tiny work.
-- Generalize the passed case into reusable decisions, affected components, state
-  and data contracts, interaction rules, responsive rules, visual system rules
-  when relevant, and constraints.
+- Generalize the passed concrete case into reusable decisions, affected
+  components, state and data contracts, interaction rules, responsive rules,
+  visual system rules when relevant, and constraints.
 - For brownfield work, optionally include a Static Model (Purpose, Components,
   Business Rules) and a Dynamic Model (workflow / behavior) section before the
   new design.
@@ -533,6 +595,8 @@ makes a file authoritative.
 
 - Whether unknowns and context are sufficient to create realistic mock data.
   If not, return to `02-unknowns.md` / `03-context.md` before design.
+- Whether requirements are grouped into concrete pages, flows, states,
+  commands, or document sections before drawing.
 - Whether the text-first wireframe uses representative data, examples, states,
   or command transcripts instead of abstract placeholders.
 - Whether the intended user/operator can walk through the flow and find the
@@ -542,6 +606,8 @@ makes a file authoritative.
 - Whether an artifact-specific wireframe is needed after text-first approval
   (for example HTML for web, generated TOML for config, or API
   request/response examples).
+- For UI/web work, whether the visual treatment is sufficient to judge the
+  concrete case before generalizing a visual system in `07-design.md`.
 - Which empty/error/edge/loading/conflict states change structure and therefore
   must appear before design.
 - Whether the wireframe reveals missing requirements or wrong assumptions.

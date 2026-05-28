@@ -1,5 +1,9 @@
 # Work Sequence
 
+EDGE (Explore -> Demonstrate -> Generalize -> Evolve) validates the user's
+real intent with cheap concrete cases before committing to costly solutions,
+then feeds execution lessons back into the next iteration.
+
 Use this reference to decide what artifact `wt-ready` should produce next. The
 sequence is not a rigid waterfall. It is a set of gates: each step reduces a
 different kind of uncertainty before the work becomes runnable.
@@ -7,27 +11,34 @@ different kind of uncertainty before the work becomes runnable.
 ## Summary
 
 ```text
-Discover: 1 Raw intent
+Explore:     1 Intent
        -> 2 Unknown surfacing
        -> 3 Context / reference exploration
 
-Shape:    4 Purpose / success criteria
+Demonstrate: 4 Purpose / success criteria
        -> 5 Requirements / principles
        -> 6 Wireframe with mock data
 
-Execute:  7 Design
+Generalize:  7 Design
        -> 8 Task graph
        -> 9 Execution handoff
 
-Improve: 10 Review / sync
+Evolve:     10 Review / sync
        -> 11 Retrospect
 ```
 
-For `wt-ready`, Discover is either inherited from `wt-idea` or reconstructed
-when the user enters prep directly. Shape and Execute-prep are the main
-ownership area: settle purpose, requirements, wireframe, design, task graph, and
-handoff. Improve is owned later by `wt-coordinate` and `wt-retrospect`, but
-`wt-ready` must leave artifacts that are easy to sync and learn from.
+For `wt-ready`, Explore is either inherited from `wt-idea` or reconstructed
+when the user enters prep directly. `wt-ready` mainly owns Demonstrate and the
+Generalize preparation gates: purpose, requirements, wireframe, design, task
+graph, and handoff. Evolve is owned later by `wt-coordinate` and
+`wt-retrospect`, but `wt-ready` must leave artifacts that are easy to sync and
+learn from.
+
+Once Gate 1 has a current one-sentence intent, show the user a compact EDGE
+route preview. Phrase each phase as a question about that intent: what to learn
+in Explore, what cheap concrete case to validate in Demonstrate, what
+rules/tasks to extract in Generalize, and what to review or learn in Evolve.
+Keep it as orientation, not a fixed plan.
 
 Kiro's spec-driven workflow maps to
 `04+05-requirements.md -> 06-wireframe.md -> 07-design.md -> 08-tasks.md`.
@@ -46,18 +57,21 @@ planning/ideas/<slug>.{md,toml}
 -> review, land, retrospect
 ```
 
-## 1. Raw intent (Discover)
+## 1. Intent (Explore)
 
 Owner: `wt-idea`, or the first minutes of `wt-ready` when the user skips idea
 capture.
 
 Artifact: `planning/ideas/<slug>.{md,toml}` when the thought is exploratory; otherwise
-`planning/specs/<slug>/01-intent.md` or a short raw-intent note in the TaskDocument body.
+`planning/specs/<slug>/01-intent.md` or a short intent note in the TaskDocument body.
 
 Gate to next step:
 
 - The user's wording is preserved enough that later agents can tell what was
   requested, not only what the coordinator inferred.
+- The current one-sentence intent states what the user appears to want after
+  available interview/context, with uncertain parts marked as assumptions or
+  questions.
 - The idea is allowed to die, split, or be rewritten.
 - It is clear whether the user already has enough context to state purpose and
   success criteria, or whether references/benchmarks are needed first.
@@ -67,7 +81,7 @@ Return here when:
 - The request is only a symptom, preference, or implementation hunch.
 - Multiple unrelated ideas are mixed together.
 
-## 2. Unknown surfacing (Discover)
+## 2. Unknown surfacing (Explore)
 
 Owner: `wt-idea`, or `wt-ready` when entered directly without prior idea capture.
 
@@ -96,7 +110,7 @@ Return here when:
 - Repeated unplanned research detours start interrupting drafting or
   implementation.
 
-## 3. Context / reference exploration (Discover)
+## 3. Context / reference exploration (Explore)
 
 Owner: `wt-idea` for exploratory research, `wt-ready` when reference gathering
 is needed before committed prep.
@@ -105,7 +119,7 @@ Artifact: idea body sections for references/options/tradeoffs, or
 `planning/specs/<slug>/03-context.md`.
 
 Purpose: use the Unknown surfacing list as the research agenda, then sharpen
-raw intent before forcing purpose, requirements, or output form. This is where
+intent before forcing purpose, requirements, or output form. This is where
 contextual research, reference benchmarking, prior art, related tasks, product
 examples, and possible solution frames belong when the user cannot yet picture
 the desired result.
@@ -126,7 +140,7 @@ Return here when:
 - The user needs examples before they can say what they want.
 - There are too many possible product/document/workflow shapes.
 
-## 4. Purpose / success criteria (Shape)
+## 4. Purpose / success criteria (Demonstrate)
 
 Owner: `wt-idea` for exploration, `wt-ready` for committed prep.
 
@@ -145,7 +159,7 @@ Return here when:
 - The implementation is named but the benefit is unclear.
 - A task would need the agent to invent product intent.
 
-## 5. Requirements / principles (Shape)
+## 5. Requirements / principles (Demonstrate)
 
 Owner: `wt-ready`.
 
@@ -175,7 +189,7 @@ Return here when:
   prototype, docs change, or implementation PR is the right next artifact.
 - Acceptance checks cannot be stated.
 
-## 6. Wireframe with mock data (Shape)
+## 6. Wireframe with mock data (Demonstrate)
 
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
 show that the validated structure was wrong.
@@ -183,17 +197,20 @@ show that the validated structure was wrong.
 Artifact: `planning/specs/<slug>/06-wireframe.md` for one compact artifact,
 `06-wireframe/` for several screens/flows/examples, or collapsed
 `04+05+06-requirements.md` when the work is tiny and the structural sketch fits
-inside requirements. Gate 6 starts with a text-first wireframe by default:
-ASCII layout, command transcript, sequence sketch, table/state matrix, or
-outline with placeholder evidence. After that passes, add the artifact-specific
-shape when needed: HTML for web, generated TOML example, TaskDocument/workflow
-flow, API request/response examples, or realistic state table. For visual
-outputs, this may include the concrete visual treatment the user approves; it is
-still a case, not the generalized system.
+inside requirements. Gate 6 is the cheap-iteration gate before expensive
+generalization. It validates a concrete case by grouping requirements into
+pages, flows, states, commands, or document sections; walking a representative
+journey; then drawing a text-first wireframe by default: ASCII layout, command
+transcript, sequence sketch, table/state matrix, or outline with placeholder
+evidence. After that passes, add the artifact-specific shape when needed: HTML
+for web, generated TOML example, TaskDocument/workflow flow,
+API request/response examples, or realistic state table. For visual outputs,
+this may include visual treatment for the concrete case; it is still a case,
+not the generalized system.
 
-Purpose: validate concrete structure and workflow cases before design. The
-wireframe is not the generalized system; it is a check that the
-unknowns/context gathered so far are sufficient to model the work with
+Purpose: validate concrete structure, workflow, and visual judgment before
+design generalizes. The wireframe is not the generalized system; it is a check
+that the unknowns/context gathered so far are sufficient to model the work with
 representative data and states.
 
 Entry condition:
@@ -210,6 +227,8 @@ Gate to next step:
 
 - The text-first wireframe uses realistic mock data or representative examples,
   not empty placeholders that hide structure.
+- Requirements are grouped into the page, flow, state, command, or document
+  buckets the concrete case needs.
 - The operator/user can walk through the intended flow in text-first form.
 - For user-facing, ambiguous, or high-risk flows, a cold reader can infer the
   actor, purpose, expected outcome, next action, and important states from the
@@ -233,15 +252,18 @@ Return here when:
   from the wireframe alone.
 - An artifact-specific wireframe was started before the text-first structure
   passed.
+- The visual mockup exposes missing context or data; return to Explore.
+- The concrete case exposes missing behavior or acceptance criteria; return to
+  Gate 5 Requirements.
 
-## 7. Design (Execute prep)
+## 7. Design (Generalize)
 
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
 invalidate assumptions.
 
 Artifact: `planning/specs/<slug>/07-design.md`.
 
-Purpose: generalize the passed wireframe case into implementation-facing design
+Purpose: generalize the passed concrete case into implementation-facing design
 rules: component boundaries, state model, command/config shape, data contracts,
 interaction rules, responsive rules, visual system rules when relevant, and
 rejected alternatives.
@@ -267,8 +289,10 @@ Return here when:
   wireframe first.
 - The design treats one approved mock screen, example, or happy path as the
   whole system instead of extracting general rules.
+- The design cannot generalize without inventing missing cases; return to Gate
+  6 and add another concrete case.
 
-## 8. Task graph (Execute prep)
+## 8. Task graph (Generalize)
 
 Owner: `wt-ready`.
 
@@ -294,7 +318,7 @@ Return here when:
 - A slice is too large to review or too small to justify its own branch.
 - The proposed stack is only a packaging choice, not a dependency claim.
 
-## 9. Execution handoff (Execute prep)
+## 9. Execution handoff (Generalize)
 
 Owner: `wt-ready` prepares; `wt-start` launches.
 
@@ -313,7 +337,7 @@ Return here when:
 - The next command is ambiguous.
 - Required expected duration, policy, or acceptance checks are missing.
 
-## 10. Review / sync (Improve)
+## 10. Review / sync (Evolve)
 
 Owner: `wt-coordinate`.
 
@@ -336,7 +360,7 @@ Return here when:
 - Implementation reveals a requirement or design assumption was wrong.
 - The diff is too broad for the prepared task and needs re-slicing.
 
-## 11. Retrospect (Improve)
+## 11. Retrospect (Evolve)
 
 Owner: `wt-retrospect`, normally called by `wt-work` after landing or explicit
 discard.
