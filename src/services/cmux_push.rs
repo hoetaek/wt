@@ -5,6 +5,7 @@ use crate::services::cmux::{
     codex_prompt_expects_pasted_content_marker, screen_has_codex_pasted_content_marker,
     unique_cmux_buffer_name,
 };
+use crate::services::cmux::{CmuxCaller, CmuxService};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
@@ -162,7 +163,7 @@ fn push_codex_prompt(
     let set_buffer_args = cmux_set_buffer_args(&buffer, text);
     run_cmux(runner, &set_buffer_args, "set-buffer")?;
     let paste_buffer_args = cmux_paste_buffer_args(surface_id, workspace, &buffer);
-    run_cmux_paste_buffer_with_retry(runner, &paste_buffer_args)?;
+    run_cmux_paste_buffer_with_retry(runner, surface_id, workspace, &paste_buffer_args)?;
     if let Some(workspace) = workspace {
         if codex_prompt_expects_pasted_content_marker(text)
             && wait_for_codex_pasted_content_marker(runner, surface_id, workspace)?
@@ -187,7 +188,7 @@ fn push_pasted_prompt(
     let set_buffer_args = cmux_set_buffer_args(&buffer, text);
     run_cmux(runner, &set_buffer_args, "set-buffer")?;
     let paste_buffer_args = cmux_paste_buffer_args(surface_id, workspace, &buffer);
-    run_cmux_paste_buffer_with_retry(runner, &paste_buffer_args)?;
+    run_cmux_paste_buffer_with_retry(runner, surface_id, workspace, &paste_buffer_args)?;
     std::thread::sleep(PASTE_SUBMIT_SETTLE);
     let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
     run_cmux(runner, &enter_args, "send-key")
@@ -232,16 +233,42 @@ fn run_cmux(runner: &dyn CommandRunner, args: &[&str], verb: &str) -> Result<()>
     Ok(())
 }
 
-/// Retry paste-buffer on transient `Command timed out` errors. The receiving
-/// agent TUI sometimes shows its ready marker before fully entering an input
-/// mode that accepts paste; in that brief window cmux's IPC waits on the
-/// surface and the CLI returns a timeout. A short backoff resolves it.
-fn run_cmux_paste_buffer_with_retry(runner: &dyn CommandRunner, args: &[&str]) -> Result<()> {
-    const BACKOFFS_MS: &[u64] = &[0, 1_000, 3_000];
+/// Retry paste-buffer on transient `Command timed out` errors.
+///
+/// cmux 0.64.x has an offscreen-PTY race where a surface that is not currently
+/// focused can be slow to process `paste-buffer`; the cmux CLI eventually
+/// returns "Command timed out". The previous fix at the workspace-open layer
+/// (d0c5594, `src/setup/workspace.rs:140-155`) handled the same race for the
+/// initial agent launch by briefly focusing the target workspace, letting the
+/// PTY wake, then restoring the prior focus. The send/paste-buffer path lost
+/// that mirror when cmux send paths were unified, so we reapply it here.
+///
+/// Strategy: first attempt is unchanged. On a transient timeout we capture the
+/// caller's current focus (once), briefly focus the target surface, dwell to
+/// wake the PTY, restore the prior focus, then retry. Non-transient failures
+/// surface immediately.
+fn run_cmux_paste_buffer_with_retry(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: Option<&str>,
+    args: &[&str],
+) -> Result<()> {
+    const DWELL_MS: &[u64] = &[0, 1_000, 3_000];
+    let cmux = CmuxService::new(runner);
+    let mut prior_focus: Option<CmuxCaller> = None;
     let mut last_err: Option<String> = None;
-    for (attempt, &delay) in BACKOFFS_MS.iter().enumerate() {
-        if delay > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(delay));
+    for (idx, &dwell_ms) in DWELL_MS.iter().enumerate() {
+        if idx > 0 {
+            if prior_focus.is_none() {
+                prior_focus = cmux
+                    .identity_context()
+                    .and_then(|identity| identity.focused.or(identity.caller));
+            }
+            let _ = cmux.focus_surface(surface_id, workspace);
+            std::thread::sleep(std::time::Duration::from_millis(dwell_ms));
+            if let Some(prior) = prior_focus.as_ref() {
+                restore_prior_focus(&cmux, prior);
+            }
         }
         let out = runner.run("cmux", args, None)?;
         if out.success {
@@ -252,13 +279,26 @@ fn run_cmux_paste_buffer_with_retry(runner: &dyn CommandRunner, args: &[&str]) -
             bail!("cmux paste-buffer failed: {message}");
         }
         last_err = Some(message);
-        let _ = attempt;
     }
     bail!(
         "cmux paste-buffer failed after {} attempts: {}",
-        BACKOFFS_MS.len(),
+        DWELL_MS.len(),
         last_err.unwrap_or_else(|| "command exited with non-zero status".into())
     )
+}
+
+fn restore_prior_focus(cmux: &CmuxService<'_>, prior: &CmuxCaller) {
+    if let Some(surface) = prior.surface.as_deref().filter(|s| !s.trim().is_empty()) {
+        if cmux
+            .focus_surface(surface, prior.workspace.as_deref())
+            .is_ok()
+        {
+            return;
+        }
+    }
+    if let Some(workspace) = prior.workspace.as_deref().filter(|w| !w.trim().is_empty()) {
+        let _ = cmux.select_workspace(workspace);
+    }
 }
 
 fn is_transient_paste_failure(message: &str) -> bool {
@@ -612,21 +652,36 @@ mod tests {
         let mut runner = MockRunner::new();
         runner.add_response("", true); // set-buffer
         runner.add_response_with_stderr("", "Error: Command timed out", false); // paste-buffer attempt 1
+        // identify + focus target + restore prior, then retry paste-buffer
+        runner.add_response(
+            r#"{"caller":{"surface_ref":"surface:9","workspace_ref":"workspace:7"},"focused":{"surface_ref":"surface:9","workspace_ref":"workspace:7"}}"#,
+            true,
+        ); // cmux identify
+        runner.add_response("", true); // cmux rpc surface.focus (target)
+        runner.add_response("", true); // cmux rpc surface.focus (restore)
         runner.add_response("", true); // paste-buffer attempt 2 succeeds
         runner.add_response("", true); // send-key enter
 
         push_to_surface(&runner, "surface:4", PushKind::Codex, "hello").unwrap();
 
         let calls = runner.calls.lock().unwrap();
+        let verbs: Vec<&str> = calls.iter().map(|c| c.1[0].as_str()).collect();
         assert_eq!(
-            calls.len(),
-            4,
-            "expected set-buffer + 2x paste-buffer + send-key"
+            verbs,
+            vec![
+                "set-buffer",
+                "paste-buffer",
+                "identify",
+                "rpc",
+                "rpc",
+                "paste-buffer",
+                "send-key",
+            ],
+            "retry must focus target then restore prior focus before re-attempting paste-buffer",
         );
-        assert_eq!(calls[0].1[0], "set-buffer");
-        assert_eq!(calls[1].1[0], "paste-buffer");
-        assert_eq!(calls[2].1[0], "paste-buffer");
-        assert_eq!(calls[3].1[0], "send-key");
+        // first rpc focuses target (surface:4); second restores prior (surface:9).
+        assert!(calls[3].1.iter().any(|a| a.contains("surface:4")));
+        assert!(calls[4].1.iter().any(|a| a.contains("surface:9")));
     }
 
     #[test]
