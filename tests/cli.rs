@@ -750,7 +750,7 @@ fn session_set_rejects_invalid_ids_without_stdout() {
 }
 
 #[test]
-fn session_whoami_reports_identity_anchor_and_json() {
+fn session_show_reports_identity_anchor_and_json() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -768,7 +768,7 @@ fn session_whoami_reports_identity_anchor_and_json() {
         .success();
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "session", "whoami"])
+        .args(["-C", temp.path().to_str().unwrap(), "session", "show"])
         .env("CMUX_SURFACE_ID", "surface-1")
         .env("CMUX_WORKSPACE_ID", "workspace:1")
         .assert()
@@ -785,7 +785,7 @@ fn session_whoami_reports_identity_anchor_and_json() {
             "-C",
             temp.path().to_str().unwrap(),
             "session",
-            "whoami",
+            "show",
             "--json",
         ])
         .env("CMUX_SURFACE_ID", "surface-1")
@@ -808,7 +808,7 @@ fn session_whoami_reports_identity_anchor_and_json() {
 }
 
 #[test]
-fn session_unset_removes_identity_anchor_and_whoami_reports_none() {
+fn session_unset_removes_identity_anchor_and_show_reports_none() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -835,7 +835,7 @@ fn session_unset_removes_identity_anchor_and_whoami_reports_none() {
     assert!(toml_files(&anchor_dir(temp.path(), "my-coord")).is_empty());
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "session", "whoami"])
+        .args(["-C", temp.path().to_str().unwrap(), "session", "show"])
         .env("CMUX_SURFACE_ID", "surface-1")
         .assert()
         .success()
@@ -844,7 +844,7 @@ fn session_unset_removes_identity_anchor_and_whoami_reports_none() {
 }
 
 #[test]
-fn session_whoami_reports_corrupt_identity_anchor_but_unset_can_recover() {
+fn session_show_reports_corrupt_identity_anchor_but_unset_can_recover() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -865,7 +865,7 @@ fn session_whoami_reports_corrupt_identity_anchor_but_unset_can_recover() {
     std::fs::write(&files[0], "not valid toml = [").unwrap();
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "session", "whoami"])
+        .args(["-C", temp.path().to_str().unwrap(), "session", "show"])
         .env("CMUX_SURFACE_ID", "surface-1")
         .assert()
         .failure()

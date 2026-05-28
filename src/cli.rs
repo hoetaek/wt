@@ -427,7 +427,7 @@ pub enum SessionCommand {
     /// Remove the current session identity anchor and print shell unsets
     Unset,
     /// Print the current session identity resolution
-    Whoami {
+    Show {
         /// Emit machine-readable JSON
         #[arg(long)]
         json: bool,

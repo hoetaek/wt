@@ -26,7 +26,7 @@ pub fn unset(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-pub fn whoami(ctx: &Ctx, json: bool) -> Result<()> {
+pub fn show(ctx: &Ctx, json: bool) -> Result<()> {
     let report = resolve_report(ctx)?;
     if json {
         let stdout = io::stdout();
@@ -39,7 +39,7 @@ pub fn whoami(ctx: &Ctx, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn resolve_report(ctx: &Ctx) -> Result<WhoamiReport> {
+fn resolve_report(ctx: &Ctx) -> Result<SessionReport> {
     let key = identity_locator::current_anchor_key()?;
     let cmux_workspace_id = (key.kind == AnchorKind::Surface)
         .then(|| env::var("CMUX_WORKSPACE_ID").ok())
@@ -48,7 +48,7 @@ fn resolve_report(ctx: &Ctx) -> Result<WhoamiReport> {
 
     if let Some(id) = agent_id_from_env()? {
         let identity_anchor_path = identity_locator::identity_anchor_path_for_id(ctx, &id, &key)?;
-        return Ok(WhoamiReport {
+        return Ok(SessionReport {
             id: Some(id),
             source: IdentitySource::Env,
             anchor_kind: anchor_kind_name(&key.kind).into(),
@@ -68,7 +68,7 @@ fn resolve_report(ctx: &Ctx) -> Result<WhoamiReport> {
         ));
     }
 
-    Ok(WhoamiReport {
+    Ok(SessionReport {
         id: None,
         source: IdentitySource::None,
         anchor_kind: anchor_kind_name(&key.kind).into(),
@@ -104,8 +104,8 @@ fn report_from_marker(
     anchor: IdentityAnchor,
     identity_anchor_path: std::path::PathBuf,
     cmux_workspace_id: Option<String>,
-) -> WhoamiReport {
-    WhoamiReport {
+) -> SessionReport {
+    SessionReport {
         id: Some(anchor.id),
         source: IdentitySource::IdentityAnchor,
         anchor_kind: anchor_kind_name(&anchor.anchor_kind).into(),
@@ -115,7 +115,7 @@ fn report_from_marker(
     }
 }
 
-fn print_text_report(report: &WhoamiReport) {
+fn print_text_report(report: &SessionReport) {
     println!("id: {}", report.id.as_deref().unwrap_or("none"));
     println!("source: {}", report.source.as_str());
     println!("anchor_kind: {}", report.anchor_kind);
@@ -138,7 +138,7 @@ fn anchor_kind_name(kind: &AnchorKind) -> &'static str {
 }
 
 #[derive(Debug, Serialize)]
-struct WhoamiReport {
+struct SessionReport {
     id: Option<String>,
     source: IdentitySource,
     anchor_kind: String,

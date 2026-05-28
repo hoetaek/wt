@@ -59,9 +59,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Session { command } => match command {
             SessionCommand::Set { id } => commands::session::set(ctx, id),
             SessionCommand::Unset => commands::session::unset(ctx),
-            SessionCommand::Whoami { json } => {
-                commands::session::whoami(ctx, ctx.is_json() || *json)
-            }
+            SessionCommand::Show { json } => commands::session::show(ctx, ctx.is_json() || *json),
         },
         Commands::DeprecatedIssue { .. } => {
             deprecated_start_command_error("wt issue", "wt run issue")
