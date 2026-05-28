@@ -36,7 +36,7 @@ preparation. Implementation belongs in a wt task/workflow branch.
 
 ## Gather Evidence
 
-If raw intent and unknowns are not yet surfaced (e.g., the user skipped
+If intent and unknowns are not yet surfaced (e.g., the user skipped
 `wt-idea` and entered ready directly), run a brief Unknown Surfacing pass
 before evidence gathering. Use the four categories from `wt-idea` — domain
 concepts, standards/conventions, external facts, internal facts — and mark
@@ -70,7 +70,7 @@ URL, command output), **flagged assumption** (still to validate), or
 **inventoried material** (user/team already holds it). Assumptions must not
 ride along as facts into the next gate.
 
-When raw intent is still soft, use bounded context/reference exploration before
+When intent is still soft, use bounded context/reference exploration before
 forcing purpose or requirements. Gather enough local or external examples to
 name 2-4 plausible frames, record why each fits or fails, and then either:
 continue to purpose/success criteria, return to `wt-idea`, or ask one HITL
@@ -79,18 +79,25 @@ question that chooses the next exploration direction.
 ## Work Sequence
 
 Before promoting an idea, writing specs, or preparing TaskDocuments, identify
-where the work currently sits in `references/work-sequence.md`: Discover
-(intent/context), Shape (purpose/requirements/wireframe), Execute prep
-(design/tasks/handoff), or Improve (review/retrospect). Do not treat the
+where the work currently sits in the EDGE phases from
+`references/work-sequence.md`: Explore (intent/context), Demonstrate
+(purpose/requirements/wireframe), Generalize (design/tasks/handoff), or
+Evolve (review/retrospect). Do not treat the
 sequence as a waterfall; use it as a set of gates that prevent skipping from
 vague intent straight to runnable work.
 
 If a user enters `wt-ready` directly with implementation-shaped wording,
-reconstruct the missing raw intent, purpose/success criteria, and output
-form first. If Discover is incomplete, gather unknowns and context before
-Shape. If Shape is incomplete, stop at requirements or wireframe instead of
-design. If Execute prep is incomplete, stop at design, task graph, or execution
-handoff instead of fabricating a TaskDocument.
+reconstruct the missing intent, purpose/success criteria, and output
+form first. If Explore is incomplete, gather unknowns and context before
+Demonstrate. If Demonstrate is incomplete, stop at requirements or wireframe
+instead of design. If the Generalize gates are incomplete, stop at design, task
+graph, or execution handoff instead of fabricating a TaskDocument.
+
+Once the current one-sentence intent is available, show a compact EDGE route
+preview before deep prep. Phrase each phase as a question about this specific
+intent: what to learn in Explore, what cheap concrete case to validate in
+Demonstrate, what rules/tasks to extract in Generalize, and what to review or
+learn in Evolve. This is orientation, not a fixed plan.
 
 Gate transitions require explicit user approval. The agent may propose that
 unknowns are surfaced, context is adequate, requirements are settled, a
@@ -177,7 +184,7 @@ boundaries, state model, command/config shape, data contracts, interaction
 rules, or visual system rules.
 
 Loops are expected. If the visual mockup exposes missing data or context, return
-to Discover. If it exposes missing behavior, return to requirements. If design
+to Explore. If it exposes missing behavior, return to requirements. If design
 cannot generalize the case without inventing rules, return to Gate 6 and add a
 better concrete case.
 
