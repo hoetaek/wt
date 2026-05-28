@@ -1,4 +1,4 @@
 interface:
   display_name: "WT Ready"
   short_description: "Prepare wt work before launching"
-  default_prompt: "Use $wt-ready to gather evidence, set purpose/success criteria, requirements, output concept, slices, execution shape/policy, and prepare TaskDocuments or a workflow handoff for $wt-start."
+  default_prompt: "Use $wt-ready to reconcile Discover evidence, settle Shape artifacts (purpose, requirements, text-first wireframe), prepare Execute handoff (design, tasks, policy), and create TaskDocuments or workflow for $wt-start."

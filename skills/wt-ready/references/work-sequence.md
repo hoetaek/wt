@@ -183,17 +183,20 @@ show that the validated structure was wrong.
 Artifact: `planning/specs/<slug>/06-wireframe.md` for one compact artifact,
 `06-wireframe/` for several screens/flows/examples, or collapsed
 `04+05+06-requirements.md` when the work is tiny and the structural sketch fits
-inside requirements. Gate 6 starts with a text-first wireframe by default:
-ASCII layout, command transcript, sequence sketch, table/state matrix, or
-outline with placeholder evidence. After that passes, add the artifact-specific
-shape when needed: HTML for web, generated TOML example, TaskDocument/workflow
-flow, API request/response examples, or realistic state table. For visual
-outputs, this may include the concrete visual treatment the user approves; it is
-still a case, not the generalized system.
+inside requirements. Gate 6 is the cheap-iteration gate before expensive
+generalization. It validates a concrete case by grouping requirements into
+pages, flows, states, commands, or document sections; walking a representative
+journey; then drawing a text-first wireframe by default: ASCII layout, command
+transcript, sequence sketch, table/state matrix, or outline with placeholder
+evidence. After that passes, add the artifact-specific shape when needed: HTML
+for web, generated TOML example, TaskDocument/workflow flow,
+API request/response examples, or realistic state table. For visual outputs,
+this may include visual treatment for the concrete case; it is still a case,
+not the generalized system.
 
-Purpose: validate concrete structure and workflow cases before design. The
-wireframe is not the generalized system; it is a check that the
-unknowns/context gathered so far are sufficient to model the work with
+Purpose: validate concrete structure, workflow, and visual judgment before
+design generalizes. The wireframe is not the generalized system; it is a check
+that the unknowns/context gathered so far are sufficient to model the work with
 representative data and states.
 
 Entry condition:
@@ -210,6 +213,8 @@ Gate to next step:
 
 - The text-first wireframe uses realistic mock data or representative examples,
   not empty placeholders that hide structure.
+- Requirements are grouped into the page, flow, state, command, or document
+  buckets the concrete case needs.
 - The operator/user can walk through the intended flow in text-first form.
 - For user-facing, ambiguous, or high-risk flows, a cold reader can infer the
   actor, purpose, expected outcome, next action, and important states from the
@@ -233,6 +238,9 @@ Return here when:
   from the wireframe alone.
 - An artifact-specific wireframe was started before the text-first structure
   passed.
+- The visual mockup exposes missing context or data; return to Discover.
+- The concrete case exposes missing behavior or acceptance criteria; return to
+  Gate 5 Requirements.
 
 ## 7. Design (Execute prep)
 
@@ -241,7 +249,7 @@ invalidate assumptions.
 
 Artifact: `planning/specs/<slug>/07-design.md`.
 
-Purpose: generalize the passed wireframe case into implementation-facing design
+Purpose: generalize the passed concrete case into implementation-facing design
 rules: component boundaries, state model, command/config shape, data contracts,
 interaction rules, responsive rules, visual system rules when relevant, and
 rejected alternatives.
@@ -267,6 +275,8 @@ Return here when:
   wireframe first.
 - The design treats one approved mock screen, example, or happy path as the
   whole system instead of extracting general rules.
+- The design cannot generalize without inventing missing cases; return to Gate
+  6 and add another concrete case.
 
 ## 8. Task graph (Execute prep)
 

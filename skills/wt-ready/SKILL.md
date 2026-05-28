@@ -144,12 +144,18 @@ operator workflow, important states, or system constraints are missing, return
 to `02-unknowns.md` / `03-context.md` instead of letting design discover the
 structure late.
 
+Run cheap iterations before expensive generalization. Gate 6 validates a
+concrete case; Gate 7 generalizes the case into reusable design rules.
+
 Wireframe does not mean UI only. Use the artifact form that fits the output:
 
-1. Start with a text-first wireframe: ASCII layout, command transcript,
+1. Group requirements into the pages, flows, states, commands, or document
+   sections they will appear in. For UI/web work, write the representative user
+   journey before drawing.
+2. Start with a text-first wireframe: ASCII layout, command transcript,
    sequence sketch, table/state matrix, or outline with representative mock
    data. This pass must succeed before design or medium-specific wireframing.
-2. If needed, add an artifact-specific wireframe:
+3. If needed, add an artifact-specific wireframe:
    - UI / app flow: rough screens or HTML with realistic records, empty states,
      error states, and visual treatment for the concrete approved case.
    - CLI / config: expected command transcript, generated TOML, and failure
@@ -169,6 +175,11 @@ confirm that it fits. If an artifact-specific wireframe is needed, that concrete
 case must also pass before `07-design.md` generalizes it into component
 boundaries, state model, command/config shape, data contracts, interaction
 rules, or visual system rules.
+
+Loops are expected. If the visual mockup exposes missing data or context, return
+to Discover. If it exposes missing behavior, return to requirements. If design
+cannot generalize the case without inventing rules, return to Gate 6 and add a
+better concrete case.
 
 For user-facing, ambiguous, or high-risk flows, add a cold reader check. Show
 only the wireframe, mock data, labels, and visible sequence to a blind reader.
@@ -221,6 +232,49 @@ Example body section:
 ```
 
 Prefer several narrow slices over one broad task.
+
+### TaskDocument body placement
+
+The agent reads task body top-down and often acts before reaching the end. Place
+**hard constraints the agent must not miss** in the top of the body, not at the
+bottom. In particular, when a slice carries any of these:
+
+- Design language or visual-grade requirements (specific fonts, banned fonts,
+  layout archetype, container/shadow rules, motion easing, allowlisted icon
+  set)
+- Security envelope (path allowlist, sandbox boundary, secret handling)
+- Cross-cutting prohibitions (e.g. "do not touch `wt ui`", "do not bump
+  `Cargo.toml` version", "do not introduce dependency X")
+- Base-branch / parent-branch restriction (especially when the agent might
+  default to a different base)
+
+place them in a dedicated top-level section that appears within the first ~30
+lines of the body — **immediately after `## 계획 (Planning)`, before `## 맥락`**
+— and reference the canonical spec/contract by path so the agent can pull
+detail without scrolling.
+
+Example body order:
+
+```text
+## 계획 (Planning)
+- ...
+
+## 필수 준수 (Hard constraints)
+- Design language: Soft Structuralism + Geist + Phosphor Light. 금지: Inter,
+  generic border. 정본: `<spec-path>/07-design.md` "Design language" 절.
+- Security: write 는 `<repo-root>/.wt/execution/tasks/*.toml` 만.
+- 회귀: `wt ui` 손대지 않음. `Cargo.toml` version 변경 금지.
+- Base: develop (master 아님).
+
+## 맥락
+- ...
+```
+
+Background reason: empirically
+(`<repo-root>/.wt/planning/specs/wt-studio-authoring-surface/11-retrospect.md`),
+visual-grade constraints buried in the lower half of a long task body are
+silently dropped by the first agent turn even when the spec file fully states
+them. Top-of-body placement is the cheap structural fix.
 
 ### Task and PR size budget
 
@@ -409,8 +463,9 @@ idea file existing first.
 
 `06-wireframe.md` or `06-wireframe/`:
 
-- Validate structure and workflow before design, starting with a text-first
-  wireframe that uses realistic mock data or representative examples.
+- Validate a concrete case before design. Start by grouping requirements into
+  pages, flows, states, commands, or document sections, then create a
+  text-first wireframe with realistic mock data or representative examples.
 - Record the context adequacy check: which unknowns were resolved, which facts
   or examples from `03-context.md` support the structure, and which states are
   intentionally deferred.
@@ -429,9 +484,9 @@ idea file existing first.
 
 - Start from the passed wireframe case or explicitly note that the wireframe was
   collapsed for tiny work.
-- Generalize the passed case into reusable decisions, affected components, state
-  and data contracts, interaction rules, responsive rules, visual system rules
-  when relevant, and constraints.
+- Generalize the passed concrete case into reusable decisions, affected
+  components, state and data contracts, interaction rules, responsive rules,
+  visual system rules when relevant, and constraints.
 - For brownfield work, optionally include a Static Model (Purpose, Components,
   Business Rules) and a Dynamic Model (workflow / behavior) section before the
   new design.
@@ -533,6 +588,8 @@ makes a file authoritative.
 
 - Whether unknowns and context are sufficient to create realistic mock data.
   If not, return to `02-unknowns.md` / `03-context.md` before design.
+- Whether requirements are grouped into concrete pages, flows, states,
+  commands, or document sections before drawing.
 - Whether the text-first wireframe uses representative data, examples, states,
   or command transcripts instead of abstract placeholders.
 - Whether the intended user/operator can walk through the flow and find the
@@ -542,6 +599,8 @@ makes a file authoritative.
 - Whether an artifact-specific wireframe is needed after text-first approval
   (for example HTML for web, generated TOML for config, or API
   request/response examples).
+- For UI/web work, whether the visual treatment is sufficient to judge the
+  concrete case before generalizing a visual system in `07-design.md`.
 - Which empty/error/edge/loading/conflict states change structure and therefore
   must appear before design.
 - Whether the wireframe reveals missing requirements or wrong assumptions.

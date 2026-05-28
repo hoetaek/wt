@@ -35,8 +35,8 @@ Improve: 10 Review / sync
 | Discover | Context / reference exploration | `wt-idea`, or `wt-ready` for bounded prep research | idea body or `03-context.md` driven by the unknowns list |
 | Shape | Purpose / success criteria | `wt-ready` | `04+05-requirements.md`, or collapsed `04+05+06-requirements.md` |
 | Shape | Requirements / principles | `wt-ready` | `04+05-requirements.md` with output form, or collapsed `04+05+06-requirements.md` |
-| Shape | Wireframe with mock data | `wt-ready` | text-first wireframe in `06-wireframe.md` / `06-wireframe/`, then artifact-specific concrete case when needed; collapsed `04+05+06-requirements.md` for tiny work |
-| Execute | Design | `wt-ready` | `07-design.md` generalizes the passed wireframe case into component/state/data/interaction rules |
+| Shape | Wireframe with mock data | `wt-ready` | requirements grouped into pages/flows/states, text-first wireframe in `06-wireframe.md` / `06-wireframe/`, then artifact-specific concrete case when needed; collapsed `04+05+06-requirements.md` for tiny work |
+| Execute | Design | `wt-ready` | `07-design.md` generalizes the passed concrete case into component/state/data/interaction/visual-system rules |
 | Execute | Task graph | `wt-ready` | `08-tasks.md`, optional `09-execution.md`, TaskDocuments/workflow TOML |
 | Execute | Execution handoff | `wt-ready` | `09-execution.md`, TaskDocument `계획 (Planning)`, and exact `wt-start` target |
 | Execute | Execution launch | `wt-start` | TaskRun/worktree/workflow and inspect target |
@@ -56,8 +56,9 @@ Before moving to the next skill, answer the matching question:
   structure with realistic mock data, design, slice graph, expected duration,
   acceptance checks, size class, and policy explicit enough for an agent to
   start? If the work needed an artifact-specific wireframe, did the text-first
-  pass happen before it? Does design generalize the approved concrete case
-  instead of treating one mock screen or happy path as the whole system?
+  pass happen before it? Did Gate 6 validate a cheap concrete case before Gate
+  7 generalized it? Does design generalize the approved concrete case instead
+  of treating one mock screen or happy path as the whole system?
 - `wt-start` -> `wt-coordinate`: Is there a concrete inspect target and is
   runtime state visible through `wt inspect` / `wt agent status`?
 - `wt-coordinate` -> `wt-land`: Has the coordinator inspected the diff directly,
@@ -98,9 +99,10 @@ Examples:
   TaskDocument, workflow, or direct local edit.
 - Missing realistic examples, states, workflow, or constraints for a
   wireframe: return to Unknown surfacing / Context exploration.
-- Missing structure validation: create or grill the text-first
-  `06-wireframe.md` before design, then add an artifact-specific wireframe only
-  when needed.
+- Missing structure validation: group requirements into concrete pages, flows,
+  states, commands, or document sections; create or grill the text-first
+  `06-wireframe.md` before design; then add an artifact-specific wireframe or
+  visual mockup only when needed.
 - Missing dependency graph: revise `08-tasks.md` / `09-execution.md` before launch.
 - Missing execution target: stop with an unresolved `wt-start` handoff.
 - Missing sync: update `07-design.md`, `08-tasks.md`, `09-execution.md`, or
