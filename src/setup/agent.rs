@@ -123,10 +123,8 @@ pub(super) fn bootstrap_agent(
         }
 
         if let Some(marker) = &ready_marker {
-            ctx.ui.print_step(&format!(
-                "Waiting for agent ready marker '{}' ({}s timeout)...",
-                marker, agent.timeout
-            ));
+            ctx.ui
+                .print_step(&format!("Waiting for agent ready marker '{}'...", marker));
 
             let mut ready = false;
             for attempt in 0..agent.timeout {
