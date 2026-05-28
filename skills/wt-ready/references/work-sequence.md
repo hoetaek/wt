@@ -211,6 +211,9 @@ Gate to next step:
 - The text-first wireframe uses realistic mock data or representative examples,
   not empty placeholders that hide structure.
 - The operator/user can walk through the intended flow in text-first form.
+- For user-facing, ambiguous, or high-risk flows, a cold reader can infer the
+  actor, purpose, expected outcome, next action, and important states from the
+  wireframe alone.
 - Any needed artifact-specific wireframe also passes after the text-first pass.
 - Empty, error, edge, loading, conflict, or migration states that affect
   structure are represented or explicitly deferred.
@@ -226,6 +229,8 @@ Return here when:
 - A missing example, state, workflow step, or constraint could change the
   information architecture or command/config shape.
 - The user cannot walk through the flow with the current mock data.
+- A cold reader infers the wrong actor, purpose, next action, outcome, or state
+  from the wireframe alone.
 - An artifact-specific wireframe was started before the text-first structure
   passed.
 

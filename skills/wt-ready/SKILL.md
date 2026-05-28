@@ -170,6 +170,11 @@ case must also pass before `07-design.md` generalizes it into component
 boundaries, state model, command/config shape, data contracts, interaction
 rules, or visual system rules.
 
+For user-facing, ambiguous, or high-risk flows, add a cold reader check. Show
+only the wireframe, mock data, labels, and visible sequence to a blind reader.
+If they infer the wrong actor, outcome, next action, or important state, revise
+the wireframe before design.
+
 ## Slice The Work
 
 When the work is bigger than one safe task, split it into thin vertical slices.
@@ -417,6 +422,8 @@ idea file existing first.
   structure.
 - Record the user/operator walkthrough result for the text-first pass, and for
   the artifact-specific pass when one exists, before design starts.
+- For user-facing, ambiguous, or high-risk flows, record what a blind reader
+  inferred from the wireframe alone, plus any mismatch against requirements.
 
 `07-design.md`:
 
@@ -530,6 +537,8 @@ makes a file authoritative.
   or command transcripts instead of abstract placeholders.
 - Whether the intended user/operator can walk through the flow and find the
   expected outcome.
+- Whether a blind reader, seeing only the wireframe and mock data, can infer the
+  actor, purpose, expected outcome, next action, and important states.
 - Whether an artifact-specific wireframe is needed after text-first approval
   (for example HTML for web, generated TOML for config, or API
   request/response examples).
