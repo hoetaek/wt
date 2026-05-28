@@ -20,6 +20,7 @@ import {
   serializeConfigDraft,
   type ConfigDraft
 } from "./config-form";
+import { PromptEditor, promptModes, type PromptMode } from "./prompt-editor";
 import "./style.css";
 
 type TaskOrigin = {
@@ -72,16 +73,18 @@ type PersonalConfigPlanResponse = {
   baseline_stale: boolean;
 };
 
+type ProfilePromptPlanResponse = PersonalConfigPlanResponse;
+
 type PreviewPlan = {
   path: string;
-  operation: "create" | "update" | "config";
+  operation: "create" | "update" | "config" | "prompt";
   valid: boolean;
   validation_errors: string[];
   diff: string;
 };
 
 type Mode = "create" | "update";
-type SurfaceMode = "tasks" | "config";
+type SurfaceMode = "tasks" | "config" | "prompts";
 type PlanStatus = "idle" | "planning" | "stale";
 
 type EditorDraft = {
@@ -121,6 +124,7 @@ const eyebrow =
   "inline-flex w-fit items-center rounded-full bg-black/[0.04] px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-500 ring-1 ring-black/5 dark:bg-white/[0.04] dark:text-neutral-400 dark:ring-white/10";
 
 function App() {
+  const initialPrompt = promptLocationFromHash();
   const [surface, setSurface] = useState<SurfaceMode>(() => surfaceFromHash());
   const [inventory, setInventory] = useState<Inventory>({ items: [], invalid: [] });
   const [mode, setMode] = useState<Mode>("create");
@@ -136,6 +140,14 @@ function App() {
   const [configPlan, setConfigPlan] = useState<PersonalConfigPlanResponse | null>(null);
   const [configPlanStatus, setConfigPlanStatus] = useState<PlanStatus>("idle");
   const [configLoaded, setConfigLoaded] = useState(false);
+  const [promptProfile, setPromptProfile] = useState(initialPrompt.profile);
+  const [promptMode, setPromptMode] = useState<PromptMode>(initialPrompt.mode);
+  const [promptCandidate, setPromptCandidate] = useState("");
+  const [promptBaselineCandidate, setPromptBaselineCandidate] = useState("");
+  const [promptBaselineFingerprint, setPromptBaselineFingerprint] = useState<Fingerprint | null>(null);
+  const [promptPlan, setPromptPlan] = useState<ProfilePromptPlanResponse | null>(null);
+  const [promptPlanStatus, setPromptPlanStatus] = useState<PlanStatus>("idle");
+  const [promptLoadedKey, setPromptLoadedKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -155,22 +167,71 @@ function App() {
     () => JSON.stringify({ candidate: configCandidate, baseline: configBaselineFingerprint }),
     [configBaselineFingerprint, configCandidate]
   );
+  const promptResourceKey = `${promptProfile.trim()}/${promptMode}`;
+  const promptClean = promptLoadedKey === promptResourceKey && promptCandidate === promptBaselineCandidate;
+  const promptPlanSignature = useMemo(
+    () =>
+      JSON.stringify({
+        resource: promptResourceKey,
+        candidate: promptCandidate,
+        baseline: promptBaselineFingerprint
+      }),
+    [promptBaselineFingerprint, promptCandidate, promptResourceKey]
+  );
   const latestConfigPlanSignature = useRef(configPlanSignature);
+  const latestPromptPlanSignature = useRef(promptPlanSignature);
   const recoveryPlanController = useRef<AbortController | null>(null);
   const configPlanController = useRef<AbortController | null>(null);
+  const promptPlanController = useRef<AbortController | null>(null);
   latestPlanSignature.current = planSignature;
   latestConfigPlanSignature.current = configPlanSignature;
-  const activePlanStatus = surface === "config" ? configPlanStatus : planStatus;
-  const activeStatus = surface === "config" ? configStatusDescriptor(configPlanStatus, configPlan) : statusDescriptor(planStatus, plan);
+  latestPromptPlanSignature.current = promptPlanSignature;
+  const activePlanStatus = surface === "prompts" ? promptPlanStatus : surface === "config" ? configPlanStatus : planStatus;
+  const activeStatus =
+    surface === "prompts"
+      ? promptStatusDescriptor(promptPlanStatus, promptPlan)
+      : surface === "config"
+        ? configStatusDescriptor(configPlanStatus, configPlan)
+        : statusDescriptor(planStatus, plan);
   const displaySlug =
-    surface === "config" ? "local.toml" : mode === "create" ? draft.slug.trim() || "new-task" : selected?.key || draft.slug;
-  const displayTitle = surface === "config" ? "Personal config" : draft.title.trim() || "제목 없는 TaskDocument";
+    surface === "prompts"
+      ? promptMode
+      : surface === "config"
+        ? "local.toml"
+        : mode === "create"
+          ? draft.slug.trim() || "new-task"
+          : selected?.key || draft.slug;
+  const displayTitle =
+    surface === "prompts"
+      ? `${promptProfile.trim() || "profile"}/prompts/${promptMode}.md`
+      : surface === "config"
+        ? "Personal config"
+        : draft.title.trim() || "제목 없는 TaskDocument";
   const detailMetrics = useMemo(
     () =>
-      surface === "config"
+      surface === "prompts"
+        ? buildPromptDetailMetrics(promptProfile, promptMode, promptCandidate, promptPlan, promptPlanStatus)
+        : surface === "config"
         ? buildConfigDetailMetrics(configCandidate, configDraft, configPlan, configPlanStatus)
         : buildDetailMetrics(currentPath, draft, selected, plan, draftIssues, planStatus),
-    [configCandidate, configDraft, configPlan, configPlanStatus, currentPath, draft, draftIssues, plan, planStatus, selected, surface]
+    [
+      configCandidate,
+      configDraft,
+      configPlan,
+      configPlanStatus,
+      currentPath,
+      draft,
+      draftIssues,
+      plan,
+      planStatus,
+      promptCandidate,
+      promptMode,
+      promptPlan,
+      promptPlanStatus,
+      promptProfile,
+      selected,
+      surface
+    ]
   );
 
   useEffect(() => {
@@ -178,7 +239,15 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const onHashChange = () => setSurface(surfaceFromHash());
+    const onHashChange = () => {
+      const nextSurface = surfaceFromHash();
+      setSurface(nextSurface);
+      const nextPrompt = promptLocationFromHash();
+      setPromptProfile(nextPrompt.profile);
+      setPromptMode(nextPrompt.mode);
+      setPromptLoadedKey("");
+      resetPromptPlanState();
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
@@ -200,11 +269,19 @@ function App() {
   }, [configLoaded, surface]);
 
   useEffect(() => {
+    if (surface === "prompts" && promptLoadedKey !== promptResourceKey) {
+      void loadProfilePrompt();
+    }
+  }, [promptLoadedKey, promptResourceKey, surface]);
+
+  useEffect(() => {
     return () => {
       recoveryPlanController.current?.abort();
       recoveryPlanController.current = null;
       configPlanController.current?.abort();
       configPlanController.current = null;
+      promptPlanController.current?.abort();
+      promptPlanController.current = null;
     };
   }, []);
 
@@ -267,6 +344,34 @@ function App() {
       controller.abort();
     };
   }, [configClean, configLoaded, configPlanSignature, surface]);
+
+  useEffect(() => {
+    if (surface !== "prompts" || promptLoadedKey !== promptResourceKey) {
+      return;
+    }
+    if (promptClean) {
+      resetPromptPlanState();
+      return;
+    }
+
+    const controller = new AbortController();
+    const signature = promptPlanSignature;
+    const timer = window.setTimeout(() => {
+      if (latestPromptPlanSignature.current !== signature) {
+        return;
+      }
+      promptPlanController.current?.abort();
+      promptPlanController.current = controller;
+      setPromptPlanStatus("planning");
+      setError("");
+      void planProfilePrompt(controller.signal, signature);
+    }, PLAN_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [promptClean, promptLoadedKey, promptPlanSignature, promptResourceKey, surface]);
 
   useEffect(() => {
     const nodes = Array.from(document.querySelectorAll<HTMLElement>("[data-reveal]"));
@@ -340,11 +445,43 @@ function App() {
     }
   }
 
+  async function loadProfilePrompt() {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await api<ProfilePromptPlanResponse>(profilePromptApiPath("plan"), {
+        method: "POST",
+        body: JSON.stringify({
+          candidate: "",
+          baseline_fingerprint: null
+        })
+      });
+      setPromptCandidate(response.before);
+      setPromptBaselineCandidate(response.before);
+      setPromptBaselineFingerprint(response.fingerprint);
+      setPromptPlan(null);
+      setPromptPlanStatus("idle");
+      setPromptLoadedKey(promptResourceKey);
+    } catch (err) {
+      setError(errorMessage(err));
+      setPromptLoadedKey(promptResourceKey);
+      setPromptCandidate("");
+      setPromptBaselineCandidate("");
+      setPromptBaselineFingerprint(null);
+      setPromptPlan(null);
+      setPromptPlanStatus("idle");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function switchSurface(next: SurfaceMode) {
     setSurface(next);
     setError("");
     if (next === "config") {
       window.location.hash = "config";
+    } else if (next === "prompts") {
+      window.location.hash = promptHash(promptProfile, promptMode);
     } else {
       const slug = mode === "update" && selected ? selected.key : draft.slug.trim() || "new-task";
       window.location.hash = `task/${encodeURIComponent(slug)}`;
@@ -386,6 +523,13 @@ function App() {
     configPlanController.current = null;
     setConfigPlan(null);
     setConfigPlanStatus("idle");
+  }
+
+  function resetPromptPlanState() {
+    promptPlanController.current?.abort();
+    promptPlanController.current = null;
+    setPromptPlan(null);
+    setPromptPlanStatus("idle");
   }
 
   function triggerConflictRecoveryPlan() {
@@ -458,6 +602,32 @@ function App() {
     }
   }
 
+  async function planProfilePrompt(signal: AbortSignal, signature: string) {
+    try {
+      const response = await api<ProfilePromptPlanResponse>(profilePromptApiPath("plan"), {
+        method: "POST",
+        signal,
+        body: JSON.stringify({
+          candidate: promptCandidate,
+          baseline_fingerprint: promptBaselineFingerprint
+        })
+      });
+      if (latestPromptPlanSignature.current !== signature) {
+        return;
+      }
+      setPromptPlan(response);
+      setError("");
+      setPromptPlanStatus(response.baseline_stale ? "stale" : "idle");
+    } catch (err) {
+      if (isAbortError(err) || latestPromptPlanSignature.current !== signature) {
+        return;
+      }
+      setError(errorMessage(err));
+      setPromptPlan(null);
+      setPromptPlanStatus("idle");
+    }
+  }
+
   async function applyPlan() {
     if (!plan || !plan.valid) return;
     setBusy(true);
@@ -517,6 +687,33 @@ function App() {
     }
   }
 
+  async function applyPromptPlan() {
+    if (!promptPlan || promptPlan.validation_errors.length > 0 || promptPlan.baseline_stale) return;
+    setBusy(true);
+    setError("");
+    try {
+      const applied = await api<{ committed_fingerprint: Fingerprint }>(profilePromptApiPath("apply"), {
+        method: "POST",
+        body: JSON.stringify({
+          candidate: promptCandidate,
+          precondition: promptPlan.fingerprint
+        })
+      });
+      setPromptBaselineCandidate(promptCandidate);
+      setPromptBaselineFingerprint(applied.committed_fingerprint);
+      setPromptPlan(null);
+      setPromptPlanStatus("idle");
+    } catch (err) {
+      const apiErr = err as ApiFailure;
+      setError(errorMessage(err));
+      if (apiErr.status === 409) {
+        setPromptPlanStatus("stale");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function updateDraft(key: keyof EditorDraft, value: string) {
     setDraft((current) => {
       const next = { ...current, [key]: value };
@@ -526,6 +723,29 @@ function App() {
       return next;
     });
     resetPlanState();
+  }
+
+  function updatePromptProfile(profile: string) {
+    setPromptProfile(profile);
+    setPromptLoadedKey("");
+    resetPromptPlanState();
+    window.location.hash = promptHash(profile, promptMode);
+  }
+
+  function updatePromptMode(nextMode: PromptMode) {
+    setPromptMode(nextMode);
+    setPromptLoadedKey("");
+    resetPromptPlanState();
+    window.location.hash = promptHash(promptProfile, nextMode);
+  }
+
+  function updatePromptCandidate(value: string) {
+    setPromptCandidate(value);
+    resetPromptPlanState();
+  }
+
+  function profilePromptApiPath(action: "plan" | "apply") {
+    return `/api/profile-prompts/${encodeURIComponent(promptProfile.trim())}/${promptMode}/${action}`;
   }
 
   return h("main", { class: "relative min-h-[100dvh] overflow-hidden px-4 py-12 text-neutral-950 dark:text-neutral-50 sm:py-16" }, [
@@ -551,7 +771,8 @@ function App() {
           h("p", { class: "text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-500 dark:text-neutral-400" }, "wt studio"),
           h("div", { class: "mt-1 inline-flex rounded-full bg-black/[0.04] p-1 ring-1 ring-black/5 dark:bg-white/[0.05] dark:ring-white/10" }, [
             h(SurfacePill, { label: "Tasks", active: surface === "tasks", onClick: () => switchSurface("tasks") }),
-            h(SurfacePill, { label: "Personal config", active: surface === "config", onClick: () => switchSurface("config") })
+            h(SurfacePill, { label: "Personal config", active: surface === "config", onClick: () => switchSurface("config") }),
+            h(SurfacePill, { label: "Prompts", active: surface === "prompts", onClick: () => switchSurface("prompts") })
           ])
         ]),
         h("div", { class: "flex items-center gap-2" }, [
@@ -584,11 +805,21 @@ function App() {
             h("div", { class: "flex flex-wrap gap-2" }, [
               h(MetaPill, { label: surface === "config" ? "Config Plan" : mode === "create" ? "생성 Plan" : "수정 Plan" }),
               h(MetaPill, {
-                label: surface === "config" ? configPlanSummaryLabel(configPlanStatus, configPlan) : planSummaryLabel(planStatus, plan),
+                label:
+                  surface === "prompts"
+                    ? promptPlanSummaryLabel(promptPlanStatus, promptPlan)
+                    : surface === "config"
+                      ? configPlanSummaryLabel(configPlanStatus, configPlan)
+                      : planSummaryLabel(planStatus, plan),
                 tone:
                   activePlanStatus === "stale"
                     ? "amber"
-                    : activePlanStatus === "planning" || (surface === "config" ? configPlan && configPlan.validation_errors.length === 0 : plan?.valid)
+                    : activePlanStatus === "planning" ||
+                        (surface === "prompts"
+                          ? promptPlan && promptPlan.validation_errors.length === 0
+                          : surface === "config"
+                            ? configPlan && configPlan.validation_errors.length === 0
+                            : plan?.valid)
                       ? "blue"
                       : "neutral"
               }),
@@ -598,7 +829,9 @@ function App() {
           ]),
           drawerOpen &&
             h(Bezel, { className: "animate-[studio-spring_700ms_var(--ease-studio)_both]" }, [
-              surface === "config"
+              surface === "prompts"
+                ? h(PromptResourceList, { profile: promptProfile, mode: promptMode, onModeChange: updatePromptMode })
+                : surface === "config"
                 ? h(ConfigResourceList, { selected: true })
                 : [
                     h("div", { class: "flex items-center justify-between gap-4" }, [
@@ -620,18 +853,32 @@ function App() {
             ])
         ])
       ]),
-      h("section", { class: "grid gap-8 md:col-span-7", "aria-label": surface === "config" ? "Personal config editor" : "TaskDocument editor" }, [
+      h("section", { class: "grid gap-8 md:col-span-7", "aria-label": surface === "prompts" ? "Profile prompt editor" : surface === "config" ? "Personal config editor" : "TaskDocument editor" }, [
         h(Bezel, {}, [
           h("div", { class: "flex flex-col gap-6 md:flex-row md:items-center md:justify-between" }, [
             h("div", {}, [
               h("p", { class: eyebrow }, "편집기"),
-              h("h2", { class: "mt-4 text-3xl font-medium tracking-normal text-neutral-950 dark:text-neutral-50" }, surface === "config" ? "local.toml Plan" : "Apply 전 Plan")
+              h(
+                "h2",
+                { class: "mt-4 text-3xl font-medium tracking-normal text-neutral-950 dark:text-neutral-50" },
+                surface === "prompts" ? "Prompt Markdown Plan" : surface === "config" ? "local.toml Plan" : "Apply 전 Plan"
+              )
             ]),
             h("span", { "aria-live": "polite", "aria-atomic": "true" }, [
               h("span", { class: statusClass(activeStatus.tone, activeStatus.pulse) }, activeStatus.label)
             ])
           ]),
-          surface === "config"
+          surface === "prompts"
+            ? h(PromptEditor, {
+                profile: promptProfile,
+                mode: promptMode,
+                value: promptCandidate,
+                iconComponent: StudioFile,
+                onProfileChange: updatePromptProfile,
+                onModeChange: updatePromptMode,
+                onChange: updatePromptCandidate
+              })
+            : surface === "config"
             ? h(ConfigForm, {
                 draft: configDraft,
                 iconComponent: StudioConfig,
@@ -685,9 +932,11 @@ function App() {
             h(ActionButton, {
               label: "Apply",
               iconComponent: StudioSave,
-              onClick: surface === "config" ? applyConfigPlan : applyPlan,
+              onClick: surface === "prompts" ? applyPromptPlan : surface === "config" ? applyConfigPlan : applyPlan,
               disabled:
-                surface === "config"
+                surface === "prompts"
+                  ? busy || promptPlanStatus === "planning" || !promptPlan || promptPlan.validation_errors.length > 0 || promptPlan.baseline_stale
+                  : surface === "config"
                   ? busy || configPlanStatus === "planning" || !configPlan || configPlan.validation_errors.length > 0 || configPlan.baseline_stale
                   : busy || planStatus === "planning" || !plan?.valid,
               tone: "primary"
@@ -695,7 +944,9 @@ function App() {
           ])
         ]),
         error && h(MessagePanel, { message: error, tone: "error" }),
-        surface === "config"
+        surface === "prompts"
+          ? promptPlan && h(PlanPreview, { plan: profilePromptPreview(promptProfile, promptMode, promptPlan) })
+          : surface === "config"
           ? configPlan && h(PlanPreview, { plan: personalConfigPreview(configPlan) })
           : plan && h(PlanPreview, { plan: taskPreview(plan) })
       ])
@@ -808,6 +1059,57 @@ function ConfigResourceList(props: { selected: boolean }) {
         h("span", { class: "truncate text-xs text-white/70" }, "<repo-root>/.wt/config/local.toml")
       ]
     )
+  ]);
+}
+
+function PromptResourceList(props: {
+  profile: string;
+  mode: PromptMode;
+  onModeChange: (mode: PromptMode) => void;
+}) {
+  return h("div", { class: "grid gap-5" }, [
+    h("div", {}, [
+      h("p", { class: eyebrow }, "디스크"),
+      h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, "Profile prompts")
+    ]),
+    h("div", { class: "grid gap-2" }, [
+      h(
+        "div",
+        {
+          class:
+            "grid w-full gap-1 rounded-[1.25rem] bg-studio-accent px-4 py-3 text-left text-white ring-1 ring-studio-accent"
+        },
+        [
+          h("span", { class: "truncate text-sm font-medium" }, props.profile.trim() || "profile"),
+          h("span", { class: "truncate text-xs text-white/70" }, "<repo-root>/.wt/config/profiles/<name>/prompts")
+        ]
+      ),
+      h(
+        "div",
+        { class: "grid gap-2 pl-3" },
+        promptModes.map((mode) =>
+          h(
+            "button",
+            {
+              key: mode,
+              type: "button",
+              onClick: () => props.onModeChange(mode),
+              class: clsx(
+                "group grid w-full gap-1 rounded-[1rem] px-4 py-2 text-left ring-1 active:scale-[0.98]",
+                props.mode === mode
+                  ? "bg-neutral-950 text-white ring-neutral-950 dark:bg-white dark:text-neutral-950 dark:ring-white"
+                  : "bg-white/40 text-neutral-700 ring-black/5 hover:bg-white/80 dark:bg-white/[0.03] dark:text-neutral-200 dark:ring-white/10 dark:hover:bg-white/[0.06]",
+                transition
+              )
+            },
+            [
+              h("span", { class: "truncate text-sm font-medium" }, `${mode}.md`),
+              h("span", { class: clsx("truncate text-xs", props.mode === mode ? "text-white/70 dark:text-neutral-500" : "text-neutral-500 dark:text-neutral-500") }, promptModeSummary(mode))
+            ]
+          )
+        )
+      )
+    ])
   ]);
 }
 
@@ -1017,6 +1319,23 @@ function buildConfigDetailMetrics(
   ];
 }
 
+function buildPromptDetailMetrics(
+  profile: string,
+  mode: PromptMode,
+  candidate: string,
+  plan: ProfilePromptPlanResponse | null,
+  planStatus: PlanStatus
+): DetailMetric[] {
+  return [
+    { label: "대상", value: promptDisplayPath(profile, mode) },
+    { label: "Profile", value: profile.trim() || "없음" },
+    { label: "Mode", value: mode },
+    { label: "Markdown", value: bodySummary(candidate) },
+    { label: "검증", value: promptValidationSummary(plan, planStatus) },
+    { label: "Hash", value: plan?.fingerprint.hash.slice(0, 12) || "baseline" }
+  ];
+}
+
 function bodySummary(body: string) {
   const chars = body.length;
   const lines = body.length === 0 ? 0 : body.split(/\r\n|\r|\n/).length;
@@ -1034,6 +1353,16 @@ function configValidationSummary(plan: PersonalConfigPlanResponse | null, planSt
     return "Plan 대기";
   }
   return plan.validation_errors.length === 0 ? "검증 통과" : `검증 오류 ${plan.validation_errors.length}개`;
+}
+
+function promptValidationSummary(plan: ProfilePromptPlanResponse | null, planStatus: PlanStatus) {
+  if (planStatus === "planning") {
+    return "Plan 갱신 중";
+  }
+  if (planStatus === "stale" || plan?.baseline_stale) {
+    return "Stale";
+  }
+  return plan ? "검증 없음" : "Plan 대기";
 }
 
 function validationSummary(plan: PlanResponse | null, draftIssues: string[], planStatus: PlanStatus) {
@@ -1060,6 +1389,16 @@ function configPlanSummaryLabel(planStatus: PlanStatus, plan: PersonalConfigPlan
     return "Stale";
   }
   return plan && plan.validation_errors.length === 0 ? "유효한 Diff" : "Plan 대기";
+}
+
+function promptPlanSummaryLabel(planStatus: PlanStatus, plan: ProfilePromptPlanResponse | null) {
+  if (planStatus === "planning") {
+    return "Plan 갱신 중";
+  }
+  if (planStatus === "stale" || plan?.baseline_stale) {
+    return "Stale";
+  }
+  return plan ? "유효한 Diff" : "Plan 대기";
 }
 
 function planSummaryLabel(planStatus: PlanStatus, plan: PlanResponse | null) {
@@ -1093,6 +1432,9 @@ function operationLabel(operation: PreviewPlan["operation"]) {
   if (operation === "config") {
     return "config";
   }
+  if (operation === "prompt") {
+    return "prompt";
+  }
   return operation === "create" ? "생성" : "수정";
 }
 
@@ -1110,6 +1452,16 @@ function personalConfigPreview(plan: PersonalConfigPlanResponse): PreviewPlan {
   return {
     path: "<repo-root>/.wt/config/local.toml",
     operation: "config",
+    valid: plan.validation_errors.length === 0 && !plan.baseline_stale,
+    validation_errors: plan.validation_errors,
+    diff: plan.diff
+  };
+}
+
+function profilePromptPreview(profile: string, mode: PromptMode, plan: ProfilePromptPlanResponse): PreviewPlan {
+  return {
+    path: promptDisplayPath(profile, mode),
+    operation: "prompt",
     valid: plan.validation_errors.length === 0 && !plan.baseline_stale,
     validation_errors: plan.validation_errors,
     diff: plan.diff
@@ -1210,6 +1562,19 @@ function configStatusDescriptor(planStatus: PlanStatus, plan: PersonalConfigPlan
   return { label: "미저장", tone: "neutral" as const };
 }
 
+function promptStatusDescriptor(planStatus: PlanStatus, plan: ProfilePromptPlanResponse | null) {
+  if (planStatus === "stale" || plan?.baseline_stale) {
+    return { label: "Stale (재plan 필요)", tone: "amber" as const };
+  }
+  if (planStatus === "planning") {
+    return { label: "Plan 갱신 중", tone: "blue" as const, pulse: true };
+  }
+  if (plan && plan.validation_errors.length === 0) {
+    return { label: "적용 가능", tone: "blue" as const };
+  }
+  return { label: "미저장", tone: "neutral" as const };
+}
+
 function statusClass(tone: "blue" | "amber" | "neutral", pulse?: boolean) {
   return clsx(
     "inline-flex w-fit rounded-full px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] ring-1",
@@ -1223,7 +1588,13 @@ function statusClass(tone: "blue" | "amber" | "neutral", pulse?: boolean) {
 }
 
 function surfaceFromHash(): SurfaceMode {
-  return window.location.hash === "#config" ? "config" : "tasks";
+  if (window.location.hash === "#config") {
+    return "config";
+  }
+  if (window.location.hash.match(/^#profile\/[^/]+\/prompts\/[^/]+$/)) {
+    return "prompts";
+  }
+  return "tasks";
 }
 
 function taskPathFromHash(items: TaskDocumentItem[]) {
@@ -1233,6 +1604,42 @@ function taskPathFromHash(items: TaskDocumentItem[]) {
   }
   const key = decodeURIComponent(match[1]);
   return items.find((item) => item.key === key || item.path.endsWith(`/${key}.toml`) || item.path.endsWith(`${key}.toml`))?.path || "";
+}
+
+function promptLocationFromHash(): { profile: string; mode: PromptMode } {
+  const match = window.location.hash.match(/^#profile\/([^/]+)\/prompts\/([^/]+)$/);
+  const profile = match ? decodeURIComponent(match[1]) : "codex";
+  const candidateMode = match ? decodeURIComponent(match[2]) : "workflow";
+  const mode = isPromptMode(candidateMode) ? candidateMode : "workflow";
+  return { profile, mode };
+}
+
+function promptHash(profile: string, mode: PromptMode) {
+  const safeProfile = profile.trim() || "codex";
+  return `profile/${encodeURIComponent(safeProfile)}/prompts/${mode}`;
+}
+
+function isPromptMode(mode: string): mode is PromptMode {
+  return promptModes.includes(mode as PromptMode);
+}
+
+function promptDisplayPath(profile: string, mode: PromptMode) {
+  return `<repo-root>/.wt/config/profiles/${profile.trim() || "<name>"}/prompts/${mode}.md`;
+}
+
+function promptModeSummary(mode: PromptMode) {
+  switch (mode) {
+    case "workflow":
+      return "workflow task scope";
+    case "issue":
+      return "issue worktree scope";
+    case "branch":
+      return "branch worktree scope";
+    case "pr":
+      return "pull request scope";
+    case "common":
+      return "shared scope";
+  }
 }
 
 type ApiFailure = Error & {

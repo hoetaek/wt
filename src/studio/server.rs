@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, validate_profile_name};
 use crate::context::Ctx;
 use crate::storage::StorageRoot;
 use crate::studio::auth::{COOKIE_NAME, StudioSession, mint_session_token};
@@ -9,7 +9,7 @@ use crate::studio::resource::{
 use crate::task::{self, TaskDocument};
 use anyhow::{Context, Result, bail};
 use axum::body::Body;
-use axum::extract::{Query, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -36,6 +36,7 @@ pub struct StudioState {
     storage_root: StorageRoot,
     task_document_apply_lock: Arc<Mutex<()>>,
     personal_config_apply_lock: Arc<Mutex<()>>,
+    profile_prompt_apply_lock: Arc<Mutex<()>>,
 }
 
 impl StudioState {
@@ -46,6 +47,7 @@ impl StudioState {
             storage_root: ctx.storage_root.clone(),
             task_document_apply_lock: Arc::new(Mutex::new(())),
             personal_config_apply_lock: Arc::new(Mutex::new(())),
+            profile_prompt_apply_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -57,6 +59,7 @@ impl StudioState {
             storage_root: StorageRoot::from_git_common_dir(repo_root.join(".git")),
             task_document_apply_lock: Arc::new(Mutex::new(())),
             personal_config_apply_lock: Arc::new(Mutex::new(())),
+            profile_prompt_apply_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -117,6 +120,14 @@ pub fn app(state: StudioState) -> Router {
         .route(
             "/api/personal-config/apply",
             post(api_personal_config_apply),
+        )
+        .route(
+            "/api/profile-prompts/{name}/{mode}/plan",
+            post(api_profile_prompt_plan),
+        )
+        .route(
+            "/api/profile-prompts/{name}/{mode}/apply",
+            post(api_profile_prompt_apply),
         )
         .route("/favicon.ico", get(favicon))
         .fallback(static_or_not_found)
@@ -258,6 +269,38 @@ async fn api_personal_config_apply(
     }
 
     match apply_personal_config_edit(&state, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_profile_prompt_plan(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath((name, mode)): AxumPath<(String, String)>,
+    Json(request): Json<ProfilePromptPlanRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match plan_profile_prompt_edit(&state, &name, &mode, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_profile_prompt_apply(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath((name, mode)): AxumPath<(String, String)>,
+    Json(request): Json<ProfilePromptApplyRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match apply_profile_prompt_edit(&state, &name, &mode, request) {
         Ok(response) => Json(response).into_response(),
         Err(err) => err.into_response(),
     }
@@ -411,6 +454,35 @@ struct PersonalConfigApplyRequest {
 
 #[derive(Debug, Serialize)]
 struct PersonalConfigApplyResponse {
+    committed_fingerprint: FileFingerprint,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePromptPlanRequest {
+    candidate: String,
+    baseline_fingerprint: Option<FileFingerprint>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfilePromptPlanResponse {
+    before: String,
+    after: String,
+    diff: String,
+    validation_errors: Vec<String>,
+    fingerprint: FileFingerprint,
+    baseline_stale: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePromptApplyRequest {
+    candidate: String,
+    precondition: FileFingerprint,
+}
+
+#[derive(Debug, Serialize)]
+struct ProfilePromptApplyResponse {
     committed_fingerprint: FileFingerprint,
 }
 
@@ -667,6 +739,63 @@ fn apply_personal_config_edit(
     })
 }
 
+fn plan_profile_prompt_edit(
+    state: &StudioState,
+    name: &str,
+    mode: &str,
+    request: ProfilePromptPlanRequest,
+) -> std::result::Result<ProfilePromptPlanResponse, StudioApiError> {
+    let resolved = resolve_profile_prompt_path(state, name, mode)?;
+    let before = read_fingerprint(&resolved.path, "profile prompt").map_err(resource_error)?;
+    let baseline_stale = request
+        .baseline_fingerprint
+        .as_ref()
+        .is_some_and(|baseline| baseline != &before.fingerprint);
+
+    Ok(ProfilePromptPlanResponse {
+        before: before.content.clone(),
+        after: request.candidate.clone(),
+        diff: diff_text(&resolved.display_path, &before.content, &request.candidate),
+        validation_errors: Vec::new(),
+        fingerprint: before.fingerprint,
+        baseline_stale,
+    })
+}
+
+fn apply_profile_prompt_edit(
+    state: &StudioState,
+    name: &str,
+    mode: &str,
+    request: ProfilePromptApplyRequest,
+) -> std::result::Result<ProfilePromptApplyResponse, StudioApiError> {
+    let resolved = resolve_profile_prompt_path(state, name, mode)?;
+    let _apply_guard = state.profile_prompt_apply_lock.lock().map_err(|_| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Profile prompt apply lock is poisoned",
+        )
+    })?;
+    match check_precondition(&resolved.path, &request.precondition, "profile prompt") {
+        Ok(_) => {}
+        Err(ResourceErrorOrPrecondition::Error(err)) => return Err(resource_error(err)),
+        Err(ResourceErrorOrPrecondition::Precondition(stale)) => {
+            return Err(StudioApiError {
+                status: StatusCode::CONFLICT,
+                body: serde_json::json!({
+                    "error": "Profile prompt precondition failed",
+                    "current_fingerprint": stale.current.fingerprint,
+                }),
+            });
+        }
+    }
+
+    let committed_fingerprint = atomic_write(&resolved.path, &request.candidate, "profile prompt")
+        .map_err(resource_error)?;
+    Ok(ProfilePromptApplyResponse {
+        committed_fingerprint,
+    })
+}
+
 fn personal_config_path(state: &StudioState) -> PathBuf {
     state.repo_root.join(".wt/config/local.toml")
 }
@@ -681,6 +810,46 @@ fn validate_personal_config_content(content: &str) -> Vec<String> {
     toml::from_str::<Config>(content)
         .map(|_| Vec::new())
         .unwrap_or_else(|err| vec![err.to_string()])
+}
+
+#[derive(Debug)]
+struct ProfilePromptPath {
+    path: PathBuf,
+    display_path: String,
+}
+
+fn resolve_profile_prompt_path(
+    state: &StudioState,
+    name: &str,
+    mode: &str,
+) -> std::result::Result<ProfilePromptPath, StudioApiError> {
+    validate_profile_name(name)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, err.to_string()))?;
+    let mode = prompt_mode_file_stem(mode)?;
+    let path = state
+        .storage_root
+        .profiles_dir()
+        .join(name)
+        .join("prompts")
+        .join(format!("{mode}.md"));
+    Ok(ProfilePromptPath {
+        display_path: state.storage_root.display_path(&path),
+        path,
+    })
+}
+
+fn prompt_mode_file_stem(mode: &str) -> std::result::Result<&'static str, StudioApiError> {
+    match mode {
+        "workflow" => Ok("workflow"),
+        "issue" => Ok("issue"),
+        "branch" => Ok("branch"),
+        "pr" => Ok("pr"),
+        "common" => Ok("common"),
+        _ => Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Prompt mode must be one of workflow, issue, branch, pr, common",
+        )),
+    }
 }
 
 fn resolve_task_document_path(
@@ -1361,6 +1530,179 @@ mod tests {
         assert_eq!(stale_response.status(), StatusCode::OK);
         let stale = json_body(stale_response).await;
         assert_eq!(stale["baseline_stale"], true);
+    }
+
+    #[tokio::test]
+    async fn profile_prompt_plan_routes_all_modes_and_missing_file_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join(".wt/config/profiles/codex/prompts");
+        fs::create_dir_all(&prompts_dir).unwrap();
+        for mode in ["workflow", "issue", "branch", "pr"] {
+            fs::write(
+                prompts_dir.join(format!("{mode}.md")),
+                format!("{mode} prompt\n"),
+            )
+            .unwrap();
+        }
+        let server = app(test_state(dir.path()));
+
+        for mode in ["workflow", "issue", "branch", "pr", "common"] {
+            let candidate = format!("updated {mode}\n");
+            let response = server
+                .clone()
+                .oneshot(authorized_json_request(
+                    &format!("/api/profile-prompts/codex/{mode}/plan"),
+                    serde_json::json!({
+                        "candidate": candidate,
+                        "baseline_fingerprint": null
+                    }),
+                ))
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let value = json_body(response).await;
+            assert_eq!(value["validation_errors"].as_array().unwrap().len(), 0);
+            assert_eq!(value["after"], format!("updated {mode}\n"));
+            if mode == "common" {
+                assert_eq!(value["before"], "");
+                assert_eq!(value["fingerprint"]["mtime_ns"], serde_json::Value::Null);
+            } else {
+                assert_eq!(value["before"], format!("{mode} prompt\n"));
+            }
+            assert!(
+                value["diff"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&format!("prompts/{mode}.md"))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn profile_prompt_apply_creates_parent_dir_for_missing_mode_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/codex/common/plan",
+                serde_json::json!({
+                    "candidate": "shared prompt\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/codex/common/apply",
+                serde_json::json!({
+                    "candidate": plan["after"],
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::OK);
+        let applied = json_body(apply_response).await;
+        assert!(applied["committed_fingerprint"]["mtime_ns"].is_string());
+        assert_eq!(
+            fs::read_to_string(
+                dir.path()
+                    .join(".wt/config/profiles/codex/prompts/common.md")
+            )
+            .unwrap(),
+            "shared prompt\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_prompt_rejects_invalid_mode_and_profile_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = app(test_state(dir.path()));
+
+        let invalid_mode = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/codex/new/plan",
+                serde_json::json!({
+                    "candidate": "legacy new prompt\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(invalid_mode.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            json_body(invalid_mode).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("workflow, issue, branch, pr, common")
+        );
+
+        let invalid_profile = server
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/default/common/plan",
+                serde_json::json!({
+                    "candidate": "default prompt\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(invalid_profile.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            json_body(invalid_profile).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("reserved")
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_prompt_apply_rejects_stale_precondition() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join(".wt/config/profiles/codex/prompts");
+        fs::create_dir_all(&prompts_dir).unwrap();
+        fs::write(prompts_dir.join("issue.md"), "original\n").unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/codex/issue/plan",
+                serde_json::json!({
+                    "candidate": "planned\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+        fs::write(prompts_dir.join("issue.md"), "external\n").unwrap();
+
+        let response = server
+            .oneshot(authorized_json_request(
+                "/api/profile-prompts/codex/issue/apply",
+                serde_json::json!({
+                    "candidate": plan["after"],
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let value = json_body(response).await;
+        assert_eq!(value["error"], "Profile prompt precondition failed");
+        assert!(value["current_fingerprint"]["mtime_ns"].is_string());
+        assert_eq!(
+            fs::read_to_string(prompts_dir.join("issue.md")).unwrap(),
+            "external\n"
+        );
     }
 
     #[test]
