@@ -85,3 +85,9 @@ coordinator route. If inbox delivery will be used, confirm the launched process
 got identity from `wt codex`, `wt claude`, `wt as`, or a live identity anchor;
 `wt setup` alone only installs hooks and does not bind an already-running
 session. Use `wt agent watch <target>` if waiting for a state transition.
+
+## Next
+
+Launch가 성공하고 inspect target까지 캡처됐으면 바로 `wt-coordinate`로 이어간다.
+Launch 자체가 깨졌거나 handoff가 불완전한 게 드러났으면 `wt-coordinate`로
+진입하지 말고 `wt-ready`로 복귀한다.
