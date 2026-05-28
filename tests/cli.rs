@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command as StdCommand};
 use std::time::{Duration, Instant};
 #[cfg(unix)]
-use wt::services::identity_locator::{percent_encode, process_start_time};
+use wt::services::identity_locator::process_start_time;
 
 const GIT_LOCAL_ENV_KEYS: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -25,7 +25,7 @@ const GIT_LOCAL_ENV_KEYS: &[&str] = &[
     "GIT_COMMON_DIR",
 ];
 
-const CLAUDE_INBOX_HOOK_COMMAND: &str = "wt msg check-inbox --silent # wt-agent-hook:claude-inbox";
+const CLAUDE_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:claude-inbox";
 const CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND: &str = "if [ -n \"${WT_AGENT_ID:-}\" ]; then wt agent supervisor stop --owned-by \"$WT_AGENT_ID\"; fi # wt-agent-hook:claude-supervisor-session-end";
 const CODEX_INBOX_HOOK_MARKER: &str = "# wt-agent-hook:codex-inbox";
 const MANAGED_INBOX_HOOK_EVENTS: &[(&str, &str)] = &[
@@ -47,7 +47,7 @@ fn wt_command() -> Command {
         command.env_remove(key);
     }
     command.env_remove("WT_AGENT_ID");
-    command.env_remove("WT_COORDINATOR_AGENT_ID");
+    command.env_remove("WT_TASK_RUN_ID");
     command
 }
 
@@ -57,7 +57,7 @@ fn wt_command_at(path: &Path) -> Command {
         command.env_remove(key);
     }
     command.env_remove("WT_AGENT_ID");
-    command.env_remove("WT_COORDINATOR_AGENT_ID");
+    command.env_remove("WT_TASK_RUN_ID");
     command
 }
 
@@ -68,6 +68,13 @@ fn git_init(path: &Path) {
         .status()
         .unwrap();
     assert!(status.success());
+}
+
+fn wt_init_yes(path: &Path) {
+    wt_command()
+        .args(["-C", path.to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success();
 }
 
 fn git_commit(path: &Path) {
@@ -191,7 +198,6 @@ fn write_fake_agent(path: &Path, name: &str) -> std::path::PathBuf {
         &agent,
         r#"#!/bin/sh
 printf 'WT_AGENT_ID=%s\n' "${WT_AGENT_ID:-}"
-printf 'WT_COORDINATOR_AGENT_ID=%s\n' "${WT_COORDINATOR_AGENT_ID:-}"
 printf 'ARGS=%s\n' "$*"
 printf 'PWD=%s\n' "$PWD"
 "#,
@@ -225,7 +231,7 @@ fn copy_wt_binary(path: &Path) -> std::path::PathBuf {
 }
 
 fn write_task_document(root: &Path, key: &str, branch: &str) {
-    let dir = root.join(".git/wt/tasks");
+    let dir = root.join(".wt/execution/tasks");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join(format!("{key}.toml")),
@@ -240,7 +246,7 @@ body = "Task body"
 }
 
 fn write_task_run_file(root: &Path, id: &str, task: &str, branch: &str, status: &str, group: &str) {
-    let dir = root.join(".git/wt/task-runs");
+    let dir = root.join(".wt/execution/task-runs");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join(format!("{id}.toml")),
@@ -267,20 +273,48 @@ fn write_task_run_file_with_coordinator(
     group: &str,
     coordinator_id: Option<&str>,
 ) {
-    let dir = root.join(".git/wt/task-runs");
+    write_task_run_file_with_routes(
+        root,
+        id,
+        task,
+        branch,
+        status,
+        group,
+        (None, coordinator_id),
+    );
+}
+
+fn write_task_run_file_with_routes(
+    root: &Path,
+    id: &str,
+    task: &str,
+    branch: &str,
+    status: &str,
+    group: &str,
+    routes: (Option<&str>, Option<&str>),
+) {
+    let dir = root.join(".wt/execution/task-runs");
     std::fs::create_dir_all(&dir).unwrap();
+    let (agent_id, coordinator_id) = routes;
+    let agent = agent_id
+        .map(|id| format!("agent_id = \"{id}\"\n"))
+        .unwrap_or_default();
     let coordinator = coordinator_id
         .map(|id| format!("coordinator_id = \"{id}\"\n"))
         .unwrap_or_default();
+    let group = if group.is_empty() {
+        String::new()
+    } else {
+        format!("group = \"{group}\"\n")
+    };
     std::fs::write(
         dir.join(format!("{id}.toml")),
         format!(
             r#"task = "{task}"
 branch = "{branch}"
 status = "{status}"
-group = "{group}"
-creation_order = 1
-{coordinator}created_at = "2026-05-18T00:00:00.000000000Z"
+{group}creation_order = 1
+{agent}{coordinator}created_at = "2026-05-18T00:00:00.000000000Z"
 updated_at = "2026-05-18T00:00:00.000000000Z"
 "#
         ),
@@ -336,11 +370,11 @@ fn write_supervisor_registration_with_cleanup(
     stale_threshold_secs: u64,
     poll_interval_secs: u64,
 ) -> PathBuf {
-    let dir = root.join(".git/wt/supervisors");
+    let agent_name = agent_id.trim_start_matches("agents/");
+    let dir = root.join(format!(".wt/runtime/agents/{agent_name}"));
     std::fs::create_dir_all(&dir).unwrap();
-    let encoded = percent_encode(agent_id);
-    let path = dir.join(format!("{encoded}.toml"));
-    let log_path = dir.join(format!("{encoded}.log"));
+    let path = dir.join("supervisor.toml");
+    let log_path = dir.join("supervisor.log");
     let pid_start_time = process_start_time(pid as i32).unwrap();
     std::fs::write(
         &path,
@@ -363,13 +397,17 @@ log_path = "{}"
 }
 
 fn write_wait_observations(root: &Path, content: &str) {
-    let dir = root.join(".git/wt/agent.state");
+    let dir = root.join(".wt/runtime/agents/codex/observations");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("wait-observations.jsonl"), content).unwrap();
 }
 
+fn anchor_dir(root: &Path, agent_name: &str) -> PathBuf {
+    root.join(format!(".wt/runtime/agents/{agent_name}/anchors"))
+}
+
 fn write_workflow_file(root: &Path, id: &str, mode: &str, extra: &str, tasks: &str) {
-    let dir = root.join(".git/wt/workflows");
+    let dir = root.join(".wt/execution/workflows");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join(format!("{id}.toml")),
@@ -392,13 +430,13 @@ landing = "manual"
 }
 
 fn write_personal_config(root: &Path, content: &str) {
-    let dir = root.join(".git/wt");
+    let dir = root.join(".wt/config");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("config.toml"), content).unwrap();
+    std::fs::write(dir.join("local.toml"), content).unwrap();
 }
 
 fn wt_state_dir_names(root: &Path) -> Vec<String> {
-    let mut dirs = std::fs::read_dir(root.join(".git/wt"))
+    let mut dirs = std::fs::read_dir(root.join(".wt"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.is_dir())
@@ -583,8 +621,16 @@ fn codex_managed_inbox_commands(hooks: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-fn codex_dispatcher_command() -> String {
-    format!("wt msg check-inbox --silent {CODEX_INBOX_HOOK_MARKER}")
+fn claude_inbox_hook_command(event_name: &str) -> String {
+    format!(
+        "wt msg check-inbox --hook-event-name {event_name} --silent 2>/dev/null || true {CLAUDE_INBOX_HOOK_MARKER}"
+    )
+}
+
+fn codex_dispatcher_command(event_name: &str) -> String {
+    format!(
+        "wt msg check-inbox --hook-event-name {event_name} --silent 2>/dev/null || true {CODEX_INBOX_HOOK_MARKER}"
+    )
 }
 
 #[test]
@@ -635,66 +681,36 @@ fn no_args_prints_help_successfully() {
         .stdout(predicate::str::contains("new").not())
         .stdout(predicate::str::contains("agent"))
         .stdout(predicate::str::contains("wt help <cmd>"))
-        .stdout(predicate::str::contains("\n  ui").not());
+        .stdout(predicate::str::contains("Examples:"))
+        .stdout(predicate::str::contains("\n  ui"));
 }
 
 #[test]
-fn coord_use_prints_exact_exports_without_repo() {
-    wt_command()
-        .args(["coord", "use", "my-coord"])
-        .assert()
-        .success()
-        .stdout("export WT_AGENT_ID=agents/my-coord;\nexport WT_COORDINATOR_AGENT_ID=agents/my-coord;\n")
-        .stderr("");
-}
-
-#[test]
-fn coord_exit_prints_exact_unsets_without_repo() {
-    wt_command()
-        .args(["coord", "exit"])
-        .assert()
-        .success()
-        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
-        .stderr("");
-}
-
-#[test]
-fn coord_use_rejects_invalid_ids_without_stdout() {
-    wt_command()
-        .args(["coord", "use", ""])
-        .assert()
-        .failure()
-        .stdout("")
-        .stderr(predicate::str::contains("Agent id cannot be empty"));
-
-    wt_command()
-        .args(["coord", "use", "foo/bar"])
-        .assert()
-        .failure()
-        .stdout("")
-        .stderr(predicate::str::contains("path-like ids are ambiguous"));
-}
-
-#[test]
-fn session_set_writes_marker_and_prints_exports() {
+fn session_set_writes_identity_anchor_and_prints_exports() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
     wt_command()
-        .args(["-C", temp.path().to_str().unwrap(), "session", "set", "my-coord"])
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "my-coord",
+        ])
         .env("CMUX_SURFACE_ID", "surface-1")
         .assert()
         .success()
-        .stdout("export WT_AGENT_ID=agents/my-coord;\nexport WT_COORDINATOR_AGENT_ID=agents/my-coord;\n")
+        .stdout("export WT_AGENT_ID=agents/my-coord;\n")
         .stderr("");
 
-    let files = toml_files(&temp.path().join(".git/wt/sessions"));
+    let files = toml_files(&anchor_dir(temp.path(), "my-coord"));
     assert_eq!(files.len(), 1);
     let content = std::fs::read_to_string(&files[0]).unwrap();
-    let marker: toml::Value = toml::from_str(&content).unwrap();
-    assert_eq!(marker["id"].as_str(), Some("agents/my-coord"));
-    assert_eq!(marker["anchor_kind"].as_str(), Some("surface"));
-    assert_eq!(marker["anchor_value"].as_str(), Some("surface-1"));
+    let identity_anchor: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(identity_anchor["id"].as_str(), Some("agents/my-coord"));
+    assert_eq!(identity_anchor["anchor_kind"].as_str(), Some("surface"));
+    assert_eq!(identity_anchor["anchor_value"].as_str(), Some("surface-1"));
 }
 
 #[test]
@@ -728,7 +744,7 @@ fn session_set_rejects_invalid_ids_without_stdout() {
 }
 
 #[test]
-fn session_whoami_reports_marker_and_json() {
+fn session_whoami_reports_identity_anchor_and_json() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -752,10 +768,10 @@ fn session_whoami_reports_marker_and_json() {
         .assert()
         .success()
         .stdout(predicate::str::contains("id: agents/my-coord"))
-        .stdout(predicate::str::contains("source: marker"))
+        .stdout(predicate::str::contains("source: identity-anchor"))
         .stdout(predicate::str::contains("anchor_kind: surface"))
         .stdout(predicate::str::contains("anchor_value: surface-1"))
-        .stdout(predicate::str::contains("marker: "))
+        .stdout(predicate::str::contains("identity_anchor: "))
         .stdout(predicate::str::contains("cmux_workspace_id: workspace:1"));
 
     let output = wt_command()
@@ -774,19 +790,19 @@ fn session_whoami_reports_marker_and_json() {
         .clone();
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["id"].as_str(), Some("agents/my-coord"));
-    assert_eq!(value["source"].as_str(), Some("marker"));
+    assert_eq!(value["source"].as_str(), Some("identity-anchor"));
     assert_eq!(value["anchor_kind"].as_str(), Some("surface"));
     assert_eq!(value["anchor_value"].as_str(), Some("surface-1"));
     assert!(
-        value["marker_path"]
+        value["identity_anchor_path"]
             .as_str()
             .unwrap()
-            .contains(".git/wt/sessions")
+            .contains(".wt/runtime/agents/my-coord/anchors")
     );
 }
 
 #[test]
-fn session_unset_removes_marker_and_whoami_reports_none() {
+fn session_unset_removes_identity_anchor_and_whoami_reports_none() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -807,10 +823,10 @@ fn session_unset_removes_marker_and_whoami_reports_none() {
         .env("CMUX_SURFACE_ID", "surface-1")
         .assert()
         .success()
-        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stdout("unset WT_AGENT_ID;\n")
         .stderr("");
 
-    assert!(toml_files(&temp.path().join(".git/wt/sessions")).is_empty());
+    assert!(toml_files(&anchor_dir(temp.path(), "my-coord")).is_empty());
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "session", "whoami"])
@@ -822,7 +838,7 @@ fn session_unset_removes_marker_and_whoami_reports_none() {
 }
 
 #[test]
-fn session_whoami_reports_corrupt_marker_but_unset_can_recover() {
+fn session_whoami_reports_corrupt_identity_anchor_but_unset_can_recover() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -838,7 +854,7 @@ fn session_whoami_reports_corrupt_marker_but_unset_can_recover() {
         .assert()
         .success();
 
-    let files = toml_files(&temp.path().join(".git/wt/sessions"));
+    let files = toml_files(&anchor_dir(temp.path(), "my-coord"));
     assert_eq!(files.len(), 1);
     std::fs::write(&files[0], "not valid toml = [").unwrap();
 
@@ -848,35 +864,23 @@ fn session_whoami_reports_corrupt_marker_but_unset_can_recover() {
         .assert()
         .failure()
         .stdout("")
-        .stderr(predicate::str::contains("Failed to parse marker"));
+        .stderr(predicate::str::contains("Failed to parse identity anchor"));
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "session", "unset"])
         .env("CMUX_SURFACE_ID", "surface-1")
         .assert()
         .success()
-        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stdout("unset WT_AGENT_ID;\n")
         .stderr("");
 
-    assert!(toml_files(&temp.path().join(".git/wt/sessions")).is_empty());
+    assert!(toml_files(&anchor_dir(temp.path(), "my-coord")).is_empty());
 }
 
 #[test]
-fn msg_send_to_coordinator_alias_resolves_from_session_marker() {
+fn msg_send_to_agents_coordinator_uses_ordinary_explicit_inbox() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "session",
-            "set",
-            "my-coord",
-        ])
-        .env("CMUX_SURFACE_ID", "surface-1")
-        .assert()
-        .success();
 
     wt_command()
         .args([
@@ -885,17 +889,16 @@ fn msg_send_to_coordinator_alias_resolves_from_session_marker() {
             "msg",
             "send",
             "--to",
-            "coordinator",
+            "agents/coordinator",
             "hello",
         ])
-        .env("CMUX_SURFACE_ID", "surface-1")
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/my-coord/inbox/new/",
+            "<repo-root>/.wt/runtime/agents/coordinator/inbox/new/",
         ));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/my-coord/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/coordinator/inbox");
     let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 }
@@ -910,18 +913,7 @@ fn session_set_help_explains_eval_pattern() {
 }
 
 #[test]
-fn coord_use_help_explains_eval_and_shell_init() {
-    wt_command()
-        .args(["coord", "use", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("eval \"$(wt coord use <id>)\""))
-        .stdout(predicate::str::contains("wt shell-init"))
-        .stdout(predicate::str::contains("wt-coord-use my-coord"));
-}
-
-#[test]
-fn env_prints_worker_binding_with_coordinator_for_matching_task_run() {
+fn env_prints_worker_binding_for_matching_task_run() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     git_commit(temp.path());
@@ -946,14 +938,12 @@ fn env_prints_worker_binding_with_coordinator_for_matching_task_run() {
         .args(["env"])
         .assert()
         .success()
-        .stdout(
-            "export WT_AGENT_ID=agents/feat-env;\nexport WT_COORDINATOR_AGENT_ID=agents/coord-a;\n",
-        )
+        .stdout("export WT_AGENT_ID=agents/feat-env;\n")
         .stderr("");
 }
 
 #[test]
-fn env_prints_worker_binding_without_coordinator_for_matching_task_run() {
+fn env_prints_worker_binding_for_matching_task_run_without_extra_route() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
     git_commit(temp.path());
@@ -978,8 +968,47 @@ fn env_prints_worker_binding_without_coordinator_for_matching_task_run() {
         .args(["env"])
         .assert()
         .success()
-        .stdout("export WT_AGENT_ID=agents/feat-env;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stdout("export WT_AGENT_ID=agents/feat-env;\n")
         .stderr("");
+}
+
+#[test]
+fn env_rejects_legacy_task_run_storage() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let status = git_command()
+        .args(["checkout", "-b", "feat-env"])
+        .current_dir(temp.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let legacy_dir = temp.path().join(".wt/task-runs");
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+    std::fs::write(
+        legacy_dir.join("run-feat-env.toml"),
+        r#"task = "feat-env"
+branch = "feat-env"
+status = "running"
+creation_order = 1
+created_at = "2026-05-18T00:00:00.000000000Z"
+updated_at = "2026-05-18T00:00:00.000000000Z"
+"#,
+    )
+    .unwrap();
+
+    wt_command()
+        .current_dir(temp.path())
+        .args(["env"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(
+            predicate::str::contains("Found legacy wt personal TaskRun storage")
+                .and(predicate::str::contains(".wt/task-runs"))
+                .and(predicate::str::contains(".wt/execution/task-runs")),
+        );
 }
 
 #[test]
@@ -993,7 +1022,7 @@ fn env_unsets_identity_without_matching_task_run() {
         .args(["env"])
         .assert()
         .success()
-        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stdout("unset WT_AGENT_ID;\n")
         .stderr("");
 }
 
@@ -1006,7 +1035,7 @@ fn env_unsets_identity_outside_git_repo() {
         .args(["env"])
         .assert()
         .success()
-        .stdout("unset WT_AGENT_ID;\nunset WT_COORDINATOR_AGENT_ID;\n")
+        .stdout("unset WT_AGENT_ID;\n")
         .stderr("");
 }
 
@@ -1018,7 +1047,6 @@ fn shell_init_prints_valid_bash_source() {
         .assert()
         .success()
         .stdout(predicate::str::contains("wt-env"))
-        .stdout(predicate::str::contains("wt-coord-use"))
         .stdout(predicate::str::contains("PROMPT_COMMAND"))
         .stdout(predicate::str::contains("declare -p PROMPT_COMMAND"))
         .stdout(predicate::str::contains("PROMPT_COMMAND+=(wt-env)"))
@@ -1053,7 +1081,6 @@ fn shell_init_prints_valid_zsh_source_when_zsh_is_available() {
         .assert()
         .success()
         .stdout(predicate::str::contains("chpwd_functions"))
-        .stdout(predicate::str::contains("wt-coord-exit"))
         .get_output()
         .stdout
         .clone();
@@ -1082,6 +1109,7 @@ fn shell_init_rejects_unsupported_shell_with_supported_list() {
 fn run_branch_without_args_requires_branch_text() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
+    wt_init_yes(temp.path());
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "run", "branch"])
@@ -1216,10 +1244,8 @@ fn run_task_help_explains_task_execution() {
         .success()
         .stdout(predicate::str::contains("one worktree per selected"))
         .stdout(predicate::str::contains("direct TaskRun"))
-        .stdout(predicate::str::contains("Task Run Coordinator Handoff"))
-        .stdout(predicate::str::contains(
-            "coordinator inbox target `coordinator`",
-        ))
+        .stdout(predicate::str::contains("wt task report"))
+        .stdout(predicate::str::contains("Agent Completion Report"))
         .stdout(predicate::str::contains("Task-run agents report PR=none"))
         .stdout(predicate::str::contains("wt workflow task --mode batch"))
         .stdout(predicate::str::contains("wt workflow task --mode single"))
@@ -1249,7 +1275,7 @@ fn task_list_help_explains_actionable_default_and_full_inventory() {
             "same selectability rules as wt run task",
         ))
         .stdout(predicate::str::contains("prepared, failed, or skipped"))
-        .stdout(predicate::str::contains("done or running are hidden"))
+        .stdout(predicate::str::contains("passed or running are hidden"))
         .stdout(predicate::str::contains("--all"))
         .stdout(predicate::str::contains(
             "full read-only TaskDocument inventory",
@@ -1266,8 +1292,15 @@ fn task_list_help_explains_actionable_default_and_full_inventory() {
 fn task_list_supports_json_and_reports_invalid_tasks() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    write_task_document(temp.path(), "done", "feature/done");
-    write_task_run_file(temp.path(), "run-done", "done", "feature/done", "done", "");
+    write_task_document(temp.path(), "passed", "feature/passed");
+    write_task_run_file(
+        temp.path(),
+        "run-passed",
+        "passed",
+        "feature/passed",
+        "passed",
+        "",
+    );
     write_task_document(temp.path(), "running", "feature/running");
     write_task_run_file(
         temp.path(),
@@ -1306,7 +1339,7 @@ fn task_list_supports_json_and_reports_invalid_tasks() {
     );
     write_task_document(temp.path(), "no-run", "feature/no-run");
     std::fs::write(
-        temp.path().join(".git/wt/tasks/provider.toml"),
+        temp.path().join(".wt/execution/tasks/provider.toml"),
         r#"title = "Provider task"
 branch = "alice/provider-task"
 body = "Imported provider task body"
@@ -1318,7 +1351,7 @@ id = "PROJ-123"
     )
     .unwrap();
     std::fs::write(
-        temp.path().join(".git/wt/tasks/bad.toml"),
+        temp.path().join(".wt/execution/tasks/bad.toml"),
         "unknown = true\n",
     )
     .unwrap();
@@ -1344,7 +1377,7 @@ id = "PROJ-123"
     assert_eq!(invalid.len(), 1);
     assert_eq!(value.as_object().unwrap().len(), 2);
 
-    assert!(tasks.iter().all(|row| row["key"] != "done"));
+    assert!(tasks.iter().all(|row| row["key"] != "passed"));
     assert!(tasks.iter().all(|row| row["key"] != "running"));
     for key in ["failed", "no-run", "prepared", "skipped"] {
         assert!(
@@ -1357,7 +1390,10 @@ id = "PROJ-123"
         .iter()
         .find(|row| row["key"] == "no-run")
         .expect("task without a TaskRun should be listed");
-    assert_eq!(no_run["path"], "<git-common-dir>/wt/tasks/no-run.toml");
+    assert_eq!(
+        no_run["path"],
+        "<repo-root>/.wt/execution/tasks/no-run.toml"
+    );
     assert_eq!(no_run["branch"], "feature/no-run");
     assert_eq!(no_run["publish_state"], "local");
     assert_eq!(no_run["source"], "local");
@@ -1376,7 +1412,10 @@ id = "PROJ-123"
     assert_eq!(provider["body_summary"], "Imported provider task body");
 
     assert_eq!(invalid[0]["key"], "bad");
-    assert_eq!(invalid[0]["path"], "<git-common-dir>/wt/tasks/bad.toml");
+    assert_eq!(
+        invalid[0]["path"],
+        "<repo-root>/.wt/execution/tasks/bad.toml"
+    );
     assert!(
         invalid[0]["error"]
             .as_str()
@@ -1405,7 +1444,7 @@ id = "PROJ-123"
     assert_eq!(all_tasks.len(), 7);
     assert_eq!(all_invalid.len(), 1);
     assert_eq!(all_value.as_object().unwrap().len(), 2);
-    assert!(all_tasks.iter().any(|row| row["key"] == "done"));
+    assert!(all_tasks.iter().any(|row| row["key"] == "passed"));
     assert!(all_tasks.iter().any(|row| row["key"] == "running"));
 }
 
@@ -1413,8 +1452,15 @@ id = "PROJ-123"
 fn task_list_text_includes_stable_task_fields_and_invalid_warning() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    write_task_document(temp.path(), "done", "feature/done");
-    write_task_run_file(temp.path(), "run-done", "done", "feature/done", "done", "");
+    write_task_document(temp.path(), "passed", "feature/passed");
+    write_task_run_file(
+        temp.path(),
+        "run-passed",
+        "passed",
+        "feature/passed",
+        "passed",
+        "",
+    );
     write_task_document(temp.path(), "running", "feature/running");
     write_task_run_file(
         temp.path(),
@@ -1426,7 +1472,7 @@ fn task_list_text_includes_stable_task_fields_and_invalid_warning() {
     );
     write_task_document(temp.path(), "local", "feature/local");
     std::fs::write(
-        temp.path().join(".git/wt/tasks/provider.toml"),
+        temp.path().join(".wt/execution/tasks/provider.toml"),
         r#"title = "Provider task"
 branch = "alice/provider-task"
 body = "Provider task body"
@@ -1438,7 +1484,7 @@ id = "PROJ-123"
     )
     .unwrap();
     std::fs::write(
-        temp.path().join(".git/wt/tasks/bad.toml"),
+        temp.path().join(".wt/execution/tasks/bad.toml"),
         "unknown = true\n",
     )
     .unwrap();
@@ -1459,21 +1505,53 @@ id = "PROJ-123"
         .stdout(predicate::str::contains(
             "2 tasks hidden; use wt task list --all to show the full inventory",
         ))
-        .stdout(predicate::str::contains("task done").not())
+        .stdout(predicate::str::contains("task passed").not())
         .stdout(predicate::str::contains("task running").not())
         .stdout(predicate::str::contains("Path:").not())
         .stdout(predicate::str::contains("Summary:").not())
         .stderr(predicate::str::contains(
-            "Invalid task <git-common-dir>/wt/tasks/bad.toml",
+            "Invalid task <repo-root>/.wt/execution/tasks/bad.toml",
         ));
+}
+
+#[test]
+fn task_list_rejects_legacy_git_common_tasks_without_empty_fallback() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let legacy_tasks = temp.path().join(".git/wt/tasks");
+    std::fs::create_dir_all(&legacy_tasks).unwrap();
+    std::fs::write(
+        legacy_tasks.join("foo.toml"),
+        "title = \"Legacy\"\nbranch = \"legacy\"\n",
+    )
+    .unwrap();
+
+    wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "task", "list"])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains(
+            "Found legacy TaskDocument storage",
+        ))
+        .stderr(predicate::str::contains(".git/wt/tasks"))
+        .stderr(predicate::str::contains("<repo-root>/.wt/execution/tasks"))
+        .stderr(predicate::str::contains("No task files found").not());
 }
 
 #[test]
 fn task_list_all_text_keeps_full_grouped_inventory() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    write_task_document(temp.path(), "done", "feature/done");
-    write_task_run_file(temp.path(), "run-done", "done", "feature/done", "done", "");
+    write_task_document(temp.path(), "passed", "feature/passed");
+    write_task_run_file(
+        temp.path(),
+        "run-passed",
+        "passed",
+        "feature/passed",
+        "passed",
+        "",
+    );
     write_task_document(temp.path(), "running", "feature/running");
     write_task_run_file(
         temp.path(),
@@ -1485,7 +1563,7 @@ fn task_list_all_text_keeps_full_grouped_inventory() {
     );
     write_task_document(temp.path(), "local", "feature/local");
     std::fs::write(
-        temp.path().join(".git/wt/tasks/provider.toml"),
+        temp.path().join(".wt/execution/tasks/provider.toml"),
         r#"title = "Provider task"
 branch = "alice/provider-task"
 body = "Provider task body"
@@ -1497,7 +1575,7 @@ id = "PROJ-123"
     )
     .unwrap();
     std::fs::write(
-        temp.path().join(".git/wt/tasks/bad.toml"),
+        temp.path().join(".wt/execution/tasks/bad.toml"),
         "unknown = true\n",
     )
     .unwrap();
@@ -1511,8 +1589,8 @@ id = "PROJ-123"
         .stdout(predicate::str::contains("│ local"))
         .stdout(predicate::str::contains("task local"))
         .stdout(predicate::str::contains("branch feature/local"))
-        .stdout(predicate::str::contains("task done"))
-        .stdout(predicate::str::contains("branch feature/done"))
+        .stdout(predicate::str::contains("task passed"))
+        .stdout(predicate::str::contains("branch feature/passed"))
         .stdout(predicate::str::contains("task running"))
         .stdout(predicate::str::contains("branch feature/running"))
         .stdout(predicate::str::contains(
@@ -1520,7 +1598,7 @@ id = "PROJ-123"
         ))
         .stdout(predicate::str::contains("tasks hidden").not())
         .stderr(predicate::str::contains(
-            "Invalid task <git-common-dir>/wt/tasks/bad.toml",
+            "Invalid task <repo-root>/.wt/execution/tasks/bad.toml",
         ));
 }
 
@@ -1534,7 +1612,7 @@ fn task_list_empty_inventory_uses_plain_output() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "No tasks found in <git-common-dir>/wt/tasks",
+            "No tasks found in <repo-root>/.wt/execution/tasks",
         ))
         .stdout(predicate::str::contains("==>").not());
 }
@@ -1547,7 +1625,7 @@ fn task_import_help_explains_behavior() {
         .success()
         .stdout(predicate::str::contains("Import existing provider issues"))
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/tasks/<safe-issue-id>.toml",
+            "<repo-root>/.wt/execution/tasks/<safe-issue-id>.toml",
         ))
         .stdout(predicate::str::contains(
             "write title, branch, body, and [origin]",
@@ -1568,14 +1646,48 @@ fn task_publish_help_explains_behavior() {
         .assert()
         .success()
         .stdout(predicate::str::contains("provider issue"))
+        .stdout(predicate::str::contains(
+            "rewrite branch to a provider-keyed branch",
+        ))
         .stdout(predicate::str::contains("write [origin]"))
         .stdout(predicate::str::contains("does not start workspaces"))
+        .stdout(predicate::str::contains("create local branches"))
         .stdout(predicate::str::contains("wt run task and wt run workflow"))
         .stdout(predicate::str::contains("Omit task keys"))
         .stdout(predicate::str::contains(
             "already have [origin] are excluded",
         ))
-        .stdout(predicate::str::contains("already has origin"));
+        .stdout(predicate::str::contains("already has origin"))
+        .stdout(predicate::str::contains("checked-out worktree"));
+}
+
+#[test]
+fn task_report_help_explains_reportable_statuses() {
+    wt_command()
+        .args(["task", "report", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("running or passed"))
+        .stdout(predicate::str::contains(
+            "exactly one running or passed TaskRun",
+        ))
+        .stdout(predicate::str::contains("TaskRun report metadata"));
+}
+
+#[test]
+fn task_review_help_explains_behavior() {
+    wt_command()
+        .args(["task", "review", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("coordinator review feedback"))
+        .stdout(predicate::str::contains("TaskRun.agent_id"))
+        .stdout(predicate::str::contains("task_run:<id>"))
+        .stdout(predicate::str::contains("reopens it to running"))
+        .stdout(predicate::str::contains("does not pass a running TaskRun"))
+        .stdout(predicate::str::contains("--accept"))
+        .stdout(predicate::str::contains("--reject"))
+        .stdout(predicate::str::contains("--block"));
 }
 
 #[test]
@@ -1586,20 +1698,16 @@ fn msg_help_explains_agent_inbox_contract() {
         .success()
         .stdout(predicate::str::contains("file-based agent inbox"))
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>",
+            "<repo-root>/.wt/runtime/agents/<agent>/inbox/<state>",
         ))
-        .stdout(predicate::str::contains("wt msg send --to <agent>"))
-        .stdout(predicate::str::contains("--scope workflow:<id>"))
-        .stdout(predicate::str::contains("coordinator"))
-        .stdout(predicate::str::contains(
-            "coordinator` resolves from WT_COORDINATOR_AGENT_ID",
-        ))
+        .stdout(predicate::str::contains("wt msg send --to agents/<agent>"))
+        .stdout(predicate::str::contains("wt task report <message>"))
+        .stdout(predicate::str::contains("wt task review <task-run-id>"))
         .stdout(predicate::str::contains("wt msg list --agent <agent>"))
         .stdout(predicate::str::contains(
             "wt msg read --agent <agent> <message-id>",
         ))
-        .stdout(predicate::str::contains("wt msg check-inbox"))
-        .stdout(predicate::str::contains("WT_COORDINATOR_AGENT_ID"))
+        .stdout(predicate::str::contains("internal hook consumer"))
         .stdout(predicate::str::contains("inbox/new"))
         .stdout(predicate::str::contains("inbox/delivered"));
 
@@ -1611,14 +1719,12 @@ fn msg_help_explains_agent_inbox_contract() {
             "Target agent id as NAME or agents/NAME",
         ))
         .stdout(predicate::str::contains(
-            "coordinator resolves from WT_COORDINATOR_AGENT_ID",
-        ))
-        .stdout(predicate::str::contains(
             "Message ownership scope: direct, repo, workflow:<id>, or task_run:<id>",
         ))
         .stdout(predicate::str::contains(
-            "Unscoped sends use the direct/default scope",
+            "Prefer `wt task report <message>`",
         ))
+        .stdout(predicate::str::contains("wt task review <task-run-id>"))
         .stdout(predicate::str::contains("Message text"));
 
     wt_command()
@@ -1627,7 +1733,8 @@ fn msg_help_explains_agent_inbox_contract() {
         .success()
         .stdout(predicate::str::contains("hook JSON"))
         .stdout(predicate::str::contains("Explicit single agent id"))
-        .stdout(predicate::str::contains("WT_COORDINATOR_AGENT_ID"));
+        .stdout(predicate::str::contains("WT_AGENT_ID"))
+        .stdout(predicate::str::contains("current live identity anchor"));
 
     wt_command()
         .args(["msg", "list", "--help"])
@@ -1644,6 +1751,30 @@ fn msg_help_explains_agent_inbox_contract() {
         .stdout(predicate::str::contains(
             "Message id without the .toml extension",
         ));
+}
+
+#[test]
+fn msg_commands_reject_legacy_messages_storage() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    std::fs::create_dir_all(temp.path().join(".wt/messages/agents/codex/inbox/new")).unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "list",
+            "--agent",
+            "codex",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Found legacy wt personal message storage",
+        ))
+        .stderr(predicate::str::contains("runtime/agents"))
+        .stderr(predicate::str::contains("does not silently fall back"));
 }
 
 #[test]
@@ -1664,10 +1795,10 @@ fn msg_send_writes_to_agent_inbox_and_normalizes_agent_id() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/codex/inbox/new/",
+            "<repo-root>/.wt/runtime/agents/codex/inbox/new/",
         ));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/codex/inbox");
     let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
@@ -1691,7 +1822,7 @@ fn msg_send_writes_to_agent_inbox_and_normalizes_agent_id() {
 }
 
 #[test]
-fn msg_send_to_coordinator_alias_writes_to_runtime_coordinator_inbox() {
+fn msg_send_to_bare_coordinator_writes_to_ordinary_coordinator_inbox() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
@@ -1705,20 +1836,19 @@ fn msg_send_to_coordinator_alias_writes_to_runtime_coordinator_inbox() {
             "coordinator",
             "hello",
         ])
-        .env("WT_COORDINATOR_AGENT_ID", "agents/foo")
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/foo/inbox/new/",
+            "<repo-root>/.wt/runtime/agents/coordinator/inbox/new/",
         ));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/foo/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/coordinator/inbox");
     let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
     let content = std::fs::read_to_string(&files[0]).unwrap();
     let message: toml::Value = toml::from_str(&content).unwrap();
-    assert_eq!(message["meta"]["to"].as_str(), Some("agents/foo"));
+    assert_eq!(message["meta"]["to"].as_str(), Some("agents/coordinator"));
     assert_eq!(message["meta"]["from"].as_str(), Some("agents/user"));
     assert_eq!(message["scope"]["kind"].as_str(), Some("direct"));
     assert!(message["scope"].get("id").is_none());
@@ -1727,28 +1857,6 @@ fn msg_send_to_coordinator_alias_writes_to_runtime_coordinator_inbox() {
         message["body"]["parts"][0]["content"].as_str(),
         Some("hello")
     );
-}
-
-#[test]
-fn msg_send_to_coordinator_alias_without_env_errors_with_hint() {
-    let temp = TempDir::new().unwrap();
-    git_init(temp.path());
-
-    wt_command()
-        .args([
-            "-C",
-            temp.path().to_str().unwrap(),
-            "msg",
-            "send",
-            "--to",
-            "coordinator",
-            "hello",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("wt coord use <id>"))
-        .stderr(predicate::str::contains("wt session set <id>"))
-        .stderr(predicate::str::contains("wt shell-init zsh"));
 }
 
 #[test]
@@ -1765,18 +1873,17 @@ fn msg_send_accepts_explicit_workflow_scope() {
             "--scope",
             "workflow:2026-05-20-001",
             "--to",
-            "coordinator",
+            "agents/coord-a",
             "workflow",
             "owned",
         ])
-        .env("WT_COORDINATOR_AGENT_ID", "agents/coord-a")
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/coord-a/inbox/new/",
+            "<repo-root>/.wt/runtime/agents/coord-a/inbox/new/",
         ));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/coord-a/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/coord-a/inbox");
     let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
@@ -1852,12 +1959,10 @@ fn msg_send_to_derived_agent_id_targets_runtime_identity_inbox() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/messages/agents/issue-1-test/inbox/new/",
+            "<repo-root>/.wt/runtime/agents/issue-1-test/inbox/new/",
         ));
 
-    let inbox = temp
-        .path()
-        .join(".git/wt/messages/agents/issue-1-test/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/issue-1-test/inbox");
     let files = toml_files(&inbox.join("new"));
     assert_eq!(files.len(), 1);
 
@@ -1917,14 +2022,11 @@ fn msg_list_summarizes_lifecycle_states_without_mutating_messages() {
                 "coordinator",
                 summary,
             ])
-            .env("WT_COORDINATOR_AGENT_ID", "agents/coordinator")
             .assert()
             .success();
     }
 
-    let inbox = temp
-        .path()
-        .join(".git/wt/messages/agents/coordinator/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/coordinator/inbox");
     let new_dir = inbox.join("new");
     let claimed_path = claim_message_file(
         &message_path_with_summary(&new_dir, "claimed summary"),
@@ -1950,10 +2052,9 @@ fn msg_list_summarizes_lifecycle_states_without_mutating_messages() {
             temp.path().to_str().unwrap(),
             "msg",
             "list",
-            "--agent",
-            "coordinator",
-        ])
-        .env("WT_COORDINATOR_AGENT_ID", "agents/coordinator")
+        "--agent",
+        "coordinator",
+    ])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -2006,7 +2107,7 @@ fn msg_list_json_uses_stable_lifecycle_inventory_shape() {
         ])
         .assert()
         .success();
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/codex/inbox");
     claim_message_file(
         &message_path_with_summary(&inbox.join("new"), "json new"),
         "agents/supervisor",
@@ -2070,7 +2171,7 @@ fn msg_read_shows_claim_and_body_without_changing_state() {
         ])
         .assert()
         .success();
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/codex/inbox");
     let claimed_path = claim_message_file(
         &message_path_with_summary(&inbox.join("new"), "claimed body"),
         "agents/supervisor",
@@ -2122,7 +2223,7 @@ fn msg_read_json_includes_full_message_payload() {
         ])
         .assert()
         .success();
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/codex/inbox");
     let path = message_path_with_summary(&inbox.join("new"), "json read");
     let message_id = path.file_stem().unwrap().to_str().unwrap();
 
@@ -2224,7 +2325,7 @@ fn msg_check_inbox_emits_hook_json_and_acknowledges_claimed_messages() {
     assert!(context.contains("hello from claude"));
     assert!(context.contains("wt msg send --to <agent> <message>"));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/codex/inbox");
     assert!(toml_files(&inbox.join("new")).is_empty());
     assert!(toml_files(&inbox.join("claimed")).is_empty());
     let delivered = toml_files(&inbox.join("delivered"));
@@ -2236,9 +2337,73 @@ fn msg_check_inbox_emits_hook_json_and_acknowledges_claimed_messages() {
 }
 
 #[test]
+fn msg_check_inbox_uses_internal_hook_event_name_when_supplied() {
+    for event_name in ["UserPromptSubmit", "PostToolUse"] {
+        let temp = TempDir::new().unwrap();
+        git_init(temp.path());
+
+        wt_command()
+            .args([
+                "-C",
+                temp.path().to_str().unwrap(),
+                "msg",
+                "send",
+                "--to",
+                "agents/codex",
+                "event",
+                event_name,
+            ])
+            .assert()
+            .success();
+
+        let output = wt_command()
+            .args([
+                "-C",
+                temp.path().to_str().unwrap(),
+                "msg",
+                "check-inbox",
+                "--agent",
+                "agents/codex",
+                "--hook-event-name",
+                event_name,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+
+        let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(
+            value["hookSpecificOutput"]["hookEventName"].as_str(),
+            Some(event_name)
+        );
+    }
+}
+
+#[test]
 fn msg_check_inbox_coordinator_delivers_workflow_scoped_messages() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
+    write_task_run_file_with_coordinator(
+        temp.path(),
+        "run-2026-05-20-001-workflow-report",
+        "workflow-report",
+        "workflow-report",
+        "running",
+        "2026-05-20-001",
+        Some("agents/coord-a"),
+    );
+    write_workflow_file(
+        temp.path(),
+        "2026-05-20-001",
+        "batch",
+        "",
+        r#"[[tasks]]
+task = "workflow-report"
+run = "run-2026-05-20-001-workflow-report"
+"#,
+    );
 
     wt_command()
         .args([
@@ -2249,11 +2414,10 @@ fn msg_check_inbox_coordinator_delivers_workflow_scoped_messages() {
             "--scope",
             "workflow:2026-05-20-001",
             "--to",
-            "coordinator",
+            "agents/coord-a",
             "workflow",
             "done",
         ])
-        .env("WT_COORDINATOR_AGENT_ID", "agents/coord-a")
         .assert()
         .success();
 
@@ -2264,9 +2428,8 @@ fn msg_check_inbox_coordinator_delivers_workflow_scoped_messages() {
             "msg",
             "check-inbox",
             "--agent",
-            "coordinator",
+            "agents/coord-a",
         ])
-        .env("WT_COORDINATOR_AGENT_ID", "agents/coord-a")
         .assert()
         .success()
         .get_output()
@@ -2281,7 +2444,7 @@ fn msg_check_inbox_coordinator_delivers_workflow_scoped_messages() {
     assert!(context.contains("scope: workflow:2026-05-20-001"));
     assert!(context.contains("workflow done"));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/coord-a/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/coord-a/inbox");
     assert!(toml_files(&inbox.join("new")).is_empty());
     assert!(toml_files(&inbox.join("claimed")).is_empty());
     let delivered = toml_files(&inbox.join("delivered"));
@@ -2290,6 +2453,272 @@ fn msg_check_inbox_coordinator_delivers_workflow_scoped_messages() {
     let message: toml::Value = toml::from_str(&content).unwrap();
     assert_eq!(message["scope"]["kind"].as_str(), Some("workflow"));
     assert_eq!(message["delivery"]["state"].as_str(), Some("delivered"));
+}
+
+#[test]
+fn task_report_workflow_scope_delivers_to_current_identity_anchor_coordinator_inbox() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-marker-workflow",
+        "marker-workflow",
+        "marker-workflow",
+        "running",
+        "2026-05-20-marker",
+        (Some("agents/run-marker"), Some("agents/marker-coord")),
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-marker-workflow")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "task",
+            "report",
+            "Agent Completion Report: Summary=workflow done; Changed files=src/lib.rs; Checks run=cargo test; PR=none; Risks or follow-ups=none",
+        ])
+        .env("WT_AGENT_ID", "agents/run-marker")
+        .env("WT_TASK_RUN_ID", "run-marker-workflow")
+        .assert()
+        .success();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--silent",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-marker-workflow")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/marker-coord: 1 new message"));
+    assert!(context.contains("scope: workflow:2026-05-20-marker"));
+    assert!(context.contains("Agent Completion Report: Summary=workflow done"));
+
+    let inbox = temp.path().join(".wt/runtime/agents/marker-coord/inbox");
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert_eq!(toml_files(&inbox.join("delivered")).len(), 1);
+}
+
+#[test]
+fn task_report_review_smoke_delivers_accepted_feedback_to_matching_task_agent() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-smoke",
+        "smoke",
+        "smoke",
+        "running",
+        "",
+        (Some("agents/run-1-smoke"), Some("agents/coord-a")),
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "task",
+            "report",
+            "Agent Completion Report: Summary=done; Changed files=src/lib.rs; Checks run=cargo test; PR=none; Risks or follow-ups=none",
+        ])
+        .env("WT_AGENT_ID", "agents/run-1-smoke")
+        .env("WT_TASK_RUN_ID", "run-smoke")
+        .assert()
+        .success();
+
+    let task_run_path = temp.path().join(".wt/execution/task-runs/run-smoke.toml");
+    let task_run: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&task_run_path).unwrap()).unwrap();
+    assert!(task_run["last_report_message_id"].as_str().is_some());
+    assert!(task_run["last_reported_at"].as_str().is_some());
+
+    let coordinator_output = wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .env("WT_AGENT_ID", "agents/coord-a")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let coordinator_json: serde_json::Value = serde_json::from_slice(&coordinator_output).unwrap();
+    let coordinator_context = coordinator_json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(coordinator_context.contains("WT INBOX for agents/coord-a: 1 new message"));
+    assert!(coordinator_context.contains("Agent Completion Report: Summary=done"));
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "task",
+            "review",
+            "run-smoke",
+            "--accept",
+            "accepted",
+            "for",
+            "landing",
+        ])
+        .env("WT_AGENT_ID", "agents/coord-a")
+        .assert()
+        .success();
+
+    let task_run: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&task_run_path).unwrap()).unwrap();
+    assert_eq!(task_run["last_review_status"].as_str(), Some("accepted"));
+    assert!(task_run["last_review_message_id"].as_str().is_some());
+    assert!(task_run["last_reviewed_at"].as_str().is_some());
+
+    let task_agent_output = wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .env("WT_AGENT_ID", "agents/run-1-smoke")
+        .env("WT_TASK_RUN_ID", "run-smoke")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task_agent_json: serde_json::Value = serde_json::from_slice(&task_agent_output).unwrap();
+    let task_agent_context = task_agent_json["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(task_agent_context.contains("WT INBOX for agents/run-1-smoke: 1 new message"));
+    assert!(task_agent_context.contains("scope: task_run:run-smoke"));
+    assert!(
+        task_agent_context
+            .contains("Coordinator Review: Status=accepted; Message=accepted for landing")
+    );
+
+    let task_inbox = temp.path().join(".wt/runtime/agents/run-1-smoke/inbox");
+    assert!(toml_files(&task_inbox.join("new")).is_empty());
+    assert_eq!(toml_files(&task_inbox.join("delivered")).len(), 1);
+}
+
+#[test]
+fn msg_check_inbox_requires_runtime_task_run_binding_for_review_scope() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-review",
+        "review",
+        "review",
+        "running",
+        "",
+        (Some("agents/run-1-review"), Some("agents/coord-a")),
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "task",
+            "review",
+            "run-review",
+            "--block",
+            "waiting",
+            "on",
+            "approval",
+        ])
+        .env("WT_AGENT_ID", "agents/coord-a")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/run-1-review",
+        ])
+        .env("WT_TASK_RUN_ID", "run-review")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let inbox = temp.path().join(".wt/runtime/agents/run-1-review/inbox");
+    assert_eq!(toml_files(&inbox.join("new")).len(), 1);
+    assert!(!inbox.join("delivered").exists());
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/run-1-review",
+        ])
+        .env("WT_AGENT_ID", "agents/run-1-review")
+        .env("WT_TASK_RUN_ID", "run-review")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("scope: task_run:run-review"));
+    assert!(context.contains("Coordinator Review: Status=blocked; Message=waiting on approval"));
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert_eq!(toml_files(&inbox.join("delivered")).len(), 1);
+}
+
+#[test]
+fn msg_check_inbox_rejects_invalid_runtime_agent_env() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-review",
+        "review",
+        "review",
+        "running",
+        "",
+        (Some("agents/run-1-review"), Some("agents/coord-a")),
+    );
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--agent",
+            "agents/run-1-review",
+        ])
+        .env("WT_AGENT_ID", "agents/team/coord")
+        .env("WT_TASK_RUN_ID", "run-review")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid WT_AGENT_ID"));
 }
 
 #[test]
@@ -2326,7 +2755,7 @@ fn msg_check_inbox_non_coordinator_leaves_workflow_scoped_messages_new() {
         .success()
         .stdout(predicate::str::is_empty());
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/codex/inbox");
     let new = toml_files(&inbox.join("new"));
     assert_eq!(new.len(), 1);
     assert!(!inbox.join("claimed").exists());
@@ -2356,7 +2785,7 @@ fn msg_check_inbox_does_not_steal_active_claims() {
         .assert()
         .success();
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/codex/inbox");
     let new = toml_files(&inbox.join("new"));
     let claimed_path = claim_message_file(&new[0], "agents/supervisor", "2099-01-01T00:00:00Z");
 
@@ -2403,7 +2832,7 @@ fn msg_check_inbox_reclaims_expired_claims_and_delivers_them() {
         .assert()
         .success();
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/codex/inbox");
     let new = toml_files(&inbox.join("new"));
     claim_message_file(&new[0], "agents/supervisor", "1970-01-01T00:00:01Z");
 
@@ -2461,7 +2890,7 @@ fn msg_check_inbox_keeps_hook_stdout_json_when_acknowledge_fails() {
         .assert()
         .success();
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/codex/inbox");
     let new = toml_files(&inbox.join("new"));
     let delivered_conflict = write_conflicting_delivered_message(&new[0]);
 
@@ -2553,15 +2982,19 @@ fn msg_check_empty_inbox_exits_quietly() {
 }
 
 #[test]
-fn msg_check_inbox_without_agent_and_no_env_exits_quietly() {
+fn msg_check_inbox_no_agent_no_anchor_exits_quietly_without_creating_anchor() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .env("CMUX_SURFACE_ID", "surface-empty")
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
+
+    let agents = temp.path().join(".wt/runtime/agents");
+    assert!(!agents.exists());
 }
 
 #[test]
@@ -2601,6 +3034,177 @@ fn msg_check_inbox_without_agent_uses_wt_agent_id_env() {
 }
 
 #[test]
+fn msg_check_inbox_without_agent_uses_current_live_identity_anchor() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-marker")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/marker-coord",
+            "marker",
+            "delivery",
+        ])
+        .assert()
+        .success();
+
+    let output = wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--silent",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-marker")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/marker-coord: 1 new message"));
+    assert!(context.contains("marker delivery"));
+
+    let inbox = temp.path().join(".wt/runtime/agents/marker-coord/inbox");
+    assert!(toml_files(&inbox.join("new")).is_empty());
+    assert_eq!(toml_files(&inbox.join("delivered")).len(), 1);
+}
+
+#[test]
+fn msg_check_inbox_without_agent_ignores_non_current_identity_anchor() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-original")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/marker-coord",
+            "other",
+            "surface",
+        ])
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "check-inbox",
+            "--silent",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-other")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let inbox = temp.path().join(".wt/runtime/agents/marker-coord/inbox");
+    assert_eq!(toml_files(&inbox.join("new")).len(), 1);
+    assert!(!inbox.join("delivered").exists());
+}
+
+#[test]
+fn msg_check_inbox_without_agent_prefers_wt_agent_id_over_identity_anchor() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-precedence")
+        .assert()
+        .success();
+
+    for (agent, message) in [
+        ("agents/codex", "runtime message"),
+        ("agents/marker-coord", "marker message"),
+    ] {
+        wt_command()
+            .args([
+                "-C",
+                temp.path().to_str().unwrap(),
+                "msg",
+                "send",
+                "--to",
+                agent,
+                message,
+            ])
+            .assert()
+            .success();
+    }
+
+    let output = wt_command()
+        .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
+        .env("WT_AGENT_ID", "agents/codex")
+        .env("CMUX_SURFACE_ID", "surface-precedence")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = value["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("WT INBOX for agents/codex: 1 new message"));
+    assert!(context.contains("runtime message"));
+    assert!(!context.contains("marker message"));
+
+    let runtime_agents_root = temp.path().join(".wt/runtime/agents");
+    assert_eq!(
+        toml_files(&runtime_agents_root.join("codex/inbox/delivered")).len(),
+        1
+    );
+    assert_eq!(
+        toml_files(&runtime_agents_root.join("marker-coord/inbox/new")).len(),
+        1
+    );
+}
+
+#[test]
 fn msg_check_inbox_without_agent_uses_only_runtime_agent_id() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -2629,14 +3233,12 @@ fn msg_check_inbox_without_agent_uses_only_runtime_agent_id() {
             "coordinator",
             "message",
         ])
-        .env("WT_COORDINATOR_AGENT_ID", "agents/coordinator")
         .assert()
         .success();
 
     let output = wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
         .env("WT_AGENT_ID", "agents/codex")
-        .env("WT_COORDINATOR_AGENT_ID", "agents/coordinator")
         .assert()
         .success()
         .get_output()
@@ -2656,13 +3258,13 @@ fn msg_check_inbox_without_agent_uses_only_runtime_agent_id() {
     assert!(context.contains("runtime message"));
     assert!(!context.contains("coordinator message"));
 
-    let messages_root = temp.path().join(".git/wt/messages/agents");
+    let runtime_agents_root = temp.path().join(".wt/runtime/agents");
     assert_eq!(
-        toml_files(&messages_root.join("codex/inbox/delivered")).len(),
+        toml_files(&runtime_agents_root.join("codex/inbox/delivered")).len(),
         1
     );
     assert_eq!(
-        toml_files(&messages_root.join("coordinator/inbox/new")).len(),
+        toml_files(&runtime_agents_root.join("coordinator/inbox/new")).len(),
         1
     );
 }
@@ -2689,7 +3291,6 @@ fn msg_check_inbox_without_agent_delivers_coordinator_when_runtime_agent_matches
     let output = wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
         .env("WT_AGENT_ID", "agents/coordinator")
-        .env("WT_COORDINATOR_AGENT_ID", "agents/coordinator")
         .assert()
         .success()
         .get_output()
@@ -2717,7 +3318,7 @@ fn msg_check_inbox_explicit_agent_ignores_runtime_env_ids() {
     for (agent, message) in [
         ("agents/manual", "manual override"),
         ("agents/codex", "runtime env"),
-        ("agents/coordinator", "coordinator env"),
+        ("agents/coordinator", "ordinary coordinator message"),
     ] {
         wt_command()
             .args([
@@ -2732,6 +3333,29 @@ fn msg_check_inbox_explicit_agent_ignores_runtime_env_ids() {
             .assert()
             .success();
     }
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-explicit")
+        .assert()
+        .success();
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/marker-coord",
+            "marker fallback",
+        ])
+        .assert()
+        .success();
 
     let output = wt_command()
         .args([
@@ -2743,7 +3367,7 @@ fn msg_check_inbox_explicit_agent_ignores_runtime_env_ids() {
             "agents/manual",
         ])
         .env("WT_AGENT_ID", "agents/codex")
-        .env("WT_COORDINATOR_AGENT_ID", "agents/coordinator")
+        .env("CMUX_SURFACE_ID", "surface-explicit")
         .assert()
         .success()
         .get_output()
@@ -2757,16 +3381,24 @@ fn msg_check_inbox_explicit_agent_ignores_runtime_env_ids() {
     assert!(context.contains("WT INBOX for agents/manual: 1 new message"));
     assert!(context.contains("manual override"));
     assert!(!context.contains("runtime env"));
-    assert!(!context.contains("coordinator env"));
+    assert!(!context.contains("ordinary coordinator message"));
+    assert!(!context.contains("marker fallback"));
 
-    let messages_root = temp.path().join(".git/wt/messages/agents");
+    let runtime_agents_root = temp.path().join(".wt/runtime/agents");
     assert_eq!(
-        toml_files(&messages_root.join("manual/inbox/delivered")).len(),
+        toml_files(&runtime_agents_root.join("manual/inbox/delivered")).len(),
         1
     );
-    assert_eq!(toml_files(&messages_root.join("codex/inbox/new")).len(), 1);
     assert_eq!(
-        toml_files(&messages_root.join("coordinator/inbox/new")).len(),
+        toml_files(&runtime_agents_root.join("codex/inbox/new")).len(),
+        1
+    );
+    assert_eq!(
+        toml_files(&runtime_agents_root.join("coordinator/inbox/new")).len(),
+        1
+    );
+    assert_eq!(
+        toml_files(&runtime_agents_root.join("marker-coord/inbox/new")).len(),
         1
     );
 }
@@ -2829,7 +3461,7 @@ fn msg_check_inbox_without_silent_still_errors_on_legacy_local_config() {
         .args(["-C", temp.path().to_str().unwrap(), "msg", "check-inbox"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("legacy repo-root config"));
+        .stderr(predicate::str::contains("legacy wt personal config"));
 }
 
 #[test]
@@ -2878,7 +3510,7 @@ fn msg_check_inbox_silent_still_delivers_when_context_healthy() {
     assert!(context.contains("WT INBOX for agents/codex: 1 new message"));
     assert!(context.contains("silent delivery"));
 
-    let inbox = temp.path().join(".git/wt/messages/agents/codex/inbox");
+    let inbox = temp.path().join(".wt/runtime/agents/codex/inbox");
     assert!(toml_files(&inbox.join("new")).is_empty());
     let delivered = toml_files(&inbox.join("delivered"));
     assert_eq!(delivered.len(), 1);
@@ -2921,7 +3553,7 @@ fn msg_rejects_invalid_or_ambiguous_agent_ids() {
 }
 
 #[test]
-fn msg_uses_git_common_messages_from_linked_worktree() {
+fn msg_uses_git_common_runtime_inbox_from_linked_worktree() {
     let temp = TempDir::new().unwrap();
     let repo = temp.path().join("repo");
     let linked = temp.path().join("linked");
@@ -2956,9 +3588,9 @@ fn msg_uses_git_common_messages_from_linked_worktree() {
         .assert()
         .success();
 
-    let common_inbox = repo.join(".git/wt/messages/agents/codex/inbox");
+    let common_inbox = repo.join(".wt/runtime/agents/codex/inbox");
     assert_eq!(toml_files(&common_inbox.join("new")).len(), 1);
-    assert!(!linked.join(".git/wt/messages").exists());
+    assert!(!linked.join(".wt/runtime").exists());
 
     let output = wt_command()
         .args([
@@ -2987,6 +3619,72 @@ fn msg_uses_git_common_messages_from_linked_worktree() {
 }
 
 #[test]
+fn run_workflow_requires_coordinator_session_when_agent_env_unset() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    wt_init_yes(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "workflow",
+            "missing",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "wt workflow run requires a coordinator session.",
+        ))
+        .stderr(predicate::str::contains("eval \"$(wt session set"));
+}
+
+#[test]
+fn run_workflow_requires_coordinator_session_when_agent_env_empty() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    wt_init_yes(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "workflow",
+            "missing",
+        ])
+        .env("WT_AGENT_ID", "")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "wt workflow run requires a coordinator session.",
+        ))
+        .stderr(predicate::str::contains("eval \"$(wt session set"));
+}
+
+#[test]
+fn run_workflow_with_agent_env_reaches_workflow_resolution() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    wt_init_yes(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "workflow",
+            "missing",
+        ])
+        .env("WT_AGENT_ID", "agents/coordinator")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Workflow not found"))
+        .stderr(predicate::str::contains("wt workflow run requires a coordinator session").not());
+}
+
+#[test]
 fn run_workflow_help_explains_omitted_target_selection() {
     wt_command()
         .args(["run", "workflow", "--help"])
@@ -2995,7 +3693,7 @@ fn run_workflow_help_explains_omitted_target_selection() {
         .stdout(predicate::str::contains("Omit WORKFLOW"))
         .stdout(predicate::str::contains("choose from runnable workflows"))
         .stdout(predicate::str::contains(
-            "does not list, edit, repair, or complete",
+            "does not list, edit, repair, or pass workflow tasks",
         ))
         .stdout(predicate::str::contains(
             "omit to select a runnable workflow",
@@ -3016,9 +3714,11 @@ fn workflow_list_help_explains_canonical_inventory() {
             "reports invalid workflow TOML files",
         ))
         .stdout(predicate::str::contains(
-            "derived action labels such as runnable, waiting, and done",
+            "derived action labels such as runnable, waiting, and passed",
         ))
-        .stdout(predicate::str::contains("<git-common-dir>/wt/workflows"))
+        .stdout(predicate::str::contains(
+            "<repo-root>/.wt/execution/workflows",
+        ))
         .stdout(predicate::str::contains(legacy_local_path("workflows")).not());
 }
 
@@ -3029,13 +3729,13 @@ fn workflow_archive_help_explains_visibility_retention_model() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/archive/workflows",
+            "<repo-root>/.wt/execution/archive/workflows",
         ))
         .stdout(predicate::str::contains(
             "Archive is a visibility and retention action",
         ))
         .stdout(predicate::str::contains("not a substitute for landing"))
-        .stdout(predicate::str::contains("wt workflow complete"))
+        .stdout(predicate::str::contains("wt workflow pass"))
         .stdout(predicate::str::contains("wt done"))
         .stdout(predicate::str::contains("--discard").not());
 }
@@ -3050,6 +3750,7 @@ fn primary_help_surfaces_do_not_teach_legacy_local_storage_paths() {
         &["config", "--help"],
         &["profile", "--help"],
         &["ui", "--help"],
+        &["studio", "--help"],
     ];
     let stale_paths = [
         legacy_local_path("tasks"),
@@ -3108,7 +3809,7 @@ run = "run-2026-05-18-001-schema"
 "#,
     );
     std::fs::write(
-        temp.path().join(".git/wt/workflows/bad.toml"),
+        temp.path().join(".wt/execution/workflows/bad.toml"),
         "mode = \"batch\"\n",
     )
     .unwrap();
@@ -3137,7 +3838,7 @@ run = "run-2026-05-18-001-schema"
     assert_eq!(row["id"], "2026-05-18-001");
     assert_eq!(
         row["path"],
-        "<git-common-dir>/wt/workflows/2026-05-18-001.toml"
+        "<repo-root>/.wt/execution/workflows/2026-05-18-001.toml"
     );
     assert_eq!(row["mode"], "batch");
     assert_eq!(row["title"], "Ship search");
@@ -3152,7 +3853,10 @@ run = "run-2026-05-18-001-schema"
     assert_eq!(row["policy"]["landing"], "manual");
     assert!(row["state_error"].is_null());
     assert_eq!(invalid[0]["id"], "bad");
-    assert_eq!(invalid[0]["path"], "<git-common-dir>/wt/workflows/bad.toml");
+    assert_eq!(
+        invalid[0]["path"],
+        "<repo-root>/.wt/execution/workflows/bad.toml"
+    );
     assert!(
         invalid[0]["error"]
             .as_str()
@@ -3171,7 +3875,7 @@ fn workflow_list_empty_inventory_uses_plain_output() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "No workflows found in <git-common-dir>/wt/workflows",
+            "No workflows found in <repo-root>/.wt/execution/workflows",
         ))
         .stdout(predicate::str::contains("==>").not());
 }
@@ -3186,7 +3890,7 @@ fn workflow_archive_moves_completed_workflow_out_of_active_inventory() {
         "run-archive-unique",
         "archive-unique",
         "archive-unique",
-        "done",
+        "passed",
         "2026-05-20-009",
     );
     write_workflow_file(
@@ -3213,29 +3917,31 @@ run = "run-archive-unique"
     assert_eq!(archive_report["workflow_id"], "2026-05-20-009");
     assert_eq!(
         archive_report["workflow_source_path"],
-        "workflows/2026-05-20-009.toml"
+        "execution/workflows/2026-05-20-009.toml"
     );
 
-    let archive = temp.path().join(".git/wt/archive/workflows/2026-05-20-009");
+    let archive = temp
+        .path()
+        .join(".wt/execution/archive/workflows/2026-05-20-009");
     assert!(archive.join("workflow.toml").exists());
     assert!(archive.join("task-runs/run-archive-unique.toml").exists());
     assert!(archive.join("tasks/archive-unique.toml").exists());
     assert!(
         !temp
             .path()
-            .join(".git/wt/workflows/2026-05-20-009.toml")
+            .join(".wt/execution/workflows/2026-05-20-009.toml")
             .exists()
     );
     assert!(
         !temp
             .path()
-            .join(".git/wt/task-runs/run-archive-unique.toml")
+            .join(".wt/execution/task-runs/run-archive-unique.toml")
             .exists()
     );
     assert!(
         !temp
             .path()
-            .join(".git/wt/tasks/archive-unique.toml")
+            .join(".wt/execution/tasks/archive-unique.toml")
             .exists()
     );
 
@@ -3244,25 +3950,26 @@ run = "run-archive-unique"
     assert_eq!(manifest["workflow_id"].as_str(), Some("2026-05-20-009"));
     assert_eq!(
         manifest["workflow_archive_path"].as_str(),
-        Some("archive/workflows/2026-05-20-009/workflow.toml")
+        Some("execution/archive/workflows/2026-05-20-009/workflow.toml")
     );
     let task_runs = manifest["task_runs"].as_array().unwrap();
+    assert_eq!(task_runs[0]["status"].as_str(), Some("passed"));
     assert_eq!(
         task_runs[0]["source_path"].as_str(),
-        Some("task-runs/run-archive-unique.toml")
+        Some("execution/task-runs/run-archive-unique.toml")
     );
     assert_eq!(
         task_runs[0]["archive_path"].as_str(),
-        Some("archive/workflows/2026-05-20-009/task-runs/run-archive-unique.toml")
+        Some("execution/archive/workflows/2026-05-20-009/task-runs/run-archive-unique.toml")
     );
     let tasks = manifest["tasks"].as_array().unwrap();
     assert_eq!(
         tasks[0]["source_path"].as_str(),
-        Some("tasks/archive-unique.toml")
+        Some("execution/tasks/archive-unique.toml")
     );
     assert_eq!(
         tasks[0]["archive_path"].as_str(),
-        Some("archive/workflows/2026-05-20-009/tasks/archive-unique.toml")
+        Some("execution/archive/workflows/2026-05-20-009/tasks/archive-unique.toml")
     );
 
     let output = wt_command()
@@ -3307,12 +4014,12 @@ fn scaffold_supports_json_global_flag() {
     assert_eq!(value["feature"], "demo");
     assert_eq!(
         value["created"][0],
-        "<git-common-dir>/wt/specs/demo/11-retrospect.md"
+        "<repo-root>/.wt/planning/specs/demo/11-retrospect.md"
     );
     assert!(value["skipped"].as_array().unwrap().is_empty());
     assert!(
         temp.path()
-            .join(".git/wt/specs/demo/11-retrospect.md")
+            .join(".wt/planning/specs/demo/11-retrospect.md")
             .is_file()
     );
 }
@@ -3361,7 +4068,7 @@ fn workflow_prepare_accepts_pr_on_non_stack_modes() {
         .success()
         .stdout(predicate::str::contains("Prepared workflow:"));
 
-    let workflows = std::fs::read_dir(temp.path().join(".git/wt/workflows"))
+    let workflows = std::fs::read_dir(temp.path().join(".wt/execution/workflows"))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -3411,10 +4118,12 @@ fn workflow_state_is_visible_from_linked_worktree() {
         .stdout(predicate::str::contains(
             "Prepared workflow: linked-workflow-task",
         ))
-        .stdout(predicate::str::contains("<git-common-dir>/wt/workflows/"));
+        .stdout(predicate::str::contains(
+            "<repo-root>/.wt/execution/workflows/",
+        ));
 
     assert!(!repo.join(legacy_local_path("workflows")).exists());
-    let workflows = std::fs::read_dir(repo.join(".git/wt/workflows"))
+    let workflows = std::fs::read_dir(repo.join(".wt/execution/workflows"))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -3432,7 +4141,7 @@ fn workflow_state_is_visible_from_linked_worktree() {
     let workflows = value["workflows"].as_array().unwrap();
     assert_eq!(workflows.len(), 1);
     let path = workflows[0]["path"].as_str().unwrap();
-    assert!(path.starts_with("<git-common-dir>/wt/workflows/"));
+    assert!(path.starts_with("<repo-root>/.wt/execution/workflows/"));
     assert!(path.ends_with(".toml"));
 }
 
@@ -3467,7 +4176,7 @@ fn agent_watch_help_explains_polling_target() {
         .stdout(predicate::str::contains("--heartbeat"))
         .stdout(predicate::str::contains("--record-wait-observations").not())
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
+            "<repo-root>/.wt/runtime/agents/<agent>/observations/wait-observations.jsonl",
         ))
         .stdout(predicate::str::contains(
             "When --timeout or --heartbeat emits a non-idle sample",
@@ -3489,7 +4198,7 @@ fn agent_wait_stats_help_explains_read_only_summary() {
         .stdout(predicate::str::contains("average"))
         .stdout(predicate::str::contains("low-cardinality group data"))
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
+            "<repo-root>/.wt/runtime/agents/<agent>/observations/wait-observations.jsonl",
         ))
         .stdout(predicate::str::contains("does not observe agents"))
         .stdout(predicate::str::contains("mutate TaskRuns"));
@@ -3513,7 +4222,7 @@ fn agent_wait_stats_reports_sample_jsonl_summary() {
         .success()
         .stdout(predicate::str::contains("Agent wait stats"))
         .stdout(predicate::str::contains(
-            "<git-common-dir>/wt/agent.state/wait-observations.jsonl",
+            "<repo-root>/.wt/runtime/agents/*/observations/wait-observations.jsonl",
         ))
         .stdout(predicate::str::contains("Count: 3"))
         .stdout(predicate::str::contains("Sum seconds: 480"))
@@ -3620,10 +4329,11 @@ fn setup_installs_detected_claude_and_codex_hooks() {
 
     let settings = json_file(&home.join(".claude/settings.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        let expected = claude_inbox_hook_command(event_name);
         assert!(
             claude_event_commands(&settings, event_name)
                 .iter()
-                .any(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
+                .any(|command| command == &expected)
         );
     }
     assert!(
@@ -3635,7 +4345,10 @@ fn setup_installs_detected_claude_and_codex_hooks() {
 
     let hooks = json_file(&codex_home.join("hooks.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
-        assert!(codex_event_commands(&hooks, event_name).contains(&codex_dispatcher_command()));
+        assert!(
+            codex_event_commands(&hooks, event_name)
+                .contains(&codex_dispatcher_command(event_name))
+        );
     }
 }
 
@@ -3749,7 +4462,7 @@ trusted_hash = "sha256:cmux"
         hooks["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
         Some("cmux hooks codex stop")
     );
-    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
+    assert!(codex_managed_inbox_commands(&hooks).is_empty());
 
     let config: toml::Value =
         toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml")).unwrap()).unwrap();
@@ -3783,10 +4496,11 @@ fn setup_and_remove_are_idempotent() {
     let settings = json_file(&home.join(".claude/settings.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
         let commands = claude_event_commands(&settings, event_name);
+        let expected = claude_inbox_hook_command(event_name);
         assert_eq!(
             commands
                 .iter()
-                .filter(|command| command.as_str() == CLAUDE_INBOX_HOOK_COMMAND)
+                .filter(|command| command.as_str() == expected.as_str())
                 .count(),
             1
         );
@@ -3801,10 +4515,11 @@ fn setup_and_remove_are_idempotent() {
     let hooks = json_file(&codex_home.join("hooks.json"));
     for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
         let commands = codex_event_commands(&hooks, event_name);
+        let expected = codex_dispatcher_command(event_name);
         assert_eq!(
             commands
                 .iter()
-                .filter(|command| command.as_str() == codex_dispatcher_command())
+                .filter(|command| command.as_str() == expected.as_str())
                 .count(),
             1
         );
@@ -3828,7 +4543,312 @@ fn setup_and_remove_are_idempotent() {
 
     assert!(!home.join(".claude/settings.json").exists());
     let hooks = json_file(&codex_home.join("hooks.json"));
-    assert!(!codex_managed_inbox_commands(&hooks).contains(&codex_dispatcher_command()));
+    assert!(codex_managed_inbox_commands(&hooks).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn init_prepares_personal_storage_in_main_repo() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .env("SHELL", "/bin/fish")
+        .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("설정 생성됨"));
+
+    assert!(temp.path().join(".wt").is_dir());
+    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
+    assert_eq!(exclude.lines().filter(|line| *line == "/.wt").count(), 1);
+
+    let ignored = git_command()
+        .args(["check-ignore", "-v", ".wt/whatever"])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(
+        ignored.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&ignored.stdout),
+        String::from_utf8_lossy(&ignored.stderr)
+    );
+    assert!(String::from_utf8_lossy(&ignored.stdout).contains(".git/info/exclude"));
+
+    wt_command()
+        .env("SHELL", "/bin/fish")
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "init",
+            "--yes",
+            "--force",
+        ])
+        .assert()
+        .success();
+
+    let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
+    assert_eq!(exclude.lines().filter(|line| *line == "/.wt").count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn init_from_linked_worktree_prepares_main_storage_without_link_symlink() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    let linked = temp.path().join("linked");
+    std::fs::create_dir(&repo).unwrap();
+    git_init(&repo);
+    git_commit(&repo);
+    let status = git_command()
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            linked.to_str().unwrap(),
+            "HEAD",
+        ])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    wt_command()
+        .env("SHELL", "/bin/fish")
+        .args(["-C", linked.to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("설정 생성됨"));
+
+    let main_storage = repo.join(".wt");
+    let linked_storage = linked.join(".wt");
+    assert!(main_storage.is_dir());
+    assert!(!linked_storage.exists());
+
+    let ignored = git_command()
+        .args(["check-ignore", "-v", ".wt"])
+        .current_dir(&linked)
+        .output()
+        .unwrap();
+    assert!(
+        ignored.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&ignored.stdout),
+        String::from_utf8_lossy(&ignored.stderr)
+    );
+    let ignored_stdout = String::from_utf8_lossy(&ignored.stdout);
+    assert!(ignored_stdout.contains(".git/info/exclude"));
+    assert!(ignored_stdout.contains("/.wt"));
+
+    let status = git_command()
+        .args(["status", "--short", "--untracked-files=all"])
+        .current_dir(&linked)
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    assert!(!String::from_utf8_lossy(&status.stdout).contains(".wt"));
+}
+
+#[test]
+fn run_task_rejects_missing_repo_bootstrap_before_task_selection() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "task",
+            "missing-task",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wt repo bootstrap is not ready"))
+        .stderr(predicate::str::contains(
+            "Run `wt init` once before `wt run ...`",
+        ))
+        .stderr(predicate::str::contains(
+            "is not a directory or symlink to a directory",
+        ))
+        .stderr(predicate::str::contains("is missing exact line `/.wt`"));
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_repairs_claude_when_session_end_hook_is_missing() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let home = temp.path().join("home");
+    let settings_path = home.join(".claude/settings.json");
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+
+    wt_command()
+        .env("HOME", &home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success();
+
+    let mut settings = json_file(&settings_path);
+    settings["hooks"]
+        .as_object_mut()
+        .unwrap()
+        .remove("SessionEnd");
+    std::fs::write(
+        &settings_path,
+        format!("{}\n", serde_json::to_string_pretty(&settings).unwrap()),
+    )
+    .unwrap();
+
+    wt_command()
+        .env("HOME", &home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Claude hook installed"));
+
+    let settings = json_file(&settings_path);
+    assert!(
+        claude_event_commands(&settings, "SessionEnd")
+            .iter()
+            .any(|command| command == CLAUDE_SUPERVISOR_SESSION_END_HOOK_COMMAND)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_repairs_codex_when_hooks_feature_is_disabled() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let config_path = codex_home.join("config.toml");
+    let fake_bin = write_fake_agent(temp.path(), "codex");
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success();
+
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(
+        &config_path,
+        config.replacen("hooks = true", "hooks = false", 1),
+    )
+    .unwrap();
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex hook installed"));
+
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(config_path).unwrap()).unwrap();
+    assert_eq!(config["features"]["hooks"].as_bool(), Some(true));
+
+    let hooks = json_file(&codex_home.join("hooks.json"));
+    for &(event_name, _) in MANAGED_INBOX_HOOK_EVENTS {
+        let commands = codex_event_commands(&hooks, event_name);
+        let expected = codex_dispatcher_command(event_name);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.as_str() == expected.as_str())
+                .count(),
+            1
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_remove_cleans_stale_codex_trust_without_hooks_and_preserves_other_trust() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let hooks_path = codex_home.join("hooks.json");
+    let config_path = codex_home.join("config.toml");
+    let fake_bin = write_fake_agent(temp.path(), "codex");
+
+    wt_command()
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .assert()
+        .success();
+
+    let stale_prompt_key = format!("{}:user_prompt_submit:0:0", hooks_path.display());
+    let stale_post_tool_key = format!("{}:post_tool_use:0:0", hooks_path.display());
+    let user_key = format!("{}:user_prompt_submit:5:0", hooks_path.display());
+    let cmux_key = format!("{}:post_tool_use:5:0", hooks_path.display());
+    let unrelated_key = format!(
+        "{}:user_prompt_submit:0:0",
+        temp.path().join("other-hooks.json").display()
+    );
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"{config}
+[hooks.state."{user_key}"]
+trusted_hash = "sha256:user"
+
+[hooks.state."{cmux_key}"]
+trusted_hash = "sha256:cmux"
+
+[hooks.state."{unrelated_key}"]
+trusted_hash = "sha256:unrelated"
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::remove_file(&hooks_path).unwrap();
+
+    wt_command()
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/fish")
+        .args(["setup", "--remove", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Codex hook uninstalled"));
+
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(config_path).unwrap()).unwrap();
+    let state = config["hooks"]["state"].as_table().unwrap();
+    assert!(!state.contains_key(&stale_prompt_key));
+    assert!(!state.contains_key(&stale_post_tool_key));
+    assert_eq!(
+        state[&user_key]["trusted_hash"].as_str(),
+        Some("sha256:user")
+    );
+    assert_eq!(
+        state[&cmux_key]["trusted_hash"].as_str(),
+        Some("sha256:cmux")
+    );
+    assert_eq!(
+        state[&unrelated_key]["trusted_hash"].as_str(),
+        Some("sha256:unrelated")
+    );
 }
 
 #[cfg(unix)]
@@ -3863,7 +4883,7 @@ fn setup_remove_cleans_partial_wt_managed_hooks() {
                 "UserPromptSubmit": [{
                     "hooks": [{
                         "type": "command",
-                        "command": codex_dispatcher_command()
+                        "command": codex_dispatcher_command("UserPromptSubmit")
                     }]
                 }]
             }
@@ -3905,7 +4925,7 @@ fn setup_remove_preserves_codex_user_trust_after_index_shift() {
                     "hooks": [
                         {
                             "type": "command",
-                            "command": codex_dispatcher_command()
+                            "command": codex_dispatcher_command("UserPromptSubmit")
                         },
                         {
                             "type": "command",
@@ -3917,7 +4937,7 @@ fn setup_remove_preserves_codex_user_trust_after_index_shift() {
                     {
                         "hooks": [{
                             "type": "command",
-                            "command": codex_dispatcher_command()
+                            "command": codex_dispatcher_command("PostToolUse")
                         }]
                     },
                     {
@@ -4011,10 +5031,47 @@ fn setup_dry_run_writes_nothing() {
         .args(["-C", temp.path().to_str().unwrap(), "setup", "--dry-run"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("Setup plan"))
+        .stdout(predicate::str::contains("Target files:"))
+        .stdout(predicate::str::contains("Planned actions:"))
+        .stdout(predicate::str::contains(
+            "Summary: dry run only; no files will be changed.",
+        ))
         .stdout(predicate::str::contains("dry run complete"));
 
     assert!(!home.join(".claude/settings.json").exists());
     assert!(!codex_home.exists());
+    assert!(!zdotdir.join(".zshrc").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_malformed_codex_config_fails_before_writing_any_step() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let codex_home = temp.path().join("codex-home");
+    let zdotdir = temp.path().join("zdot");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(codex_home.join("config.toml"), "[hooks.state.\n").unwrap();
+    let fake_bin = write_fake_agent(temp.path(), "claude");
+    write_fake_agent(temp.path(), "codex");
+
+    wt_command()
+        .current_dir(temp.path())
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", &zdotdir)
+        .env("PATH", path_with_fake_bin(&fake_bin))
+        .args(["setup", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Failed to parse Codex config TOML",
+        ));
+
+    assert!(!home.join(".claude/settings.json").exists());
+    assert!(!codex_home.join("hooks.json").exists());
     assert!(!zdotdir.join(".zshrc").exists());
 }
 
@@ -4061,7 +5118,7 @@ fn setup_skips_completion_for_homebrew_install_source() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Homebrew-managed wt detected; completion provided by formula. Skipping.",
+            "Shell completion: skip - Homebrew-managed wt detected; completion provided by formula",
         ));
 
     let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
@@ -4099,8 +5156,11 @@ fn setup_remove_removes_completion_for_homebrew_install_source() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Shell integration removed"))
-        .stdout(predicate::str::contains("Shell completion removed"));
+        .stdout(predicate::str::contains(
+            "Setup removal complete: 2 step(s) changed",
+        ))
+        .stdout(predicate::str::contains("- Shell integration"))
+        .stdout(predicate::str::contains("- Shell completion"));
 
     let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
     assert!(!zshrc.contains("eval \"$(wt shell-init zsh)\""));
@@ -4124,7 +5184,11 @@ fn setup_installs_completion_for_explicit_non_homebrew_wt_path() {
         .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Shell completion added"));
+        .stdout(predicate::str::contains("Shell completion: install"))
+        .stdout(predicate::str::contains("Setup complete:"))
+        .stdout(predicate::str::contains("step(s) changed"))
+        .stdout(predicate::str::contains("- Shell integration"))
+        .stdout(predicate::str::contains("- Shell completion"));
 
     let zshrc = std::fs::read_to_string(zdotdir.join(".zshrc")).unwrap();
     assert!(zshrc.contains("eval \"$(wt shell-init zsh)\""));
@@ -4149,6 +5213,9 @@ fn setup_dry_run_succeeds_outside_git_repo() {
         .args(["setup", "--dry-run"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("Setup plan"))
+        .stdout(predicate::str::contains("Target files:"))
+        .stdout(predicate::str::contains("Planned actions:"))
         .stdout(predicate::str::contains(
             "Setup dry run complete: no files changed",
         ));
@@ -4176,8 +5243,11 @@ fn setup_yes_succeeds_outside_git_repo() {
         .args(["setup", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Shell integration added"))
-        .stdout(predicate::str::contains("Shell completion added"))
+        .stdout(predicate::str::contains("Shell integration: install"))
+        .stdout(predicate::str::contains("Shell completion: install"))
+        .stdout(predicate::str::contains(
+            "Setup complete: 2 step(s) changed",
+        ))
         .stdout(predicate::str::contains(
             "Next: run `wt init` inside a git repo.",
         ));
@@ -4207,10 +5277,14 @@ fn setup_remove_yes_succeeds_outside_git_repo() {
         .args(["setup", "--remove", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Claude hooks: already absent"))
-        .stdout(predicate::str::contains("Codex hooks: already absent"))
         .stdout(predicate::str::contains(
-            "Shell integration: already absent",
+            "Claude hooks: none - already absent",
+        ))
+        .stdout(predicate::str::contains(
+            "Codex hooks: none - already absent",
+        ))
+        .stdout(predicate::str::contains(
+            "Shell integration: none - already absent",
         ));
 
     assert!(!home.join(".claude/settings.json").exists());
@@ -4357,11 +5431,15 @@ fn write_repo_agent_config(root: &Path, cli: &str) {
 #[cfg(unix)]
 fn write_wt_core_dirs(root: &Path) {
     for path in [
-        root.join(".git/wt/tasks"),
-        root.join(".git/wt/messages"),
-        root.join(".git/wt/task-runs"),
-        root.join(".git/wt/agent.state"),
-        root.join(".git/wt/worktrees"),
+        root.join(".wt/config/profiles"),
+        root.join(".wt/planning/ideas"),
+        root.join(".wt/planning/specs"),
+        root.join(".wt/planning/retrospectives"),
+        root.join(".wt/execution/tasks"),
+        root.join(".wt/execution/workflows"),
+        root.join(".wt/execution/task-runs"),
+        root.join(".wt/execution/archive"),
+        root.join(".wt/runtime/agents"),
     ] {
         std::fs::create_dir_all(path).unwrap();
     }
@@ -4394,8 +5472,7 @@ fn codex_wrapper_sets_default_agent_id_from_current_worktree_branch() {
         .success()
         .stdout(predicate::str::contains(
             "WT_AGENT_ID=agents/feat-add-schema\n",
-        ))
-        .stdout(predicate::str::contains("WT_COORDINATOR_AGENT_ID=\n"));
+        ));
 }
 
 #[cfg(unix)]
@@ -4420,7 +5497,6 @@ fn codex_wrapper_role_uses_distinct_same_worktree_agent_id() {
         .stdout(predicate::str::contains(
             "WT_AGENT_ID=agents/feat-add-schema-planner\n",
         ))
-        .stdout(predicate::str::contains("WT_COORDINATOR_AGENT_ID=\n"))
         .stdout(predicate::str::contains("WT_AGENT_ID=agents/feat-add-schema\n").not());
 }
 
@@ -4445,8 +5521,7 @@ fn claude_wrapper_role_uses_distinct_same_worktree_agent_id() {
         .success()
         .stdout(predicate::str::contains(
             "WT_AGENT_ID=agents/feat-add-schema-reviewer\n",
-        ))
-        .stdout(predicate::str::contains("WT_COORDINATOR_AGENT_ID=\n"));
+        ));
 }
 
 #[cfg(unix)]
@@ -4563,12 +5638,12 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
     let claude_settings = json_file(&home.join(".claude/settings.json"));
     let claude_hook = claude_managed_inbox_commands(&claude_settings)
         .into_iter()
-        .find(|command| command == CLAUDE_INBOX_HOOK_COMMAND)
+        .find(|command| command == &claude_inbox_hook_command("UserPromptSubmit"))
         .unwrap();
     let codex_hooks = json_file(&codex_home.join("hooks.json"));
     let codex_hook = codex_managed_inbox_commands(&codex_hooks)
         .into_iter()
-        .find(|command| command == &codex_dispatcher_command())
+        .find(|command| command == &codex_dispatcher_command("UserPromptSubmit"))
         .unwrap();
 
     wt_command()
@@ -4606,6 +5681,10 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
         String::from_utf8_lossy(&codex_delivery.stderr)
     );
     let codex_json: serde_json::Value = serde_json::from_slice(&codex_delivery.stdout).unwrap();
+    assert_eq!(
+        codex_json["hookSpecificOutput"]["hookEventName"].as_str(),
+        Some("UserPromptSubmit")
+    );
     let codex_context = codex_json["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
@@ -4649,6 +5728,10 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
         String::from_utf8_lossy(&claude_delivery.stderr)
     );
     let claude_json: serde_json::Value = serde_json::from_slice(&claude_delivery.stdout).unwrap();
+    assert_eq!(
+        claude_json["hookSpecificOutput"]["hookEventName"].as_str(),
+        Some("UserPromptSubmit")
+    );
     let claude_context = claude_json["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
@@ -4671,7 +5754,7 @@ fn cross_agent_hook_roundtrip_uses_file_inbox_without_cmux() {
         .success();
     assert!(!home.join(".claude/settings.json").exists());
     let codex_hooks = json_file(&codex_home.join("hooks.json"));
-    assert!(!codex_managed_inbox_commands(&codex_hooks).contains(&codex_dispatcher_command()));
+    assert!(codex_managed_inbox_commands(&codex_hooks).is_empty());
 }
 
 #[test]
@@ -4688,6 +5771,25 @@ fn ui_help_explains_read_only_local_server_contract() {
         .stdout(predicate::str::contains("0 selects an available port"))
         .stdout(predicate::str::contains("GET /api/snapshot"))
         .stdout(predicate::str::contains("embedded no-build assets"));
+}
+
+#[test]
+fn studio_help_explains_authoring_server_contract() {
+    wt_command()
+        .args(["studio", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "write-capable wt studio authoring surface",
+        ))
+        .stdout(predicate::str::contains("127.0.0.1"))
+        .stdout(predicate::str::contains("--port <PORT>"))
+        .stdout(predicate::str::contains("0 selects an available port"))
+        .stdout(predicate::str::contains("Vite-built Preact frontend"))
+        .stdout(predicate::str::contains("session cookie"))
+        .stdout(predicate::str::contains("matching Origin header"))
+        .stdout(predicate::str::contains("GET /api/ping"))
+        .stdout(predicate::str::contains("does not add mutation routes"));
 }
 
 #[test]
@@ -4717,7 +5819,7 @@ fn done_help_explains_cleanup_target_contract() {
         .stdout(predicate::str::contains("worktree path/name"))
         .stdout(predicate::str::contains("issue-like branch-name shorthand"))
         .stdout(predicate::str::contains("direct TaskRun id"))
-        .stdout(predicate::str::contains("wt workflow complete"));
+        .stdout(predicate::str::contains("wt workflow pass"));
 }
 
 #[test]
@@ -4754,6 +5856,55 @@ fn inspect_explicit_branch_prints_dossier_without_cmux_contact() {
         .stdout(predicate::str::contains("Expected report"))
         .stdout(predicate::str::contains("PR=<pr>"))
         .stderr(predicate::str::contains("Cmux:"));
+}
+
+#[test]
+fn inspect_prints_task_run_route_report_and_review_state() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+    git_commit(temp.path());
+    let branch = current_branch(temp.path());
+    let tasks_dir = temp.path().join(".wt/execution/tasks");
+    std::fs::create_dir_all(&tasks_dir).unwrap();
+    std::fs::write(
+        tasks_dir.join("inspect.toml"),
+        format!("title = \"Inspect\"\nbranch = \"{branch}\"\n"),
+    )
+    .unwrap();
+    write_task_run_file_with_routes(
+        temp.path(),
+        "run-inspect",
+        "inspect",
+        &branch,
+        "running",
+        "",
+        (Some("agents/run-1-inspect"), Some("agents/coord-a")),
+    );
+    let task_run_path = temp.path().join(".wt/execution/task-runs/run-inspect.toml");
+    let mut task_run = std::fs::read_to_string(&task_run_path).unwrap();
+    task_run.push_str(
+        "coordinator_label = \"Coordinator\"\nlast_report_message_id = \"msg_report\"\nlast_reported_at = \"2026-05-18T00:01:00.000000000Z\"\nlast_review_status = \"accepted\"\nlast_review_message_id = \"msg_review\"\nlast_reviewed_at = \"2026-05-18T00:02:00.000000000Z\"\n",
+    );
+    std::fs::write(&task_run_path, task_run).unwrap();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "inspect",
+            "run-inspect",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "TaskRun route: task_agent=agents/run-1-inspect, coordinator=agents/coord-a, coordinator_label=Coordinator",
+        ))
+        .stdout(predicate::str::contains(
+            "TaskRun report: message=msg_report, reported_at=2026-05-18T00:01:00.000000000Z",
+        ))
+        .stdout(predicate::str::contains(
+            "TaskRun review: status=accepted, message=msg_review, reviewed_at=2026-05-18T00:02:00.000000000Z",
+        ));
 }
 
 #[test]
@@ -4875,7 +6026,7 @@ fn init_yes_uses_project_recommendation_without_agent() {
         .assert()
         .success();
 
-    let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
+    let content = std::fs::read_to_string(temp.path().join(".wt/config/local.toml")).unwrap();
     assert!(content.contains("[workspace]"));
     assert!(!content.contains("[profile.agent]"));
     assert!(!content.contains("[issues]"));
@@ -4894,21 +6045,37 @@ fn init_yes_bootstraps_only_core_state_dirs() {
     assert_eq!(
         wt_state_dir_names(temp.path()),
         vec![
-            "agent.state".to_string(),
-            "messages".to_string(),
-            "task-runs".to_string(),
-            "tasks".to_string(),
-            "worktrees".to_string(),
+            "config".to_string(),
+            "execution".to_string(),
+            "planning".to_string(),
+            "runtime".to_string(),
         ]
     );
-    for lazy in [
+    for legacy_flat in [
         "workflows",
         "archive",
         "ideas",
         "retrospectives",
         "profiles",
+        "worktrees",
+        "agent.state",
+        "sessions",
     ] {
-        assert!(!temp.path().join(".git/wt").join(lazy).exists());
+        assert!(!temp.path().join(".wt").join(legacy_flat).exists());
+    }
+    for canonical in [
+        "config/local.toml",
+        "config/profiles",
+        "planning/ideas",
+        "planning/specs",
+        "planning/retrospectives",
+        "execution/tasks",
+        "execution/workflows",
+        "execution/task-runs",
+        "execution/archive",
+        "runtime/agents",
+    ] {
+        assert!(temp.path().join(".wt").join(canonical).exists());
     }
     assert!(!temp.path().join(".claude/settings.local.json").exists());
 }
@@ -4923,7 +6090,9 @@ fn init_rerun_preserves_user_created_workflow_file() {
         .assert()
         .success();
 
-    let workflow_path = temp.path().join(".git/wt/workflows/2026-05-21-999.toml");
+    let workflow_path = temp
+        .path()
+        .join(".wt/execution/workflows/2026-05-21-999.toml");
     std::fs::create_dir_all(workflow_path.parent().unwrap()).unwrap();
     std::fs::write(&workflow_path, "mode = \"batch\"\n").unwrap();
 
@@ -4961,7 +6130,7 @@ fn init_explicit_agent_yes_writes_agent() {
         .assert()
         .success();
 
-    let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
+    let content = std::fs::read_to_string(temp.path().join(".wt/config/local.toml")).unwrap();
     assert!(content.contains("[profile.agent]"));
     assert!(content.contains("cli = \"codex\""));
 }
@@ -5028,8 +6197,8 @@ fn init_dry_run_previews_plan_without_writing_config() {
         .stdout(predicate::str::contains("[test]"));
 
     assert!(!temp.path().join(".wt.toml").exists());
-    assert!(!temp.path().join(".git/wt/config.toml").exists());
-    assert!(!temp.path().join(".git/wt").exists());
+    assert!(!temp.path().join(".wt/config/local.toml").exists());
+    assert!(!temp.path().join(".wt").exists());
     assert!(!temp.path().join(".claude/settings.local.json").exists());
 }
 
@@ -5073,7 +6242,7 @@ fn init_quiet_suppresses_status_output_but_still_writes_config() {
         .success()
         .stdout("");
 
-    let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
+    let content = std::fs::read_to_string(temp.path().join(".wt/config/local.toml")).unwrap();
     assert!(content.contains("[workspace]"));
 }
 
@@ -5170,7 +6339,7 @@ fn init_existing_config_requires_force_for_yes_and_force_overwrites() {
         .stderr(predicate::str::contains("WARNING:"))
         .stdout(predicate::str::contains("설정 업데이트됨:"));
 
-    let content = std::fs::read_to_string(temp.path().join(".git/wt/config.toml")).unwrap();
+    let content = std::fs::read_to_string(temp.path().join(".wt/config/local.toml")).unwrap();
     assert!(content.contains("[profile.agent]"));
 }
 
@@ -5381,10 +6550,10 @@ args = ["--model", "gpt-5.5"]
     )
     .unwrap();
 
-    std::fs::create_dir_all(temp.path().join(".git/wt/profiles/codex/prompts")).unwrap();
+    std::fs::create_dir_all(temp.path().join(".wt/config/profiles/codex/prompts")).unwrap();
     std::fs::create_dir_all(
         temp.path()
-            .join(".git/wt/profiles/codex/scaffold/.codex/skills"),
+            .join(".wt/config/profiles/codex/scaffold/.codex/skills"),
     )
     .unwrap();
     write_personal_config(
@@ -5402,7 +6571,7 @@ name = "codex"
 "#,
     );
     std::fs::write(
-        temp.path().join(".git/wt/profiles/codex/profile.toml"),
+        temp.path().join(".wt/config/profiles/codex/profile.toml"),
         r#"
 [agent]
 cli = "codex"
@@ -5426,30 +6595,32 @@ CODEX_MODE = "1"
     )
     .unwrap();
     std::fs::write(
-        temp.path().join(".git/wt/profiles/codex/prompts/common.md"),
+        temp.path()
+            .join(".wt/config/profiles/codex/prompts/common.md"),
         "from common prompt file\n",
     )
     .unwrap();
     std::fs::write(
         temp.path()
-            .join(".git/wt/profiles/codex/prompts/common.append.md"),
+            .join(".wt/config/profiles/codex/prompts/common.append.md"),
         "from common append file\n",
     )
     .unwrap();
     std::fs::write(
-        temp.path().join(".git/wt/profiles/codex/prompts/issue.md"),
+        temp.path()
+            .join(".wt/config/profiles/codex/prompts/issue.md"),
         "from prompt file\n",
     )
     .unwrap();
     std::fs::write(
         temp.path()
-            .join(".git/wt/profiles/codex/prompts/issue.append.md"),
+            .join(".wt/config/profiles/codex/prompts/issue.append.md"),
         "from prompt append file\n",
     )
     .unwrap();
     std::fs::write(
         temp.path()
-            .join(".git/wt/profiles/codex/scaffold/AGENTS.override.md"),
+            .join(".wt/config/profiles/codex/scaffold/AGENTS.override.md"),
         "codex override\n",
     )
     .unwrap();
@@ -5530,7 +6701,7 @@ CODEX_MODE = "1"
 
     let copy_as = config.worktree.copy_as;
     assert!(copy_as.iter().any(|entry| {
-        Path::new(&entry.from).ends_with(".git/wt/profiles/codex/scaffold") && entry.to == "."
+        Path::new(&entry.from).ends_with(".wt/config/profiles/codex/scaffold") && entry.to == "."
     }));
 }
 
@@ -5716,7 +6887,7 @@ fn supervisor_start_records_threshold_and_poll_interval() {
         .stdout(predicate::str::contains("Supervisor started"));
 
     let content =
-        std::fs::read_to_string(temp.path().join(".git/wt/supervisors/agents%2Fcodex.toml"))
+        std::fs::read_to_string(temp.path().join(".wt/runtime/agents/codex/supervisor.toml"))
             .unwrap();
     assert!(content.contains("agent_id = \"agents/codex\""));
     assert!(content.contains("stale_threshold_secs = 300"));
@@ -5759,7 +6930,7 @@ fn supervisor_start_refuses_live_duplicate_and_replace_succeeds() {
 
     let _ = child.wait();
     assert!(
-        !std::fs::read_to_string(temp.path().join(".git/wt/supervisors/agents%2Fcodex.toml"))
+        !std::fs::read_to_string(temp.path().join(".wt/runtime/agents/codex/supervisor.toml"))
             .unwrap()
             .contains(&format!("pid = {}", child.id()))
     );
@@ -5877,17 +7048,17 @@ fn supervisor_stop_owned_by_filters_started_by() {
     assert!(
         !temp
             .path()
-            .join(".git/wt/supervisors/agents%2Fowned.toml")
+            .join(".wt/runtime/agents/owned/supervisor.toml")
             .exists()
     );
     assert!(
         temp.path()
-            .join(".git/wt/supervisors/agents%2Fcleanup-disabled.toml")
+            .join(".wt/runtime/agents/cleanup-disabled/supervisor.toml")
             .exists()
     );
     assert!(
         temp.path()
-            .join(".git/wt/supervisors/agents%2Fother.toml")
+            .join(".wt/runtime/agents/other/supervisor.toml")
             .exists()
     );
     cleanup_disabled.kill().unwrap();
@@ -5922,7 +7093,7 @@ fn supervisor_stop_escalates_sigkill_after_timeout() {
     assert!(
         !temp
             .path()
-            .join(".git/wt/supervisors/agents%2Fstubborn.toml")
+            .join(".wt/runtime/agents/stubborn/supervisor.toml")
             .exists()
     );
 }

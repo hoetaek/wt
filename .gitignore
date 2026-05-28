@@ -2,3 +2,5 @@
 .local
 AGENTS.override.md
 .agents/*.lock
+src/studio/web/dist/
+src/studio/web/node_modules/

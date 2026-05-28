@@ -36,7 +36,7 @@ pub struct ProfileInventory {
 }
 
 impl Config {
-    /// Load config with .wt.toml as the shared base and StorageRoot config.toml
+    /// Load config with .wt.toml as the shared base and StorageRoot local config
     /// as the private override.
     pub fn load(repo_root: &Path) -> anyhow::Result<Self> {
         let storage_root = default_storage_root(repo_root);
@@ -169,7 +169,7 @@ impl Config {
         Ok(config)
     }
 
-    /// Discover profile configs: <git-common-dir>/wt/profiles/{name}/profile.toml
+    /// Discover profile configs: <repo-root>/.wt/config/profiles/{name}/profile.toml
     pub fn load_profiles(repo_root: &Path, base: &Self) -> anyhow::Result<Vec<(String, Self)>> {
         let storage_root = default_storage_root(repo_root);
         Self::load_profiles_from_storage(repo_root, &storage_root, base)
@@ -292,13 +292,16 @@ impl Config {
         let profile_config = Self::load_file(&profile_dir.join("profile.toml"))?;
         if profile_config.profile.is_some() {
             bail!(
-                "[profile] is only valid in .wt.toml or <git-common-dir>/wt/config.toml, not in {}",
+                "[profile] is only valid in .wt.toml or <repo-root>/.wt/config/local.toml, not in {}",
                 profile_dir.join("profile.toml").display()
             );
         }
         let mut config = merge_config(base, profile_config);
         config.profile = None;
-        apply_profile_conventions(profile_dir, &mut config)?;
+        let warnings = apply_profile_conventions(profile_dir, &mut config)?;
+        for warning in &warnings {
+            eprintln!("warning: {warning}");
+        }
         finalize_config_common_prompt_scope(&mut config);
         config.validate_effective_agent()?;
         Ok(config)

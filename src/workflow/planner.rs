@@ -4,7 +4,7 @@ use crate::config::{
 };
 use crate::task as task_store;
 use crate::task::PreparedTask;
-use crate::task_run::{STATUS_DONE, STATUS_SKIPPED};
+use crate::task_run::{STATUS_PASSED, STATUS_SKIPPED};
 use crate::workflow::render::workflow_task_label;
 use crate::workflow::run::WorkflowTaskState;
 use crate::workflow::{
@@ -70,7 +70,7 @@ pub(crate) fn runnable_workflow_info(
 pub(crate) fn next_runnable_stack_task(items: &[WorkflowTaskState]) -> Option<usize> {
     for item in items {
         match item.run.status {
-            STATUS_DONE | STATUS_SKIPPED => continue,
+            STATUS_PASSED | STATUS_SKIPPED => continue,
             status if status.is_runnable() => return Some(item.idx),
             _ => return None,
         }
@@ -90,7 +90,7 @@ pub(crate) fn parent_for_stack_task(
 
     for previous in states.iter().rev().filter(|state| state.idx < idx) {
         match previous.run.status {
-            STATUS_DONE => {
+            STATUS_PASSED => {
                 return task_store::prepared_branch_name(&previous.document.branch)
                     .map(str::to_string)
                     .ok_or_else(|| {
@@ -102,7 +102,7 @@ pub(crate) fn parent_for_stack_task(
             }
             STATUS_SKIPPED => continue,
             _ => bail!(
-                "Previous workflow task {} is not done",
+                "Previous workflow task {} has not passed",
                 workflow_task_label(&previous.row)
             ),
         }

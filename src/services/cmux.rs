@@ -4,7 +4,16 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+static CMUX_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
+pub(crate) const PASTE_SUBMIT_SETTLE: Duration = Duration::from_millis(500);
+pub(crate) const CODEX_PASTE_MARKER_TIMEOUT: Duration = Duration::from_secs(3);
+pub(crate) const CODEX_PASTE_MARKER_POLL: Duration = Duration::from_millis(100);
+const CODEX_PASTE_MARKER: &str = "[Pasted Content ";
+const CODEX_LONG_PROMPT_MIN_BYTES: usize = 1000;
+const CODEX_LONG_PROMPT_MIN_LINES: usize = 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CmuxWorkspace {
@@ -84,6 +93,58 @@ pub struct CmuxIdentity {
 pub struct CmuxService<'a> {
     runner: &'a dyn CommandRunner,
     focus_new_workspace: bool,
+}
+
+pub(crate) fn cmux_send_args<'a>(
+    command: &'a str,
+    surface: &'a str,
+    workspace: Option<&'a str>,
+    payload: &'a str,
+) -> Vec<&'a str> {
+    let mut args = vec![command, "--surface", surface];
+    if let Some(workspace) = workspace {
+        args.extend(["--workspace", workspace]);
+    }
+    args.extend(["--", payload]);
+    args
+}
+
+pub(crate) fn cmux_set_buffer_args<'a>(name: &'a str, payload: &'a str) -> Vec<&'a str> {
+    vec!["set-buffer", "--name", name, "--", payload]
+}
+
+pub(crate) fn cmux_paste_buffer_args<'a>(
+    surface: &'a str,
+    workspace: Option<&'a str>,
+    name: &'a str,
+) -> Vec<&'a str> {
+    let mut args = vec!["paste-buffer", "--name", name, "--surface", surface];
+    if let Some(workspace) = workspace {
+        args.extend(["--workspace", workspace]);
+    }
+    args
+}
+
+pub(crate) fn unique_cmux_buffer_name(prefix: &str, surface: &str) -> String {
+    let suffix = surface
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let counter = CMUX_BUFFER_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}-{suffix}-{}-{nanos}-{counter}", std::process::id())
+}
+
+pub(crate) fn codex_prompt_expects_pasted_content_marker(prompt: &str) -> bool {
+    prompt.len() >= CODEX_LONG_PROMPT_MIN_BYTES
+        || prompt.lines().count() >= CODEX_LONG_PROMPT_MIN_LINES
+}
+
+pub(crate) fn screen_has_codex_pasted_content_marker(screen: &str) -> bool {
+    screen.contains(CODEX_PASTE_MARKER)
 }
 
 impl<'a> CmuxService<'a> {
@@ -410,11 +471,8 @@ impl<'a> CmuxService<'a> {
     }
 
     pub fn send(&self, surface: &str, workspace: &str, text: &str) -> Result<()> {
-        let out = self.runner.run(
-            "cmux",
-            &["send", "--surface", surface, "--workspace", workspace, text],
-            None,
-        )?;
+        let args = cmux_send_args("send", surface, Some(workspace), text);
+        let out = self.runner.run("cmux", &args, None)?;
         if !out.success {
             bail!("cmux send failed: {}", command_error(&out));
         }
@@ -422,20 +480,28 @@ impl<'a> CmuxService<'a> {
     }
 
     pub fn send_key(&self, surface: &str, workspace: &str, key: &str) -> Result<()> {
-        let out = self.runner.run(
-            "cmux",
-            &[
-                "send-key",
-                "--surface",
-                surface,
-                "--workspace",
-                workspace,
-                key,
-            ],
-            None,
-        )?;
+        let args = cmux_send_args("send-key", surface, Some(workspace), key);
+        let out = self.runner.run("cmux", &args, None)?;
         if !out.success {
             bail!("cmux send-key failed: {}", command_error(&out));
+        }
+        Ok(())
+    }
+
+    pub fn set_buffer(&self, name: &str, text: &str) -> Result<()> {
+        let args = cmux_set_buffer_args(name, text);
+        let out = self.runner.run("cmux", &args, None)?;
+        if !out.success {
+            bail!("cmux set-buffer failed: {}", command_error(&out));
+        }
+        Ok(())
+    }
+
+    pub fn paste_buffer(&self, surface: &str, workspace: &str, name: &str) -> Result<()> {
+        let args = cmux_paste_buffer_args(surface, Some(workspace), name);
+        let out = self.runner.run("cmux", &args, None)?;
+        if !out.success {
+            bail!("cmux paste-buffer failed: {}", command_error(&out));
         }
         Ok(())
     }
@@ -499,6 +565,24 @@ impl<'a> CmuxService<'a> {
             bail!("cmux read-screen failed: {}", command_error(&out));
         }
         Ok(out.stdout)
+    }
+
+    pub fn wait_for_codex_pasted_content_marker(
+        &self,
+        surface: &str,
+        workspace: &str,
+    ) -> Result<bool> {
+        let deadline = Instant::now() + CODEX_PASTE_MARKER_TIMEOUT;
+        loop {
+            let screen = self.read_screen(surface, workspace)?;
+            if screen_has_codex_pasted_content_marker(&screen) {
+                return Ok(true);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(CODEX_PASTE_MARKER_POLL);
+        }
     }
 
     pub fn list_status(&self, workspace: &str) -> Result<Vec<CmuxStatusEntry>> {
@@ -1323,6 +1407,7 @@ mod tests {
                 "surface:4",
                 "--workspace",
                 "workspace:2",
+                "--",
                 "vi file.toml\n"
             ]
         );
@@ -1337,7 +1422,18 @@ mod tests {
         svc.send("surface:0", "workspace:1", "lazygit\n").unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls[0].1[5], "lazygit\n");
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "send",
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1",
+                "--",
+                "lazygit\n"
+            ]
+        );
     }
 
     #[test]
@@ -1357,9 +1453,94 @@ mod tests {
                 "surface:0",
                 "--workspace",
                 "workspace:1",
+                "--",
                 "enter"
             ]
         );
+    }
+
+    #[test]
+    fn set_buffer_passes_raw_payload_to_named_buffer() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+
+        let svc = CmuxService::new(&runner);
+        svc.set_buffer("wt-codex-surface-0", "line 1\nline 2")
+            .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "set-buffer",
+                "--name",
+                "wt-codex-surface-0",
+                "--",
+                "line 1\nline 2"
+            ]
+        );
+    }
+
+    #[test]
+    fn paste_buffer_targets_surface_and_workspace() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true);
+
+        let svc = CmuxService::new(&runner);
+        svc.paste_buffer("surface:0", "workspace:1", "wt-codex-surface-0")
+            .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].1,
+            vec![
+                "paste-buffer",
+                "--name",
+                "wt-codex-surface-0",
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1",
+            ]
+        );
+    }
+
+    #[test]
+    fn unique_cmux_buffer_name_includes_sanitized_surface_and_counter() {
+        let first = unique_cmux_buffer_name("wt-codex", "surface:0");
+        let second = unique_cmux_buffer_name("wt-codex", "surface:0");
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("wt-codex-surface-0-"));
+        assert!(
+            first
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        );
+    }
+
+    #[test]
+    fn codex_paste_marker_policy_uses_byte_or_line_threshold() {
+        let short = "short prompt\nwith a few lines";
+        let many_bytes = "x".repeat(1000);
+        let many_lines = (1..=60)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!codex_prompt_expects_pasted_content_marker(short));
+        assert!(codex_prompt_expects_pasted_content_marker(&many_bytes));
+        assert!(codex_prompt_expects_pasted_content_marker(&many_lines));
+    }
+
+    #[test]
+    fn screen_marker_detection_matches_codex_folded_paste_label() {
+        assert!(screen_has_codex_pasted_content_marker(
+            "› ## Task[Pasted Content 1639 chars]"
+        ));
+        assert!(!screen_has_codex_pasted_content_marker(
+            "› ## Task plain visible content"
+        ));
     }
 
     #[test]

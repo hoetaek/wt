@@ -1,8 +1,7 @@
 use crate::context::Ctx;
-use crate::messages::COORDINATOR_AGENT_ALIAS;
 use crate::task as task_store;
 use crate::task_run::{
-    STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
+    STATUS_FAILED, STATUS_PASSED, STATUS_PREPARED, STATUS_RUNNING, STATUS_SKIPPED,
 };
 use crate::workflow::run::WorkflowTaskState;
 use crate::workflow::{
@@ -16,21 +15,21 @@ enum WorkflowCoordinatorHandoff<'a> {
         pr_base: &'a str,
         pr_base_label: &'static str,
         issue_closing_references: &'a [String],
-        completion: Option<WorkflowCompletion<'a>>,
+        pass: Option<WorkflowPass<'a>>,
     },
 }
 
-struct WorkflowCompletion<'a> {
+struct WorkflowPass<'a> {
     workflow_path: &'a Path,
     row: Option<&'a WorkflowTask>,
     target: Option<String>,
     run_next: bool,
 }
 
-impl WorkflowCompletion<'_> {
-    fn complete_command(&self) -> String {
+impl WorkflowPass<'_> {
+    fn pass_command(&self) -> String {
         let mut command = format!(
-            "wt workflow complete {}",
+            "wt workflow pass {}",
             shell_arg(&self.workflow_path.to_string_lossy())
         );
         if let Some(target) = self.target.as_deref() {
@@ -146,7 +145,7 @@ pub(crate) fn workflow_selection_status_counts(items: &[WorkflowTaskState]) -> S
     let counts = [
         STATUS_PREPARED,
         STATUS_RUNNING,
-        STATUS_DONE,
+        STATUS_PASSED,
         STATUS_FAILED,
         STATUS_SKIPPED,
     ]
@@ -335,7 +334,7 @@ pub(crate) fn stack_task_already_running_message(
     row: &WorkflowTask,
 ) -> String {
     format!(
-        "Workflow stack task {} is already running. Mark it complete with: wt workflow complete {} {}",
+        "Workflow stack task {} is already running. Mark it passed with: wt workflow pass {} {}",
         workflow_task_label(row),
         shell_arg(&workflow_path.to_string_lossy()),
         shell_arg(workflow_task_label(row))
@@ -344,7 +343,7 @@ pub(crate) fn stack_task_already_running_message(
 
 pub(crate) fn started_stack_task_message(workflow_path: &Path, row: &WorkflowTask) -> String {
     format!(
-        "Started workflow task {}. Mark it complete with: wt workflow complete {} {}",
+        "Started workflow task {}. Mark it passed with: wt workflow pass {} {}",
         workflow_task_label(row),
         shell_arg(&workflow_path.to_string_lossy()),
         shell_arg(workflow_task_label(row))
@@ -378,7 +377,7 @@ pub(crate) fn workflow_single_task_prompt_content(content: &str) -> String {
     workflow_task_prompt_content(
         content,
         &workflow_single_task_handoff_section(
-            Path::new("/repo/.git/wt/workflows/test.toml"),
+            Path::new("/repo/.wt/execution/workflows/test.toml"),
             Some(&WorkflowTask::new("task", "run-task")),
             &default_workflow_policy(),
             TEST_WORKFLOW_BASE,
@@ -395,7 +394,7 @@ pub(crate) fn workflow_single_task_prompt_content_for_policy(
     workflow_task_prompt_content(
         content,
         &workflow_single_task_handoff_section(
-            Path::new("/repo/.git/wt/workflows/test.toml"),
+            Path::new("/repo/.wt/execution/workflows/test.toml"),
             Some(&WorkflowTask::new("task", "run-task")),
             policy,
             TEST_WORKFLOW_BASE,
@@ -413,7 +412,7 @@ pub(crate) fn workflow_single_task_prompt_content_for_policy_and_closing_refs(
     workflow_task_prompt_content(
         content,
         &workflow_single_task_handoff_section(
-            Path::new("/repo/.git/wt/workflows/test.toml"),
+            Path::new("/repo/.wt/execution/workflows/test.toml"),
             Some(&WorkflowTask::new("task", "run-task")),
             policy,
             TEST_WORKFLOW_BASE,
@@ -428,7 +427,7 @@ pub(crate) fn workflow_batch_task_prompt_content(content: &str) -> String {
     workflow_task_prompt_content(
         content,
         &workflow_batch_task_handoff_section(
-            Path::new("/repo/.git/wt/workflows/test.toml"),
+            Path::new("/repo/.wt/execution/workflows/test.toml"),
             &row,
             &default_workflow_policy(),
             TEST_WORKFLOW_BASE,
@@ -446,7 +445,7 @@ pub(crate) fn workflow_batch_task_prompt_content_for_policy(
     workflow_task_prompt_content(
         content,
         &workflow_batch_task_handoff_section(
-            Path::new("/repo/.git/wt/workflows/test.toml"),
+            Path::new("/repo/.wt/execution/workflows/test.toml"),
             &row,
             policy,
             TEST_WORKFLOW_BASE,
@@ -481,7 +480,7 @@ pub(crate) fn workflow_single_task_handoff_section(
         pr_base,
         pr_base_label: "workflow base branch",
         issue_closing_references,
-        completion: Some(WorkflowCompletion {
+        pass: Some(WorkflowPass {
             workflow_path,
             row,
             target: None,
@@ -502,7 +501,7 @@ pub(crate) fn workflow_batch_task_handoff_section(
         pr_base,
         pr_base_label: "workflow base branch",
         issue_closing_references,
-        completion: Some(WorkflowCompletion {
+        pass: Some(WorkflowPass {
             workflow_path,
             row: Some(row),
             target: None,
@@ -524,7 +523,7 @@ pub(crate) fn workflow_matrix_task_handoff_section(
         pr_base,
         pr_base_label: "workflow base branch",
         issue_closing_references,
-        completion: Some(WorkflowCompletion {
+        pass: Some(WorkflowPass {
             workflow_path,
             row: Some(row),
             target: Some(format!("{}:{profile}", workflow_task_label(row))),
@@ -545,7 +544,7 @@ pub(crate) fn workflow_stack_task_handoff_section(
         pr_base: validated_parent,
         pr_base_label: "workflow parent branch",
         issue_closing_references,
-        completion: Some(WorkflowCompletion {
+        pass: Some(WorkflowPass {
             workflow_path,
             row: Some(row),
             target: None,
@@ -560,38 +559,17 @@ fn workflow_task_prompt_content(content: &str, handoff: &str) -> String {
 }
 
 fn workflow_coordinator_handoff_section(handoff: WorkflowCoordinatorHandoff<'_>) -> String {
-    let workflow_path = match &handoff {
-        WorkflowCoordinatorHandoff::Task {
-            completion: Some(completion),
-            ..
-        } => completion.workflow_path,
-        WorkflowCoordinatorHandoff::Task {
-            completion: None, ..
-        } => Path::new("<workflow-path>"),
-    };
-    let workflow_scope = workflow_scope_arg(workflow_path);
     let (pull_request_instructions, pr_report_value, after_send) = workflow_handoff_policy(handoff);
     let cmux_send_command = format!(
         "cmux send --workspace {{{{coordinator_cmux_workspace}}}} --surface {{{{coordinator_cmux_surface}}}} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\"\n{{{{coordinator_enter_command}}}}"
     );
     let inbox_send_command = format!(
-        "wt msg send --scope {} --to {COORDINATOR_AGENT_ALIAS} \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\"",
-        shell_arg(&workflow_scope)
+        "wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR={pr_report_value}; Risks or follow-ups=<risks>\""
     );
 
     format!(
-        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report back to the coordinator inbox:\n\n```bash\n{inbox_send_command}\n```\n\nThe coordinator inbox target `{COORDINATOR_AGENT_ALIAS}` resolves from `WT_COORDINATOR_AGENT_ID`, and this command uses explicit workflow scope `{workflow_scope}`. Workflow supervisors may claim resolved coordinator inbox messages only when this explicit workflow scope matches. If the file inbox route is unavailable, send the same report to the fallback cmux surface that started this workflow:\n\n```bash\n{cmux_send_command}\n```\n\n{pull_request_instructions}\n\n{after_send}\n\nIf neither coordinator route is available, leave the same report in this task session and wait."
+        "## Workflow Coordinator Handoff\n\nSend the Agent Completion Report through the TaskRun report route:\n\n```bash\n{inbox_send_command}\n```\n\n`wt task report` uses this TaskRun's stored coordinator route and workflow scope. If the file inbox route is unavailable, send the same report to the fallback cmux surface that started this workflow:\n\n```bash\n{cmux_send_command}\n```\n\n{pull_request_instructions}\n\n{after_send}\n\nIf `wt task report` fails, leave the same report in this task session and wait."
     )
-}
-
-fn workflow_scope_arg(workflow_path: &Path) -> String {
-    let id = workflow_path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(str::trim)
-        .filter(|stem| !stem.is_empty())
-        .unwrap_or("<workflow-id>");
-    format!("workflow:{id}")
 }
 
 fn workflow_handoff_policy(
@@ -603,7 +581,7 @@ fn workflow_handoff_policy(
             pr_base,
             pr_base_label,
             issue_closing_references,
-            completion,
+            pass,
         } => {
             let pr_report_value = match policy.pull_request {
                 WorkflowPullRequestMode::None => "none",
@@ -633,11 +611,11 @@ fn workflow_handoff_policy(
                 }
             };
 
-            let after_send = if let Some(completion) = completion {
+            let after_send = if let Some(pass) = pass {
                 format!(
                     "{}\n\nWhen review passes, wait for the coordinator to advance the workflow. The coordinator will run:\n\n```bash\n{}\n```\n\n{}",
                     review_followup(policy),
-                    completion.complete_command(),
+                    pass.pass_command(),
                     landing_wait_text(policy)
                 )
             } else {

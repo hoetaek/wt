@@ -71,6 +71,13 @@ struct FileMove {
 }
 
 fn plan_archive(ctx: &Ctx, workflow: &str) -> Result<ArchivePlan> {
+    if let Some(legacy) = ctx.storage_root.detect_legacy_archive(&ctx.repo_root) {
+        bail!("{}", legacy.error_message_for("Workflow archive storage"));
+    }
+    if let Some(legacy) = ctx.storage_root.detect_legacy_tasks(&ctx.repo_root) {
+        bail!("{}", legacy.error_message_for("TaskDocument storage"));
+    }
+
     let workflow_source = resolve_archive_workflow_key(ctx, workflow)?;
     let workflow_id = workflow_store::id_from_path(&workflow_source)?;
     let metadata = workflow_store::read(&workflow_source)?;
@@ -86,7 +93,7 @@ fn plan_archive(ctx: &Ctx, workflow: &str) -> Result<ArchivePlan> {
     let offenders = unfinished_task_runs(&task_run_refs);
     if !offenders.is_empty() {
         bail!(
-            "Cannot archive workflow {workflow_id}; linked TaskRuns must be done or skipped. Offending runs: {}",
+            "Cannot archive workflow {workflow_id}; linked TaskRuns must be passed or skipped. Offending runs: {}",
             offenders.join(", ")
         );
     }
@@ -297,7 +304,7 @@ fn workflow_task_run_refs(ctx: &Ctx, metadata: &WorkflowMetadata) -> Result<Vec<
 fn unfinished_task_runs(refs: &[TaskRunRef]) -> Vec<String> {
     refs.iter()
         .filter(|reference| {
-            reference.exists && !matches!(reference.status.as_str(), "done" | "skipped")
+            reference.exists && !matches!(reference.status.as_str(), "passed" | "skipped")
         })
         .map(|reference| format!("{} ({})", reference.id, reference.status))
         .collect()
@@ -519,7 +526,7 @@ mod tests {
     }
 
     fn write_task(root: &Path, key: &str) {
-        let tasks_dir = root.join(".git/wt/tasks");
+        let tasks_dir = root.join(".wt/execution/tasks");
         fs::create_dir_all(&tasks_dir).unwrap();
         fs::write(
             tasks_dir.join(format!("{key}.toml")),
@@ -534,7 +541,7 @@ body = "Task body"
     }
 
     fn write_task_run(root: &Path, id: &str, task: &str, status: &str, group: &str) {
-        let task_runs_dir = root.join(".git/wt/task-runs");
+        let task_runs_dir = root.join(".wt/execution/task-runs");
         fs::create_dir_all(&task_runs_dir).unwrap();
         fs::write(
             task_runs_dir.join(format!("{id}.toml")),
@@ -554,7 +561,9 @@ updated_at = "2026-05-20T00:00:00Z"
 
     fn write_workflow(root: &Path, id: &str, tasks: Vec<WorkflowTask>) {
         let ctx = ctx(root);
-        let path = root.join(".git/wt/workflows").join(format!("{id}.toml"));
+        let path = root
+            .join(".wt/execution/workflows")
+            .join(format!("{id}.toml"));
         let mut workflow =
             WorkflowMetadata::new(WorkflowMode::Batch, "explicit", Some("main".into()), tasks);
         workflow.color = Some("red".into());
@@ -562,8 +571,8 @@ updated_at = "2026-05-20T00:00:00Z"
     }
 
     #[test]
-    fn archive_allows_only_done_or_skipped_existing_task_runs() {
-        for status in ["done", "skipped"] {
+    fn archive_allows_only_passed_or_skipped_existing_task_runs() {
+        for status in ["passed", "skipped"] {
             let dir = tempfile::tempdir().unwrap();
             let ctx = ctx(dir.path());
             write_task(dir.path(), status);
@@ -577,7 +586,7 @@ updated_at = "2026-05-20T00:00:00Z"
             run(&ctx, "wf").unwrap();
             assert!(
                 dir.path()
-                    .join(".git/wt/archive/workflows/wf/manifest.toml")
+                    .join(".wt/execution/archive/workflows/wf/manifest.toml")
                     .exists()
             );
         }
@@ -597,28 +606,68 @@ updated_at = "2026-05-20T00:00:00Z"
         assert!(report.contains("run-prepared (prepared)"));
         assert!(report.contains("run-running (running)"));
         assert!(report.contains("run-failed (failed)"));
-        assert!(!dir.path().join(".git/wt/archive/workflows/wf").exists());
+        assert!(
+            !dir.path()
+                .join(".wt/execution/archive/workflows/wf")
+                .exists()
+        );
     }
 
     #[test]
     fn archive_requires_explicit_workflow_key() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        write_task(dir.path(), "done");
-        write_task_run(dir.path(), "run-done", "done", "done", "wf");
+        write_task(dir.path(), "passed");
+        write_task_run(dir.path(), "run-passed", "passed", "passed", "wf");
         write_workflow(
             dir.path(),
             "wf",
-            vec![WorkflowTask::new("done", "run-done")],
+            vec![WorkflowTask::new("passed", "run-passed")],
         );
 
         let latest = format!("{:#}", run(&ctx, "latest").unwrap_err());
         assert!(latest.contains("pass a workflow key explicitly"));
         let with_extension = format!("{:#}", run(&ctx, "wf.toml").unwrap_err());
         assert!(with_extension.contains("Workflow key must be a file stem"));
-        let with_path = format!("{:#}", run(&ctx, ".git/wt/workflows/wf.toml").unwrap_err());
+        let with_path = format!(
+            "{:#}",
+            run(&ctx, ".wt/execution/workflows/wf.toml").unwrap_err()
+        );
         assert!(with_path.contains("Workflow key must be a file stem"));
-        assert!(dir.path().join(".git/wt/workflows/wf.toml").exists());
+        assert!(dir.path().join(".wt/execution/workflows/wf.toml").exists());
+    }
+
+    #[test]
+    fn archive_rejects_legacy_task_storage_before_marking_tasks_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        write_task_run(dir.path(), "run-legacy", "legacy-task", "done", "wf");
+        write_workflow(
+            dir.path(),
+            "wf",
+            vec![WorkflowTask::new("legacy-task", "run-legacy")],
+        );
+        let legacy_tasks = dir.path().join(".wt/tasks");
+        fs::create_dir_all(&legacy_tasks).unwrap();
+        fs::write(
+            legacy_tasks.join("legacy-task.toml"),
+            r#"title = "legacy-task"
+branch = "legacy-task"
+body = "Task body"
+"#,
+        )
+        .unwrap();
+
+        let error = run(&ctx, "wf").unwrap_err();
+        let report = format!("{error:#}");
+        assert!(report.contains("Found legacy wt personal TaskDocument storage"));
+        assert!(report.contains(".wt/tasks"));
+        assert!(report.contains(".wt/execution/tasks"));
+        assert!(
+            !dir.path()
+                .join(".wt/execution/archive/workflows/wf")
+                .exists()
+        );
     }
 
     #[test]
@@ -633,7 +682,7 @@ updated_at = "2026-05-20T00:00:00Z"
             ("run-shared", "shared"),
             ("run-missing", "missing"),
         ] {
-            write_task_run(dir.path(), run, task, "done", "wf");
+            write_task_run(dir.path(), run, task, "passed", "wf");
         }
         write_task_run(dir.path(), "run-other", "shared", "prepared", "other");
         write_workflow(
@@ -653,13 +702,13 @@ updated_at = "2026-05-20T00:00:00Z"
 
         run(&ctx, "wf").unwrap();
 
-        let archive = dir.path().join(".git/wt/archive/workflows/wf");
+        let archive = dir.path().join(".wt/execution/archive/workflows/wf");
         assert!(archive.join("workflow.toml").exists());
         assert!(archive.join("tasks/unique.toml").exists());
         assert!(!archive.join("tasks/shared.toml").exists());
         assert!(!archive.join("tasks/missing.toml").exists());
-        assert!(!dir.path().join(".git/wt/tasks/unique.toml").exists());
-        assert!(dir.path().join(".git/wt/tasks/shared.toml").exists());
+        assert!(!dir.path().join(".wt/execution/tasks/unique.toml").exists());
+        assert!(dir.path().join(".wt/execution/tasks/shared.toml").exists());
 
         let manifest: ArchiveManifest =
             toml::from_str(&fs::read_to_string(archive.join("manifest.toml")).unwrap()).unwrap();
@@ -669,10 +718,10 @@ updated_at = "2026-05-20T00:00:00Z"
             .find(|row| row.key == "unique")
             .unwrap();
         assert_eq!(unique.result, "moved");
-        assert_eq!(unique.source_path, "tasks/unique.toml");
+        assert_eq!(unique.source_path, "execution/tasks/unique.toml");
         assert_eq!(
             unique.archive_path.as_deref(),
-            Some("archive/workflows/wf/tasks/unique.toml")
+            Some("execution/archive/workflows/wf/tasks/unique.toml")
         );
         let shared = manifest
             .tasks

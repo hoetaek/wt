@@ -8,6 +8,36 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.43.0 - 2026-05-28
+
+- Changed remaining agent runtime state to live under the owning
+  `<git-common-dir>/wt/runtime/agents/<agent>/` directory: wait observations now
+  aggregate from per-agent `observations/wait-observations.jsonl` files,
+  identity locator markers live under `anchors/`, and supervisor registration,
+  log, and stop state live beside the owning agent runtime.
+
+- Changed the canonical file inbox storage from
+  `<git-common-dir>/wt/messages/agents/<agent>/inbox/<state>` to
+  `<git-common-dir>/wt/runtime/agents/<agent>/inbox/<state>`. The old
+  top-level `messages/` root is now reported as legacy state instead of being
+  silently consumed.
+
+- Changed personal planning and execution state to the repo-owned `.wt`
+  layout, including `planning/ideas`, `planning/specs`, `execution/tasks`,
+  `execution/workflows`, `execution/task-runs`, and runtime migration handling.
+
+- Added `wt init`/`wt setup` responsibility separation, improved init config
+  scaffolding, and kept `.wt` setup idempotent for both real directories and
+  linked-worktree symlinks.
+
+- Added `wt welcome` and refreshed the wt skill pack around
+  Discover/Shape/Execute/Improve preparation, text-first wireframes, and
+  wireframe cold-reader checks before design.
+
+- Added wt Studio and UI authoring surfaces for local state, TaskDocument
+  editing, plan preview, profile/config inspection, workflow visualization, and
+  master-detail review flows.
+
 ## 0.42.0 - 2026-05-26
 
 - Changed `wt msg check-inbox --agent coordinator` to claim coordinator inbox
@@ -35,9 +65,8 @@ minor version instead of moving to `x.0.0`.
   emits hook JSON on stdout, and acknowledges successful output into
   `inbox/delivered` without stealing active claims.
 - Changed generated task and workflow coordinator handoff prompts to present
-  `wt msg send --to coordinator ...` as the default report route, with cmux
-  send coordinates retained as the fallback route when the file inbox is
-  unavailable.
+  `wt task report ...` as the default report route, with cmux send coordinates
+  retained as the fallback route when the file inbox is unavailable.
 
 - Added automated cmux-free cross-agent hook roundtrip coverage. The smoke uses
   linked worktrees, `wt setup`, `wt as`, `wt msg send`, and the installed
@@ -53,17 +82,18 @@ minor version instead of moving to `x.0.0`.
   `wt as <agent-id> -- <command...>`. The known-agent wrappers derive
   `WT_AGENT_ID=agents/<branch_slug>` from the current worktree and support
   same-worktree role identities such as `wt codex @planner`, which uses
-  `agents/<branch_slug>-planner` instead of consuming the default inbox.
+  `agents/<branch_slug>-planner` instead of consuming the default inbox. All
+  wrappers clear removed legacy coordinator routing env before launching the
+  child process.
 
 - Refactored `wt agent hook install claude` to install a worktree-local
   `WT_AGENT_ID` dispatcher hook by default, matching the Codex runtime identity
   model while preserving `--agent <agent>` as a manual/test override.
 
-- Added the `coordinator` message target for task and workflow handoffs. Task
-  agents launched with coordinator context receive
-  `WT_COORDINATOR_AGENT_ID=<coordinator-agent-id>`, and generated handoff
-  prompts include the `wt msg send --to coordinator ...` route alongside the
-  existing cmux send coordinates.
+- Added TaskRun-owned report routing for task and workflow handoffs. Task
+  agents launched by wt receive their own `WT_AGENT_ID` and `WT_TASK_RUN_ID`,
+  and generated handoff prompts use `wt task report ...` alongside the existing
+  cmux send coordinates.
 
 - Bound wt-launched agent workspace commands to the file-inbox runtime identity
   by injecting `WT_AGENT_ID=agents/<branch_slug>` into the cmux

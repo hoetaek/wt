@@ -1,0 +1,146 @@
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SFMono-Regular", monospace;
+  --color-studio-accent: #3b82f6;
+  --ease-studio: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: #f5f5f4;
+  color-scheme: light dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100dvh;
+  margin: 0;
+  background: #f5f5f4;
+  color: #111827;
+  font-family: var(--font-sans);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+input,
+textarea {
+  outline: none;
+}
+
+textarea {
+  resize: vertical;
+}
+
+::selection {
+  background: rgb(59 130 246 / 0.18);
+}
+
+.studio-noise {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.28;
+  background-image: radial-gradient(circle, rgb(0 0 0 / 0.12) 0.55px, transparent 0.7px);
+  background-size: 12px 12px;
+  mask-image: radial-gradient(circle at center, black, transparent 84%);
+}
+
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(4rem);
+  filter: blur(12px);
+  transition:
+    opacity 800ms var(--ease-studio),
+    transform 800ms var(--ease-studio),
+    filter 800ms var(--ease-studio);
+}
+
+[data-reveal="visible"] {
+  opacity: 1;
+  transform: translateY(0);
+  filter: blur(0);
+}
+
+@keyframes studio-spring {
+  0% {
+    opacity: 0;
+    transform: scale(0.96) translateY(1rem);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes studio-chip-pulse {
+  0%,
+  100% {
+    opacity: 0.78;
+    transform: scale(0.985);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.015);
+  }
+}
+
+.studio-status-pulse {
+  animation: studio-chip-pulse 1600ms var(--ease-studio) infinite;
+  transform-origin: center;
+}
+
+@media (prefers-color-scheme: dark) {
+  html {
+    background: #0a0a0a;
+  }
+
+  body {
+    background: #0a0a0a;
+    color: #f8fafc;
+  }
+
+  .studio-noise {
+    opacity: 0.2;
+    background-image: radial-gradient(circle, rgb(255 255 255 / 0.16) 0.55px, transparent 0.7px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}

@@ -1732,7 +1732,7 @@ mod tests {
             SelectorRow::option(7, "Task 7"),
             SelectorRow::section("running"),
             SelectorRow::option(8, "Task 8"),
-            SelectorRow::section("done"),
+            SelectorRow::section("passed"),
         ];
         rows.extend((9..28).map(|index| SelectorRow::option(index, format!("Task {index}"))));
         let mut state = SelectorState::multi(rows);
@@ -1755,7 +1755,7 @@ mod tests {
         );
 
         assert!(mixed_groups.contains("│ skipped"));
-        assert!(single_group.contains("│ done"));
+        assert!(single_group.contains("│ passed"));
         assert_eq!(mixed_groups.lines().count(), single_group.lines().count());
     }
 
@@ -1851,7 +1851,7 @@ mod tests {
     #[test]
     fn nested_final_frame_renders_selected_label_and_hint() {
         let mut state = SelectorState::single(vec![
-            SelectorRow::option_with_hint(0, "개인 설정 파일", "보통 .git/wt/config.toml"),
+            SelectorRow::option_with_hint(0, "개인 설정 파일", "보통 .wt/config/local.toml"),
             SelectorRow::option_with_hint(1, "팀 공유 설정", "./.wt.toml"),
         ]);
 
@@ -1867,7 +1867,7 @@ mod tests {
                     .nested(true),
                 SelectorRenderFrame::Submitted
             ),
-            "\n  저장 위치\n  └ 선택: 개인 설정 파일 (보통 .git/wt/config.toml)\n"
+            "\n  저장 위치\n  └ 선택: 개인 설정 파일 (보통 .wt/config/local.toml)\n"
         );
     }
 

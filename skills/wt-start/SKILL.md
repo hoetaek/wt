@@ -17,8 +17,8 @@ distinction: see `../wt-work/references/task-lifecycle.md`.
 ```bash
 git status --short --branch
 git worktree list
-common_dir="$(git rev-parse --git-common-dir)"
-find "$common_dir/wt/tasks" "$common_dir/wt/task-runs" "$common_dir/wt/workflows" -maxdepth 1 -type f 2>/dev/null | sort
+repo_root="$(git rev-parse --show-toplevel)"
+find "$repo_root/.wt/execution/tasks" "$repo_root/.wt/execution/task-runs" "$repo_root/.wt/execution/workflows" -maxdepth 1 -type f 2>/dev/null | sort
 wt doctor
 ```
 
@@ -56,7 +56,9 @@ For provider issues, use `wt workflow issue --mode <single|batch|stack> ...`.
 ## Start Rules
 
 - Prefer explicit task keys in scripts; omit only for interactive selection.
-- Verify every selected task body has `계획 (Planning)` with `expected duration`. If missing, return to `wt-ready`.
+- Verify every selected task body has `계획 (Planning)` with `expected duration`,
+  `estimate basis`, and suggested watch cadence. If missing, return to
+  `wt-ready`.
 - Verify the handoff has acceptance checks, size class, output concept or workflow rationale, and PR/landing policy source. If missing, return to `wt-ready`.
 - `--base .` for current branch, `--base <branch>` for explicit base, bare `--base` for interactive base selection.
 - Direct execution is `wt run task`; workflow commands only for saved workflow execution.
@@ -71,12 +73,15 @@ Capture the inspect target:
 
 ```bash
 git worktree list
-common_dir="$(git rev-parse --git-common-dir)"
-find "$common_dir/wt/task-runs" -maxdepth 1 -type f 2>/dev/null | sort
+repo_root="$(git rev-parse --show-toplevel)"
+find "$repo_root/.wt/execution/task-runs" -maxdepth 1 -type f 2>/dev/null | sort
 wt inspect <branch|worktree|task-run-id>
 wt agent status <branch|worktree|task-run-id>
 ```
 
 Report: command used, created branch/worktree or workflow, TaskRun id when
-available, next `wt inspect` target. Use `wt agent watch <target>` if waiting
-for a state transition.
+available, next `wt inspect` target, and the recorded worker `agent_id` /
+coordinator route. If inbox delivery will be used, confirm the launched process
+got identity from `wt codex`, `wt claude`, `wt as`, or a live identity anchor;
+`wt setup` alone only installs hooks and does not bind an already-running
+session. Use `wt agent watch <target>` if waiting for a state transition.

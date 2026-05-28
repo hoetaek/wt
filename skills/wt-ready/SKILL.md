@@ -19,10 +19,11 @@ Inspect local truth before asking questions:
 ```bash
 git status --short --branch
 find . -maxdepth 2 -name AGENTS.md -o -name AGENTS.override.md
-common_dir="$(git rev-parse --git-common-dir)"
-# tasks/, workflows/, ideas/ hold flat files; specs/ holds one directory per slug.
-find "$common_dir/wt/tasks" "$common_dir/wt/workflows" "$common_dir/wt/ideas" -maxdepth 1 -type f 2>/dev/null | sort
-find "$common_dir/wt/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
+repo_root="$(git rev-parse --show-toplevel)"
+# execution/tasks, execution/workflows, planning/ideas hold flat files;
+# planning/specs holds one directory per slug.
+find "$repo_root/.wt/execution/tasks" "$repo_root/.wt/execution/workflows" "$repo_root/.wt/planning/ideas" -maxdepth 1 -type f 2>/dev/null | sort
+find "$repo_root/.wt/planning/specs" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort
 ```
 
 For `wt` itself, read `docs/consistency.md` before proposing model, CLI,
@@ -51,10 +52,16 @@ how something works, verify it against the repo when it is cheap.
 Useful evidence:
 
 - docs and glossary terms that define the domain model
-- current config shape and local overrides such as `.wt.toml` / `<git-common-dir>/wt/config.toml`
-- current persisted state such as `<git-common-dir>/wt/tasks` and `<git-common-dir>/wt/workflows`
+- current config shape and local overrides such as `.wt.toml` / `<repo-root>/.wt/config/local.toml`
+- current persisted state such as `<repo-root>/.wt/execution/tasks` and `<repo-root>/.wt/execution/workflows`
 - command help for user-facing CLI contracts
 - tests or small local experiments for uncertain behavior
+- spec-local retrospectives and the cross-work timing baseline at
+  `<repo-root>/.wt/planning/retrospectives/timing.md` for similar task type, size,
+  agent/profile, and coordination shape
+- `wt agent wait-stats` as a read-only summary of prior non-idle watch
+  observations; use it as evidence for cadence and uncertainty, not as the
+  source of actual task duration
 - external references only when the user asks or the decision depends on current
   best practice outside the repo
 
@@ -72,15 +79,24 @@ question that chooses the next exploration direction.
 ## Work Sequence
 
 Before promoting an idea, writing specs, or preparing TaskDocuments, identify
-where the work currently sits in `references/work-sequence.md`. Do not treat
-the sequence as a waterfall; use it as a set of gates that prevent skipping
-from vague intent straight to runnable work.
+where the work currently sits in `references/work-sequence.md`: Discover
+(intent/context), Shape (purpose/requirements/wireframe), Execute prep
+(design/tasks/handoff), or Improve (review/retrospect). Do not treat the
+sequence as a waterfall; use it as a set of gates that prevent skipping from
+vague intent straight to runnable work.
 
 If a user enters `wt-ready` directly with implementation-shaped wording,
 reconstruct the missing raw intent, purpose/success criteria, and output
-concept first. If the purpose, requirements/principles, output concept, design,
-or task graph cannot be stated clearly, stop at the matching earlier artifact
-instead of fabricating a TaskDocument.
+form first. If Discover is incomplete, gather unknowns and context before
+Shape. If Shape is incomplete, stop at requirements or wireframe instead of
+design. If Execute prep is incomplete, stop at design, task graph, or execution
+handoff instead of fabricating a TaskDocument.
+
+Gate transitions require explicit user approval. The agent may propose that
+unknowns are surfaced, context is adequate, requirements are settled, a
+wireframe has passed, or design is ready for tasking, but the user decides when
+to move to the next gate. For tiny work, gates may collapse into one file, but
+the collapse must be stated instead of silently skipping the check.
 
 ## Questions
 
@@ -92,17 +108,20 @@ focused question at a time and include your recommended answer.
 Resolve terminology as you go. If the user uses a term that conflicts with the
 repo docs or code, point to the conflict and propose the canonical term.
 
-When authoring a spec file (`04+05+06-requirements.md`, `07-design.md`,
-`08-tasks.md`, `09-execution.md`), use the **Grill The Spec** cycle instead.
+When authoring a spec file (`04+05-requirements.md`,
+`04+05+06-requirements.md`, `06-wireframe.md`, `07-design.md`, `08-tasks.md`,
+`09-execution.md`), use the **Grill The Spec** cycle instead.
 
-## Set Output Concept
+## Set Output Form
 
 After purpose, requirements, and principles are clear, decide what kind of
-artifact this preparation should produce. Do this before design and task graph
-work so an implementation PR is not assumed by default.
+artifact this preparation should produce. This is part of requirements, not a
+separate gate. Do it before wireframe, design, and task graph work so an
+implementation PR is not assumed by default.
 
-Record the output concept in `04+05+06-requirements.md`,
-TaskDocument `계획 (Planning)` section, or `09-execution.md` rationale:
+Record the output form in `04+05-requirements.md`, collapsed
+`04+05+06-requirements.md`, TaskDocument `계획 (Planning)` section, or
+`09-execution.md` rationale:
 
 - docs-only change
 - implementation PR
@@ -116,6 +135,45 @@ TaskDocument `계획 (Planning)` section, or `09-execution.md` rationale:
 If several output forms are plausible, split them or record the deferred form.
 Do not bundle a prototype, docs cleanup, and implementation branch into one
 task unless the dependency is real and review remains safe.
+
+## Wireframe With Mock Data
+
+Before design, confirm the unknowns and context are sufficient to build a
+realistic representative structure. If mock data, representative examples,
+operator workflow, important states, or system constraints are missing, return
+to `02-unknowns.md` / `03-context.md` instead of letting design discover the
+structure late.
+
+Wireframe does not mean UI only. Use the artifact form that fits the output:
+
+1. Start with a text-first wireframe: ASCII layout, command transcript,
+   sequence sketch, table/state matrix, or outline with representative mock
+   data. This pass must succeed before design or medium-specific wireframing.
+2. If needed, add an artifact-specific wireframe:
+   - UI / app flow: rough screens or HTML with realistic records, empty states,
+     error states, and visual treatment for the concrete approved case.
+   - CLI / config: expected command transcript, generated TOML, and failure
+     cases.
+   - Workflow/process: mock TaskDocument, Workflow, TaskRun, pass/land path,
+     and coordinator handoff.
+   - Docs/report: outline with placeholder evidence, claims, and reader path.
+   - API/data: representative request/response examples and state table.
+
+Write `06-wireframe.md` for one compact artifact or `06-wireframe/` when there
+are several screens, flows, examples, or transcripts. For tiny work, the
+wireframe can collapse into `04+05+06-requirements.md`, but say that it is a
+collapsed wireframe and still check the representative examples/states.
+
+The gate passes only when the user can walk through the text-first structure and
+confirm that it fits. If an artifact-specific wireframe is needed, that concrete
+case must also pass before `07-design.md` generalizes it into component
+boundaries, state model, command/config shape, data contracts, interaction
+rules, or visual system rules.
+
+For user-facing, ambiguous, or high-risk flows, add a cold reader check. Show
+only the wireframe, mock data, labels, and visible sequence to a blind reader.
+If they infer the wrong actor, outcome, next action, or important state, revise
+the wireframe before design.
 
 ## Slice The Work
 
@@ -132,15 +190,21 @@ For each slice, record:
 - blocked by
 - execution shape: direct, batch, stack, separate workflow, or direct local edit
 - expected duration before first coordinator review, such as `20m`, `45m`, or
-  `2h`; use a conservative estimate or range when uncertain
+  `2h`; derive this from similar retrospectives when available, otherwise mark
+  it as a conservative planning guess or range
+- estimate basis: previous `11-retrospect.md`, cross-work `timing.md`,
+  `wt agent wait-stats`, user-provided target, or conservative planning guess
+- suggested watch cadence: launch validation and steady heartbeat interval for
+  `wt-coordinate`, based on expected duration and prior timing evidence
 - acceptance checks
 - notes for experiments or tradeoffs that shaped the slice
 
 Record this planning context in the TaskDocument `body` as a text section, not
 as top-level TOML fields (only canonical task fields are accepted). Every
 TaskDocument or workflow task must include an expected duration in its
-`계획 (Planning)` body section before `wt-start`. Prefer Korean human-facing
-labels with the stable English key in parentheses.
+`계획 (Planning)` body section before `wt-start`, plus the estimate basis when
+known. Prefer Korean human-facing labels with the stable English key in
+parentheses.
 
 Example body section:
 
@@ -148,6 +212,8 @@ Example body section:
 ## 계획 (Planning)
 - 유형 (type): AFK
 - 예상 소요 (expected duration): 45m
+- 예상 근거 (estimate basis): conservative planning guess
+- 권장 watch cadence (suggested watch cadence): launch 45s, steady heartbeat 5-10m
 - 막힘 / 의존성 (blocked by): workflow-policy-contract-simplified
 - 실행 형태 (execution shape): stack child
 - 크기 (size class): medium
@@ -194,11 +260,11 @@ separate workflows over a false parent chain.
 
 ### Derive workflow mode from `08-tasks.md`
 
-When a spec exists at `<git-common-dir>/wt/specs/<slug>/`, derive the execution
+When a spec exists at `<repo-root>/.wt/planning/specs/<slug>/`, derive the execution
 shape from `08-tasks.md`. Read the slice graph (dependencies, parallel groups,
 shared base, lifecycle) and consult the canonical mapping below to pick a
 workflow mode. Then record the choice and the reasoning in
-`specs/<slug>/09-execution.md` (see Spec Deliverables for authoring shape).
+`planning/specs/<slug>/09-execution.md` (see Spec Deliverables for authoring shape).
 
 Canonical `08-tasks.md` → workflow mode mapping:
 
@@ -214,7 +280,7 @@ Then act on the chosen mode:
 
 - `single` / `batch` / `stack` — create the workflow TOML via
   `wt workflow task --mode <mode> ...` at
-  `<git-common-dir>/wt/workflows/<id>.toml`. Record its path in `09-execution.md`
+  `<repo-root>/.wt/execution/workflows/<id>.toml`. Record its path in `09-execution.md`
   under "Linked workflow TOML".
 - `matrix` — create the workflow TOML via
   `wt workflow task --mode matrix <task> --profiles <profile-a>,<profile-b> ...`.
@@ -225,7 +291,7 @@ Then act on the chosen mode:
 
 ## Workflow Policy
 
-Treat `.wt.toml` / `<git-common-dir>/wt/config.toml` `[workflow]` as workflow preparation
+Treat `.wt.toml` / `<repo-root>/.wt/config/local.toml` `[workflow]` as workflow preparation
 policy and workflow TOML as the prepared run's effective policy snapshot.
 
 Read existing workflow policy when present. If policy is missing, stale, or
@@ -256,20 +322,21 @@ spec genuinely cannot be authored until an upstream has partially landed.
 When asked "anything still not ready?", enumerate everything in-flight and
 bring it all to ready unless the user explicitly defers a specific item.
 
-Prepared wt work lives in three state directories under `<git-common-dir>/wt/`:
+Prepared wt work uses three canonical locations under the planning/execution buckets:
 
-- `ideas/<slug>.{md,toml}` — kill-able exploration captured by `wt-idea`. Free-form
+- `planning/ideas/<slug>.{md,toml}` — kill-able exploration captured by `wt-idea`. Free-form
   Markdown or TOML. May be deleted at any time. No commitment.
-- `specs/<slug>/` — committed prep artifact. Holds numbered work-sequence files:
+- `planning/specs/<slug>/` — committed prep artifact. Holds numbered work-sequence files:
   `01-intent.md`, `02-unknowns.md`, `03-context.md`,
-  `04+05+06-requirements.md`, `07-design.md`, `08-tasks.md`, lazy
-  `09-execution.md`, lazy `10-review.md`, and lazy `11-retrospect.md`.
+  `04+05-requirements.md` or collapsed `04+05+06-requirements.md`,
+  optional `06-wireframe.md` / `06-wireframe/`, `07-design.md`, `08-tasks.md`,
+  lazy `09-execution.md`, lazy `10-review.md`, and lazy `11-retrospect.md`.
   This is the canonical location for prep work that has been promoted past
   exploration and for spec-backed review/retrospect records.
-- `tasks/<slug>.toml` — TaskDocument, the launch unit. Schema unchanged. The body
-  may reference `specs/<slug>/` files by relative path.
+- `execution/tasks/<slug>.toml` — TaskDocument, the launch unit. Schema unchanged. The body
+  may reference `planning/specs/<slug>/` files by relative path.
 
-The wt CLI does not parse or manage `specs/` as executable state. It can *seed*
+The wt CLI does not parse or manage `planning/specs/` as executable state. It can *seed*
 the six prep files (`01` through `08`) via `wt scaffold <slug> --spec`; after
 that, spec authoring stays a human/AI artifact. TaskDocument and TaskRun models
 are unchanged.
@@ -279,18 +346,22 @@ are unchanged.
 When `wt-ready` is invoked and the user commits to preparing the work, an
 existing idea file is promoted, not copied:
 
-- `rm <git-common-dir>/wt/ideas/<slug>.{md,toml}` — the visible commit gate
+- `rm <repo-root>/.wt/planning/ideas/<slug>.{md,toml}` — the visible commit gate
   that distinguishes exploration from committed prep.
 - `wt scaffold <slug> --spec` — seeds `01-intent.md`, `02-unknowns.md`,
   `03-context.md`, `04+05+06-requirements.md`, `07-design.md`, and
   `08-tasks.md`.
+- If the work needs an explicit wireframe gate, create `06-wireframe.md` or
+  `06-wireframe/` by hand and treat the scaffolded `04+05+06-requirements.md`
+  as a collapsed legacy/starter form rather than proof that the wireframe
+  check passed.
 - If a mode decision is recorded at prep time, create `09-execution.md` by
   hand. Scaffold intentionally does not make `09-execution.md` — it is a
   decision and handoff artifact, not a blank prep skeleton.
 
 The deletion plus spec directory creation is the visible commit gate that
 distinguishes exploration from committed prep. Work that the user requests
-directly, without a prior idea, may go straight into `specs/<slug>/` without an
+directly, without a prior idea, may go straight into `planning/specs/<slug>/` without an
 idea file existing first.
 
 ### Authoring conventions
@@ -316,12 +387,15 @@ idea file existing first.
 - Do not record final design decisions here unless the decision has already
   been approved downstream.
 
-`04+05+06-requirements.md`:
+`04+05-requirements.md` or collapsed `04+05+06-requirements.md`:
 
 - First line is the user story in Korean:
   `사용자 스토리: [역할]은 [이유/효과]를 위해 [기능/변화]를 원한다.`
 - Include `목적 / 성공 기준` so the work states why it matters before
   describing behavior.
+- Include the output form: docs-only change, implementation PR, prototype,
+  spike, direct local edit, TaskDocument, saved Workflow, or mixed-lifecycle
+  handoff.
 - Include `원칙 / 제약` when review, compatibility, UX, security,
   migration, or process rules should shape the output.
 - Functional requirements use EARS-style sentences:
@@ -333,9 +407,31 @@ idea file existing first.
 - Regression-sensitive behavior is stated explicitly:
   `WHEN <조건> THE SYSTEM SHALL CONTINUE TO <보존할 동작>`.
 
+`06-wireframe.md` or `06-wireframe/`:
+
+- Validate structure and workflow before design, starting with a text-first
+  wireframe that uses realistic mock data or representative examples.
+- Record the context adequacy check: which unknowns were resolved, which facts
+  or examples from `03-context.md` support the structure, and which states are
+  intentionally deferred.
+- After the text-first pass, add an artifact-specific form when needed: HTML for
+  web, command transcript, generated TOML, TaskDocument/workflow flow, outline
+  with placeholder evidence, API examples, or state table. For UI/web work, this
+  can include the concrete visual treatment to approve as a case.
+- Include important empty/error/edge/loading/conflict states when they affect
+  structure.
+- Record the user/operator walkthrough result for the text-first pass, and for
+  the artifact-specific pass when one exists, before design starts.
+- For user-facing, ambiguous, or high-risk flows, record what a blind reader
+  inferred from the wireframe alone, plus any mismatch against requirements.
+
 `07-design.md`:
 
-- Capture decisions, affected components, and constraints.
+- Start from the passed wireframe case or explicitly note that the wireframe was
+  collapsed for tiny work.
+- Generalize the passed case into reusable decisions, affected components, state
+  and data contracts, interaction rules, responsive rules, visual system rules
+  when relevant, and constraints.
 - For brownfield work, optionally include a Static Model (Purpose, Components,
   Business Rules) and a Dynamic Model (workflow / behavior) section before the
   new design.
@@ -369,14 +465,16 @@ idea file existing first.
     shared base, lifecycle, parallel groups).
   - **슬라이스 → TaskDocument 매핑**: how `08-tasks.md` slices became one or
     more TaskDocuments (or direct local edits), with paths.
-  - **연결된 workflow TOML**: `<git-common-dir>/wt/workflows/<id>.toml` when
+  - **연결된 workflow TOML**: `<repo-root>/.wt/execution/workflows/<id>.toml` when
     applicable; `none` otherwise.
   - **wt-start target**: exact command or target for execution launch.
+  - **시간 가정 / watch cadence**: expected duration, estimate basis, launch
+    validation cadence, and steady watch cadence to hand to `wt-coordinate`.
   - **리스크**: anything to watch when execution starts.
 - When mode = `none`, `09-execution.md` may be very brief (one paragraph plus the
   slice → TaskDocument mapping) or omitted entirely.
 - The executable workflow is still the TOML at
-  `<git-common-dir>/wt/workflows/<id>.toml`, created via
+  `<repo-root>/.wt/execution/workflows/<id>.toml`, created via
   `wt workflow task --mode ...`. `09-execution.md` is prose only and never
   replaces the TOML.
 
@@ -391,7 +489,7 @@ than silently changing the workflow TOML.
 ## Grill The Spec
 
 Spec authoring is an active dialogue, not one-shot generation. For each file in
-`specs/<slug>/`, run a draft → grill → revise → confirm loop with the user
+`planning/specs/<slug>/`, run a draft → grill → revise → confirm loop with the user
 before moving on. Drafts are working material; only the user's confirmation
 makes a file authoritative.
 
@@ -414,12 +512,14 @@ makes a file authoritative.
 
 ### File-specific grill foci
 
-`04+05+06-requirements.md`:
+`04+05-requirements.md` or collapsed `04+05+06-requirements.md`:
 
 - Whether the purpose/success criteria explain the desired effect rather than
   only naming an artifact to produce.
 - Whether principles/constraints are specific enough to reject unsuitable
   designs or output forms.
+- Whether the output form belongs here, or whether the work should split into
+  separate docs/prototype/implementation/workflow artifacts.
 - Edge cases the user story or EARS sentences silently skip (empty input,
   cancellation mid-flight, concurrent invocation, missing config).
 - Non-functional concerns that apply but are unwritten: performance budgets,
@@ -429,8 +529,29 @@ makes a file authoritative.
 - Ambiguity inside EARS phrasing: does `WHEN` describe a trigger or a state?
   Is `THE SYSTEM` the CLI, the harness, or the agent?
 
+`06-wireframe.md` / `06-wireframe/`:
+
+- Whether unknowns and context are sufficient to create realistic mock data.
+  If not, return to `02-unknowns.md` / `03-context.md` before design.
+- Whether the text-first wireframe uses representative data, examples, states,
+  or command transcripts instead of abstract placeholders.
+- Whether the intended user/operator can walk through the flow and find the
+  expected outcome.
+- Whether a blind reader, seeing only the wireframe and mock data, can infer the
+  actor, purpose, expected outcome, next action, and important states.
+- Whether an artifact-specific wireframe is needed after text-first approval
+  (for example HTML for web, generated TOML for config, or API
+  request/response examples).
+- Which empty/error/edge/loading/conflict states change structure and therefore
+  must appear before design.
+- Whether the wireframe reveals missing requirements or wrong assumptions.
+
 `07-design.md`:
 
+- Whether it builds on a passed wireframe instead of doing hidden wireframe
+  discovery inside design.
+- Whether it generalizes the approved concrete case instead of treating one
+  mock screen, example, or happy path as the whole system.
 - Trade-offs and rejected alternatives. "Why not the simpler shape?" If no
   alternative was considered, that itself is the grill question.
 - Conflicts with existing conventions — point at `docs/consistency.md` and
@@ -440,6 +561,9 @@ makes a file authoritative.
   against current code?
 - Coupling and boundary questions: which module owns the new behavior, and
   does that match the file's stated component responsibility?
+- Scale and variation questions: how the design handles larger data, responsive
+  breakpoints, empty/error/conflict states, and cases not present in the
+  approved wireframe.
 
 `08-tasks.md`:
 
@@ -475,8 +599,8 @@ drift is the cheapest defect to fix during grilling.
 
 End with one of these concrete outputs:
 
-- spec deliverables prepared (or promoted from `ideas/`) at
-  `<git-common-dir>/wt/specs/<slug>/`, recording the chosen execution shape
+- spec deliverables prepared (or promoted from `planning/ideas/`) at
+  `<repo-root>/.wt/planning/specs/<slug>/`, recording the chosen execution shape
 - existing TaskDocuments/workflow ready, with the exact `wt-start` target
 - new TaskDocument TOML files prepared
 - a saved workflow prepared (mode, base, order, policy)
@@ -487,11 +611,14 @@ file paths unless they are necessary for the task.
 
 Report:
 
+- current phase/gate and the first missing gate, if any
 - evidence checked
 - selected approach and rejected alternatives
-- output concept
+- output form
+- wireframe/context adequacy status, including mock data or representative
+  examples used
 - slice list with dependencies and chosen execution shape
-- expected duration per slice (firm or conservative planning guess)
+- expected duration per slice, with estimate basis and suggested watch cadence
 - PR/landing policy source: `[workflow]` config, CLI/workflow override, or
   explicit user answer
 - exact next command or target for `wt-start`

@@ -13,6 +13,9 @@ pub struct WorktreeNamingResult {
     pub vars: HashMap<String, String>,
 }
 
+const PUBLISH_TASK_BRANCH_TEMPLATE: &str =
+    "{{branch_prefix}}{{issue_key_lower}}-{{existing_branch_slug}}";
+
 pub fn generate(
     ctx: &Ctx,
     identifier: &str,
@@ -41,6 +44,24 @@ pub fn generate(
         workspace,
         vars,
     }))
+}
+
+pub(crate) fn publish_task_branch(
+    identifier: &str,
+    suggested_branch: Option<&str>,
+    existing_branch: &str,
+) -> Result<String> {
+    let vars = build_publish_task_vars(identifier, suggested_branch, existing_branch);
+    let rendered = template::render(PUBLISH_TASK_BRANCH_TEMPLATE, &vars);
+    if rendered.contains("{{") {
+        bail!("publish task branch template has unresolved variables: {rendered}");
+    }
+
+    let branch = sanitize_branch_name(&rendered);
+    if branch.is_empty() {
+        bail!("publish task branch resolved to an empty branch name");
+    }
+    Ok(branch)
 }
 
 fn build_vars(
@@ -77,6 +98,54 @@ fn build_vars(
             },
         ),
     ])
+}
+
+fn build_publish_task_vars(
+    identifier: &str,
+    suggested_branch: Option<&str>,
+    existing_branch: &str,
+) -> HashMap<String, String> {
+    let issue_key = identifier.trim_start_matches('#');
+    let issue_key_lower = issue_key.to_ascii_lowercase();
+    let issue_number = extract_issue_number(issue_key).unwrap_or_default();
+    let suggested_branch = suggested_branch.unwrap_or("");
+    let (branch_prefix, branch_name) = suggested_branch
+        .rsplit_once('/')
+        .map(|(before, after)| (format!("{before}/"), after.to_string()))
+        .unwrap_or_else(|| (String::new(), suggested_branch.to_string()));
+    let existing_branch_slug = publish_existing_branch_slug(existing_branch, &issue_key_lower);
+
+    HashMap::from([
+        ("issue_identifier".into(), identifier.to_string()),
+        ("issue_id".into(), issue_key.to_string()),
+        ("issue_key".into(), issue_key.to_string()),
+        ("issue_key_lower".into(), issue_key_lower),
+        ("issue_number".into(), issue_number),
+        ("suggested_branch".into(), suggested_branch.to_string()),
+        ("branch_prefix".into(), branch_prefix),
+        ("branch_name".into(), branch_name),
+        ("existing_branch".into(), existing_branch.to_string()),
+        ("existing_branch_slug".into(), existing_branch_slug),
+    ])
+}
+
+fn publish_existing_branch_slug(existing_branch: &str, issue_key_lower: &str) -> String {
+    let final_segment = existing_branch
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    let slug = sanitize_branch_name(final_segment);
+    strip_duplicate_issue_key_prefix(&slug, issue_key_lower)
+}
+
+fn strip_duplicate_issue_key_prefix(slug: &str, issue_key_lower: &str) -> String {
+    if slug == issue_key_lower {
+        return String::new();
+    }
+
+    let prefix = format!("{issue_key_lower}-");
+    slug.strip_prefix(&prefix).unwrap_or(slug).to_string()
 }
 
 fn extract_issue_number(issue_key: &str) -> Option<String> {
@@ -289,6 +358,43 @@ mod tests {
         assert_eq!(
             sanitize_branch_name("Alice/PROJ-680 Document title!!"),
             "alice/proj-680-document-title"
+        );
+    }
+
+    #[test]
+    fn publish_task_branch_adds_issue_key_to_existing_slug() {
+        assert_eq!(
+            publish_task_branch("PROJ-123", None, "add-profile-docs").unwrap(),
+            "proj-123-add-profile-docs"
+        );
+    }
+
+    #[test]
+    fn publish_task_branch_uses_final_existing_branch_segment() {
+        assert_eq!(
+            publish_task_branch("PROJ-123", None, "alice/add-profile-docs").unwrap(),
+            "proj-123-add-profile-docs"
+        );
+    }
+
+    #[test]
+    fn publish_task_branch_avoids_duplicate_issue_key_prefix() {
+        assert_eq!(
+            publish_task_branch("PROJ-123", None, "proj-123-add-profile-docs").unwrap(),
+            "proj-123-add-profile-docs"
+        );
+    }
+
+    #[test]
+    fn publish_task_branch_keeps_provider_prefix_from_suggested_branch() {
+        assert_eq!(
+            publish_task_branch(
+                "PROJ-123",
+                Some("provider/proj-123-suggested-branch"),
+                "alice/add-profile-docs"
+            )
+            .unwrap(),
+            "provider/proj-123-add-profile-docs"
         );
     }
 }

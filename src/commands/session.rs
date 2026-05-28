@@ -1,6 +1,6 @@
 use crate::context::Ctx;
 use crate::messages::AgentId;
-use crate::services::identity_locator::{self, AnchorKind, Marker};
+use crate::services::identity_locator::{self, AnchorKind, IdentityAnchor};
 use anyhow::{Result, bail};
 use serde::Serialize;
 use std::env;
@@ -9,22 +9,20 @@ use std::io::{self, Write};
 pub fn set(ctx: &Ctx, id: &str) -> Result<()> {
     let agent = AgentId::parse(id)?;
     let key = identity_locator::current_anchor_key()?;
-    identity_locator::write_marker(
+    identity_locator::write_identity_anchor(
         ctx,
         &key,
         agent.as_str(),
         identity_locator::current_agent_kind().as_deref(),
     )?;
     println!("export WT_AGENT_ID={};", agent.as_str());
-    println!("export WT_COORDINATOR_AGENT_ID={};", agent.as_str());
     Ok(())
 }
 
 pub fn unset(ctx: &Ctx) -> Result<()> {
     let key = identity_locator::current_anchor_key()?;
-    identity_locator::remove_marker(ctx, &key)?;
+    identity_locator::remove_identity_anchor(ctx, &key)?;
     println!("unset WT_AGENT_ID;");
-    println!("unset WT_COORDINATOR_AGENT_ID;");
     Ok(())
 }
 
@@ -43,33 +41,41 @@ pub fn whoami(ctx: &Ctx, json: bool) -> Result<()> {
 
 fn resolve_report(ctx: &Ctx) -> Result<WhoamiReport> {
     let key = identity_locator::current_anchor_key()?;
-    let marker_path = identity_locator::marker_path(ctx, &key);
     let cmux_workspace_id = (key.kind == AnchorKind::Surface)
         .then(|| env::var("CMUX_WORKSPACE_ID").ok())
         .flatten()
         .filter(|value| !value.trim().is_empty());
 
     if let Some(id) = agent_id_from_env()? {
+        let identity_anchor_path = identity_locator::identity_anchor_path_for_id(ctx, &id, &key)?;
         return Ok(WhoamiReport {
             id: Some(id),
             source: IdentitySource::Env,
             anchor_kind: anchor_kind_name(&key.kind).into(),
             anchor_value: key.value,
-            marker_path: marker_path.display().to_string(),
+            identity_anchor_path: identity_anchor_path.display().to_string(),
             cmux_workspace_id,
         });
     }
 
-    if let Some(marker) = identity_locator::resolve_identity(ctx)? {
-        return Ok(report_from_marker(marker, marker_path, cmux_workspace_id));
+    if let Some(anchor) = identity_locator::resolve_identity(ctx)? {
+        let identity_anchor_path =
+            identity_locator::identity_anchor_path_for_id(ctx, &anchor.id, &key)?;
+        return Ok(report_from_marker(
+            anchor,
+            identity_anchor_path,
+            cmux_workspace_id,
+        ));
     }
 
     Ok(WhoamiReport {
         id: None,
         source: IdentitySource::None,
         anchor_kind: anchor_kind_name(&key.kind).into(),
-        anchor_value: key.value,
-        marker_path: marker_path.display().to_string(),
+        anchor_value: key.value.clone(),
+        identity_anchor_path: identity_locator::identity_anchor_path(ctx, &key)
+            .display()
+            .to_string(),
         cmux_workspace_id,
     })
 }
@@ -95,16 +101,16 @@ fn agent_id_from_env() -> Result<Option<String>> {
 }
 
 fn report_from_marker(
-    marker: Marker,
-    marker_path: std::path::PathBuf,
+    anchor: IdentityAnchor,
+    identity_anchor_path: std::path::PathBuf,
     cmux_workspace_id: Option<String>,
 ) -> WhoamiReport {
     WhoamiReport {
-        id: Some(marker.id),
-        source: IdentitySource::Marker,
-        anchor_kind: anchor_kind_name(&marker.anchor_kind).into(),
-        anchor_value: marker.anchor_value,
-        marker_path: marker_path.display().to_string(),
+        id: Some(anchor.id),
+        source: IdentitySource::IdentityAnchor,
+        anchor_kind: anchor_kind_name(&anchor.anchor_kind).into(),
+        anchor_value: anchor.anchor_value,
+        identity_anchor_path: identity_anchor_path.display().to_string(),
         cmux_workspace_id,
     }
 }
@@ -114,7 +120,7 @@ fn print_text_report(report: &WhoamiReport) {
     println!("source: {}", report.source.as_str());
     println!("anchor_kind: {}", report.anchor_kind);
     println!("anchor_value: {}", report.anchor_value);
-    println!("marker: {}", report.marker_path);
+    println!("identity_anchor: {}", report.identity_anchor_path);
     if report.anchor_kind == "surface" {
         if let Some(workspace) = report.cmux_workspace_id.as_deref() {
             println!("cmux_workspace_id: {workspace}");
@@ -137,7 +143,7 @@ struct WhoamiReport {
     source: IdentitySource,
     anchor_kind: String,
     anchor_value: String,
-    marker_path: String,
+    identity_anchor_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     cmux_workspace_id: Option<String>,
 }
@@ -146,7 +152,7 @@ struct WhoamiReport {
 #[serde(rename_all = "kebab-case")]
 enum IdentitySource {
     Env,
-    Marker,
+    IdentityAnchor,
     None,
 }
 
@@ -154,7 +160,7 @@ impl IdentitySource {
     fn as_str(&self) -> &'static str {
         match self {
             Self::Env => "env",
-            Self::Marker => "marker",
+            Self::IdentityAnchor => "identity-anchor",
             Self::None => "none",
         }
     }

@@ -33,7 +33,7 @@ pub fn run(ctx: &Ctx, target: Option<&str>, options: InspectOptions) -> Result<(
         None => None,
     };
     let task_runs = task_runs_for_target(ctx, target)?;
-    let workflows = workflows_for_task_runs(ctx, &task_runs)?;
+    let workflows = workflows_for_task_runs(ctx, &task_runs.records)?;
     let pull_request_review = if options.pr {
         Some(
             GithubReviewService::new(ctx.runner.as_ref(), Some(&ctx.repo_root))
@@ -57,7 +57,8 @@ pub fn run(ctx: &Ctx, target: Option<&str>, options: InspectOptions) -> Result<(
     }
 
     ctx.ui.print_step(&format!("Inspect: {}", target.label));
-    print_work_section(ctx, target, &task_runs, &workflows)?;
+    print_work_section(ctx, target, &task_runs.records, &workflows)?;
+    print_target_warnings(ctx, target);
     print_git_section(ctx, status.as_deref(), parent.as_deref(), &target.branch)?;
     print_agent_section(ctx, &work);
     print_cmux_section(ctx, &work);
@@ -84,17 +85,31 @@ fn select_inspect_target(ctx: &Ctx) -> Result<InspectTarget> {
         "wt inspect requires TARGET when it cannot open an interactive selector. Pass a branch, worktree path/name, or TaskRun id; or run `wt inspect` in an interactive terminal to choose a work target.",
     )
 }
-fn task_runs_for_target(ctx: &Ctx, target: &InspectTarget) -> Result<Vec<task_run::TaskRunRecord>> {
+#[derive(Clone, Debug, Default)]
+struct TargetTaskRunInventory {
+    records: Vec<task_run::TaskRunRecord>,
+    invalid: Vec<task_run::InvalidTaskRunRecord>,
+}
+
+fn task_runs_for_target(ctx: &Ctx, target: &InspectTarget) -> Result<TargetTaskRunInventory> {
     if let Some(record) = target.task_run.clone() {
-        return Ok(vec![record]);
+        return Ok(TargetTaskRunInventory {
+            records: vec![record],
+            invalid: Vec::new(),
+        });
     }
 
-    let mut records = task_run::list(ctx)?
+    let inventory = task_run::list_lossy(ctx)?;
+    let mut records = inventory
+        .records
         .into_iter()
         .filter(|record| record.run.branch == target.branch)
         .collect::<Vec<_>>();
     records.sort_by(task_run::compare_task_run_records);
-    Ok(records)
+    Ok(TargetTaskRunInventory {
+        records,
+        invalid: inventory.invalid,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -217,6 +232,7 @@ struct InspectReport {
     target: InspectTargetReport,
     git: InspectGitReport,
     task_runs: Vec<InspectTaskRunReport>,
+    invalid_task_runs: Vec<InspectInvalidTaskRunReport>,
     workflows: Vec<InspectWorkflowReport>,
     agent: InspectAgentReport,
     cmux: InspectCmuxReport,
@@ -248,8 +264,38 @@ struct InspectTaskRunReport {
     context: String,
     group: Option<String>,
     error: Option<String>,
+    route: InspectTaskRunRouteReport,
+    report: InspectTaskRunReportState,
+    review: InspectTaskRunReviewState,
     task_path: String,
     task_title: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectInvalidTaskRunReport {
+    id: String,
+    path: String,
+    error: String,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectTaskRunRouteReport {
+    agent_id: Option<String>,
+    coordinator_id: Option<String>,
+    coordinator_label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectTaskRunReportState {
+    last_message_id: Option<String>,
+    last_reported_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectTaskRunReviewState {
+    last_status: Option<String>,
+    last_message_id: Option<String>,
+    last_reviewed_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -309,7 +355,7 @@ fn inspect_report(
     work: &work::Work,
     status: Option<&str>,
     parent: Option<&str>,
-    records: &[task_run::TaskRunRecord],
+    task_runs: &TargetTaskRunInventory,
     workflows: &[WorkflowMatch],
     pull_request_review: Option<PullRequestReviewEvidence>,
 ) -> Result<InspectReport> {
@@ -324,10 +370,20 @@ fn inspect_report(
                 .map(|path| path.display().to_string()),
         },
         git: inspect_git_report(ctx, status, parent),
-        task_runs: records
+        task_runs: task_runs
+            .records
             .iter()
             .map(|record| inspect_task_run_report(ctx, record))
             .collect::<Result<Vec<_>>>()?,
+        invalid_task_runs: task_runs
+            .invalid
+            .iter()
+            .map(|record| InspectInvalidTaskRunReport {
+                id: record.id.clone(),
+                path: ctx.storage_root.display_path(&record.path),
+                error: record.error.clone(),
+            })
+            .collect(),
         workflows: workflows
             .iter()
             .map(|workflow| InspectWorkflowReport {
@@ -410,6 +466,23 @@ fn inspect_task_run_report(
         context,
         group: record.run.group.clone(),
         error: record.run.error.clone(),
+        route: InspectTaskRunRouteReport {
+            agent_id: record.run.agent_id.clone(),
+            coordinator_id: record.run.coordinator_id.clone(),
+            coordinator_label: record.run.coordinator_label.clone(),
+        },
+        report: InspectTaskRunReportState {
+            last_message_id: record.run.last_report_message_id.clone(),
+            last_reported_at: record.run.last_reported_at.clone(),
+        },
+        review: InspectTaskRunReviewState {
+            last_status: record
+                .run
+                .last_review_status
+                .map(|status| status.as_str().into()),
+            last_message_id: record.run.last_review_message_id.clone(),
+            last_reviewed_at: record.run.last_reviewed_at.clone(),
+        },
         task_path,
         task_title,
     })
@@ -478,6 +551,12 @@ fn print_work_section(
     print_task_runs(ctx, records)?;
     print_workflows(ctx, workflows);
     Ok(())
+}
+
+fn print_target_warnings(ctx: &Ctx, target: &InspectTarget) {
+    for warning in &target.warnings {
+        ctx.ui.print_warning(warning);
+    }
 }
 
 fn print_task_runs(ctx: &Ctx, records: &[task_run::TaskRunRecord]) -> Result<()> {
@@ -555,6 +634,9 @@ fn print_task_run(ctx: &Ctx, record: &task_run::TaskRunRecord) -> Result<()> {
     if let Some(error) = record.run.error.as_deref() {
         ctx.ui.print_warning(&format!("  TaskRun error: {error}"));
     }
+    print_task_run_route(ctx, record);
+    print_task_run_report_state(ctx, record);
+    print_task_run_review_state(ctx, record);
 
     match task::read_task_document(ctx, &record.run.task) {
         Ok(document) => ctx.ui.print_dim(&format!(
@@ -569,6 +651,53 @@ fn print_task_run(ctx: &Ctx, record: &task_run::TaskRunRecord) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_task_run_route(ctx: &Ctx, record: &task_run::TaskRunRecord) {
+    let task_agent = record.run.agent_id.as_deref().unwrap_or("missing");
+    let coordinator = record.run.coordinator_id.as_deref().unwrap_or("missing");
+    let label = record
+        .run
+        .coordinator_label
+        .as_deref()
+        .map(|label| format!(", coordinator_label={label}"))
+        .unwrap_or_default();
+    ctx.ui.print_dim(&format!(
+        "  TaskRun route: task_agent={task_agent}, coordinator={coordinator}{label}"
+    ));
+}
+
+fn print_task_run_report_state(ctx: &Ctx, record: &task_run::TaskRunRecord) {
+    match (
+        record.run.last_report_message_id.as_deref(),
+        record.run.last_reported_at.as_deref(),
+    ) {
+        (Some(message_id), Some(reported_at)) => ctx.ui.print_dim(&format!(
+            "  TaskRun report: message={message_id}, reported_at={reported_at}"
+        )),
+        (Some(message_id), None) => ctx.ui.print_dim(&format!(
+            "  TaskRun report: message={message_id}, reported_at=missing"
+        )),
+        _ => ctx.ui.print_dim("  TaskRun report: not reported"),
+    }
+}
+
+fn print_task_run_review_state(ctx: &Ctx, record: &task_run::TaskRunRecord) {
+    match (
+        record.run.last_review_status,
+        record.run.last_review_message_id.as_deref(),
+        record.run.last_reviewed_at.as_deref(),
+    ) {
+        (Some(status), Some(message_id), Some(reviewed_at)) => ctx.ui.print_dim(&format!(
+            "  TaskRun review: status={status}, message={message_id}, reviewed_at={reviewed_at}"
+        )),
+        (Some(status), message_id, reviewed_at) => ctx.ui.print_dim(&format!(
+            "  TaskRun review: status={status}, message={}, reviewed_at={}",
+            message_id.unwrap_or("missing"),
+            reviewed_at.unwrap_or("missing")
+        )),
+        _ => ctx.ui.print_dim("  TaskRun review: not reviewed"),
+    }
 }
 
 fn print_worktree_status(ctx: &Ctx, status: Option<&str>) {
@@ -929,14 +1058,14 @@ fn print_next_section(ctx: &Ctx, target: &InspectTarget, workflows: &[WorkflowMa
 
 fn print_workflow_next_step(ctx: &Ctx, workflow: &WorkflowMatch) {
     ctx.ui.print_dim(&format!(
-        "  Complete: when accepted, review the worktree, report, and checks, then run `{}`; land when policy and safety checks allow.",
-        workflow_complete_command(workflow)
+        "  Pass: when accepted, review the worktree, report, and checks, then run `{}`; land when policy and safety checks allow.",
+        workflow_pass_command(workflow)
     ));
 }
 
-fn workflow_complete_command(workflow: &WorkflowMatch) -> String {
+fn workflow_pass_command(workflow: &WorkflowMatch) -> String {
     let mut command = format!(
-        "wt workflow complete {}",
+        "wt workflow pass {}",
         shell_arg(&workflow.path.to_string_lossy())
     );
     if workflow.mode != "single" {
@@ -1009,22 +1138,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
-        std::fs::create_dir_all(repo.join(".git/wt/tasks")).unwrap();
-        std::fs::create_dir_all(repo.join(".git/wt/task-runs")).unwrap();
-        std::fs::create_dir_all(repo.join(".git/wt/workflows")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/tasks")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/workflows")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
-            repo.join(".git/wt/tasks/feature.toml"),
+            repo.join(".wt/execution/tasks/feature.toml"),
             "title = \"Feature\"\nbranch = \"feature\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/task-runs/run-feature.toml"),
+            repo.join(".wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ngroup = \"2026-05-17-001\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/workflows/2026-05-17-001.toml"),
+            repo.join(".wt/execution/workflows/2026-05-17-001.toml"),
             r#"title = "Ship feature workflow"
 body = """Coordinate inspect rendering without letting this deliberately verbose workflow body dominate the inspect dossier output or hide useful metadata. Hidden tail should not render."""
 mode = "stack"
@@ -1049,7 +1178,7 @@ parent = "main"
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/workflows/2026-05-17-099.toml"),
+            repo.join(".wt/execution/workflows/2026-05-17-099.toml"),
             r#"objective = "Old workflow"
 mode = "batch"
 base_mode = "explicit"
@@ -1109,7 +1238,10 @@ run = "run-unrelated"
         assert!(dims.contains("Agent Completion Report"));
         assert!(dims.contains("PR=<pr>"));
         assert!(dims.contains("TaskRun: run-feature"));
-        assert!(dims.contains("Task: <git-common-dir>/wt/tasks/feature.toml (Feature)"));
+        assert!(dims.contains("TaskRun route: task_agent=missing, coordinator=missing"));
+        assert!(dims.contains("TaskRun report: not reported"));
+        assert!(dims.contains("TaskRun review: not reviewed"));
+        assert!(dims.contains("Task: <repo-root>/.wt/execution/tasks/feature.toml (Feature)"));
         assert!(dims.contains("Workflow: Ship feature workflow"));
         assert!(dims.contains("id=2026-05-17-001"));
         assert!(dims.contains("body=Coordinate inspect rendering"));
@@ -1119,23 +1251,24 @@ run = "run-unrelated"
         assert!(dims.contains("Commits ahead of parent: 2"));
         assert!(dims.contains("dirty (1 paths)"));
         assert!(dims.contains("PR=<pr>"));
-        assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("wt workflow pass"));
         assert!(dims.contains("--run-next"));
         let warnings = ui.warnings.lock().unwrap().join("\n");
         assert!(warnings.contains("Cmux: cmux command not found"));
         assert!(
-            warnings
-                .contains("Skipping workflow <git-common-dir>/wt/workflows/2026-05-17-099.toml")
+            warnings.contains(
+                "Skipping workflow <repo-root>/.wt/execution/workflows/2026-05-17-099.toml"
+            )
         );
         assert!(warnings.contains("uses removed `objective`"));
     }
 
     #[test]
-    fn inspect_next_includes_workflow_complete_for_single_workflow() {
+    fn inspect_next_includes_workflow_pass_for_single_workflow() {
         let dims = inspect_next_section_for_mode("single");
 
-        assert!(dims.contains("Complete: when accepted"));
-        assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("Pass: when accepted"));
+        assert!(dims.contains("wt workflow pass"));
         assert!(!dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("review the worktree, report, and checks"));
         assert!(dims.contains("land when policy and safety checks allow"));
@@ -1144,11 +1277,11 @@ run = "run-unrelated"
     }
 
     #[test]
-    fn inspect_next_includes_workflow_complete_for_batch_workflow() {
+    fn inspect_next_includes_workflow_pass_for_batch_workflow() {
         let dims = inspect_next_section_for_mode("batch");
 
-        assert!(dims.contains("Complete: when accepted"));
-        assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("Pass: when accepted"));
+        assert!(dims.contains("wt workflow pass"));
         assert!(dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("review the worktree, report, and checks"));
         assert!(dims.contains("land when policy and safety checks allow"));
@@ -1157,11 +1290,11 @@ run = "run-unrelated"
     }
 
     #[test]
-    fn inspect_next_keeps_stack_workflow_completion_guidance() {
+    fn inspect_next_keeps_stack_workflow_pass_guidance() {
         let dims = inspect_next_section_for_mode("stack");
 
-        assert!(dims.contains("Complete: when accepted"));
-        assert!(dims.contains("wt workflow complete"));
+        assert!(dims.contains("Pass: when accepted"));
+        assert!(dims.contains("wt workflow pass"));
         assert!(dims.contains("2026-05-17-001.toml feature"));
         assert!(dims.contains("--run-next"));
         assert!(dims.contains("wt done feature"));
@@ -1183,10 +1316,11 @@ run = "run-unrelated"
             branch: "feature".into(),
             worktree: None,
             task_run: None,
+            warnings: Vec::new(),
         };
         let workflow = WorkflowMatch {
             id: "2026-05-17-001".into(),
-            path: repo.join(".git/wt/workflows/2026-05-17-001.toml"),
+            path: repo.join(".wt/execution/workflows/2026-05-17-001.toml"),
             mode: mode.into(),
             title: "Feature workflow".into(),
             body_summary: None,
@@ -1206,27 +1340,32 @@ run = "run-unrelated"
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-workspace");
-        std::fs::create_dir_all(repo.join(".git/wt/tasks")).unwrap();
-        std::fs::create_dir_all(repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/tasks")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
-            repo.join(".git/wt/tasks/add-schema.toml"),
+            repo.join(".wt/execution/tasks/add-schema.toml"),
             "title = \"Add schema\"\nbranch = \"add-schema\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/tasks/publish-issues.toml"),
+            repo.join(".wt/execution/tasks/publish-issues.toml"),
             "title = \"Publish issues\"\nbranch = \"publish-issues\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/task-runs/run-add-schema.toml"),
+            repo.join(".wt/execution/task-runs/run-add-schema.toml"),
             "task = \"add-schema\"\nbranch = \"team-run\"\nstatus = \"running\"\ncreation_order = 1\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/task-runs/run-publish-issues.toml"),
+            repo.join(".wt/execution/task-runs/run-publish-issues.toml"),
             "task = \"publish-issues\"\nbranch = \"team-run\"\nstatus = \"running\"\ncreation_order = 2\ncreated_at = \"2026-05-16T00:00:01Z\"\nupdated_at = \"2026-05-16T00:00:01Z\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join(".wt/execution/task-runs/run-broken.toml"),
+            "task = \"broken\"\nbranch = \"unrelated\"\nstatus = \"started\"\ncreated_at = \"2026-05-16T00:00:02Z\"\nupdated_at = \"2026-05-16T00:00:02Z\"\n",
         )
         .unwrap();
 
@@ -1260,10 +1399,15 @@ run = "run-unrelated"
         assert!(dims.contains("TaskRuns: 2"));
         assert!(dims.contains("TaskRun: run-add-schema"));
         assert!(dims.contains("TaskRun: run-publish-issues"));
-        assert!(dims.contains("Task: <git-common-dir>/wt/tasks/add-schema.toml (Add schema)"));
         assert!(
-            dims.contains("Task: <git-common-dir>/wt/tasks/publish-issues.toml (Publish issues)")
+            dims.contains("Task: <repo-root>/.wt/execution/tasks/add-schema.toml (Add schema)")
         );
+        assert!(dims.contains(
+            "Task: <repo-root>/.wt/execution/tasks/publish-issues.toml (Publish issues)"
+        ));
+        let warnings = ui.warnings.lock().unwrap().join("\n");
+        assert!(warnings.contains("TaskRun inventory skipped invalid record"));
+        assert!(warnings.contains("run-broken.toml"));
     }
 
     #[test]
@@ -1271,10 +1415,10 @@ run = "run-unrelated"
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
-        std::fs::create_dir_all(repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
-            repo.join(".git/wt/task-runs/run-feature.toml"),
+            repo.join(".wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1342,16 +1486,16 @@ run = "run-unrelated"
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
-        std::fs::create_dir_all(repo.join(".git/wt/tasks")).unwrap();
-        std::fs::create_dir_all(repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/tasks")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(
-            repo.join(".git/wt/tasks/feature.toml"),
+            repo.join(".wt/execution/tasks/feature.toml"),
             "title = \"Feature\"\nbranch = \"feature\"\n",
         )
         .unwrap();
         std::fs::write(
-            repo.join(".git/wt/task-runs/run-feature.toml"),
+            repo.join(".wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ngroup = \"stack-1\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1431,7 +1575,7 @@ run = "run-unrelated"
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
-        std::fs::create_dir_all(repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
 
         let mut runner = MockRunner::new();
@@ -1497,7 +1641,7 @@ run = "run-unrelated"
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("sample");
         let worktree = dir.path().join("sample-feature");
-        std::fs::create_dir_all(repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
 
         let mut runner = MockRunner::new();

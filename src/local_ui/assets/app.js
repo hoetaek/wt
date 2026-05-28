@@ -139,11 +139,11 @@ const STRINGS = {
     tabIdeas: "Ideas",
     tabRetrospecs: "Retrospecs",
     noteOverview: "Action-focused snapshot across personal wt state, prepared workflows, running TaskRuns, and records that need attention.",
-    noteIdeas: "Ideas are legacy repo-root planning notes included for read-only context.",
+    noteIdeas: "Ideas are planning notes included for read-only context.",
     noteRetrospecs: "Retrospectives include spec-local work lessons and cross-work learning records.",
     noteWorkflows: "Workflows are grouped by derived state and show linked TaskRuns inside each plan.",
-    noteTaskRuns: "TaskRuns are execution records from <git-common-dir>/wt/task-runs with linked TaskDocument content. Failed or broken links are grouped under Needs attention.",
-    noteProfiles: "Profiles are effective agent/config overlays from <git-common-dir>/wt/profiles.",
+    noteTaskRuns: "TaskRuns are execution records from <repo-root>/.wt/execution/task-runs with linked TaskDocument content. Failed or broken links are grouped under Needs attention.",
+    noteProfiles: "Profiles are effective agent/config overlays from <repo-root>/.wt/config/profiles.",
     noteConfig: "Config shows final settings, settings layers, and profiles.",
     cockpitConfigTitle: "Config cockpit",
     cockpitConfigSubtitle: "Review final settings, settings layers, and profiles.",
@@ -341,7 +341,7 @@ const STRINGS = {
     statePrepared: "Prepared",
     stateRunning: "Running",
     stateWaiting: "Waiting",
-    stateDone: "Done",
+    statePassed: "Passed",
     stateSkipped: "Skipped",
     stateFailed: "Failed",
     stateError: "State error",
@@ -453,11 +453,11 @@ const STRINGS = {
     tabIdeas: "아이디어",
     tabRetrospecs: "회고",
     noteOverview: "개인 wt 상태와 준비된 워크플로우, 실행 중인 작업, 확인이 필요한 항목을 우선 보여줍니다.",
-    noteIdeas: "Idea는 읽기 전용 맥락으로 보여주는 legacy repo-root 기획 노트입니다.",
+    noteIdeas: "Idea는 읽기 전용 맥락으로 보여주는 기획 노트입니다.",
     noteRetrospecs: "회고는 spec-local 작업 교훈과 cross-work 학습 기록을 함께 보여줍니다.",
     noteWorkflows: "워크플로우는 파생 상태별로 정렬하고 각 계획 안에 연결된 작업 실행을 묶어 보여줍니다.",
-    noteTaskRuns: "작업 실행은 <git-common-dir>/wt/task-runs 실행 기록입니다. 실패했거나 연결이 깨진 항목은 확인 필요로 묶습니다.",
-    noteProfiles: "프로필은 <git-common-dir>/wt/profiles의 agent/config overlay입니다.",
+    noteTaskRuns: "작업 실행은 <repo-root>/.wt/execution/task-runs 실행 기록입니다. 실패했거나 연결이 깨진 항목은 확인 필요로 묶습니다.",
+    noteProfiles: "프로필은 <repo-root>/.wt/config/profiles의 agent/config overlay입니다.",
     noteConfig: "설정은 최종 적용값, 설정층, 프로필을 보여줍니다.",
     cockpitConfigTitle: "설정 현황",
     cockpitConfigSubtitle: "최종 적용값, 설정층, 프로필을 확인합니다.",
@@ -655,7 +655,7 @@ const STRINGS = {
     statePrepared: "준비됨",
     stateRunning: "실행 중",
     stateWaiting: "대기",
-    stateDone: "완료",
+    statePassed: "통과",
     stateSkipped: "건너뜀",
     stateFailed: "실패",
     stateError: "상태 오류",
@@ -3315,7 +3315,7 @@ function workflowUiGroup(row) {
   if (workflowNeedsAttention(row)) return "needs_attention";
   if (row.task_runs.running) return "running";
   if (row.presentation_group === "runnable") return "prepared";
-  if (row.presentation_group === "done") return "done";
+  if (row.presentation_group === "passed") return "passed";
   return "waiting";
 }
 
@@ -3589,15 +3589,15 @@ function sortedWorkflows(rows) {
 }
 
 function taskRunStatusOrder(status) {
-  return ["needs_attention", "running", "prepared", "done", "skipped", "failed"].indexOf(status) === -1
+  return ["needs_attention", "running", "prepared", "passed", "skipped", "failed"].indexOf(status) === -1
     ? 99
-    : ["needs_attention", "running", "prepared", "done", "skipped", "failed"].indexOf(status);
+    : ["needs_attention", "running", "prepared", "passed", "skipped", "failed"].indexOf(status);
 }
 
 function workflowGroupOrder(group) {
-  return ["needs_attention", "running", "prepared", "waiting", "done"].indexOf(group) === -1
+  return ["needs_attention", "running", "prepared", "waiting", "passed"].indexOf(group) === -1
     ? 99
-    : ["needs_attention", "running", "prepared", "waiting", "done"].indexOf(group);
+    : ["needs_attention", "running", "prepared", "waiting", "passed"].indexOf(group);
 }
 
 function countBy(rows, mapper) {
@@ -3616,7 +3616,7 @@ function statusColor(status) {
   if (status === "prepared" || status === "ready" || status === "running" || status === "landed") return "green";
   if (status === "failed" || status === "state_error" || status === "needs_attention") return "red";
   if (status === "skipped" || status === "waiting") return "amber";
-  if (status === "done") return "blue";
+  if (status === "passed") return "blue";
   return "";
 }
 
@@ -3630,7 +3630,7 @@ function stateLabel(value) {
     runnable: "statePrepared",
     running: "stateRunning",
     waiting: "stateWaiting",
-    done: "stateDone",
+    passed: "statePassed",
     skipped: "stateSkipped",
     failed: "stateFailed",
     state_error: "stateError",

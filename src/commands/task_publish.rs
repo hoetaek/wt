@@ -1,9 +1,11 @@
 use crate::commands::{issue, task as task_command};
 use crate::context::{Ctx, PromptItem, PromptRow};
+use crate::services::git::GitService;
 use crate::services::issues::CreateIssueRequest;
 use crate::services::issues::IssueProvider;
 use crate::task;
 use crate::task_run;
+use crate::worktree_naming;
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::fs;
@@ -14,6 +16,8 @@ struct PublishResult {
     task_key: String,
     provider: String,
     issue_id: String,
+    old_branch: String,
+    new_branch: String,
 }
 
 #[derive(Clone, Debug)]
@@ -121,7 +125,7 @@ fn publish_candidate_rank(candidate: &PublishCandidate) -> u8 {
         Some(TaskRunStatus::Prepared | TaskRunStatus::Skipped) => 1,
         Some(TaskRunStatus::Failed) => 2,
         Some(TaskRunStatus::Running) => 3,
-        Some(TaskRunStatus::Done) => 4,
+        Some(TaskRunStatus::Passed) => 4,
     }
 }
 
@@ -225,6 +229,7 @@ fn preflight_task_documents(
     for key in task_keys {
         let document = task::read_task_document(ctx, key)?;
         validate_publishable(key, &document, provider_name)?;
+        validate_branch_rewrite_safe(ctx, key, &document)?;
         candidates.push(PublishCandidate {
             task_key: key.clone(),
             document,
@@ -287,8 +292,12 @@ fn format_published(summary: &PublishSummary) -> String {
         .iter()
         .map(|result| {
             format!(
-                "{} -> {}:{}",
-                result.task_key, result.provider, result.issue_id
+                "{} -> {}:{} (branch {} -> {})",
+                result.task_key,
+                result.provider,
+                result.issue_id,
+                result.old_branch,
+                result.new_branch
             )
         })
         .collect::<Vec<_>>()
@@ -356,12 +365,17 @@ where
     F: FnMut(&Ctx, &str, &task::TaskDocument) -> Result<()>,
 {
     validate_publishable(key, document, provider_name)?;
+    validate_branch_rewrite_safe(ctx, key, document)?;
 
     let issue = provider.create_issue(CreateIssueRequest {
         title: document.title.clone(),
         body: document.body.clone(),
     })?;
     let issue_id = issue.identifier;
+    let old_branch = document.branch.clone();
+    let new_branch =
+        worktree_naming::publish_task_branch(&issue_id, issue.branch_name.as_deref(), &old_branch)?;
+    document.branch = new_branch.clone();
     document.origin = Some(task::TaskOrigin {
         provider: provider_name.to_string(),
         id: issue_id.clone(),
@@ -369,7 +383,7 @@ where
 
     write(ctx, key, document).with_context(|| {
         format!(
-            "Provider issue {provider_name}:{issue_id} was created, but failed to write origin to {}. Add the [origin] table manually before retrying.",
+            "Provider issue {provider_name}:{issue_id} was created, but failed to write origin and normalized branch to {}. Set branch = {new_branch:?} and add the [origin] table manually before retrying.",
             task::task_relative_path(key)
         )
     })?;
@@ -378,6 +392,8 @@ where
         task_key: key.to_string(),
         provider: provider_name.to_string(),
         issue_id,
+        old_branch,
+        new_branch,
     })
 }
 
@@ -404,21 +420,63 @@ fn validate_publishable(
     Ok(())
 }
 
+fn validate_branch_rewrite_safe(ctx: &Ctx, key: &str, document: &task::TaskDocument) -> Result<()> {
+    if task_run::latest_for_task(ctx, key)?.is_some() {
+        bail!(
+            "Task {key} already has a TaskRun; refusing to publish because publish rewrites TaskDocument.branch after provider issue creation"
+        );
+    }
+
+    let Some(branch) = task::prepared_branch_name(&document.branch) else {
+        return Ok(());
+    };
+    let git = GitService::new(ctx.runner.as_ref(), Some(&ctx.invocation_root));
+    if let Some(path) = git.checked_out_path(branch)? {
+        bail!(
+            "Task {key} branch {branch} is checked out at {}; refusing to publish because publish rewrites TaskDocument.branch after provider issue creation",
+            path.display()
+        );
+    }
+    if git.local_branch_exists(branch)? {
+        bail!(
+            "Task {key} branch {branch} already exists locally; refusing to publish because publish rewrites TaskDocument.branch after provider issue creation"
+        );
+    }
+    if git.remote_branch_exists(branch)? {
+        bail!(
+            "Task {key} branch {branch} already exists at origin/{branch}; refusing to publish because publish rewrites TaskDocument.branch after provider issue creation"
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{Config, IssueProviderType, IssuesConfig};
-    use crate::context::mock::{MockRunner, MockUi};
+    use crate::context::mock::MockUi;
+    use crate::context::{CmdOutput, CommandRunner};
     use crate::services::issues::{EnsuredBranch, IssueInfo, IssueListItem};
-    use crate::task_run::{STATUS_DONE, STATUS_FAILED, STATUS_PREPARED, STATUS_RUNNING};
+    use crate::task_run::{STATUS_FAILED, STATUS_PASSED, STATUS_PREPARED, STATUS_RUNNING};
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
     struct FakeIssueProvider {
         created: Mutex<Vec<CreateIssueRequest>>,
+        created_branch_name: Option<String>,
     }
 
     impl FakeIssueProvider {
+        fn with_created_branch_name(branch_name: &str) -> Self {
+            Self {
+                created: Mutex::new(Vec::new()),
+                created_branch_name: Some(branch_name.to_string()),
+            }
+        }
+
         fn created_requests(&self) -> Vec<CreateIssueRequest> {
             self.created.lock().unwrap().clone()
         }
@@ -440,7 +498,7 @@ mod tests {
             Ok(IssueInfo {
                 identifier,
                 title: request.title,
-                branch_name: Some("provider/suggested-branch".into()),
+                branch_name: self.created_branch_name.clone(),
                 body: Some(request.body),
             })
         }
@@ -463,24 +521,109 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct PublishRunner {
+        local_branches: HashSet<String>,
+        remote_branches: HashSet<String>,
+        worktrees: Vec<(PathBuf, String)>,
+    }
+
+    impl PublishRunner {
+        fn with_local_branch(mut self, branch: &str) -> Self {
+            self.local_branches.insert(branch.to_string());
+            self
+        }
+
+        fn with_remote_branch(mut self, branch: &str) -> Self {
+            self.remote_branches.insert(branch.to_string());
+            self
+        }
+
+        fn with_worktree(mut self, path: PathBuf, branch: &str) -> Self {
+            self.worktrees.push((path, branch.to_string()));
+            self
+        }
+
+        fn worktree_list_output(&self) -> String {
+            self.worktrees
+                .iter()
+                .map(|(path, branch)| {
+                    format!(
+                        "worktree {}\nHEAD abc\nbranch refs/heads/{branch}\n\n",
+                        path.display()
+                    )
+                })
+                .collect::<String>()
+        }
+    }
+
+    impl CommandRunner for PublishRunner {
+        fn run(&self, cmd: &str, args: &[&str], _cwd: Option<&Path>) -> Result<CmdOutput> {
+            if cmd == "git" && args == ["worktree", "list", "--porcelain"] {
+                return Ok(CmdOutput {
+                    stdout: self.worktree_list_output(),
+                    stderr: String::new(),
+                    success: true,
+                });
+            }
+
+            if cmd == "git"
+                && args.len() == 4
+                && args[0] == "show-ref"
+                && args[1] == "--verify"
+                && args[2] == "--quiet"
+            {
+                let reference = args[3];
+                let success = reference
+                    .strip_prefix("refs/heads/")
+                    .map(|branch| self.local_branches.contains(branch))
+                    .or_else(|| {
+                        reference
+                            .strip_prefix("refs/remotes/origin/")
+                            .map(|branch| self.remote_branches.contains(branch))
+                    })
+                    .unwrap_or(false);
+                return Ok(CmdOutput {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success,
+                });
+            }
+
+            bail!("unexpected command: {cmd} {}", args.join(" "))
+        }
+
+        fn has_command(&self, _cmd: &str) -> bool {
+            false
+        }
+    }
+
     fn ctx_with_config(root: &std::path::Path, config: Config) -> Ctx {
-        Ctx::new(
-            root.to_path_buf(),
-            root.to_path_buf(),
+        ctx_with_publish_runner(
+            root,
             config,
-            Box::new(MockRunner::new()),
+            PublishRunner::default(),
             Box::new(MockUi::new()),
         )
     }
 
-    fn ctx_with_config_and_ui(root: &std::path::Path, config: Config, ui: Arc<MockUi>) -> Ctx {
+    fn ctx_with_publish_runner(
+        root: &std::path::Path,
+        config: Config,
+        runner: PublishRunner,
+        ui: Box<dyn crate::context::UserInterface>,
+    ) -> Ctx {
         Ctx::new(
             root.to_path_buf(),
             root.to_path_buf(),
             config,
-            Box::new(MockRunner::new()),
-            Box::new(ui),
+            Box::new(runner),
+            ui,
         )
+    }
+
+    fn ctx_with_config_and_ui(root: &std::path::Path, config: Config, ui: Arc<MockUi>) -> Ctx {
+        ctx_with_publish_runner(root, config, PublishRunner::default(), Box::new(ui))
     }
 
     fn linear_config() -> Config {
@@ -494,7 +637,7 @@ mod tests {
     }
 
     fn write_task(root: &std::path::Path, key: &str, content: &str) {
-        let tasks_dir = root.join(".git/wt/tasks");
+        let tasks_dir = root.join(".wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(tasks_dir.join(format!("{key}.toml")), content).unwrap();
     }
@@ -543,7 +686,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("Failed to read task: <git-common-dir>/wt/tasks/missing.toml")
+                .contains("Failed to read task: <repo-root>/.wt/execution/tasks/missing.toml")
         );
     }
 
@@ -583,28 +726,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Task A", "Task B"]
         );
-        assert_eq!(
-            task::read_task_document(&ctx, "task-a")
-                .unwrap()
-                .origin
-                .unwrap()
-                .id,
-            "PROJ-123"
-        );
-        assert_eq!(
-            task::read_task_document(&ctx, "task-b")
-                .unwrap()
-                .origin
-                .unwrap()
-                .id,
-            "PROJ-124"
-        );
-        assert!(!dir.path().join(".git/wt/task-runs").exists());
+        let task_a = task::read_task_document(&ctx, "task-a").unwrap();
+        let task_b = task::read_task_document(&ctx, "task-b").unwrap();
+        assert_eq!(task_a.branch, "proj-123-task-a");
+        assert_eq!(task_a.origin.as_ref().unwrap().id, "PROJ-123");
+        assert_eq!(task_b.branch, "proj-124-task-b");
+        assert_eq!(task_b.origin.as_ref().unwrap().id, "PROJ-124");
+        assert!(!dir.path().join(".wt/execution/task-runs").exists());
 
         let dims = ui.dims.lock().unwrap().clone();
-        assert!(dims.contains(
-            &"  Published: task-a -> linear:PROJ-123, task-b -> linear:PROJ-124".to_string()
-        ));
+        assert!(dims.contains(&"  Published: task-a -> linear:PROJ-123 (branch task-a -> proj-123-task-a), task-b -> linear:PROJ-124 (branch task-b -> proj-124-task-b)".to_string()));
         assert!(!dims.iter().any(|line| line.starts_with("  Skipped:")));
         assert!(dims.contains(&"  Failed: none".to_string()));
     }
@@ -645,6 +776,14 @@ mod tests {
         );
         assert_eq!(provider.created_requests().len(), 2);
         assert_eq!(
+            task::read_task_document(&ctx, "task-a").unwrap().branch,
+            "proj-123-task-a"
+        );
+        assert_eq!(
+            task::read_task_document(&ctx, "task-b").unwrap().branch,
+            "proj-124-task-b"
+        );
+        assert_eq!(
             task::read_task_document(&ctx, "published-task")
                 .unwrap()
                 .origin
@@ -664,8 +803,8 @@ mod tests {
         );
         write_task(
             dir.path(),
-            "b-done",
-            "title = \"Done\"\nbranch = \"b-done\"\n",
+            "b-passed",
+            "title = \"Passed\"\nbranch = \"b-passed\"\n",
         );
         write_task(
             dir.path(),
@@ -688,7 +827,7 @@ mod tests {
         let ui = Arc::new(ui);
         let ctx = ctx_with_config_and_ui(dir.path(), linear_config(), Arc::clone(&ui));
         task_run::create(&ctx, "a-running", "a-running", None, STATUS_RUNNING).unwrap();
-        task_run::create(&ctx, "b-done", "b-done", None, STATUS_DONE).unwrap();
+        task_run::create(&ctx, "b-passed", "b-passed", None, STATUS_PASSED).unwrap();
         task_run::create(&ctx, "x-failed", "x-failed", None, STATUS_FAILED).unwrap();
         task_run::create(&ctx, "y-prepared", "y-prepared", None, STATUS_PREPARED).unwrap();
 
@@ -701,12 +840,12 @@ mod tests {
                 .iter()
                 .map(|item| item.split("  ").next().unwrap_or(""))
                 .collect::<Vec<_>>(),
-            vec!["Fresh", "Prepared", "Failed", "Running", "Done"]
+            vec!["Fresh", "Prepared", "Failed", "Running", "Passed"]
         );
         let rows = ui.multi_select_rows.lock().unwrap();
         assert_eq!(
             section_titles(&rows[0]),
-            vec!["not started", "prepared", "failed", "running", "done"]
+            vec!["not started", "prepared", "failed", "running", "passed"]
         );
     }
 
@@ -810,7 +949,7 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("Failed to read task: <git-common-dir>/wt/tasks/missing-task.toml")
+                .contains("Failed to read task: <repo-root>/.wt/execution/tasks/missing-task.toml")
         );
         assert!(provider.created_requests().is_empty());
         assert!(
@@ -991,7 +1130,118 @@ mod tests {
     }
 
     #[test]
-    fn publish_writes_origin_and_preserves_task_fields() {
+    fn publish_preflight_rejects_existing_task_run_before_provider_create() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "add-publish",
+            "title = \"Add publish\"\nbranch = \"manual/add-publish\"\n",
+        );
+        let ctx = ctx_with_config(dir.path(), linear_config());
+        task_run::create(
+            &ctx,
+            "add-publish",
+            "manual/add-publish",
+            None,
+            STATUS_PREPARED,
+        )
+        .unwrap();
+        let provider = FakeIssueProvider::default();
+        let tasks = vec!["add-publish".to_string()];
+
+        let err = publish_with_fake_provider(&ctx, &tasks, &provider).unwrap_err();
+
+        assert!(err.to_string().contains("already has a TaskRun"));
+        assert!(provider.created_requests().is_empty());
+        assert!(
+            task::read_task_document(&ctx, "add-publish")
+                .unwrap()
+                .origin
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn publish_preflight_rejects_checked_out_old_branch_before_provider_create() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "add-publish",
+            "title = \"Add publish\"\nbranch = \"manual/add-publish\"\n",
+        );
+        let runner = PublishRunner::default()
+            .with_worktree(dir.path().join("../repo-add-publish"), "manual/add-publish");
+        let ctx =
+            ctx_with_publish_runner(dir.path(), linear_config(), runner, Box::new(MockUi::new()));
+        let provider = FakeIssueProvider::default();
+        let tasks = vec!["add-publish".to_string()];
+
+        let err = publish_with_fake_provider(&ctx, &tasks, &provider).unwrap_err();
+
+        assert!(err.to_string().contains("is checked out at"));
+        assert!(provider.created_requests().is_empty());
+        assert!(
+            task::read_task_document(&ctx, "add-publish")
+                .unwrap()
+                .origin
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn publish_preflight_rejects_local_old_branch_before_provider_create() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "add-publish",
+            "title = \"Add publish\"\nbranch = \"manual/add-publish\"\n",
+        );
+        let runner = PublishRunner::default().with_local_branch("manual/add-publish");
+        let ctx =
+            ctx_with_publish_runner(dir.path(), linear_config(), runner, Box::new(MockUi::new()));
+        let provider = FakeIssueProvider::default();
+        let tasks = vec!["add-publish".to_string()];
+
+        let err = publish_with_fake_provider(&ctx, &tasks, &provider).unwrap_err();
+
+        assert!(err.to_string().contains("already exists locally"));
+        assert!(provider.created_requests().is_empty());
+        assert!(
+            task::read_task_document(&ctx, "add-publish")
+                .unwrap()
+                .origin
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn publish_preflight_rejects_remote_old_branch_before_provider_create() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "add-publish",
+            "title = \"Add publish\"\nbranch = \"manual/add-publish\"\n",
+        );
+        let runner = PublishRunner::default().with_remote_branch("manual/add-publish");
+        let ctx =
+            ctx_with_publish_runner(dir.path(), linear_config(), runner, Box::new(MockUi::new()));
+        let provider = FakeIssueProvider::default();
+        let tasks = vec!["add-publish".to_string()];
+
+        let err = publish_with_fake_provider(&ctx, &tasks, &provider).unwrap_err();
+
+        assert!(err.to_string().contains("already exists at origin"));
+        assert!(provider.created_requests().is_empty());
+        assert!(
+            task::read_task_document(&ctx, "add-publish")
+                .unwrap()
+                .origin
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn publish_writes_origin_and_normalized_branch() {
         let dir = tempfile::tempdir().unwrap();
         write_task(
             dir.path(),
@@ -1020,10 +1270,36 @@ mod tests {
 
         let updated = task::read_task_document(&ctx, "add-publish").unwrap();
         assert_eq!(updated.title, "Add publish");
-        assert_eq!(updated.branch, "manual/add-publish");
+        assert_eq!(updated.branch, "proj-123-add-publish");
         assert_eq!(updated.body, "Create provider issue.");
         assert_eq!(updated.origin.as_ref().unwrap().provider, "linear");
         assert_eq!(updated.origin.as_ref().unwrap().id, "PROJ-123");
+    }
+
+    #[test]
+    fn publish_uses_provider_prefix_from_created_issue_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "add-publish",
+            "title = \"Add publish\"\nbranch = \"manual/add-publish\"\n",
+        );
+        let ctx = ctx_with_config(dir.path(), linear_config());
+        let mut document = task::read_task_document(&ctx, "add-publish").unwrap();
+        let provider = FakeIssueProvider::with_created_branch_name("provider/suggested-branch");
+
+        publish_document_with_writer(
+            &ctx,
+            "add-publish",
+            "linear",
+            &mut document,
+            &provider,
+            task::write_task_document,
+        )
+        .unwrap();
+
+        let updated = task::read_task_document(&ctx, "add-publish").unwrap();
+        assert_eq!(updated.branch, "provider/proj-123-add-publish");
     }
 
     #[test]
@@ -1050,7 +1326,7 @@ mod tests {
 
         let err = format!("{err:#}");
         assert!(err.contains("Provider issue linear:PROJ-123 was created"));
-        assert!(err.contains("<git-common-dir>/wt/tasks/add-publish.toml"));
+        assert!(err.contains("<repo-root>/.wt/execution/tasks/add-publish.toml"));
         assert!(err.contains("disk is read-only"));
     }
 

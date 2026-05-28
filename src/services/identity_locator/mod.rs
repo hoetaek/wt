@@ -110,7 +110,7 @@ impl AnchorKey {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Marker {
+pub struct IdentityAnchor {
     pub id: String,
     pub anchor_kind: AnchorKind,
     pub anchor_value: String,
@@ -126,19 +126,19 @@ pub struct Marker {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MarkerEntry {
+pub struct IdentityAnchorEntry {
     pub path: PathBuf,
-    pub marker: Marker,
+    pub anchor: IdentityAnchor,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MarkerScanWarning {
+pub struct IdentityAnchorScanWarning {
     pub path: PathBuf,
     pub message: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MarkerLiveness {
+pub enum IdentityAnchorLiveness {
     Live,
     NotLive,
 }
@@ -197,25 +197,32 @@ pub fn current_agent_kind() -> Option<String> {
     current_agent_kind_with(&SystemEnv)
 }
 
-pub fn marker_path(ctx: &Ctx, key: &AnchorKey) -> PathBuf {
-    sessions_dir(ctx).join(format!("{}.toml", key.encode()))
+pub fn identity_anchor_path(ctx: &Ctx, key: &AnchorKey) -> PathBuf {
+    anchor_search_path(ctx, key)
 }
 
-pub fn write_marker(
+pub fn identity_anchor_path_for_id(ctx: &Ctx, id: &str, key: &AnchorKey) -> Result<PathBuf> {
+    let agent = AgentId::parse(id)?;
+    Ok(identity_anchor_path_for_agent(ctx, &agent, key))
+}
+
+pub fn write_identity_anchor(
     ctx: &Ctx,
     key: &AnchorKey,
     id: &str,
     agent_kind: Option<&str>,
-) -> Result<Marker> {
-    let id = AgentId::parse(id)?.as_str().to_string();
-    let path = marker_path(ctx, key);
-    let existing = read_marker(ctx, key)?;
+) -> Result<IdentityAnchor> {
+    let agent = AgentId::parse(id)?;
+    let id = agent.as_str().to_string();
+    let path = identity_anchor_path_for_agent(ctx, &agent, key);
+    let existing = read_identity_anchor(ctx, key)?;
+    remove_identity_anchor_files_for_key(ctx, key, Some(&path))?;
     let now = current_timestamp();
     let (liveness_pid, liveness_start_time) = match key.shell_sid_parts()? {
         Some((pid, start_time)) => (Some(pid), Some(start_time)),
         None => (None, None),
     };
-    let marker = Marker {
+    let anchor = IdentityAnchor {
         id,
         anchor_kind: key.kind.clone(),
         anchor_value: key.value.clone(),
@@ -224,124 +231,159 @@ pub fn write_marker(
         anchor_agent_kind: agent_kind.map(str::to_string),
         cwd: ctx.invocation_root.clone(),
         created_at: existing
-            .map(|marker| marker.created_at)
+            .map(|anchor| anchor.created_at)
             .unwrap_or(now.clone()),
         updated_at: now,
     };
-    write_marker_atomically(&path, &marker)?;
-    Ok(marker)
+    write_identity_anchor_atomically(&path, &anchor)?;
+    Ok(anchor)
 }
 
-pub fn read_marker(ctx: &Ctx, key: &AnchorKey) -> Result<Option<Marker>> {
-    let path = marker_path(ctx, key);
-    match fs::read_to_string(&path) {
-        Ok(content) => {
-            let marker = toml::from_str::<Marker>(&content)
-                .with_context(|| format!("Failed to parse marker: {}", path.display()))?;
-            if marker_matches_key(&marker, key) {
-                Ok(Some(marker))
-            } else {
-                Ok(None)
-            }
-        }
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err).with_context(|| format!("Failed to read marker: {}", path.display())),
-    }
-}
-
-pub fn remove_marker(ctx: &Ctx, key: &AnchorKey) -> Result<bool> {
-    let path = marker_path(ctx, key);
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(true),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
-        Err(err) => {
-            Err(err).with_context(|| format!("Failed to remove marker: {}", path.display()))
-        }
-    }
-}
-
-pub fn list_markers(ctx: &Ctx) -> Result<Vec<Marker>> {
-    let dir = sessions_dir(ctx);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err).with_context(|| format!("Failed to read {}", dir.display())),
-    };
-    let mut markers = Vec::new();
-    for entry in entries {
-        let entry = entry.with_context(|| format!("Failed to read entry in {}", dir.display()))?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
-            continue;
-        }
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read marker: {}", path.display()))?;
-        markers.push(
-            toml::from_str::<Marker>(&content)
-                .with_context(|| format!("Failed to parse marker: {}", path.display()))?,
-        );
-    }
-    markers.sort_by(|left, right| {
-        let left_key = marker_anchor_key(left).display();
-        let right_key = marker_anchor_key(right).display();
-        left_key.cmp(&right_key)
-    });
-    Ok(markers)
-}
-
-pub fn list_markers_with_warnings(ctx: &Ctx) -> Result<(Vec<MarkerEntry>, Vec<MarkerScanWarning>)> {
-    let dir = sessions_dir(ctx);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((Vec::new(), Vec::new())),
-        Err(err) => return Err(err).with_context(|| format!("Failed to read {}", dir.display())),
-    };
-    let mut markers = Vec::new();
-    let mut warnings = Vec::new();
-    for entry in entries {
-        let entry = entry.with_context(|| format!("Failed to read entry in {}", dir.display()))?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
-            continue;
-        }
+pub fn read_identity_anchor(ctx: &Ctx, key: &AnchorKey) -> Result<Option<IdentityAnchor>> {
+    let mut matching = Vec::new();
+    let mut first_error: Option<anyhow::Error> = None;
+    for path in identity_anchor_paths_for_key(ctx, key)? {
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
             Err(err) => {
-                warnings.push(MarkerScanWarning {
-                    path,
-                    message: format!("Failed to read marker: {err}"),
+                first_error.get_or_insert_with(|| {
+                    anyhow::Error::new(err).context(format!(
+                        "Failed to read identity anchor: {}",
+                        path.display()
+                    ))
                 });
                 continue;
             }
         };
-        let marker = match toml::from_str::<Marker>(&content) {
-            Ok(marker) => marker,
+        let anchor = match toml::from_str::<IdentityAnchor>(&content) {
+            Ok(anchor) => anchor,
             Err(err) => {
-                warnings.push(MarkerScanWarning {
-                    path,
-                    message: format!("Failed to parse marker: {err}"),
+                first_error.get_or_insert_with(|| {
+                    anyhow::Error::new(err).context(format!(
+                        "Failed to parse identity anchor: {}",
+                        path.display()
+                    ))
                 });
                 continue;
             }
         };
-        markers.push(MarkerEntry { path, marker });
+        match identity_anchor_path_matches_owner(ctx, &path, &anchor) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(err) => {
+                first_error.get_or_insert_with(|| {
+                    err.context(format!("Invalid identity anchor owner: {}", path.display()))
+                });
+                continue;
+            }
+        }
+        if identity_anchor_matches_key(&anchor, key) {
+            matching.push((path, anchor));
+        }
     }
-    markers.sort_by(|left, right| {
-        let left_key = marker_anchor_key(&left.marker).display();
-        let right_key = marker_anchor_key(&right.marker).display();
+    matching.sort_by(|left, right| {
+        right
+            .1
+            .updated_at
+            .cmp(&left.1.updated_at)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    if let Some((_, anchor)) = matching.into_iter().next() {
+        return Ok(Some(anchor));
+    }
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+    Ok(None)
+}
+
+pub fn remove_identity_anchor(ctx: &Ctx, key: &AnchorKey) -> Result<bool> {
+    remove_identity_anchor_files_for_key(ctx, key, None)
+}
+
+pub fn list_identity_anchors(ctx: &Ctx) -> Result<Vec<IdentityAnchor>> {
+    let (entries, warnings) = list_identity_anchors_with_warnings(ctx)?;
+    if let Some(warning) = warnings.into_iter().next() {
+        bail!(
+            "Failed to scan identity anchor {}: {}",
+            warning.path.display(),
+            warning.message
+        );
+    }
+    let mut anchors = entries
+        .into_iter()
+        .map(|entry| entry.anchor)
+        .collect::<Vec<_>>();
+    anchors.sort_by(|left, right| {
+        let left_key = identity_anchor_key(left).display();
+        let right_key = identity_anchor_key(right).display();
+        left_key.cmp(&right_key)
+    });
+    Ok(anchors)
+}
+
+pub fn list_identity_anchors_with_warnings(
+    ctx: &Ctx,
+) -> Result<(Vec<IdentityAnchorEntry>, Vec<IdentityAnchorScanWarning>)> {
+    let mut anchors = Vec::new();
+    let mut warnings = Vec::new();
+    for path in all_identity_anchor_paths(ctx)? {
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(err) => {
+                warnings.push(IdentityAnchorScanWarning {
+                    path,
+                    message: format!("Failed to read identity anchor: {err}"),
+                });
+                continue;
+            }
+        };
+        let anchor = match toml::from_str::<IdentityAnchor>(&content) {
+            Ok(anchor) => anchor,
+            Err(err) => {
+                warnings.push(IdentityAnchorScanWarning {
+                    path,
+                    message: format!("Failed to parse identity anchor: {err}"),
+                });
+                continue;
+            }
+        };
+        match identity_anchor_path_matches_owner(ctx, &path, &anchor) {
+            Ok(true) => {}
+            Ok(false) => {
+                warnings.push(IdentityAnchorScanWarning {
+                    path,
+                    message: "Identity anchor id does not match owning runtime agent directory"
+                        .into(),
+                });
+                continue;
+            }
+            Err(err) => {
+                warnings.push(IdentityAnchorScanWarning {
+                    path,
+                    message: format!("Invalid identity anchor owner: {err:#}"),
+                });
+                continue;
+            }
+        }
+        anchors.push(IdentityAnchorEntry { path, anchor });
+    }
+    anchors.sort_by(|left, right| {
+        let left_key = identity_anchor_key(&left.anchor).display();
+        let right_key = identity_anchor_key(&right.anchor).display();
         left_key
             .cmp(&right_key)
             .then_with(|| left.path.cmp(&right.path))
     });
     warnings.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok((markers, warnings))
+    Ok((anchors, warnings))
 }
 
-pub fn marker_is_live(marker: &Marker) -> Result<MarkerLiveness> {
-    marker_is_live_with(marker, &SystemEnv, &SystemProcess)
+pub fn identity_anchor_is_live(anchor: &IdentityAnchor) -> Result<IdentityAnchorLiveness> {
+    identity_anchor_is_live_with(anchor, &SystemEnv, &SystemProcess)
 }
 
-pub fn resolve_identity(ctx: &Ctx) -> Result<Option<Marker>> {
+pub fn resolve_identity(ctx: &Ctx) -> Result<Option<IdentityAnchor>> {
     resolve_identity_with(ctx, &SystemEnv, &SystemProcess)
 }
 
@@ -380,34 +422,34 @@ fn current_agent_kind_with(env: &dyn EnvProvider) -> Option<String> {
     }
 }
 
-fn marker_is_live_with(
-    marker: &Marker,
+fn identity_anchor_is_live_with(
+    anchor: &IdentityAnchor,
     env: &dyn EnvProvider,
     process: &dyn ProcessProvider,
-) -> Result<MarkerLiveness> {
-    if let Some(var) = marker.anchor_kind.env_var() {
+) -> Result<IdentityAnchorLiveness> {
+    if let Some(var) = anchor.anchor_kind.env_var() {
         return Ok(match env.var(var) {
-            Some(value) if value == marker.anchor_value => MarkerLiveness::Live,
-            _ => MarkerLiveness::NotLive,
+            Some(value) if value == anchor.anchor_value => IdentityAnchorLiveness::Live,
+            _ => IdentityAnchorLiveness::NotLive,
         });
     }
 
-    let Some(pid) = marker.liveness_pid else {
-        return Ok(MarkerLiveness::NotLive);
+    let Some(pid) = anchor.liveness_pid else {
+        return Ok(IdentityAnchorLiveness::NotLive);
     };
-    let Some(expected_start_time) = marker.liveness_start_time.as_deref() else {
-        return Ok(MarkerLiveness::NotLive);
+    let Some(expected_start_time) = anchor.liveness_start_time.as_deref() else {
+        return Ok(IdentityAnchorLiveness::NotLive);
     };
     if !process.pid_is_live(pid)? {
-        return Ok(MarkerLiveness::NotLive);
+        return Ok(IdentityAnchorLiveness::NotLive);
     }
     let Ok(actual_start_time) = process.process_start_time(pid) else {
-        return Ok(MarkerLiveness::NotLive);
+        return Ok(IdentityAnchorLiveness::NotLive);
     };
     if actual_start_time == expected_start_time {
-        Ok(MarkerLiveness::Live)
+        Ok(IdentityAnchorLiveness::Live)
     } else {
-        Ok(MarkerLiveness::NotLive)
+        Ok(IdentityAnchorLiveness::NotLive)
     }
 }
 
@@ -415,60 +457,161 @@ fn resolve_identity_with(
     ctx: &Ctx,
     env: &dyn EnvProvider,
     process: &dyn ProcessProvider,
-) -> Result<Option<Marker>> {
+) -> Result<Option<IdentityAnchor>> {
     let key = current_anchor_key_with(env, process)?;
-    let Some(marker) = read_marker(ctx, &key)? else {
+    let Some(anchor) = read_identity_anchor(ctx, &key)? else {
         return Ok(None);
     };
-    match marker_is_live_with(&marker, env, process)? {
-        MarkerLiveness::Live => Ok(Some(marker)),
-        MarkerLiveness::NotLive => Ok(None),
+    match identity_anchor_is_live_with(&anchor, env, process)? {
+        IdentityAnchorLiveness::Live => Ok(Some(anchor)),
+        IdentityAnchorLiveness::NotLive => Ok(None),
     }
 }
 
-fn sessions_dir(ctx: &Ctx) -> PathBuf {
-    ctx.storage_root.personal_root().join("sessions")
+fn anchor_search_path(ctx: &Ctx, key: &AnchorKey) -> PathBuf {
+    ctx.storage_root
+        .runtime_agents_dir()
+        .join("*")
+        .join("anchors")
+        .join(identity_anchor_file_name(key))
 }
 
-fn marker_anchor_key(marker: &Marker) -> AnchorKey {
+fn identity_anchor_path_for_agent(ctx: &Ctx, agent: &AgentId, key: &AnchorKey) -> PathBuf {
+    ctx.storage_root
+        .runtime_agent_anchors_dir(agent)
+        .join(identity_anchor_file_name(key))
+}
+
+fn identity_anchor_file_name(key: &AnchorKey) -> String {
+    format!("{}.toml", key.encode())
+}
+
+fn identity_anchor_paths_for_key(ctx: &Ctx, key: &AnchorKey) -> Result<Vec<PathBuf>> {
+    let file_name = identity_anchor_file_name(key);
+    let mut paths = all_identity_anchor_paths(ctx)?
+        .into_iter()
+        .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some(file_name.as_str()))
+        .collect::<Vec<_>>();
+    paths.sort();
+    Ok(paths)
+}
+
+fn all_identity_anchor_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
+    let agents_dir = ctx.storage_root.runtime_agents_dir();
+    let entries = match fs::read_dir(&agents_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(err).with_context(|| format!("Failed to read {}", agents_dir.display()));
+        }
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.with_context(|| format!("Failed to read entry in {}", agents_dir.display()))?;
+        let agent_dir = entry.path();
+        if !entry
+            .file_type()
+            .with_context(|| format!("Failed to inspect {}", agent_dir.display()))?
+            .is_dir()
+        {
+            continue;
+        }
+        let anchors_dir = agent_dir.join("anchors");
+        let anchors = match fs::read_dir(&anchors_dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("Failed to read {}", anchors_dir.display()));
+            }
+        };
+        for anchor in anchors {
+            let anchor = anchor
+                .with_context(|| format!("Failed to read entry in {}", anchors_dir.display()))?;
+            let path = anchor.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("toml") {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn identity_anchor_path_matches_owner(
+    ctx: &Ctx,
+    path: &Path,
+    anchor: &IdentityAnchor,
+) -> Result<bool> {
+    let agent = AgentId::parse(&anchor.id)?;
+    let expected_dir = ctx.storage_root.runtime_agent_anchors_dir(&agent);
+    Ok(path.parent() == Some(expected_dir.as_path()))
+}
+
+fn remove_identity_anchor_files_for_key(
+    ctx: &Ctx,
+    key: &AnchorKey,
+    except: Option<&Path>,
+) -> Result<bool> {
+    let mut removed = false;
+    for path in identity_anchor_paths_for_key(ctx, key)? {
+        if except.is_some_and(|except| except == path.as_path()) {
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => removed = true,
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("Failed to remove identity anchor: {}", path.display())
+                });
+            }
+        }
+    }
+    Ok(removed)
+}
+
+fn identity_anchor_key(anchor: &IdentityAnchor) -> AnchorKey {
     AnchorKey {
-        kind: marker.anchor_kind.clone(),
-        value: marker.anchor_value.clone(),
+        kind: anchor.anchor_kind.clone(),
+        value: anchor.anchor_value.clone(),
     }
 }
 
-fn marker_matches_key(marker: &Marker, key: &AnchorKey) -> bool {
-    marker.anchor_kind == key.kind && marker.anchor_value == key.value
+fn identity_anchor_matches_key(anchor: &IdentityAnchor, key: &AnchorKey) -> bool {
+    anchor.anchor_kind == key.kind && anchor.anchor_value == key.value
 }
 
-fn write_marker_atomically(path: &Path, marker: &Marker) -> Result<()> {
+fn write_identity_anchor_atomically(path: &Path, anchor: &IdentityAnchor) -> Result<()> {
     let dir = path
         .parent()
-        .with_context(|| format!("Marker path has no parent: {}", path.display()))?;
+        .with_context(|| format!("Identity anchor path has no parent: {}", path.display()))?;
     fs::create_dir_all(dir).with_context(|| {
         format!(
-            "Failed to create session marker directory: {}",
+            "Failed to create identity anchor directory: {}",
             dir.display()
         )
     })?;
-    let content = toml::to_string_pretty(marker).context("Failed to serialize marker TOML")?;
+    let content =
+        toml::to_string_pretty(anchor).context("Failed to serialize identity anchor TOML")?;
     let (temp_path, mut file) = create_temp_file_with_retry(dir)?;
     let result = (|| -> Result<()> {
         file.write_all(content.as_bytes()).with_context(|| {
             format!(
-                "Failed to write temporary session marker: {}",
+                "Failed to write temporary identity anchor: {}",
                 temp_path.display()
             )
         })?;
         file.sync_all().with_context(|| {
             format!(
-                "Failed to sync temporary session marker: {}",
+                "Failed to sync temporary identity anchor: {}",
                 temp_path.display()
             )
         })?;
         drop(file);
         fs::rename(&temp_path, path)
-            .with_context(|| format!("Failed to replace session marker: {}", path.display()))?;
+            .with_context(|| format!("Failed to replace identity anchor: {}", path.display()))?;
         Ok(())
     })();
     if result.is_err() {
@@ -480,14 +623,14 @@ fn write_marker_atomically(path: &Path, marker: &Marker) -> Result<()> {
 fn create_temp_file_with_retry(dir: &Path) -> Result<(PathBuf, fs::File)> {
     let pid = std::process::id();
     for attempt in 0..100 {
-        let path = dir.join(format!(".wt-session-marker-{pid}-{attempt}.tmp"));
+        let path = dir.join(format!(".wt-identity-anchor-{pid}-{attempt}.tmp"));
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => return Ok((path, file)),
             Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
             Err(err) => {
                 return Err(err).with_context(|| {
                     format!(
-                        "Failed to create temporary session marker: {}",
+                        "Failed to create temporary identity anchor: {}",
                         path.display()
                     )
                 });
@@ -495,7 +638,7 @@ fn create_temp_file_with_retry(dir: &Path) -> Result<(PathBuf, fs::File)> {
         }
     }
     bail!(
-        "Failed to allocate temporary session marker path in {}",
+        "Failed to allocate temporary identity anchor path in {}",
         dir.display()
     )
 }
@@ -684,43 +827,43 @@ mod tests {
     }
 
     #[test]
-    fn marker_toml_round_trips_with_optional_fields() {
-        let marker = marker_fixture(
+    fn identity_anchor_toml_round_trips_with_optional_fields() {
+        let anchor = identity_anchor_fixture(
             AnchorKind::ShellSid,
             "20:100.000000000",
             Some(20),
             Some("100.000000000"),
         );
-        let encoded = toml::to_string_pretty(&marker).unwrap();
-        let decoded: Marker = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded, marker);
+        let encoded = toml::to_string_pretty(&anchor).unwrap();
+        let decoded: IdentityAnchor = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded, anchor);
     }
 
     #[test]
-    fn marker_toml_round_trips_without_optional_fields() {
-        let marker = marker_fixture(AnchorKind::Surface, "surface-1", None, None);
-        let encoded = toml::to_string_pretty(&marker).unwrap();
+    fn identity_anchor_toml_round_trips_without_optional_fields() {
+        let anchor = identity_anchor_fixture(AnchorKind::Surface, "surface-1", None, None);
+        let encoded = toml::to_string_pretty(&anchor).unwrap();
         assert!(!encoded.contains("liveness_pid"));
-        let decoded: Marker = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded, marker);
+        let decoded: IdentityAnchor = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded, anchor);
     }
 
     #[test]
     fn shell_sid_liveness_detects_live_dead_and_reused_pid() {
         let process = TestProcess::new().with_live_pid(42, "200.000000000");
-        let live = marker_fixture(
+        let live = identity_anchor_fixture(
             AnchorKind::ShellSid,
             "42:200.000000000",
             Some(42),
             Some("200.000000000"),
         );
-        let dead = marker_fixture(
+        let dead = identity_anchor_fixture(
             AnchorKind::ShellSid,
             "43:300.000000000",
             Some(43),
             Some("300.000000000"),
         );
-        let reused = marker_fixture(
+        let reused = identity_anchor_fixture(
             AnchorKind::ShellSid,
             "42:199.000000000",
             Some(42),
@@ -728,16 +871,16 @@ mod tests {
         );
 
         assert_eq!(
-            marker_is_live_with(&live, &TestEnv::default(), &process).unwrap(),
-            MarkerLiveness::Live
+            identity_anchor_is_live_with(&live, &TestEnv::default(), &process).unwrap(),
+            IdentityAnchorLiveness::Live
         );
         assert_eq!(
-            marker_is_live_with(&dead, &TestEnv::default(), &process).unwrap(),
-            MarkerLiveness::NotLive
+            identity_anchor_is_live_with(&dead, &TestEnv::default(), &process).unwrap(),
+            IdentityAnchorLiveness::NotLive
         );
         assert_eq!(
-            marker_is_live_with(&reused, &TestEnv::default(), &process).unwrap(),
-            MarkerLiveness::NotLive
+            identity_anchor_is_live_with(&reused, &TestEnv::default(), &process).unwrap(),
+            IdentityAnchorLiveness::NotLive
         );
     }
 
@@ -747,7 +890,7 @@ mod tests {
             live_pids: HashSet::from([44]),
             ..TestProcess::new()
         };
-        let marker = marker_fixture(
+        let anchor = identity_anchor_fixture(
             AnchorKind::ShellSid,
             "44:400.000000000",
             Some(44),
@@ -755,40 +898,41 @@ mod tests {
         );
 
         assert_eq!(
-            marker_is_live_with(&marker, &TestEnv::default(), &process).unwrap(),
-            MarkerLiveness::NotLive
+            identity_anchor_is_live_with(&anchor, &TestEnv::default(), &process).unwrap(),
+            IdentityAnchorLiveness::NotLive
         );
     }
 
     #[test]
     fn env_keyed_liveness_uses_injected_env() {
-        let marker = marker_fixture(AnchorKind::Surface, "surface-1", None, None);
+        let anchor = identity_anchor_fixture(AnchorKind::Surface, "surface-1", None, None);
         let live_env = TestEnv::default().with(CMUX_SURFACE_ID, "surface-1");
         let wrong_env = TestEnv::default().with(CMUX_SURFACE_ID, "surface-2");
 
         assert_eq!(
-            marker_is_live_with(&marker, &live_env, &TestProcess::new()).unwrap(),
-            MarkerLiveness::Live
+            identity_anchor_is_live_with(&anchor, &live_env, &TestProcess::new()).unwrap(),
+            IdentityAnchorLiveness::Live
         );
         assert_eq!(
-            marker_is_live_with(&marker, &wrong_env, &TestProcess::new()).unwrap(),
-            MarkerLiveness::NotLive
+            identity_anchor_is_live_with(&anchor, &wrong_env, &TestProcess::new()).unwrap(),
+            IdentityAnchorLiveness::NotLive
         );
         assert_eq!(
-            marker_is_live_with(&marker, &TestEnv::default(), &TestProcess::new()).unwrap(),
-            MarkerLiveness::NotLive
+            identity_anchor_is_live_with(&anchor, &TestEnv::default(), &TestProcess::new())
+                .unwrap(),
+            IdentityAnchorLiveness::NotLive
         );
     }
 
     #[test]
-    fn resolve_identity_reads_matching_live_marker() {
+    fn resolve_identity_reads_matching_live_anchor() {
         let fixture = CtxFixture::new();
         let env = TestEnv::default().with(CMUX_SURFACE_ID, "surface-1");
         let key = AnchorKey {
             kind: AnchorKind::Surface,
             value: "surface-1".into(),
         };
-        write_marker(&fixture.ctx, &key, "coord-a", Some("codex")).unwrap();
+        write_identity_anchor(&fixture.ctx, &key, "coord-a", Some("codex")).unwrap();
 
         let resolved = resolve_identity_with(&fixture.ctx, &env, &TestProcess::new())
             .unwrap()
@@ -798,18 +942,18 @@ mod tests {
     }
 
     #[test]
-    fn resolve_identity_ignores_marker_with_mismatched_anchor_payload() {
+    fn resolve_identity_ignores_anchor_with_mismatched_anchor_payload() {
         let fixture = CtxFixture::new();
         let env = TestEnv::default().with(CMUX_SURFACE_ID, "surface-1");
         let key = AnchorKey {
             kind: AnchorKind::Surface,
             value: "surface-1".into(),
         };
-        let mut marker = marker_fixture(AnchorKind::Surface, "surface-2", None, None);
-        marker.id = "agents/coord-b".into();
-        let path = marker_path(&fixture.ctx, &key);
+        let mut anchor = identity_anchor_fixture(AnchorKind::Surface, "surface-2", None, None);
+        anchor.id = "agents/coord-b".into();
+        let path = identity_anchor_path_for_id(&fixture.ctx, "agents/coord-b", &key).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, toml::to_string_pretty(&marker).unwrap()).unwrap();
+        fs::write(&path, toml::to_string_pretty(&anchor).unwrap()).unwrap();
 
         assert!(
             resolve_identity_with(&fixture.ctx, &env, &TestProcess::new())
@@ -867,70 +1011,87 @@ mod tests {
     }
 
     #[test]
-    fn marker_file_lifecycle_round_trips_lists_and_removes() {
+    fn identity_anchor_file_lifecycle_round_trips_lists_and_removes() {
         let fixture = CtxFixture::new();
         let key = AnchorKey {
             kind: AnchorKind::Surface,
             value: "surface-1".into(),
         };
-        let marker = write_marker(&fixture.ctx, &key, "agents/coord-a", Some("claude")).unwrap();
-        assert_eq!(marker.id, "agents/coord-a");
-        assert_eq!(
-            read_marker(&fixture.ctx, &key).unwrap().unwrap().id,
-            marker.id
+        let anchor =
+            write_identity_anchor(&fixture.ctx, &key, "agents/coord-a", Some("claude")).unwrap();
+        assert_eq!(anchor.id, "agents/coord-a");
+        assert!(
+            identity_anchor_path_for_id(&fixture.ctx, "agents/coord-a", &key)
+                .unwrap()
+                .ends_with("runtime/agents/coord-a/anchors/surface%3Asurface-1.toml")
         );
-        assert_eq!(list_markers(&fixture.ctx).unwrap().len(), 1);
-        assert!(remove_marker(&fixture.ctx, &key).unwrap());
-        assert!(!remove_marker(&fixture.ctx, &key).unwrap());
-        assert!(read_marker(&fixture.ctx, &key).unwrap().is_none());
+        assert_eq!(
+            read_identity_anchor(&fixture.ctx, &key)
+                .unwrap()
+                .unwrap()
+                .id,
+            anchor.id
+        );
+        assert_eq!(list_identity_anchors(&fixture.ctx).unwrap().len(), 1);
+        assert!(remove_identity_anchor(&fixture.ctx, &key).unwrap());
+        assert!(!remove_identity_anchor(&fixture.ctx, &key).unwrap());
+        assert!(read_identity_anchor(&fixture.ctx, &key).unwrap().is_none());
     }
 
     #[test]
-    fn read_marker_ignores_mismatched_marker() {
+    fn read_identity_anchor_ignores_mismatched_anchor() {
         let fixture = CtxFixture::new();
         let key = AnchorKey {
             kind: AnchorKind::Surface,
             value: "surface-1".into(),
         };
-        let marker = marker_fixture(AnchorKind::Surface, "surface-2", None, None);
-        let path = marker_path(&fixture.ctx, &key);
+        let anchor = identity_anchor_fixture(AnchorKind::Surface, "surface-2", None, None);
+        let path = identity_anchor_path_for_id(&fixture.ctx, "agents/coord-a", &key).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, toml::to_string_pretty(&marker).unwrap()).unwrap();
+        fs::write(&path, toml::to_string_pretty(&anchor).unwrap()).unwrap();
 
-        assert!(read_marker(&fixture.ctx, &key).unwrap().is_none());
+        assert!(read_identity_anchor(&fixture.ctx, &key).unwrap().is_none());
     }
 
     #[test]
-    fn write_marker_retries_when_first_temp_path_already_exists() {
+    fn write_identity_anchor_retries_when_first_temp_path_already_exists() {
         let fixture = CtxFixture::new();
         let key = AnchorKey {
             kind: AnchorKind::Surface,
             value: "surface-1".into(),
         };
-        let sessions_dir = sessions_dir(&fixture.ctx);
-        fs::create_dir_all(&sessions_dir).unwrap();
+        let anchors_dir = identity_anchor_path_for_id(&fixture.ctx, "agents/coord-a", &key)
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        fs::create_dir_all(&anchors_dir).unwrap();
         let pid = std::process::id();
         fs::write(
-            sessions_dir.join(format!(".wt-session-marker-{pid}-0.tmp")),
+            anchors_dir.join(format!(".wt-identity-anchor-{pid}-0.tmp")),
             "occupied",
         )
         .unwrap();
 
-        let marker = write_marker(&fixture.ctx, &key, "agents/coord-a", Some("claude")).unwrap();
-        assert_eq!(marker.id, "agents/coord-a");
+        let anchor =
+            write_identity_anchor(&fixture.ctx, &key, "agents/coord-a", Some("claude")).unwrap();
+        assert_eq!(anchor.id, "agents/coord-a");
         assert_eq!(
-            read_marker(&fixture.ctx, &key).unwrap().unwrap().id,
-            marker.id
+            read_identity_anchor(&fixture.ctx, &key)
+                .unwrap()
+                .unwrap()
+                .id,
+            anchor.id
         );
     }
 
-    fn marker_fixture(
+    fn identity_anchor_fixture(
         kind: AnchorKind,
         value: &str,
         liveness_pid: Option<i32>,
         liveness_start_time: Option<&str>,
-    ) -> Marker {
-        Marker {
+    ) -> IdentityAnchor {
+        IdentityAnchor {
             id: "agents/coord-a".into(),
             anchor_kind: kind,
             anchor_value: value.into(),
@@ -968,7 +1129,6 @@ mod tests {
                     verbosity: 0,
                     quiet: false,
                     launcher_coordinator_id: None,
-                    coordinator_agent_id: None,
                 },
             );
             Self { _temp: temp, ctx }

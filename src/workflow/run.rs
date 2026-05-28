@@ -7,6 +7,7 @@ use crate::config::{
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::services::cmux::CmuxService;
+use crate::services::current_actor;
 use crate::services::git::GitService;
 use crate::setup;
 use crate::task::{self as task_store, PreparedTask};
@@ -117,8 +118,14 @@ pub(crate) fn prepare_workflow(
     validate_single_mode_branches(options.mode, &prepared_tasks)?;
     let resolved_base = resolve_workflow_base(ctx, options.base)?;
     let workflow_path = workflow_store::next_available_path(ctx)?;
+    let workflow_id = task_run::group_from_path(&workflow_path)?;
     let default_policy = workflow_default_policy(ctx, options.profile)?;
     let pull_request = workflow_pr_mode(options.pr, default_policy);
+    let default_title =
+        default_workflow_title(ctx, options.mode, &prepared_tasks, options.profiles);
+    let title = workflow_metadata.title.or(default_title);
+    let coordinator = current_actor::resolve_launch_coordinator(ctx)?;
+    let coordinator_label = workflow_coordinator_label(title.as_deref(), &workflow_id);
     let prepared = workflow_tasks_from_prepared(
         ctx,
         options.mode,
@@ -126,9 +133,11 @@ pub(crate) fn prepare_workflow(
         &resolved_base,
         prepared_tasks,
         options.profiles,
+        WorkflowRouteSnapshot {
+            coordinator_id: coordinator.as_str(),
+            coordinator_label: &coordinator_label,
+        },
     )?;
-    let default_title =
-        default_workflow_title(ctx, options.mode, &prepared.tasks, options.profiles);
 
     let mut metadata = WorkflowMetadata::new(
         workflow_mode(options.mode),
@@ -140,7 +149,7 @@ pub(crate) fn prepare_workflow(
     if options.mode == WorkflowModeArg::Matrix {
         metadata.profiles = options.profiles.to_vec();
     }
-    metadata.title = workflow_metadata.title.or(default_title);
+    metadata.title = title;
     metadata.body = workflow_metadata.body;
     metadata.origin = workflow_metadata.origin;
     metadata.policy = workflow_policy(default_policy, pull_request);
@@ -160,6 +169,7 @@ pub(crate) fn prepare_workflow(
 
 pub(crate) fn run_workflow(ctx: &Ctx, workflow_path: &Path, jobs: usize) -> Result<()> {
     let mut metadata = workflow_store::read(workflow_path)?;
+    state::ensure_workflow_task_routes(ctx, workflow_path, &metadata)?;
     match metadata.mode {
         WorkflowMode::Single => run_single_workflow(ctx, workflow_path, &mut metadata),
         WorkflowMode::Batch => run_batch_workflow(ctx, workflow_path, &mut metadata, jobs),
@@ -191,6 +201,10 @@ fn run_single_workflow(
     }
 
     let base = workflow_base_raw(metadata)?;
+    for state in &states {
+        task_run::update(ctx, &state.row.run, STATUS_RUNNING, None, None)?;
+    }
+
     let result = if states.len() == 1 {
         run_single_workflow_task(
             workflow_path,
@@ -268,6 +282,7 @@ fn run_single_workflow_task(
             title: &title,
             branch_name,
             setup_mode: state.document.setup_mode(),
+            template_vars: task_run::launch_template_vars_for(&state.run_id, &state.run),
             additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: state
@@ -323,6 +338,7 @@ fn run_single_workflow_group(
             title: &title,
             branch_name: Some(&branch),
             setup_mode: setup::WORKSPACE_COLOR_KIND_BRANCH,
+            template_vars: task_run::launch_template_vars_for(&states[0].run_id, &states[0].run),
             additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: None,
@@ -421,6 +437,12 @@ struct PreparedWorkflowTasks {
     task_runs: Vec<task_run::TaskRunRecord>,
 }
 
+#[derive(Clone, Copy)]
+struct WorkflowRouteSnapshot<'a> {
+    coordinator_id: &'a str,
+    coordinator_label: &'a str,
+}
+
 fn workflow_tasks_from_prepared(
     ctx: &Ctx,
     mode: WorkflowModeArg,
@@ -428,23 +450,30 @@ fn workflow_tasks_from_prepared(
     initial_parent: &str,
     prepared_tasks: Vec<PreparedTask>,
     profiles: &[String],
+    routes: WorkflowRouteSnapshot<'_>,
 ) -> Result<PreparedWorkflowTasks> {
     if mode == WorkflowModeArg::Matrix {
-        return matrix_workflow_tasks_from_prepared(ctx, workflow_path, prepared_tasks, profiles);
+        return matrix_workflow_tasks_from_prepared(
+            ctx,
+            workflow_path,
+            prepared_tasks,
+            profiles,
+            routes,
+        );
     }
 
     let group = task_run::group_from_path(workflow_path)?;
-    let coordinator_id = task_run::launcher_coordinator_id(ctx);
     let mut parent = Some(initial_parent.to_string());
     let mut tasks = Vec::new();
     let mut task_runs = Vec::new();
     for task in prepared_tasks {
-        let run = match task_run::create_with_coordinator_id(
+        let run = match task_run::create_workflow_routed(
             ctx,
             &task.key,
             &task.branch,
-            Some(&group),
-            coordinator_id,
+            &group,
+            routes.coordinator_id,
+            Some(routes.coordinator_label),
             STATUS_PREPARED,
         ) {
             Ok(run) => run,
@@ -470,22 +499,23 @@ fn matrix_workflow_tasks_from_prepared(
     workflow_path: &Path,
     prepared_tasks: Vec<PreparedTask>,
     profiles: &[String],
+    routes: WorkflowRouteSnapshot<'_>,
 ) -> Result<PreparedWorkflowTasks> {
     let Some(task) = prepared_tasks.into_iter().next() else {
         bail!("matrix mode workflow requires exactly one task");
     };
     let group = task_run::group_from_path(workflow_path)?;
-    let coordinator_id = task_run::launcher_coordinator_id(ctx);
     let mut task_runs = Vec::new();
     let mut runs = Vec::new();
     for profile in profiles {
         let branch = matrix_profile_branch(&task.branch, profile)?;
-        let run = match task_run::create_with_coordinator_id(
+        let run = match task_run::create_workflow_routed(
             ctx,
             &task.key,
             &branch,
-            Some(&group),
-            coordinator_id,
+            &group,
+            routes.coordinator_id,
+            Some(routes.coordinator_label),
             STATUS_PREPARED,
         ) {
             Ok(run) => run,
@@ -519,13 +549,13 @@ fn matrix_profile_branch(branch: &str, profile: &str) -> Result<String> {
 fn default_workflow_title(
     ctx: &Ctx,
     mode: WorkflowModeArg,
-    tasks: &[WorkflowTask],
+    tasks: &[PreparedTask],
     profiles: &[String],
 ) -> Option<String> {
     let first = tasks.first()?;
-    let first_title = match task_store::read_task_document(ctx, &first.task) {
-        Ok(document) => document.title_or_key(&first.task),
-        Err(_) => first.task.clone(),
+    let first_title = match task_store::read_task_document(ctx, &first.key) {
+        Ok(document) => document.title_or_key(&first.key),
+        Err(_) => first.key.clone(),
     };
     let first_title = first_title.split_whitespace().collect::<Vec<_>>().join(" ");
     if first_title.is_empty() {
@@ -540,6 +570,13 @@ fn default_workflow_title(
         first_title
     };
     Some(title)
+}
+
+fn workflow_coordinator_label(title: Option<&str>, workflow_id: &str) -> String {
+    match title.map(str::trim).filter(|title| !title.is_empty()) {
+        Some(title) => format!("Coordinator for workflow \"{title}\""),
+        None => format!("Coordinator for workflow {workflow_id}"),
+    }
 }
 
 fn validate_mode_options(mode: WorkflowModeArg, pr: Option<WorkflowPrModeArg>) -> Result<()> {

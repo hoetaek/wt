@@ -64,12 +64,13 @@ used by another project.
 This repository also ships an installable Agent Skills pack for the `wt`
 lifecycle. The pack contains:
 
+- `wt-welcome`
 - `wt-idea`
 - `wt-ready`
 - `wt-start`
 - `wt-coordinate`
 - `wt-land`
-- `wt-setup`
+- `wt-config`
 - `wt-work`
 
 For an interactive install, run one command and choose the skills, agent, and
@@ -85,12 +86,13 @@ For a non-interactive Codex global install, pass explicit skill names:
 
 ```bash
 npx --yes skills@latest add https://github.com/hoetaek/wt/tree/develop/skills \
+  --skill wt-welcome \
   --skill wt-idea \
   --skill wt-ready \
   --skill wt-start \
   --skill wt-coordinate \
   --skill wt-land \
-  --skill wt-setup \
+  --skill wt-config \
   --skill wt-work \
   -g -a codex --copy -y
 ```
@@ -99,12 +101,13 @@ From a local clone of this repository, use `.` as the source:
 
 ```bash
 npx --yes skills@latest add . \
+  --skill wt-welcome \
   --skill wt-idea \
   --skill wt-ready \
   --skill wt-start \
   --skill wt-coordinate \
   --skill wt-land \
-  --skill wt-setup \
+  --skill wt-config \
   --skill wt-work \
   -g -a codex --copy -y
 ```
@@ -114,12 +117,13 @@ should receive the skills, point `add` at this repository clone, and omit `-g`:
 
 ```bash
 npx --yes skills@latest add /path/to/wt \
+  --skill wt-welcome \
   --skill wt-idea \
   --skill wt-ready \
   --skill wt-start \
   --skill wt-coordinate \
   --skill wt-land \
-  --skill wt-setup \
+  --skill wt-config \
   --skill wt-work \
   -a codex --copy -y
 ```
@@ -155,6 +159,12 @@ wt doctor
 wt doctor --profile codex
 ```
 
+`wt init` also prepares repo-local wt state: the main `<repo-root>/.wt/`
+directory path, canonical personal-state subdirectories, and the clone-local
+`/.wt` ignore line in git `info/exclude`. An existing `.wt` symlink to a
+directory is accepted. `wt init --dry-run` previews without writing any of
+those files.
+
 Start work:
 
 ```bash
@@ -187,7 +197,7 @@ wt workflow issue --mode stack 123 456 789 --base main --pr draft
 wt workflow list
 wt run workflow
 wt workflow repair 2026-05-16-001
-wt workflow complete 2026-05-16-001 add-schema --run-next
+wt workflow pass 2026-05-16-001 add-schema --run-next
 wt workflow archive 2026-05-16-001
 ```
 
@@ -219,7 +229,7 @@ path/name, or direct TaskRun id.
 
 `wt done` removes worktrees and local branches. It does not merge the branch.
 Land reviewed work with Git or pull requests first. Workflow-linked TaskRuns are
-completed with `wt workflow complete`, not `wt done`.
+passed with `wt workflow pass`, not `wt done`.
 
 Pass `--pr` to `wt inspect <target>` when the dossier should include read-only
 pull request review evidence. The PR section is opt-in and does not resolve
@@ -238,11 +248,11 @@ merge.
   branch/worktree opening under `wt open`, and saved workflow lifecycle actions
   under `wt workflow`.
 - `wt run workflow` starts runnable tasks from saved Workflow files. It does
-  not list, edit, repair, or complete Workflow files.
-- `TaskDocument` files in `<git-common-dir>/wt/tasks/<task>.toml` define prepared local work.
+  not list, edit, repair, or pass workflow tasks.
+- `TaskDocument` files in `<repo-root>/.wt/execution/tasks/<task>.toml` define prepared local work.
 - `wt task list` shows the actionable local TaskDocument working set: tasks
   with no TaskRun, or whose latest TaskRun is prepared, failed, or skipped. It
-  hides done and running tasks with a count hint; use `wt task list --all` for
+  hides passed and running tasks with a count hint; use `wt task list --all` for
   the full TaskDocument inventory. Both modes report invalid task TOML files
   and do not start worktrees, branches, TaskRuns, Workflows, provider issues, or
   pull requests.
@@ -251,9 +261,10 @@ merge.
   issue branch first; it does not start worktrees, local branches, TaskRuns,
   Workflows, or pull requests.
 - `wt run task [<task>...]` starts one worktree per selected TaskDocument.
-- `wt task publish [<task>...]` creates provider issues from TaskDocuments and
-  records `[origin]`; it does not start worktrees.
-- `Workflow` files in `<git-common-dir>/wt/workflows/<id>.toml` save coordinated execution.
+- `wt task publish [<task>...]` creates provider issues from TaskDocuments,
+  rewrites `branch` to the created issue key plus the existing branch slug, and
+  records `[origin]`; it does not start worktrees, local branches, or TaskRuns.
+- `Workflow` files in `<repo-root>/.wt/execution/workflows/<id>.toml` save coordinated execution.
   Optional top-level `title`, `body`, and `[origin]` record the larger human
   context for the saved plan. Workflow `[origin]` belongs to the large
   issue-like unit represented by the Workflow; TaskDocument `[origin]` belongs
@@ -263,12 +274,12 @@ merge.
 - `wt workflow list` is the canonical saved Workflow inventory. It lists valid
   Workflow files whether or not they are runnable and reports invalid workflow
   TOML files instead of hiding parse failures.
-- `wt workflow archive <workflow>` moves a completed Workflow plus linked
-  done/skipped TaskRuns and uniquely-owned TaskDocuments into
-  `<git-common-dir>/wt/archive/workflows/<workflow-id>/`. Archive is
+- `wt workflow archive <workflow>` moves a passed Workflow plus linked
+  passed/skipped TaskRuns and uniquely-owned TaskDocuments into
+  `<repo-root>/.wt/execution/archive/workflows/<workflow-id>/`. Archive is
   visibility and retention only; it is not a substitute for landing,
-  `wt workflow complete`, or `wt done`.
-- `TaskRun` files in `<git-common-dir>/wt/task-runs/<id>.toml` record execution attempts.
+  `wt workflow pass`, or `wt done`.
+- `TaskRun` files in `<repo-root>/.wt/execution/task-runs/<id>.toml` record execution attempts.
   Execution state is separate from branch landing.
 - `wt ui [--port <port>]` starts a read-only loopback web UI for personal `wt`
   ideas, TaskDocuments, Workflows, TaskRuns, profile summaries, and effective
@@ -282,36 +293,46 @@ merge.
   `wt agent watch [<target>]` polls it. `wt agent watch` prints state
   transitions by default; `--timeout <seconds>` bounds the wait, and
   `--heartbeat <seconds>` opts into unchanged running reports. Non-idle
-  heartbeat and timeout samples are recorded under local `agent.state`, which
-  stays separate from `TaskRun.status`.
+  heartbeat and timeout samples are recorded under
+  `<repo-root>/.wt/runtime/agents/<name>/observations`, which stays separate from
+  `TaskRun.status`.
 - `wt setup` configures per-machine wt integration. It detects supported agent
   CLIs, prompts before installing wt-managed Claude and Codex inbox hooks, and
   can add shell integration and completion eval lines to the resolved shell rc
-  file. Use `--yes` to accept detected steps, `--dry-run` to preview writes,
-  and `--remove` to remove wt-managed per-machine entries while preserving
+  file. Repo-local `.wt` storage belongs to `wt init`, not `wt setup`. Use
+  `--yes` to accept detected steps, `--dry-run` to preview writes, and
+  `--remove` to remove wt-managed per-machine entries while preserving
   user-managed hooks, cmux hooks, and unrelated trust state.
 - `wt codex` and `wt claude` launch those agent CLIs with
-  `WT_AGENT_ID=agents/<branch_slug>` and set `WT_COORDINATOR_AGENT_ID` from
-  the launch context when a coordinator identity is available. In the same
-  worktree, pass a leading role such as `wt codex @planner` or
+  `WT_AGENT_ID=agents/<branch_slug>`. In the same worktree, pass a leading role
+  such as `wt codex @planner` or
   `wt claude @reviewer` to use a separate inbox like
   `agents/<branch_slug>-planner`; role launches never consume the default
-  worktree inbox.
+  worktree inbox. The wrappers also clear removed legacy coordinator routing env
+  before starting the child process.
 - `wt as <agent-id> -- <command...>` is the low-level escape hatch for unusual
-  agent commands or scripts that need an explicit inbox identity.
+  agent commands or scripts that need an explicit inbox identity; it applies the
+  same legacy coordinator env cleanup as the known-agent wrappers.
 - `wt msg send --to <agent> <message>` writes a scoped file inbox message under
-  `<git-common-dir>/wt/messages/agents/<agent>/inbox/new/`. The default CLI
+  `<repo-root>/.wt/runtime/agents/<name>/inbox/new/`. The default CLI
   send scope is `direct`; use `--scope workflow:<id>` for workflow-owned
   coordinator reports, `--scope task_run:<id>` for TaskRun-owned delivery, and
   `--scope repo` for repo-local singleton delivery. Workflow and TaskRun
   ownership belong in explicit message scope metadata, not in `correlates_with`.
+- `wt task review <task-run-id> --accept|--reject|--block <message>` sends
+  coordinator feedback to the task agent recorded on that TaskRun with
+  `task_run:<id>` scope and records review metadata on the TaskRun.
+- File-inbox senders may best-effort wake the recipient after the message is
+  durably written: if the recipient resolves to an idle live TaskRun or session
+  marker, `wt` nudges that surface to check its inbox. This is internal delivery
+  help, not a separate user-facing command or message lifecycle.
 - `wt msg check-inbox` is the hook-compatible consumer. With no `--agent`, it
-  checks the unique non-empty inbox ids from `WT_AGENT_ID` and
-  `WT_COORDINATOR_AGENT_ID`; `--agent <agent>` is an explicit single-inbox
-  override. It claims deliverable direct-scope messages from `inbox/new` or
-  eligible `inbox/retry`, emits hook JSON, and acknowledges them into
-  `inbox/delivered` after stdout is written; it is not a separate unread/read
-  lifecycle.
+  checks the inbox id from `WT_AGENT_ID`; `--agent <agent>` is an explicit
+  single-inbox override. It claims deliverable direct-scope messages from
+  `inbox/new` or eligible `inbox/retry`; task-run scoped feedback is deliverable
+  only when `WT_AGENT_ID` and `WT_TASK_RUN_ID` match the scoped TaskRun. Claimed
+  messages emit hook JSON and are acknowledged into `inbox/delivered` after
+  stdout is written; this is not a separate unread/read lifecycle.
 - `wt msg list --agent <agent>` is the read-only lifecycle inventory. It counts
   and summarizes `new`, `claimed`, `delivered`, `retry`, and `failed` messages,
   including claim owner, lease, attempts, scope, and error metadata when present.
@@ -327,19 +348,23 @@ for runtime observation.
 ## Coordinator Handoff
 
 Task prompts started by `wt run task` and `wt run workflow` include coordinator
-handoff instructions. Workflow handoffs give the agent the scoped coordinator
-file inbox target, `wt msg send --scope workflow:<id> --to coordinator ...`,
-where `coordinator` normalizes to `agents/coordinator`, so workflow supervisors
-can attribute shared coordinator messages to the owning workflow. The prompt
-also includes fallback cmux coordinates with a `cmux send --workspace ...
---surface ...` report command and a matching `cmux send-key ... enter` command.
-Direct `wt msg send --to coordinator ...` remains a direct/default-scope
-coordinator message, not workflow-owned delivery.
+handoff instructions. The normal report route is:
 
-Workflow supervisors may claim shared `agents/coordinator` inbox messages only
-when the message has explicit matching workflow scope. The recipient address,
-`coordinator` alias normalization, cmux coordinates, or `correlates_with` are
-not enough ownership evidence.
+```bash
+wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>"
+```
+
+`wt task report` uses the current running or passed TaskRun's stored coordinator
+route and applies direct or workflow scope from TaskRun state automatically.
+Without `WT_TASK_RUN_ID`, branch fallback resolves exactly one running or passed
+TaskRun and fails on ambiguity. Prompts also include fallback cmux coordinates
+with a `cmux send --workspace ... --surface ...` report command and a matching
+`cmux send-key ... enter` command.
+
+Low-level `wt msg send --to agents/<id> ...` remains an explicit file-inbox
+escape hatch. Workflow ownership belongs in message scope or TaskRun routing
+state; recipient address, cmux coordinates, or `correlates_with` are not enough
+ownership evidence.
 
 Agents report back in this shape and then keep ownership of review follow-up
 for their task:
@@ -347,6 +372,19 @@ for their task:
 ```text
 Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>
 ```
+
+Coordinators send canonical task-agent feedback with:
+
+```bash
+wt task review <task-run-id> --accept|--reject|--block "<message>"
+```
+
+The feedback is addressed to the TaskRun's stored task-agent route with
+`task_run:<id>` scope, and updates the TaskRun's latest review status, message
+id, and timestamp. Late review after pass is normal: `--reject` and `--block`
+reopen a passed TaskRun to `running` so the task agent can report again through
+the same route. `--accept` records metadata only and does not pass a running
+TaskRun.
 
 Immediate `wt run task` work reports `PR=none`. Workflow tasks follow the
 prepared workflow policy. Omit `--pr` to use the effective `[workflow]`
@@ -382,7 +420,7 @@ threads, comments, and checks. Examples:
 
 1. `--config <path>`
 2. `.wt.toml` as shared project config
-3. `<git-common-dir>/wt/config.toml` as personal repo config
+3. `<repo-root>/.wt/config/local.toml` as personal repo config
 
 Inspect the effective config:
 
@@ -435,7 +473,7 @@ When `[editor]` is configured, `wt config` prints the effective editor
 placement default, `cmux_surface`, unless it is overridden.
 
 `wt workflow task` and `wt workflow issue` snapshot the effective workflow
-policy into `<git-common-dir>/wt/workflows/<id>.toml` for the prepared workflow.
+policy into `<repo-root>/.wt/execution/workflows/<id>.toml` for the prepared workflow.
 `wt workflow show` reads that prepared policy from the workflow file, not from
 the current `.wt.toml`, so later config edits do not rewrite the meaning of
 existing workflow files. An explicit `--pr none|draft|ready` overrides the
@@ -456,22 +494,21 @@ Small private agent config can stay inline:
 
 ```toml
 [profile.agent]
-# Agent CLI used by this inline profile.
+# Inline profile agent CLI.
 cli = "codex"
-# Extra args passed whenever this agent is launched.
+# Extra CLI args for this agent.
 args = ["--model", "gpt-5.5"]
 
 [profile.agent.prompt]
-# `common` is prepended to issue, branch, and pr prompts.
+# Appended after the built-in `wt run` prompt.
+# `common` applies to every run; the others match their run mode.
 common = ["Before editing, identify the intended outcome, the smallest coherent change, and the checks that should prove it."]
-# `issue` applies to `wt run issue`.
 issue = ["Use the linked issue as the contract: extract the user-visible problem, acceptance criteria, constraints, and comments that change scope before coding."]
-# `branch` applies to `wt run branch`.
 branch = ["Use the current branch and local task context as the contract: inspect recent commits and existing diff, then continue only the requested line of work."]
-# `pr` applies to `wt run pr`.
 pr = ["Use review comments, CI failures, and the PR diff as the contract: fix correctness and regressions first, and explain any non-code decisions."]
 
 [workspace]
+# Personal helper tabs; `wt init` recommends these only for local config.
 tabs = ["lazygit", "nvim"]
 colors = { task = "blue", issue = "blue", branch = "green", pr = "magenta" }
 ```
@@ -486,7 +523,7 @@ It does not apply to direct `wt run task`, `wt run issue`, `wt run branch`, or `
 
 ```toml
 [agent.prompt]
-workflow = ["Wait for external PR review before reporting workflow completion."]
+workflow = ["Wait for external PR review before asking the coordinator to pass the workflow task."]
 
 [agent.prompt.append]
 workflow = ["Mention the PR state and any remaining review risk in the report."]
@@ -518,8 +555,8 @@ bundles are needed:
 
 ```bash
 wt profile create codex
-wt config extract "$(git rev-parse --git-common-dir)/wt/config.toml"
-wt config inline "$(git rev-parse --git-common-dir)/wt/profiles/codex/profile.toml"
+wt config extract "$(git rev-parse --show-toplevel)/.wt/config/local.toml"
+wt config inline "$(git rev-parse --show-toplevel)/.wt/config/profiles/codex/profile.toml"
 ```
 
 Named profile `profile.toml` is an override layer: omitted `[agent]` fields
@@ -557,7 +594,7 @@ there for one named profile.
 | `wt task import` | Import provider issues as local TaskDocuments |
 | `wt run task` | Start work from local TaskDocuments |
 | `wt task publish` | Publish local TaskDocuments as provider issues |
-| `wt workflow` | Prepare, inspect, repair, archive, and complete saved workflows |
+| `wt workflow` | Prepare, inspect, repair, archive, and pass saved workflow tasks |
 | `wt run workflow` | Start runnable tasks from saved workflows |
 | `wt ui` | Start the read-only personal state web UI |
 | `wt inspect` | Read a work dossier for a branch, worktree, or TaskRun |

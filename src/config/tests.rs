@@ -390,7 +390,7 @@ claude_copy = ["settings.local.json"]
 #[test]
 fn local_config_overrides_root_config() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt")).ok();
+    std::fs::create_dir_all(dir.path().join(".wt/config")).ok();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -413,7 +413,7 @@ copy = [".env"]
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".git/wt/config.toml"),
+        dir.path().join(".wt/config/local.toml"),
         r#"
 [profile.agent]
 cli = "codex"
@@ -454,7 +454,7 @@ copy = ["CLAUDE.local.md"]
 #[test]
 fn workflow_policy_merges_per_field() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -467,7 +467,7 @@ landing = "manual"
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".git/wt/config.toml"),
+        dir.path().join(".wt/config/local.toml"),
         r#"
 [workflow]
 landing = "auto"
@@ -484,7 +484,7 @@ landing = "auto"
 #[test]
 fn workflow_policy_profile_overlay_merges_per_field() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt/profiles/codex")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config/profiles/codex")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -496,7 +496,7 @@ landing = "manual"
     )
     .unwrap();
     std::fs::write(
-        dir.path().join(".git/wt/profiles/codex/profile.toml"),
+        dir.path().join(".wt/config/profiles/codex/profile.toml"),
         r#"
 [workflow]
 landing = "auto"
@@ -641,7 +641,7 @@ mode = "chrome_devtools"
 #[test]
 fn prompt_append_layers_extend_effective_prompt_without_redeclaring_agent() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -660,7 +660,7 @@ issue = ["shared append\n"]
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".git/wt/config.toml"),
+        dir.path().join(".wt/config/local.toml"),
         r#"
 [agent.prompt.append]
 issue = ["local append\n"]
@@ -681,7 +681,7 @@ issue = ["local append\n"]
 #[test]
 fn workflow_prompt_append_layers_extend_workflow_scope() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -699,7 +699,7 @@ workflow = ["shared workflow append\n"]
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".git/wt/config.toml"),
+        dir.path().join(".wt/config/local.toml"),
         r#"
 [agent.prompt.append]
 workflow = ["local workflow append\n"]
@@ -718,7 +718,7 @@ workflow = ["local workflow append\n"]
 #[test]
 fn prompt_overwrite_layer_replaces_then_append_extends() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -733,7 +733,7 @@ issue = ["shared prompt\n"]
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".git/wt/config.toml"),
+        dir.path().join(".wt/config/local.toml"),
         r#"
 [agent.prompt]
 issue = ["local prompt\n"]
@@ -756,7 +756,7 @@ issue = ["local append\n"]
 #[test]
 fn named_profile_agent_fields_merge_by_presence_and_prompt_overlay() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".git/wt/profiles/codex");
+    let profile_dir = dir.path().join(".wt/config/profiles/codex");
     std::fs::create_dir_all(&profile_dir).unwrap();
 
     std::fs::write(
@@ -779,9 +779,9 @@ pr = ["base pr\n"]
 "#,
     )
     .unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config")).unwrap();
     std::fs::write(
-        dir.path().join(".git/wt/config.toml"),
+        dir.path().join(".wt/config/local.toml"),
         r#"
 [profile]
 name = "codex"
@@ -833,7 +833,7 @@ issue = ["profile issue append\n"]
 #[test]
 fn named_profile_empty_args_clears_inherited_args() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".git/wt/profiles/codex");
+    let profile_dir = dir.path().join(".wt/config/profiles/codex");
     std::fs::create_dir_all(&profile_dir).unwrap();
 
     std::fs::write(
@@ -845,9 +845,9 @@ args = ["--model", "gpt-5.5"]
 "#,
     )
     .unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config")).unwrap();
     std::fs::write(
-        dir.path().join(".git/wt/config.toml"),
+        dir.path().join(".wt/config/local.toml"),
         r#"
 [profile]
 name = "codex"
@@ -872,7 +872,7 @@ args = []
 #[test]
 fn common_prompt_scope_expands_after_layers_before_mode_prompt() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config")).unwrap();
 
     std::fs::write(
         dir.path().join(".wt.toml"),
@@ -891,7 +891,7 @@ common = ["shared common append\n"]
     .unwrap();
 
     std::fs::write(
-        dir.path().join(".git/wt/config.toml"),
+        dir.path().join(".wt/config/local.toml"),
         r#"
 [agent.prompt.append]
 common = ["local common append\n"]
@@ -924,7 +924,7 @@ issue = ["local issue append\n"]
 #[test]
 fn profile_convention_common_prompt_files_expand_after_mode_files() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".git/wt/profiles/codex");
+    let profile_dir = dir.path().join(".wt/config/profiles/codex");
     std::fs::create_dir_all(profile_dir.join("prompts")).unwrap();
 
     std::fs::write(
@@ -1039,7 +1039,7 @@ new = ["legacy branch append\n"]
 #[test]
 fn rejects_legacy_new_profile_prompt_file() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".git/wt/profiles/codex");
+    let profile_dir = dir.path().join(".wt/config/profiles/codex");
     std::fs::create_dir_all(profile_dir.join("prompts")).unwrap();
 
     std::fs::write(
@@ -1088,7 +1088,7 @@ name = "root"
 #[test]
 fn load_profiles_discovers_profile_toml_files() {
     let dir = tempfile::tempdir().unwrap();
-    let profiles_dir = dir.path().join(".git/wt/profiles");
+    let profiles_dir = dir.path().join(".wt/config/profiles");
     let baseline_dir = profiles_dir.join("baseline");
     let tdd_dir = profiles_dir.join("tdd");
     std::fs::create_dir_all(&baseline_dir).unwrap();
@@ -1126,7 +1126,7 @@ fn load_profiles_returns_empty_when_no_profiles_dir() {
 #[test]
 fn load_profiles_returns_empty_when_no_profile_toml_files() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt/profiles/empty")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config/profiles/empty")).unwrap();
     let profiles = Config::load_profiles(dir.path(), &Config::default()).unwrap();
     assert!(profiles.is_empty());
 }
@@ -1143,9 +1143,9 @@ fn rejects_legacy_repo_root_personal_config() {
 
     let err = Config::load(dir.path()).unwrap_err().to_string();
 
-    assert!(err.contains("legacy repo-root config"));
+    assert!(err.contains("legacy wt personal config"));
     assert!(err.contains(".local/.wt.toml"));
-    assert!(err.contains(".git/wt/config.toml"));
+    assert!(err.contains(".wt/config/local.toml"));
     assert!(err.contains("does not silently fall back"));
 }
 
@@ -1166,17 +1166,17 @@ fn reports_legacy_repo_root_profile_storage() {
     let invalid = &inventory.invalid_profiles[0];
     assert_eq!(invalid.name, "<legacy>");
     assert!(invalid.path.ends_with(".local/profiles"));
-    assert!(invalid.error.contains("legacy repo-root profile storage"));
-    assert!(invalid.error.contains(".git/wt/profiles"));
+    assert!(invalid.error.contains("legacy wt personal profile storage"));
+    assert!(invalid.error.contains(".wt/config/profiles"));
     assert!(invalid.error.contains("does not silently fall back"));
 }
 
 #[test]
 fn load_with_source_applies_inline_profile_to_effective_config() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config")).unwrap();
     std::fs::write(
-        dir.path().join(".git/wt/config.toml"),
+        dir.path().join(".wt/config/local.toml"),
         r#"
 [profile.agent]
 cli = "codex"
@@ -1199,19 +1199,19 @@ args = ["--yolo"]
 #[test]
 fn load_with_source_resolves_named_profile_without_polluting_base_config() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".git/wt/profiles/codex")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".wt/config/profiles/codex")).unwrap();
     std::fs::write(
         dir.path().join(".wt.toml"),
         "[issues]\nprovider = \"github\"\n",
     )
     .unwrap();
     std::fs::write(
-        dir.path().join(".git/wt/config.toml"),
+        dir.path().join(".wt/config/local.toml"),
         "[profile]\nname = \"codex\"\n",
     )
     .unwrap();
     std::fs::write(
-        dir.path().join(".git/wt/profiles/codex/profile.toml"),
+        dir.path().join(".wt/config/profiles/codex/profile.toml"),
         "[agent]\ncli = \"codex\"\n",
     )
     .unwrap();
@@ -1465,7 +1465,7 @@ fn agent_none_disables_command_even_with_override() {
 #[test]
 fn load_profile_returns_specific_config_or_none() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".git/wt/profiles/codex");
+    let profile_dir = dir.path().join(".wt/config/profiles/codex");
     std::fs::create_dir_all(&profile_dir).unwrap();
     std::fs::write(
         profile_dir.join("profile.toml"),
@@ -1491,7 +1491,7 @@ args = ["--model", "gpt-5.5"]
 #[test]
 fn load_profile_overlays_base_config_and_applies_conventions() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".git/wt/profiles/codex-yolo");
+    let profile_dir = dir.path().join(".wt/config/profiles/codex-yolo");
     std::fs::create_dir_all(profile_dir.join("prompts")).unwrap();
     std::fs::create_dir_all(profile_dir.join("scaffold/.codex/skills")).unwrap();
     std::fs::write(
@@ -1541,7 +1541,7 @@ args = ["--yolo"]
 #[test]
 fn load_profile_merges_worktree_fields_without_dropping_base_lists() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".git/wt/profiles/alternate-path");
+    let profile_dir = dir.path().join(".wt/config/profiles/alternate-path");
     std::fs::create_dir_all(&profile_dir).unwrap();
     std::fs::write(
         profile_dir.join("profile.toml"),
@@ -1571,7 +1571,7 @@ path = "profiles/{{default_name}}"
 #[test]
 fn load_profile_applies_profile_scaffold_root() {
     let dir = tempfile::tempdir().unwrap();
-    let profile_dir = dir.path().join(".git/wt/profiles/claude-plan");
+    let profile_dir = dir.path().join(".wt/config/profiles/claude-plan");
     std::fs::create_dir_all(profile_dir.join("scaffold/.claude/commands")).unwrap();
     std::fs::write(
         profile_dir.join("profile.toml"),

@@ -1,7 +1,7 @@
 use crate::names::WorktreeNames;
 use crate::storage::StorageRoot;
 use crate::task_run::{self, TaskRunRecord};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,12 +10,6 @@ pub fn run(cwd: &Path) -> Result<()> {
     match resolve_binding(cwd)? {
         Some(binding) => {
             println!("export WT_AGENT_ID={};", binding.agent_id);
-            match binding.coordinator_id {
-                Some(coordinator_id) => {
-                    println!("export WT_COORDINATOR_AGENT_ID={coordinator_id};")
-                }
-                None => println!("unset WT_COORDINATOR_AGENT_ID;"),
-            }
         }
         None => print_unset(),
     }
@@ -25,7 +19,6 @@ pub fn run(cwd: &Path) -> Result<()> {
 #[derive(Debug, PartialEq, Eq)]
 struct EnvBinding {
     agent_id: String,
-    coordinator_id: Option<String>,
 }
 
 fn resolve_binding(cwd: &Path) -> Result<Option<EnvBinding>> {
@@ -44,13 +37,21 @@ fn resolve_binding(cwd: &Path) -> Result<Option<EnvBinding>> {
     }
 
     let storage_root = StorageRoot::from_git_common_dir(git_common_dir);
+    let repo_root = git_output(cwd, &["rev-parse", "--show-toplevel"])?
+        .map(PathBuf::from)
+        .unwrap_or_else(|| cwd.to_path_buf());
+    if let Some(legacy) = storage_root.detect_legacy_task_runs(&repo_root) {
+        bail!("{}", legacy.error_message_for("TaskRun storage"));
+    }
     let Some(record) = latest_task_run_for_branch(storage_root.task_runs_dir(), &branch)? else {
         return Ok(None);
     };
 
     Ok(Some(EnvBinding {
-        agent_id: format!("agents/{}", WorktreeNames::build_branch_slug(&branch)),
-        coordinator_id: record.run.coordinator_id,
+        agent_id: record
+            .run
+            .agent_id
+            .unwrap_or_else(|| format!("agents/{}", WorktreeNames::build_branch_slug(&branch))),
     }))
 }
 
@@ -118,7 +119,6 @@ fn git_output(cwd: &Path, args: &[&str]) -> Result<Option<String>> {
 
 fn print_unset() {
     println!("unset WT_AGENT_ID;");
-    println!("unset WT_COORDINATOR_AGENT_ID;");
 }
 
 #[cfg(test)]

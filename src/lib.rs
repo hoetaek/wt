@@ -10,11 +10,13 @@ pub mod local_ui;
 pub mod messages;
 pub mod names;
 pub(crate) mod parallel;
+pub(crate) mod personal_storage;
 pub mod runner;
 pub mod scaffold;
 pub mod services;
 pub mod setup;
 pub mod storage;
+pub mod studio;
 pub mod task;
 pub mod task_run;
 pub mod template;
@@ -53,8 +55,7 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         Commands::Version
         | Commands::Completion { .. }
         | Commands::ShellInit { .. }
-        | Commands::Env
-        | Commands::Coord { .. } => Ok(()),
+        | Commands::Env => Ok(()),
         Commands::Session { command } => match command {
             SessionCommand::Set { id } => commands::session::set(ctx, id),
             SessionCommand::Unset => commands::session::unset(ctx),
@@ -67,35 +68,42 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         }
         Commands::DeprecatedPr { .. } => deprecated_start_command_error("wt pr", "wt run pr"),
         Commands::DeprecatedNew { .. } => deprecated_start_command_error("wt new", "wt run branch"),
-        Commands::Run { command } => match command {
-            RunCommand::Issue {
-                targets,
-                base,
-                profile,
-                matrix,
-                jobs,
-            } => commands::issue::run(ctx, targets, base, profile.as_deref(), *matrix, *jobs),
-            RunCommand::Pr {
-                numbers,
-                profile,
-                jobs,
-            } => commands::pr::run(ctx, numbers, profile.as_deref(), *jobs),
-            RunCommand::Branch {
-                name,
-                base,
-                profile,
-                matrix,
-            } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
-            RunCommand::Task {
-                tasks,
-                base,
-                profile,
-                jobs,
-            } => commands::task_run_command::run(ctx, tasks, base, profile.as_deref(), *jobs),
-            RunCommand::Workflow { workflow, jobs } => {
-                commands::workflow::run(ctx, workflow.as_deref(), *jobs)
+        Commands::Run { command } => {
+            personal_storage::ensure_launch_ready(
+                ctx.runner.as_ref(),
+                &ctx.storage_root,
+                &ctx.repo_root,
+            )?;
+            match command {
+                RunCommand::Issue {
+                    targets,
+                    base,
+                    profile,
+                    matrix,
+                    jobs,
+                } => commands::issue::run(ctx, targets, base, profile.as_deref(), *matrix, *jobs),
+                RunCommand::Pr {
+                    numbers,
+                    profile,
+                    jobs,
+                } => commands::pr::run(ctx, numbers, profile.as_deref(), *jobs),
+                RunCommand::Branch {
+                    name,
+                    base,
+                    profile,
+                    matrix,
+                } => commands::new::run(ctx, name, base, profile.as_deref(), *matrix),
+                RunCommand::Task {
+                    tasks,
+                    base,
+                    profile,
+                    jobs,
+                } => commands::task_run_command::run(ctx, tasks, base, profile.as_deref(), *jobs),
+                RunCommand::Workflow { workflow, jobs } => {
+                    commands::workflow::run(ctx, workflow.as_deref(), *jobs)
+                }
             }
-        },
+        }
         Commands::Task { command } => match command {
             TaskCommand::List { all } => commands::task_list::run(ctx, *all),
             TaskCommand::Import { issues } => commands::task::import(ctx, issues),
@@ -103,6 +111,22 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
                 deprecated_start_command_error("wt task run", "wt run task")
             }
             TaskCommand::Publish { tasks } => commands::task_publish::run(ctx, tasks),
+            TaskCommand::Report { message } => commands::task_report::run(ctx, message),
+            TaskCommand::Review {
+                task_run_id,
+                accept,
+                reject,
+                block,
+                message,
+            } => {
+                let status = match (*accept, *reject, *block) {
+                    (true, false, false) => task_run::REVIEW_ACCEPTED,
+                    (false, true, false) => task_run::REVIEW_REJECTED,
+                    (false, false, true) => task_run::REVIEW_BLOCKED,
+                    _ => bail!("Pass exactly one of --accept, --reject, or --block"),
+                };
+                commands::task_review::run(ctx, task_run_id, status, message)
+            }
         },
         Commands::Workflow { command } => match command {
             WorkflowCommand::List => commands::workflow::list(ctx),
@@ -173,11 +197,16 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
             WorkflowCommand::Repair { workflow, apply } => {
                 commands::workflow::repair(ctx, workflow, *apply)
             }
+            WorkflowCommand::Pass {
+                workflow,
+                task,
+                run_next,
+            } => commands::workflow::pass(ctx, workflow, task.as_deref(), *run_next),
             WorkflowCommand::Complete {
                 workflow,
                 task,
                 run_next,
-            } => commands::workflow::complete(ctx, workflow, task.as_deref(), *run_next),
+            } => commands::workflow::deprecated_complete(workflow, task.as_deref(), *run_next),
         },
         Commands::Scaffold {
             feature,
@@ -309,15 +338,18 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         }
         Commands::As { agent, command } => commands::agent_runtime::run_as(ctx, agent, command),
         Commands::Ui { port } => commands::ui::run(ctx, *port),
+        Commands::Studio { port } => commands::studio::run(ctx, *port),
         Commands::Msg { command } => match command {
             MsgCommand::Send { to, scope, message } => {
                 commands::msg::send(ctx, to, scope.as_deref(), message)
             }
             MsgCommand::List { agent } => commands::msg::list(ctx, agent),
             MsgCommand::Read { agent, message_id } => commands::msg::read(ctx, agent, message_id),
-            MsgCommand::CheckInbox { agent, silent: _ } => {
-                commands::msg::check_inbox(ctx, agent.as_deref())
-            }
+            MsgCommand::CheckInbox {
+                agent,
+                hook_event_name,
+                silent: _,
+            } => commands::msg::check_inbox(ctx, agent.as_deref(), hook_event_name.as_deref()),
             MsgCommand::Watch {
                 agent,
                 timeout,
@@ -336,8 +368,8 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         } => commands::send::run(ctx, target, message, *no_enter),
         Commands::Doctor {
             profile,
-            prune_env_markers,
-        } => commands::doctor::run(ctx, profile.as_deref(), prune_env_markers.as_deref()),
+            prune_env_anchors,
+        } => commands::doctor::run(ctx, profile.as_deref(), prune_env_anchors.as_deref()),
         Commands::Config { profile, command } => match command {
             Some(ConfigCommand::Edit { source }) => {
                 commands::config::edit(ctx, profile.as_deref(), source.as_deref())

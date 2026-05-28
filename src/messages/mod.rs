@@ -10,8 +10,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 static MESSAGE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 static MESSAGE_TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) const COORDINATOR_AGENT_ALIAS: &str = "coordinator";
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentId(String);
 
@@ -51,12 +49,16 @@ impl AgentId {
         &self.0
     }
 
-    fn inbox_dir(&self, root: &Path) -> PathBuf {
-        root.join(self.as_str()).join("inbox")
+    pub fn runtime_dir(&self, runtime_root: &Path) -> PathBuf {
+        runtime_root.join(self.as_str())
     }
 
-    fn inbox_state_dir(&self, root: &Path, state: MessageDeliveryState) -> PathBuf {
-        self.inbox_dir(root).join(state.directory_name())
+    pub fn inbox_dir(&self, runtime_root: &Path) -> PathBuf {
+        self.runtime_dir(runtime_root).join("inbox")
+    }
+
+    pub fn inbox_state_dir(&self, runtime_root: &Path, state: MessageDeliveryState) -> PathBuf {
+        self.inbox_dir(runtime_root).join(state.directory_name())
     }
 }
 
@@ -535,23 +537,6 @@ impl MessageStore {
         for state in [MessageDeliveryState::New, MessageDeliveryState::Retry] {
             if let Some(claimed) =
                 self.claim_next_from_state(&agent, Some(&scope), &claimed_by, lease, state)?
-            {
-                return Ok(Some(claimed));
-            }
-        }
-
-        Ok(None)
-    }
-
-    fn claim_next_any_scope(
-        &self,
-        agent: &AgentId,
-        claimed_by: &AgentId,
-        lease: MessageLease,
-    ) -> Result<Option<ClaimedMessage>> {
-        for state in [MessageDeliveryState::New, MessageDeliveryState::Retry] {
-            if let Some(claimed) =
-                self.claim_next_from_state(agent, None, claimed_by, lease, state)?
             {
                 return Ok(Some(claimed));
             }
@@ -1148,7 +1133,7 @@ impl MessageStore {
     pub fn check_inbox(
         &self,
         agent: &str,
-        runtime_coordinator_agent_id: Option<&str>,
+        authorized_scopes: &[MessageScope],
     ) -> Result<InboxDelivery> {
         let agent = AgentId::parse(agent)?;
         let inbox = agent.inbox_dir(&self.root);
@@ -1158,17 +1143,11 @@ impl MessageStore {
         let claimed_by = agent.clone();
         let lease = MessageLease::new(Duration::from_secs(60))?;
         let mut messages = Vec::new();
-        if is_runtime_coordinator(agent.as_str(), runtime_coordinator_agent_id) {
-            while let Some(claimed) = self.claim_next_any_scope(&agent, &claimed_by, lease)? {
-                messages.push(claimed);
-            }
-        } else {
-            while let Some(claimed) = self.claim_next(
-                agent.as_str(),
-                &MessageScope::direct(),
-                claimed_by.as_str(),
-                lease,
-            )? {
+        let scopes = inbox_claim_scopes(authorized_scopes)?;
+        for scope in scopes {
+            while let Some(claimed) =
+                self.claim_next(agent.as_str(), &scope, claimed_by.as_str(), lease)?
+            {
                 messages.push(claimed);
             }
         }
@@ -1265,10 +1244,15 @@ impl MessageStore {
     }
 }
 
-fn is_runtime_coordinator(agent: &str, runtime_coordinator_agent_id: Option<&str>) -> bool {
-    runtime_coordinator_agent_id
-        .and_then(|value| AgentId::parse(value).ok())
-        .is_some_and(|coordinator| agent == coordinator.as_str())
+fn inbox_claim_scopes(authorized_scopes: &[MessageScope]) -> Result<Vec<MessageScope>> {
+    let mut scopes = vec![MessageScope::direct()];
+    for scope in authorized_scopes {
+        let scope = canonicalize_scope_value(scope)?;
+        if !scopes.iter().any(|existing| existing == &scope) {
+            scopes.push(scope);
+        }
+    }
+    Ok(scopes)
 }
 
 fn sender_agent_id() -> Result<AgentId> {
@@ -2160,9 +2144,8 @@ mod tests {
             AgentId::parse("agents/codex").unwrap().as_str(),
             "agents/codex"
         );
-        assert_eq!(COORDINATOR_AGENT_ALIAS, "coordinator");
         assert_eq!(
-            AgentId::parse(COORDINATOR_AGENT_ALIAS).unwrap().as_str(),
+            AgentId::parse("coordinator").unwrap().as_str(),
             "agents/coordinator"
         );
     }
@@ -2206,16 +2189,31 @@ mod tests {
     }
 
     #[test]
+    fn agent_id_path_helpers_project_runtime_inbox_paths() {
+        let agent = AgentId::parse("codex").unwrap();
+        let runtime_root = Path::new("/repo/.wt/runtime");
+
+        assert_eq!(
+            agent.runtime_dir(runtime_root),
+            PathBuf::from("/repo/.wt/runtime/agents/codex")
+        );
+        assert_eq!(
+            agent.inbox_state_dir(runtime_root, MessageDeliveryState::New),
+            PathBuf::from("/repo/.wt/runtime/agents/codex/inbox/new")
+        );
+    }
+
+    #[test]
     fn send_writes_a_toml_message_to_the_agent_inbox_new_state() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
 
         let sent = store.send("codex", "hello from unit test").unwrap();
 
         assert_eq!(sent.message.meta.to, "agents/codex");
         assert!(
             sent.path
-                .starts_with(temp.path().join("messages/agents/codex/inbox/new"))
+                .starts_with(temp.path().join("runtime/agents/codex/inbox/new"))
         );
         let content = fs::read_to_string(&sent.path).unwrap();
         let parsed: Message = toml::from_str(&content).unwrap();
@@ -2231,7 +2229,7 @@ mod tests {
     #[test]
     fn atomic_publish_exposes_only_final_message_path() {
         let temp = TempDir::new().unwrap();
-        let new_dir = temp.path().join("messages/agents/codex/inbox/new");
+        let new_dir = temp.path().join("runtime/agents/codex/inbox/new");
         let final_path = new_dir.join("msg_atomic.toml");
 
         let outcome = publish_bytes_atomically(&final_path, b"ready", "message").unwrap();
@@ -2251,7 +2249,7 @@ mod tests {
     #[test]
     fn atomic_publish_reports_existing_final_path_without_overwriting() {
         let temp = TempDir::new().unwrap();
-        let new_dir = temp.path().join("messages/agents/codex/inbox/new");
+        let new_dir = temp.path().join("runtime/agents/codex/inbox/new");
         fs::create_dir_all(&new_dir).unwrap();
         let final_path = new_dir.join("msg_existing.toml");
         fs::write(&final_path, "existing").unwrap();
@@ -2272,12 +2270,12 @@ mod tests {
     #[test]
     fn check_inbox_claims_messages_and_renders_context_then_acknowledges_delivery() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
         let sent = store
             .send_from("agents/claude", "agents/codex", "please respond")
             .unwrap();
 
-        let delivery = store.check_inbox("agents/codex", None).unwrap();
+        let delivery = store.check_inbox("agents/codex", &[]).unwrap();
 
         assert_eq!(delivery.messages.len(), 1);
         assert!(!sent.path.exists());
@@ -2310,7 +2308,7 @@ mod tests {
     #[test]
     fn claim_next_moves_matching_scope_to_claimed_with_lease_metadata() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
         let scope = MessageScope::workflow("2026-05-20-001").unwrap();
         let scoped = store
             .send_scoped_from(
@@ -2357,7 +2355,7 @@ mod tests {
     #[test]
     fn path_specific_helpers_reject_paths_outside_expected_state_dir() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let sent = store
             .send_from("agents/claude", "agents/codex", "outside")
@@ -2417,7 +2415,7 @@ mod tests {
     #[test]
     fn claim_recovers_when_claimed_payload_exists_and_source_remains() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let sent = store
             .send_from("agents/claude", "agents/codex", "recover claim crash")
@@ -2462,7 +2460,7 @@ mod tests {
     #[test]
     fn claim_rejects_existing_claimed_payload_with_different_content() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let sent = store
             .send_from("agents/claude", "agents/codex", "valid source")
@@ -2500,7 +2498,7 @@ mod tests {
     #[test]
     fn acknowledge_delivery_moves_claim_to_delivered() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
         let sent = store
             .send_from("agents/claude", "agents/codex", "delivered content")
             .unwrap();
@@ -2533,7 +2531,7 @@ mod tests {
     #[test]
     fn acknowledge_recovers_when_delivered_payload_exists_and_claim_source_remains() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let sent = store
             .send_from("agents/claude", "agents/codex", "recover ack crash")
@@ -2577,7 +2575,7 @@ mod tests {
     #[test]
     fn retry_and_fail_claims_preserve_content_and_attempts() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
         let sent = store
             .send_from("agents/claude", "agents/codex", "recoverable content")
             .unwrap();
@@ -2645,7 +2643,7 @@ mod tests {
     #[test]
     fn expired_claim_leases_are_reclaimed_to_retry() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
         let sent = store
             .send_from("agents/claude", "agents/codex", "lease content")
             .unwrap();
@@ -2705,7 +2703,7 @@ mod tests {
     #[test]
     fn check_inbox_respects_active_claims() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
         let sent = store
             .send_from("agents/claude", "agents/codex", "supervisor owned")
             .unwrap();
@@ -2719,7 +2717,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let delivery = store.check_inbox("agents/codex", None).unwrap();
+        let delivery = store.check_inbox("agents/codex", &[]).unwrap();
 
         assert!(delivery.is_empty());
         assert!(claimed.claimed_path.exists());
@@ -2736,7 +2734,7 @@ mod tests {
     #[test]
     fn check_inbox_reclaims_expired_claims_before_claiming_direct_delivery() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
         let sent = store
             .send_from("agents/claude", "agents/codex", "expired supervisor claim")
             .unwrap();
@@ -2757,7 +2755,7 @@ mod tests {
         )
         .unwrap();
 
-        let delivery = store.check_inbox("agents/codex", None).unwrap();
+        let delivery = store.check_inbox("agents/codex", &[]).unwrap();
 
         assert_eq!(delivery.messages.len(), 1);
         assert_eq!(delivery.messages[0].message.meta.id, sent.id);
@@ -2776,7 +2774,7 @@ mod tests {
     #[test]
     fn concurrent_claim_allows_only_one_consumer_to_deliver() {
         let temp = TempDir::new().unwrap();
-        let store = Arc::new(MessageStore::new(temp.path().join("messages")));
+        let store = Arc::new(MessageStore::new(temp.path().join("runtime")));
         let sent = store
             .send_from("agents/claude", "agents/codex", "claim once")
             .unwrap();
@@ -2810,7 +2808,7 @@ mod tests {
             .acknowledge_delivery("agents/codex", claimant, &sent.id)
             .unwrap();
 
-        let inbox = temp.path().join("messages/agents/codex/inbox");
+        let inbox = temp.path().join("runtime/agents/codex/inbox");
         assert!(message_paths(&inbox.join("new")).unwrap().is_empty());
         assert!(message_paths(&inbox.join("claimed")).unwrap().is_empty());
         assert_eq!(message_paths(&inbox.join("delivered")).unwrap().len(), 1);
@@ -2819,12 +2817,12 @@ mod tests {
     #[test]
     fn check_inbox_rejects_pre_redesign_root_messages() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
-        let inbox = temp.path().join("messages/agents/codex/inbox");
+        let store = MessageStore::new(temp.path().join("runtime"));
+        let inbox = temp.path().join("runtime/agents/codex/inbox");
         fs::create_dir_all(&inbox).unwrap();
         fs::write(inbox.join("old.toml"), "legacy = true\n").unwrap();
 
-        let err = store.check_inbox("codex", None).unwrap_err().to_string();
+        let err = store.check_inbox("codex", &[]).unwrap_err().to_string();
 
         assert!(err.contains("pre-redesign message file"));
         assert!(err.contains("inbox/new"));
@@ -2834,12 +2832,12 @@ mod tests {
     #[test]
     fn check_inbox_rejects_pre_redesign_read_messages() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
-        let read_dir = temp.path().join("messages/agents/codex/inbox/read");
+        let store = MessageStore::new(temp.path().join("runtime"));
+        let read_dir = temp.path().join("runtime/agents/codex/inbox/read");
         fs::create_dir_all(&read_dir).unwrap();
         fs::write(read_dir.join("old.toml"), "legacy = true\n").unwrap();
 
-        let err = store.check_inbox("codex", None).unwrap_err().to_string();
+        let err = store.check_inbox("codex", &[]).unwrap_err().to_string();
 
         assert!(err.contains("pre-redesign message file"));
         assert!(err.contains("inbox/read/old.toml"));
@@ -2847,9 +2845,9 @@ mod tests {
     }
 
     #[test]
-    fn runtime_coordinator_check_inbox_claims_scope_mixed_messages() {
+    fn check_inbox_claims_authorized_scoped_messages() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
         let direct = store
             .send_from("agents/claude", "agents/coord-a", "direct")
             .unwrap();
@@ -2879,7 +2877,14 @@ mod tests {
             .unwrap();
 
         let delivery = store
-            .check_inbox("agents/coord-a", Some("agents/coord-a"))
+            .check_inbox(
+                "agents/coord-a",
+                &[
+                    MessageScope::workflow("2026-05-20-001").unwrap(),
+                    MessageScope::task_run("run-1").unwrap(),
+                    MessageScope::repo(),
+                ],
+            )
             .unwrap();
 
         assert_eq!(
@@ -2915,7 +2920,7 @@ mod tests {
     #[test]
     fn non_coordinator_check_inbox_skips_scoped_messages_and_claims_direct_messages() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
         let scoped = store
             .send_scoped_from(
                 "agents/claude",
@@ -2928,7 +2933,7 @@ mod tests {
             .send_from("agents/claude", "agents/codex", "direct")
             .unwrap();
 
-        let delivery = store.check_inbox("agents/codex", None).unwrap();
+        let delivery = store.check_inbox("agents/codex", &[]).unwrap();
 
         assert_eq!(delivery.messages.len(), 1);
         assert_eq!(delivery.messages[0].message.meta.id, direct.id);
@@ -2938,9 +2943,9 @@ mod tests {
     }
 
     #[test]
-    fn malformed_runtime_coordinator_id_does_not_block_direct_delivery() {
+    fn unauthorized_scoped_messages_do_not_block_direct_delivery() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
         let scoped = store
             .send_scoped_from(
                 "agents/claude",
@@ -2953,9 +2958,7 @@ mod tests {
             .send_from("agents/claude", "agents/codex", "direct")
             .unwrap();
 
-        let delivery = store
-            .check_inbox("agents/codex", Some("agents/bad/nested"))
-            .unwrap();
+        let delivery = store.check_inbox("agents/codex", &[]).unwrap();
 
         assert_eq!(delivery.messages.len(), 1);
         assert_eq!(delivery.messages[0].message.meta.id, direct.id);
@@ -2964,9 +2967,9 @@ mod tests {
     }
 
     #[test]
-    fn coordinator_without_runtime_env_claims_only_direct_messages() {
+    fn coordinator_claims_only_direct_messages_without_scoped_authorization() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
         let scoped = store
             .send_scoped_from(
                 "agents/claude",
@@ -2979,7 +2982,7 @@ mod tests {
             .send_from("agents/claude", "agents/coordinator", "direct")
             .unwrap();
 
-        let delivery = store.check_inbox("agents/coordinator", None).unwrap();
+        let delivery = store.check_inbox("agents/coordinator", &[]).unwrap();
 
         assert_eq!(delivery.messages.len(), 1);
         assert_eq!(delivery.messages[0].message.meta.id, direct.id);
@@ -2990,7 +2993,7 @@ mod tests {
     #[test]
     fn check_inbox_moves_poison_messages_to_failed_without_blocking_valid_messages() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let new_dir = root.join("agents/codex/inbox/new");
         fs::create_dir_all(&new_dir).unwrap();
@@ -3023,7 +3026,7 @@ mod tests {
         )
         .unwrap();
 
-        let delivery = store.check_inbox("codex", None).unwrap();
+        let delivery = store.check_inbox("codex", &[]).unwrap();
 
         assert_eq!(delivery.messages.len(), 1);
         assert_eq!(delivery.messages[0].message.meta.id, "a-valid");
@@ -3050,7 +3053,7 @@ mod tests {
     #[test]
     fn check_inbox_leaves_unparsable_messages_transient_without_blocking_valid_messages() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let new_dir = root.join("agents/codex/inbox/new");
         fs::create_dir_all(&new_dir).unwrap();
@@ -3068,7 +3071,7 @@ mod tests {
         )
         .unwrap();
 
-        let delivery = store.check_inbox("codex", None).unwrap();
+        let delivery = store.check_inbox("codex", &[]).unwrap();
 
         assert_eq!(delivery.messages.len(), 1);
         assert_eq!(delivery.messages[0].message.meta.id, "b-valid");
@@ -3083,7 +3086,7 @@ mod tests {
     #[test]
     fn claim_leaves_unparsable_new_messages_transient_without_blocking_valid_messages() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let new_dir = root.join("agents/codex/inbox/new");
         fs::create_dir_all(&new_dir).unwrap();
@@ -3114,7 +3117,7 @@ mod tests {
     #[test]
     fn claim_leaves_unparsable_retry_messages_transient_without_blocking_valid_messages() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let retry_dir = root.join("agents/codex/inbox/retry");
         fs::create_dir_all(&retry_dir).unwrap();
@@ -3157,7 +3160,7 @@ mod tests {
     #[test]
     fn claim_poison_wrong_target_without_blocking_valid_messages() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let new_dir = root.join("agents/codex/inbox/new");
         fs::create_dir_all(&new_dir).unwrap();
@@ -3213,7 +3216,7 @@ mod tests {
     #[test]
     fn claim_poison_filename_meta_id_mismatch_without_blocking_valid_messages() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let new_dir = root.join("agents/codex/inbox/new");
         fs::create_dir_all(&new_dir).unwrap();
@@ -3268,7 +3271,7 @@ mod tests {
     #[test]
     fn acknowledge_rejects_claimed_filename_meta_id_mismatch() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let claimed_dir = root.join("agents/codex/inbox/claimed");
         fs::create_dir_all(&claimed_dir).unwrap();
@@ -3298,7 +3301,7 @@ mod tests {
     #[test]
     fn claim_poison_unsupported_part_type_to_failed() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path().join("messages");
+        let root = temp.path().join("runtime");
         let store = MessageStore::new(&root);
         let new_dir = root.join("agents/codex/inbox/new");
         fs::create_dir_all(&new_dir).unwrap();
@@ -3340,9 +3343,9 @@ mod tests {
     #[test]
     fn empty_inbox_has_no_delivery() {
         let temp = TempDir::new().unwrap();
-        let store = MessageStore::new(temp.path().join("messages"));
+        let store = MessageStore::new(temp.path().join("runtime"));
 
-        let delivery = store.check_inbox("codex", None).unwrap();
+        let delivery = store.check_inbox("codex", &[]).unwrap();
 
         assert!(delivery.is_empty());
     }

@@ -668,7 +668,7 @@ fn workflows_dir(ctx: &Ctx) -> PathBuf {
 fn ensure_no_legacy_workflows(ctx: &Ctx) -> Result<()> {
     if let Some(legacy) = ctx.storage_root.detect_legacy_workflows(&ctx.repo_root) {
         bail!(
-            "Found legacy Workflow storage at {}. Canonical Workflow storage is {}. wt does not silently read .local/workflows; import or repair legacy state explicitly before using this command.",
+            "Found legacy Workflow storage at {}. Canonical Workflow storage is {}. wt does not silently read legacy Workflow storage; import or repair legacy state explicitly before using this command.",
             legacy.path().display(),
             ctx.storage_root.display_path(legacy.canonical_root())
         );
@@ -682,8 +682,16 @@ fn ensure_not_legacy_workflow_path(ctx: &Ctx, path: &Path) -> Result<()> {
     } else {
         ctx.invocation_root.join(path)
     };
-    let legacy_dir = ctx.repo_root.join(".local/workflows");
-    if absolute_path.starts_with(&legacy_dir) {
+    let legacy_dirs = [
+        ctx.storage_root.personal_root().join("workflows"),
+        ctx.repo_root.join(".local/workflows"),
+    ];
+    let normalized_path = crate::storage::normalize_path_lexically(&absolute_path);
+    if legacy_dirs
+        .iter()
+        .map(|legacy_dir| crate::storage::normalize_path_lexically(legacy_dir))
+        .any(|legacy_dir| normalized_path.starts_with(legacy_dir))
+    {
         bail!(
             "Refusing to write legacy Workflow storage at {}. Canonical Workflow storage is {}.",
             absolute_path.display(),
@@ -789,7 +797,9 @@ mod tests {
     fn workflow_write_and_read_round_trip_uses_canonical_task_rows() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let path = dir.path().join(".git/wt/workflows/2026-05-16-001.toml");
+        let path = dir
+            .path()
+            .join(".wt/execution/workflows/2026-05-16-001.toml");
         let mut workflow = WorkflowMetadata {
             title: Some("Workflow state model migration".into()),
             body: Some("Ship the workflow state model migration".into()),
@@ -1329,7 +1339,7 @@ run = "workflow-add-schema"
         assert_eq!(second.workflow.color.as_deref(), Some("crimson"));
         assert_eq!(
             first.path.parent().unwrap(),
-            dir.path().join(".git/wt/workflows")
+            dir.path().join(".wt/execution/workflows")
         );
         assert!(first.path < second.path);
 
@@ -1367,7 +1377,7 @@ run = "workflow-add-schema"
     fn resolve_supports_latest_absolute_relative_and_shorthand_paths() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let workflows_dir = dir.path().join(".git/wt/workflows");
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
         fs::create_dir_all(&workflows_dir).unwrap();
         let old = workflows_dir.join("2026-05-16-001.toml");
         let new = workflows_dir.join("2026-05-16-002.toml");
@@ -1377,8 +1387,9 @@ run = "workflow-add-schema"
         assert_eq!(resolve(&ctx, "latest").unwrap(), new);
         assert_eq!(resolve(&ctx, old.to_str().unwrap()).unwrap(), old);
         assert_eq!(
-            resolve(&ctx, ".git/wt/workflows/2026-05-16-001.toml").unwrap(),
-            dir.path().join(".git/wt/workflows/2026-05-16-001.toml")
+            resolve(&ctx, ".wt/execution/workflows/2026-05-16-001.toml").unwrap(),
+            dir.path()
+                .join(".wt/execution/workflows/2026-05-16-001.toml")
         );
         assert_eq!(resolve(&ctx, "2026-05-16-001").unwrap(), old);
     }
@@ -1398,8 +1409,54 @@ run = "workflow-add-schema"
         let message = error_report_paths(workflow_paths(&ctx));
 
         assert!(message.contains("Found legacy Workflow storage"));
-        assert!(message.contains("Canonical Workflow storage is <git-common-dir>/wt/workflows"));
-        assert!(message.contains("does not silently read .local/workflows"));
+        assert!(
+            message.contains("Canonical Workflow storage is <repo-root>/.wt/execution/workflows")
+        );
+        assert!(message.contains("does not silently read legacy Workflow storage"));
+    }
+
+    #[test]
+    fn workflow_paths_reject_legacy_git_common_workflows_without_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let legacy_dir = dir.path().join(".git/wt/workflows");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        fs::write(
+            legacy_dir.join("2026-x.toml"),
+            valid_workflow_toml("legacy"),
+        )
+        .unwrap();
+
+        let message = error_report_paths(workflow_paths(&ctx));
+
+        assert!(message.contains("Found legacy Workflow storage"));
+        assert!(message.contains(".git/wt/workflows"));
+        assert!(
+            message.contains("Canonical Workflow storage is <repo-root>/.wt/execution/workflows")
+        );
+        assert!(message.contains("does not silently read legacy Workflow storage"));
+    }
+
+    #[test]
+    fn workflow_write_rejects_normalized_legacy_workflow_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let path = dir
+            .path()
+            .join(".wt/execution/../workflows/2026-05-16-001.toml");
+        let mut workflow = WorkflowMetadata::new(
+            WorkflowMode::Single,
+            "explicit",
+            Some("main".into()),
+            vec![task("task", "run-task")],
+        );
+
+        let error = write(&ctx, &path, &mut workflow).unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("Refusing to write legacy Workflow storage"));
+        assert!(report.contains(".wt/execution/../workflows/2026-05-16-001.toml"));
+        assert!(!dir.path().join(".wt/workflows").exists());
     }
 
     fn valid_workflow_toml(task_key: &str) -> String {

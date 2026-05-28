@@ -1,10 +1,12 @@
 use crate::context::Ctx;
 use crate::error::WtError;
 use crate::messages::{
-    AgentId, COORDINATOR_AGENT_ALIAS, HookOutput, Message, MessageDeliveryState,
-    MessageInspectionRecord, MessageInventory, MessageInventoryCounts, MessageScope, MessageStore,
+    AgentId, HookOutput, Message, MessageDeliveryState, MessageInspectionRecord, MessageInventory,
+    MessageInventoryCounts, MessageScope, MessageStore,
 };
 use crate::services::inbox_watcher::InboxWatcher;
+use crate::services::{identity_locator, inbox_wake};
+use crate::task_run;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::env;
@@ -14,19 +16,35 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+const DEFAULT_CHECK_INBOX_HOOK_EVENT_NAME: &str = "UserPromptSubmit";
+const CHECK_INBOX_HOOK_EVENT_NAMES: &[&str] = &["UserPromptSubmit", "PostToolUse"];
+
+pub(crate) fn runtime_message_store(ctx: &Ctx) -> Result<MessageStore> {
+    ensure_no_legacy_message_storage(ctx)?;
+    Ok(MessageStore::new(ctx.storage_root.runtime_dir()))
+}
+
+pub(crate) fn ensure_no_legacy_message_storage(ctx: &Ctx) -> Result<()> {
+    if let Some(legacy) = ctx.storage_root.detect_legacy_messages() {
+        bail!("{}", legacy.error_message_for("message storage"));
+    }
+    Ok(())
+}
+
 pub(crate) fn send(ctx: &Ctx, to: &str, scope: Option<&str>, message: &[String]) -> Result<()> {
     let text = message.join(" ");
     if text.trim().is_empty() {
         bail!("Message cannot be empty");
     }
 
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     let scope = scope.map(parse_scope_arg).transpose()?;
     let to = resolve_agent_arg(ctx, to).context("Invalid target agent id")?;
     let sent = match scope {
         Some(scope) => store.send_scoped(to.as_str(), scope, &text)?,
         None => store.send(to.as_str(), &text)?,
     };
+    let _wake_result = inbox_wake::wake_sent_message_recipient(ctx, &sent);
 
     if !ctx.quiet {
         println!("{}", ctx.storage_root.display_path(&sent.path));
@@ -69,7 +87,7 @@ fn parse_scope_arg(scope: &str) -> Result<MessageScope> {
 }
 
 pub(crate) fn list(ctx: &Ctx, agent: &str) -> Result<()> {
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     let agent = resolve_agent_arg(ctx, agent).context("Invalid agent id")?;
     let inventory = store.list(agent.as_str())?;
     let report = MessageListReport::from_inventory(ctx, inventory);
@@ -86,7 +104,7 @@ pub(crate) fn list(ctx: &Ctx, agent: &str) -> Result<()> {
 pub(crate) fn read(ctx: &Ctx, agent: &str, message_id: &str) -> Result<()> {
     let message_id = canonical_read_message_id(message_id)?;
     let agent = resolve_agent_arg(ctx, agent).context("Invalid agent id")?;
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     let record = store.read_for_inspection(agent.as_str(), message_id)?;
     let row = MessageRow::from_record(ctx, record);
     let report = MessageReadReport {
@@ -112,7 +130,12 @@ fn canonical_read_message_id(message_id: &str) -> Result<&str> {
     Ok(id)
 }
 
-pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
+pub(crate) fn check_inbox(
+    ctx: &Ctx,
+    agent: Option<&str>,
+    hook_event_name: Option<&str>,
+) -> Result<()> {
+    let hook_event_name = check_inbox_hook_event_name(hook_event_name)?;
     let agents = match agent {
         Some(agent) => vec![
             resolve_agent_arg(ctx, agent)
@@ -126,14 +149,15 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     for agent in agents {
-        let delivery = store.check_inbox(&agent, ctx.coordinator_agent_id.as_deref())?;
+        let authorized_scopes = authorized_inbox_scopes(ctx, &agent)?;
+        let delivery = store.check_inbox(&agent, &authorized_scopes)?;
         if delivery.is_empty() {
             continue;
         }
 
-        let output = HookOutput::new("UserPromptSubmit", delivery.additional_context());
+        let output = HookOutput::new(hook_event_name, delivery.additional_context());
         let stdout = std::io::stdout();
         let mut handle = stdout.lock();
         serde_json::to_writer(&mut handle, &output)?;
@@ -144,6 +168,66 @@ pub(crate) fn check_inbox(ctx: &Ctx, agent: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn check_inbox_hook_event_name(hook_event_name: Option<&str>) -> Result<&str> {
+    let Some(hook_event_name) = hook_event_name else {
+        return Ok(DEFAULT_CHECK_INBOX_HOOK_EVENT_NAME);
+    };
+    if CHECK_INBOX_HOOK_EVENT_NAMES.contains(&hook_event_name) {
+        return Ok(hook_event_name);
+    }
+    bail!(
+        "Unsupported check-inbox hook event `{hook_event_name}`; expected one of: {}",
+        CHECK_INBOX_HOOK_EVENT_NAMES.join(", ")
+    )
+}
+
+fn authorized_inbox_scopes(ctx: &Ctx, agent: &str) -> Result<Vec<MessageScope>> {
+    let agent = AgentId::parse(agent)?;
+    let runtime_agent = env_agent_id("WT_AGENT_ID")?;
+    let runtime_task_run_id = env_task_run_id()?;
+    let mut scopes = Vec::new();
+    for record in task_run::list(ctx)? {
+        if let Some(coordinator_id) = record.run.coordinator_id.as_deref()
+            && let Ok(coordinator) = AgentId::parse(coordinator_id)
+            && coordinator.as_str() == agent.as_str()
+            && let Some(workflow_id) = task_run::workflow_scope_id(&record)
+        {
+            push_unique_scope(&mut scopes, MessageScope::workflow(workflow_id)?);
+        }
+        if task_run_scope_is_owned_by_runtime_agent(
+            &record,
+            &agent,
+            runtime_agent.as_ref(),
+            runtime_task_run_id.as_deref(),
+        ) {
+            push_unique_scope(&mut scopes, MessageScope::task_run(record.id.clone())?);
+        }
+    }
+    Ok(scopes)
+}
+
+fn task_run_scope_is_owned_by_runtime_agent(
+    record: &task_run::TaskRunRecord,
+    inbox_agent: &AgentId,
+    runtime_agent: Option<&AgentId>,
+    runtime_task_run_id: Option<&str>,
+) -> bool {
+    runtime_agent.map(AgentId::as_str) == Some(inbox_agent.as_str())
+        && runtime_task_run_id == Some(record.id.as_str())
+        && record
+            .run
+            .agent_id
+            .as_deref()
+            .and_then(|id| AgentId::parse(id).ok())
+            .is_some_and(|task_agent| task_agent.as_str() == inbox_agent.as_str())
+}
+
+fn push_unique_scope(scopes: &mut Vec<MessageScope>, scope: MessageScope) {
+    if !scopes.iter().any(|existing| existing == &scope) {
+        scopes.push(scope);
+    }
+}
+
 pub(crate) fn watch(ctx: &Ctx, agent: Option<&str>, timeout: Duration, json: bool) -> Result<()> {
     if timeout.is_zero() {
         bail!("wt msg watch: --timeout 0 is invalid (use 'wt msg list' for snapshot)");
@@ -151,18 +235,15 @@ pub(crate) fn watch(ctx: &Ctx, agent: Option<&str>, timeout: Duration, json: boo
 
     let signal_state = WatchSignalState::install()?;
     let agent = resolve_watch_agent(ctx, agent)?;
-    let inbox_new = ctx
-        .storage_root
-        .messages_dir()
-        .join(agent.as_str())
-        .join("inbox")
-        .join("new");
+    ensure_no_legacy_message_storage(ctx)?;
+    let inbox_new =
+        agent.inbox_state_dir(&ctx.storage_root.runtime_dir(), MessageDeliveryState::New);
     fs::create_dir_all(&inbox_new)
         .with_context(|| format!("Failed to create inbox: {}", inbox_new.display()))?;
 
     let mut watcher = InboxWatcher::new(&inbox_new)?;
     signal_state.exit_if_signaled()?;
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
@@ -196,39 +277,20 @@ pub(crate) fn watch(ctx: &Ctx, agent: Option<&str>, timeout: Duration, json: boo
     }
 }
 
-fn resolve_agent_arg(ctx: &Ctx, input: &str) -> Result<AgentId> {
-    if input.trim() == COORDINATOR_AGENT_ALIAS {
-        return coordinator_agent_from_context(ctx);
-    }
+fn resolve_agent_arg(_ctx: &Ctx, input: &str) -> Result<AgentId> {
     AgentId::parse(input)
 }
 
-fn coordinator_agent_from_context(ctx: &Ctx) -> Result<AgentId> {
-    let Some(value) = ctx.coordinator_agent_id.as_deref() else {
-        bail!(coordinator_alias_error());
+fn inbox_agents_from_context(ctx: &Ctx) -> Result<Vec<String>> {
+    if let Some(agent) = env_agent_id("WT_AGENT_ID")? {
+        return Ok(vec![agent.as_str().to_string()]);
+    }
+
+    let Some(anchor) = identity_locator::resolve_identity(ctx)? else {
+        return Ok(Vec::new());
     };
-    if value.trim().is_empty() {
-        bail!(coordinator_alias_error());
-    }
-    AgentId::parse(value).map_err(|err| anyhow::anyhow!("Invalid WT_COORDINATOR_AGENT_ID: {err:#}"))
-}
-
-fn coordinator_alias_error() -> &'static str {
-    "The `coordinator` alias requires WT_COORDINATOR_AGENT_ID. Run `wt coord use <id>` in the coordinator shell, bind the current session with `eval \"$(wt session set <id>)\"`, or enable ambient binding with `eval \"$(wt shell-init zsh)\"`."
-}
-
-fn inbox_agents_from_context(_ctx: &Ctx) -> Result<Vec<String>> {
-    let mut agents = Vec::new();
-    match env::var("WT_AGENT_ID") {
-        Ok(value) => {
-            if !value.is_empty() {
-                agents.push(value);
-            }
-        }
-        Err(env::VarError::NotPresent) => {}
-        Err(env::VarError::NotUnicode(_)) => bail!("Invalid WT_AGENT_ID: value is not Unicode"),
-    }
-    Ok(agents)
+    let agent = AgentId::parse(&anchor.id).context("Invalid live identity anchor agent id")?;
+    Ok(vec![agent.as_str().to_string()])
 }
 
 fn resolve_watch_agent(ctx: &Ctx, agent: Option<&str>) -> Result<AgentId> {
@@ -236,15 +298,12 @@ fn resolve_watch_agent(ctx: &Ctx, agent: Option<&str>) -> Result<AgentId> {
         return resolve_agent_arg(ctx, agent).context("Invalid agent id");
     }
 
-    if let Some(agent) = env_agent_id("WT_COORDINATOR_AGENT_ID")? {
-        return Ok(agent);
-    }
     if let Some(agent) = env_agent_id("WT_AGENT_ID")? {
         return Ok(agent);
     }
 
     bail!(
-        "wt msg watch could not resolve an agent id. Tried explicit --agent, WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Pass --agent <agent>, run `wt coord use <id>`, bind the session with `eval \"$(wt session set <id>)\"`, or launch through `wt as`, `wt codex`, or `wt claude`."
+        "wt msg watch could not resolve an agent id. Pass --agent <agent>, set WT_AGENT_ID, or launch through `wt as`, `wt codex`, or `wt claude`."
     )
 }
 
@@ -262,6 +321,14 @@ fn env_agent_id(name: &str) -> Result<Option<AgentId>> {
         }
         Err(env::VarError::NotPresent) => Ok(None),
         Err(env::VarError::NotUnicode(_)) => bail!("Invalid {name}: value is not Unicode"),
+    }
+}
+
+fn env_task_run_id() -> Result<Option<String>> {
+    match env::var("WT_TASK_RUN_ID") {
+        Ok(value) => Ok((!value.trim().is_empty()).then(|| value.trim().to_string())),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => bail!("Invalid WT_TASK_RUN_ID: value is not Unicode"),
     }
 }
 
@@ -584,31 +651,38 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn coordinator_alias_resolves_from_runtime_env() {
+    fn bare_coordinator_is_ordinary_agent_name() {
         let temp = TempDir::new().unwrap();
-        let ctx = test_ctx(temp.path(), Some("agents/foo".into()));
+        let ctx = test_ctx(temp.path());
 
         let agent = resolve_agent_arg(&ctx, "coordinator").unwrap();
 
-        assert_eq!(agent.as_str(), "agents/foo");
+        assert_eq!(agent.as_str(), "agents/coordinator");
     }
 
     #[test]
-    fn coordinator_alias_without_runtime_env_errors_with_setup_hint() {
+    fn authorized_inbox_scopes_include_recorded_workflow_coordinator() {
         let temp = TempDir::new().unwrap();
-        let ctx = test_ctx(temp.path(), None);
+        let ctx = test_ctx(temp.path());
+        task_run::create_workflow_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "workflow-1",
+            "agents/coord-a",
+            Some("Coordinator"),
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
 
-        let err = resolve_agent_arg(&ctx, "coordinator")
-            .unwrap_err()
-            .to_string();
+        let scopes = authorized_inbox_scopes(&ctx, "agents/coord-a").unwrap();
+        let other_scopes = authorized_inbox_scopes(&ctx, "agents/other").unwrap();
 
-        assert!(err.contains("WT_COORDINATOR_AGENT_ID"));
-        assert!(err.contains("wt coord use <id>"));
-        assert!(err.contains("wt session set <id>"));
-        assert!(err.contains("wt shell-init zsh"));
+        assert_eq!(scopes, vec![MessageScope::workflow("workflow-1").unwrap()]);
+        assert!(other_scopes.is_empty());
     }
 
-    fn test_ctx(root: &std::path::Path, coordinator_agent_id: Option<String>) -> Ctx {
+    fn test_ctx(root: &std::path::Path) -> Ctx {
         Ctx::new_with_options(
             root.to_path_buf(),
             root.to_path_buf(),
@@ -618,7 +692,6 @@ mod tests {
             CtxOptions {
                 storage_root: Some(StorageRoot::from_git_common_dir(root.join(".git"))),
                 output_mode: OutputMode::Text,
-                coordinator_agent_id,
                 ..CtxOptions::default()
             },
         )

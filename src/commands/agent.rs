@@ -4,12 +4,16 @@ use crate::agent_state::{
 use crate::agents::AgentStatus;
 use crate::context::Ctx;
 use crate::error::WtError;
+use crate::messages::AgentId;
+use crate::services::identity_locator::{self, AnchorKey, AnchorKind};
 use crate::services::work::{self, WorkSessionState};
 use crate::task_run;
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 pub mod supervisor;
@@ -44,9 +48,8 @@ pub fn watch(
 }
 
 pub fn wait_stats(ctx: &Ctx) -> Result<()> {
-    let store = WaitObservationStore::new(ctx.storage_root.wait_observations_jsonl());
-    let mut summary = store.summary()?;
-    summary.path = ctx.storage_root.display_path(store.path());
+    let paths = wait_observation_paths(ctx)?;
+    let summary = WaitObservationStore::summary_all(&paths, wait_observation_summary_path(ctx))?;
     if ctx.is_json() {
         print_json(&summary)?;
     } else {
@@ -105,14 +108,17 @@ fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) ->
         }
 
         if let Some(timeout) = options.timeout.filter(|timeout| elapsed >= *timeout) {
-            record_wait_observation(
-                ctx,
-                &report,
-                "timeout",
-                elapsed,
-                timeout,
-                now.duration_since(last_output_at),
-            )?;
+            if let Some(agent_id) = wait_observation_agent_id(ctx, &work)? {
+                record_wait_observation(
+                    ctx,
+                    &agent_id,
+                    &report,
+                    "timeout",
+                    elapsed,
+                    timeout,
+                    now.duration_since(last_output_at),
+                )?;
+            }
             if ctx.is_json() {
                 print_json_line(&report_with_warning(
                     &report,
@@ -131,14 +137,17 @@ fn watch_with_options(ctx: &Ctx, target: Option<&str>, options: WatchOptions) ->
         {
             let unchanged_duration = now.duration_since(last_output_at);
             let heartbeat = options.heartbeat.expect("heartbeat was checked above");
-            record_wait_observation(
-                ctx,
-                &report,
-                "heartbeat",
-                elapsed,
-                heartbeat,
-                unchanged_duration,
-            )?;
+            if let Some(agent_id) = wait_observation_agent_id(ctx, &work)? {
+                record_wait_observation(
+                    ctx,
+                    &agent_id,
+                    &report,
+                    "heartbeat",
+                    elapsed,
+                    heartbeat,
+                    unchanged_duration,
+                )?;
+            }
             if ctx.is_json() {
                 print_json_line(&report)?;
             } else {
@@ -348,6 +357,11 @@ impl CmuxCandidateReport {
 
 fn warnings_for_work(work: &work::Work) -> Vec<String> {
     let mut warnings = Vec::new();
+    for warning in &work.target.warnings {
+        if !warnings.contains(warning) {
+            warnings.push(warning.clone());
+        }
+    }
     if let Some(warning) = work.state.warning.as_ref() {
         warnings.push(warning.clone());
     }
@@ -437,6 +451,7 @@ fn report_with_warning(report: &AgentStatusReport, warning: String) -> AgentStat
 
 fn record_wait_observation(
     ctx: &Ctx,
+    agent_id: &AgentId,
     report: &AgentStatusReport,
     wait_reason: &str,
     elapsed_duration: Duration,
@@ -459,13 +474,91 @@ fn record_wait_observation(
     observation.last_event_at = report.agent.last_event_at.clone();
     observation.session_id = report.agent.session_id.clone();
 
-    let store = WaitObservationStore::new(ctx.storage_root.wait_observations_jsonl());
+    let store = WaitObservationStore::new(ctx.storage_root.wait_observations_jsonl(agent_id));
     store.append(&observation).with_context(|| {
         format!(
             "Failed to record wait observation in {}",
             ctx.storage_root.display_path(store.path())
         )
     })
+}
+
+fn wait_observation_agent_id(ctx: &Ctx, work: &work::Work) -> Result<Option<AgentId>> {
+    if let Some(agent_id) = work
+        .target
+        .task_run
+        .as_ref()
+        .and_then(|record| record.run.agent_id.as_deref())
+    {
+        return Ok(AgentId::parse(agent_id).ok());
+    }
+
+    let Some(surface_id) = work
+        .cmux
+        .as_ref()
+        .and_then(|cmux| cmux.surface_id.as_deref())
+    else {
+        return Ok(None);
+    };
+    let key = AnchorKey {
+        kind: AnchorKind::Surface,
+        value: surface_id.to_string(),
+    };
+    let Some(anchor) = identity_locator::read_identity_anchor(ctx, &key)? else {
+        return Ok(None);
+    };
+    Ok(AgentId::parse(&anchor.id).ok())
+}
+
+fn wait_observation_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
+    let agents_dir = ctx.storage_root.runtime_agents_dir();
+    let entries = match fs::read_dir(&agents_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to read runtime agents directory {}",
+                    agents_dir.display()
+                )
+            });
+        }
+    };
+
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| {
+            format!(
+                "Failed to read runtime agents directory entry in {}",
+                agents_dir.display()
+            )
+        })?;
+        if !entry
+            .file_type()
+            .with_context(|| format!("Failed to inspect {}", entry.path().display()))?
+            .is_dir()
+        {
+            continue;
+        }
+        let path = entry
+            .path()
+            .join("observations")
+            .join(crate::agent_state::WAIT_OBSERVATIONS_FILE);
+        if path.is_file() {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn wait_observation_summary_path(ctx: &Ctx) -> String {
+    format!(
+        "{}/*/observations/{}",
+        ctx.storage_root
+            .display_path(&ctx.storage_root.runtime_agents_dir()),
+        crate::agent_state::WAIT_OBSERVATIONS_FILE
+    )
 }
 
 fn print_json<T: Serialize>(report: &T) -> Result<()> {
@@ -847,6 +940,42 @@ mod tests {
     }
 
     #[test]
+    fn status_branch_target_warns_about_unrelated_invalid_task_run() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.repo.join(".wt/execution/task-runs")).unwrap();
+        std::fs::write(
+            fixture
+                .repo
+                .join(".wt/execution/task-runs/run-broken.toml"),
+            "task = \"broken\"\nbranch = \"unrelated\"\nstatus = \"started\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+        )
+        .unwrap();
+        let mut runner = MockRunner::new();
+        runner.add_command("cmux");
+        add_worktree_list(&mut runner, &fixture);
+        add_matching_workspace(&mut runner, &fixture);
+        add_selected_surface(&mut runner);
+        runner.add_response("Codex Ready", true);
+        runner.add_response("codex=Idle", true);
+        let ui = Arc::new(MockUi::new());
+        let ctx = Ctx::new(
+            fixture.repo.clone(),
+            fixture.repo.clone(),
+            Config::default(),
+            Box::new(runner),
+            Box::new(ui.clone()),
+        );
+
+        status(&ctx, Some("feature")).unwrap();
+
+        let steps = ui.steps.lock().unwrap().join("\n");
+        let warnings = ui.warnings.lock().unwrap().join("\n");
+        assert!(steps.contains("Agent status: feature"));
+        assert!(warnings.contains("TaskRun inventory skipped invalid record"));
+        assert!(warnings.contains("run-broken.toml"));
+    }
+
+    #[test]
     fn needs_input_maps_to_exit_code_two_and_records_since_time() {
         let fixture = Fixture::new();
         let mut runner = MockRunner::new();
@@ -1080,9 +1209,9 @@ mod tests {
     #[test]
     fn task_run_target_adds_task_run_metadata() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
@@ -1110,10 +1239,17 @@ mod tests {
     #[test]
     fn status_without_target_selects_interactive_work_target() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
+            fixture.repo.join(".wt/execution/task-runs/run-feature.toml"),
             "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            fixture
+                .repo
+                .join(".wt/execution/task-runs/run-broken.toml"),
+            "task = \"broken\"\nbranch = \"unrelated\"\nstatus = \"started\"\ncreated_at = \"2026-05-16T00:00:01Z\"\nupdated_at = \"2026-05-16T00:00:01Z\"\n",
         )
         .unwrap();
         let mut runner = MockRunner::new();
@@ -1144,6 +1280,9 @@ mod tests {
         assert!(items[0].iter().any(|item| item.contains("feature")));
         assert!(items[0].iter().any(|item| item.contains("run-feature")));
         assert!(steps.contains("Agent status: feature"));
+        let warnings = ui.warnings.lock().unwrap().join("\n");
+        assert!(warnings.contains("TaskRun inventory skipped invalid record"));
+        assert!(warnings.contains("run-broken.toml"));
     }
 
     #[test]
@@ -1240,6 +1379,16 @@ mod tests {
         add_worktree_list(&mut runner, &fixture);
         add_running_observation(&mut runner, &fixture);
         let ctx = fixture.ctx(runner, OutputMode::Text);
+        identity_locator::write_identity_anchor(
+            &ctx,
+            &AnchorKey {
+                kind: AnchorKind::Surface,
+                value: "uuid-surface-4".into(),
+            },
+            "agents/codex",
+            Some("codex"),
+        )
+        .unwrap();
 
         watch_with_options(
             &ctx,
@@ -1271,9 +1420,11 @@ mod tests {
         let fixture = Fixture::new();
         let ctx = fixture.ctx(MockRunner::new(), OutputMode::Text);
         let report = test_running_report();
+        let agent = AgentId::parse("agents/codex").unwrap();
 
         record_wait_observation(
             &ctx,
+            &agent,
             &report,
             "heartbeat",
             Duration::from_secs(125),
@@ -1283,6 +1434,7 @@ mod tests {
         .unwrap();
         record_wait_observation(
             &ctx,
+            &agent,
             &report,
             "timeout",
             Duration::from_secs(300),
@@ -1307,10 +1459,10 @@ mod tests {
     #[test]
     fn watch_heartbeat_prints_unchanged_running_observation() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            fixture.repo.join(".wt/execution/task-runs/run-feature.toml"),
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nagent_id = \"agents/codex\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         let mut runner = MockRunner::new();
@@ -1357,10 +1509,10 @@ mod tests {
     #[test]
     fn watch_recording_heartbeat_appends_one_non_idle_wait_observation() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.repo.join(".git/wt/task-runs")).unwrap();
+        std::fs::create_dir_all(fixture.repo.join(".wt/execution/task-runs")).unwrap();
         std::fs::write(
-            fixture.repo.join(".git/wt/task-runs/run-feature.toml"),
-            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
+            fixture.repo.join(".wt/execution/task-runs/run-feature.toml"),
+            "task = \"feature\"\nbranch = \"feature\"\nstatus = \"running\"\nagent_id = \"agents/codex\"\ncreated_at = \"2026-05-16T00:00:00Z\"\nupdated_at = \"2026-05-16T00:00:00Z\"\n",
         )
         .unwrap();
         let mut runner = MockRunner::new();
@@ -1486,7 +1638,6 @@ mod tests {
                     verbosity: 0,
                     quiet: false,
                     launcher_coordinator_id: None,
-                    coordinator_agent_id: None,
                 },
             )
         }
@@ -1548,7 +1699,7 @@ mod tests {
     fn wait_observations_path(fixture: &Fixture) -> PathBuf {
         fixture
             .repo
-            .join(".git/wt/agent.state/wait-observations.jsonl")
+            .join(".wt/runtime/agents/codex/observations/wait-observations.jsonl")
     }
 
     fn read_wait_observations(fixture: &Fixture) -> Vec<serde_json::Value> {

@@ -1,4 +1,4 @@
-use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, ArgGroup, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 const ROOT_HELP_TEMPLATE: &str = "\
@@ -6,30 +6,49 @@ const ROOT_HELP_TEMPLATE: &str = "\
 
 {usage-heading} {usage}
 
-Common:
-  run      Start workspace execution from issue, PR, branch text, task, or workflow
+Start Work:
+  run issue [ISSUE]       Start from provider issue
+  run pr [PR]             Start from pull request
+  run branch <TEXT>       Start ad hoc branch work
+  run task [TASK]...      Start local TaskDocuments
+  run workflow [WORKFLOW] Start saved Workflow tasks
+
+Manage Work:
   open     Open an existing worktree or branch
   inspect  Read a work dossier
   done     Clean completed work
   list     Show current wt state
 
-Prepared Work:
+Prepare:
+  scaffold  Create idea/spec/task/workflow skeletons
   task      Manage local TaskDocuments
   workflow  Prepare and coordinate saved workflow tasks
 
-Setup:
-  init    이 저장소에 맞는 config 추천 wizard 시작
-  config  Print, edit, or refactor config
-  setup   Install or remove per-machine integration
-  doctor  Check config and local tools
+Coordinate Agents:
+  agent    Observe task-agent runtime state
+  msg      Send and inspect agent inbox messages
+  send     Send a live cmux prompt message
+  session  Manage current agent identity
 
-Explore:
-  wt run -h        start surfaces
-  wt task -h       TaskDocument commands
-  wt workflow -h   workflow lifecycle
-  wt agent -h      agent observation
-  wt msg -h        agent inbox messages
-  wt help <cmd>    any other command
+Run Agents:
+  codex   Launch Codex with wt agent identity
+  claude  Launch Claude with wt agent identity
+  as      Run any command with explicit WT_AGENT_ID
+
+Setup:
+  init        Start the config recommendation wizard
+  config      Print, edit, or refactor config
+  profile     List or manage named profile configs
+  setup       Install or remove per-machine integration
+  doctor      Check config and local tools
+
+Tools:
+  ui          Start the read-only personal state web UI
+  studio      Start the write-capable authoring surface
+  site        Inspect and manage local site helpers
+  shell-init  Print shell integration source
+  completion  Generate shell completions
+  version     Print wt version
 
 Options:
 {options}{after-help}";
@@ -40,28 +59,28 @@ Options:
     version,
     about = "Worktree-based agent orchestration harness",
     help_template = ROOT_HELP_TEMPLATE,
-    after_help = "Start workspace execution with: wt run issue, wt run pr, wt run branch, wt run task, wt run workflow.\nUse wt open for existing branches or worktrees; use wt workflow for saved workflow files and lifecycle actions."
+    after_help = "Examples:\n  $ wt init\n  $ wt run issue 123\n  $ wt run pr 42\n  $ wt run branch \"fix login\"\n  $ wt run task\n  $ wt run workflow release-stack\n  $ wt inspect <target> --pr\n  $ wt agent watch <target> --heartbeat 300\n  $ wt run -h\n  $ wt help <cmd>"
 )]
 pub struct Cli {
-    /// DIR에서 wt 실행
+    /// Run wt from DIR
     #[arg(short = 'C', long = "directory", global = true, value_name = "DIR")]
     pub directory: Option<PathBuf>,
-    /// wt config를 읽는 명령에서 사용할 config 파일
+    /// Read wt config from PATH
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
-    /// 진단 출력 자세히 보기 (-v, -vv)
+    /// Show more diagnostics (-v, -vv)
     #[arg(short, long, action = ArgAction::Count, global = true, conflicts_with = "quiet")]
     pub verbose: u8,
-    /// 일반 status 출력 숨기기
+    /// Hide routine status output
     #[arg(short, long, global = true)]
     pub quiet: bool,
-    /// 터미널 색상 사용 시점
+    /// When to use terminal colors
     #[arg(long, value_enum, default_value_t = ColorMode::Auto, global = true)]
     pub color: ColorMode,
-    /// 터미널 색상 끄기
+    /// Disable terminal colors
     #[arg(long = "no-color", global = true, conflicts_with = "color")]
     pub no_color: bool,
-    /// 지원하는 명령에서 machine-readable JSON 출력
+    /// Output JSON for supported commands
     #[arg(long, global = true)]
     pub json: bool,
     #[command(subcommand)]
@@ -80,7 +99,7 @@ pub enum Commands {
     },
     /// Print shell integration source for ambient worker identity binding
     #[command(
-        long_about = "Print shell integration source for ambient worker identity binding.\n\nAdd `eval \"$(wt shell-init zsh)\"` or `eval \"$(wt shell-init bash)\"` to your shell rc. The generated hook runs `wt env` when the current directory changes so worker worktree shells inherit WT_AGENT_ID and WT_COORDINATOR_AGENT_ID. See docs/architecture.md#shell-integration."
+        long_about = "Print shell integration source for ambient worker identity binding.\n\nAdd `eval \"$(wt shell-init zsh)\"` or `eval \"$(wt shell-init bash)\"` to your shell rc. The generated hook runs `wt env` when the current directory changes so worker worktree shells inherit WT_AGENT_ID. See docs/architecture.md#shell-integration."
     )]
     ShellInit {
         /// Shell to initialize: zsh or bash
@@ -91,20 +110,12 @@ pub enum Commands {
     #[command(
         name = "env",
         hide = true,
-        long_about = "Internal shell-hook command. Print export/unset statements for WT_AGENT_ID and WT_COORDINATOR_AGENT_ID based on the current git worktree branch and matching <git-common-dir>/wt/task-runs records.\n\nThis command is intended to be called by source generated from `wt shell-init <shell>`."
+        long_about = "Internal shell-hook command. Print export/unset statements for WT_AGENT_ID based on the current git worktree branch and matching <repo-root>/.wt/execution/task-runs records, while clearing removed legacy coordinator routing env.\n\nThis command is intended to be called by source generated from `wt shell-init <shell>`."
     )]
     Env,
-    /// Declare or clear the coordinator identity for the current shell
-    #[command(
-        long_about = "Print shell statements for declaring or clearing the coordinator identity in the current shell.\n\nUse `eval \"$(wt coord use <id>)\"` once per coordinator session, for example `eval \"$(wt coord use my-coord)\"`. `wt coord use` sets WT_AGENT_ID and WT_COORDINATOR_AGENT_ID to the same agent because a coordinator session is its own coordinator.\n\n`wt shell-init <shell>` provides a shell function wrapper so users can run `wt-coord-use my-coord` directly."
-    )]
-    Coord {
-        #[command(subcommand)]
-        command: CoordCommand,
-    },
     /// Declare, clear, or inspect the current session agent identity
     #[command(
-        long_about = "Declare, clear, or inspect the current session agent identity using the current terminal or agent-session anchor.\n\nUse `eval \"$(wt session set <id>)\"` to bind this shell or agent session to WT_AGENT_ID and WT_COORDINATOR_AGENT_ID while also writing a marker that later wt invocations from the same anchor can resolve."
+        long_about = "Declare, clear, or inspect the current session agent identity using the current terminal or agent-session anchor.\n\nUse `eval \"$(wt session set <id>)\"` to bind this shell or agent session to WT_AGENT_ID while also writing a marker that later wt invocations from the same anchor can resolve."
     )]
     Session {
         #[command(subcommand)]
@@ -153,32 +164,32 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    /// Prepare, inspect, edit, repair, archive, or complete workflow tasks
+    /// Prepare, inspect, edit, repair, archive, or pass workflow tasks
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommand,
     },
     /// Create blank skeleton documents for a feature
     #[command(
-        long_about = "Create blank skeleton documents for a feature under <git-common-dir>/wt/ideas, numbered specs, tasks, workflows, and spec-local retrospects. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
+        long_about = "Create blank skeleton documents for a feature under <repo-root>/.wt/planning/ideas, numbered specs, tasks, workflows, and spec-local retrospects. Pass one or more document-kind flags, use --all for every kind, or omit flags to choose interactively."
     )]
     Scaffold {
         /// Feature slug to use for every generated path
         #[arg(value_name = "FEATURE")]
         feature: String,
-        /// Create <git-common-dir>/wt/ideas/<feature>.md
+        /// Create <repo-root>/.wt/planning/ideas/<feature>.md
         #[arg(long)]
         idea: bool,
-        /// Create numbered prep files under <git-common-dir>/wt/specs/<feature>/
+        /// Create numbered prep files under <repo-root>/.wt/planning/specs/<feature>/
         #[arg(long)]
         spec: bool,
-        /// Create <git-common-dir>/wt/tasks/<feature>.toml
+        /// Create <repo-root>/.wt/execution/tasks/<feature>.toml
         #[arg(long)]
         task: bool,
-        /// Create <git-common-dir>/wt/workflows/<feature>.toml
+        /// Create <repo-root>/.wt/execution/workflows/<feature>.toml
         #[arg(long)]
         workflow: bool,
-        /// Create <git-common-dir>/wt/specs/<feature>/11-retrospect.md
+        /// Create <repo-root>/.wt/planning/specs/<feature>/11-retrospect.md
         #[arg(long)]
         retrospect: bool,
         /// Create all scaffold document kinds
@@ -204,7 +215,7 @@ pub enum Commands {
     },
     /// Remove worktrees, clean integrations, and delete local branches
     #[command(
-        long_about = "Remove checked-out worktrees, clean integrations, mark matching direct running TaskRuns done, and delete local branches.\n\nPass branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id. Workflow-linked TaskRun ids are completed with `wt workflow complete`, not `wt done`. Omit TARGETS to choose worktrees interactively."
+        long_about = "Remove checked-out worktrees, clean integrations, mark matching direct running TaskRuns passed, and delete local branches.\n\nPass branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id. Workflow-linked TaskRun ids are passed with `wt workflow pass`, not `wt done`. Omit TARGETS to choose worktrees interactively."
     )]
     Done {
         /// Branch, worktree path/name, issue-like branch-name shorthand, or direct TaskRun id to remove
@@ -228,7 +239,7 @@ pub enum Commands {
     },
     /// Set up or remove per-machine wt integration
     #[command(
-        long_about = "Set up or remove per-machine wt integration.\n\n`wt setup` detects supported local agent CLIs, prompts before installing wt-managed Claude and Codex inbox hooks, and can add shell integration and completion eval lines to the resolved shell rc file. Use --yes to accept detected steps without prompting, --dry-run to preview changes without writing files, and --remove to remove wt-managed per-machine entries."
+        long_about = "Set up or remove per-machine wt integration.\n\n`wt setup` detects supported local agent CLIs, renders a structured plan of target files and planned actions, prompts before installing wt-managed Claude and Codex inbox hooks, and can add shell integration and completion eval lines to the resolved shell rc file. Repo-local `.wt` storage is prepared by `wt init`, not `wt setup`. Use --yes to apply detected steps without prompting, --dry-run to preview the plan without writing files, and --remove to remove wt-managed per-machine entries."
     )]
     Setup {
         /// Accept every detected setup step without prompting
@@ -243,7 +254,7 @@ pub enum Commands {
     },
     /// Launch Codex with the current worktree's wt agent identity
     #[command(
-        long_about = "Launch Codex with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID resolved from the launch context when available.\n\nUse `wt codex` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt codex @planner` or `wt codex @reviewer` to launch a separate inbox like `agents/<branch_slug>-planner`, so multiple agents do not consume each other's messages. Extra Codex arguments are passed through after the optional role."
+        long_about = "Launch Codex with WT_AGENT_ID derived from the current git branch, and clear removed legacy coordinator routing env before the child process starts.\n\nUse `wt codex` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt codex @planner` or `wt codex @reviewer` to launch a separate inbox like `agents/<branch_slug>-planner`, so multiple agents do not consume each other's messages. Extra Codex arguments are passed through after the optional role."
     )]
     Codex {
         /// Optional @role followed by arguments passed to codex
@@ -257,7 +268,7 @@ pub enum Commands {
     },
     /// Launch Claude with the current worktree's wt agent identity
     #[command(
-        long_about = "Launch Claude with WT_AGENT_ID derived from the current git branch and WT_COORDINATOR_AGENT_ID resolved from the launch context when available.\n\nUse `wt claude` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt claude @coordinator` or `wt claude @reviewer` to launch a separate inbox like `agents/<branch_slug>-coordinator`, so multiple agents do not consume each other's messages. Extra Claude arguments are passed through after the optional role."
+        long_about = "Launch Claude with WT_AGENT_ID derived from the current git branch, and clear removed legacy coordinator routing env before the child process starts.\n\nUse `wt claude` for the default agent inbox `agents/<branch_slug>`. In the same worktree, use a leading role such as `wt claude @coordinator` or `wt claude @reviewer` to launch a separate inbox like `agents/<branch_slug>-coordinator`, so multiple agents do not consume each other's messages. Extra Claude arguments are passed through after the optional role."
     )]
     Claude {
         /// Optional @role followed by arguments passed to claude
@@ -271,7 +282,7 @@ pub enum Commands {
     },
     /// Run any command with an explicit wt agent identity
     #[command(
-        long_about = "Run any command with an explicit WT_AGENT_ID and context-resolved WT_COORDINATOR_AGENT_ID when available.\n\nUse `wt as <AGENT> -- <COMMAND>` as the low-level escape hatch for scripts, unusual agent CLIs, or identities that should not be derived from the current branch. For daily Codex and Claude launches, prefer `wt codex`, `wt codex @planner`, `wt claude`, or `wt claude @reviewer`."
+        long_about = "Run any command with an explicit WT_AGENT_ID, and clear removed legacy coordinator routing env before the child process starts.\n\nUse `wt as <AGENT> -- <COMMAND>` as the low-level escape hatch for scripts, unusual agent CLIs, or identities that should not be derived from the current branch. For daily Codex and Claude launches, prefer `wt codex`, `wt codex @planner`, `wt claude`, or `wt claude @reviewer`."
     )]
     As {
         /// Agent id as NAME or agents/NAME
@@ -288,16 +299,25 @@ pub enum Commands {
     },
     /// Start a read-only personal state web UI
     #[command(
-        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <git-common-dir>/wt ideas, spec-local and cross-work retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
+        long_about = "Start a read-only personal wt state web UI. The server binds to 127.0.0.1, prints the local URL, and opens it in the default browser unless --quiet is set. It serves embedded no-build assets and exposes only allowlisted routes including GET /api/snapshot for <repo-root>/.wt ideas, spec-local and cross-work retrospectives, TaskDocuments, Workflows, TaskRuns, profiles, and effective config summaries."
     )]
     Ui {
         /// Port to bind on 127.0.0.1; 0 selects an available port
         #[arg(long, default_value_t = 0, value_name = "PORT")]
         port: u16,
     },
+    /// Start the write-capable authoring web surface
+    #[command(
+        long_about = "Start the write-capable wt studio authoring surface. The server binds only to 127.0.0.1, prints a one-time /auth URL, and opens it in the default browser unless --quiet is set. Studio serves a Vite-built Preact frontend embedded in the wt binary. API routes require the session cookie and a matching Origin header; this first skeleton exposes only GET /api/ping and does not add mutation routes."
+    )]
+    Studio {
+        /// Port to bind on 127.0.0.1; 0 selects an available port
+        #[arg(long, default_value_t = 0, value_name = "PORT")]
+        port: u16,
+    },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
-        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <git-common-dir>/wt/messages/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to <agent> <message>` for scriptable direct/default-scope sends, or add `--scope workflow:<id>` for workflow-owned coordinator reports. The short target `coordinator` resolves from WT_COORDINATOR_AGENT_ID. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use `wt msg check-inbox --silent` from agent hooks so the WT_AGENT_ID inbox is checked; `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
+        long_about = "Send, deliver, observe, and inspect file-based agent inbox messages stored under <repo-root>/.wt/runtime/agents/<agent>/inbox/<state>.\n\nUse `wt msg send --to agents/<agent> <message>` as a low-level explicit inbox write. Task completion should use `wt task report <message>`, which derives direct or workflow scope from the current TaskRun; coordinator feedback should use `wt task review <task-run-id> --accept|--reject|--block <message>`, which sends task_run:<id> scope to the recorded task agent. Use `wt msg list --agent <agent>` and `wt msg read --agent <agent> <message-id>` for read-only lifecycle inspection. Use `wt msg watch --agent <agent> --timeout 300` to observe one agent's inbox/new without claiming messages; omitted --agent falls back to WT_AGENT_ID. `wt msg check-inbox --silent` is an internal hook consumer for the implicit inbox resolved from WT_AGENT_ID, then the current live identity anchor; missing both exits successfully with no output. `--silent` makes the command exit 0 quietly when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup), so a globally installed hook never blocks the agent. Pass `--agent <agent>` only as an explicit single-inbox override. Deliverable direct-scope messages and authorized workflow/task_run scoped messages from inbox/new or eligible inbox/retry are claimed, emitted as hook-compatible JSON, then acknowledged into inbox/delivered after stdout is written."
     )]
     Msg {
         #[command(subcommand)]
@@ -322,19 +342,19 @@ pub enum Commands {
     },
     /// Check configured providers and required local tools
     Doctor {
-        /// Run checks against the effective config for <git-common-dir>/wt/profiles/<name>
+        /// Run checks against the effective config for <repo-root>/.wt/config/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
-        /// Delete one env-keyed session marker by display key, for example surface:A22D...
-        #[arg(long, value_name = "KEY")]
-        prune_env_markers: Option<String>,
+        /// Delete one env-keyed identity anchor by display key, for example surface:A22D...
+        #[arg(long = "prune-env-anchors", value_name = "KEY")]
+        prune_env_anchors: Option<String>,
     },
     /// Print, edit, or refactor wt config files
     #[command(
-        long_about = "Print, edit, or refactor wt config files. Shared repo config is .wt.toml; private repo config is <git-common-dir>/wt/config.toml; named profile config is <git-common-dir>/wt/profiles/<name>/profile.toml."
+        long_about = "Print, edit, or refactor wt config files. Shared repo config is .wt.toml; private repo config is <repo-root>/.wt/config/local.toml; named profile config is <repo-root>/.wt/config/profiles/<name>/profile.toml."
     )]
     Config {
-        /// Show effective config using <git-common-dir>/wt/profiles/<name>
+        /// Show effective config using <repo-root>/.wt/config/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         #[command(subcommand)]
@@ -342,13 +362,16 @@ pub enum Commands {
     },
     /// List or manage named profile configs
     #[command(
-        long_about = "List or manage named profile configs stored under <git-common-dir>/wt/profiles/<name>/profile.toml. Bare `wt profile` is an omission-default that runs `wt profile list`; the canonical inventory surface is the explicit `wt profile list` subcommand. Use `wt profile create <name>` to scaffold a new profile."
+        long_about = "List or manage named profile configs stored under <repo-root>/.wt/config/profiles/<name>/profile.toml. Bare `wt profile` is an omission-default that runs `wt profile list`; the canonical inventory surface is the explicit `wt profile list` subcommand. Use `wt profile create <name>` to scaffold a new profile."
     )]
     Profile {
         #[command(subcommand)]
         command: Option<ProfileCommand>,
     },
     /// 이 저장소에 맞는 config 추천 wizard 시작
+    #[command(
+        long_about = "Start a project-specific config recommendation wizard and bootstrap repo-local wt storage.\n\n`wt init` prepares the current repository: it writes one selected config file, prepares the canonical <repo-root>/.wt/ personal state directory path when applying changes, and records the clone-local `/.wt` ignore line in git info/exclude. An existing `.wt` symlink to a directory is accepted. Use --dry-run to preview without writing files."
+    )]
     Init {
         /// 개인 설정 파일에 쓰기
         #[arg(long, conflicts_with = "shared")]
@@ -392,30 +415,16 @@ pub enum Commands {
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq)]
-pub enum CoordCommand {
-    /// Print exports for using this shell as a coordinator
-    #[command(
-        long_about = "Print shell exports for using this shell as a coordinator.\n\nUse `eval \"$(wt coord use <id>)\"` once per coordinator session, for example `eval \"$(wt coord use my-coord)\"`.\n\n`wt shell-init <shell>` provides a shell function wrapper so users can run `wt-coord-use my-coord` directly."
-    )]
-    Use {
-        /// Coordinator agent id as NAME or agents/NAME
-        id: String,
-    },
-    /// Print unsets for clearing the coordinator identity
-    Exit,
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq)]
 pub enum SessionCommand {
-    /// Write a session identity marker and print shell exports
+    /// Write a session identity anchor and print shell exports
     #[command(
-        long_about = "Write a session identity marker for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set my-coord)\"`, so the current shell gets WT_AGENT_ID and WT_COORDINATOR_AGENT_ID immediately while later wt invocations from the same anchor can resolve the marker."
+        long_about = "Write a session identity anchor for the current terminal or agent-session anchor and print shell exports.\n\nUse `eval \"$(wt session set <id>)\"`, for example `eval \"$(wt session set my-coord)\"`, so the current shell gets WT_AGENT_ID immediately while later wt invocations from the same anchor can resolve the identity anchor."
     )]
     Set {
         /// Agent id as NAME or agents/NAME
         id: String,
     },
-    /// Remove the current session identity marker and print shell unsets
+    /// Remove the current session identity anchor and print shell unsets
     Unset,
     /// Print the current session identity resolution
     Whoami {
@@ -453,7 +462,7 @@ pub enum ConfigCommand {
 pub enum ProfileCommand {
     /// List named profile configs
     #[command(
-        long_about = "List named profile configs discovered under <git-common-dir>/wt/profiles/<name>/profile.toml. Profiles are listed in deterministic name order with their copy, link, and agent summary. Invalid profile records are surfaced as warnings in text output and as `invalid_profiles` entries in JSON output rather than being silently hidden. The reserved `default` name is never shown as a valid named profile."
+        long_about = "List named profile configs discovered under <repo-root>/.wt/config/profiles/<name>/profile.toml. Profiles are listed in deterministic name order with their copy, link, and agent summary. Invalid profile records are surfaced as warnings in text output and as `invalid_profiles` entries in JSON output rather than being silently hidden. The reserved `default` name is never shown as a valid named profile."
     )]
     List,
     /// Create a named profile scaffold
@@ -475,7 +484,7 @@ pub enum AgentCommand {
     },
     /// Poll a task agent's runtime state until it is no longer running, becomes blocked, or reaches a bound
     #[command(
-        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. When --timeout or --heartbeat emits a non-idle sample, wt agent watch appends it to the local <git-common-dir>/wt/agent.state/wait-observations.jsonl file. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
+        long_about = "Poll a task agent's runtime state from the matching cmux surface. Prints compact state transitions and exits with the agent observation exit-code contract. Use --timeout to stop waiting after a bounded number of seconds, and --heartbeat to print unchanged running observations at an explicit interval. When --timeout or --heartbeat emits a non-idle sample and the runtime AgentId is known, wt agent watch appends it to <repo-root>/.wt/runtime/agents/<agent>/observations/wait-observations.jsonl. Omit TARGET in an interactive terminal to choose an observable work target; pass TARGET explicitly for scripts, --json, --quiet, and non-interactive use."
     )]
     Watch {
         /// Branch, worktree path/name, or TaskRun id to watch
@@ -497,12 +506,12 @@ pub enum AgentCommand {
     },
     /// Summarize recorded non-idle wait observations
     #[command(
-        long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch` when heartbeat or timeout samples are emitted. This is read-only: it summarizes <git-common-dir>/wt/agent.state/wait-observations.jsonl with count, sum, average, min, max, bucket, and low-cardinality group data; it does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
+        long_about = "Read a local summary of non-idle wait observations recorded by `wt agent watch` when heartbeat or timeout samples are emitted. This is read-only: it summarizes <repo-root>/.wt/runtime/agents/<agent>/observations/wait-observations.jsonl files with count, sum, average, min, max, bucket, and low-cardinality group data; it does not observe agents, contact cmux, mutate TaskRuns, or infer new watch defaults."
     )]
     WaitStats,
     /// Manage opt-in supervisors for agent inbox stale-rescue
     #[command(
-        long_about = "Manage opt-in supervisors for agent inbox stale-rescue.\n\nA supervisor is default-off Layer 3 insurance for one agent identity. It records a local registration under <git-common-dir>/wt/supervisors/ and only intervenes after an inbox/new message has aged past --stale-threshold. Supervisors started with --surface run inside an unfocused cmux surface in the target pane so cmux push delivery stays attached to cmux without creating another workspace; supervisors without --surface use the detached process path. No wt verb starts a supervisor implicitly."
+        long_about = "Manage opt-in supervisors for agent inbox stale-rescue.\n\nA supervisor is default-off Layer 3 insurance for one agent identity. It records local state under <repo-root>/.wt/runtime/agents/<agent>/supervisor.toml and supervisor.log, and only intervenes after an inbox/new message has aged past --stale-threshold. Supervisors started with --surface run inside an unfocused cmux surface in the target pane so cmux push delivery stays attached to cmux without creating another workspace; supervisors without --surface use the detached process path. No wt verb starts a supervisor implicitly."
     )]
     Supervisor {
         #[command(subcommand)]
@@ -605,10 +614,10 @@ pub enum AgentSupervisorCommand {
 pub enum MsgCommand {
     /// Write one message to an agent inbox
     #[command(
-        long_about = "Write one message to an agent inbox.\n\nUnscoped sends use the direct/default scope. Use `--scope workflow:<id>` for workflow-owned coordinator reports, `--scope task_run:<id>` for TaskRun-owned delivery, or `--scope repo` for repo-local singleton delivery."
+        long_about = "Write one message to an explicit agent inbox.\n\nUnscoped sends use the direct/default scope. Prefer `wt task report <message>` for TaskRun completion reports and `wt task review <task-run-id> --accept|--reject|--block <message>` for coordinator review feedback; use explicit `--scope workflow:<id>`, `--scope task_run:<id>`, or `--scope repo` only as low-level escape hatches."
     )]
     Send {
-        /// Target agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
+        /// Target agent id as NAME or agents/NAME
         #[arg(long)]
         to: String,
         /// Message ownership scope: direct, repo, workflow:<id>, or task_run:<id>
@@ -626,33 +635,37 @@ pub enum MsgCommand {
     },
     /// List lifecycle messages for one agent inbox without claiming them
     List {
-        /// Agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
+        /// Agent id as NAME or agents/NAME
         #[arg(long)]
         agent: String,
     },
     /// Read one lifecycle message by id without changing delivery state
     Read {
-        /// Agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID
+        /// Agent id as NAME or agents/NAME
         #[arg(long)]
         agent: String,
         /// Message id without the .toml extension
         message_id: String,
     },
     /// Claim deliverable inbox messages, emit hook JSON, and acknowledge delivery
+    #[command(hide = true)]
     CheckInbox {
-        /// Explicit single agent id as NAME or agents/NAME; coordinator resolves from WT_COORDINATOR_AGENT_ID; omitted uses WT_AGENT_ID
+        /// Explicit single agent id as NAME or agents/NAME; omitted uses WT_AGENT_ID, then the current live identity anchor
         #[arg(long)]
         agent: Option<String>,
+        /// Internal hook event name supplied by wt-managed hook templates; omitted preserves the compatible UserPromptSubmit default
+        #[arg(long, hide = true)]
+        hook_event_name: Option<String>,
         /// Hook mode: exit 0 silently when wt context cannot load (non-git CWD, legacy `.local/.wt.toml`, missing setup). Intended for agent hooks installed globally; direct CLI use should omit this flag.
         #[arg(long)]
         silent: bool,
     },
     /// Observe pending or newly-arriving inbox/new messages without claiming them
     #[command(
-        long_about = "Observe pending or newly-arriving inbox/new messages for one agent without claiming, moving, or acknowledging them.\n\n`wt msg watch` arms a filesystem watcher, drains existing .toml messages in mtime order, and exits after emitting pending messages, one new arrival, or a timeout. Omitted --agent resolves from WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID. Use --json for newline-delimited JSON rows with the same fields as `wt msg list --json` message records. Use `wt msg list` for a snapshot instead of --timeout 0."
+        long_about = "Observe pending or newly-arriving inbox/new messages for one agent without claiming, moving, or acknowledging them.\n\n`wt msg watch` arms a filesystem watcher, drains existing .toml messages in mtime order, and exits after emitting pending messages, one new arrival, or a timeout. Omitted --agent falls back to WT_AGENT_ID. Use --json for newline-delimited JSON rows with the same fields as `wt msg list --json` message records. Use `wt msg list` for a snapshot instead of --timeout 0."
     )]
     Watch {
-        /// Explicit single agent id as NAME or agents/NAME; omitted tries WT_COORDINATOR_AGENT_ID, then WT_AGENT_ID
+        /// Explicit single agent id as NAME or agents/NAME; omitted uses WT_AGENT_ID
         #[arg(long)]
         agent: Option<String>,
         /// Maximum seconds to wait for a new inbox/new message; must be greater than 0
@@ -681,7 +694,7 @@ pub enum RunCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Create a profiled issue worktree from <git-common-dir>/wt/profiles/<name>
+        /// Create a profiled issue worktree from <repo-root>/.wt/config/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         /// Start one workspace for each named profile
@@ -696,7 +709,7 @@ pub enum RunCommand {
         /// Pull request numbers (omit to select multiple open PRs)
         #[arg(value_name = "PR")]
         numbers: Vec<u32>,
-        /// Apply config from <git-common-dir>/wt/profiles/<name> to the PR worktree
+        /// Apply config from <repo-root>/.wt/config/profiles/<name> to the PR worktree
         #[arg(long)]
         profile: Option<String>,
         /// Maximum number of pull requests to execute concurrently
@@ -714,7 +727,7 @@ pub enum RunCommand {
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Create a profiled branch worktree from <git-common-dir>/wt/profiles/<name>
+        /// Create a profiled branch worktree from <repo-root>/.wt/config/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         /// Start one workspace for each named profile
@@ -723,16 +736,16 @@ pub enum RunCommand {
     },
     /// Start one worktree per selected local TaskDocument
     #[command(
-        long_about = "Start one worktree per selected <git-common-dir>/wt/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun in <git-common-dir>/wt/task-runs.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt includes a Task Run Coordinator Handoff with coordinator inbox target `coordinator` and fallback cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
+        long_about = "Start one worktree per selected <repo-root>/.wt/execution/tasks/<task>.toml TaskDocument and record each attempt as a direct TaskRun in <repo-root>/.wt/execution/task-runs.\n\nPass explicit task keys for scripts. Omit task keys to choose local TaskDocuments interactively.\n\nEvery started task prompt leads with `wt task report \"Agent Completion Report: ...\"` and includes fallback cmux send coordinates. Task-run agents report PR=none and wait for the coordinator to review, land, and clean up explicitly.\n\nUse `wt workflow task --mode batch` and `wt run workflow` when multiple independent TaskDocuments need saved batch coordination. Use `wt workflow task --mode single` and `wt run workflow` when multiple TaskDocuments should share one workspace."
     )]
     Task {
-        /// Local task keys from <git-common-dir>/wt/tasks/<task>.toml
+        /// Local task keys from <repo-root>/.wt/execution/tasks/<task>.toml
         #[arg(value_name = "TASK")]
         tasks: Vec<String>,
         /// Base branch: --base (interactive), --base . (current), --base main (explicit)
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         base: Option<String>,
-        /// Create a profiled task worktree from <git-common-dir>/wt/profiles/<name>
+        /// Create a profiled task worktree from <repo-root>/.wt/config/profiles/<name>
         #[arg(long)]
         profile: Option<String>,
         /// Maximum number of local tasks to execute concurrently
@@ -741,7 +754,7 @@ pub enum RunCommand {
     },
     /// Start runnable tasks from a saved workflow
     #[command(
-        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts. In non-interactive shells, pass WORKFLOW explicitly.\n\nThis does not list, edit, repair, or complete workflow files; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff with a scoped coordinator inbox target using `wt msg send --scope workflow:<id> --to coordinator` and fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow complete ...` command. Stack prompts include `--run-next`."
+        long_about = "Start runnable tasks from a saved workflow.\n\nOmit WORKFLOW to choose from runnable workflows. A runnable workflow has prepared or failed TaskRuns that can still be started: single mode requires all linked TaskRuns to be prepared or failed, batch mode requires at least one prepared or failed task, and stack mode requires a next prepared or failed task with no running task. Passing WORKFLOW accepts a TOML path or shorthand id for scripts. In non-interactive shells, pass WORKFLOW explicitly.\n\nThis does not list, edit, repair, or pass workflow tasks; those lifecycle actions stay under `wt workflow`.\n\nEvery started task prompt includes a Workflow Coordinator Handoff using `wt task report \"Agent Completion Report: ...\"` with workflow scope derived from the TaskRun, plus fallback cmux send coordinates. All workflow modes use the prepared [policy].pull_request value for PR reporting and pull-request creation and include their `wt workflow pass ...` command. Stack prompts include `--run-next`."
     )]
     Workflow {
         /// Workflow TOML path or shorthand id (omit to select a runnable workflow)
@@ -781,16 +794,16 @@ pub enum InitSiteProvider {
 pub enum TaskCommand {
     /// List actionable local TaskDocument files
     #[command(
-        long_about = "List actionable <git-common-dir>/wt/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is done or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nEach mode reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
+        long_about = "List actionable <repo-root>/.wt/execution/tasks/<task>.toml TaskDocument files by default.\n\nThe default working set uses the same selectability rules as wt run task: tasks with no TaskRun, or whose latest TaskRun status is prepared, failed, or skipped. Tasks whose latest TaskRun status is passed or running are hidden with a count hint. Use --all to show the full read-only TaskDocument inventory.\n\nEach mode reports invalid TaskDocument TOML files instead of hiding them, and does not start workspaces, create local branches, create TaskRuns, prepare workflows, publish provider issues, open pull requests, or run agent setup."
     )]
     List {
-        /// Show the full TaskDocument inventory, including done and running tasks
+        /// Show the full TaskDocument inventory, including passed and running tasks
         #[arg(long)]
         all: bool,
     },
     /// Import provider issues as local TaskDocuments
     #[command(
-        long_about = "Import existing provider issues into <git-common-dir>/wt/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
+        long_about = "Import existing provider issues into <repo-root>/.wt/execution/tasks/<safe-issue-id>.toml TaskDocuments, materialize the provider issue branch when needed, and write title, branch, body, and [origin] with the configured provider and issue id. This command does not start workspaces, create local branches, create TaskRuns, prepare workflows, open pull requests, or run agent setup.\n\nFor GitHub, materializing a missing provider issue branch may call gh issue develop. Import fails instead of writing a TaskDocument with an empty branch.\n\nPass explicit issue ids for scripts. Omit issue ids to choose provider issues interactively.\n\nFails before writing when no issue provider is configured, duplicate issue ids are passed, or an imported issue would overwrite an existing local TaskDocument."
     )]
     Import {
         /// Provider issue ids to import
@@ -809,12 +822,43 @@ pub enum TaskCommand {
     },
     /// Publish local TaskDocuments as provider issues
     #[command(
-        long_about = "Create provider issues from selected <git-common-dir>/wt/tasks/<task>.toml files, then write [origin] with the configured provider and created issue id. This command does not start workspaces, create TaskRuns, or run workflow work.\n\nAfter [origin] is written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, or the task has an empty title."
+        long_about = "Create provider issues from selected <repo-root>/.wt/execution/tasks/<task>.toml files, then rewrite branch to a provider-keyed branch and write [origin] with the configured provider and created issue id. This command does not start workspaces, create local branches, create TaskRuns, or run workflow work.\n\nAfter branch and [origin] are written, later wt run task and wt run workflow treat that TaskDocument as provider-origin issue work.\n\nPass explicit task keys for scripts. Omit task keys to choose unprocessed local TaskDocuments interactively; tasks that already have [origin] are excluded from that selector.\n\nFails before creating an issue for an explicit task when no issue provider is configured, the task is missing or invalid, the task already has origin, the task has an empty title, or rewriting the old branch would be unsafe because it already has a TaskRun, checked-out worktree, local branch, or remote branch."
     )]
     Publish {
-        /// Local task keys from <git-common-dir>/wt/tasks/<task>.toml
+        /// Local task keys from <repo-root>/.wt/execution/tasks/<task>.toml
         #[arg(value_name = "TASK")]
         tasks: Vec<String>,
+    },
+    /// Send the current TaskRun completion report to its recorded coordinator
+    #[command(
+        long_about = "Send a report from the current TaskRun to the coordinator recorded on that TaskRun.\n\nThe normal task-agent path is `wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=none; Risks or follow-ups=<risks>\"`. When WT_TASK_RUN_ID is set, wt uses that exact TaskRun when it is running or passed. Without WT_TASK_RUN_ID, wt may fall back to the current branch only when exactly one running or passed TaskRun matches. Workflow-linked TaskRuns use their workflow scope automatically. Reports are sent through the file inbox and update TaskRun report metadata."
+    )]
+    Report {
+        /// Report message to send
+        #[arg(value_name = "MESSAGE", num_args = 1..)]
+        message: Vec<String>,
+    },
+    /// Send coordinator review feedback to a TaskRun agent
+    #[command(
+        long_about = "Send coordinator review feedback to the task agent recorded on a TaskRun.\n\nUse `wt task review <task-run-id> --accept <message>` to accept a report, `--reject` to request changes, or `--block` when the task cannot proceed. Feedback is sent through the file inbox to TaskRun.agent_id with task_run:<id> scope and updates TaskRun review metadata. Rejecting or blocking a passed TaskRun reopens it to running; accepting records metadata only and does not pass a running TaskRun.",
+        group(ArgGroup::new("review_status").required(true).args(["accept", "reject", "block"]))
+    )]
+    Review {
+        /// TaskRun id to review
+        #[arg(value_name = "TASK_RUN_ID")]
+        task_run_id: String,
+        /// Accept the TaskRun report
+        #[arg(long)]
+        accept: bool,
+        /// Reject the TaskRun report and ask for changes
+        #[arg(long)]
+        reject: bool,
+        /// Block the TaskRun on missing input or external state
+        #[arg(long)]
+        block: bool,
+        /// Review feedback message to send
+        #[arg(value_name = "MESSAGE", num_args = 1..)]
+        message: Vec<String>,
     },
 }
 
@@ -822,15 +866,15 @@ pub enum TaskCommand {
 pub enum WorkflowCommand {
     /// List saved workflow files
     #[command(
-        long_about = "List all saved <git-common-dir>/wt/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and done, with indented rows and secondary detail lines."
+        long_about = "List all saved <repo-root>/.wt/execution/workflows/<id>.toml Workflow files.\n\nThis is the canonical read-only inventory for saved workflows. It lists valid Workflow files whether or not they are currently runnable, reports invalid workflow TOML files instead of hiding them, and exposes runnable as derived metadata from linked TaskRuns. Human text output groups workflows under derived action labels such as runnable, waiting, and passed, with indented rows and secondary detail lines."
     )]
     List,
-    /// Move completed workflow state into the frozen archive
+    /// Move passed workflow state into the frozen archive
     #[command(
-        long_about = "Move a completed Workflow out of the active surface into <git-common-dir>/wt/archive/workflows/<workflow-id>/.\n\nArchive is a visibility and retention action: wt workflow list, wt task list, and wt ui stop showing the archived workflow because active inventory reads only typed active directories. It is not a substitute for landing, merge checks, wt workflow complete, or wt done. Only workflows whose linked TaskRuns are done or skipped can be archived."
+        long_about = "Move a passed Workflow out of the active surface into <repo-root>/.wt/execution/archive/workflows/<workflow-id>/.\n\nArchive is a visibility and retention action: wt workflow list, wt task list, and wt ui stop showing the archived workflow because active inventory reads only typed active directories. It is not a substitute for landing, merge checks, wt workflow pass, or wt done. Only workflows whose linked TaskRuns are passed or skipped can be archived."
     )]
     Archive {
-        /// Workflow key under <git-common-dir>/wt/workflows/<workflow>.toml
+        /// Workflow key under <repo-root>/.wt/execution/workflows/<workflow>.toml
         workflow: String,
     },
     /// Prepare local tasks as a workflow file without starting workspaces
@@ -843,7 +887,7 @@ pub enum WorkflowCommand {
         /// Workflow execution shape
         #[arg(long, value_enum)]
         mode: WorkflowModeArg,
-        /// Named profile from <git-common-dir>/wt/profiles/<name> for all tasks
+        /// Named profile from <repo-root>/.wt/config/profiles/<name> for all tasks
         #[arg(long, conflicts_with = "profiles")]
         profile: Option<String>,
         /// With --mode matrix, selected named profiles to run in order
@@ -881,7 +925,7 @@ pub enum WorkflowCommand {
         /// Workflow execution shape
         #[arg(long, value_enum)]
         mode: WorkflowModeArg,
-        /// Named profile from <git-common-dir>/wt/profiles/<name> for all tasks
+        /// Named profile from <repo-root>/.wt/config/profiles/<name> for all tasks
         #[arg(long)]
         profile: Option<String>,
         /// Short workflow title for list, select, and show surfaces
@@ -937,13 +981,24 @@ pub enum WorkflowCommand {
         #[arg(long)]
         apply: bool,
     },
-    /// Mark running workflow task runs as complete
+    /// Mark running workflow TaskRuns passed
+    Pass {
+        /// Workflow TOML path or shorthand id
+        workflow: String,
+        /// Running workflow task identifier to pass
+        task: Option<String>,
+        /// Start the next stack-mode workflow task after marking this one passed
+        #[arg(long)]
+        run_next: bool,
+    },
+    /// Legacy migration surface for wt workflow pass
+    #[command(hide = true)]
     Complete {
         /// Workflow TOML path or shorthand id
         workflow: String,
-        /// Running workflow task identifier to complete
+        /// Running workflow task identifier to pass
         task: Option<String>,
-        /// Start the next stack-mode workflow task after marking this one complete
+        /// Start the next stack-mode workflow task after marking this one passed
         #[arg(long)]
         run_next: bool,
     },
@@ -1040,6 +1095,9 @@ mod tests {
             .find(&start_marker)
             .unwrap_or_else(|| panic!("missing heading {heading}"))
             + start_marker.len();
+        if next_heading.is_empty() {
+            return &help[start..];
+        }
         let end_marker = format!("\n\n{next_heading}:\n");
         let end = help[start..]
             .find(&end_marker)
@@ -1108,7 +1166,7 @@ mod tests {
             cli.command,
             Some(Commands::Doctor {
                 profile: None,
-                prune_env_markers: None
+                prune_env_anchors: None
             })
         ));
     }
@@ -1121,7 +1179,7 @@ mod tests {
             cli.command,
             Some(Commands::Doctor {
                 profile: None,
-                prune_env_markers: None
+                prune_env_anchors: None
             })
         ));
     }
@@ -1472,7 +1530,9 @@ mod tests {
         assert!(help.contains("--timeout"));
         assert!(help.contains("--heartbeat"));
         assert!(!help.contains("--record-wait-observations"));
-        assert!(help.contains("<git-common-dir>/wt/agent.state/wait-observations.jsonl"));
+        assert!(help.contains(
+            "<repo-root>/.wt/runtime/agents/<agent>/observations/wait-observations.jsonl"
+        ));
         assert!(help.contains("When --timeout or --heartbeat emits a non-idle sample"));
         assert!(help.contains("unchanged running observations"));
         assert!(help.contains("Omit TARGET in an interactive terminal"));
@@ -1491,7 +1551,9 @@ mod tests {
 
         assert!(help.contains("non-idle wait observations"));
         assert!(help.contains("read-only"));
-        assert!(help.contains("<git-common-dir>/wt/agent.state/wait-observations.jsonl"));
+        assert!(help.contains(
+            "<repo-root>/.wt/runtime/agents/<agent>/observations/wait-observations.jsonl"
+        ));
         assert!(help.contains("does not observe agents"));
         assert!(help.contains("mutate TaskRuns"));
     }
@@ -1667,7 +1729,7 @@ mod tests {
             .to_string();
 
         assert!(help.contains("Import existing provider issues"));
-        assert!(help.contains("<git-common-dir>/wt/tasks/<safe-issue-id>.toml"));
+        assert!(help.contains("<repo-root>/.wt/execution/tasks/<safe-issue-id>.toml"));
         assert!(help.contains("write title, branch, body, and [origin]"));
         assert!(help.contains("does not start workspaces"));
         assert!(help.contains("create local branches"));
@@ -1735,7 +1797,9 @@ mod tests {
 
         assert!(help.contains("provider issue"));
         assert!(help.contains("write [origin]"));
+        assert!(help.contains("rewrite branch to a provider-keyed branch"));
         assert!(help.contains("does not start workspaces"));
+        assert!(help.contains("create local branches"));
         assert!(help.contains("later wt run task and wt run workflow"));
         assert!(help.contains("Omit task keys to choose unprocessed local TaskDocuments"));
         assert!(help.contains("tasks that already have [origin] are excluded"));
@@ -1743,6 +1807,7 @@ mod tests {
         assert!(!help.contains("--batch <BATCH>"));
         assert!(help.contains("no issue provider"));
         assert!(help.contains("already has origin"));
+        assert!(help.contains("checked-out worktree"));
     }
 
     #[test]
@@ -1898,8 +1963,8 @@ mod tests {
         assert!(help.contains("one worktree per selected"));
         assert!(help.contains("direct TaskRun"));
         assert!(help.contains("Omit task keys"));
-        assert!(help.contains("Task Run Coordinator Handoff"));
-        assert!(help.contains("coordinator inbox target `coordinator`"));
+        assert!(help.contains("wt task report"));
+        assert!(help.contains("Agent Completion Report"));
         assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("Task-run agents report PR=none"));
         assert!(help.contains("wt workflow task --mode batch"));
@@ -2128,6 +2193,28 @@ mod tests {
     }
 
     #[test]
+    fn workflow_pass_accepts_task_and_run_next() {
+        let cli = parse(&[
+            "wt",
+            "workflow",
+            "pass",
+            "2026-05-17-002",
+            "add-schema",
+            "--run-next",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Workflow {
+                command: WorkflowCommand::Pass {
+                    ref workflow,
+                    ref task,
+                    run_next: true,
+                }
+            }) if workflow == "2026-05-17-002" && task.as_deref() == Some("add-schema")
+        ));
+    }
+
+    #[test]
     fn workflow_repair_help_describes_preview_first_contract() {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
@@ -2145,13 +2232,13 @@ mod tests {
         let workflow = run.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_long_help().to_string();
         assert!(help.contains("saved workflow"));
-        assert!(help.contains("does not list, edit, repair, or complete workflow files"));
+        assert!(help.contains("does not list, edit, repair, or pass workflow tasks"));
         assert!(help.contains("Workflow Coordinator Handoff"));
-        assert!(help.contains("scoped coordinator inbox target"));
-        assert!(help.contains("wt msg send --scope workflow:<id> --to coordinator"));
+        assert!(help.contains("wt task report"));
+        assert!(help.contains("workflow scope derived from the TaskRun"));
         assert!(help.contains("fallback cmux send coordinates"));
         assert!(help.contains("prepared [policy].pull_request"));
-        assert!(help.contains("wt workflow complete"));
+        assert!(help.contains("wt workflow pass"));
     }
 
     #[test]
@@ -2191,15 +2278,14 @@ mod tests {
         let mut command = Cli::command();
         let workflow = command.find_subcommand_mut("workflow").unwrap();
         let help = workflow.render_help().to_string();
-        assert!(
-            help.contains("Prepare, inspect, edit, repair, archive, or complete workflow tasks")
-        );
+        assert!(help.contains("Prepare, inspect, edit, repair, archive, or pass workflow tasks"));
         assert!(!help.contains("Start runnable tasks from a workflow"));
         assert!(help.contains("archive"));
         assert!(help.contains("repair"));
         assert!(help.contains("task"));
         assert!(help.contains("issue"));
-        assert!(help.contains("complete"));
+        assert!(help.contains("pass"));
+        assert!(!help.contains("complete"));
     }
 
     #[test]
@@ -2363,39 +2449,78 @@ mod tests {
     fn root_help_prioritizes_common_commands() {
         let help = Cli::command().render_long_help().to_string();
 
-        for heading in ["Common:", "Prepared Work:", "Setup:", "Explore:"] {
+        for heading in [
+            "Start Work:",
+            "Manage Work:",
+            "Prepare:",
+            "Coordinate Agents:",
+            "Run Agents:",
+            "Setup:",
+            "Tools:",
+            "Examples:",
+        ] {
             assert!(help.contains(heading), "missing heading {heading}");
         }
         assert!(!help.contains("\nCommands:\n"));
 
-        let common = root_help_section(&help, "Common", "Prepared Work");
-        for command in ["run", "open", "list", "inspect", "done"] {
-            assert_section_contains_command(common, command);
+        let start_work = root_help_section(&help, "Start Work", "Manage Work");
+        for command in [
+            "run issue",
+            "run pr",
+            "run branch",
+            "run task",
+            "run workflow",
+        ] {
+            assert_section_contains_command(start_work, command);
         }
-        assert!(!common.contains("\n  ui"));
 
-        let prepared_work = root_help_section(&help, "Prepared Work", "Setup");
-        for command in ["task", "workflow"] {
-            assert_section_contains_command(prepared_work, command);
+        let manage_work = root_help_section(&help, "Manage Work", "Prepare");
+        for command in ["open", "list", "inspect", "done"] {
+            assert_section_contains_command(manage_work, command);
         }
-        assert!(!prepared_work.contains("\n  scaffold"));
+        assert!(!manage_work.contains("\n  ui"));
 
-        let setup = root_help_section(&help, "Setup", "Explore");
-        for command in ["init", "config", "setup", "doctor"] {
+        let prepare = root_help_section(&help, "Prepare", "Coordinate Agents");
+        for command in ["scaffold", "task", "workflow"] {
+            assert_section_contains_command(prepare, command);
+        }
+
+        let coordinate_agents = root_help_section(&help, "Coordinate Agents", "Run Agents");
+        for command in ["agent", "msg", "send", "session"] {
+            assert_section_contains_command(coordinate_agents, command);
+        }
+
+        let run_agents = root_help_section(&help, "Run Agents", "Setup");
+        for command in ["codex", "claude", "as"] {
+            assert_section_contains_command(run_agents, command);
+        }
+
+        let setup = root_help_section(&help, "Setup", "Tools");
+        for command in ["init", "config", "profile", "setup", "doctor"] {
             assert_section_contains_command(setup, command);
         }
-        assert!(!setup.contains("\n  profile"));
         assert!(!setup.contains("\n  shell-init"));
 
-        let explore = root_help_section(&help, "Explore", "Options");
+        let tools = root_help_section(&help, "Tools", "Options");
         for command in [
-            "wt run -h",
-            "wt task -h",
-            "wt workflow -h",
-            "wt agent -h",
-            "wt msg -h",
+            "ui",
+            "studio",
+            "site",
+            "shell-init",
+            "completion",
+            "version",
         ] {
-            assert!(explore.contains(command), "missing explore hint {command}");
+            assert_section_contains_command(tools, command);
+        }
+
+        let examples = root_help_section(&help, "Examples", "");
+        for command in [
+            "wt run issue",
+            "wt run pr",
+            "wt run workflow",
+            "wt help <cmd>",
+        ] {
+            assert!(examples.contains(command), "missing example {command}");
         }
     }
 
@@ -2483,7 +2608,7 @@ mod tests {
             cli.command,
             Some(Commands::Doctor {
                 profile: None,
-                prune_env_markers: None
+                prune_env_anchors: None
             })
         ));
     }
@@ -2495,19 +2620,19 @@ mod tests {
             cli.command,
             Some(Commands::Doctor {
                 profile: Some(ref profile),
-                prune_env_markers: None,
+                prune_env_anchors: None,
             }) if profile == "codex"
         ));
     }
 
     #[test]
-    fn doctor_accepts_prune_env_markers_flag() {
-        let cli = parse(&["wt", "doctor", "--prune-env-markers", "surface:A22D"]);
+    fn doctor_accepts_prune_env_anchors_flag() {
+        let cli = parse(&["wt", "doctor", "--prune-env-anchors", "surface:A22D"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Doctor {
                 profile: None,
-                prune_env_markers: Some(ref key),
+                prune_env_anchors: Some(ref key),
             }) if key == "surface:A22D"
         ));
     }
@@ -2538,25 +2663,25 @@ mod tests {
 
     #[test]
     fn config_edit_accepts_optional_source() {
-        let cli = parse(&["wt", "config", "edit", ".git/wt/config.toml"]);
+        let cli = parse(&["wt", "config", "edit", ".wt/config/local.toml"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
                 profile: None,
                 command: Some(ConfigCommand::Edit { ref source }),
-            }) if source.as_deref() == Some(std::path::Path::new(".git/wt/config.toml"))
+            }) if source.as_deref() == Some(std::path::Path::new(".wt/config/local.toml"))
         ));
     }
 
     #[test]
     fn config_extract_accepts_optional_source() {
-        let cli = parse(&["wt", "config", "extract", ".git/wt/config.toml"]);
+        let cli = parse(&["wt", "config", "extract", ".wt/config/local.toml"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
                 profile: None,
                 command: Some(ConfigCommand::Extract { ref source }),
-            }) if source.as_deref() == Some(std::path::Path::new(".git/wt/config.toml"))
+            }) if source.as_deref() == Some(std::path::Path::new(".wt/config/local.toml"))
         ));
     }
 
@@ -2566,14 +2691,14 @@ mod tests {
             "wt",
             "config",
             "inline",
-            ".git/wt/profiles/codex/profile.toml",
+            ".wt/config/profiles/codex/profile.toml",
         ]);
         assert!(matches!(
             cli.command,
             Some(Commands::Config {
                 profile: None,
                 command: Some(ConfigCommand::Inline { ref source }),
-            }) if source.as_deref() == Some(std::path::Path::new(".git/wt/profiles/codex/profile.toml"))
+            }) if source.as_deref() == Some(std::path::Path::new(".wt/config/profiles/codex/profile.toml"))
         ));
     }
 
@@ -2816,8 +2941,8 @@ mod tests {
             .to_string();
 
         assert!(help.contains(".wt.toml"));
-        assert!(help.contains("<git-common-dir>/wt/config.toml"));
-        assert!(help.contains("<git-common-dir>/wt/profiles/<name>/profile.toml"));
+        assert!(help.contains("<repo-root>/.wt/config/local.toml"));
+        assert!(help.contains("<repo-root>/.wt/config/profiles/<name>/profile.toml"));
     }
 
     #[test]

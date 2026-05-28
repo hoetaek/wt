@@ -1,12 +1,13 @@
 use crate::context::{Ctx, PromptItem, PromptRow};
+use crate::storage::StorageRoot;
 use crate::task_run;
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TaskDocument {
     #[serde(default)]
@@ -19,7 +20,7 @@ pub(crate) struct TaskDocument {
     pub(crate) origin: Option<TaskOrigin>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TaskOrigin {
     pub(crate) provider: String,
@@ -93,6 +94,8 @@ impl TaskDocument {
             body: "## 계획 (Planning)\n\n\
 - 유형 (type): AFK\n\
 - 예상 소요 (expected duration): \n\
+- 예상 근거 (estimate basis): conservative planning guess\n\
+- 권장 watch cadence (suggested watch cadence): launch 45s, steady heartbeat 5-10m\n\
 - 막힘 / 의존성 (blocked by): none\n\
 - 실행 형태 (execution shape): direct\n\
 - 크기 (size class): small\n\
@@ -134,7 +137,7 @@ impl TaskDocument {
 pub(crate) fn select_local_task(ctx: &Ctx) -> Result<SelectedTask> {
     let tasks = list_local_tasks(ctx)?;
     if tasks.is_empty() {
-        bail!("No task files found in <git-common-dir>/wt/tasks");
+        bail!("No task files found in <repo-root>/.wt/execution/tasks");
     }
 
     let rows = task_selection_rows(&tasks);
@@ -148,7 +151,7 @@ pub(crate) fn select_local_task(ctx: &Ctx) -> Result<SelectedTask> {
 pub(crate) fn select_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
     let tasks = list_local_tasks(ctx)?;
     if tasks.is_empty() {
-        bail!("No task files found in <git-common-dir>/wt/tasks");
+        bail!("No task files found in <repo-root>/.wt/execution/tasks");
     }
 
     let rows = task_selection_rows(&tasks);
@@ -166,7 +169,7 @@ pub(crate) fn select_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
 pub(crate) fn select_local_task_documents(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
     let tasks = list_local_task_documents(ctx)?;
     if tasks.is_empty() {
-        bail!("No task files found in <git-common-dir>/wt/tasks");
+        bail!("No task files found in <repo-root>/.wt/execution/tasks");
     }
 
     let rows = task_selection_rows(&tasks);
@@ -203,16 +206,30 @@ pub(crate) fn list_local_tasks(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
 }
 
 pub(crate) fn list_local_task_documents(ctx: &Ctx) -> Result<Vec<SelectedTask>> {
+    list_task_documents(&ctx.storage_root, &ctx.repo_root)
+}
+
+pub(crate) fn list_task_documents(
+    storage_root: &StorageRoot,
+    repo_root: &Path,
+) -> Result<Vec<SelectedTask>> {
     let mut tasks = Vec::new();
-    for path in task_document_paths(ctx)? {
-        tasks.push(read_task_document_path(ctx, &path)?);
+    for path in task_document_paths_for(storage_root, repo_root)? {
+        tasks.push(read_task_document_path_from_store(storage_root, &path)?);
     }
     Ok(tasks)
 }
 
 pub(crate) fn task_document_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
-    ensure_no_legacy_tasks(ctx)?;
-    let tasks_dir = ctx.storage_root.tasks_dir();
+    task_document_paths_for(&ctx.storage_root, &ctx.repo_root)
+}
+
+pub(crate) fn task_document_paths_for(
+    storage_root: &StorageRoot,
+    repo_root: &Path,
+) -> Result<Vec<PathBuf>> {
+    ensure_task_document_store_available(storage_root, repo_root)?;
+    let tasks_dir = storage_root.tasks_dir();
     if !tasks_dir.exists() {
         return Ok(Vec::new());
     }
@@ -221,7 +238,7 @@ pub(crate) fn task_document_paths(ctx: &Ctx) -> Result<Vec<PathBuf>> {
     for entry in fs::read_dir(&tasks_dir).with_context(|| {
         format!(
             "Failed to read task directory: {}",
-            ctx.storage_root.display_path(&tasks_dir)
+            storage_root.display_path(&tasks_dir)
         )
     })? {
         let path = entry?.path();
@@ -244,12 +261,19 @@ pub(crate) fn task_key_from_path(path: &Path) -> Result<String> {
 }
 
 pub(crate) fn read_task_document_path(ctx: &Ctx, path: &Path) -> Result<SelectedTask> {
-    read_selected_task(ctx, path.to_path_buf())
+    read_task_document_path_from_store(&ctx.storage_root, path)
+}
+
+pub(crate) fn read_task_document_path_from_store(
+    storage_root: &StorageRoot,
+    path: &Path,
+) -> Result<SelectedTask> {
+    read_selected_task(storage_root, path.to_path_buf())
 }
 
 pub(crate) fn read_task_document(ctx: &Ctx, key: &str) -> Result<TaskDocument> {
-    ensure_no_legacy_tasks(ctx)?;
-    let path = task_path(ctx, key);
+    ensure_task_document_store_available(&ctx.storage_root, &ctx.repo_root)?;
+    let path = task_path_for(&ctx.storage_root, key);
     let display_path = ctx.storage_root.display_path(&path);
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read task: {display_path}"))?;
@@ -259,9 +283,17 @@ pub(crate) fn read_task_document(ctx: &Ctx, key: &str) -> Result<TaskDocument> {
 }
 
 pub(crate) fn read_task_file(ctx: &Ctx, key: &str) -> Result<(TaskDocument, String, String)> {
-    ensure_no_legacy_tasks(ctx)?;
-    let absolute_path = task_path(ctx, key);
-    let path = ctx.storage_root.display_path(&absolute_path);
+    read_task_file_from_store(&ctx.storage_root, &ctx.repo_root, key)
+}
+
+pub(crate) fn read_task_file_from_store(
+    storage_root: &StorageRoot,
+    repo_root: &Path,
+    key: &str,
+) -> Result<(TaskDocument, String, String)> {
+    ensure_task_document_store_available(storage_root, repo_root)?;
+    let absolute_path = task_path_for(storage_root, key);
+    let path = storage_root.display_path(&absolute_path);
     let content = fs::read_to_string(&absolute_path)
         .with_context(|| format!("Failed to read task: {path}"))?;
     let task: TaskDocument =
@@ -270,24 +302,33 @@ pub(crate) fn read_task_file(ctx: &Ctx, key: &str) -> Result<(TaskDocument, Stri
 }
 
 pub(crate) fn write_task_document(ctx: &Ctx, key: &str, task: &TaskDocument) -> Result<()> {
-    ensure_no_legacy_tasks(ctx)?;
-    let tasks_dir = ctx.storage_root.tasks_dir();
+    write_task_document_content(ctx, key, &render_task_document(task))
+}
+
+pub(crate) fn write_task_document_content(ctx: &Ctx, key: &str, content: &str) -> Result<()> {
+    write_task_document_content_to_store(&ctx.storage_root, &ctx.repo_root, key, content)
+}
+
+pub(crate) fn write_task_document_content_to_store(
+    storage_root: &StorageRoot,
+    repo_root: &Path,
+    key: &str,
+    content: &str,
+) -> Result<()> {
+    ensure_task_document_store_available(storage_root, repo_root)?;
+    let tasks_dir = storage_root.tasks_dir();
     fs::create_dir_all(&tasks_dir)?;
-    write_task_document_atomically(
-        &tasks_dir,
-        &task_path(ctx, key),
-        &render_task_document(task),
-    )
+    write_task_document_atomically(&tasks_dir, &task_path_for(storage_root, key), content)
 }
 
 pub(crate) fn write_new_task_document(ctx: &Ctx, key: &str, task: &TaskDocument) -> Result<()> {
-    ensure_no_legacy_tasks(ctx)?;
+    ensure_task_document_store_available(&ctx.storage_root, &ctx.repo_root)?;
     let tasks_dir = ctx.storage_root.tasks_dir();
     fs::create_dir_all(&tasks_dir)?;
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(task_path(ctx, key))
+        .open(task_path_for(&ctx.storage_root, key))
         .with_context(|| format!("Task already exists: {}", task_relative_path(key)))?;
     file.write_all(render_task_document(task).as_bytes())?;
     Ok(())
@@ -300,7 +341,10 @@ pub(crate) fn write_task_branch(ctx: &Ctx, key: &str, branch: &str) -> Result<()
 }
 
 pub(crate) fn task_relative_path(key: &str) -> String {
-    format!("<git-common-dir>/wt/tasks/{}.toml", safe_task_key(key))
+    format!(
+        "<repo-root>/.wt/execution/tasks/{}.toml",
+        safe_task_key(key)
+    )
 }
 
 pub(crate) fn prepared_branch_name(branch: &str) -> Option<&str> {
@@ -313,22 +357,25 @@ pub(crate) fn prepared_branch_name(branch: &str) -> Option<&str> {
 }
 
 pub(crate) fn task_exists(ctx: &Ctx, key: &str) -> Result<bool> {
-    ensure_no_legacy_tasks(ctx)?;
-    Ok(task_path(ctx, key).exists())
+    ensure_task_document_store_available(&ctx.storage_root, &ctx.repo_root)?;
+    Ok(task_path_for(&ctx.storage_root, key).exists())
 }
 
-fn task_path(ctx: &Ctx, key: &str) -> PathBuf {
-    ctx.storage_root
+pub(crate) fn task_path_for(storage_root: &StorageRoot, key: &str) -> PathBuf {
+    storage_root
         .tasks_dir()
         .join(format!("{}.toml", safe_task_key(key)))
 }
 
-fn ensure_no_legacy_tasks(ctx: &Ctx) -> Result<()> {
-    if let Some(legacy) = ctx.storage_root.detect_legacy_tasks(&ctx.repo_root) {
+pub(crate) fn ensure_task_document_store_available(
+    storage_root: &StorageRoot,
+    repo_root: &Path,
+) -> Result<()> {
+    if let Some(legacy) = storage_root.detect_legacy_tasks(repo_root) {
         bail!(
-            "Found legacy TaskDocument storage at {}. Canonical TaskDocument storage is {}. wt does not silently read .local/tasks; import or repair legacy state explicitly before using this command.",
+            "Found legacy TaskDocument storage at {}. Canonical TaskDocument storage is {}. wt does not silently read legacy task storage; import or repair legacy state explicitly before using this command.",
             legacy.path().display(),
-            ctx.storage_root.display_path(legacy.canonical_root())
+            storage_root.display_path(legacy.canonical_root())
         );
     }
     Ok(())
@@ -411,8 +458,8 @@ fn create_task_temp_file(tasks_dir: &Path, _final_path: &Path) -> Result<(PathBu
     )
 }
 
-fn read_selected_task(ctx: &Ctx, path: PathBuf) -> Result<SelectedTask> {
-    let relative_path = ctx.storage_root.display_path(&path);
+fn read_selected_task(storage_root: &StorageRoot, path: PathBuf) -> Result<SelectedTask> {
+    let relative_path = storage_root.display_path(&path);
     let key = task_key_from_path(&path)?;
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read task: {relative_path}"))?;
@@ -625,7 +672,7 @@ mod tests {
     fn task_selection_label_keeps_title_origin_and_branch_separate() {
         let task = SelectedTask {
             key: "PROJ-123".into(),
-            path: "<git-common-dir>/wt/tasks/PROJ-123.toml".into(),
+            path: "<repo-root>/.wt/execution/tasks/PROJ-123.toml".into(),
             content: String::new(),
             document: TaskDocument {
                 title: "Fix editor".into(),
@@ -648,7 +695,7 @@ mod tests {
     fn task_selection_label_omits_redundant_local_origin() {
         let task = SelectedTask {
             key: "local-task".into(),
-            path: "<git-common-dir>/wt/tasks/local-task.toml".into(),
+            path: "<repo-root>/.wt/execution/tasks/local-task.toml".into(),
             content: String::new(),
             document: TaskDocument {
                 title: String::new(),
@@ -659,6 +706,19 @@ mod tests {
         };
 
         assert_eq!(task_selection_label(&task), "local-task  branch local-task");
+    }
+
+    #[test]
+    fn empty_task_document_includes_timing_and_watch_planning_fields() {
+        let task = TaskDocument::empty("foo");
+
+        assert!(task.body.contains("## 계획 (Planning)"));
+        assert!(task.body.contains("예상 소요 (expected duration)"));
+        assert!(task.body.contains("예상 근거 (estimate basis)"));
+        assert!(
+            task.body
+                .contains("권장 watch cadence (suggested watch cadence)")
+        );
     }
 
     #[test]
@@ -709,14 +769,14 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("No task files found in <git-common-dir>/wt/tasks")
+                .contains("No task files found in <repo-root>/.wt/execution/tasks")
         );
     }
 
     #[test]
     fn select_local_task_reads_selected_task_document() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".git/wt/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("a-first.toml"),
@@ -741,7 +801,10 @@ mod tests {
         let selected = select_local_task(&ctx).unwrap();
 
         assert_eq!(selected.key, "b-second");
-        assert_eq!(selected.path, "<git-common-dir>/wt/tasks/b-second.toml");
+        assert_eq!(
+            selected.path,
+            "<repo-root>/.wt/execution/tasks/b-second.toml"
+        );
         assert_eq!(selected.document.title, "Second");
         assert_eq!(selected.document.branch, "second");
         assert!(selected.content.contains("body = \"details\""));
@@ -750,7 +813,7 @@ mod tests {
     #[test]
     fn list_local_tasks_normalizes_discovered_filename_key() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".git/wt/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("ISSUE#42!.toml"),
@@ -769,13 +832,16 @@ mod tests {
 
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].key, "ISSUE-42");
-        assert_eq!(tasks[0].path, "<git-common-dir>/wt/tasks/ISSUE#42!.toml");
+        assert_eq!(
+            tasks[0].path,
+            "<repo-root>/.wt/execution/tasks/ISSUE#42!.toml"
+        );
     }
 
     #[test]
     fn write_task_document_replaces_existing_task_without_leaving_temp_files() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".git/wt/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         let final_path = tasks_dir.join("replace-me.toml");
         std::fs::write(&final_path, "title = \"Old\"\nbranch = \"old\"\n").unwrap();
@@ -833,7 +899,7 @@ mod tests {
 
         write_task_document(&ctx, &key, &task).unwrap();
 
-        let final_path = dir.path().join(format!(".git/wt/tasks/{key}.toml"));
+        let final_path = dir.path().join(format!(".wt/execution/tasks/{key}.toml"));
         assert!(final_path.exists());
     }
 
@@ -859,7 +925,33 @@ mod tests {
 
         assert!(err.contains("Found legacy TaskDocument storage"));
         assert!(err.contains(".local/tasks"));
-        assert!(err.contains("<git-common-dir>/wt/tasks"));
+        assert!(err.contains("<repo-root>/.wt/execution/tasks"));
+    }
+
+    #[test]
+    fn task_store_rejects_legacy_git_common_tasks_without_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_tasks_dir = dir.path().join(".git/wt/tasks");
+        std::fs::create_dir_all(&legacy_tasks_dir).unwrap();
+        std::fs::write(
+            legacy_tasks_dir.join("foo.toml"),
+            "title = \"Legacy\"\nbranch = \"legacy\"\n",
+        )
+        .unwrap();
+        let ctx = Ctx::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        );
+
+        let err = list_local_task_documents(&ctx).unwrap_err().to_string();
+
+        assert!(err.contains("Found legacy TaskDocument storage"));
+        assert!(err.contains(".git/wt/tasks"));
+        assert!(err.contains("<repo-root>/.wt/execution/tasks"));
+        assert!(!err.contains("No task files found"));
     }
 
     #[cfg(unix)]
@@ -868,7 +960,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".git/wt/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         let final_path = tasks_dir.join("restricted.toml");
         std::fs::write(&final_path, "title = \"Old\"\nbranch = \"old\"\n").unwrap();
@@ -894,9 +986,9 @@ mod tests {
     }
 
     #[test]
-    fn list_local_tasks_omits_tasks_with_completed_runs() {
+    fn list_local_tasks_omits_tasks_with_passed_runs() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".git/wt/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("a-first.toml"),
@@ -915,7 +1007,7 @@ mod tests {
             Box::new(MockRunner::new()),
             Box::new(MockUi::new()),
         );
-        task_run::create(&ctx, "a-first", "first", None, task_run::STATUS_DONE).unwrap();
+        task_run::create(&ctx, "a-first", "first", None, task_run::STATUS_PASSED).unwrap();
 
         let tasks = list_local_tasks(&ctx).unwrap();
 
@@ -926,7 +1018,7 @@ mod tests {
     #[test]
     fn list_local_tasks_keeps_skipped_runs_selectable() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".git/wt/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("a-first.toml"),
@@ -951,7 +1043,7 @@ mod tests {
     #[test]
     fn list_local_tasks_rejects_unknown_task_fields() {
         let dir = tempfile::tempdir().unwrap();
-        let tasks_dir = dir.path().join(".git/wt/tasks");
+        let tasks_dir = dir.path().join(".wt/execution/tasks");
         std::fs::create_dir_all(&tasks_dir).unwrap();
         std::fs::write(
             tasks_dir.join("bad.toml"),
@@ -980,7 +1072,7 @@ mod tests {
     ) -> SelectedTask {
         SelectedTask {
             key: key.into(),
-            path: format!("<git-common-dir>/wt/tasks/{key}.toml"),
+            path: format!("<repo-root>/.wt/execution/tasks/{key}.toml"),
             content: String::new(),
             document: TaskDocument {
                 title: title.into(),

@@ -32,6 +32,7 @@ pub(crate) struct PreparedIssueContext<'a> {
     pub(crate) title: &'a str,
     pub(crate) branch_name: Option<&'a str>,
     pub(crate) setup_mode: &'a str,
+    pub(crate) template_vars: HashMap<String, String>,
     pub(crate) additional_prompt_scope: Option<&'a str>,
     pub(crate) workspace_color_kind: &'a str,
     pub(crate) on_start_issue_id: Option<&'a str>,
@@ -639,6 +640,7 @@ fn run_resolved_issue<'a>(
     }
 
     let names = issue_worktree_names(ctx, &branch_name, &title, naming.as_ref(), workspace_label)?;
+    let prepared_template_vars = prepared_setup_template_vars(prepared_issue, naming.as_ref());
     let snapshot_config = issue_snapshot.map(|snapshot| {
         profile_config_with_issue_snapshot(
             &ctx.config,
@@ -674,7 +676,7 @@ fn run_resolved_issue<'a>(
                 &names,
                 Some(&title),
                 setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
-                naming.as_ref().map(|n| &n.vars),
+                prepared_template_vars.as_ref(),
                 snapshot_config.as_ref(),
             )?;
             return Ok(vec![IssueRunResult {
@@ -718,7 +720,7 @@ fn run_resolved_issue<'a>(
                     &names,
                     Some(&title),
                     setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
-                    naming.as_ref().map(|n| &n.vars),
+                    prepared_template_vars.as_ref(),
                     snapshot_config.as_ref(),
                 )?;
                 return Ok(vec![IssueRunResult {
@@ -755,7 +757,7 @@ fn run_resolved_issue<'a>(
         &names,
         Some(&title),
         setup::SetupModeKinds::new(setup_mode, workspace_color_kind),
-        naming.as_ref().map(|n| &n.vars),
+        prepared_template_vars.as_ref(),
         snapshot_config.as_ref(),
     )?;
 
@@ -875,7 +877,8 @@ fn run_profiles(
                 .and_then(|issue| issue.workspace_label.as_deref()),
             &profile_workspace,
         );
-        let profile_extra_vars = profile_template_vars(naming, profile_name, issue_snapshot);
+        let profile_extra_vars =
+            profile_template_vars(naming, profile_name, issue_snapshot, options.prepared_issue);
 
         ctx.ui
             .print_step(&format!("Setting up profile: {profile_name}"));
@@ -997,13 +1000,28 @@ fn profile_template_vars(
     naming: Option<&WorktreeNamingResult>,
     profile_name: &str,
     issue_snapshot: Option<&IssueSnapshotContext<'_>>,
+    prepared_issue: Option<&PreparedIssueContext<'_>>,
 ) -> HashMap<String, String> {
     let mut vars = naming.map(|n| n.vars.clone()).unwrap_or_default();
+    if let Some(prepared) = prepared_issue {
+        vars.extend(prepared.template_vars.clone());
+    }
     vars.insert("profile".into(), profile_name.to_string());
     if let Some(snapshot) = issue_snapshot {
         vars.insert("issue_snapshot".into(), snapshot.path.to_string());
     }
     vars
+}
+
+fn prepared_setup_template_vars(
+    prepared_issue: Option<&PreparedIssueContext<'_>>,
+    naming: Option<&WorktreeNamingResult>,
+) -> Option<HashMap<String, String>> {
+    let mut vars = naming.map(|n| n.vars.clone()).unwrap_or_default();
+    if let Some(prepared) = prepared_issue {
+        vars.extend(prepared.template_vars.clone());
+    }
+    (!vars.is_empty()).then_some(vars)
 }
 
 fn profile_config_with_issue_snapshot(
@@ -1022,29 +1040,21 @@ fn profile_config_with_issue_snapshot(
             .unwrap_or_default();
         let prompts = agent.prompt.entry(mode.into()).or_default();
         if let Some(completion_section) = completion_section {
-            let handoff_prompt = format!(
-                "{completion_section}\n\nThe TaskDocument prompt follows next. Do not start work until it arrives."
-            );
-            let snapshot_prompt = prepared_snapshot_prompt(
+            let task_context = prepared_snapshot_prompt(
                 pre_snapshot_context,
                 prompt_intro,
                 snapshot.path_label,
                 snapshot.path,
                 snapshot.content,
             );
-            if additional_prompts.is_empty() {
-                if let Some(first_prompt) = prompts.first_mut() {
-                    *first_prompt = format!("{snapshot_prompt}\n\n{first_prompt}");
-                } else {
-                    prompts.push(snapshot_prompt);
-                }
-            } else {
-                let mode_prompts = std::mem::take(prompts);
-                prompts.push(snapshot_prompt);
-                prompts.extend(additional_prompts);
-                prompts.extend(mode_prompts);
-            }
-            prompts.insert(0, handoff_prompt);
+            let snapshot_prompt = format!("{completion_section}\n\n{task_context}");
+            let mode_prompts = std::mem::take(prompts);
+            let mut prompt_parts =
+                Vec::with_capacity(1 + additional_prompts.len() + mode_prompts.len());
+            prompt_parts.push(snapshot_prompt);
+            prompt_parts.extend(additional_prompts);
+            prompt_parts.extend(mode_prompts);
+            prompts.push(prompt_parts.join("\n\n"));
         } else {
             let snapshot_prompt = format!(
                 "{}\n\n{}: `{}`\n\n{}\n\n{}",
@@ -1320,7 +1330,7 @@ mod tests {
     }
 
     fn write_empty_profile(root: &Path, name: &str) {
-        let profile_dir = root.join(".git/wt/profiles").join(name);
+        let profile_dir = root.join(".wt/config/profiles").join(name);
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
     }
@@ -1492,7 +1502,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Snapshot path",
-            path: "<git-common-dir>/wt/issues/PROJ-123.md",
+            path: "<repo-root>/.wt/issues/PROJ-123.md",
             content: "# PROJ-123: Fix editor\n\nBody",
         };
 
@@ -1509,7 +1519,7 @@ mod tests {
         let mut agent = config.agent.unwrap();
         let prompts = agent.prompt.remove("issue").unwrap();
         assert_eq!(prompts.len(), 2);
-        assert!(prompts[0].contains("<git-common-dir>/wt/issues/PROJ-123.md"));
+        assert!(prompts[0].contains("<repo-root>/.wt/issues/PROJ-123.md"));
         assert!(prompts[0].contains("# PROJ-123: Fix editor"));
         assert!(prompts[0].contains("Agent Completion Report"));
         assert!(prompts[0].contains("Start from the profile instructions."));
@@ -1540,7 +1550,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: "<git-common-dir>/wt/tasks/add-schema.toml",
+            path: "<repo-root>/.wt/execution/tasks/add-schema.toml",
             content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
         };
 
@@ -1558,25 +1568,27 @@ mod tests {
 
         let mut agent = config.agent.unwrap();
         let prompts = agent.prompt.remove("branch").unwrap();
-        assert_eq!(prompts.len(), 2);
+        assert_eq!(prompts.len(), 1);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
-        assert!(prompts[0].contains("TaskDocument prompt follows next"));
-        assert!(!prompts[0].contains("Workflow title"));
         assert!(
-            prompts[1].find("Workflow title").unwrap() < prompts[1].find("Workflow body").unwrap()
+            prompts[0].find("## Workflow Coordinator Handoff").unwrap()
+                < prompts[0].find("Workflow title").unwrap()
         );
         assert!(
-            prompts[1].find("Workflow body").unwrap() < prompts[1].find("Workflow origin").unwrap()
+            prompts[0].find("Workflow title").unwrap() < prompts[0].find("Workflow body").unwrap()
         );
         assert!(
-            prompts[1].find("Workflow origin").unwrap()
-                < prompts[1]
-                    .find("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
+            prompts[0].find("Workflow body").unwrap() < prompts[0].find("Workflow origin").unwrap()
+        );
+        assert!(
+            prompts[0].find("Workflow origin").unwrap()
+                < prompts[0]
+                    .find("Task path: `<repo-root>/.wt/execution/tasks/add-schema.toml`")
                     .unwrap()
         );
         assert!(
-            prompts[1].find("Workflow body").unwrap()
-                < prompts[1].find("title = \"Add schema\"").unwrap()
+            prompts[0].find("Workflow body").unwrap()
+                < prompts[0].find("title = \"Add schema\"").unwrap()
         );
     }
 
@@ -1596,7 +1608,10 @@ mod tests {
                         AGENT_PROMPT_WORKFLOW_SCOPE.into(),
                         vec!["Workflow prompt".into(), "Workflow follow-up".into()],
                     ),
-                    ("branch".into(), vec!["Branch prompt".into()]),
+                    (
+                        "branch".into(),
+                        vec!["Common prompt".into(), "Branch prompt".into()],
+                    ),
                 ]),
                 ..AgentConfig::default()
             }),
@@ -1604,7 +1619,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: "<git-common-dir>/wt/tasks/add-schema.toml",
+            path: "<repo-root>/.wt/execution/tasks/add-schema.toml",
             content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
         };
 
@@ -1620,13 +1635,33 @@ mod tests {
 
         let mut agent = config.agent.unwrap();
         let prompts = agent.prompt.remove("branch").unwrap();
-        assert_eq!(prompts.len(), 5);
+        assert_eq!(prompts.len(), 1);
         assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
-        assert!(prompts[1].contains("Workflow body"));
-        assert!(prompts[1].contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`"));
-        assert_eq!(prompts[2], "Workflow prompt");
-        assert_eq!(prompts[3], "Workflow follow-up");
-        assert_eq!(prompts[4], "Branch prompt");
+        assert!(prompts[0].contains("Workflow body"));
+        assert!(
+            prompts[0].contains("Task path: `<repo-root>/.wt/execution/tasks/add-schema.toml`")
+        );
+        assert!(prompts[0].contains("Workflow prompt"));
+        assert!(prompts[0].contains("Workflow follow-up"));
+        assert!(prompts[0].contains("Common prompt"));
+        assert!(prompts[0].contains("Branch prompt"));
+        assert!(
+            prompts[0]
+                .find("Task path: `<repo-root>/.wt/execution/tasks/add-schema.toml`")
+                .unwrap()
+                < prompts[0].find("Workflow prompt").unwrap()
+        );
+        assert!(
+            prompts[0].find("Workflow prompt").unwrap()
+                < prompts[0].find("Workflow follow-up").unwrap()
+        );
+        assert!(
+            prompts[0].find("Workflow follow-up").unwrap()
+                < prompts[0].find("Common prompt").unwrap()
+        );
+        assert!(
+            prompts[0].find("Common prompt").unwrap() < prompts[0].find("Branch prompt").unwrap()
+        );
         assert!(!agent.prompt.contains_key(AGENT_PROMPT_WORKFLOW_SCOPE));
     }
 
@@ -1646,7 +1681,10 @@ mod tests {
                         AGENT_PROMPT_WORKFLOW_SCOPE.into(),
                         vec!["Workflow prompt".into()],
                     ),
-                    ("branch".into(), vec!["Branch prompt".into()]),
+                    (
+                        "branch".into(),
+                        vec!["Common prompt".into(), "Branch prompt".into()],
+                    ),
                 ]),
                 ..AgentConfig::default()
             }),
@@ -1654,7 +1692,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: "<git-common-dir>/wt/tasks/add-schema.toml",
+            path: "<repo-root>/.wt/execution/tasks/add-schema.toml",
             content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
         };
 
@@ -1670,8 +1708,22 @@ mod tests {
 
         let mut agent = config.agent.unwrap();
         let prompts = agent.prompt.remove("branch").unwrap();
-        assert_eq!(prompts.len(), 2);
-        assert!(prompts[1].contains("Branch prompt"));
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].contains("## Workflow Coordinator Handoff"));
+        assert!(
+            prompts[0].contains("Task path: `<repo-root>/.wt/execution/tasks/add-schema.toml`")
+        );
+        assert!(prompts[0].contains("Common prompt"));
+        assert!(prompts[0].contains("Branch prompt"));
+        assert!(
+            prompts[0]
+                .find("Task path: `<repo-root>/.wt/execution/tasks/add-schema.toml`")
+                .unwrap()
+                < prompts[0].find("Common prompt").unwrap()
+        );
+        assert!(
+            prompts[0].find("Common prompt").unwrap() < prompts[0].find("Branch prompt").unwrap()
+        );
         assert!(
             !prompts
                 .iter()
@@ -1704,7 +1756,7 @@ mod tests {
         };
         let snapshot = IssueSnapshotContext {
             path_label: "Task path",
-            path: "<git-common-dir>/wt/tasks/add-schema.toml",
+            path: "<repo-root>/.wt/execution/tasks/add-schema.toml",
             content: "# Add schema\n\nbranch = \"add-schema\"",
         };
 
@@ -1723,7 +1775,8 @@ mod tests {
         assert_eq!(branch_prompts.len(), 1);
         assert!(branch_prompts[0].contains("Use this task before changing code."));
         assert!(
-            branch_prompts[0].contains("Task path: `<git-common-dir>/wt/tasks/add-schema.toml`")
+            branch_prompts[0]
+                .contains("Task path: `<repo-root>/.wt/execution/tasks/add-schema.toml`")
         );
         assert!(branch_prompts[0].contains("# Add schema"));
         assert!(branch_prompts[0].contains("Changed files"));
@@ -1734,7 +1787,7 @@ mod tests {
     #[test]
     fn issue_profile_existing_branch_without_worktree_reuses_branch() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".git/wt/profiles/codex");
+        let profile_dir = repo.path().join(".wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
 
@@ -1773,6 +1826,7 @@ mod tests {
                 title: "Add schema",
                 branch_name: Some("add-schema"),
                 setup_mode: setup::WORKSPACE_COLOR_KIND_ISSUE,
+                template_vars: HashMap::new(),
                 additional_prompt_scope: None,
                 workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: None,
@@ -1782,7 +1836,7 @@ mod tests {
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",
-                    path: "<git-common-dir>/wt/tasks/add-schema.toml",
+                    path: "<repo-root>/.wt/execution/tasks/add-schema.toml",
                     content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
                 },
             },
@@ -1813,7 +1867,7 @@ mod tests {
     #[test]
     fn issue_profile_existing_branch_non_interactive_fails_without_prompt_or_delete() {
         let repo = tempfile::tempdir().unwrap();
-        let profile_dir = repo.path().join(".git/wt/profiles/codex");
+        let profile_dir = repo.path().join(".wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(profile_dir.join("profile.toml"), "").unwrap();
 
@@ -1842,6 +1896,7 @@ mod tests {
                 title: "Add schema",
                 branch_name: Some("add-schema"),
                 setup_mode: setup::WORKSPACE_COLOR_KIND_ISSUE,
+                template_vars: HashMap::new(),
                 additional_prompt_scope: None,
                 workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
                 on_start_issue_id: None,
@@ -1851,7 +1906,7 @@ mod tests {
                 workspace_label: None,
                 snapshot: IssueSnapshotContext {
                     path_label: "Task path",
-                    path: "<git-common-dir>/wt/tasks/add-schema.toml",
+                    path: "<repo-root>/.wt/execution/tasks/add-schema.toml",
                     content: "title = \"Add schema\"\nbranch = \"add-schema\"\n",
                 },
             },

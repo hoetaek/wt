@@ -2,7 +2,7 @@ use super::resolve_mutating_target;
 use crate::context::Ctx;
 use crate::services::git::GitService;
 use crate::task as task_store;
-use crate::task_run::STATUS_DONE;
+use crate::task_run::STATUS_PASSED;
 use crate::workflow as workflow_store;
 use crate::workflow::render::workflow_task_label;
 use crate::workflow::run::{
@@ -13,42 +13,42 @@ use crate::workflow::run::{
 use crate::workflow::{WorkflowMetadata, WorkflowMode, WorkflowTask};
 use anyhow::{Result, bail};
 
-pub(super) fn complete_workflow(
+pub(super) fn pass_workflow(
     ctx: &Ctx,
     workflow: &str,
     task: Option<&str>,
     run_next: bool,
 ) -> Result<()> {
-    let path = resolve_mutating_target(ctx, workflow, "complete")?;
+    let path = resolve_mutating_target(ctx, workflow, "pass")?;
     let mut metadata = workflow_store::read(&path)?;
     if run_next && metadata.mode != WorkflowMode::Stack {
-        bail!("wt workflow complete --run-next only supports mode stack");
+        bail!("wt workflow pass --run-next only supports mode stack");
     }
 
     if metadata.mode == WorkflowMode::Matrix {
-        return complete_matrix_workflow(ctx, &path, &mut metadata, workflow, task);
+        return pass_matrix_workflow(ctx, &path, &mut metadata, workflow, task);
     }
 
     let states = read_completable_workflow_task_states(ctx, &path, &metadata)?;
-    let complete_indices = complete_indices(ctx, workflow, task, &metadata, &states)?;
-    if complete_indices.is_empty() {
+    let pass_indices = pass_indices(ctx, workflow, task, &metadata, &states)?;
+    if pass_indices.is_empty() {
         return Ok(());
     }
 
     if metadata.mode == WorkflowMode::Stack {
-        for idx in &complete_indices {
+        for idx in &pass_indices {
             validate_completable_stack_task(ctx, &metadata.tasks[*idx])?;
         }
     }
-    for idx in &complete_indices {
-        update_workflow_task_run(ctx, &metadata.tasks[*idx], STATUS_DONE, None)?;
+    for idx in &pass_indices {
+        update_workflow_task_run(ctx, &metadata.tasks[*idx], STATUS_PASSED, None)?;
     }
     workflow_store::touch(&mut metadata);
     workflow_store::write(ctx, &path, &mut metadata)?;
 
-    for idx in complete_indices {
+    for idx in pass_indices {
         ctx.ui.print_step(&format!(
-            "Marked {} done",
+            "Marked {} passed",
             workflow_task_label(&metadata.tasks[idx])
         ));
     }
@@ -71,7 +71,7 @@ fn read_completable_workflow_task_states(
     }
 }
 
-fn complete_matrix_workflow(
+fn pass_matrix_workflow(
     ctx: &Ctx,
     path: &std::path::Path,
     metadata: &mut WorkflowMetadata,
@@ -79,12 +79,12 @@ fn complete_matrix_workflow(
     task: Option<&str>,
 ) -> Result<()> {
     let states = read_matrix_workflow_task_states(ctx, path, metadata)?;
-    let complete = complete_matrix_states(ctx, workflow, task, &states)?;
-    if complete.is_empty() {
+    let passed = pass_matrix_states(ctx, workflow, task, &states)?;
+    if passed.is_empty() {
         return Ok(());
     }
 
-    for state in &complete {
+    for state in &passed {
         let profile = state
             .profile
             .as_deref()
@@ -94,7 +94,7 @@ fn complete_matrix_workflow(
             &state.row,
             profile,
             &state.run_id,
-            STATUS_DONE,
+            STATUS_PASSED,
             Some(&state.run.branch),
             None,
         )?;
@@ -102,17 +102,17 @@ fn complete_matrix_workflow(
     workflow_store::touch(metadata);
     workflow_store::write(ctx, path, metadata)?;
 
-    for state in complete {
+    for state in passed {
         let profile = state.profile.as_deref().unwrap_or("<missing-profile>");
         ctx.ui.print_step(&format!(
-            "Marked {}:{profile} done",
+            "Marked {}:{profile} passed",
             workflow_task_label(&state.row)
         ));
     }
     Ok(())
 }
 
-fn complete_matrix_states(
+fn pass_matrix_states(
     ctx: &Ctx,
     workflow: &str,
     task: Option<&str>,
@@ -138,7 +138,7 @@ fn complete_matrix_states(
         }
         if matching.len() > 1 {
             bail!(
-                "Multiple running workflow profile tasks match {task}; pass a profile target like `wt workflow complete {workflow} <task>:<profile>`"
+                "Multiple running workflow profile tasks match {task}; pass a profile target like `wt workflow pass {workflow} <task>:<profile>`"
             );
         }
         return Ok(matching);
@@ -146,13 +146,13 @@ fn complete_matrix_states(
 
     if running.len() > 1 {
         bail!(
-            "Multiple running workflow profile tasks found; pass a profile target like `wt workflow complete {workflow} <task>:<profile>`"
+            "Multiple running workflow profile tasks found; pass a profile target like `wt workflow pass {workflow} <task>:<profile>`"
         );
     }
     Ok(running)
 }
 
-fn complete_indices(
+fn pass_indices(
     ctx: &Ctx,
     workflow: &str,
     task: Option<&str>,
@@ -185,7 +185,7 @@ fn complete_indices(
         WorkflowMode::Batch | WorkflowMode::Stack | WorkflowMode::Matrix => {
             if running.len() > 1 {
                 bail!(
-                    "Multiple running workflow tasks found; pass a task to `wt workflow complete {workflow} <task>` or run `wt workflow repair {workflow}` first"
+                    "Multiple running workflow tasks found; pass a task to `wt workflow pass {workflow} <task>` or run `wt workflow repair {workflow}` first"
                 );
             }
             Ok(vec![running[0].idx])

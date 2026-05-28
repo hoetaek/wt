@@ -34,7 +34,8 @@ pub(crate) use crate::config::{
 };
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
-use anyhow::Result;
+use crate::personal_storage;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -124,6 +125,8 @@ pub(crate) fn run_setup_with_workspace_color_kind(
     let options = SetupOptions::default();
     let config = config_override.unwrap_or(&ctx.config);
 
+    ensure_worktree_personal_storage(ctx, wt_path)?;
+
     copy_files(ctx, config, wt_path)?;
     link_files(ctx, config, wt_path)?;
 
@@ -177,6 +180,59 @@ pub(crate) fn run_setup_with_workspace_color_kind(
     Ok(())
 }
 
+fn ensure_worktree_personal_storage(ctx: &Ctx, wt_path: &Path) -> Result<()> {
+    let main_personal_root = ctx.storage_root.personal_root();
+    personal_storage::ensure_directory_path(main_personal_root).with_context(|| {
+        format!(
+            "Failed to prepare main repo wt personal storage at {}",
+            main_personal_root.display()
+        )
+    })?;
+
+    if equivalent_paths(wt_path, &ctx.repo_root) {
+        return Ok(());
+    }
+
+    if !wt_path.is_dir() {
+        return missing_worktree_personal_storage_dir(wt_path);
+    }
+
+    let worktree_personal_path = wt_path.join(".wt");
+    personal_storage::ensure_linked_worktree_symlink(&worktree_personal_path, main_personal_root)
+        .with_context(|| {
+        format!(
+            "Failed to prepare linked worktree wt personal storage: {} -> {}",
+            worktree_personal_path.display(),
+            main_personal_root.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+fn equivalent_paths(left: &Path, right: &Path) -> bool {
+    comparable_path(left) == comparable_path(right)
+}
+
+fn comparable_path(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| crate::storage::normalize_path_lexically(path))
+}
+
+#[cfg(test)]
+fn missing_worktree_personal_storage_dir(_wt_path: &Path) -> Result<()> {
+    // Command tests mock `git worktree add` without its filesystem side effect.
+    // The focused setup tests cover symlink creation once the worktree exists.
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn missing_worktree_personal_storage_dir(wt_path: &Path) -> Result<()> {
+    anyhow::bail!(
+        "Cannot prepare linked worktree personal storage at {}: worktree directory does not exist",
+        wt_path.display()
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +268,52 @@ mod tests {
             Box::new(SharedMockRunner { inner: runner }),
             Box::new(MockUi::new()),
         )
+    }
+
+    fn test_ctx_for_repo(repo: PathBuf) -> Ctx {
+        Ctx::new(
+            repo.clone(),
+            repo,
+            Config::default(),
+            Box::new(MockRunner::new()),
+            Box::new(MockUi::new()),
+        )
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn worktree_setup_creates_personal_storage_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let wt = dir.path().join("repo-feature");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        let ctx = test_ctx_for_repo(repo.clone());
+
+        ensure_worktree_personal_storage(&ctx, &wt).unwrap();
+
+        let main_personal_root = repo.join(".wt");
+        let link = wt.join(".wt");
+        assert!(main_personal_root.is_dir());
+        assert_eq!(fs::read_link(&link).unwrap(), main_personal_root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn worktree_setup_rejects_existing_non_symlink_personal_storage_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let wt = dir.path().join("repo-feature");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(wt.join(".wt")).unwrap();
+        let ctx = test_ctx_for_repo(repo);
+
+        let err = ensure_worktree_personal_storage(&ctx, &wt).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Failed to prepare linked worktree wt personal storage")
+        );
     }
 
     fn agent_config(cli: AgentCli) -> AgentConfig {
@@ -308,7 +410,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
         let wt = dir.path().join("worktree");
-        let scaffold = repo.join(".git/wt/profiles/codex/scaffold");
+        let scaffold = repo.join(".wt/config/profiles/codex/scaffold");
         fs::create_dir_all(scaffold.join(".codex/skills/start")).unwrap();
         fs::create_dir_all(&wt).unwrap();
         fs::write(scaffold.join("AGENTS.override.md"), "instructions\n").unwrap();
@@ -320,7 +422,7 @@ mod tests {
 
         let mut config = Config::default();
         config.worktree.copy_as = vec![CopyAsEntry {
-            from: ".git/wt/profiles/codex/scaffold".into(),
+            from: ".wt/config/profiles/codex/scaffold".into(),
             to: ".".into(),
         }];
 
@@ -501,11 +603,6 @@ mod tests {
             vars.get("wt_agent_id").unwrap(),
             "agents/proj-680-document-editor"
         );
-        assert_eq!(
-            vars.get("wt_coordinator_agent_id").unwrap(),
-            "agents/coord-a"
-        );
-        assert_eq!(vars.get("coordinator_msg_target").unwrap(), "coordinator");
         assert_eq!(vars.get("issue_title").unwrap(), "Document editor");
         assert!(vars.contains_key("vite_port"));
         assert!(vars.contains_key("api_port"));
@@ -1752,7 +1849,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_agent_waits_for_codex_ready_and_submits_with_enter_key() {
+    fn bootstrap_agent_waits_for_codex_ready_and_submits_with_paste_buffer() {
         use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode};
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
@@ -1778,6 +1875,7 @@ mod tests {
         runner.add_response("pane:0", true);
         runner.add_response("surface:0", true);
         runner.add_response("ready ›", true);
+        runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
         let runner = Arc::new(runner);
@@ -1811,33 +1909,54 @@ mod tests {
         bootstrap_agent(&ctx, "workspace:1", &agent, "issue", &vars).unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        let send_call = calls
+        let set_buffer_call = calls
             .iter()
-            .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send"))
-            .expect("expected cmux send call");
+            .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "set-buffer"))
+            .expect("expected cmux set-buffer call");
+        assert!(set_buffer_call.1[2].starts_with("wt-codex-surface-0-"));
         assert_eq!(
-            send_call.1.last().unwrap(),
+            set_buffer_call.1.last().unwrap(),
             "start http://127.0.0.1:15001 on surface:0"
         );
-        let send_key_call = calls
+        let paste_buffer_call = calls
             .iter()
-            .find(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send-key"))
-            .expect("expected cmux send-key call");
+            .find(|(cmd, args, _)| {
+                cmd == "cmux" && args.first().is_some_and(|a| a == "paste-buffer")
+            })
+            .expect("expected cmux paste-buffer call");
         assert_eq!(
-            send_key_call.1,
+            paste_buffer_call.1,
+            vec![
+                "paste-buffer",
+                "--name",
+                set_buffer_call.1[2].as_str(),
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1"
+            ]
+        );
+        let send_key_calls = calls
+            .iter()
+            .filter(|(cmd, args, _)| cmd == "cmux" && args.first().is_some_and(|a| a == "send-key"))
+            .collect::<Vec<_>>();
+        assert_eq!(send_key_calls.len(), 1);
+        assert_eq!(
+            send_key_calls[0].1,
             vec![
                 "send-key",
                 "--surface",
                 "surface:0",
                 "--workspace",
                 "workspace:1",
+                "--",
                 "enter"
             ]
         );
     }
 
     #[test]
-    fn bootstrap_agent_waits_for_claude_ready_and_submits_with_enter_key() {
+    fn bootstrap_agent_waits_for_claude_ready_and_submits_with_paste_buffer() {
         use crate::config::{AgentCli, AgentConfig, ReadyMode, SubmitMode};
         use crate::context::mock::{MockRunner, MockUi};
         use crate::context::{CmdOutput, CommandRunner, Ctx};
@@ -1863,6 +1982,7 @@ mod tests {
         runner.add_response("pane:0", true);
         runner.add_response("surface:0", true);
         runner.add_response("ready ❯", true);
+        runner.add_response("", true);
         runner.add_response("", true);
         runner.add_response("", true);
         let runner = Arc::new(runner);
@@ -1898,22 +2018,40 @@ mod tests {
         let calls = runner.calls.lock().unwrap();
         let cmux_calls: Vec<&(String, Vec<String>, Option<PathBuf>)> =
             calls.iter().filter(|(cmd, _, _)| cmd == "cmux").collect();
-        let send_idx = cmux_calls
+        let set_buffer_idx = cmux_calls
             .iter()
-            .position(|(_, args, _)| args.first().is_some_and(|a| a == "send"))
-            .expect("expected cmux send call");
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "set-buffer"))
+            .expect("expected cmux set-buffer call");
+        let paste_buffer_idx = cmux_calls
+            .iter()
+            .position(|(_, args, _)| args.first().is_some_and(|a| a == "paste-buffer"))
+            .expect("expected cmux paste-buffer call");
         let send_key_idx = cmux_calls
             .iter()
             .position(|(_, args, _)| args.first().is_some_and(|a| a == "send-key"))
             .expect("expected cmux send-key call");
         assert!(
-            send_idx < send_key_idx,
-            "send must precede send-key for claude auto submit"
+            set_buffer_idx < paste_buffer_idx && paste_buffer_idx < send_key_idx,
+            "set-buffer and paste-buffer must precede send-key for claude auto submit"
         );
-        let send_call = cmux_calls[send_idx];
+        let set_buffer_call = cmux_calls[set_buffer_idx];
+        assert!(set_buffer_call.1[2].starts_with("wt-claude-surface-0-"));
         assert_eq!(
-            send_call.1.last().unwrap(),
+            set_buffer_call.1.last().unwrap(),
             "claude start http://127.0.0.1:15002 on surface:0"
+        );
+        let paste_buffer_call = cmux_calls[paste_buffer_idx];
+        assert_eq!(
+            paste_buffer_call.1,
+            vec![
+                "paste-buffer",
+                "--name",
+                set_buffer_call.1[2].as_str(),
+                "--surface",
+                "surface:0",
+                "--workspace",
+                "workspace:1"
+            ]
         );
         let send_key_call = cmux_calls[send_key_idx];
         assert_eq!(
@@ -1924,6 +2062,7 @@ mod tests {
                 "surface:0",
                 "--workspace",
                 "workspace:1",
+                "--",
                 "enter"
             ]
         );
@@ -2017,6 +2156,7 @@ mod tests {
                 "surface:0",
                 "--workspace",
                 "workspace:1",
+                "--",
                 "enter"
             ]
         );

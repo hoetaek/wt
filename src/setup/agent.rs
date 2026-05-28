@@ -1,12 +1,15 @@
 use crate::config::{AgentCli, AgentConfig, SubmitMode};
 use crate::context::Ctx;
-use crate::services::cmux::CmuxService;
+use crate::services::cmux::{
+    CmuxService, PASTE_SUBMIT_SETTLE, codex_prompt_expects_pasted_content_marker,
+    unique_cmux_buffer_name,
+};
 use crate::template;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 const WT_AGENT_ID_TEMPLATE_KEY: &str = "wt_agent_id";
-const WT_COORDINATOR_AGENT_ID_TEMPLATE_KEY: &str = "wt_coordinator_agent_id";
+const WT_TASK_RUN_ID_TEMPLATE_KEY: &str = "wt_task_run_id";
 
 pub(crate) fn agent_launch_command(
     agent: Option<&AgentConfig>,
@@ -39,17 +42,13 @@ fn inject_agent_identity_env(
     {
         exports.push(format!("WT_AGENT_ID={}", shell_arg(agent_id)));
     }
-    if let Some(coordinator_agent_id) = vars
-        .get(WT_COORDINATOR_AGENT_ID_TEMPLATE_KEY)
+    if let Some(task_run_id) = vars
+        .get(WT_TASK_RUN_ID_TEMPLATE_KEY)
         .map(String::as_str)
-        .filter(|agent_id| !agent_id.trim().is_empty())
+        .filter(|task_run_id| !task_run_id.trim().is_empty())
     {
-        exports.push(format!(
-            "WT_COORDINATOR_AGENT_ID={}",
-            shell_arg(coordinator_agent_id)
-        ));
+        exports.push(format!("WT_TASK_RUN_ID={}", shell_arg(task_run_id)));
     }
-
     if exports.is_empty() {
         return command;
     }
@@ -176,6 +175,16 @@ fn send_agent_prompt(
     agent: &AgentConfig,
     rendered: String,
 ) -> Result<()> {
+    if should_submit_codex_with_enter_key(agent) {
+        let prompt = rendered.trim_end_matches(['\n', '\r']);
+        return send_codex_prompt(cmux, surface, ws_handle, prompt);
+    }
+
+    if should_submit_claude_with_enter_key(agent) {
+        let prompt = rendered.trim_end_matches(['\n', '\r']);
+        return send_pasted_prompt_then_enter(cmux, surface, ws_handle, "wt-claude", prompt);
+    }
+
     if should_submit_with_enter_key(agent) {
         let prompt = rendered.trim_end_matches(['\n', '\r']).to_string();
         cmux.send(surface, ws_handle, &prompt)?;
@@ -188,13 +197,63 @@ fn send_agent_prompt(
     cmux.send(surface, ws_handle, &prompt)
 }
 
+fn send_codex_prompt(
+    cmux: &CmuxService,
+    surface: &str,
+    ws_handle: &str,
+    prompt: &str,
+) -> Result<()> {
+    let buffer = unique_cmux_buffer_name("wt-codex", surface);
+    cmux.set_buffer(&buffer, prompt)?;
+    cmux.paste_buffer(surface, ws_handle, &buffer)?;
+    if codex_prompt_expects_pasted_content_marker(prompt)
+        && cmux.wait_for_codex_pasted_content_marker(surface, ws_handle)?
+    {
+        cmux.send_key(surface, ws_handle, "enter")?;
+        return Ok(());
+    }
+    std::thread::sleep(PASTE_SUBMIT_SETTLE);
+    cmux.send_key(surface, ws_handle, "enter")?;
+    Ok(())
+}
+
+fn send_pasted_prompt_then_enter(
+    cmux: &CmuxService,
+    surface: &str,
+    ws_handle: &str,
+    buffer_prefix: &str,
+    prompt: &str,
+) -> Result<()> {
+    let buffer = unique_cmux_buffer_name(buffer_prefix, surface);
+    cmux.set_buffer(&buffer, prompt)?;
+    cmux.paste_buffer(surface, ws_handle, &buffer)?;
+    std::thread::sleep(PASTE_SUBMIT_SETTLE);
+    cmux.send_key(surface, ws_handle, "enter")?;
+    Ok(())
+}
+
 fn should_submit_with_enter_key(agent: &AgentConfig) -> bool {
     matches!(
         (&agent.submit, &agent.cli),
-        (
-            SubmitMode::Auto,
-            AgentCli::Codex | AgentCli::Claude | AgentCli::Gemini,
-        ) | (SubmitMode::CarriageReturn, _)
+        (SubmitMode::Auto, AgentCli::Gemini)
+            | (
+                SubmitMode::CarriageReturn,
+                AgentCli::Gemini | AgentCli::None
+            )
+    )
+}
+
+fn should_submit_codex_with_enter_key(agent: &AgentConfig) -> bool {
+    matches!(
+        (&agent.submit, &agent.cli),
+        (SubmitMode::Auto, AgentCli::Codex) | (SubmitMode::CarriageReturn, AgentCli::Codex)
+    )
+}
+
+fn should_submit_claude_with_enter_key(agent: &AgentConfig) -> bool {
+    matches!(
+        (&agent.submit, &agent.cli),
+        (SubmitMode::Auto, AgentCli::Claude) | (SubmitMode::CarriageReturn, AgentCli::Claude)
     )
 }
 
@@ -207,4 +266,42 @@ fn shell_arg(value: &str) -> String {
     }
 
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_launch_command_injects_task_run_identity_only() {
+        let agent = AgentConfig {
+            cli: AgentCli::Codex,
+            command: Some("codex".into()),
+            ..AgentConfig::default()
+        };
+        let vars = HashMap::from([
+            ("wt_agent_id".into(), "agents/run-1-add-schema".into()),
+            ("wt_task_run_id".into(), "run-add-schema".into()),
+        ]);
+
+        let command = agent_launch_command(Some(&agent), &vars).unwrap();
+
+        assert_eq!(
+            command,
+            "export WT_AGENT_ID=agents/run-1-add-schema WT_TASK_RUN_ID=run-add-schema; codex"
+        );
+    }
+
+    #[test]
+    fn agent_launch_command_without_identity_returns_bare_command() {
+        let agent = AgentConfig {
+            cli: AgentCli::Codex,
+            command: Some("codex".into()),
+            ..AgentConfig::default()
+        };
+
+        let command = agent_launch_command(Some(&agent), &HashMap::new()).unwrap();
+
+        assert_eq!(command, "codex");
+    }
 }

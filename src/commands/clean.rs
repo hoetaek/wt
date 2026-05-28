@@ -77,7 +77,7 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
         if !remove_worktree(ctx, &git, wt_path)? {
             continue;
         }
-        mark_matching_task_runs_done(ctx, entry);
+        mark_matching_task_runs_passed(ctx, entry);
 
         // Clean up leftover directory
         if wt_path.exists() {
@@ -138,22 +138,26 @@ fn remove_worktree(ctx: &Ctx, git: &GitService<'_>, wt_path: &Path) -> Result<bo
     }
 }
 
-fn mark_matching_task_runs_done(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) {
-    let runs = match task_run::running_cleanup_matches(ctx, &entry.branch) {
-        Ok(runs) => runs,
+fn mark_matching_task_runs_passed(ctx: &Ctx, entry: &crate::services::git::WorktreeEntry) {
+    let inventory = match task_run::running_cleanup_matches_lossy(ctx, &entry.branch) {
+        Ok(inventory) => inventory,
         Err(err) => {
             ctx.ui.print_warning(&format!("  TaskRun lookup: {err}"));
             return;
         }
     };
 
-    for record in runs {
-        match task_run::update(ctx, &record.id, task_run::STATUS_DONE, None, None) {
+    for warning in task_run::invalid_inventory_warnings(ctx, &inventory.invalid) {
+        ctx.ui.print_warning(&format!("  {warning}"));
+    }
+
+    for record in inventory.records {
+        match task_run::update(ctx, &record.id, task_run::STATUS_PASSED, None, None) {
             Ok(_) => ctx
                 .ui
-                .print_step(&format!("  TaskRun marked done: {}", record.id)),
+                .print_step(&format!("  TaskRun marked passed: {}", record.id)),
             Err(err) => ctx.ui.print_warning(&format!(
-                "  Failed to mark TaskRun {} done: {err}",
+                "  Failed to mark TaskRun {} passed: {err}",
                 record.id
             )),
         }
@@ -401,7 +405,7 @@ fn reject_non_direct_task_run(ctx: &Ctx, record: &TaskRunRecord) -> Result<()> {
     match task_run::resolve_context(ctx, record)? {
         TaskRunContext::Direct => Ok(()),
         TaskRunContext::WorkflowLinked(context) => bail!(
-            "TaskRun {} is workflow-linked to {} task {}. Use `wt inspect {}` for context and complete it with `wt workflow complete {} {}`; `wt done` only accepts direct TaskRun ids.",
+            "TaskRun {} is workflow-linked to {} task {}. Use `wt inspect {}` for context and pass it with `wt workflow pass {} {}`; `wt done` only accepts direct TaskRun ids.",
             record.id,
             context.workflow_id,
             context.task,
@@ -410,7 +414,7 @@ fn reject_non_direct_task_run(ctx: &Ctx, record: &TaskRunRecord) -> Result<()> {
             context.task
         ),
         TaskRunContext::UnresolvedWorkflowGroup { group } => bail!(
-            "TaskRun {} belongs to workflow group {}, but the workflow file was not discovered. Use `wt inspect {}` for context and complete the workflow path instead; `wt done` only accepts direct TaskRun ids.",
+            "TaskRun {} belongs to workflow group {}, but the workflow file was not discovered. Use `wt inspect {}` for context and pass the workflow path instead; `wt done` only accepts direct TaskRun ids.",
             record.id,
             group,
             record.id
@@ -491,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_marks_matching_running_direct_task_runs_done() {
+    fn clean_marks_matching_running_direct_task_runs_passed() {
         let repo = tempfile::tempdir().unwrap();
         let worktree = repo.path().with_file_name("test-repo-add-schema");
         let mut runner = MockRunner::new();
@@ -541,7 +545,7 @@ mod tests {
 
         assert_eq!(
             task_run::read(&direct_run.path).unwrap().status,
-            task_run::STATUS_DONE
+            task_run::STATUS_PASSED
         );
         assert_eq!(
             task_run::read(&grouped_run.path).unwrap().status,
@@ -592,7 +596,7 @@ mod tests {
 
         assert_eq!(
             task_run::read(&run.path).unwrap().status,
-            task_run::STATUS_DONE
+            task_run::STATUS_PASSED
         );
     }
 
@@ -600,7 +604,7 @@ mod tests {
     fn clean_branch_target_ignores_unrelated_malformed_task_run_during_resolution() {
         let repo = tempfile::tempdir().unwrap();
         let worktree = repo.path().with_file_name("test-repo-add-schema");
-        let task_runs_dir = repo.path().join(".git/wt/task-runs");
+        let task_runs_dir = repo.path().join(".wt/execution/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
         std::fs::write(
             task_runs_dir.join("unrelated-broken.toml"),
@@ -639,17 +643,34 @@ updated_at = "2026-05-18T00:00:00Z"
             Box::new(runner),
             Box::new(Arc::clone(&ui)),
         );
+        let run = task_run::create(
+            &ctx,
+            "add-schema",
+            "alice/add-schema",
+            None,
+            task_run::STATUS_RUNNING,
+        )
+        .unwrap();
 
         run_with_targets(&ctx, &["alice/add-schema".into()]).unwrap();
 
+        assert_eq!(
+            task_run::read(&run.path).unwrap().status,
+            task_run::STATUS_PASSED
+        );
         let steps = ui.steps.lock().unwrap();
         assert!(steps.contains(&"  Branch deleted".into()));
+        assert!(
+            steps
+                .iter()
+                .any(|step| step.contains("TaskRun marked passed"))
+        );
         drop(steps);
         let warnings = ui.warnings.lock().unwrap();
         assert!(
             warnings
                 .iter()
-                .any(|warning| warning.contains("TaskRun lookup:"))
+                .any(|warning| warning.contains("TaskRun inventory skipped invalid record"))
         );
     }
 
@@ -682,7 +703,9 @@ updated_at = "2026-05-18T00:00:00Z"
             task_run::STATUS_RUNNING,
         )
         .unwrap();
-        let workflow_path = repo.path().join(".git/wt/workflows/2026-05-16-001.toml");
+        let workflow_path = repo
+            .path()
+            .join(".wt/execution/workflows/2026-05-16-001.toml");
         let mut workflow = crate::workflow::WorkflowMetadata::new(
             crate::workflow::WorkflowMode::Batch,
             "branch",
@@ -698,7 +721,7 @@ updated_at = "2026-05-18T00:00:00Z"
         let message = format!("{err:#}");
 
         assert!(message.contains("workflow-linked"));
-        assert!(message.contains("wt workflow complete"));
+        assert!(message.contains("wt workflow pass"));
         assert_eq!(
             task_run::read(&run.path).unwrap().status,
             task_run::STATUS_RUNNING
@@ -741,7 +764,7 @@ updated_at = "2026-05-18T00:00:00Z"
     }
 
     #[test]
-    fn clean_does_not_mark_task_run_done_when_worktree_remove_fails() {
+    fn clean_does_not_mark_task_run_passed_when_worktree_remove_fails() {
         let repo = tempfile::tempdir().unwrap();
         let worktree = repo.path().with_file_name("test-repo-add-schema");
         let mut runner = MockRunner::new();
@@ -1048,7 +1071,7 @@ updated_at = "2026-05-18T00:00:00Z"
     fn clean_uses_matching_profile_config_for_site_unlink() {
         let repo = tempfile::tempdir().unwrap();
         let worktree = repo.path().with_file_name("repo-cms-codex");
-        let profile_dir = repo.path().join(".git/wt/profiles/codex");
+        let profile_dir = repo.path().join(".wt/config/profiles/codex");
         std::fs::create_dir_all(&profile_dir).unwrap();
         std::fs::write(
             profile_dir.join("profile.toml"),

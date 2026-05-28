@@ -62,6 +62,8 @@ pub(super) fn run_stack_workflow(
         StackWorkflowTaskContext {
             workflow_path,
             row: &metadata.tasks[idx],
+            run_id: &states[idx].run_id,
+            run: &states[idx].run,
             policy: &metadata.policy,
             idx,
             total_tasks: metadata.tasks.len(),
@@ -102,6 +104,8 @@ pub(super) fn run_stack_workflow(
 struct StackWorkflowTaskContext<'a> {
     workflow_path: &'a Path,
     row: &'a WorkflowTask,
+    run_id: &'a str,
+    run: &'a task_run::TaskRun,
     policy: &'a WorkflowPolicy,
     idx: usize,
     total_tasks: usize,
@@ -148,6 +152,7 @@ fn run_stack_workflow_task(
             title: &title,
             branch_name,
             setup_mode: task_doc.setup_mode(),
+            template_vars: task_run::launch_template_vars_for(task.run_id, task.run),
             additional_prompt_scope: Some(AGENT_PROMPT_WORKFLOW_SCOPE),
             workspace_color_kind: setup::WORKSPACE_COLOR_KIND_TASK,
             on_start_issue_id: task_doc.origin.as_ref().map(|origin| origin.id.as_str()),

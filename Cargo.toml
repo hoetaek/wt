@@ -1,6 +1,6 @@
 [package]
 name = "wt"
-version = "0.42.0"
+version = "0.43.0"
 edition = "2024"
 rust-version = "1.85"
 publish = false
@@ -31,6 +31,8 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 console = "0.16"
 crossterm = "0.29"
+getrandom = "0.4"
+include_dir = "0.7"
 nix = { version = "0.31.3", features = ["process", "signal"] }
 notify = "8"
 opener = "0.8.4"

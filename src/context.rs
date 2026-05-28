@@ -360,7 +360,6 @@ pub struct CtxOptions {
     pub verbosity: u8,
     pub quiet: bool,
     pub launcher_coordinator_id: Option<String>,
-    pub coordinator_agent_id: Option<String>,
 }
 
 impl Default for CtxOptions {
@@ -373,16 +372,16 @@ impl Default for CtxOptions {
             verbosity: 0,
             quiet: false,
             launcher_coordinator_id: None,
-            coordinator_agent_id: None,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineCtxOptions {
     pub output_mode: OutputMode,
     pub verbosity: u8,
     pub quiet: bool,
+    pub working_dir: Option<PathBuf>,
 }
 
 impl Default for MachineCtxOptions {
@@ -391,6 +390,7 @@ impl Default for MachineCtxOptions {
             output_mode: OutputMode::Text,
             verbosity: 0,
             quiet: false,
+            working_dir: None,
         }
     }
 }
@@ -402,6 +402,7 @@ pub struct MachineCtx<'a> {
     pub output_mode: OutputMode,
     pub verbosity: u8,
     pub quiet: bool,
+    pub working_dir: Option<PathBuf>,
 }
 
 impl<'a> MachineCtx<'a> {
@@ -420,6 +421,7 @@ impl<'a> MachineCtx<'a> {
             output_mode: options.output_mode,
             verbosity: options.verbosity,
             quiet: options.quiet,
+            working_dir: options.working_dir,
         }
     }
 
@@ -444,7 +446,6 @@ pub struct Ctx {
     pub verbosity: u8,
     pub quiet: bool,
     pub launcher_coordinator_id: Option<String>,
-    pub coordinator_agent_id: Option<String>,
 }
 
 impl Ctx {
@@ -463,7 +464,6 @@ impl Ctx {
             verbosity: 0,
             quiet: false,
             launcher_coordinator_id: None,
-            coordinator_agent_id: None,
         };
         Self::new_with_options(repo_root, invocation_root, config, runner, ui, options)
     }
@@ -500,7 +500,6 @@ impl Ctx {
             verbosity: options.verbosity,
             quiet: options.quiet,
             launcher_coordinator_id: options.launcher_coordinator_id,
-            coordinator_agent_id: options.coordinator_agent_id,
         }
     }
 
@@ -516,6 +515,7 @@ impl Ctx {
                 output_mode: self.output_mode,
                 verbosity: self.verbosity,
                 quiet: self.quiet,
+                working_dir: Some(self.invocation_root.clone()),
             },
         )
     }

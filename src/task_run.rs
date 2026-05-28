@@ -1,9 +1,11 @@
 use crate::context::Ctx;
+use crate::messages::AgentId;
 use crate::task;
 use crate::workflow::{self, WorkflowMode};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,15 +13,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) const STATUS_PREPARED: TaskRunStatus = TaskRunStatus::Prepared;
 pub(crate) const STATUS_RUNNING: TaskRunStatus = TaskRunStatus::Running;
-pub(crate) const STATUS_DONE: TaskRunStatus = TaskRunStatus::Done;
+pub(crate) const STATUS_PASSED: TaskRunStatus = TaskRunStatus::Passed;
 pub(crate) const STATUS_FAILED: TaskRunStatus = TaskRunStatus::Failed;
 pub(crate) const STATUS_SKIPPED: TaskRunStatus = TaskRunStatus::Skipped;
+
+pub(crate) const REVIEW_ACCEPTED: TaskReviewStatus = TaskReviewStatus::Accepted;
+pub(crate) const REVIEW_REJECTED: TaskReviewStatus = TaskReviewStatus::Rejected;
+pub(crate) const REVIEW_BLOCKED: TaskReviewStatus = TaskReviewStatus::Blocked;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TaskRunStatus {
     Prepared,
     Running,
-    Done,
+    Passed,
     Failed,
     Skipped,
 }
@@ -29,7 +35,7 @@ impl TaskRunStatus {
         match self {
             Self::Prepared => "prepared",
             Self::Running => "running",
-            Self::Done => "done",
+            Self::Passed => "passed",
             Self::Failed => "failed",
             Self::Skipped => "skipped",
         }
@@ -39,7 +45,7 @@ impl TaskRunStatus {
         match status {
             "prepared" => Ok(Self::Prepared),
             "running" => Ok(Self::Running),
-            "done" => Ok(Self::Done),
+            "passed" | "done" => Ok(Self::Passed),
             "failed" => Ok(Self::Failed),
             "skipped" => Ok(Self::Skipped),
             _ => bail!("Unknown task run status: {status}"),
@@ -61,6 +67,10 @@ impl TaskRunStatus {
     pub(crate) fn is_cleanup_completable(self) -> bool {
         self == Self::Running
     }
+
+    pub(crate) fn is_reportable(self) -> bool {
+        matches!(self, Self::Running | Self::Passed)
+    }
 }
 
 impl fmt::Display for TaskRunStatus {
@@ -75,6 +85,42 @@ impl From<TaskRunStatus> for String {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum TaskReviewStatus {
+    Accepted,
+    Rejected,
+    Blocked,
+}
+
+impl TaskReviewStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+            Self::Blocked => "blocked",
+        }
+    }
+
+    pub(crate) fn parse(status: &str) -> Result<Self> {
+        match status {
+            "accepted" => Ok(Self::Accepted),
+            "rejected" => Ok(Self::Rejected),
+            "blocked" => Ok(Self::Blocked),
+            _ => bail!("Unknown task review status: {status}"),
+        }
+    }
+
+    pub(crate) fn reopens_passed_task_run(self) -> bool {
+        matches!(self, Self::Rejected | Self::Blocked)
+    }
+}
+
+impl fmt::Display for TaskReviewStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TaskRun {
     pub(crate) task: String,
@@ -83,7 +129,14 @@ pub(crate) struct TaskRun {
     pub(crate) group: Option<String>,
     pub(crate) error: Option<String>,
     pub(crate) creation_order: Option<u64>,
+    pub(crate) agent_id: Option<String>,
     pub(crate) coordinator_id: Option<String>,
+    pub(crate) coordinator_label: Option<String>,
+    pub(crate) last_report_message_id: Option<String>,
+    pub(crate) last_reported_at: Option<String>,
+    pub(crate) last_review_status: Option<TaskReviewStatus>,
+    pub(crate) last_review_message_id: Option<String>,
+    pub(crate) last_reviewed_at: Option<String>,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
 }
@@ -109,7 +162,21 @@ struct RawTaskRun {
     #[serde(default)]
     creation_order: Option<u64>,
     #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
     coordinator_id: Option<String>,
+    #[serde(default)]
+    coordinator_label: Option<String>,
+    #[serde(default)]
+    last_report_message_id: Option<String>,
+    #[serde(default)]
+    last_reported_at: Option<String>,
+    #[serde(default)]
+    last_review_status: Option<String>,
+    #[serde(default)]
+    last_review_message_id: Option<String>,
+    #[serde(default)]
+    last_reviewed_at: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -128,7 +195,18 @@ impl TryFrom<RawTaskRun> for TaskRun {
             group: raw.group,
             error: raw.error,
             creation_order: raw.creation_order,
+            agent_id: raw.agent_id,
             coordinator_id: raw.coordinator_id,
+            coordinator_label: raw.coordinator_label,
+            last_report_message_id: raw.last_report_message_id,
+            last_reported_at: raw.last_reported_at,
+            last_review_status: raw
+                .last_review_status
+                .as_deref()
+                .map(TaskReviewStatus::parse)
+                .transpose()?,
+            last_review_message_id: raw.last_review_message_id,
+            last_reviewed_at: raw.last_reviewed_at,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
         };
@@ -143,11 +221,31 @@ struct TaskRunCreationOrder {
     creation_order: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct TaskRunRoutes<'a> {
+    agent_id: Option<&'a str>,
+    coordinator_id: Option<&'a str>,
+    coordinator_label: Option<&'a str>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TaskRunRecord {
     pub(crate) id: String,
     pub(crate) path: PathBuf,
     pub(crate) run: TaskRun,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TaskRunInventory {
+    pub(crate) records: Vec<TaskRunRecord>,
+    pub(crate) invalid: Vec<InvalidTaskRunRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InvalidTaskRunRecord {
+    pub(crate) id: String,
+    pub(crate) path: PathBuf,
+    pub(crate) error: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,6 +292,7 @@ pub(crate) fn create(
     create_with_coordinator_id(ctx, task, branch, group, None, status)
 }
 
+#[cfg(test)]
 pub(crate) fn create_with_coordinator_id(
     ctx: &Ctx,
     task: &str,
@@ -202,24 +301,171 @@ pub(crate) fn create_with_coordinator_id(
     coordinator_id: Option<&str>,
     status: TaskRunStatus,
 ) -> Result<TaskRunRecord> {
+    create_with_routes(
+        ctx,
+        task,
+        branch,
+        group,
+        TaskRunRoutes {
+            coordinator_id,
+            ..TaskRunRoutes::default()
+        },
+        status,
+    )
+}
+
+pub(crate) fn create_direct_routed(
+    ctx: &Ctx,
+    task: &str,
+    branch: &str,
+    coordinator_id: &str,
+    coordinator_label: Option<&str>,
+    status: TaskRunStatus,
+) -> Result<TaskRunRecord> {
+    create_with_routes(
+        ctx,
+        task,
+        branch,
+        None,
+        TaskRunRoutes {
+            coordinator_id: Some(coordinator_id),
+            coordinator_label,
+            ..TaskRunRoutes::default()
+        },
+        status,
+    )
+}
+
+pub(crate) fn create_workflow_routed(
+    ctx: &Ctx,
+    task: &str,
+    branch: &str,
+    group: &str,
+    coordinator_id: &str,
+    coordinator_label: Option<&str>,
+    status: TaskRunStatus,
+) -> Result<TaskRunRecord> {
+    create_with_routes(
+        ctx,
+        task,
+        branch,
+        Some(group),
+        TaskRunRoutes {
+            coordinator_id: Some(coordinator_id),
+            coordinator_label,
+            ..TaskRunRoutes::default()
+        },
+        status,
+    )
+}
+
+fn create_with_routes(
+    ctx: &Ctx,
+    task: &str,
+    branch: &str,
+    group: Option<&str>,
+    routes: TaskRunRoutes<'_>,
+    status: TaskRunStatus,
+) -> Result<TaskRunRecord> {
     let now = current_utc_timestamp();
     let creation_order = next_creation_order(ctx)?;
+    let task_key = task::safe_task_key(task);
+    let coordinator_id = routes.coordinator_id.and_then(optional_string);
+    let agent_id = match routes.agent_id.and_then(optional_string) {
+        Some(agent_id) => Some(agent_id),
+        None if coordinator_id.is_some() => {
+            Some(generated_task_agent_id(creation_order, &task_key)?)
+        }
+        None => None,
+    };
     let run = TaskRun {
-        task: task::safe_task_key(task),
+        task: task_key,
         branch: branch.to_string(),
         status,
         group: group.and_then(optional_string),
         error: None,
         creation_order: Some(creation_order),
-        coordinator_id: coordinator_id.and_then(optional_string),
+        agent_id,
+        coordinator_id,
+        coordinator_label: routes.coordinator_label.and_then(optional_string),
+        last_report_message_id: None,
+        last_reported_at: None,
+        last_review_status: None,
+        last_review_message_id: None,
+        last_reviewed_at: None,
         created_at: now.clone(),
         updated_at: now,
     };
     write_new(ctx, &run)
 }
 
-pub(crate) fn launcher_coordinator_id(ctx: &Ctx) -> Option<&str> {
-    ctx.launcher_coordinator_id.as_deref()
+pub(crate) fn launch_template_vars(record: &TaskRunRecord) -> HashMap<String, String> {
+    launch_template_vars_for(&record.id, &record.run)
+}
+
+pub(crate) fn launch_template_vars_for(id: &str, run: &TaskRun) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    vars.insert("wt_task_run_id".into(), id.to_string());
+    if let Some(agent_id) = run.agent_id.as_deref() {
+        vars.insert("wt_agent_id".into(), agent_id.to_string());
+    }
+    vars
+}
+
+pub(crate) fn workflow_scope_id(record: &TaskRunRecord) -> Option<&str> {
+    record
+        .run
+        .group
+        .as_deref()
+        .map(str::trim)
+        .filter(|group| !group.is_empty())
+}
+
+pub(crate) fn ensure_workflow_routes(
+    record: &TaskRunRecord,
+    coordinator_id: &str,
+    coordinator_label: Option<&str>,
+) -> Result<TaskRunRecord> {
+    let coordinator_id = AgentId::parse(coordinator_id)
+        .context("Invalid coordinator id for workflow TaskRun route repair")?;
+    let mut run = read(&record.path)?;
+    let mut changed = false;
+
+    if run
+        .coordinator_id
+        .as_deref()
+        .and_then(optional_string)
+        .is_none()
+    {
+        run.coordinator_id = Some(coordinator_id.as_str().to_string());
+        changed = true;
+    }
+    if run.agent_id.as_deref().and_then(optional_string).is_none() {
+        run.agent_id = Some(generated_task_agent_id_for_record(&run, &record.id)?);
+        changed = true;
+    }
+    if run
+        .coordinator_label
+        .as_deref()
+        .and_then(optional_string)
+        .is_none()
+    {
+        if let Some(label) = coordinator_label.and_then(optional_string) {
+            run.coordinator_label = Some(label);
+            changed = true;
+        }
+    }
+
+    if changed {
+        run.updated_at = current_utc_timestamp();
+        write(&record.path, &run)?;
+    }
+
+    Ok(TaskRunRecord {
+        id: record.id.clone(),
+        path: record.path.clone(),
+        run,
+    })
 }
 
 pub(crate) fn read(path: &Path) -> Result<TaskRun> {
@@ -237,6 +483,41 @@ pub(crate) fn list(ctx: &Ctx) -> Result<Vec<TaskRunRecord>> {
             let id = id_from_path(&path)?;
             let run = read(&path)?;
             Ok(TaskRunRecord { id, path, run })
+        })
+        .collect()
+}
+
+pub(crate) fn list_lossy(ctx: &Ctx) -> Result<TaskRunInventory> {
+    let mut records = Vec::new();
+    let mut invalid = Vec::new();
+
+    for path in task_run_paths(ctx)? {
+        let id = id_from_path(&path).unwrap_or_else(|_| "task-run".into());
+        match read(&path) {
+            Ok(run) => records.push(TaskRunRecord { id, path, run }),
+            Err(err) => invalid.push(InvalidTaskRunRecord {
+                id,
+                path,
+                error: format!("{err:#}"),
+            }),
+        }
+    }
+
+    Ok(TaskRunInventory { records, invalid })
+}
+
+pub(crate) fn invalid_inventory_warnings(
+    ctx: &Ctx,
+    invalid: &[InvalidTaskRunRecord],
+) -> Vec<String> {
+    invalid
+        .iter()
+        .map(|record| {
+            format!(
+                "TaskRun inventory skipped invalid record {}: {}",
+                ctx.storage_root.display_path(&record.path),
+                record.error
+            )
         })
         .collect()
 }
@@ -309,9 +590,13 @@ pub(crate) fn resolve(ctx: &Ctx, target: &str) -> Result<PathBuf> {
 }
 
 fn storage_display_target(ctx: &Ctx, target: &str) -> Option<PathBuf> {
+    if target == "<repo-root>/.wt" {
+        return Some(ctx.storage_root.personal_root().to_path_buf());
+    }
+
     target
-        .strip_prefix("<git-common-dir>/")
-        .map(|relative| ctx.storage_root.git_common_dir().join(relative))
+        .strip_prefix("<repo-root>/.wt/")
+        .map(|relative| ctx.storage_root.personal_root().join(relative))
 }
 
 pub(crate) fn update(
@@ -334,6 +619,47 @@ pub(crate) fn update(
     Ok(TaskRunRecord {
         id: task_run_id(&path)?,
         path,
+        run,
+    })
+}
+
+pub(crate) fn update_report_metadata(
+    record: &TaskRunRecord,
+    message_id: &str,
+) -> Result<TaskRunRecord> {
+    let mut run = read(&record.path)?;
+    let now = current_utc_timestamp();
+    run.last_report_message_id = optional_string(message_id);
+    run.last_reported_at = Some(now.clone());
+    run.updated_at = now;
+    write(&record.path, &run)?;
+
+    Ok(TaskRunRecord {
+        id: record.id.clone(),
+        path: record.path.clone(),
+        run,
+    })
+}
+
+pub(crate) fn update_review_metadata(
+    record: &TaskRunRecord,
+    status: TaskReviewStatus,
+    message_id: &str,
+) -> Result<TaskRunRecord> {
+    let mut run = read(&record.path)?;
+    let now = current_utc_timestamp();
+    run.last_review_status = Some(status);
+    run.last_review_message_id = optional_string(message_id);
+    run.last_reviewed_at = Some(now.clone());
+    if run.status == TaskRunStatus::Passed && status.reopens_passed_task_run() {
+        run.status = TaskRunStatus::Running;
+    }
+    run.updated_at = now;
+    write(&record.path, &run)?;
+
+    Ok(TaskRunRecord {
+        id: record.id.clone(),
+        path: record.path.clone(),
         run,
     })
 }
@@ -364,6 +690,7 @@ pub(crate) fn task_is_selectable(ctx: &Ctx, task: &str) -> Result<bool> {
     Ok(record.run.status.is_task_selectable())
 }
 
+#[cfg(test)]
 pub(crate) fn running_cleanup_matches(ctx: &Ctx, branch: &str) -> Result<Vec<TaskRunRecord>> {
     let mut records = Vec::new();
     for record in list(ctx)? {
@@ -375,6 +702,23 @@ pub(crate) fn running_cleanup_matches(ctx: &Ctx, branch: &str) -> Result<Vec<Tas
         }
     }
     Ok(records)
+}
+
+pub(crate) fn running_cleanup_matches_lossy(ctx: &Ctx, branch: &str) -> Result<TaskRunInventory> {
+    let inventory = list_lossy(ctx)?;
+    let mut records = Vec::new();
+    for record in inventory.records {
+        if record.run.branch != branch || !record.run.status.is_cleanup_completable() {
+            continue;
+        }
+        if matches!(resolve_context(ctx, &record), Ok(TaskRunContext::Direct)) {
+            records.push(record);
+        }
+    }
+    Ok(TaskRunInventory {
+        records,
+        invalid: inventory.invalid,
+    })
 }
 
 pub(crate) fn resolve_context(ctx: &Ctx, record: &TaskRunRecord) -> Result<TaskRunContext> {
@@ -445,11 +789,44 @@ fn write(path: &Path, run: &TaskRun) -> Result<()> {
     if let Some(creation_order) = run.creation_order {
         content.push_str(&format!("creation_order = {creation_order}\n"));
     }
+    if let Some(agent_id) = run.agent_id.as_deref() {
+        content.push_str(&format!("agent_id = {}\n", toml_quote(agent_id)));
+    }
     if let Some(coordinator_id) = run.coordinator_id.as_deref() {
         content.push_str(&format!(
             "coordinator_id = {}\n",
             toml_quote(coordinator_id)
         ));
+    }
+    if let Some(coordinator_label) = run.coordinator_label.as_deref() {
+        content.push_str(&format!(
+            "coordinator_label = {}\n",
+            toml_quote(coordinator_label)
+        ));
+    }
+    if let Some(message_id) = run.last_report_message_id.as_deref() {
+        content.push_str(&format!(
+            "last_report_message_id = {}\n",
+            toml_quote(message_id)
+        ));
+    }
+    if let Some(reported_at) = run.last_reported_at.as_deref() {
+        content.push_str(&format!("last_reported_at = {}\n", toml_quote(reported_at)));
+    }
+    if let Some(review_status) = run.last_review_status {
+        content.push_str(&format!(
+            "last_review_status = {}\n",
+            toml_quote(review_status.as_str())
+        ));
+    }
+    if let Some(message_id) = run.last_review_message_id.as_deref() {
+        content.push_str(&format!(
+            "last_review_message_id = {}\n",
+            toml_quote(message_id)
+        ));
+    }
+    if let Some(reviewed_at) = run.last_reviewed_at.as_deref() {
+        content.push_str(&format!("last_reviewed_at = {}\n", toml_quote(reviewed_at)));
     }
     content.push_str(&format!("created_at = {}\n", toml_quote(&run.created_at)));
     content.push_str(&format!("updated_at = {}\n", toml_quote(&run.updated_at)));
@@ -465,16 +842,18 @@ fn validate_run(run: &TaskRun) -> Result<()> {
     if matches!(run.creation_order, Some(0)) {
         bail!("Task run creation_order must be greater than 0");
     }
+    if let Some(agent_id) = run.agent_id.as_deref() {
+        AgentId::parse(agent_id).context("Invalid TaskRun agent_id")?;
+    }
     Ok(())
 }
 
 fn latest_path(ctx: &Ctx) -> Result<PathBuf> {
     let mut records = list(ctx)?;
     records.sort_by(compare_task_run_records);
-    records
-        .pop()
-        .map(|record| record.path)
-        .ok_or_else(|| anyhow::anyhow!("No task run files found in <git-common-dir>/wt/task-runs"))
+    records.pop().map(|record| record.path).ok_or_else(|| {
+        anyhow::anyhow!("No task run files found in <repo-root>/.wt/execution/task-runs")
+    })
 }
 
 pub(crate) fn compare_task_run_records(left: &TaskRunRecord, right: &TaskRunRecord) -> Ordering {
@@ -534,7 +913,7 @@ pub(crate) fn task_run_display_path(ctx: &Ctx, path: &Path) -> String {
 fn ensure_no_legacy_task_runs(ctx: &Ctx) -> Result<()> {
     if let Some(legacy) = ctx.storage_root.detect_legacy_task_runs(&ctx.repo_root) {
         bail!(
-            "Found legacy TaskRun storage at {}. Canonical TaskRun storage is {}. wt does not silently read .local/task-runs; import or repair legacy state explicitly before using this command.",
+            "Found legacy TaskRun storage at {}. Canonical TaskRun storage is {}. wt does not silently read legacy TaskRun storage; import or repair legacy state explicitly before using this command.",
             legacy.path().display(),
             ctx.storage_root.display_path(legacy.canonical_root())
         );
@@ -569,6 +948,22 @@ fn task_run_id_base(run: &TaskRun) -> String {
         .map(task::safe_task_key)
         .collect::<Vec<_>>()
         .join("-")
+}
+
+fn generated_task_agent_id(creation_order: u64, task_key: &str) -> Result<String> {
+    let task_key = task::safe_task_key(task_key);
+    AgentId::parse(&format!("agents/run-{creation_order}-{task_key}"))
+        .map(|agent| agent.as_str().to_string())
+        .context("Generated TaskRun agent_id was invalid")
+}
+
+fn generated_task_agent_id_for_record(run: &TaskRun, record_id: &str) -> Result<String> {
+    match run.creation_order {
+        Some(order) => generated_task_agent_id(order, &run.task),
+        None => AgentId::parse(&format!("agents/{}", task::safe_task_key(record_id)))
+            .map(|agent| agent.as_str().to_string())
+            .context("Generated legacy TaskRun agent_id was invalid"),
+    }
 }
 
 fn validate_legacy_source(source: &str) -> Result<()> {
@@ -764,7 +1159,7 @@ mod tests {
         assert_eq!(record.id, "run-2026-05-16-001-add-schema");
         assert_eq!(
             task_run_display_path(&ctx, &record.path),
-            "<git-common-dir>/wt/task-runs/run-2026-05-16-001-add-schema.toml"
+            "<repo-root>/.wt/execution/task-runs/run-2026-05-16-001-add-schema.toml"
         );
         let parsed = read(&record.path).unwrap();
         assert_eq!(parsed.task, "add-schema");
@@ -818,9 +1213,134 @@ mod tests {
 
         let parsed = read(&record.path).unwrap();
         assert_eq!(parsed.coordinator_id.as_deref(), Some("agents/coord-a"));
+        assert_eq!(parsed.agent_id.as_deref(), Some("agents/run-1-add-schema"));
 
         let content = std::fs::read_to_string(record.path).unwrap();
         assert!(content.contains("coordinator_id = \"agents/coord-a\""));
+        assert!(content.contains("agent_id = \"agents/run-1-add-schema\""));
+    }
+
+    #[test]
+    fn blank_coordinator_id_does_not_generate_agent_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+
+        let record = create_with_coordinator_id(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            None,
+            Some("   "),
+            STATUS_RUNNING,
+        )
+        .unwrap();
+
+        let parsed = read(&record.path).unwrap();
+        assert!(parsed.coordinator_id.is_none());
+        assert!(parsed.agent_id.is_none());
+    }
+
+    #[test]
+    fn direct_routed_task_run_round_trips_label_and_report_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let record = create_direct_routed(
+            &ctx,
+            "add-schema",
+            "add-schema",
+            "agents/coord-a",
+            Some("Coordinator for task \"Add schema\""),
+            STATUS_RUNNING,
+        )
+        .unwrap();
+
+        let updated = update_report_metadata(&record, "msg_123").unwrap();
+        let updated = update_review_metadata(&updated, REVIEW_ACCEPTED, "msg_456").unwrap();
+        let parsed = read(&updated.path).unwrap();
+
+        assert_eq!(parsed.agent_id.as_deref(), Some("agents/run-1-add-schema"));
+        assert_eq!(parsed.coordinator_id.as_deref(), Some("agents/coord-a"));
+        assert_eq!(
+            parsed.coordinator_label.as_deref(),
+            Some("Coordinator for task \"Add schema\"")
+        );
+        assert_eq!(parsed.last_report_message_id.as_deref(), Some("msg_123"));
+        assert!(parsed.last_reported_at.is_some());
+        assert_eq!(parsed.last_review_status, Some(REVIEW_ACCEPTED));
+        assert_eq!(parsed.last_review_message_id.as_deref(), Some("msg_456"));
+        assert!(parsed.last_reviewed_at.is_some());
+
+        let content = std::fs::read_to_string(updated.path).unwrap();
+        assert!(content.contains("agent_id = \"agents/run-1-add-schema\""));
+        assert!(content.contains("coordinator_id = \"agents/coord-a\""));
+        assert!(
+            content.contains("coordinator_label = \"Coordinator for task \\\"Add schema\\\"\"")
+        );
+        assert!(content.contains("last_report_message_id = \"msg_123\""));
+        assert!(content.contains("last_reported_at = "));
+        assert!(content.contains("last_review_status = \"accepted\""));
+        assert!(content.contains("last_review_message_id = \"msg_456\""));
+        assert!(content.contains("last_reviewed_at = "));
+    }
+
+    #[test]
+    fn ensure_workflow_routes_repairs_legacy_run_without_overwriting_coordinator() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_runs_dir = dir.path().join(".wt/execution/task-runs");
+        std::fs::create_dir_all(&task_runs_dir).unwrap();
+        let path = task_runs_dir.join("run-workflow-legacy.toml");
+        let run = TaskRun {
+            task: "legacy-task".into(),
+            branch: "legacy-task".into(),
+            status: STATUS_PREPARED,
+            group: Some("workflow-1".into()),
+            error: None,
+            creation_order: Some(42),
+            agent_id: None,
+            coordinator_id: Some("agents/coord-existing".into()),
+            coordinator_label: None,
+            last_report_message_id: None,
+            last_reported_at: None,
+            last_review_status: None,
+            last_review_message_id: None,
+            last_reviewed_at: None,
+            created_at: "2026-05-16T00:00:00Z".into(),
+            updated_at: "2026-05-16T00:00:00Z".into(),
+        };
+        write(&path, &run).unwrap();
+        let record = TaskRunRecord {
+            id: "run-workflow-legacy".into(),
+            path,
+            run,
+        };
+
+        let repaired = ensure_workflow_routes(
+            &record,
+            "agents/coord-new",
+            Some("Coordinator for workflow \"Legacy\""),
+        )
+        .unwrap();
+
+        assert_eq!(
+            repaired.run.agent_id.as_deref(),
+            Some("agents/run-42-legacy-task")
+        );
+        assert_eq!(
+            repaired.run.coordinator_id.as_deref(),
+            Some("agents/coord-existing")
+        );
+        assert_eq!(
+            repaired.run.coordinator_label.as_deref(),
+            Some("Coordinator for workflow \"Legacy\"")
+        );
+        assert_ne!(repaired.run.updated_at, "2026-05-16T00:00:00Z");
+
+        let content = std::fs::read_to_string(repaired.path).unwrap();
+        assert!(content.contains("agent_id = \"agents/run-42-legacy-task\""));
+        assert!(content.contains("coordinator_id = \"agents/coord-existing\""));
+        assert!(
+            content.contains("coordinator_label = \"Coordinator for workflow \\\"Legacy\\\"\"")
+        );
     }
 
     #[test]
@@ -841,6 +1361,10 @@ updated_at = "2026-05-16T00:00:00Z"
 
         let parsed = read(&path).unwrap();
         assert!(parsed.coordinator_id.is_none());
+        assert!(parsed.agent_id.is_none());
+        assert!(parsed.coordinator_label.is_none());
+        assert!(parsed.last_report_message_id.is_none());
+        assert!(parsed.last_reported_at.is_none());
     }
 
     #[test]
@@ -855,7 +1379,7 @@ updated_at = "2026-05-16T00:00:00Z"
             &["worktree", "add", "-b", "linked", path_str(&linked), "HEAD"],
         );
 
-        let storage_root = StorageRoot::resolve(&CleanGitRunner, Some(&linked)).unwrap();
+        let storage_root = StorageRoot::resolve(&CleanGitRunner, Some(&linked), &repo).unwrap();
         let main_ctx = ctx_with_storage(&repo, &repo, storage_root.clone());
         let linked_ctx = ctx_with_storage(&repo, &linked, storage_root);
         let document = TaskDocument {
@@ -871,14 +1395,14 @@ updated_at = "2026-05-16T00:00:00Z"
         let selected = task::select_local_task_by_key(&linked_ctx, "shared").unwrap();
         let records = list(&linked_ctx).unwrap();
 
-        assert_eq!(selected.path, "<git-common-dir>/wt/tasks/shared.toml");
+        assert_eq!(selected.path, "<repo-root>/.wt/execution/tasks/shared.toml");
         assert_eq!(selected.document.title, "Shared task");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, run.id);
         assert_eq!(records[0].path, run.path);
         assert_eq!(
             task_run_display_path(&linked_ctx, &records[0].path),
-            "<git-common-dir>/wt/task-runs/run-shared.toml"
+            "<repo-root>/.wt/execution/task-runs/run-shared.toml"
         );
     }
 
@@ -903,7 +1427,7 @@ updated_at = "2026-05-16T00:00:00Z"
 
         assert!(err.contains("Found legacy TaskRun storage"));
         assert!(err.contains(".local/task-runs"));
-        assert!(err.contains("<git-common-dir>/wt/task-runs"));
+        assert!(err.contains("<repo-root>/.wt/execution/task-runs"));
     }
 
     #[test]
@@ -963,6 +1487,31 @@ updated_at = "2026-05-16T00:00:00Z"
     }
 
     #[test]
+    fn read_accepts_legacy_done_status_but_rewrites_passed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.toml");
+
+        std::fs::write(
+            &path,
+            r#"task = "add-schema"
+branch = "add-schema"
+status = "done"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let parsed = read(&path).unwrap();
+        assert_eq!(parsed.status, STATUS_PASSED);
+
+        write(&path, &parsed).unwrap();
+        let content = std::fs::read_to_string(path).unwrap();
+        assert!(content.contains("status = \"passed\""));
+        assert!(!content.contains("status = \"done\""));
+    }
+
+    #[test]
     fn read_rejects_runtime_binding_fields() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("run.toml");
@@ -986,11 +1535,52 @@ updated_at = "2026-05-16T00:00:00Z"
     }
 
     #[test]
+    fn list_lossy_keeps_valid_task_runs_and_reports_invalid_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let task_runs_dir = dir.path().join(".wt/execution/task-runs");
+        std::fs::create_dir_all(&task_runs_dir).unwrap();
+        write(
+            &task_runs_dir.join("run-valid.toml"),
+            &run_with_order(
+                "add-schema",
+                STATUS_RUNNING,
+                Some(1),
+                "2026-05-16T00:00:00Z",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            task_runs_dir.join("run-broken.toml"),
+            r#"task = "broken"
+branch = "broken"
+status = "started"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let inventory = list_lossy(&ctx).unwrap();
+
+        assert_eq!(inventory.records.len(), 1);
+        assert_eq!(inventory.records[0].id, "run-valid");
+        assert_eq!(inventory.invalid.len(), 1);
+        assert_eq!(inventory.invalid[0].id, "run-broken");
+        assert!(
+            inventory.invalid[0]
+                .error
+                .contains("Unknown task run status")
+        );
+        assert!(list(&ctx).unwrap_err().to_string().contains("status"));
+    }
+
+    #[test]
     fn create_uses_next_id_without_clobbering_existing_run() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
 
-        let first = create(&ctx, "add-schema", "add-schema", None, STATUS_DONE).unwrap();
+        let first = create(&ctx, "add-schema", "add-schema", None, STATUS_PASSED).unwrap();
         let second = create(&ctx, "add-schema", "add-schema", None, STATUS_RUNNING).unwrap();
 
         assert_eq!(first.id, "run-add-schema");
@@ -1000,6 +1590,11 @@ updated_at = "2026-05-16T00:00:00Z"
         assert!(first.path.exists());
         assert!(second.path.exists());
         assert_eq!(list(&ctx).unwrap().len(), 2);
+        assert!(
+            std::fs::read_to_string(first.path)
+                .unwrap()
+                .contains("status = \"passed\"")
+        );
     }
 
     #[test]
@@ -1014,7 +1609,7 @@ updated_at = "2026-05-16T00:00:00Z"
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
         create(&ctx, "add-schema", "add-schema", None, STATUS_SKIPPED).unwrap();
         assert!(task_is_selectable(&ctx, "add-schema").unwrap());
-        create(&ctx, "add-schema", "add-schema", None, STATUS_DONE).unwrap();
+        create(&ctx, "add-schema", "add-schema", None, STATUS_PASSED).unwrap();
         assert!(!task_is_selectable(&ctx, "add-schema").unwrap());
     }
 
@@ -1022,7 +1617,7 @@ updated_at = "2026-05-16T00:00:00Z"
     fn running_cleanup_matches_skips_unreadable_workflow_contexts() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        std::fs::create_dir_all(dir.path().join(".git/wt/workflows")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".wt/execution/workflows")).unwrap();
 
         let direct = create(&ctx, "direct-task", "feature", None, STATUS_RUNNING).unwrap();
         create(
@@ -1034,7 +1629,8 @@ updated_at = "2026-05-16T00:00:00Z"
         )
         .unwrap();
         std::fs::write(
-            dir.path().join(".git/wt/workflows/broken-workflow.toml"),
+            dir.path()
+                .join(".wt/execution/workflows/broken-workflow.toml"),
             "mode = [",
         )
         .unwrap();
@@ -1046,15 +1642,40 @@ updated_at = "2026-05-16T00:00:00Z"
     }
 
     #[test]
+    fn running_cleanup_matches_lossy_keeps_matching_direct_runs_with_unrelated_invalid_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        let direct = create(&ctx, "direct-task", "feature", None, STATUS_RUNNING).unwrap();
+        std::fs::write(
+            dir.path().join(".wt/execution/task-runs/run-broken.toml"),
+            r#"task = "broken"
+branch = "other"
+status = "started"
+created_at = "2026-05-16T00:00:00Z"
+updated_at = "2026-05-16T00:00:00Z"
+"#,
+        )
+        .unwrap();
+
+        let inventory = running_cleanup_matches_lossy(&ctx, "feature").unwrap();
+
+        assert_eq!(inventory.records.len(), 1);
+        assert_eq!(inventory.records[0].id, direct.id);
+        assert_eq!(inventory.invalid.len(), 1);
+        assert_eq!(inventory.invalid[0].id, "run-broken");
+        assert!(running_cleanup_matches(&ctx, "feature").is_err());
+    }
+
+    #[test]
     fn latest_for_task_uses_creation_order_when_created_at_ties() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let task_runs_dir = dir.path().join(".git/wt/task-runs");
+        let task_runs_dir = dir.path().join(".wt/execution/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
 
         write(
             &task_runs_dir.join("z-earlier-id.toml"),
-            &run_with_order("add-schema", STATUS_DONE, Some(1), "2026-05-16T00:00:00Z"),
+            &run_with_order("add-schema", STATUS_PASSED, Some(1), "2026-05-16T00:00:00Z"),
         )
         .unwrap();
         write(
@@ -1073,12 +1694,12 @@ updated_at = "2026-05-16T00:00:00Z"
     fn latest_for_task_sorts_fractional_timestamps_after_previous_seconds() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let task_runs_dir = dir.path().join(".git/wt/task-runs");
+        let task_runs_dir = dir.path().join(".wt/execution/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
 
         write(
             &task_runs_dir.join("z-previous.toml"),
-            &run_with_order("add-schema", STATUS_DONE, None, "2026-05-16T00:00:00Z"),
+            &run_with_order("add-schema", STATUS_PASSED, None, "2026-05-16T00:00:00Z"),
         )
         .unwrap();
         write(
@@ -1102,7 +1723,7 @@ updated_at = "2026-05-16T00:00:00Z"
     fn latest_for_task_orders_mixed_previous_and_ordered_records_totally() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx(dir.path());
-        let task_runs_dir = dir.path().join(".git/wt/task-runs");
+        let task_runs_dir = dir.path().join(".wt/execution/task-runs");
         std::fs::create_dir_all(&task_runs_dir).unwrap();
 
         write(
@@ -1112,7 +1733,7 @@ updated_at = "2026-05-16T00:00:00Z"
         .unwrap();
         write(
             &task_runs_dir.join("b-previous.toml"),
-            &run_with_order("add-schema", STATUS_DONE, None, "2026-05-16T00:00:02Z"),
+            &run_with_order("add-schema", STATUS_PASSED, None, "2026-05-16T00:00:02Z"),
         )
         .unwrap();
         write(
@@ -1169,7 +1790,14 @@ updated_at = "2026-05-16T00:00:00Z"
             group: None,
             error: None,
             creation_order,
+            agent_id: None,
             coordinator_id: None,
+            coordinator_label: None,
+            last_report_message_id: None,
+            last_reported_at: None,
+            last_review_status: None,
+            last_review_message_id: None,
+            last_reviewed_at: None,
             created_at: created_at.into(),
             updated_at: created_at.into(),
         }

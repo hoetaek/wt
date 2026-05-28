@@ -1,17 +1,18 @@
 use crate::cli::{InitAgent, InitIssueProvider, InitSiteProvider};
 use crate::config::{
-    AgentCli, AgentConfig, Config, CopyAsEntry, ReadyMode, SubmitMode, WORKSPACE_DEFAULT_COLORS,
+    AgentCli, AgentConfig, Config, CopyAsEntry, WORKSPACE_DEFAULT_COLORS,
     WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
     WorkspaceBrowserMode,
 };
 use crate::context::{Ctx, PromptItem};
 use crate::error::WtError;
+use crate::personal_storage;
 use crate::storage::StorageRoot;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
 const CLAUDE_LOCAL_SETTINGS_PATH: &str = ".claude/settings.local.json";
-const CLAUDE_ALLOW_RULES: [&str; 2] = ["Edit(/.git/wt/**)", "Write(/.git/wt/**)"];
+const CLAUDE_ALLOW_RULES: [&str; 2] = ["Edit(/.wt/**)", "Write(/.wt/**)"];
 const DEFAULT_INJECT_LOCAL_CONTEXT: &str = "## Local context\n- site: {{site_url}}\n- worktree: {{worktree_path}}\n- parent: {{parent_branch}}\n";
 
 #[derive(Debug, Default)]
@@ -336,6 +337,7 @@ impl InitDefaults {
 
 pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     validate_options(&options)?;
+    ensure_no_legacy_bootstrap_roots(ctx)?;
     let interactive_wizard = is_interactive_wizard(&options);
     if interactive_wizard {
         print_wizard_header(ctx);
@@ -343,7 +345,7 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
             ctx,
             1,
             "설정 파일 위치",
-            "- 개인 설정 파일: <git-common-dir>/wt/config.toml (보통 .git/wt/config.toml)\n- 팀 공유 설정: ./.wt.toml",
+            "- 개인 설정 파일: <repo-root>/.wt/config/local.toml (보통 .wt/config/local.toml)\n- 팀 공유 설정: ./.wt.toml",
         );
     }
     let target = resolve_target(ctx, &options)?;
@@ -385,6 +387,8 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
         return Err(WtError::Cancelled.into());
     }
 
+    personal_storage::ensure_repo_bootstrap(&ctx.storage_root)?;
+
     if let Some(parent) = plan.target_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -421,13 +425,81 @@ fn bootstrap_core_dirs(storage_root: &StorageRoot) -> Result<()> {
     Ok(())
 }
 
+fn ensure_no_legacy_bootstrap_roots(ctx: &Ctx) -> Result<()> {
+    let legacy_roots = [
+        (
+            "config",
+            ctx.storage_root.detect_legacy_config(&ctx.repo_root),
+        ),
+        (
+            "profile storage",
+            ctx.storage_root.detect_legacy_profiles(&ctx.repo_root),
+        ),
+        (
+            "idea storage",
+            ctx.storage_root.detect_legacy_ideas(&ctx.repo_root),
+        ),
+        (
+            "spec storage",
+            ctx.storage_root.detect_legacy_specs(&ctx.repo_root),
+        ),
+        (
+            "retrospective storage",
+            ctx.storage_root
+                .detect_legacy_retrospectives(&ctx.repo_root),
+        ),
+        (
+            "TaskDocument storage",
+            ctx.storage_root.detect_legacy_tasks(&ctx.repo_root),
+        ),
+        (
+            "Workflow storage",
+            ctx.storage_root.detect_legacy_workflows(&ctx.repo_root),
+        ),
+        (
+            "TaskRun storage",
+            ctx.storage_root.detect_legacy_task_runs(&ctx.repo_root),
+        ),
+        (
+            "Workflow archive storage",
+            ctx.storage_root.detect_legacy_archive(&ctx.repo_root),
+        ),
+        ("message storage", ctx.storage_root.detect_legacy_messages()),
+        (
+            "runtime observation storage",
+            ctx.storage_root.detect_legacy_agent_state(),
+        ),
+        (
+            "session anchor storage",
+            ctx.storage_root.detect_legacy_sessions(),
+        ),
+    ];
+    for (state_name, legacy) in legacy_roots {
+        if let Some(legacy) = legacy {
+            bail!("{}", legacy.error_message_for(state_name));
+        }
+    }
+    if let Some(legacy) = ctx.storage_root.detect_legacy_local(&ctx.repo_root) {
+        bail!("{}", legacy.error_message());
+    }
+    Ok(())
+}
+
 fn core_state_dirs(storage_root: &StorageRoot) -> Vec<PathBuf> {
     vec![
+        storage_root.config_dir(),
+        storage_root.profiles_dir(),
+        storage_root.planning_dir(),
+        storage_root.ideas_dir(),
+        storage_root.specs_dir(),
+        storage_root.retrospectives_dir(),
+        storage_root.execution_dir(),
         storage_root.tasks_dir(),
-        storage_root.messages_dir(),
+        storage_root.workflows_dir(),
         storage_root.task_runs_dir(),
-        storage_root.agent_state_dir(),
-        storage_root.worktrees_dir(),
+        storage_root.archive_dir(),
+        storage_root.runtime_dir(),
+        storage_root.runtime_agents_dir(),
     ]
 }
 
@@ -437,7 +509,7 @@ fn maybe_scaffold_claude_allow_rules(ctx: &Ctx, options: &InitOptions) -> Result
     }
 
     if !ctx.ui.confirm(
-        "Claude가 .git/wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?",
+        "Claude가 .wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?",
         false,
     )? {
         return Ok(());
@@ -642,7 +714,7 @@ fn resolve_target(ctx: &Ctx, options: &InitOptions) -> Result<InitTarget> {
     }
 
     let items = vec![
-        PromptItem::with_hint("개인 설정 파일", "보통 .git/wt/config.toml"),
+        PromptItem::with_hint("개인 설정 파일", "보통 .wt/config/local.toml"),
         PromptItem::with_hint("팀 공유 설정", "./.wt.toml"),
     ];
     match ctx
@@ -1168,13 +1240,16 @@ fn append_active_common_config(
 
     sections.push(InitSection::Workspace);
     s.push_str("[workspace]\n");
+    s.push_str("# cmux로 함께 열 보조 탭입니다. 없거나 불필요하면 []로 둡니다.\n");
     s.push_str(&format!("tabs = {}\n", toml_array(&common.workspace_tabs)));
     if !common.post_deps_tabs.is_empty() {
+        s.push_str("# setup.deps 뒤에 시작할 개발 서버 탭입니다.\n");
         s.push_str(&format!(
             "post_deps_tabs = {}\n",
             toml_array(&common.post_deps_tabs)
         ));
     }
+    s.push_str("# task/issue/branch/pr workspace 색상입니다.\n");
     s.push_str(&format!(
         "colors = {}\n",
         toml_inline_string_entries(&workspace_colors(common))
@@ -1219,10 +1294,12 @@ fn append_workflow_policy(
 ) {
     sections.push(InitSection::Workflow);
     s.push_str("[workflow]\n");
+    s.push_str("# workflow task의 PR 처리: none | draft | ready\n");
     s.push_str(&format!(
         "pull_request = {}\n",
         toml_quote(workflow_pull_request_name(policy.pull_request))
     ));
+    s.push_str("# review 통과 뒤 처리: manual은 대기, auto는 landing 진행\n");
     s.push_str(&format!(
         "landing = {}\n\n",
         toml_quote(workflow_landing_name(policy.landing))
@@ -1385,7 +1462,11 @@ fn detected_project_common_config(
             Vec::new()
         },
         test_commands: default_enabled_test_commands(detected),
-        workspace_tabs: recommended_workspace_tabs(ctx),
+        workspace_tabs: if local_target {
+            recommended_workspace_tabs(ctx)
+        } else {
+            Vec::new()
+        },
         workspace_browser: recommended_workspace_browser(ctx, target_kind, site_provider),
         ..InitCommonConfig::default()
     }
@@ -1423,7 +1504,7 @@ fn resolve_custom_common_config(
         config.worktree_copy.clear();
         config.worktree_link.clear();
     }
-    config.workspace_tabs = resolve_workspace_tabs(ctx, &config.workspace_tabs)?;
+    config.workspace_tabs = resolve_workspace_tabs(ctx, target_kind, &config.workspace_tabs)?;
 
     config.setup_deps = resolve_setup_deps(ctx, detected, &config.setup_deps)?;
 
@@ -1623,10 +1704,21 @@ fn resolve_worktree_link(
     Ok(split_list(&input))
 }
 
-fn resolve_workspace_tabs(ctx: &Ctx, default_tabs: &[String]) -> Result<Vec<String>> {
+fn resolve_workspace_tabs(
+    ctx: &Ctx,
+    target_kind: InitTargetKind,
+    default_tabs: &[String],
+) -> Result<Vec<String>> {
     let default = default_tabs.join(", ");
-    ctx.ui
-        .print_dim("worktree를 열 때 cmux 안에 같이 띄울 명령입니다. 예: lazygit, nvim");
+    if target_kind == InitTargetKind::Local {
+        ctx.ui.print_dim(
+            "worktree를 열 때 cmux 안에 같이 띄울 개인 보조 명령입니다. 없으면 비워둡니다.",
+        );
+    } else {
+        ctx.ui.print_dim(
+            "팀에 공유할 cmux 보조 탭입니다. 개인 도구는 local 설정에 두는 편이 안전합니다.",
+        );
+    }
     let input = ctx.ui.input(
         "worktree 열 때 같이 띄울 명령",
         Some(if default_tabs.is_empty() {
@@ -2289,27 +2381,31 @@ fn resolve_agent_args(
         .map(|agent| agent.args.clone())
         .unwrap_or_default();
     let default_args_input = (!default_args.is_empty()).then(|| default_args.join(" "));
-    let mut items = Vec::new();
-    if let Some(default) = default_args_input.as_deref() {
-        items.push(format!("기존 args 유지: {default}"));
+    if default_args.is_empty() {
+        if !ctx.ui.confirm("agent 실행 args를 추가할까요?", false)? {
+            return Ok(Vec::new());
+        }
+        return input_agent_args(ctx, None);
     }
-    items.push("추가 args 없음".into());
-    items.push("args 직접 입력".into());
+
+    let mut items = Vec::new();
+    let default = default_args_input.as_deref().unwrap_or_default();
+    items.push(format!("기존 args 유지: {default}"));
+    items.push("새 args 입력".into());
+    items.push("args 비우기".into());
 
     let selection = ctx
         .ui
         .select_nested_without_filter("agent 실행 args", &items)?;
-    if !default_args.is_empty() && selection == 0 {
-        return Ok(default_args);
+    match selection {
+        0 => Ok(default_args),
+        1 => input_agent_args(ctx, default_args_input.as_deref()),
+        _ => Ok(Vec::new()),
     }
-    let custom_index = items.len() - 1;
-    if selection != custom_index {
-        return Ok(Vec::new());
-    }
+}
 
-    let input = ctx
-        .ui
-        .input("agent args 직접 입력", default_args_input.as_deref())?;
+fn input_agent_args(ctx: &Ctx, default: Option<&str>) -> Result<Vec<String>> {
+    let input = ctx.ui.input("agent args 직접 입력", default)?;
     Ok(input
         .split_whitespace()
         .map(str::to_string)
@@ -2510,24 +2606,47 @@ fn build_profile(
     command: Option<String>,
     defaults: &InitDefaults,
 ) -> Option<InitProfile> {
-    let prompt = matching_default_agent(defaults, agent)
+    let default_agent = matching_default_agent(defaults, agent);
+    let prompt = default_agent
         .map(|agent| agent.prompt.clone())
         .filter(|prompt| !prompt.is_empty())
         .unwrap_or_else(default_agent_prompts);
 
-    (*agent != InitAgent::None).then(|| InitProfile {
-        agent: AgentConfig {
+    (*agent != InitAgent::None).then(|| {
+        let mut config = AgentConfig {
             cli: init_agent_cli(agent),
             args,
             command,
-            ready: ReadyMode::Auto,
-            submit: SubmitMode::Auto,
-            timeout: 30,
-            send_after: 2,
             prompt,
             ..AgentConfig::default()
-        },
+        };
+        config.presence.cli = true;
+        config.presence.args = !config.args.is_empty();
+        config.presence.command = config.command.is_some();
+        if let Some(default_agent) = default_agent {
+            inherit_runtime_field_presence(&mut config, default_agent);
+        }
+        InitProfile { agent: config }
     })
+}
+
+fn inherit_runtime_field_presence(config: &mut AgentConfig, default_agent: &AgentConfig) {
+    if default_agent.presence.ready {
+        config.ready = default_agent.ready.clone();
+        config.presence.ready = true;
+    }
+    if default_agent.presence.submit {
+        config.submit = default_agent.submit.clone();
+        config.presence.submit = true;
+    }
+    if default_agent.presence.timeout {
+        config.timeout = default_agent.timeout;
+        config.presence.timeout = true;
+    }
+    if default_agent.presence.send_after {
+        config.send_after = default_agent.send_after;
+        config.presence.send_after = true;
+    }
 }
 
 fn append_profile_selection(s: &mut String, profile: &InitProfile) {
@@ -2550,14 +2669,20 @@ fn append_inline_agent_section(s: &mut String, agent: &AgentConfig, include_prom
         s.push_str("# cli 이름만으로 부족할 때 사용할 전체 실행 command입니다.\n");
         s.push_str(&format!("command = {}\n", toml_quote(command)));
     }
-    s.push_str("# timeout은 agent 준비 신호를 기다릴 최대 시간(초)입니다.\n");
-    s.push_str(&format!("timeout = {}\n", agent.timeout));
-    s.push_str("# send_after는 prompt를 보낸 뒤 submit하기 전 대기 시간(초)입니다.\n");
-    s.push_str(&format!("send_after = {}\n", agent.send_after));
+    let schema_defaults = AgentConfig::default();
+    if agent.presence.timeout && agent.timeout != schema_defaults.timeout {
+        s.push_str("# agent 준비 신호 대기 최대 초입니다.\n");
+        s.push_str(&format!("timeout = {}\n", agent.timeout));
+    }
+    if agent.presence.send_after && agent.send_after != schema_defaults.send_after {
+        s.push_str("# ready marker가 없을 때 prompt 전 대기 초입니다.\n");
+        s.push_str(&format!("send_after = {}\n", agent.send_after));
+    }
     if include_prompt && !agent.prompt.is_empty() {
         s.push('\n');
         s.push_str("[profile.agent.prompt]\n");
-        s.push_str("# wt가 기본 launch prompt 뒤에 덧붙이는 profile prompt입니다.\n");
+        s.push_str("# wt run 기본 prompt 뒤에 붙는 추가 지침입니다.\n");
+        s.push_str("# common은 모든 run, 나머지는 같은 이름의 run 모드에 붙습니다.\n");
         append_agent_prompts(s, &agent.prompt);
     }
 }
@@ -2571,40 +2696,11 @@ fn append_agent_prompts(s: &mut String, prompts: &std::collections::HashMap<Stri
 }
 
 fn append_prompt_array(s: &mut String, mode: &str, prompt_blocks: &[String]) {
-    if let Some(comment) = prompt_mode_comment(mode) {
-        s.push_str(comment);
-    }
     s.push_str(&format!("{mode} = [\n"));
     for block in prompt_blocks {
         s.push_str(&format!("    {},\n", toml_quote(block)));
     }
     s.push_str("]\n");
-}
-
-fn prompt_mode_comment(mode: &str) -> Option<&'static str> {
-    match mode {
-        "common" => Some(
-            "# common은 issue/branch/pr prompt 앞에 공통으로 붙습니다.\n\
-             # 모든 작업에 반복되는 보고 방식, 검증 기준, 범위 제한을 넣기 좋습니다.\n",
-        ),
-        "issue" => Some(
-            "# issue는 provider issue에서 시작하는 `wt run issue` 작업에 붙습니다.\n\
-             # GitHub/Linear issue의 문제, 수용 기준, 댓글 맥락을 우선 확인하게 할 때 씁니다.\n",
-        ),
-        "branch" => Some(
-            "# branch는 branch-name text로 시작하는 `wt run branch` 작업에 붙습니다.\n\
-             # 현재 branch 이름, task context, 기존 diff에서 작업 범위를 추론하게 할 때 씁니다.\n",
-        ),
-        "pr" => Some(
-            "# pr은 pull request branch를 여는 `wt run pr` 작업에 붙습니다.\n\
-             # review comment, 실패한 check, PR diff를 우선순위로 다루게 할 때 씁니다.\n",
-        ),
-        "workflow" => Some(
-            "# workflow는 `wt run workflow`로 시작한 workflow task에만 붙습니다.\n\
-             # issue/branch setup prompt와 함께 추가되는 workflow 전용 지침입니다.\n",
-        ),
-        _ => None,
-    }
 }
 
 fn prompt_mode_order(mode: &str) -> (usize, &str) {
@@ -2771,14 +2867,12 @@ fn toml_array(values: &[String]) -> String {
 mod tests {
     use super::*;
     use crate::config::{AgentCli, IssueProviderType, SiteProvider, WorkspaceBrowserMode};
-    use crate::context::UserInterface;
     use crate::context::mock::{MockRunner, MockUi};
-    use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     fn local_target(dir: &tempfile::TempDir) -> InitTarget {
         InitTarget {
-            path: dir.path().join(".git/wt/config.toml"),
+            path: dir.path().join(".wt/config/local.toml"),
             kind: InitTargetKind::Local,
         }
     }
@@ -2802,6 +2896,183 @@ mod tests {
     }
 
     #[test]
+    fn init_rejects_legacy_flat_roots_before_bootstrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_tasks = dir.path().join(".wt/tasks");
+        std::fs::create_dir_all(&legacy_tasks).unwrap();
+        std::fs::write(legacy_tasks.join("old.toml"), "").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let error = run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("Found legacy wt personal TaskDocument storage"));
+        assert!(report.contains(".wt/tasks"));
+        assert!(report.contains(".wt/execution/tasks"));
+        assert!(!dir.path().join(".wt/execution").exists());
+        assert!(!dir.path().join(".wt/config/local.toml").exists());
+    }
+
+    #[test]
+    fn init_rejects_legacy_runtime_observation_root_before_bootstrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_agent_state = dir.path().join(".wt/agent.state");
+        std::fs::create_dir_all(&legacy_agent_state).unwrap();
+        std::fs::write(legacy_agent_state.join("wait-observations.jsonl"), "").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let error = run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("Found legacy wt personal runtime observation storage"));
+        assert!(report.contains(".wt/agent.state"));
+        assert!(report.contains(".wt/runtime/agents"));
+        assert!(!dir.path().join(".wt/runtime/agents").exists());
+        assert!(!dir.path().join(".wt/config/local.toml").exists());
+    }
+
+    #[test]
+    fn init_rejects_legacy_session_anchor_root_before_bootstrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_sessions = dir.path().join(".wt/sessions");
+        std::fs::create_dir_all(&legacy_sessions).unwrap();
+        std::fs::write(legacy_sessions.join("surface%3Aold.toml"), "").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        let error = run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("Found legacy wt personal session anchor storage"));
+        assert!(report.contains(".wt/sessions"));
+        assert!(report.contains(".wt/runtime/agents"));
+        assert!(!dir.path().join(".wt/runtime/agents").exists());
+        assert!(!dir.path().join(".wt/config/local.toml").exists());
+    }
+
+    #[test]
+    fn init_allows_local_directory_without_legacy_wt_state() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".local/cache")).unwrap();
+        std::fs::write(dir.path().join(".local/README"), "project-local files\n").unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        let config = Config::load_file(&dir.path().join(".wt/config/local.toml")).unwrap();
+        assert_eq!(config.worktree.link, vec![".local"]);
+        assert!(dir.path().join(".wt/execution").is_dir());
+    }
+
+    #[test]
+    fn init_bootstraps_repo_personal_storage_and_git_exclude_idempotently() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(dir.path().join(".wt").is_dir());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap(),
+            "/.wt\n"
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                force: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap(),
+            "/.wt\n"
+        );
+    }
+
+    #[test]
+    fn init_dry_run_does_not_bootstrap_repo_personal_storage() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                dry_run: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!dir.path().join(".wt").exists());
+        assert!(!dir.path().join(".git/info/exclude").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn init_accepts_existing_personal_storage_symlink_to_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("external-wt-state");
+        std::fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join(".wt")).unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read_link(dir.path().join(".wt")).unwrap(), target);
+        assert!(dir.path().join(".wt/config/local.toml").is_file());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap(),
+            "/.wt\n"
+        );
+    }
+
+    #[test]
     fn init_recommendation_plan_records_target_mode_and_sections() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_for_dir(&dir);
@@ -2817,7 +3088,7 @@ mod tests {
         .unwrap();
         let config: Config = toml::from_str(&plan.content).unwrap();
 
-        assert_eq!(plan.target_path, dir.path().join(".git/wt/config.toml"));
+        assert_eq!(plan.target_path, dir.path().join(".wt/config/local.toml"));
         assert_eq!(plan.target_kind, InitTargetKind::Local);
         assert!(!plan.target_exists);
         assert_eq!(
@@ -2918,21 +3189,30 @@ mod tests {
         );
         assert!(
             plan.content
-                .contains("# common은 issue/branch/pr prompt 앞에 공통으로 붙습니다.")
+                .contains("# wt run 기본 prompt 뒤에 붙는 추가 지침입니다.")
         );
         assert!(
             plan.content
-                .contains("# issue는 provider issue에서 시작하는 `wt run issue` 작업에 붙습니다.")
+                .contains("# common은 모든 run, 나머지는 같은 이름의 run 모드에 붙습니다.")
         );
         assert!(
-            plan.content.contains(
-                "# branch는 branch-name text로 시작하는 `wt run branch` 작업에 붙습니다."
-            )
+            !plan
+                .content
+                .contains("# 모든 run 모드에 공통으로 추가됩니다.")
         );
         assert!(
-            plan.content
-                .contains("# pr은 pull request branch를 여는 `wt run pr` 작업에 붙습니다.")
+            !plan
+                .content
+                .contains("# provider issue 기반 작업에 추가됩니다.")
         );
+        assert!(
+            !plan
+                .content
+                .contains("# branch/task 기반 작업에 추가됩니다.")
+        );
+        assert!(!plan.content.contains("# PR review/fix 작업에 추가됩니다."));
+        assert!(!plan.content.contains("timeout ="));
+        assert!(!plan.content.contains("send_after ="));
         assert!(!plan.content.contains("Read AGENTS.md"));
         assert!(!plan.content.contains("[issues]"));
     }
@@ -3195,7 +3475,7 @@ mod tests {
             r#"{"require":{"laravel/framework":"^13.0"}}"#,
         )
         .unwrap();
-        let ctx = ctx_for_dir_with_commands(&dir, &["cmux"]);
+        let ctx = ctx_for_dir_with_commands(&dir, &["cmux", "lazygit", "nvim"]);
 
         let plan = build_plan(
             &ctx,
@@ -3214,7 +3494,11 @@ mod tests {
         assert!(config.worktree.copy.is_empty());
         assert!(config.worktree.link.is_empty());
         assert!(config.worktree.naming.is_none());
-        assert!(config.workspace.unwrap().browser.is_none());
+        let workspace = config.workspace.unwrap();
+        assert!(workspace.tabs.is_empty());
+        assert!(workspace.browser.is_none());
+        assert!(!plan.content.contains("lazygit"));
+        assert!(!plan.content.contains("nvim"));
         assert_eq!(config.issues.unwrap().provider, IssueProviderType::Linear);
         assert_eq!(config.site.unwrap().provider, SiteProvider::Herd);
     }
@@ -3574,11 +3858,11 @@ mod tests {
                 "select: 개발 환경 설정을 어떻게 만들까요?".to_string(),
                 "select: 설정 editor command".to_string(),
                 "confirm: 설정을 생성할까요?".to_string(),
-                "confirm: Claude가 .git/wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?".to_string(),
+                "confirm: Claude가 .wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?".to_string(),
             ]
         );
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].run, "npm install");
@@ -3647,7 +3931,7 @@ mod tests {
                 .any(|prompt| prompt == "confirm: Herd local site를 설정할까요?")
         );
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.issues.unwrap().provider, IssueProviderType::Linear);
         assert_eq!(config.site.unwrap().provider, SiteProvider::Herd);
@@ -3748,7 +4032,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert!(!content.contains("# [worktree.naming]"));
         assert!(!content.contains("# [setup.env]"));
@@ -3765,9 +4049,15 @@ mod tests {
         assert!(!content.contains("[agent]"));
         assert!(agent.args.is_empty());
         assert!(!content.contains("args ="));
+        assert!(!content.contains("timeout ="));
+        assert!(!content.contains("send_after ="));
+        assert!(content.contains("# workflow task의 PR 처리: none | draft | ready"));
+        assert!(content.contains("# review 통과 뒤 처리: manual은 대기, auto는 landing 진행"));
+        assert!(content.contains("# cmux로 함께 열 보조 탭입니다. 없거나 불필요하면 []로 둡니다."));
+        assert!(content.contains("# task/issue/branch/pr workspace 색상입니다."));
         assert!(
             !dir.path()
-                .join(".git/wt/profiles/codex/profile.toml")
+                .join(".wt/config/profiles/codex/profile.toml")
                 .exists()
         );
         assert!(!content.contains("현재 GitHub 이슈"));
@@ -3817,10 +4107,10 @@ mod tests {
         assert_eq!(issues.gh_user.as_deref(), Some("alice"));
         assert!(!content.contains("[worktree.naming]"));
 
-        assert!(!dir.path().join(".git/wt/config.toml").exists());
+        assert!(!dir.path().join(".wt/config/local.toml").exists());
         assert!(
             !dir.path()
-                .join(".git/wt/profiles/gemini/profile.toml")
+                .join(".wt/config/profiles/gemini/profile.toml")
                 .exists()
         );
     }
@@ -3854,7 +4144,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let issues = config.issues.unwrap();
         assert_eq!(issues.provider, IssueProviderType::Github);
@@ -3869,7 +4159,7 @@ mod tests {
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // use Chrome DevTools browser
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
         let ctx = Ctx::new(
@@ -3898,7 +4188,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let site = config.site.unwrap();
         assert_eq!(site.provider, SiteProvider::Valet);
@@ -3939,7 +4229,7 @@ mod tests {
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // use Chrome DevTools browser
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
         let ctx = Ctx::new(
@@ -3968,7 +4258,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let site = config.site.unwrap();
         assert_eq!(site.provider, SiteProvider::Traefik);
@@ -3987,7 +4277,7 @@ mod tests {
         let mut ui = MockUi::new();
         ui.add_select(1); // shared .wt.toml
         ui.add_select(0); // use project recommendation
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
 
@@ -4022,7 +4312,7 @@ mod tests {
         assert!(config.agent.is_none());
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
-        assert!(!dir.path().join(".git/wt/config.toml").exists());
+        assert!(!dir.path().join(".wt/config/local.toml").exists());
         assert!(config.issues.is_none());
     }
 
@@ -4033,7 +4323,7 @@ mod tests {
         ui.add_select(0); // private repo config
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
         let ui = Arc::new(ui);
@@ -4083,10 +4373,9 @@ mod tests {
             dims.iter()
                 .any(|line| line.contains("이 저장소에 맞는 git worktree 프로젝트 설정"))
         );
-        assert!(
-            dims.iter()
-                .any(|line| line.contains("  - 개인 설정 파일: <git-common-dir>/wt/config.toml"))
-        );
+        assert!(dims.iter().any(|line| {
+            line.contains("  - 개인 설정 파일: <repo-root>/.wt/config/local.toml")
+        }));
         assert!(dims.iter().any(|line| line.is_empty()));
         assert!(
             dims.iter().any(|line| {
@@ -4114,9 +4403,9 @@ mod tests {
                 "select: 저장 위치".to_string(),
                 "select: 개발 환경 설정을 어떻게 만들까요?".to_string(),
                 "select: 설정 editor command".to_string(),
-                "select: agent 실행 args".to_string(),
+                "confirm: agent 실행 args를 추가할까요?".to_string(),
                 "confirm: 설정을 생성할까요?".to_string(),
-                "confirm: Claude가 .git/wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?".to_string(),
+                "confirm: Claude가 .wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?".to_string(),
             ]
         );
     }
@@ -4125,20 +4414,21 @@ mod tests {
     fn init_interactive_flow_accepts_manual_agent_args() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // .wt/config/local.toml
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
-        ui.add_select(1); // enter agent args
+        ui.add_confirm(true); // enter agent args
         ui.add_input("--model gpt-5.5");
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
+        let ui = Arc::new(ui);
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
             Config::default(),
             Box::new(MockRunner::new()),
-            Box::new(ui),
+            Box::new(Arc::clone(&ui)),
         );
 
         run(
@@ -4159,22 +4449,25 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
         assert_eq!(agent.args, vec!["--model", "gpt-5.5"]);
+        let prompts = ui.prompts.lock().unwrap().clone();
+        assert!(prompts.contains(&"confirm: agent 실행 args를 추가할까요?".to_string()));
+        assert!(prompts.contains(&"input: agent args 직접 입력".to_string()));
     }
 
     #[test]
     fn init_interactive_flow_prompts_for_agent_and_writes_prompt_scope() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // .wt/config/local.toml
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // Codex agent
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
         let ui = Arc::new(ui);
@@ -4210,11 +4503,16 @@ mod tests {
         let select_items = ui.select_items.lock().unwrap().clone();
         assert_eq!(select_items[3], vec!["Codex", "Claude"]);
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
         assert!(content.contains("[profile.agent.prompt]"));
+        assert!(content.contains("# wt run 기본 prompt 뒤에 붙는 추가 지침입니다."));
+        assert!(content.contains("# common은 모든 run, 나머지는 같은 이름의 run 모드에 붙습니다."));
+        assert!(!content.contains("# 모든 run 모드에 공통으로 추가됩니다."));
+        assert!(!content.contains("# provider issue 기반 작업에 추가됩니다."));
+        assert!(!content.contains("현재 branch 이름, task context"));
         assert!(agent.prompt.contains_key("common"));
         assert!(agent.prompt.contains_key("issue"));
         assert!(agent.prompt.contains_key("branch"));
@@ -4270,7 +4568,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(
             config.worktree.path.as_deref(),
@@ -4377,7 +4675,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 3);
         assert!(
@@ -4445,7 +4743,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.setup.deps.len(), 1);
         assert_eq!(config.setup.deps[0].working_dir.as_deref(), Some("api"));
@@ -4454,63 +4752,22 @@ mod tests {
     }
 
     #[test]
-    fn init_interactive_agent_args_options_do_not_include_default() {
-        struct CapturingUi {
-            selects: Mutex<VecDeque<usize>>,
-            confirms: Mutex<VecDeque<bool>>,
-            agent_args_items: Arc<Mutex<Option<Vec<String>>>>,
-        }
-
-        impl UserInterface for CapturingUi {
-            fn select(&self, prompt: &str, items: &[String]) -> Result<usize> {
-                if prompt == "agent 실행 args" {
-                    *self.agent_args_items.lock().unwrap() = Some(items.to_vec());
-                }
-                self.selects
-                    .lock()
-                    .unwrap()
-                    .pop_front()
-                    .ok_or_else(|| anyhow::anyhow!("no select response"))
-            }
-
-            fn multi_select(&self, _prompt: &str, _items: &[String]) -> Result<Vec<usize>> {
-                unreachable!()
-            }
-
-            fn confirm(&self, _prompt: &str, _default: bool) -> Result<bool> {
-                self.confirms
-                    .lock()
-                    .unwrap()
-                    .pop_front()
-                    .ok_or_else(|| anyhow::anyhow!("no confirm response"))
-            }
-
-            fn input(&self, _prompt: &str, _default: Option<&str>) -> Result<String> {
-                unreachable!()
-            }
-
-            fn print_step(&self, _msg: &str) {}
-
-            fn print_dim(&self, _msg: &str) {}
-
-            fn print_warning(&self, _msg: &str) {}
-
-            fn print_error(&self, _msg: &str) {}
-        }
-
+    fn init_interactive_agent_args_without_default_uses_confirm_flow() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_args_items = Arc::new(Mutex::new(None));
-        let ui = CapturingUi {
-            selects: Mutex::new(VecDeque::from([0, 0, 0, 0])),
-            confirms: Mutex::new(VecDeque::from([true, false])),
-            agent_args_items: Arc::clone(&agent_args_items),
-        };
+        let mut ui = MockUi::new();
+        ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_confirm(false); // no agent args
+        ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
+        let ui = Arc::new(ui);
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
             Config::default(),
             Box::new(MockRunner::new()),
-            Box::new(ui),
+            Box::new(Arc::clone(&ui)),
         );
 
         run(
@@ -4531,20 +4788,19 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            agent_args_items.lock().unwrap().as_ref().unwrap(),
-            &vec!["추가 args 없음".to_string(), "args 직접 입력".to_string()]
-        );
+        let prompts = ui.prompts.lock().unwrap().clone();
+        assert!(prompts.contains(&"confirm: agent 실행 args를 추가할까요?".to_string()));
+        assert!(!prompts.contains(&"select: agent 실행 args".to_string()));
     }
 
     #[test]
     fn init_interactive_codex_none_agent_args_omits_args() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // .wt/config/local.toml
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
 
@@ -4574,7 +4830,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
@@ -4611,7 +4867,7 @@ mod tests {
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(dir.path().join(".git/wt/config.toml")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".wt/config/local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
@@ -4690,7 +4946,7 @@ mod tests {
         let content = std::fs::read_to_string(dir.path().join(".wt.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         assert_eq!(config.profile.unwrap().agent.unwrap().cli, AgentCli::Codex);
-        assert!(!dir.path().join(".git/wt/config.toml").exists());
+        assert!(!dir.path().join(".wt/config/local.toml").exists());
     }
 
     #[test]
@@ -4734,11 +4990,11 @@ mod tests {
     fn init_interactive_flow_respects_create_confirmation() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = MockUi::new();
-        ui.add_select(0); // .git/wt/config.toml
+        ui.add_select(0); // .wt/config/local.toml
         ui.add_select(0); // project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // Codex agent
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(false); // do not create config
 
         let ctx = Ctx::new(
@@ -4767,16 +5023,16 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(!dir.path().join(".git/wt/config.toml").exists());
+        assert!(!dir.path().join(".wt/config/local.toml").exists());
     }
 
     #[test]
     fn init_interactive_rerun_prefills_existing_config_defaults() {
         let dir = tempfile::tempdir().unwrap();
-        let local = dir.path().join(".git/wt");
+        let local = dir.path().join(".wt/config");
         std::fs::create_dir_all(&local).unwrap();
         std::fs::write(
-            local.join("config.toml"),
+            local.join("local.toml"),
             r#"[profile.agent]
 cli = "claude"
 args = ["--model", "sonnet"]
@@ -4827,7 +5083,7 @@ colors = { task = "", issue = "cyan" }
         assert_eq!(select_items[2][0], "Claude");
         assert_eq!(select_items[3][0], "기존 args 유지: --model sonnet");
 
-        let content = std::fs::read_to_string(local.join("config.toml")).unwrap();
+        let content = std::fs::read_to_string(local.join("local.toml")).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
         let policy = config.workflow_default_policy();
         let agent = config.profile.unwrap().agent.unwrap();
@@ -4888,7 +5144,7 @@ colors = { task = "", issue = "cyan" }
         let settings = read_claude_local_settings(&settings_path).unwrap();
         assert_eq!(
             allow_rules(&settings),
-            vec!["Edit(/.git/wt/**)", "Write(/.git/wt/**)"]
+            vec!["Edit(/.wt/**)", "Write(/.wt/**)"]
         );
         assert!(settings.get("allowed").is_none());
         assert_eq!(
@@ -4896,8 +5152,8 @@ colors = { task = "", issue = "cyan" }
             serde_json::json!({
                 "permissions": {
                     "allow": [
-                        "Edit(/.git/wt/**)",
-                        "Write(/.git/wt/**)"
+                        "Edit(/.wt/**)",
+                        "Write(/.wt/**)"
                     ]
                 }
             })
@@ -4913,8 +5169,8 @@ colors = { task = "", issue = "cyan" }
             &settings_path,
             r#"{
   "allowed": [
-    "Edit(/.git/wt/**)",
-    "Write(/.git/wt/**)",
+    "Edit(/.wt/**)",
+    "Write(/.wt/**)",
     "Bash(echo:*)"
   ]
 }
@@ -4951,7 +5207,7 @@ colors = { task = "", issue = "cyan" }
         assert!(settings.get("allowed").is_none());
         assert_eq!(
             allow_rules(&settings),
-            vec!["Edit(/.git/wt/**)", "Write(/.git/wt/**)", "Bash(echo:*)"]
+            vec!["Edit(/.wt/**)", "Write(/.wt/**)", "Bash(echo:*)"]
         );
     }
 
@@ -4995,10 +5251,10 @@ colors = { task = "", issue = "cyan" }
             &settings_path,
             r#"{
   "allowed": [
-    "Edit(/.git/wt/**)",
-    "Write(/.git/wt/**)",
+    "Edit(/.wt/**)",
+    "Write(/.wt/**)",
     "Bash(echo:*)",
-    "Edit(/.git/wt/**)"
+    "Edit(/.wt/**)"
   ]
 }
 "#,
@@ -5011,7 +5267,7 @@ colors = { task = "", issue = "cyan" }
         assert!(settings.get("allowed").is_none());
         assert_eq!(
             allow_rules(&settings),
-            vec!["Edit(/.git/wt/**)", "Write(/.git/wt/**)", "Bash(echo:*)"]
+            vec!["Edit(/.wt/**)", "Write(/.wt/**)", "Bash(echo:*)"]
         );
     }
 
@@ -5043,7 +5299,7 @@ colors = { task = "", issue = "cyan" }
         assert!(settings.get("allowed").is_none());
         assert_eq!(
             allow_rules(&settings),
-            vec!["Bash(npm run *)", "Edit(/.git/wt/**)", "Write(/.git/wt/**)"]
+            vec!["Bash(npm run *)", "Edit(/.wt/**)", "Write(/.wt/**)"]
         );
     }
 
@@ -5057,12 +5313,12 @@ colors = { task = "", issue = "cyan" }
             r#"{
   "allowed": [
     "Bash(echo:*)",
-    "Edit(/.git/wt/**)"
+    "Edit(/.wt/**)"
   ],
   "permissions": {
     "allow": [
       "Bash(git:*)",
-      "Edit(/.git/wt/**)"
+      "Edit(/.wt/**)"
     ]
   }
 }
@@ -5078,9 +5334,9 @@ colors = { task = "", issue = "cyan" }
             allow_rules(&settings),
             vec![
                 "Bash(git:*)",
-                "Edit(/.git/wt/**)",
+                "Edit(/.wt/**)",
                 "Bash(echo:*)",
-                "Write(/.git/wt/**)"
+                "Write(/.wt/**)"
             ]
         );
     }
@@ -5134,9 +5390,9 @@ colors = { task = "", issue = "cyan" }
     #[test]
     fn init_refuses_existing_file_without_force_and_overwrites_with_force() {
         let dir = tempfile::tempdir().unwrap();
-        let local = dir.path().join(".git/wt");
+        let local = dir.path().join(".wt/config");
         std::fs::create_dir_all(&local).unwrap();
-        std::fs::write(local.join("config.toml"), "[workspace]\ntabs = []\n").unwrap();
+        std::fs::write(local.join("local.toml"), "[workspace]\ntabs = []\n").unwrap();
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
@@ -5182,12 +5438,12 @@ colors = { task = "", issue = "cyan" }
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(local.join("config.toml")).unwrap();
+        let content = std::fs::read_to_string(local.join("local.toml")).unwrap();
         let config = toml::from_str::<Config>(&content).unwrap();
         assert_eq!(config.profile.unwrap().agent.unwrap().cli, AgentCli::Claude);
         assert!(
             !dir.path()
-                .join(".git/wt/profiles/claude/profile.toml")
+                .join(".wt/config/profiles/claude/profile.toml")
                 .exists()
         );
     }
@@ -5209,8 +5465,8 @@ colors = { task = "", issue = "cyan" }
             serde_json::json!({
                 "permissions": {
                     "allow": [
-                        "Edit(/.git/wt/**)",
-                        "Write(/.git/wt/**)"
+                        "Edit(/.wt/**)",
+                        "Write(/.wt/**)"
                     ]
                 }
             })

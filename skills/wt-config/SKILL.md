@@ -1,14 +1,20 @@
 ---
-name: wt-setup
+name: wt-config
 description: "Use to inspect the current project and recommend an ideal wt config: ownership, active sections, omitted sections, commands, providers, workspace, workflow policy, profiles, and validation."
 ---
 
-# WT Setup
+# WT Config
 
 Use this skill to produce a project-specific wt config recommendation. Do not
 answer as a generic config manual. Do not list every possible field unless it is
 relevant to the current repo. Do not start work, coordinate agents, land
 branches, or clean worktrees.
+
+This skill is not the `wt setup` CLI. `wt setup` prepares one user/machine
+integration such as shell lines and agent hooks. `wt init` prepares one repo:
+config, a usable `<repo-root>/.wt/` personal storage path (real directory or
+directory symlink), and the clone-local `/.wt` ignore line. `wt-config`
+recommends and diagnoses repo config.
 
 ## Core Job
 
@@ -32,8 +38,8 @@ would change the config.
 Run these before giving a concrete recommendation:
 
 ```bash
-git rev-parse --path-format=absolute --git-common-dir
-find . "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/wt" -maxdepth 3 \
+git rev-parse --path-format=absolute --show-toplevel
+find . "$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null)/.wt" -maxdepth 3 \
   -name '.wt.toml' -o -name 'config.toml' -o -name 'profile.toml' 2>/dev/null
 wt config
 wt doctor
@@ -41,7 +47,9 @@ rg --files | rg '(^|/)(Cargo.toml|Cargo.lock|package.json|pnpm-lock.yaml|yarn.lo
 ```
 
 If this is the `wt` repo itself, also read `README.md`, `docs/consistency.md`,
-and `docs/north-star.md` before recommending user-facing model changes.
+and `docs/north-star.md` before recommending user-facing model changes. Treat
+`docs/consistency.md` as the source of truth for the `wt setup` / `wt init` /
+personal storage boundary.
 
 Read the relevant manifests, project docs, and CI workflows. Check local
 availability for tools that existing config or recommended commands depend on:
@@ -55,11 +63,15 @@ Never read or print secret file contents such as `.env`.
 
 Choose the file by ownership, not convenience:
 
-- `<git-common-dir>/wt/config.toml`: personal repo config, local paths, local
+- `<repo-root>/.wt/config/local.toml`: personal repo config, local paths, local
   agent commands, private runtime details, personal defaults.
 - `.wt.toml`: project integration config contributors should share.
-- `<git-common-dir>/wt/profiles/<name>/profile.toml`: named runtime profile only
+- `<repo-root>/.wt/config/profiles/<name>/profile.toml`: named runtime profile only
   when reusable structured profile config is worth the extra file.
+
+Do not put `.wt` or linked-worktree `.wt -> <main-repo>/.wt` symlinks in
+`[worktree].link`. That path is wt personal-storage infrastructure, not user
+config intent.
 
 Do not silently move settings between shared/private ownership. If existing
 config is mature, recommend a minimal patch rather than normalizing it into one
@@ -127,17 +139,78 @@ The omission rationale should be practical, for example: "CLI repo, no dev
 server", "tool missing locally", "built-in default already covers this", or
 "shared config would leak a personal path".
 
+## Diagnose Existing Setup Against Intent
+
+Before recommending changes, reconcile three views: what files declare, what
+`wt config` actually resolves, and what the user intends. Many setups fail
+silently because the resolved effective config diverges from the written intent.
+
+The canonical merge rules per section (REPLACE / extend / dedupe / append /
+wholesale-section behavior) live in
+[`docs/consistency.md` → Config Merge Semantics](../../docs/consistency.md#config-merge-semantics).
+Cite that table when explaining why a value disappeared or duplicated; do not
+restate the matrix here.
+
+Run this triangulation pass:
+
+1. **Read every config file that exists.** `.wt.toml`, `<repo-root>/.wt/config/local.toml`,
+   and every `<repo-root>/.wt/config/profiles/*/profile.toml`. Also list
+   `<repo-root>/.wt/config/profiles/*/scaffold/` and `prompts/` to see what
+   the profile expects to inject.
+2. **Read the user's intent.** What did the user just paste, ask for, or
+   describe? If unclear, ask one targeted question — do not guess.
+3. **Run `wt config` and compare.** The effective output is the source of truth
+   for what wt will actually apply. Diff it against the user's intent.
+
+For every divergence, propose a concrete fix. Common divergences to check
+explicitly:
+
+- **Profile dormancy.** `<repo-root>/.wt/config/profiles/<name>/` exists
+  (with `profile.toml`, `scaffold/`, or `prompts/`) but `wt config` shows no
+  `copy_as` pointing into that scaffold and no prompts from
+  `profile.toml`/`prompts/*.md`. Cause: `.wt.toml`/`local.toml` is missing
+  `[profile] name = "<name>"`, and no command passes `--profile <name>`. Fix:
+  add `[profile] name = "<name>"` to the owner file, or remove the profile
+  directory if it is unused.
+- **Named profile + inline `[profile.agent.*]` collision.** When `[profile]` has
+  both `name = "<name>"` and inline settings like `[profile.agent.prompt]`,
+  `wt config` fails with a hard parse error (schema validation rejects the
+  combination). Fix: pick one — drop `name` to use inline, or move the inline
+  prompts into the named profile's `prompts/*.md` (or its own `profile.toml`'s
+  `[agent.prompt]`) and delete the inline block.
+- **Scaffold drift.** `[profile] name = "<name>"` is set and `wt config` shows
+  the `copy_as` scaffold entry, but `scaffold/` is empty or missing the files
+  the user expects. Fix: populate `<repo-root>/.wt/config/profiles/<name>/scaffold/`
+  with the actual files the worktree should receive, then re-run `wt config`.
+- **Prompt file vs inline collision.** `profile.toml` defines
+  `[agent.prompt].<mode>` and the same profile has `prompts/<mode>.md`.
+  Behavior: file wins, stderr emits `warning: [agent.prompt].<mode> from
+  profile.toml is overridden by .../prompts/<mode>.md`. Fix: pick one source
+  for the replace prompt. If the user wants both ("inline as base, file as
+  override"), the warning is informational and no fix is needed — that pattern
+  is supported. `prompts/<mode>.append.md` is not a conflict; it layers on top
+  of either source.
+- **Effective ≠ files in another way.** Any setting the user clearly intended
+  (a prompt, a tab, a command) is absent from `wt config`. Trace which file
+  owns it and why the merge dropped it (wrong section, wrong owner file,
+  shadowed by profile, etc.).
+
+If divergence is detected, lead the response with the divergence and the fix,
+not with a generic recommendation.
+
 ## Response Shape
 
 Use this order:
 
 1. Observed facts: project type, CI checks, detected commands, existing
    effective config, available/missing tools.
-2. Recommended owner file.
-3. Recommended active TOML.
-4. Keep/add/omit rationale.
-5. Unresolved choices or compact project-shaped alternatives, only if needed.
-6. Validation commands.
+2. Divergences between files, intent, and `wt config` — with concrete fixes
+   (skip this item only when there is no existing setup).
+3. Recommended owner file.
+4. Recommended active TOML.
+5. Keep/add/omit rationale.
+6. Unresolved choices or compact project-shaped alternatives, only if needed.
+7. Validation commands.
 
 Keep the answer concrete. Prefer a short active config block over a long field
 catalog.
@@ -155,6 +228,7 @@ If the recommendation includes named profiles, also run:
 
 ```bash
 wt config --profile <name>
+wt config | grep -E 'copy_as|\[agent' # named profile actually merged into effective?
 ```
 
 If this skill file or wt init behavior changes inside the `wt` repo, validate

@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use wt::cli::{
-    AgentCommand, AgentSupervisorCommand, Cli, ColorMode, Commands, CoordCommand, MsgCommand,
-    SessionCommand, TaskCommand, WorkflowCommand,
+    AgentCommand, AgentSupervisorCommand, Cli, ColorMode, Commands, MsgCommand, SessionCommand,
+    TaskCommand, WorkflowCommand,
 };
 use wt::config::{Config, ConfigSource};
 use wt::context::{Ctx, CtxOptions, MachineCtx, MachineCtxOptions, OutputMode};
@@ -69,13 +69,6 @@ fn try_main() -> Result<()> {
             wt::commands::env::run(working_dir.as_deref().unwrap_or(&current_dir))?;
             return Ok(());
         }
-        Commands::Coord { command } => {
-            match command {
-                CoordCommand::Use { id } => wt::commands::coord::use_coordinator(id)?,
-                CoordCommand::Exit => wt::commands::coord::exit_coordinator(),
-            }
-            return Ok(());
-        }
         _ => {}
     }
 
@@ -126,7 +119,8 @@ fn try_main() -> Result<()> {
 
 fn run_setup_command(cli: &Cli, command: &Commands) -> Result<()> {
     let current_dir = std::env::current_dir()?;
-    let _working_dir = resolve_directory(&current_dir, cli.directory.as_deref())?;
+    let working_dir =
+        resolve_directory(&current_dir, cli.directory.as_deref())?.unwrap_or(current_dir);
     let runner = RealRunner;
     let ui = TerminalUi::with_decoration(cli.quiet, use_decorative_output(cli));
     let output_mode = if cli.json {
@@ -141,6 +135,7 @@ fn run_setup_command(cli: &Cli, command: &Commands) -> Result<()> {
             output_mode,
             verbosity: cli.verbose,
             quiet: cli.quiet,
+            working_dir: Some(working_dir),
         },
     );
     wt::dispatch_machine(&ctx, command)
@@ -154,7 +149,8 @@ fn build_ctx(cli: &Cli, command: &Commands) -> Result<(Ctx, ConfigSource)> {
     let git = GitService::new(&runner, working_dir.as_deref());
     let invocation_root = git.repo_root()?;
     let repo_root = git.canonical_repo_root()?;
-    let storage_root = wt::storage::StorageRoot::resolve(&runner, Some(&invocation_root))?;
+    let storage_root =
+        wt::storage::StorageRoot::resolve(&runner, Some(&invocation_root), &repo_root)?;
     let config_base = working_dir.as_deref().unwrap_or(&current_dir);
 
     let (base_config, config, config_source) = if matches!(command, Commands::Init { .. }) {
@@ -188,7 +184,6 @@ fn build_ctx(cli: &Cli, command: &Commands) -> Result<(Ctx, ConfigSource)> {
             verbosity: cli.verbose,
             quiet: cli.quiet,
             launcher_coordinator_id: None,
-            coordinator_agent_id: None,
         },
     );
     let marker = match wt::services::identity_locator::resolve_identity(&ctx_seed) {
@@ -205,10 +200,8 @@ fn build_ctx(cli: &Cli, command: &Commands) -> Result<(Ctx, ConfigSource)> {
         }
         Err(err) => return Err(err),
     };
-    let launcher_coordinator_id = launcher_coordinator_id_from_env()?
-        .or_else(|| marker.as_ref().map(|marker| marker.id.clone()));
-    let coordinator_agent_id = coordinator_agent_id_from_env()?
-        .or_else(|| marker.as_ref().map(|marker| marker.id.clone()));
+    let launcher_coordinator_id =
+        launcher_agent_id_from_env()?.or_else(|| marker.as_ref().map(|marker| marker.id.clone()));
 
     let ctx = Ctx::new_with_options(
         repo_root,
@@ -227,14 +220,13 @@ fn build_ctx(cli: &Cli, command: &Commands) -> Result<(Ctx, ConfigSource)> {
             verbosity: cli.verbose,
             quiet: cli.quiet,
             launcher_coordinator_id,
-            coordinator_agent_id,
         },
     );
 
     Ok((ctx, config_source))
 }
 
-fn launcher_coordinator_id_from_env() -> Result<Option<String>> {
+fn launcher_agent_id_from_env() -> Result<Option<String>> {
     match std::env::var("WT_AGENT_ID") {
         Ok(value) => {
             let value = value.trim();
@@ -243,19 +235,6 @@ fn launcher_coordinator_id_from_env() -> Result<Option<String>> {
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => {
             bail!("Invalid WT_AGENT_ID: value is not Unicode")
-        }
-    }
-}
-
-fn coordinator_agent_id_from_env() -> Result<Option<String>> {
-    match std::env::var("WT_COORDINATOR_AGENT_ID") {
-        Ok(value) => {
-            let value = value.trim();
-            Ok((!value.is_empty()).then(|| value.to_string()))
-        }
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            bail!("Invalid WT_COORDINATOR_AGENT_ID: value is not Unicode")
         }
     }
 }

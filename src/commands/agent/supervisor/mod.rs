@@ -1,9 +1,9 @@
+use crate::commands::msg::{ensure_no_legacy_message_storage, runtime_message_store};
 use crate::context::Ctx;
 use crate::messages::{AgentId, Message, MessageLease, MessageStore};
 use crate::messages::{MessageDeliveryState, MessageInspectionRecord};
 use crate::services::cmux::CmuxService;
 use crate::services::cmux_push::{CmuxPushService, DEFAULT_PAYLOAD_CAP_BYTES, PushKind};
-use crate::services::identity_locator::percent_encode;
 use crate::services::identity_locator::process_start_time;
 use crate::services::inbox_watcher::InboxWatcher;
 use crate::services::supervisor_registration::{
@@ -91,7 +91,7 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
         }
     }
 
-    let log_path = log_path(ctx, agent_id.as_str());
+    let log_path = log_path(ctx, agent_id.as_str())?;
     let supervisor_dir = log_path
         .parent()
         .ok_or_else(|| anyhow!("Supervisor log path has no parent: {}", log_path.display()))?;
@@ -155,7 +155,7 @@ pub fn start(ctx: &Ctx, agent_id: &str, options: StartOptions) -> Result<()> {
             registration.agent_id,
             registration.pid,
             ctx.storage_root
-                .display_path(&registration_path(ctx, &registration.agent_id)),
+                .display_path(&registration_path(ctx, &registration.agent_id)?),
             ctx.storage_root.display_path(&registration.log_path)
         );
     }
@@ -251,11 +251,10 @@ pub fn status(ctx: &Ctx, agent_id: Option<&str>) -> Result<()> {
 
 pub fn logs(ctx: &Ctx, agent_id: &str, options: LogsOptions) -> Result<()> {
     let agent_id = normalize_agent_id(agent_id)?;
-    let log_path = read_registration(ctx, agent_id.as_str())?
-        .map(|registration| registration.log_path)
-        .unwrap_or_else(|| {
-            crate::services::supervisor_registration::log_path(ctx, agent_id.as_str())
-        });
+    let log_path = match read_registration(ctx, agent_id.as_str())? {
+        Some(registration) => registration.log_path,
+        None => crate::services::supervisor_registration::log_path(ctx, agent_id.as_str())?,
+    };
     if options.follow {
         follow_log(&log_path)
     } else {
@@ -271,9 +270,10 @@ pub fn logs(ctx: &Ctx, agent_id: &str, options: LogsOptions) -> Result<()> {
 
 pub fn run(ctx: &Ctx, agent_id: &str, options: RunOptions) -> Result<()> {
     let agent_id = normalize_agent_id(agent_id)?;
-    let log_path = options.log_path.unwrap_or_else(|| {
-        crate::services::supervisor_registration::log_path(ctx, agent_id.as_str())
-    });
+    let log_path = match options.log_path {
+        Some(path) => path,
+        None => crate::services::supervisor_registration::log_path(ctx, agent_id.as_str())?,
+    };
     let registration = read_registration(ctx, agent_id.as_str())?;
     let target_surface_id = options.surface.or_else(|| {
         registration
@@ -325,18 +325,15 @@ pub fn run(ctx: &Ctx, agent_id: &str, options: RunOptions) -> Result<()> {
             config.payload_cap
         ),
     )?;
-    let inbox_new = ctx
-        .storage_root
-        .messages_dir()
-        .join(agent_id.as_str())
-        .join("inbox")
-        .join("new");
+    ensure_no_legacy_message_storage(ctx)?;
+    let inbox_new =
+        agent_id.inbox_state_dir(&ctx.storage_root.runtime_dir(), MessageDeliveryState::New);
     fs::create_dir_all(&inbox_new)
         .with_context(|| format!("Failed to create inbox: {}", inbox_new.display()))?;
     let mut watcher = InboxWatcher::new(&inbox_new)?;
     let mut state = SupervisorLoopState::default();
     loop {
-        let stop_path = stop_requested_path(ctx, agent_id.as_str());
+        let stop_path = stop_requested_path(ctx, &agent_id);
         if stop_path.is_file() {
             append_log(
                 &config.log_path,
@@ -393,7 +390,7 @@ fn run_one_cycle(
     state: &mut SupervisorLoopState,
 ) -> Result<()> {
     state.cycles_since_start = state.cycles_since_start.saturating_add(1);
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     store.reclaim_expired_leases(agent_id, SystemTime::now())?;
     let mut candidates = store.list_new(agent_id)?;
     candidates.extend(store.list_retry(agent_id)?);
@@ -703,7 +700,7 @@ fn next_fresh_message_stale_duration(
     agent_id: &str,
     config: &SupervisorLoopConfig,
 ) -> Result<Option<Duration>> {
-    let store = MessageStore::new(ctx.storage_root.messages_dir());
+    let store = runtime_message_store(ctx)?;
     let threshold = Duration::from_secs(config.stale_threshold_secs);
     let now = SystemTime::now();
     let mut next = None;
@@ -989,11 +986,10 @@ fn parse_kind_option(value: &str) -> Result<PushKind> {
     Ok(kind)
 }
 
-fn stop_requested_path(ctx: &Ctx, agent_id: &str) -> PathBuf {
+fn stop_requested_path(ctx: &Ctx, agent_id: &AgentId) -> PathBuf {
     ctx.storage_root
-        .personal_root()
-        .join("supervisors")
-        .join(format!("{}.stop", percent_encode(agent_id)))
+        .runtime_agent_dir(agent_id)
+        .join("supervisor.stop")
 }
 
 fn has_terminal_marker(message: &Message) -> bool {
@@ -1470,7 +1466,7 @@ mod tests {
     fn stale_gate_leaves_fresh_message_in_new() {
         let dir = TempDir::new().unwrap();
         let ctx = test_ctx(&dir);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from("agents/claude", "agents/codex", "fresh")
             .unwrap();
@@ -1488,7 +1484,7 @@ mod tests {
     fn next_wait_duration_wakes_when_fresh_message_reaches_stale_threshold() {
         let dir = TempDir::new().unwrap();
         let ctx = test_ctx(&dir);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from("agents/claude", "agents/codex", "fresh")
             .unwrap();
@@ -1515,8 +1511,9 @@ mod tests {
         );
         runner.add_response("", true);
         runner.add_response("", true);
+        runner.add_response("", true);
         let ctx = test_ctx_with_runner(&dir, runner);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from("agents/claude", "agents/codex", "stale")
             .unwrap();
@@ -1538,7 +1535,7 @@ mod tests {
     fn terminal_marker_moves_to_delivered_without_push() {
         let dir = TempDir::new().unwrap();
         let ctx = test_ctx(&dir);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from("agents/claude", "agents/codex", "[done] finished")
             .unwrap();
@@ -1560,7 +1557,7 @@ mod tests {
     fn missing_new_file_during_claim_is_treated_as_race() {
         let dir = TempDir::new().unwrap();
         let ctx = test_ctx(&dir);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from("agents/claude", "agents/codex", "claimed by hook")
             .unwrap();
@@ -1585,8 +1582,9 @@ mod tests {
         );
         runner.add_response("", true);
         runner.add_response("", true);
+        runner.add_response("", true);
         let ctx = test_ctx_with_runner(&dir, runner);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from(
                 "agents/claude",
@@ -1611,7 +1609,7 @@ mod tests {
     fn malformed_created_at_moves_to_failed() {
         let dir = TempDir::new().unwrap();
         let ctx = test_ctx(&dir);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from("agents/claude", "agents/codex", "bad timestamp")
             .unwrap();
@@ -1632,7 +1630,7 @@ mod tests {
     fn invalid_inspection_record_moves_to_failed_before_claim() {
         let dir = TempDir::new().unwrap();
         let ctx = test_ctx(&dir);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from("agents/claude", "agents/codex", "wrong state")
             .unwrap();
@@ -1655,8 +1653,10 @@ mod tests {
         let mut runner = MockRunner::new();
         runner.add_response(r#"{"surfaces":[]}"#, true);
         runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
         let ctx = test_ctx_with_runner(&dir, runner);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let first = store
             .send_from("agents/claude", "agents/codex", "first")
             .unwrap();
@@ -1689,7 +1689,7 @@ mod tests {
             false,
         );
         let ctx = test_ctx_with_runner(&dir, runner);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from("agents/claude", "agents/codex", "retry me")
             .unwrap();
@@ -1718,8 +1718,10 @@ mod tests {
         );
         runner.add_response(r#"{"surfaces":[]}"#, true);
         runner.add_response("", true);
+        runner.add_response("", true);
+        runner.add_response("", true);
         let ctx = test_ctx_with_runner(&dir, runner);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from("agents/claude", "agents/codex", "retry later")
             .unwrap();
@@ -1751,7 +1753,7 @@ mod tests {
     fn expired_claim_is_reclaimed_and_processed() {
         let dir = TempDir::new().unwrap();
         let ctx = test_ctx(&dir);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from("agents/claude", "agents/codex", "[done] after lease")
             .unwrap();
@@ -1788,7 +1790,7 @@ mod tests {
         runner.add_response(r#"{"surfaces":[]}"#, true);
         runner.add_response_with_stderr("", "surface invalid", false);
         let ctx = test_ctx_with_runner(&dir, runner);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from("agents/claude", "agents/codex", "fail me")
             .unwrap();
@@ -1810,7 +1812,7 @@ mod tests {
     fn render_payload_is_ascii_and_metadata_only_when_over_cap() {
         let dir = TempDir::new().unwrap();
         let ctx = test_ctx(&dir);
-        let store = MessageStore::new(ctx.storage_root.messages_dir());
+        let store = MessageStore::new(ctx.storage_root.runtime_dir());
         let sent = store
             .send_from(
                 "agents/claude",
@@ -1843,8 +1845,8 @@ mod tests {
             &ctx,
             "agents/codex",
             &ctx.storage_root
-                .personal_root()
-                .join("supervisors/test.log"),
+                .runtime_agent_dir(&AgentId::parse("agents/codex").unwrap())
+                .join("supervisor.log"),
             &options,
             900,
             60,
@@ -1896,14 +1898,14 @@ mod tests {
             payload_cap: DEFAULT_PAYLOAD_CAP_BYTES,
             log_path: ctx
                 .storage_root
-                .personal_root()
-                .join("supervisors/test.log"),
+                .runtime_agent_dir(&AgentId::parse("agents/codex").unwrap())
+                .join("supervisor.log"),
         }
     }
 
     fn inbox_state_dir(ctx: &Ctx, agent_name: &str, state: &str) -> PathBuf {
         ctx.storage_root
-            .messages_dir()
+            .runtime_dir()
             .join("agents")
             .join(agent_name)
             .join("inbox")

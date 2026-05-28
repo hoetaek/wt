@@ -82,7 +82,6 @@ impl SnapshotState {
                 verbosity: 0,
                 quiet: true,
                 launcher_coordinator_id: None,
-                coordinator_agent_id: None,
             },
         )
     }
@@ -403,7 +402,7 @@ struct TaskRunCounts {
     total: usize,
     prepared: usize,
     running: usize,
-    done: usize,
+    passed: usize,
     failed: usize,
     skipped: usize,
     missing: usize,
@@ -549,7 +548,7 @@ pub fn build(state: &SnapshotState) -> Result<Snapshot> {
             retrospecs: ctx
                 .storage_root
                 .display_path(&ctx.storage_root.retrospectives_dir())
-                + " + <git-common-dir>/wt/specs/*/11-retrospect.md",
+                + " + <repo-root>/.wt/planning/specs/*/11-retrospect.md",
             config_paths: config_source_paths(&ctx),
         },
         config: config_summary(&ctx),
@@ -947,7 +946,7 @@ fn workflow_task_run_counts(ctx: &Ctx, metadata: &WorkflowMetadata) -> TaskRunCo
         total: workflow_run_ids(metadata).len(),
         prepared: 0,
         running: 0,
-        done: 0,
+        passed: 0,
         failed: 0,
         skipped: 0,
         missing: 0,
@@ -1011,7 +1010,7 @@ fn task_run_status_order(status: &str) -> usize {
     match status {
         "prepared" => 0,
         "running" => 1,
-        "done" => 2,
+        "passed" => 2,
         "skipped" => 3,
         "failed" => 4,
         _ => 5,
@@ -1033,7 +1032,7 @@ fn increment_status_count(counts: &mut TaskRunCounts, status: TaskRunStatus) {
     match status {
         TaskRunStatus::Prepared => counts.prepared += 1,
         TaskRunStatus::Running => counts.running += 1,
-        TaskRunStatus::Done => counts.done += 1,
+        TaskRunStatus::Passed => counts.passed += 1,
         TaskRunStatus::Failed => counts.failed += 1,
         TaskRunStatus::Skipped => counts.skipped += 1,
     }
@@ -1050,32 +1049,29 @@ fn workflow_presentation_group(
     if runnable.runnable {
         return "runnable".into();
     }
-    if counts.total > 0 && counts.done + counts.skipped == counts.total {
-        return "done".into();
+    if counts.total > 0 && counts.passed + counts.skipped == counts.total {
+        return "passed".into();
     }
     "waiting".into()
 }
 
 fn collect_task_runs(ctx: &Ctx) -> Result<TaskRunCollection> {
-    let mut items = Vec::new();
-    let mut invalid = Vec::new();
-
-    for path in task_run::task_run_paths(ctx)? {
-        let id = task_run::id_from_path(&path).unwrap_or_else(|_| "task-run".into());
-        let relative_path = relative_path(ctx, &path);
-        match task_run::read(&path) {
-            Ok(run) => {
-                let record = TaskRunRecord { id, path, run };
-                items.push(task_run_summary(ctx, &record));
-            }
-            Err(err) => invalid.push(InvalidRecord {
-                key: id,
-                path: relative_path,
-                error: format!("{err:#}"),
-                source_text: read_known_source_text(ctx, &path),
-            }),
-        }
-    }
+    let inventory = task_run::list_lossy(ctx)?;
+    let items = inventory
+        .records
+        .iter()
+        .map(|record| task_run_summary(ctx, record))
+        .collect();
+    let invalid = inventory
+        .invalid
+        .into_iter()
+        .map(|record| InvalidRecord {
+            key: record.id,
+            path: relative_path(ctx, &record.path),
+            error: record.error,
+            source_text: read_known_source_text(ctx, &record.path),
+        })
+        .collect();
 
     Ok(TaskRunCollection { items, invalid })
 }
@@ -1250,6 +1246,14 @@ fn collect_retrospecs(ctx: &Ctx) -> Result<RetrospecCollection> {
             legacy,
             "legacy-retrospectives",
             "retrospectives",
+        ));
+    }
+    if let Some(legacy) = ctx.storage_root.detect_legacy_specs(&ctx.repo_root) {
+        invalid.push(legacy_state_invalid_record(
+            ctx,
+            legacy,
+            "legacy-specs",
+            "specs",
         ));
     }
 
@@ -1884,23 +1888,25 @@ fn read_known_source_text(ctx: &Ctx, path: &Path) -> Option<String> {
 
 fn is_known_state_or_config_path(relative: &str) -> bool {
     relative == ".wt.toml"
-        || relative == "<git-common-dir>/wt/config.toml"
-        || (relative.starts_with("<git-common-dir>/wt/ideas/")
+        || relative == "<repo-root>/.wt/config/local.toml"
+        || (relative.starts_with("<repo-root>/.wt/planning/ideas/")
             && matches!(
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
             ))
-        || (relative.starts_with("<git-common-dir>/wt/retrospectives/")
+        || (relative.starts_with("<repo-root>/.wt/planning/retrospectives/")
             && matches!(
                 Path::new(relative).extension().and_then(|ext| ext.to_str()),
                 Some("toml" | "md" | "markdown")
             ))
-        || (relative.starts_with("<git-common-dir>/wt/specs/")
+        || (relative.starts_with("<repo-root>/.wt/planning/specs/")
             && relative.ends_with("/11-retrospect.md"))
-        || (relative.starts_with("<git-common-dir>/wt/tasks/") && relative.ends_with(".toml"))
-        || (relative.starts_with("<git-common-dir>/wt/workflows/") && relative.ends_with(".toml"))
-        || (relative.starts_with("<git-common-dir>/wt/task-runs/") && relative.ends_with(".toml"))
-        || (relative.starts_with("<git-common-dir>/wt/profiles/")
+        || (relative.starts_with("<repo-root>/.wt/execution/tasks/") && relative.ends_with(".toml"))
+        || (relative.starts_with("<repo-root>/.wt/execution/workflows/")
+            && relative.ends_with(".toml"))
+        || (relative.starts_with("<repo-root>/.wt/execution/task-runs/")
+            && relative.ends_with(".toml"))
+        || (relative.starts_with("<repo-root>/.wt/config/profiles/")
             && relative.ends_with("/profile.toml"))
 }
 
@@ -2053,7 +2059,7 @@ mod tests {
         .unwrap();
         fs::create_dir_all(dir.path().join(".local")).unwrap();
         fs::write(
-            dir.path().join(".git/wt/config.toml"),
+            dir.path().join(".wt/config/local.toml"),
             "[workflow]\nlanding = \"auto\"\n",
         )
         .unwrap();
@@ -2142,7 +2148,7 @@ mod tests {
             Config::default(),
             ConfigSource::Files(vec![
                 dir.path().join(".wt.toml"),
-                dir.path().join(".git/wt/config.toml"),
+                dir.path().join(".wt/config/local.toml"),
             ]),
         );
 
@@ -2212,11 +2218,11 @@ mod tests {
         assert_eq!(profile.link, vec![".local".to_string()]);
         assert_eq!(
             snapshot.sources.config_paths,
-            vec![".wt.toml", "<git-common-dir>/wt/config.toml"]
+            vec![".wt.toml", "<repo-root>/.wt/config/local.toml"]
         );
         assert_eq!(
             snapshot.tasks.items[0].path,
-            "<git-common-dir>/wt/tasks/demo.toml"
+            "<repo-root>/.wt/execution/tasks/demo.toml"
         );
         assert_eq!(snapshot.tasks.items[0].body.as_deref(), Some("Demo body"));
         assert!(
@@ -2260,7 +2266,7 @@ mod tests {
         assert_eq!(relationship.task_run.as_ref().unwrap().status, "prepared");
         assert_eq!(
             relationship.task_run.as_ref().unwrap().path,
-            "<git-common-dir>/wt/task-runs/run-demo.toml"
+            "<repo-root>/.wt/execution/task-runs/run-demo.toml"
         );
         assert_eq!(
             snapshot.workflows.items[0].body.as_deref(),
@@ -2295,7 +2301,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.retrospecs.items[1].path,
-            "<git-common-dir>/wt/specs/demo-spec/11-retrospect.md"
+            "<repo-root>/.wt/planning/specs/demo-spec/11-retrospect.md"
         );
         assert_eq!(
             snapshot.workflows.items[0].presentation_group,
@@ -2325,7 +2331,7 @@ mod tests {
         let invalid = &snapshot.ideas.invalid[0];
         assert_eq!(invalid.key, "legacy-ideas");
         assert_eq!(invalid.path, ".local/ideas");
-        assert!(invalid.error.contains("Found legacy repo-root ideas"));
+        assert!(invalid.error.contains("Found legacy wt personal ideas"));
         assert!(invalid.error.contains("wt does not silently fall back"));
         assert_eq!(invalid.source_text, None);
     }
@@ -2355,7 +2361,7 @@ mod tests {
         assert!(
             invalid
                 .error
-                .contains("Found legacy repo-root retrospectives")
+                .contains("Found legacy wt personal retrospectives")
         );
         assert!(invalid.error.contains("wt does not silently fall back"));
         assert_eq!(invalid.source_text, None);
@@ -2468,44 +2474,82 @@ mod tests {
         );
     }
 
+    #[test]
+    fn snapshot_groups_terminal_workflow_as_passed() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "passed-task",
+            "title = \"Passed task\"\nbranch = \"feature/passed\"\n",
+        );
+        write_task_run(
+            dir.path(),
+            "run-passed",
+            "task = \"passed-task\"\nbranch = \"feature/passed\"\nstatus = \"passed\"\ngroup = \"passed-workflow\"\ncreated_at = \"2026-05-18T00:00:00Z\"\nupdated_at = \"2026-05-18T00:00:00Z\"\n",
+        );
+        write_workflow(
+            dir.path(),
+            "passed-workflow",
+            "title = \"Passed workflow\"\nmode = \"single\"\nbase_mode = \"explicit\"\nbase = \"main\"\ncreated_at = \"2026-05-18T00:00:00Z\"\nupdated_at = \"2026-05-18T00:00:00Z\"\n\n[policy]\npull_request = \"none\"\nlanding = \"manual\"\n\n[[tasks]]\ntask = \"passed-task\"\nrun = \"run-passed\"\n",
+        );
+        let state = SnapshotState::new(
+            dir.path().to_path_buf(),
+            dir.path().to_path_buf(),
+            "repo".into(),
+            Config::default(),
+            Config::default(),
+            ConfigSource::Default,
+        );
+
+        let snapshot = build(&state).unwrap();
+
+        assert_eq!(snapshot.task_runs.items[0].status, "passed");
+        assert_eq!(snapshot.workflows.items[0].task_runs.passed, 1);
+        assert_eq!(snapshot.workflows.items[0].presentation_group, "passed");
+        assert_eq!(
+            snapshot.workflows.items[0].task_run_groups[0].status,
+            "passed"
+        );
+    }
+
     fn write_task(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/tasks");
+        let dir = root.join(".wt/execution/tasks");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_task_run(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/task-runs");
+        let dir = root.join(".wt/execution/task-runs");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_workflow(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/workflows");
+        let dir = root.join(".wt/execution/workflows");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_idea(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/ideas");
+        let dir = root.join(".wt/planning/ideas");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_profile(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/profiles").join(name);
+        let dir = root.join(".wt/config/profiles").join(name);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("profile.toml"), content).unwrap();
     }
 
     fn write_retrospec(root: &Path, name: &str, content: &str) {
-        let dir = root.join(".git/wt/retrospectives");
+        let dir = root.join(".wt/planning/retrospectives");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{name}.toml")), content).unwrap();
     }
 
     fn write_spec_retrospect(root: &Path, spec: &str, content: &str) {
-        let dir = root.join(".git/wt/specs").join(spec);
+        let dir = root.join(".wt/planning/specs").join(spec);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("11-retrospect.md"), content).unwrap();
     }

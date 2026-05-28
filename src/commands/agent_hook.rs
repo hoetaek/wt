@@ -27,12 +27,12 @@ pub(crate) fn install_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Resul
 
     let mut settings = read_settings(&settings_path)?;
     remove_managed_claude_hook(&mut settings, ClaudeRemoveTarget::AllWtManaged)?;
-    let command = target.command();
     let session_end_command = target.session_end_command();
-    install_managed_claude_hook(&mut settings, &command, &session_end_command)?;
+    install_managed_claude_hook(&mut settings, &target, &session_end_command)?;
     write_settings(&settings_path, &settings)?;
 
     if !ctx.quiet {
+        let command = target.command_for_event(CLAUDE_HOOK_EVENTS[0]);
         ctx.ui
             .print_step(&format!("Claude hook installed for {}", target.label()));
         ctx.ui
@@ -59,10 +59,15 @@ pub(crate) fn uninstall_claude(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Res
     let mut settings = read_settings(&settings_path)?;
     let remove_target = match &target {
         ClaudeHookTarget::Dispatcher => ClaudeRemoveTarget::AllWtManaged,
-        ClaudeHookTarget::Agent(agent) => ClaudeRemoveTarget::Commands(vec![
-            managed_claude_hook_command(agent.as_str()),
-            managed_claude_supervisor_session_end_command(Some(agent.as_str())),
-        ]),
+        ClaudeHookTarget::Agent(agent) => {
+            let mut commands = target.inbox_commands();
+            commands.push(legacy_eventless_managed_claude_hook_command(agent.as_str()));
+            commands.push(legacy_managed_claude_hook_command(agent.as_str()));
+            commands.push(managed_claude_supervisor_session_end_command(Some(
+                agent.as_str(),
+            )));
+            ClaudeRemoveTarget::Commands(commands)
+        }
     };
     let removed = remove_managed_claude_hook(&mut settings, remove_target)?;
     if removed > 0 {
@@ -99,10 +104,11 @@ pub(crate) fn claude_dispatcher_installed() -> Result<bool> {
         return Ok(false);
     }
     let settings = read_settings(&settings_path)?;
-    Ok(claude_has_command_for_all_events(
-        &settings,
-        &managed_claude_dispatcher_command(),
-    ))
+    let session_end_command = managed_claude_supervisor_session_end_command(None);
+    Ok(
+        claude_has_dispatcher_command_for_all_inbox_events(&settings)
+            && claude_has_command_for_event(&settings, "SessionEnd", &session_end_command),
+    )
 }
 
 pub(crate) fn claude_wt_managed_hook_present() -> Result<bool> {
@@ -120,16 +126,21 @@ pub(crate) fn claude_wt_managed_hook_present() -> Result<bool> {
 pub(crate) fn install_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result<()> {
     let target = CodexHookTarget::parse(agent)?;
     let paths = codex_hook_paths(true)?;
-    let command = target.command();
+    let display_command = target.command_for_event(CODEX_HOOK_EVENTS[0].0);
 
     let mut hooks = read_codex_hooks(&paths.hooks_path)?;
     let remove_target = match &target {
         CodexHookTarget::Dispatcher => CodexRemoveTarget::AllWtManaged,
-        CodexHookTarget::Agent(_) => CodexRemoveTarget::Command(command.clone()),
+        CodexHookTarget::Agent(agent) => {
+            let mut commands = target.inbox_commands();
+            commands.push(legacy_eventless_managed_codex_hook_command(agent.as_str()));
+            commands.push(legacy_managed_codex_hook_command(agent.as_str()));
+            CodexRemoveTarget::Commands(commands)
+        }
     };
     let stale_trust = remove_managed_codex_hook(&mut hooks, &paths, remove_target)?;
-    install_managed_codex_hook(&mut hooks, &command)?;
-    let trust_installs = find_managed_codex_hook_trust_installs(&hooks, &paths, &command)?;
+    install_managed_codex_hook(&mut hooks, &target)?;
+    let trust_installs = find_managed_codex_hook_trust_installs(&hooks, &paths, &target)?;
 
     validate_codex_config_for_trust(&paths.config_path)?;
     write_codex_hooks(&paths.hooks_path, &hooks)?;
@@ -149,7 +160,7 @@ pub(crate) fn install_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Result
             .print_dim(&format!("  Hooks: {}", paths.hooks_path.display()));
         ctx.ui
             .print_dim(&format!("  Config: {}", paths.config_path.display()));
-        ctx.ui.print_dim(&format!("  Command: {command}"));
+        ctx.ui.print_dim(&format!("  Command: {display_command}"));
     }
 
     Ok(())
@@ -174,10 +185,18 @@ pub(crate) fn uninstall_codex(ctx: &MachineCtx<'_>, agent: Option<&str>) -> Resu
     let remove_target = match &target {
         CodexHookTarget::Dispatcher => CodexRemoveTarget::AllWtManaged,
         CodexHookTarget::Agent(agent) => {
-            CodexRemoveTarget::Command(managed_codex_hook_command(agent.as_str()))
+            let mut commands = target.inbox_commands();
+            commands.push(legacy_eventless_managed_codex_hook_command(agent.as_str()));
+            commands.push(legacy_managed_codex_hook_command(agent.as_str()));
+            CodexRemoveTarget::Commands(commands)
         }
     };
-    let trust_update = remove_managed_codex_hook(&mut hooks, &paths, remove_target)?;
+    let mut trust_update = remove_managed_codex_hook(&mut hooks, &paths, remove_target)?;
+    trust_update
+        .remove_keys
+        .extend(codex_wt_managed_trust_keys(&paths, &target)?);
+    trust_update.remove_keys.sort_unstable();
+    trust_update.remove_keys.dedup();
     write_codex_hooks(&paths.hooks_path, &hooks)?;
     if paths.config_path.exists() {
         write_codex_config_trust(
@@ -214,8 +233,8 @@ pub(crate) fn codex_dispatcher_installed() -> Result<bool> {
     }
 
     let hooks = read_codex_hooks(&paths.hooks_path)?;
-    let command = managed_codex_dispatcher_command();
-    let trust_installs = match find_managed_codex_hook_trust_installs(&hooks, &paths, &command) {
+    let target = CodexHookTarget::Dispatcher;
+    let trust_installs = match find_managed_codex_hook_trust_installs(&hooks, &paths, &target) {
         Ok(installs) => installs,
         Err(_) => return Ok(false),
     };
@@ -232,6 +251,9 @@ pub(crate) fn codex_dispatcher_installed() -> Result<bool> {
             paths.config_path.display()
         )
     })?;
+    if !codex_hooks_feature_enabled(&config) {
+        return Ok(false);
+    }
     let Some(state) = config
         .get("hooks")
         .and_then(Item::as_table_like)
@@ -251,16 +273,16 @@ pub(crate) fn codex_dispatcher_installed() -> Result<bool> {
     }))
 }
 
-pub(crate) fn codex_wt_managed_hook_present() -> Result<bool> {
+pub(crate) fn codex_wt_managed_hook_or_trust_present() -> Result<bool> {
     let paths = codex_hook_paths(false)?;
-    if !paths.hooks_path.exists() {
-        return Ok(false);
+    if paths.hooks_path.exists() {
+        let hooks = read_codex_hooks(&paths.hooks_path)?;
+        if codex_any_command_matches(&hooks, is_wt_managed_codex_command) {
+            return Ok(true);
+        }
     }
-    let hooks = read_codex_hooks(&paths.hooks_path)?;
-    Ok(codex_any_command_matches(
-        &hooks,
-        is_wt_managed_codex_command,
-    ))
+
+    Ok(!codex_wt_managed_trust_keys(&paths, &CodexHookTarget::Dispatcher)?.is_empty())
 }
 
 struct CodexHookPaths {
@@ -309,11 +331,18 @@ impl ClaudeHookTarget {
             .map(|target| target.unwrap_or(Self::Dispatcher))
     }
 
-    fn command(&self) -> String {
+    fn command_for_event(&self, event_name: &str) -> String {
         match self {
-            Self::Dispatcher => managed_claude_dispatcher_command(),
-            Self::Agent(agent) => managed_claude_hook_command(agent.as_str()),
+            Self::Dispatcher => managed_claude_dispatcher_command(event_name),
+            Self::Agent(agent) => managed_claude_hook_command(agent.as_str(), event_name),
         }
+    }
+
+    fn inbox_commands(&self) -> Vec<String> {
+        CLAUDE_HOOK_EVENTS
+            .iter()
+            .map(|event_name| self.command_for_event(event_name))
+            .collect()
     }
 
     fn session_end_command(&self) -> String {
@@ -327,7 +356,7 @@ impl ClaudeHookTarget {
 
     fn label(&self) -> String {
         match self {
-            Self::Dispatcher => "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher".into(),
+            Self::Dispatcher => "WT_AGENT_ID dispatcher".into(),
             Self::Agent(agent) => format!("manual override {}", agent.as_str()),
         }
     }
@@ -342,16 +371,23 @@ impl CodexHookTarget {
             .map(|target| target.unwrap_or(Self::Dispatcher))
     }
 
-    fn command(&self) -> String {
+    fn command_for_event(&self, event_name: &str) -> String {
         match self {
-            Self::Dispatcher => managed_codex_dispatcher_command(),
-            Self::Agent(agent) => managed_codex_hook_command(agent.as_str()),
+            Self::Dispatcher => managed_codex_dispatcher_command(event_name),
+            Self::Agent(agent) => managed_codex_hook_command(agent.as_str(), event_name),
         }
+    }
+
+    fn inbox_commands(&self) -> Vec<String> {
+        CODEX_HOOK_EVENTS
+            .iter()
+            .map(|(event_name, _)| self.command_for_event(event_name))
+            .collect()
     }
 
     fn label(&self) -> String {
         match self {
-            Self::Dispatcher => "WT_AGENT_ID/WT_COORDINATOR_AGENT_ID dispatcher".into(),
+            Self::Dispatcher => "WT_AGENT_ID dispatcher".into(),
             Self::Agent(agent) => format!("manual override {}", agent.as_str()),
         }
     }
@@ -359,7 +395,7 @@ impl CodexHookTarget {
 
 enum CodexRemoveTarget {
     AllWtManaged,
-    Command(String),
+    Commands(Vec<String>),
 }
 
 enum ClaudeRemoveTarget {
@@ -514,10 +550,11 @@ fn write_codex_hooks(path: &Path, hooks: &Value) -> Result<()> {
         .with_context(|| format!("Failed to write Codex hooks file: {}", path.display()))
 }
 
-fn install_managed_codex_hook(hooks: &mut Value, command: &str) -> Result<()> {
+fn install_managed_codex_hook(hooks: &mut Value, target: &CodexHookTarget) -> Result<()> {
     let root = codex_hooks_object(hooks)?;
     let events = codex_object_entry(root, "hooks")?;
     for &(event_name, _) in CODEX_HOOK_EVENTS {
+        let command = target.command_for_event(event_name);
         let event = codex_array_entry(events, event_name)?;
         event.push(json!({
             "hooks": [
@@ -556,7 +593,9 @@ fn codex_remove_target_matches(target: &CodexRemoveTarget, hook: &Value) -> bool
             .get("command")
             .and_then(Value::as_str)
             .is_some_and(is_wt_managed_codex_command),
-        CodexRemoveTarget::Command(command) => is_managed_command(hook, command),
+        CodexRemoveTarget::Commands(commands) => commands
+            .iter()
+            .any(|command| is_managed_command(hook, command)),
     }
 }
 
@@ -668,7 +707,7 @@ fn remove_codex_command_from_event_entry(
 fn find_managed_codex_hook_trust_installs(
     hooks: &Value,
     paths: &CodexHookPaths,
-    command: &str,
+    target: &CodexHookTarget,
 ) -> Result<Vec<CodexTrustInstall>> {
     let Some(events) = hooks.get("hooks").and_then(Value::as_object) else {
         bail!("Failed to locate installed Codex inbox hooks");
@@ -676,6 +715,7 @@ fn find_managed_codex_hook_trust_installs(
 
     let mut installs = Vec::new();
     for &(event_name, event_key) in CODEX_HOOK_EVENTS {
+        let command = target.command_for_event(event_name);
         let Some(event_entries) = events.get(event_name).and_then(Value::as_array) else {
             bail!("Failed to locate installed Codex inbox hook for {event_name}");
         };
@@ -685,10 +725,10 @@ fn find_managed_codex_hook_trust_installs(
                 bail!("Cannot inspect Codex hooks file: hook event `hooks` must be an array.");
             };
             for (handler_index, hook) in group_hooks.iter().enumerate() {
-                if is_managed_command(hook, command) {
+                if is_managed_command(hook, &command) {
                     found = Some(CodexTrustInstall {
                         key: codex_trust_key(paths, event_key, group_index, handler_index),
-                        trusted_hash: codex_command_hook_hash(command, event_key),
+                        trusted_hash: codex_command_hook_hash(&command, event_key),
                     });
                     break;
                 }
@@ -769,7 +809,7 @@ fn write_codex_config_trust(path: &Path, update: CodexTrustUpdate) -> Result<()>
         .with_context(|| format!("Failed to write Codex config: {}", path.display()))
 }
 
-fn validate_codex_config_for_trust(path: &Path) -> Result<()> {
+pub(crate) fn validate_codex_config_for_trust(path: &Path) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }
@@ -782,6 +822,15 @@ fn validate_codex_config_for_trust(path: &Path) -> Result<()> {
         )
     })?;
     Ok(())
+}
+
+fn codex_hooks_feature_enabled(config: &DocumentMut) -> bool {
+    config
+        .get("features")
+        .and_then(Item::as_table_like)
+        .and_then(|features| features.get("hooks"))
+        .and_then(Item::as_bool)
+        == Some(true)
 }
 
 fn ensure_codex_hooks_feature(document: &mut DocumentMut) -> Result<()> {
@@ -820,6 +869,99 @@ fn ensure_codex_hooks_table(document: &mut DocumentMut) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn codex_wt_managed_trust_keys(
+    paths: &CodexHookPaths,
+    target: &CodexHookTarget,
+) -> Result<Vec<String>> {
+    if !paths.config_path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(&paths.config_path).with_context(|| {
+        format!(
+            "Failed to read Codex config: {}",
+            paths.config_path.display()
+        )
+    })?;
+    let config = content.parse::<DocumentMut>().with_context(|| {
+        format!(
+            "Failed to parse Codex config TOML: {}. Fix config.toml before running `wt setup`.",
+            paths.config_path.display()
+        )
+    })?;
+    let Some(state) = config
+        .get("hooks")
+        .and_then(Item::as_table_like)
+        .and_then(|hooks| hooks.get("state"))
+        .and_then(Item::as_table_like)
+    else {
+        return Ok(Vec::new());
+    };
+
+    let hooks_path = paths.hooks_path.display().to_string();
+    let mut keys = Vec::new();
+    for &(event_name, event_key) in CODEX_HOOK_EVENTS {
+        let trusted_hashes = codex_trust_cleanup_hashes_for_event(target, event_name, event_key);
+        keys.extend(
+            state
+                .iter()
+                .filter(|(key, entry)| {
+                    codex_trust_key_matches_current_event(key, &hooks_path, event_key)
+                        && entry
+                            .get("trusted_hash")
+                            .and_then(Item::as_str)
+                            .is_some_and(|trusted_hash| {
+                                trusted_hashes
+                                    .iter()
+                                    .any(|known_hash| trusted_hash == known_hash)
+                            })
+                })
+                .map(|(key, _)| key.to_string()),
+        );
+    }
+    keys.sort_unstable();
+    keys.dedup();
+    Ok(keys)
+}
+
+fn codex_trust_cleanup_hashes_for_event(
+    target: &CodexHookTarget,
+    event_name: &str,
+    event_key: &str,
+) -> Vec<String> {
+    let mut commands = vec![target.command_for_event(event_name)];
+    match target {
+        CodexHookTarget::Dispatcher => {
+            commands.push(legacy_eventless_managed_codex_dispatcher_command());
+        }
+        CodexHookTarget::Agent(agent) => {
+            commands.push(legacy_eventless_managed_codex_hook_command(agent.as_str()));
+            commands.push(legacy_managed_codex_hook_command(agent.as_str()));
+        }
+    }
+    commands
+        .iter()
+        .map(|command| codex_command_hook_hash(command, event_key))
+        .collect()
+}
+
+fn codex_trust_key_matches_current_event(key: &str, hooks_path: &str, event_key: &str) -> bool {
+    let Some(rest) = key
+        .strip_prefix(hooks_path)
+        .and_then(|rest| rest.strip_prefix(':'))
+    else {
+        return false;
+    };
+    let mut parts = rest.split(':');
+    parts.next() == Some(event_key)
+        && parts
+            .next()
+            .is_some_and(|group| group.parse::<usize>().is_ok())
+        && parts
+            .next()
+            .is_some_and(|handler| handler.parse::<usize>().is_ok())
+        && parts.next().is_none()
 }
 
 fn remove_codex_trust_key(document: &mut DocumentMut, key: &str) {
@@ -873,12 +1015,13 @@ fn set_codex_trust_key(document: &mut DocumentMut, key: &str, trusted_hash: &str
 
 fn install_managed_claude_hook(
     settings: &mut Value,
-    command: &str,
+    target: &ClaudeHookTarget,
     session_end_command: &str,
 ) -> Result<()> {
     let root = settings_object(settings)?;
     let hooks = object_entry(root, "hooks")?;
     for &event_name in CLAUDE_HOOK_EVENTS {
+        let command = target.command_for_event(event_name);
         let event = array_entry(hooks, event_name)?;
         event.push(json!({
             "hooks": [
@@ -901,23 +1044,28 @@ fn install_managed_claude_hook(
     Ok(())
 }
 
-fn claude_has_command_for_all_events(settings: &Value, command: &str) -> bool {
+fn claude_has_dispatcher_command_for_all_inbox_events(settings: &Value) -> bool {
     CLAUDE_HOOK_EVENTS.iter().all(|event_name| {
-        settings
-            .get("hooks")
-            .and_then(|hooks| hooks.get(*event_name))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|entry| {
-                entry
-                    .get("hooks")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .any(|hook| is_managed_command(hook, command))
-            })
+        let command = managed_claude_dispatcher_command(event_name);
+        claude_has_command_for_event(settings, event_name, &command)
     })
+}
+
+fn claude_has_command_for_event(settings: &Value, event_name: &str, command: &str) -> bool {
+    settings
+        .get("hooks")
+        .and_then(|hooks| hooks.get(event_name))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|entry| {
+            entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|hook| is_managed_command(hook, command))
+        })
 }
 
 fn claude_any_command_matches(settings: &Value, predicate: fn(&str) -> bool) -> bool {
@@ -1052,12 +1200,26 @@ fn array_entry<'a>(object: &'a mut Map<String, Value>, key: &str) -> Result<&'a 
         .ok_or_else(|| anyhow::anyhow!("Cannot update Claude settings: `{key}` must be an array."))
 }
 
-fn managed_claude_hook_command(agent: &str) -> String {
-    format!("wt msg check-inbox --agent {agent} --silent {WT_CLAUDE_HOOK_MARKER}")
+fn managed_claude_hook_command(agent: &str, event_name: &str) -> String {
+    format!(
+        "wt msg check-inbox --agent {agent} --hook-event-name {event_name} --silent 2>/dev/null || true {WT_CLAUDE_HOOK_MARKER}"
+    )
 }
 
-fn managed_claude_dispatcher_command() -> String {
-    format!("wt msg check-inbox --silent {WT_CLAUDE_HOOK_MARKER}")
+fn managed_claude_dispatcher_command(event_name: &str) -> String {
+    format!(
+        "wt msg check-inbox --hook-event-name {event_name} --silent 2>/dev/null || true {WT_CLAUDE_HOOK_MARKER}"
+    )
+}
+
+fn legacy_eventless_managed_claude_hook_command(agent: &str) -> String {
+    format!(
+        "wt msg check-inbox --agent {agent} --silent 2>/dev/null || true {WT_CLAUDE_HOOK_MARKER}"
+    )
+}
+
+fn legacy_managed_claude_hook_command(agent: &str) -> String {
+    format!("wt msg check-inbox --agent {agent} --silent {WT_CLAUDE_HOOK_MARKER}")
 }
 
 fn managed_claude_supervisor_session_end_command(owner: Option<&str>) -> String {
@@ -1073,12 +1235,30 @@ fn managed_claude_supervisor_session_end_command(owner: Option<&str>) -> String 
     }
 }
 
-fn managed_codex_hook_command(agent: &str) -> String {
-    format!("wt msg check-inbox --agent {agent} --silent {WT_CODEX_HOOK_MARKER}")
+fn managed_codex_hook_command(agent: &str, event_name: &str) -> String {
+    format!(
+        "wt msg check-inbox --agent {agent} --hook-event-name {event_name} --silent 2>/dev/null || true {WT_CODEX_HOOK_MARKER}"
+    )
 }
 
-fn managed_codex_dispatcher_command() -> String {
-    format!("wt msg check-inbox --silent {WT_CODEX_HOOK_MARKER}")
+fn managed_codex_dispatcher_command(event_name: &str) -> String {
+    format!(
+        "wt msg check-inbox --hook-event-name {event_name} --silent 2>/dev/null || true {WT_CODEX_HOOK_MARKER}"
+    )
+}
+
+fn legacy_eventless_managed_codex_hook_command(agent: &str) -> String {
+    format!(
+        "wt msg check-inbox --agent {agent} --silent 2>/dev/null || true {WT_CODEX_HOOK_MARKER}"
+    )
+}
+
+fn legacy_eventless_managed_codex_dispatcher_command() -> String {
+    format!("wt msg check-inbox --silent 2>/dev/null || true {WT_CODEX_HOOK_MARKER}")
+}
+
+fn legacy_managed_codex_hook_command(agent: &str) -> String {
+    format!("wt msg check-inbox --agent {agent} --silent {WT_CODEX_HOOK_MARKER}")
 }
 
 fn codex_trust_key(
