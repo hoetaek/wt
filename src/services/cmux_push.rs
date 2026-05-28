@@ -162,7 +162,7 @@ fn push_codex_prompt(
     let set_buffer_args = cmux_set_buffer_args(&buffer, text);
     run_cmux(runner, &set_buffer_args, "set-buffer")?;
     let paste_buffer_args = cmux_paste_buffer_args(surface_id, workspace, &buffer);
-    run_cmux(runner, &paste_buffer_args, "paste-buffer")?;
+    run_cmux_paste_buffer_with_retry(runner, &paste_buffer_args)?;
     if let Some(workspace) = workspace {
         if codex_prompt_expects_pasted_content_marker(text)
             && wait_for_codex_pasted_content_marker(runner, surface_id, workspace)?
@@ -187,7 +187,7 @@ fn push_pasted_prompt(
     let set_buffer_args = cmux_set_buffer_args(&buffer, text);
     run_cmux(runner, &set_buffer_args, "set-buffer")?;
     let paste_buffer_args = cmux_paste_buffer_args(surface_id, workspace, &buffer);
-    run_cmux(runner, &paste_buffer_args, "paste-buffer")?;
+    run_cmux_paste_buffer_with_retry(runner, &paste_buffer_args)?;
     std::thread::sleep(PASTE_SUBMIT_SETTLE);
     let enter_args = cmux_send_args("send-key", surface_id, workspace, "enter");
     run_cmux(runner, &enter_args, "send-key")
@@ -230,6 +230,40 @@ fn run_cmux(runner: &dyn CommandRunner, args: &[&str], verb: &str) -> Result<()>
         bail!("cmux {verb} failed: {}", command_error(&out));
     }
     Ok(())
+}
+
+/// Retry paste-buffer on transient `Command timed out` errors. The receiving
+/// agent TUI sometimes shows its ready marker before fully entering an input
+/// mode that accepts paste; in that brief window cmux's IPC waits on the
+/// surface and the CLI returns a timeout. A short backoff resolves it.
+fn run_cmux_paste_buffer_with_retry(runner: &dyn CommandRunner, args: &[&str]) -> Result<()> {
+    const BACKOFFS_MS: &[u64] = &[0, 1_000, 3_000];
+    let mut last_err: Option<String> = None;
+    for (attempt, &delay) in BACKOFFS_MS.iter().enumerate() {
+        if delay > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+        }
+        let out = runner.run("cmux", args, None)?;
+        if out.success {
+            return Ok(());
+        }
+        let message = command_error(&out);
+        if !is_transient_paste_failure(&message) {
+            bail!("cmux paste-buffer failed: {message}");
+        }
+        last_err = Some(message);
+        let _ = attempt;
+    }
+    bail!(
+        "cmux paste-buffer failed after {} attempts: {}",
+        BACKOFFS_MS.len(),
+        last_err.unwrap_or_else(|| "command exited with non-zero status".into())
+    )
+}
+
+fn is_transient_paste_failure(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("timed out") || lower.contains("timeout")
 }
 
 fn command_error(out: &CmdOutput) -> String {
@@ -571,6 +605,44 @@ mod tests {
             .push_to_surface("surface:4", PushKind::Claude, "안녕")
             .unwrap_err();
         assert!(err.to_string().contains("ASCII"));
+    }
+
+    #[test]
+    fn paste_buffer_retries_on_transient_timeout() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true); // set-buffer
+        runner.add_response_with_stderr("", "Error: Command timed out", false); // paste-buffer attempt 1
+        runner.add_response("", true); // paste-buffer attempt 2 succeeds
+        runner.add_response("", true); // send-key enter
+
+        push_to_surface(&runner, "surface:4", PushKind::Codex, "hello").unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            4,
+            "expected set-buffer + 2x paste-buffer + send-key"
+        );
+        assert_eq!(calls[0].1[0], "set-buffer");
+        assert_eq!(calls[1].1[0], "paste-buffer");
+        assert_eq!(calls[2].1[0], "paste-buffer");
+        assert_eq!(calls[3].1[0], "send-key");
+    }
+
+    #[test]
+    fn paste_buffer_does_not_retry_on_non_transient_failure() {
+        let mut runner = MockRunner::new();
+        runner.add_response("", true); // set-buffer
+        runner.add_response_with_stderr("", "Error: Buffer not found: foo", false); // paste-buffer
+
+        let err = push_to_surface(&runner, "surface:4", PushKind::Codex, "hello").unwrap_err();
+
+        assert!(
+            err.to_string().contains("Buffer not found"),
+            "non-transient failure must surface immediately: {err}"
+        );
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "expected exactly one paste-buffer attempt");
     }
 
     #[test]
