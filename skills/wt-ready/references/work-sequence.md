@@ -183,14 +183,18 @@ show that the validated structure was wrong.
 Artifact: `planning/specs/<slug>/06-wireframe.md` for one compact artifact,
 `06-wireframe/` for several screens/flows/examples, or collapsed
 `04+05+06-requirements.md` when the work is tiny and the structural sketch fits
-inside requirements. For non-UI work, use the same gate with the right low-fi
-shape: command transcript, generated TOML example, TaskDocument/workflow flow,
-outline with placeholder evidence, API request/response examples, or realistic
-state table.
+inside requirements. Gate 6 starts with a text-first wireframe by default:
+ASCII layout, command transcript, sequence sketch, table/state matrix, or
+outline with placeholder evidence. After that passes, add the artifact-specific
+shape when needed: HTML for web, generated TOML example, TaskDocument/workflow
+flow, API request/response examples, or realistic state table. For visual
+outputs, this may include the concrete visual treatment the user approves; it is
+still a case, not the generalized system.
 
-Purpose: validate structure and workflow before design. The wireframe is not a
-visual polish step; it is a check that the unknowns/context gathered so far are
-sufficient to model the work with representative data and states.
+Purpose: validate concrete structure and workflow cases before design. The
+wireframe is not the generalized system; it is a check that the
+unknowns/context gathered so far are sufficient to model the work with
+representative data and states.
 
 Entry condition:
 
@@ -198,20 +202,23 @@ Entry condition:
   explicitly deferred, or turned into HITL/spike work.
 - `03-context.md` has enough verified facts, representative examples, current
   behavior, user/team material, constraints, and assumptions to build a
-  realistic low-fi artifact.
+  realistic text-first artifact.
 - Mock data or representative examples exist. If they do not, return to Unknown
   surfacing / Context exploration before drawing the structure.
 
 Gate to next step:
 
-- The wireframe uses realistic mock data or representative examples, not empty
-  placeholders that hide structure.
-- The operator/user can walk through the intended flow.
+- The text-first wireframe uses realistic mock data or representative examples,
+  not empty placeholders that hide structure.
+- The operator/user can walk through the intended flow in text-first form.
+- Any needed artifact-specific wireframe also passes after the text-first pass.
 - Empty, error, edge, loading, conflict, or migration states that affect
   structure are represented or explicitly deferred.
 - The wireframe reveals whether the requirements are complete enough for
   design.
 - The user confirms the structure fits before design starts.
+- Any visual treatment is approved as a concrete case; reusable component,
+  token, responsive, interaction, and state rules are deferred to design.
 
 Return here when:
 
@@ -219,6 +226,8 @@ Return here when:
 - A missing example, state, workflow step, or constraint could change the
   information architecture or command/config shape.
 - The user cannot walk through the flow with the current mock data.
+- An artifact-specific wireframe was started before the text-first structure
+  passed.
 
 ## 7. Design (Execute prep)
 
@@ -227,14 +236,17 @@ invalidate assumptions.
 
 Artifact: `planning/specs/<slug>/07-design.md`.
 
-Purpose: turn the passed wireframe into a final design: component boundaries,
-state model, command/config shape, information architecture, visual language
-when relevant, and rejected alternatives.
+Purpose: generalize the passed wireframe case into implementation-facing design
+rules: component boundaries, state model, command/config shape, data contracts,
+interaction rules, responsive rules, visual system rules when relevant, and
+rejected alternatives.
 
 Gate to next step:
 
 - The wireframe was confirmed or intentionally collapsed for tiny work.
 - The design names affected components and boundaries.
+- The design explains how the approved concrete case generalizes to realistic
+  data volume, responsive breakpoints, states, and edge cases.
 - At least one rejected alternative or simpler option is recorded when the
   choice is non-obvious.
 - Brownfield assumptions are checked against local code or docs where cheap.
@@ -248,6 +260,8 @@ Return here when:
   canonical docs.
 - The design changes structure that the wireframe did not validate; return to
   wireframe first.
+- The design treats one approved mock screen, example, or happy path as the
+  whole system instead of extracting general rules.
 
 ## 8. Task graph (Execute prep)
 
@@ -357,7 +371,9 @@ the work is ready for the next one. Examples:
   `04+05-requirements.md` or collapsed `04+05+06-requirements.md`.
 - Missing mock data, workflow, states, or constraints for structure: return to
   `02-unknowns.md` / `03-context.md`.
-- Missing structure validation: write or grill `06-wireframe.md` before design.
+- Missing structure validation: write or grill the text-first
+  `06-wireframe.md` before design; add an artifact-specific wireframe only when
+  needed.
 - Missing ownership/boundary decision: write or grill `07-design.md`.
 - Missing dependency graph: write or grill `08-tasks.md` / `09-execution.md`.
 - Missing reviewable size: split the task graph.

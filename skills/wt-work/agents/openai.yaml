@@ -1,4 +1,4 @@
 interface:
   display_name: "WT Work"
   short_description: "Run the full wt work loop"
-  default_prompt: "Use $wt-work to locate the current Discover/Shape/Execute/Improve phase, then route through $wt-idea, $wt-ready, $wt-start, $wt-coordinate, $wt-land, and $wt-retrospect as needed."
+  default_prompt: "Use $wt-work to locate the current Discover/Shape/Execute/Improve phase, require text-first wireframe before design when shaping work, then route through the wt lifecycle skills as needed."

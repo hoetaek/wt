@@ -139,30 +139,36 @@ task unless the dependency is real and review remains safe.
 ## Wireframe With Mock Data
 
 Before design, confirm the unknowns and context are sufficient to build a
-realistic low-fidelity structure. If mock data, representative examples,
+realistic representative structure. If mock data, representative examples,
 operator workflow, important states, or system constraints are missing, return
 to `02-unknowns.md` / `03-context.md` instead of letting design discover the
 structure late.
 
-Wireframe does not mean UI only. Use the low-fi artifact that fits the output
-form:
+Wireframe does not mean UI only. Use the artifact form that fits the output:
 
-- UI / app flow: rough screens with realistic records, empty states, and error
-  states.
-- CLI / config: expected command transcript, generated TOML, and failure cases.
-- Workflow/process: mock TaskDocument, Workflow, TaskRun, pass/land path, and
-  coordinator handoff.
-- Docs/report: outline with placeholder evidence, claims, and reader path.
-- API/data: representative request/response examples and state table.
+1. Start with a text-first wireframe: ASCII layout, command transcript,
+   sequence sketch, table/state matrix, or outline with representative mock
+   data. This pass must succeed before design or medium-specific wireframing.
+2. If needed, add an artifact-specific wireframe:
+   - UI / app flow: rough screens or HTML with realistic records, empty states,
+     error states, and visual treatment for the concrete approved case.
+   - CLI / config: expected command transcript, generated TOML, and failure
+     cases.
+   - Workflow/process: mock TaskDocument, Workflow, TaskRun, pass/land path,
+     and coordinator handoff.
+   - Docs/report: outline with placeholder evidence, claims, and reader path.
+   - API/data: representative request/response examples and state table.
 
 Write `06-wireframe.md` for one compact artifact or `06-wireframe/` when there
 are several screens, flows, examples, or transcripts. For tiny work, the
 wireframe can collapse into `04+05+06-requirements.md`, but say that it is a
 collapsed wireframe and still check the representative examples/states.
 
-The gate passes only when the user can walk through the structure and confirm
-that it fits. After that, `07-design.md` turns the passed structure into final
-component boundaries, state model, command/config shape, or visual language.
+The gate passes only when the user can walk through the text-first structure and
+confirm that it fits. If an artifact-specific wireframe is needed, that concrete
+case must also pass before `07-design.md` generalizes it into component
+boundaries, state model, command/config shape, data contracts, interaction
+rules, or visual system rules.
 
 ## Slice The Work
 
@@ -398,23 +404,27 @@ idea file existing first.
 
 `06-wireframe.md` or `06-wireframe/`:
 
-- Validate structure and workflow before design, using realistic mock data or
-  representative examples.
+- Validate structure and workflow before design, starting with a text-first
+  wireframe that uses realistic mock data or representative examples.
 - Record the context adequacy check: which unknowns were resolved, which facts
   or examples from `03-context.md` support the structure, and which states are
   intentionally deferred.
-- For non-UI work, use the appropriate low-fi form: command transcript,
-  generated TOML, TaskDocument/workflow flow, outline with placeholder
-  evidence, API examples, or state table.
+- After the text-first pass, add an artifact-specific form when needed: HTML for
+  web, command transcript, generated TOML, TaskDocument/workflow flow, outline
+  with placeholder evidence, API examples, or state table. For UI/web work, this
+  can include the concrete visual treatment to approve as a case.
 - Include important empty/error/edge/loading/conflict states when they affect
   structure.
-- Record the user/operator walkthrough result before design starts.
+- Record the user/operator walkthrough result for the text-first pass, and for
+  the artifact-specific pass when one exists, before design starts.
 
 `07-design.md`:
 
-- Start from the passed wireframe or explicitly note that the wireframe was
+- Start from the passed wireframe case or explicitly note that the wireframe was
   collapsed for tiny work.
-- Capture decisions, affected components, and constraints.
+- Generalize the passed case into reusable decisions, affected components, state
+  and data contracts, interaction rules, responsive rules, visual system rules
+  when relevant, and constraints.
 - For brownfield work, optionally include a Static Model (Purpose, Components,
   Business Rules) and a Dynamic Model (workflow / behavior) section before the
   new design.
@@ -516,10 +526,13 @@ makes a file authoritative.
 
 - Whether unknowns and context are sufficient to create realistic mock data.
   If not, return to `02-unknowns.md` / `03-context.md` before design.
-- Whether the wireframe uses representative data, examples, states, or command
-  transcripts instead of abstract placeholders.
+- Whether the text-first wireframe uses representative data, examples, states,
+  or command transcripts instead of abstract placeholders.
 - Whether the intended user/operator can walk through the flow and find the
   expected outcome.
+- Whether an artifact-specific wireframe is needed after text-first approval
+  (for example HTML for web, generated TOML for config, or API
+  request/response examples).
 - Which empty/error/edge/loading/conflict states change structure and therefore
   must appear before design.
 - Whether the wireframe reveals missing requirements or wrong assumptions.
@@ -528,6 +541,8 @@ makes a file authoritative.
 
 - Whether it builds on a passed wireframe instead of doing hidden wireframe
   discovery inside design.
+- Whether it generalizes the approved concrete case instead of treating one
+  mock screen, example, or happy path as the whole system.
 - Trade-offs and rejected alternatives. "Why not the simpler shape?" If no
   alternative was considered, that itself is the grill question.
 - Conflicts with existing conventions — point at `docs/consistency.md` and
@@ -537,6 +552,9 @@ makes a file authoritative.
   against current code?
 - Coupling and boundary questions: which module owns the new behavior, and
   does that match the file's stated component responsibility?
+- Scale and variation questions: how the design handles larger data, responsive
+  breakpoints, empty/error/conflict states, and cases not present in the
+  approved wireframe.
 
 `08-tasks.md`:
 

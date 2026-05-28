@@ -28,9 +28,10 @@ Apply these skills in order:
    explore references/options, and stop before committed TaskDocuments or
    workflows.
 2. Shape and Execute-prep with `wt-ready`: gather evidence, settle
-   purpose/success criteria, requirements, output form, wireframe with realistic
-   examples, design, scope, task graph, and workflow policy; prepare
-   TaskDocuments or a saved workflow when needed.
+   purpose/success criteria, requirements, output form, text-first wireframe
+   with realistic examples, any needed artifact-specific wireframe, generalized
+   design rules, scope, task graph, and workflow policy; prepare TaskDocuments
+   or a saved workflow when needed.
 3. Execute launch with `wt-start`: launch the prepared task or workflow and
    capture the inspect target.
 4. Improve with `wt-coordinate`: monitor the run, inspect agent state, review
