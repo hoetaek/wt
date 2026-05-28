@@ -1,4 +1,0 @@
-interface:
-  display_name: "WT Start"
-  short_description: "Start wt task or workflow runs"
-  default_prompt: "Use $wt-start to launch prepared direct tasks or workflows, verify `wt doctor`, and capture the inspect target. Use $wt-ready first if scope is unsettled."

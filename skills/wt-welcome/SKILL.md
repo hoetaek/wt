@@ -50,8 +50,8 @@ Use this order:
    - `$wt-config`: inspect the current repo and recommend repo config.
    - `$wt-lifecycle`: prepare work, run it, land or discard it, and settle
      reusable lessons into the harness.
-   - Phase skills such as `$wt-ready`, `$wt-start`, `$wt-coordinate`,
-     `$wt-land`, and `$wt-retrospect` are normally called by `$wt-lifecycle`.
+   - Phase skills such as `$wt-ready`, `$wt-work`, `$wt-land`, and
+     `$wt-retrospect` are normally called by `$wt-lifecycle`.
 4. **Common `wt run` starts.** Show only the most useful commands:
 
    ```bash
@@ -82,8 +82,8 @@ When the user asks for more detail, explain these concepts compactly:
 - **Modes:** `single` shares one workspace, `batch` runs independent branches,
   `stack` runs ordered dependent branches, and `matrix` runs one task through
   multiple profiles.
-- **wt-lifecycle loop:** `$wt-ready -> $wt-start -> $wt-coordinate -> $wt-land
-  -> $wt-retrospect`.
+- **wt-lifecycle loop:** `$wt-ready -> $wt-work -> $wt-land ->
+  $wt-retrospect`.
 
 Keep the deeper model conceptual unless the user asks for concrete commands.
 

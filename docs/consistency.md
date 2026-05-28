@@ -222,7 +222,7 @@ Rules)과 Dynamic Model section(workflow/behavior)을 둘 수 있다. Design은 
 dependency를 적고, dependency가 없는 item은 parallel 가능하다고 표시할 수 있다.
 
 `planning/specs/<slug>/09-execution.md`는 `08-tasks.md`에서 드러난 slice graph를 어떤 execution shape로
-실행할지와 그 이유, `wt-start` target, TaskDocument path, optional saved Workflow TOML path,
+실행할지와 그 이유, `wt-work` target, TaskDocument path, optional saved Workflow TOML path,
 PR/landing policy, acceptance checks를 prose로 기록하는 lazy prep/execution artifact다. 실제
 saved execution plan은 계속 `<repo-root>/.wt/execution/workflows/<id>.toml`에 있고,
 `09-execution.md`는 executable Workflow TOML이 아니다.
@@ -241,7 +241,7 @@ Canonical `08-tasks.md` slice graph → execution decision mapping:
 prep 판단이다. 이 값은 direct `wt run task`로 충분하거나, slice들이 서로 다른 lifecycle에서
 실행되어 하나의 saved Workflow로 표현하면 오히려 모델이 흐려지는 경우를 뜻한다.
 
-Spec은 `wt-ready` exit 시점에 frozen되지 않는다. Execution 중 `wt-coordinate` phase에서
+Spec은 `wt-ready` exit 시점에 frozen되지 않는다. Execution 중 `wt-work` phase에서
 findings가 나오면 design, task list, execution shape rationale을 in place로 업데이트할 수
 있다. 선택한 mode가 더 이상 맞지 않거나 실제 Workflow TOML과 spec이 갈라지면
 `09-execution.md`를 rationale과 함께 업데이트한다. Review/check evidence, spec drift, and
@@ -1185,7 +1185,7 @@ expected duration, estimate basis, suggested watch cadence, blocked by/dependenc
 execution shape, size class, acceptance checks를 적는다. Provider issue import처럼 외부
 본문을 그대로 보존하는 TaskDocument는 이 section이 없을 수 있으므로 CLI는 단순 TOML read
 중에 planning body를 자동 생성하거나 provider body를 덮어쓰지 않는다. `wt-ready` /
-`wt-start` coordinator flow가 launch 전에 부족한 planning 정보를 채우는 소유자다.
+`wt-work` flow가 launch 전에 부족한 planning 정보를 채우는 소유자다.
 
 `wt task list`는 `<repo-root>/.wt/execution/tasks/<task>.toml`에 저장된 TaskDocument file 중
 actionable working set을 보여주는 canonical read-only list다. Bare `wt task list`는

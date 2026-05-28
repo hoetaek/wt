@@ -193,7 +193,7 @@ items = [
 
 [[action_candidates]]
 summary = "<one-line action this retrospective recommends>"
-owner = "<wt | wt-lifecycle | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>>"
+owner = "<wt | wt-lifecycle | wt-idea | wt-ready | wt-work | wt-land | wt-retrospect | coordinator | <user>>"
 status = "candidate"               # or "addressed" / "promoted"
 promote_to = "<repo-root>/.wt/planning/ideas/"      # or a specific path when known
 done_when = "<observable criterion that closes this candidate>"
@@ -202,7 +202,7 @@ done_when = "<observable criterion that closes this candidate>"
 # One entry per lesson that warrants a permanent behavior change.
 # Skip this table entirely when no lesson rises to that bar.
 lesson = "<the mistake or friction this entry exists to prevent next time>"
-owner = "<wt | wt-lifecycle | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>>"
+owner = "<wt | wt-lifecycle | wt-idea | wt-ready | wt-work | wt-land | wt-retrospect | coordinator | <user>>"
 target_file = "<absolute or repo-relative path of the file that must change>"
 target_section = "<heading, anchor, or line range inside target_file>"
 change = "<what the edit should say or constrain, in one or two sentences>"
@@ -247,7 +247,7 @@ result teaches anything about future estimates or watch cadence:
 ```
 
 This file is a rolling calibration note, not a replacement for per-work
-`11-retrospect.md`. Keep it small enough for `wt-ready` and `wt-coordinate` to
+`11-retrospect.md`. Keep it small enough for `wt-ready` and `wt-work` to
 read quickly. Recommended columns:
 
 ```text
@@ -289,7 +289,7 @@ such that the agent never makes that mistake again.
   it. "Update CLAUDE.md somewhere" is not enough; "Add a bullet under
   `CLAUDE.md` > `## 문제 해결 원칙` after item 5" is.
 - Name the owner. Use the same vocabulary as `[[action_candidates]]`
-  (`wt | wt-lifecycle | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>`)
+  (`wt | wt-lifecycle | wt-idea | wt-ready | wt-work | wt-land | wt-retrospect | coordinator | <user>`)
   so the reader knows who is responsible for applying the change.
 - Record each such change as one `[[harness_tuning]]` entry in the TOML. If no
   lesson rises to that bar, omit the table entirely rather than padding it.

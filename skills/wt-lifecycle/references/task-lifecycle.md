@@ -1,8 +1,8 @@
 # Task Lifecycle
 
 Shared reference for wt skills that touch TaskDocuments, TaskRuns, and
-workflow files (`wt-start`, `wt-coordinate`, `wt-land`). Defines the object
-model, status boundaries, and pass vs cleanup commands.
+workflow files (`wt-work`, `wt-land`). Defines the object model, status
+boundaries, and pass vs cleanup commands.
 
 ## Object Model
 

@@ -30,9 +30,9 @@ Feedback:   10 Review / sync record
 For `wt-ready`, Learn is either inherited from `wt-idea` or reconstructed
 when the user enters prep directly. `wt-ready` mainly owns Example and the
 Architect preparation gates: purpose, requirements, wireframe, design, task
-graph, and handoff. Later `wt-start`, `wt-coordinate`, and `wt-land` continue
-Architect by creating, checking, and integrating the result. Feedback is owned
-by `wt-retrospect`, using review evidence and spec drift captured during
+graph, and handoff. Later `wt-work` and `wt-land` continue Architect by
+creating, checking, and integrating the result. Feedback is owned by
+`wt-retrospect`, using review evidence and spec drift captured during
 coordination.
 
 Once Gate 1 has a current one-sentence intent, show the user a compact LEAF
@@ -192,7 +192,7 @@ Return here when:
 
 ## 6. Wireframe with mock data (Example)
 
-Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
+Owner: `wt-ready`, with `wt-work` updating it when execution findings
 show that the validated structure was wrong.
 
 Artifact: `planning/specs/<slug>/06-wireframe.md` for one compact artifact,
@@ -259,7 +259,7 @@ Return here when:
 
 ## 7. Design (Architect)
 
-Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
+Owner: `wt-ready`, with `wt-work` updating it when execution findings
 invalidate assumptions.
 
 Artifact: `planning/specs/<slug>/07-design.md`.
@@ -321,14 +321,14 @@ Return here when:
 
 ## 9. Execution handoff (Architect)
 
-Owner: `wt-ready` prepares; `wt-start` launches.
+Owner: `wt-ready` prepares; `wt-work` launches.
 
 Artifact: `09-execution.md`, TaskDocument body `계획 (Planning)` section,
-optional Workflow policy snapshot, and exact `wt-start` target.
+optional Workflow policy snapshot, and exact `wt-work` target.
 
 In generic LEAF work, Gate 9 is the result or execution artifact itself. In
 `wt-ready`, Gate 9 is deliberately narrower: it prepares the runnable handoff
-because the actual implementation result is produced after `wt-start`.
+because the actual implementation result is produced after `wt-work`.
 
 Gate to next step:
 
@@ -344,7 +344,7 @@ Return here when:
 
 ## 10. Review / sync record (Feedback material)
 
-Owner: `wt-coordinate` records the evidence while doing Architect execution;
+Owner: `wt-work` records the evidence while doing Architect execution;
 `wt-retrospect` consumes it as Feedback material.
 
 Artifact: reviewed diff/check evidence, updated `07-design.md`,
@@ -412,4 +412,4 @@ the work is ready for the next one. Examples:
 - Missing ownership/boundary decision: write or grill `07-design.md`.
 - Missing dependency graph: write or grill `08-tasks.md` / `09-execution.md`.
 - Missing reviewable size: split the task graph.
-- Missing execution target: stop with unresolved `wt-start` handoff.
+- Missing execution target: stop with unresolved `wt-work` handoff.

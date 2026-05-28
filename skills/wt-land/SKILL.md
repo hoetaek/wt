@@ -5,8 +5,8 @@ description: "Use after wt work is reviewed: respect workflow policy, pass workf
 
 # WT Land
 
-Use this skill after `wt-coordinate` review says the work is acceptable. Do not
-use it to monitor active agents or request fixes; use `wt-coordinate` for that.
+Use this skill after `wt-work` review says the work is acceptable. Do not
+use it to monitor active agents or request fixes; use `wt-work` for that.
 
 In the LEAF model, this skill owns the land/close step between
 review/sync and retrospect. It proves integration or discard, performs

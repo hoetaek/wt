@@ -30,16 +30,14 @@ Apply these skills in order:
    launch-ready. Let `wt-ready` settle purpose, requirements,
    examples/wireframes, design, task graph, workflow policy, TaskDocuments, and
    launch target.
-3. Execute with `wt-start` when prepared work is ready to launch: open the
-   prepared task or workflow and capture the
-   inspect target.
-4. Coordinate execution with `wt-coordinate` while work is running: monitor the
-   run, inspect agent state, review code, run checks, sync the living spec, and
-   send focused feedback until the work is acceptable.
-5. Land or discard with `wt-land` after review passes: respect workflow landing
+3. Execute and coordinate with `wt-work`: launch the prepared task or workflow,
+   capture the inspect target, monitor the run, inspect agent state, review
+   code, run checks, sync the living spec, and send focused feedback until the
+   work is acceptable.
+4. Land or discard with `wt-land` after review passes: respect workflow landing
    policy, perform any applicable pass step, land branches in the right order,
    prove ancestry, and clean up with `wt done`.
-6. Settle the harness with `wt-retrospect` after each closed work item: capture
+5. Settle the harness with `wt-retrospect` after each closed work item: capture
    keep/problem/try lessons, action candidates, harness-tuning records,
    expected vs actual duration, and watch-cadence evidence. Write the timing
    entry even when there was no broader lesson.

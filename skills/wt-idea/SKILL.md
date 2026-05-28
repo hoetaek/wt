@@ -14,8 +14,7 @@ or workflow.
 
 Do not implement code, create TaskDocuments, create workflows, launch worktrees,
 or decide final scope from this skill. Use `wt-ready` for idea-to-task
-conversion, `wt-start` for execution, `wt-coordinate` for running work, and
-`wt-land` for reviewed work.
+conversion, `wt-work` for launch/coordination, and `wt-land` for reviewed work.
 
 ## Kill-able Identity
 
@@ -24,7 +23,7 @@ An idea is exploration. It is allowed to die.
 - An idea file at `<repo-root>/.wt/planning/ideas/<slug>.{md,toml}` may be deleted,
   rewritten, or abandoned at any time without any state transition that other
   components observe.
-- No downstream consumer (wt CLI, wt-ready, wt-start, workflows) depends on an
+- No downstream consumer (wt CLI, wt-ready, wt-work, workflows) depends on an
   idea file continuing to exist. Removing one is not breakage.
 - Do not promote prematurely. Do not create TaskDocuments, specs, or workflows
   from inside `wt-idea`. Promotion is `wt-ready`'s job: when the user commits

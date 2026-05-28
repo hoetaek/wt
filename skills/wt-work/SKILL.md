@@ -1,40 +1,126 @@
 ---
-name: wt-coordinate
-description: "Use when coordinating running wt work: inspect status, send feedback, review diffs/checks, pass workflow tasks when needed, and hand accepted work to wt-land."
+name: wt-work
+description: "Use after wt-ready when prepared wt work should be launched or running wt work should be coordinated: verify readiness, run a task or workflow, capture the inspect target, monitor status, send feedback, review diffs/checks, pass workflow tasks when applicable, and hand accepted work to wt-land."
 ---
 
-# WT Coordinate
+# WT Work
 
-Coordinate running wt work. Object model, status semantics, and pass vs
-cleanup boundaries: see `../wt-lifecycle/references/task-lifecycle.md`.
+Launch and coordinate prepared wt work. This skill owns active execution from
+pre-launch checks through accepted review/pass handoff. Do not revise purpose,
+requirements, design, or task graph here; return to `wt-ready` if the handoff is
+incomplete.
 
-Stay on these responsibilities; do not absorb later phases:
+Object model, planning-estimate requirement, status semantics, direct vs
+workflow-linked distinction, and pass vs cleanup boundaries: see
+`../wt-lifecycle/references/task-lifecycle.md`.
 
-| Phase | Owner |
+## Boundaries
+
+| Responsibility | Owner |
 |---|---|
-| inspect / feedback / spec sync | this skill |
-| `wt workflow pass` for workflow-linked runs | this skill |
-| land / merge | `wt-land` |
-| cleanup with `wt done` | `wt-land` |
+| idea capture | `wt-idea` |
+| requirements/design/tasks/TaskDocument/workflow preparation | `wt-ready` |
+| launch, inspect, feedback, spec sync, review, workflow pass | this skill |
+| land / merge / cleanup with `wt done` | `wt-land` |
+
+## Current State
+
+```bash
+git status --short --branch
+git worktree list
+repo_root="$(git rev-parse --show-toplevel)"
+find "$repo_root/.wt/execution/tasks" "$repo_root/.wt/execution/task-runs" "$repo_root/.wt/execution/workflows" -maxdepth 1 -type f 2>/dev/null | sort
+wt doctor
+```
+
+Confirm: worktree cleanliness, existing task/workflow state, `Agent` is not
+`none` when agent work is expected, `cmux CLI` and `[workspace]` ready when
+workspace automation is expected, issue provider configured for issue
+workflows.
+
+If a TaskRun is already launched, skip to inspection. If no TaskRun exists yet,
+launch only from a prepared TaskDocument or saved workflow.
+
+## Launch
+
+Direct task — each TaskDocument gets its own worktree:
+
+```bash
+wt run task <task-key> --base .
+wt run task                       # interactive selection
+```
+
+Saved workflow — multiple TaskDocuments in one saved run:
+
+```bash
+wt workflow task --mode <single|batch|stack|matrix> <tasks...> --base <branch>
+wt run workflow
+```
+
+Mode selection:
+
+- `single`: tasks share one saved workspace
+- `batch`: tasks independent from the same base
+- `stack`: each branch builds on the previous task branch (order matters)
+- `matrix`: one local TaskDocument across explicit named profiles
+  (`--profiles <a>,<b>`); local-TaskDocument only
+
+For provider issues, use `wt workflow issue --mode <single|batch|stack> ...`.
+
+Launch rules:
+
+- Prefer explicit task keys in scripts; omit only for interactive selection.
+- Verify every selected task body has `계획 (Planning)` with `expected duration`,
+  `estimate basis`, and suggested watch cadence. If missing, return to
+  `wt-ready`.
+- Verify the handoff has acceptance checks, size class, output concept or
+  workflow rationale, and PR/landing policy source. If missing, return to
+  `wt-ready`.
+- `--base .` for current branch, `--base <branch>` for explicit base, bare
+  `--base` for interactive base selection.
+- Direct execution is `wt run task`; workflow commands only for saved workflow
+  execution.
+- Do not prepare a workflow when one direct worktree run is enough.
+- Do not use batch for parent-dependent tasks; use stack.
+- Do not decide PR or landing preferences here; use prepared workflow policy or
+  repo config.
+- Do not report TaskRun `running` as active agent work without
+  `wt agent status`.
+
+After launch, capture the inspect target:
+
+```bash
+git worktree list
+repo_root="$(git rev-parse --show-toplevel)"
+find "$repo_root/.wt/execution/task-runs" -maxdepth 1 -type f 2>/dev/null | sort
+wt inspect <branch|worktree|task-run-id>
+wt agent status <branch|worktree|task-run-id>
+```
+
+Report: command used, created branch/worktree or workflow, TaskRun id when
+available, next `wt inspect` target, and the recorded worker `agent_id` /
+coordinator route. If inbox delivery will be used, confirm the launched process
+got identity from `wt codex`, `wt claude`, `wt as`, or a live identity anchor;
+`wt setup` alone only installs hooks and does not bind an already-running
+session. Use `wt agent watch <target>` if waiting for a state transition.
 
 ## Start With Tab Name
 
-Before inspection, if running inside cmux, first rename the current tab. This is
-the first coordination action, so the user can identify what this coordinator is
-doing before any longer inspection or watch command starts.
+Before longer inspection or watching, if running inside cmux, rename the current
+tab so the user can identify what this coordinator is doing.
 
 Use Korean for the visible tab name. Prefer a short user-facing task phrase over
 raw branch, workflow, or TaskRun slugs. Naming rules:
 
-- Format: `조율: <한글 작업명>`.
-- Keep the name scannable, usually 18 characters or fewer after `조율:`.
-- Use nouns or noun phrases, not status prose. Good: `조율: 리뷰 라우팅`,
-  `조율: 스택 검토`, `조율: 릴리즈 준비`.
-- Include an id or slug only when it is needed to disambiguate similar runs, and
-  put it at the end: `조율: 리뷰 라우팅 run-42`.
+- Format: `작업: <한글 작업명>`.
+- Keep the name scannable, usually 18 characters or fewer after `작업:`.
+- Use nouns or noun phrases, not status prose. Good: `작업: 리뷰 라우팅`,
+  `작업: 스택 검토`, `작업: 릴리즈 준비`.
+- Include an id or slug only when needed to disambiguate similar runs, and put
+  it at the end: `작업: 리뷰 라우팅 run-42`.
 
 ```bash
-cmux rename-tab --surface "$(cmux identify | jq -r .caller.surface_ref)" "조율: <한글 작업명>"
+cmux rename-tab --surface "$(cmux identify | jq -r .caller.surface_ref)" "작업: <한글 작업명>"
 ```
 
 Use `caller`, not `focused`; `focused` is the user's current tab, not yours. If
@@ -127,8 +213,8 @@ wt inspect <target>
 `wt session set <id>` prints shell exports; use
 `eval "$(wt session set <id>)"` so the current coordinator shell receives
 `WT_AGENT_ID` and writes an identity anchor for later resolution. For an
-already-open agent session, write the identity anchor only when you know the exact
-intended agent id from `wt inspect`; otherwise relaunch through `wt codex`,
+already-open agent session, write the identity anchor only when you know the
+exact intended agent id from `wt inspect`; otherwise relaunch through `wt codex`,
 `wt claude`, or `wt as <agent-id> -- <command...>` so launch-time
 `WT_AGENT_ID` is unambiguous. A launched TaskRun should record `agent_id` and
 `coordinator_id`; `wt task report` and `wt task review` use those TaskRun-owned
@@ -190,8 +276,8 @@ after the inbox route has been tried and one of these is true:
 
 - the agent remains idle after the short wake-observation window
 - the worker is `needs_input` and hooks are not delivering
-- `wt session whoami` reports no id for the live target and no exact identity anchor can
-  be safely set
+- `wt session whoami` reports no id for the live target and no exact identity
+  anchor can be safely set
 - the TaskRun `agent_id` or delivery route is missing, invalid, or ambiguous
 - immediate prompt-level attention is explicitly more important than preserving
   the canonical message path
@@ -201,13 +287,34 @@ only after confirming the surface is the agent prompt.
 
 ## Review
 
-Ask for a report only as input, not as proof:
+Treat the Agent Completion Report as input, not proof. The report should arrive
+through the task-agent route:
+
+```bash
+wt task report "Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>"
+```
+
+Inspect the TaskRun report metadata and coordinator inbox when a report is
+expected:
+
+```bash
+wt inspect <task-run-id>
+wt msg watch --timeout 300
+wt msg list --agent <coordinator-agent-id>
+wt msg read --agent <coordinator-agent-id> <message-id>
+```
+
+Do not use low-level `wt msg send` for review verdicts or fix requests. Use
+`wt task review` for those because it sends through the stored TaskRun route
+and records review metadata. Use a low-level TaskRun-scoped message only for a
+non-verdict prompt that should not update review metadata, such as requesting a
+missing fresh report:
 
 ```bash
 wt msg send \
   --to <task-agent-id> \
   --scope task_run:<task-run-id> \
-  "현재 상태를 Agent Completion Report 형식으로 짧게 보고해줘. 코드 변경이나 명령 실행은 하지 말고 상태/변경 파일/검증/리스크만 알려줘."
+  "코드 변경이나 명령 실행은 하지 말고 현재 상태만 `wt task report \"Agent Completion Report: Summary=<summary>; Changed files=<files>; Checks run=<checks>; PR=<pr>; Risks or follow-ups=<risks>\"` 형식으로 보내줘."
 ```
 
 Then inspect directly:
@@ -231,8 +338,7 @@ cargo test --locked --all-features
 
 Send focused feedback. Accumulate review findings across a single inspection
 pass and send them as **one consolidated message**, not one message per
-finding — bouncing the agent between micro-corrections wastes context and
-makes "what's left" hard to track:
+finding:
 
 ```bash
 wt task review <task-run-id> --reject "검토 결과입니다. <파일/동작>에서 <문제>가 보입니다. <기대 수정 방향>으로 고치고, 완료 후 변경 파일/검증 결과/남은 리스크를 짧게 보고해줘."
@@ -255,22 +361,22 @@ or validate a live surface; confirm the surface is the agent prompt first.
 ## Sync the Spec
 
 `wt-ready` produces a numbered spec at
-`<repo-root>/.wt/planning/specs/<slug>/`. The spec is not frozen at launch. Findings
-often invalidate an assumption in `07-design.md`, prove an item in
+`<repo-root>/.wt/planning/specs/<slug>/`. The spec is not frozen at launch.
+Findings often invalidate an assumption in `07-design.md`, prove an item in
 `08-tasks.md` is too coarse or mis-scoped, or show that the chosen execution
 shape in `09-execution.md` has drifted.
 
 Edit `07-design.md`, `08-tasks.md`, `09-execution.md`, and `10-review.md` in
 place during the run. The TaskDocument at
-`<repo-root>/.wt/execution/tasks/<slug>.toml` is the canonical launch
-context for the wt CLI and is not rewritten here; only the spec artifact moves.
+`<repo-root>/.wt/execution/tasks/<slug>.toml` is the canonical launch context
+for the wt CLI and is not rewritten here; only the spec artifact moves.
 
 Drift-resolution rule: when implementation and spec disagree, update the spec.
-Do not let code silently diverge. If a decision changes mid-flight, the spec
-is where it lands. `04+05+06-requirements.md` carries the approved purpose and
-requirements — surface needed changes to the user rather than rewriting it
-silently. wt CLI does not treat `planning/specs/` as executable state, so spec edits are
-coordinator-driven file edits.
+Do not let code silently diverge. If a decision changes mid-flight, the spec is
+where it lands. `04+05+06-requirements.md` carries the approved purpose and
+requirements; surface needed changes to the user rather than rewriting it
+silently. wt CLI does not treat `planning/specs/` as executable state, so spec
+edits are coordinator-driven file edits.
 
 Make the rationale visible:
 
@@ -290,8 +396,8 @@ prompt-level attention, or the inbox route is not reliable for this run.
 If unplanned research happens during the run — a domain term that needed a
 definition, a convention that was not surveyed, an external example that
 changed the approach, or an internal fact that was not inventoried — log it
-under a `## Mid-process discoveries` section in `planning/specs/<slug>/10-review.md`
-instead of silently absorbing it.
+under a `## Mid-process discoveries` section in
+`planning/specs/<slug>/10-review.md` instead of silently absorbing it.
 
 Format: one entry per discovery, dated, with a category tag (`domain` /
 `standards` / `external` / `internal`) and a one-line note on what was
@@ -302,8 +408,8 @@ happens, do not create `10-review.md` only for an empty section.
 
 ## Complete When Applicable
 
-Complete only after the worktree is clean and useful commits exist ahead of
-the parent. Applies to workflow-linked runs after review passes.
+Complete only after the worktree is clean and useful commits exist ahead of the
+parent. Applies to workflow-linked runs after review passes.
 
 Stack mode with the next task ready:
 
@@ -318,7 +424,7 @@ wait:
 wt workflow pass <workflow> <task>
 ```
 
-For direct TaskRuns, no separate pass command exists before landing — see
+For direct TaskRuns, no separate pass command exists before landing; see
 `task-lifecycle.md`.
 
 ## Handoff
@@ -327,7 +433,8 @@ When review passes, hand the branch to `wt-land` with enough context to avoid
 re-discovery:
 
 - reviewed branch or stack order
-- parent from `wt inspect`, current branch at coordination start, intended integration branch when explicitly known
+- parent from `wt inspect`, current branch at coordination start, intended
+  integration branch when explicitly known
 - prepared workflow landing policy from `wt workflow show` (workflow work)
 - worktree path and dirty/clean state
 - checks run and known gaps
@@ -338,5 +445,6 @@ re-discovery:
   fallback) and why
 - stack pass command already run, if any
 
-Report coordinated branches, feedback sent, pass command, final review
-result, checks run, message route, and the exact `wt-land` target.
+Report command used, TaskRun/inspect target, coordinated branches, feedback
+sent, pass command, final review result, checks run, message route, and the
+exact `wt-land` target.

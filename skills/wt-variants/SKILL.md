@@ -31,8 +31,7 @@ variant instructions live in `<repo-root>/.wt/config/profiles/<name>/profile.tom
 |---|---|
 | problem still vague | `wt-idea` |
 | prepare variants + matrix workflow | this skill |
-| launch | `wt-start` |
-| monitor, PR review, bot feedback, complete | `wt-coordinate` |
+| launch, monitor, PR review, bot feedback, complete | `wt-work` |
 | land selected branch | `wt-land` |
 
 Do not use variants for dependent slices. If tasks depend on each other, use a
@@ -159,7 +158,7 @@ profile. It should not store variant prose or cmux runtime coordinates.
 
 ## Launch And Coordinate
 
-Launch with `wt-start` or the explicit command:
+Launch with `wt-work` or the explicit command:
 
 ```bash
 ./target/debug/wt run workflow <workflow-id> --jobs <n>
@@ -187,7 +186,7 @@ When all useful variants have reported, summarize:
 - useful tests or ideas to cherry-pick
 - checks and review state
 - unresolved risks
-- exact `wt-coordinate` / `wt-land` next step
+- exact `wt-work` / `wt-land` next step
 
 Do not mark workflow runs complete or land branches until the selected work has
 been reviewed against the evidence above.

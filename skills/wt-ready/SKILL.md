@@ -1,16 +1,16 @@
 ---
 name: wt-ready
-description: "Use before wt-start to make unclear wt work launch-ready: gather evidence, split slices, choose execution shape/policy, and prepare TaskDocuments or workflow handoff."
+description: "Use before wt-work to make unclear wt work launch-ready: gather evidence, split slices, choose execution shape/policy, and prepare TaskDocuments or workflow handoff."
 ---
 
 # WT Ready
 
 Use this skill to prepare wt work before execution. Stop when the work is
-ready for `wt-start`: the scope is clear, evidence is gathered, slices are
+ready for `wt-work`: the scope is clear, evidence is gathered, slices are
 ordered, and the task/workflow handoff is explicit.
 
-Do not launch workspaces from this skill. Use `wt-start` after preparation,
-`wt-coordinate` after work is running, and `wt-land` after review passes.
+Do not launch workspaces from this skill. Use `wt-work` after preparation and
+while work is running, then `wt-land` after review passes.
 
 ## First Read
 
@@ -212,14 +212,14 @@ For each slice, record:
 - estimate basis: previous `11-retrospect.md`, cross-work `timing.md`,
   `wt agent wait-stats`, user-provided target, or conservative planning guess
 - suggested watch cadence: launch validation and steady heartbeat interval for
-  `wt-coordinate`, based on expected duration and prior timing evidence
+  `wt-work`, based on expected duration and prior timing evidence
 - acceptance checks
 - notes for experiments or tradeoffs that shaped the slice
 
 Record this planning context in the TaskDocument `body` as a text section, not
 as top-level TOML fields (only canonical task fields are accepted). Every
 TaskDocument or workflow task must include an expected duration in its
-`계획 (Planning)` body section before `wt-start`, plus the estimate basis when
+`계획 (Planning)` body section before `wt-work`, plus the estimate basis when
 known. Prefer Korean human-facing labels with the stable English key in
 parentheses.
 
@@ -528,9 +528,9 @@ idea file existing first.
     more TaskDocuments (or direct local edits), with paths.
   - **연결된 workflow TOML**: `<repo-root>/.wt/execution/workflows/<id>.toml` when
     applicable; `none` otherwise.
-  - **wt-start target**: exact command or target for execution launch.
+  - **wt-work target**: exact command or target for execution launch.
   - **시간 가정 / watch cadence**: expected duration, estimate basis, launch
-    validation cadence, and steady watch cadence to hand to `wt-coordinate`.
+    validation cadence, and steady watch cadence to hand to `wt-work`.
   - **리스크**: anything to watch when execution starts.
 - When mode = `none`, `09-execution.md` may be very brief (one paragraph plus the
   slice → TaskDocument mapping) or omitted entirely.
@@ -539,7 +539,7 @@ idea file existing first.
   `wt workflow task --mode ...`. `09-execution.md` is prose only and never
   replaces the TOML.
 
-Spec files are not frozen at handoff. `wt-coordinate` may update
+Spec files are not frozen at handoff. `wt-work` may update
 `07-design.md`, `08-tasks.md`, `09-execution.md`, and `10-review.md` in place
 during execution to reflect findings; treat the spec as a living artifact that
 the running work writes back to. The two-way sync rule applies to
@@ -666,7 +666,7 @@ End with one of these concrete outputs:
 
 - spec deliverables prepared (or promoted from `planning/ideas/`) at
   `<repo-root>/.wt/planning/specs/<slug>/`, recording the chosen execution shape
-- existing TaskDocuments/workflow ready, with the exact `wt-start` target
+- existing TaskDocuments/workflow ready, with the exact `wt-work` target
 - new TaskDocument TOML files prepared
 - a saved workflow prepared (mode, base, order, policy)
 - a short list of unresolved HITL decisions that blocks launch
@@ -686,4 +686,4 @@ Report:
 - expected duration per slice, with estimate basis and suggested watch cadence
 - PR/landing policy source: `[workflow]` config, CLI/workflow override, or
   explicit user answer
-- exact next command or target for `wt-start`
+- exact next command or target for `wt-work`
