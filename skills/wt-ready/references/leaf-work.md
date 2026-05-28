@@ -32,7 +32,7 @@ when the user enters prep directly. `wt-ready` mainly owns Example and the
 Architect preparation gates: purpose, requirements, wireframe, design, task
 graph, and handoff. Later `wt-work` and `wt-land` continue Architect by
 creating, checking, and integrating the result. Feedback is owned by
-`wt-retrospect`, using review evidence and spec drift captured during
+`wt-land`, using review evidence and spec drift captured during
 coordination.
 
 Once Gate 1 has a current one-sentence intent, show the user a compact LEAF
@@ -107,7 +107,7 @@ Return here when:
 
 - A new unknown surfaces mid-work and is researched on the spot — surfacing
   was incomplete. Log it under `planning/specs/<slug>/10-review.md` so
-  `wt-retrospect` can diagnose which category was missed next time.
+  `wt-land` can diagnose which category was missed next time.
 - Repeated unplanned research detours start interrupting drafting or
   implementation.
 
@@ -345,7 +345,7 @@ Return here when:
 ## 10. Review / sync record (Feedback material)
 
 Owner: `wt-work` records the evidence while doing Architect execution;
-`wt-retrospect` consumes it as Feedback material.
+`wt-land` consumes it as Feedback material.
 
 Artifact: reviewed diff/check evidence, updated `07-design.md`,
 `08-tasks.md`, `09-execution.md`, and `10-review.md` when execution reality
@@ -368,8 +368,7 @@ Return here when:
 
 ## 11. Retrospect (Feedback)
 
-Owner: `wt-retrospect`, normally called by `wt-lifecycle` after landing or explicit
-discard.
+Owner: `wt-land` after landing or explicit discard.
 
 Artifact: `planning/specs/<slug>/11-retrospect.md` for spec-backed work, or
 `<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` for cross-work or

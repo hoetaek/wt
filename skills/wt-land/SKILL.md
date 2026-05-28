@@ -1,16 +1,18 @@
 ---
 name: wt-land
-description: "Use after wt work is reviewed: respect workflow policy, pass workflow-linked tasks when needed, merge, prove ancestry, and clean with `wt done`."
+description: "Use after wt work is reviewed or intentionally discarded, or when the user asks for a wt retrospective: respect workflow policy, pass workflow-linked tasks when needed, merge or prove discard, clean with `wt done`, and record retrospective lessons, timing evidence, action candidates, and harness tuning."
 ---
 
 # WT Land
 
-Use this skill after `wt-work` review says the work is acceptable. Do not
-use it to monitor active agents or request fixes; use `wt-work` for that.
+Use this skill after `wt-work` review says the work is acceptable, after
+explicit discard, or when the user asks for a retrospective on closed wt work.
+Do not use it to monitor active agents or request fixes; use `wt-work` for that.
 
-In the LEAF model, this skill owns the land/close step between
-review/sync and retrospect. It proves integration or discard, performs
-applicable workflow pass, and cleans only after that closure is safe.
+In the LEAF model, this skill owns the final close and feedback step after
+review/sync. It proves integration or discard, performs applicable workflow
+pass, cleans only after that closure is safe, and records the retrospective
+lessons that should feed the next cycle.
 
 Object model, status boundaries, and pass vs cleanup commands: see
 `../wt-lifecycle/references/task-lifecycle.md`.
@@ -21,6 +23,9 @@ Object model, status boundaries, and pass vs cleanup commands: see
 - Coordinator landing must not absorb task-branch merge conflict ownership. A
   merge conflict during landing is a task-branch update problem until the user
   explicitly asks the coordinator to take it over.
+- Retrospectives are learning artifacts, not execution state. Write them after
+  landing or discard is proven, or when a stopped lifecycle gate produced a
+  reusable lesson.
 
 ## Preflight
 
@@ -277,6 +282,28 @@ there is no useful unmerged work before `wt done`.
 Leave TaskDocument and TaskRun files alone unless a `wt` command owns that
 state transition or the user explicitly asks to remove them.
 
+## Retrospect
+
+After landing or explicit discard cleanup, write the retrospective before
+reporting the lifecycle complete. For detailed format and scope rules, read
+`references/retrospect.md` when a retrospective is needed.
+
+Minimum rule:
+
+- Write a timing entry for every closed work item, even when no broader
+  keep/problem/try lesson emerged.
+- Prefer `<repo-root>/.wt/planning/specs/<slug>/11-retrospect.md` for
+  spec-backed work.
+- Use `<repo-root>/.wt/planning/retrospectives/YYYY-MM-DD-<slug>.toml` only for
+  cross-work, spec-less, or intentionally split lessons.
+- Include outcome proof, cleanup proof, expected vs actual duration, watch
+  cadence evidence, keep/problem/try items, action candidates, and any harness
+  tuning that should permanently change agent behavior.
+- For a reusable blocked gate lesson, do not fake landing state. Name the
+  stopped gate and record only the lesson that should change the next cycle.
+- Do not commit retrospective files unless the user asks. They are local
+  learning artifacts by default.
+
 ## Report
 
 Report:
@@ -285,5 +312,6 @@ Report:
 - integration branch and merge commit, or already-landed proof
 - pass command used, if any
 - cleanup command used
+- retrospective file path or explicit reason it was skipped
 - checks run and remaining gaps
 - remaining related worktrees or branches

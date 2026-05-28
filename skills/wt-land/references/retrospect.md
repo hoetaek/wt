@@ -1,19 +1,15 @@
----
-name: wt-retrospect
-description: "Use after wt work has landed, been intentionally discarded, or stopped at a reusable blocked gate to capture keep/problem/try lessons, timing estimate accuracy, watch cadence, and action candidates. Triggers: 'retrospect', 'retrospective 작성', or end of a wt-lifecycle loop."
----
+# Retrospect Reference
 
-# WT Retrospect
-
-Use this skill to capture a closed work item, or a blocked `wt-lifecycle` lesson, as
+Use this reference from `wt-land` to capture a closed work item, or a blocked
+`wt-lifecycle` lesson, as
 a structured retrospective that future planning, coordination, review, landing,
 or skill guidance can learn from. Do not use it to track in-flight state — that
 belongs in `<repo-root>/.wt/execution/tasks`,
 `<repo-root>/.wt/execution/task-runs`, and
 `<repo-root>/.wt/execution/workflows`.
-In the LEAF model, this skill owns the final retrospect gate after
-landing or explicit discard. It can also record a blocked-loop lesson when the
-loop stops at an earlier gate and the blocker itself is worth preserving.
+In the LEAF model, `wt-land` owns the final retrospect gate after landing or
+explicit discard. It can also record a blocked-loop lesson when the loop stops
+at an earlier gate and the blocker itself is worth preserving.
 
 ## When to Use
 
@@ -193,7 +189,7 @@ items = [
 
 [[action_candidates]]
 summary = "<one-line action this retrospective recommends>"
-owner = "<wt | wt-lifecycle | wt-idea | wt-ready | wt-work | wt-land | wt-retrospect | coordinator | <user>>"
+owner = "<wt | wt-lifecycle | wt-idea | wt-ready | wt-work | wt-land | coordinator | <user>>"
 status = "candidate"               # or "addressed" / "promoted"
 promote_to = "<repo-root>/.wt/planning/ideas/"      # or a specific path when known
 done_when = "<observable criterion that closes this candidate>"
@@ -202,7 +198,7 @@ done_when = "<observable criterion that closes this candidate>"
 # One entry per lesson that warrants a permanent behavior change.
 # Skip this table entirely when no lesson rises to that bar.
 lesson = "<the mistake or friction this entry exists to prevent next time>"
-owner = "<wt | wt-lifecycle | wt-idea | wt-ready | wt-work | wt-land | wt-retrospect | coordinator | <user>>"
+owner = "<wt | wt-lifecycle | wt-idea | wt-ready | wt-work | wt-land | coordinator | <user>>"
 target_file = "<absolute or repo-relative path of the file that must change>"
 target_section = "<heading, anchor, or line range inside target_file>"
 change = "<what the edit should say or constrain, in one or two sentences>"
@@ -289,7 +285,7 @@ such that the agent never makes that mistake again.
   it. "Update CLAUDE.md somewhere" is not enough; "Add a bullet under
   `CLAUDE.md` > `## 문제 해결 원칙` after item 5" is.
 - Name the owner. Use the same vocabulary as `[[action_candidates]]`
-  (`wt | wt-lifecycle | wt-idea | wt-ready | wt-work | wt-land | wt-retrospect | coordinator | <user>`)
+  (`wt | wt-lifecycle | wt-idea | wt-ready | wt-work | wt-land | coordinator | <user>`)
   so the reader knows who is responsible for applying the change.
 - Record each such change as one `[[harness_tuning]]` entry in the TOML. If no
   lesson rises to that bar, omit the table entirely rather than padding it.
@@ -301,7 +297,8 @@ Target files commonly include, but are not limited to:
 - Steering files such as `.kiro/steering/*` and equivalents in other dotfile
   setups.
 - Workflow rules and config: `.wt.toml`, `<repo-root>/.wt/config/local.toml`.
-- SKILL.md bodies under `~/.agents/skills/wt-*/SKILL.md` (including this one).
+- SKILL.md bodies under `~/.agents/skills/wt-*/SKILL.md`, especially
+  `wt-land/SKILL.md` when the lesson changes closeout behavior.
 - Profile prompts under `<repo-root>/.wt/config/profiles/<name>/prompts/`.
 
 When the finished work item had specs,

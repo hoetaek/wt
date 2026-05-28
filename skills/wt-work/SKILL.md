@@ -183,7 +183,7 @@ focused feedback, the expected duration is short, or an immediate transition is
 expected. If status is `needs_input`, send feedback. If status is `idle`, review
 the worktree instead of polling.
 
-Record the chosen watch strategy for `wt-retrospect`: expected duration and
+Record the chosen watch strategy for `wt-land`: expected duration and
 basis, launch-validation command, steady heartbeat/interval/timeout, first
 meaningful signal time, state transitions, reports, and any nudges sent because
 the cadence looked wrong.
@@ -402,7 +402,7 @@ under a `## Mid-process discoveries` section in
 Format: one entry per discovery, dated, with a category tag (`domain` /
 `standards` / `external` / `internal`) and a one-line note on what was
 researched and why it was not in the original Unknown surfacing list.
-`wt-retrospect` reads this section to diagnose which category was missed and
+`wt-land` reads this section to diagnose which category was missed and
 strengthen the next run's surfacing checklist. If no unplanned research
 happens, do not create `10-review.md` only for an empty section.
 

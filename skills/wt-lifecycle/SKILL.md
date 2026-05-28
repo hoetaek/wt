@@ -2,8 +2,8 @@
 name: wt-lifecycle
 description: |
   Use to carry wt work through the full lifecycle: prepare unclear work with
-  wt-ready, launch and coordinate execution, land or discard safely, then
-  settle reusable lessons into wt-retrospect and harness updates.
+  wt-ready, launch and coordinate execution, then land or discard safely while
+  settling reusable lessons into retrospective and harness updates.
 ---
 
 # WT Lifecycle
@@ -34,13 +34,12 @@ Apply these skills in order:
    capture the inspect target, monitor the run, inspect agent state, review
    code, run checks, sync the living spec, and send focused feedback until the
    work is acceptable.
-4. Land or discard with `wt-land` after review passes: respect workflow landing
-   policy, perform any applicable pass step, land branches in the right order,
-   prove ancestry, and clean up with `wt done`.
-5. Settle the harness with `wt-retrospect` after each closed work item: capture
-   keep/problem/try lessons, action candidates, harness-tuning records,
-   expected vs actual duration, and watch-cadence evidence. Write the timing
-   entry even when there was no broader lesson.
+4. Land, discard, and settle the harness with `wt-land` after review passes:
+   respect workflow landing policy, perform any applicable pass step, land
+   branches in the right order, prove ancestry or discard intent, clean up with
+   `wt done`, and record keep/problem/try lessons, action candidates,
+   harness-tuning records, expected vs actual duration, and watch-cadence
+   evidence. Write the timing entry even when there was no broader lesson.
 
 Carry the user's original context through every lifecycle step. Stop only when
 that step's own guardrail blocks progress, such as unresolved HITL decisions,

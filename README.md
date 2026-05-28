@@ -69,7 +69,6 @@ lifecycle. The pack contains:
 - `wt-ready`
 - `wt-work`
 - `wt-land`
-- `wt-retrospect`
 - `wt-config`
 - `wt-lifecycle`
 
@@ -91,7 +90,6 @@ npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/skills \
   --skill wt-ready \
   --skill wt-work \
   --skill wt-land \
-  --skill wt-retrospect \
   --skill wt-config \
   --skill wt-lifecycle \
   -g -a codex --copy -y
@@ -106,7 +104,6 @@ npx --yes skills@latest add . \
   --skill wt-ready \
   --skill wt-work \
   --skill wt-land \
-  --skill wt-retrospect \
   --skill wt-config \
   --skill wt-lifecycle \
   -g -a codex --copy -y
@@ -122,7 +119,6 @@ npx --yes skills@latest add /path/to/wt \
   --skill wt-ready \
   --skill wt-work \
   --skill wt-land \
-  --skill wt-retrospect \
   --skill wt-config \
   --skill wt-lifecycle \
   -a codex --copy -y
