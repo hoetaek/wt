@@ -77,7 +77,7 @@ For an interactive install, run one command and choose the skills, agent, and
 scope from the prompts:
 
 ```bash
-npx skills add https://github.com/hoetaek/wt/tree/develop/skills
+npx skills add https://github.com/hoetaek/wt/tree/master/skills
 ```
 
 Select the `wt-*` skills you want.
@@ -85,7 +85,7 @@ Select the `wt-*` skills you want.
 For a non-interactive Codex global install, pass explicit skill names:
 
 ```bash
-npx --yes skills@latest add https://github.com/hoetaek/wt/tree/develop/skills \
+npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/skills \
   --skill wt-welcome \
   --skill wt-idea \
   --skill wt-ready \
