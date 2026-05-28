@@ -160,8 +160,10 @@ fn push_codex_prompt(
 ) -> Result<()> {
     let lines = codex_prompt_lines(text);
     for (i, line) in lines.iter().enumerate() {
-        let send_args = cmux_send_args("send", surface_id, workspace, line);
-        run_cmux(runner, &send_args, "send")?;
+        if !line.is_empty() {
+            let send_args = cmux_send_args("send", surface_id, workspace, line);
+            run_cmux(runner, &send_args, "send")?;
+        }
         if i + 1 < lines.len() {
             let newline_args = cmux_send_args(
                 "send-key",
@@ -458,14 +460,14 @@ mod tests {
     #[test]
     fn codex_push_sends_multiline_text_with_shift_enter_between_lines() {
         let mut runner = MockRunner::new();
-        for _ in 0..6 {
+        for _ in 0..5 {
             runner.add_response("", true);
         }
 
         push_to_surface(&runner, "surface:4", PushKind::Codex, "hello\n\nworld").unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 6);
+        assert_eq!(calls.len(), 5);
         assert_eq!(
             calls[0].1,
             vec!["send", "--surface", "surface:4", "--", "hello"]
@@ -480,9 +482,9 @@ mod tests {
                 CODEX_IN_PROMPT_NEWLINE_KEY
             ]
         );
-        assert_eq!(calls[2].1, vec!["send", "--surface", "surface:4", "--", ""]);
+        // empty middle line: no cmux send "", just shift-enter
         assert_eq!(
-            calls[3].1,
+            calls[2].1,
             vec![
                 "send-key",
                 "--surface",
@@ -492,11 +494,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            calls[4].1,
+            calls[3].1,
             vec!["send", "--surface", "surface:4", "--", "world"]
         );
         assert_eq!(
-            calls[5].1,
+            calls[4].1,
             vec!["send-key", "--surface", "surface:4", "--", "enter"]
         );
     }

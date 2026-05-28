@@ -203,7 +203,9 @@ fn send_codex_prompt(
 ) -> Result<()> {
     let lines = codex_prompt_lines(prompt);
     for (i, line) in lines.iter().enumerate() {
-        cmux.send(surface, ws_handle, line)?;
+        if !line.is_empty() {
+            cmux.send(surface, ws_handle, line)?;
+        }
         if i + 1 < lines.len() {
             cmux.send_key(surface, ws_handle, CODEX_IN_PROMPT_NEWLINE_KEY)?;
         }
