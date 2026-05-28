@@ -1,14 +1,20 @@
 ---
-name: wt-setup
+name: wt-config
 description: "Use to inspect the current project and recommend an ideal wt config: ownership, active sections, omitted sections, commands, providers, workspace, workflow policy, profiles, and validation."
 ---
 
-# WT Setup
+# WT Config
 
 Use this skill to produce a project-specific wt config recommendation. Do not
 answer as a generic config manual. Do not list every possible field unless it is
 relevant to the current repo. Do not start work, coordinate agents, land
 branches, or clean worktrees.
+
+This skill is not the `wt setup` CLI. `wt setup` prepares one user/machine
+integration such as shell lines and agent hooks. `wt init` prepares one repo:
+config, a usable `<repo-root>/.wt/` personal storage path (real directory or
+directory symlink), and the clone-local `/.wt` ignore line. `wt-config`
+recommends and diagnoses repo config.
 
 ## Core Job
 
@@ -41,7 +47,9 @@ rg --files | rg '(^|/)(Cargo.toml|Cargo.lock|package.json|pnpm-lock.yaml|yarn.lo
 ```
 
 If this is the `wt` repo itself, also read `README.md`, `docs/consistency.md`,
-and `docs/north-star.md` before recommending user-facing model changes.
+and `docs/north-star.md` before recommending user-facing model changes. Treat
+`docs/consistency.md` as the source of truth for the `wt setup` / `wt init` /
+personal storage boundary.
 
 Read the relevant manifests, project docs, and CI workflows. Check local
 availability for tools that existing config or recommended commands depend on:
@@ -60,6 +68,10 @@ Choose the file by ownership, not convenience:
 - `.wt.toml`: project integration config contributors should share.
 - `<repo-root>/.wt/config/profiles/<name>/profile.toml`: named runtime profile only
   when reusable structured profile config is worth the extra file.
+
+Do not put `.wt` or linked-worktree `.wt -> <main-repo>/.wt` symlinks in
+`[worktree].link`. That path is wt personal-storage infrastructure, not user
+config intent.
 
 Do not silently move settings between shared/private ownership. If existing
 config is mature, recommend a minimal patch rather than normalizing it into one

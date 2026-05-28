@@ -60,11 +60,13 @@ Personal storage의 canonical root는 `<repo-root>/.wt/`다. 이 결정의 sourc
 - `.wt/...`는 `.git/wt/...`보다 짧고 사용자가 직접 열어 보기 쉽다.
 - Claude Code 같은 agent harness가 `.git/` write permission friction 없이 wt state를 다룰 수 있다.
 
-한 repository의 모든 worktree가 같은 personal storage를 보는 contract는 유지한다. 메커니즘만
-바뀐다: main repo에는 real directory `<repo-root>/.wt/`를 두고, linked worktree에는
-`.wt -> <main-repo>/.wt` symlink를 둔다. `wt setup`과 wt가 만든 worktree는 이 symlink를
-보장해야 한다. Ignore는 팀 `.gitignore`가 아니라 clone-local `.git/info/exclude`에 `.wt/`
-패턴을 넣어 처리한다.
+한 repository의 모든 worktree가 같은 personal storage를 보는 contract는 유지한다. 메커니즘은
+directory-like path 기준이다: main repo의 `<repo-root>/.wt/`는 real directory이거나
+directory를 가리키는 symlink일 수 있고, linked worktree에는 `.wt -> <main-repo>/.wt`
+symlink를 둔다. `wt init`은 main repo의 `.wt`가 directory로 사용할 수 있는 path이고
+clone-local `.git/info/exclude`에 exact line `/.wt`가 있음을 보장한다. wt가 만든 linked
+worktree는 worktree setup path에서 `.wt -> <main-repo>/.wt` symlink를 보장한다.
+`wt setup`은 repo personal storage를 준비하지 않는다.
 
 Canonical personal storage layout:
 
@@ -748,13 +750,14 @@ wt as agents/coordinator -- codex
 Canonical non-LLM smoke는 실제 Claude/Codex 세션을 CI에서 띄우지 않고, 설치된 hook dispatcher와
 file inbox만 검증한다.
 
-1. 같은 git common dir을 공유하는 linked worktree 두 개를 만든다.
-2. `wt setup`으로 Claude user-level dispatcher와 Codex user-level dispatcher를 설치한다.
-3. `wt as agents/claude-smoke -- wt msg send --to agents/codex-smoke CLAUDE_SENT`로 Claude identity에서 Codex inbox로 보낸다.
-4. 설치된 Codex hook command를 `WT_AGENT_ID=agents/codex-smoke`로 실행해 `CLAUDE_SENT`를 delivery한다.
-5. `wt as agents/codex-smoke -- wt msg send --to agents/claude-smoke CODEX_SENT REALWT_PONG_SEEN`로 답장한다.
-6. 설치된 Claude hook command를 `WT_AGENT_ID=agents/claude-smoke`로 실행해 `CODEX_SENT REALWT_PONG_SEEN`를 delivery한다.
-7. `wt setup --remove`로 wt-managed per-machine hook state를 정리한다.
+1. `wt init`으로 repo-local personal storage와 config bootstrap을 준비한다.
+2. 같은 git common dir을 공유하는 linked worktree 두 개를 만든다.
+3. `wt setup`으로 Claude user-level dispatcher와 Codex user-level dispatcher를 설치한다.
+4. `wt as agents/claude-smoke -- wt msg send --to agents/codex-smoke CLAUDE_SENT`로 Claude identity에서 Codex inbox로 보낸다.
+5. 설치된 Codex hook command를 `WT_AGENT_ID=agents/codex-smoke`로 실행해 `CLAUDE_SENT`를 delivery한다.
+6. `wt as agents/codex-smoke -- wt msg send --to agents/claude-smoke CODEX_SENT REALWT_PONG_SEEN`로 답장한다.
+7. 설치된 Claude hook command를 `WT_AGENT_ID=agents/claude-smoke`로 실행해 `CODEX_SENT REALWT_PONG_SEEN`를 delivery한다.
+8. `wt setup --remove`로 wt-managed per-machine hook state를 정리한다.
 
 이 smoke는 cmux workspace/surface를 만들거나 읽지 않는다. Real Claude/Codex manual smoke는 같은
 message path를 실제 agent lifecycle에서 관찰하는 추가 검증이지, message transport의 canonical
@@ -1127,13 +1130,20 @@ signal이 있을 때만 active config에 쓴다. Agent runtime은 explicit flag�
 TTY가 아니면 `--yes` 또는 충분한 explicit flag 조합처럼 prompt 없이 끝낼 수 있는 입력이
 있어야 하며, 그렇지 않으면 interactive prompt를 시도하지 말고 명확한 에러로 실패한다.
 `wt init --dry-run`은 같은 validation을 거친 뒤 생성될 target, 작업, 저장될 설정, 안내/경고,
-TOML content를 preview하고 파일을 쓰지 않는다.
+TOML content를 preview하고 파일을 쓰지 않는다. `.wt` directory와 git `info/exclude`도
+수정하지 않는다.
 
-Generated output은 여전히 사용자가 선택한 config 파일 하나에만 쓴다. `.wt.toml`과
+Generated config output은 여전히 사용자가 선택한 config 파일 하나에만 쓴다. `.wt.toml`과
 `<repo-root>/.wt/config/local.toml` 중 하나를 선택하고, 답한 설정은 그 파일에만 쓴다. 다른 config 파일,
 named profile directory, prompt/scaffold 파일은 `wt init`의 부수 효과로 만들지 않는다.
 그런 구조가 필요하면 `wt config extract`나 `wt profile create`로 드러낸다. 나중에 scaffold
 generation을 추가하더라도 별도의 명시적 choice로 다뤄야 한다.
+
+Repo bootstrap side effect는 config output과 별개의 `wt init` 책임이다. Apply 경로는
+main `<repo-root>/.wt/` directory-like path(real directory 또는 directory symlink),
+clone-local git `info/exclude`의 exact line `/.wt`, canonical core personal-state directory를
+보장한다. 이미 준비되어 있으면
+idempotent no-op이고, `/.wt` line을 중복 추가하지 않는다.
 
 `wt init --help` contract도 이 모델을 따라야 한다. Subcommand 설명은 “start a
 project-specific config recommendation wizard”를 말해야 하고, `--yes`, `--dry-run`, `--local`,

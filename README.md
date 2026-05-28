@@ -69,7 +69,7 @@ lifecycle. The pack contains:
 - `wt-start`
 - `wt-coordinate`
 - `wt-land`
-- `wt-setup`
+- `wt-config`
 - `wt-work`
 
 For an interactive install, run one command and choose the skills, agent, and
@@ -90,7 +90,7 @@ npx --yes skills@latest add https://github.com/hoetaek/wt/tree/develop/skills \
   --skill wt-start \
   --skill wt-coordinate \
   --skill wt-land \
-  --skill wt-setup \
+  --skill wt-config \
   --skill wt-work \
   -g -a codex --copy -y
 ```
@@ -104,7 +104,7 @@ npx --yes skills@latest add . \
   --skill wt-start \
   --skill wt-coordinate \
   --skill wt-land \
-  --skill wt-setup \
+  --skill wt-config \
   --skill wt-work \
   -g -a codex --copy -y
 ```
@@ -119,7 +119,7 @@ npx --yes skills@latest add /path/to/wt \
   --skill wt-start \
   --skill wt-coordinate \
   --skill wt-land \
-  --skill wt-setup \
+  --skill wt-config \
   --skill wt-work \
   -a codex --copy -y
 ```
@@ -154,6 +154,12 @@ wt init --shared --issue-provider github --yes
 wt doctor
 wt doctor --profile codex
 ```
+
+`wt init` also prepares repo-local wt state: the main `<repo-root>/.wt/`
+directory path, canonical personal-state subdirectories, and the clone-local
+`/.wt` ignore line in git `info/exclude`. An existing `.wt` symlink to a
+directory is accepted. `wt init --dry-run` previews without writing any of
+those files.
 
 Start work:
 
@@ -289,8 +295,9 @@ merge.
 - `wt setup` configures per-machine wt integration. It detects supported agent
   CLIs, prompts before installing wt-managed Claude and Codex inbox hooks, and
   can add shell integration and completion eval lines to the resolved shell rc
-  file. Use `--yes` to accept detected steps, `--dry-run` to preview writes,
-  and `--remove` to remove wt-managed per-machine entries while preserving
+  file. Repo-local `.wt` storage belongs to `wt init`, not `wt setup`. Use
+  `--yes` to accept detected steps, `--dry-run` to preview writes, and
+  `--remove` to remove wt-managed per-machine entries while preserving
   user-managed hooks, cmux hooks, and unrelated trust state.
 - `wt codex` and `wt claude` launch those agent CLIs with
   `WT_AGENT_ID=agents/<branch_slug>`. In the same worktree, pass a leading role

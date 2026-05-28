@@ -239,7 +239,7 @@ pub enum Commands {
     },
     /// Set up or remove per-machine wt integration
     #[command(
-        long_about = "Set up or remove per-machine wt integration.\n\n`wt setup` detects supported local agent CLIs, renders a structured plan of target files and planned actions, prepares repo-local personal storage when run inside a git worktree, prompts before installing wt-managed Claude and Codex inbox hooks, and can add shell integration and completion eval lines to the resolved shell rc file. Use --yes to apply detected steps without prompting, --dry-run to preview the plan without writing files, and --remove to remove wt-managed per-machine entries."
+        long_about = "Set up or remove per-machine wt integration.\n\n`wt setup` detects supported local agent CLIs, renders a structured plan of target files and planned actions, prompts before installing wt-managed Claude and Codex inbox hooks, and can add shell integration and completion eval lines to the resolved shell rc file. Repo-local `.wt` storage is prepared by `wt init`, not `wt setup`. Use --yes to apply detected steps without prompting, --dry-run to preview the plan without writing files, and --remove to remove wt-managed per-machine entries."
     )]
     Setup {
         /// Accept every detected setup step without prompting
@@ -369,6 +369,9 @@ pub enum Commands {
         command: Option<ProfileCommand>,
     },
     /// 이 저장소에 맞는 config 추천 wizard 시작
+    #[command(
+        long_about = "Start a project-specific config recommendation wizard and bootstrap repo-local wt storage.\n\n`wt init` prepares the current repository: it writes one selected config file, prepares the canonical <repo-root>/.wt/ personal state directory path when applying changes, and records the clone-local `/.wt` ignore line in git info/exclude. An existing `.wt` symlink to a directory is accepted. Use --dry-run to preview without writing files."
+    )]
     Init {
         /// 개인 설정 파일에 쓰기
         #[arg(long, conflicts_with = "shared")]

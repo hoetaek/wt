@@ -6,6 +6,7 @@ use crate::config::{
 };
 use crate::context::{Ctx, PromptItem};
 use crate::error::WtError;
+use crate::personal_storage;
 use crate::storage::StorageRoot;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -385,6 +386,8 @@ pub fn run(ctx: &Ctx, options: InitOptions) -> Result<()> {
     if !options.yes && !ctx.ui.confirm(confirm_prompt, confirm_default)? {
         return Err(WtError::Cancelled.into());
     }
+
+    personal_storage::ensure_repo_bootstrap(&ctx.storage_root)?;
 
     if let Some(parent) = plan.target_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -2964,6 +2967,87 @@ mod tests {
         let config = Config::load_file(&dir.path().join(".wt/config/local.toml")).unwrap();
         assert_eq!(config.worktree.link, vec![".local"]);
         assert!(dir.path().join(".wt/execution").is_dir());
+    }
+
+    #[test]
+    fn init_bootstraps_repo_personal_storage_and_git_exclude_idempotently() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(dir.path().join(".wt").is_dir());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap(),
+            "/.wt\n"
+        );
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                force: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap(),
+            "/.wt\n"
+        );
+    }
+
+    #[test]
+    fn init_dry_run_does_not_bootstrap_repo_personal_storage() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                dry_run: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!dir.path().join(".wt").exists());
+        assert!(!dir.path().join(".git/info/exclude").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn init_accepts_existing_personal_storage_symlink_to_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("external-wt-state");
+        std::fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join(".wt")).unwrap();
+        let ctx = ctx_for_dir(&dir);
+
+        run(
+            &ctx,
+            InitOptions {
+                yes: true,
+                ..InitOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read_link(dir.path().join(".wt")).unwrap(), target);
+        assert!(dir.path().join(".wt/config/local.toml").is_file());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap(),
+            "/.wt\n"
+        );
     }
 
     #[test]

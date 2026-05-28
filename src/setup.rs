@@ -27,7 +27,6 @@ pub(crate) use browser::{launch_browser, prepare_browser_launch};
 pub(crate) use env_template::build_template_vars;
 pub(crate) use site::apply_site_template_vars;
 
-use crate::commands::setup as setup_command;
 use crate::config::{Config, SiteProvider};
 pub(crate) use crate::config::{
     WORKSPACE_COLOR_KIND_BRANCH, WORKSPACE_COLOR_KIND_ISSUE, WORKSPACE_COLOR_KIND_PR,
@@ -35,6 +34,7 @@ pub(crate) use crate::config::{
 };
 use crate::context::Ctx;
 use crate::names::WorktreeNames;
+use crate::personal_storage;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -182,7 +182,7 @@ pub(crate) fn run_setup_with_workspace_color_kind(
 
 fn ensure_worktree_personal_storage(ctx: &Ctx, wt_path: &Path) -> Result<()> {
     let main_personal_root = ctx.storage_root.personal_root();
-    setup_command::ensure_real_directory(main_personal_root).with_context(|| {
+    personal_storage::ensure_directory_path(main_personal_root).with_context(|| {
         format!(
             "Failed to prepare main repo wt personal storage at {}",
             main_personal_root.display()
@@ -198,14 +198,14 @@ fn ensure_worktree_personal_storage(ctx: &Ctx, wt_path: &Path) -> Result<()> {
     }
 
     let worktree_personal_path = wt_path.join(".wt");
-    setup_command::ensure_personal_storage_symlink(&worktree_personal_path, main_personal_root)
+    personal_storage::ensure_linked_worktree_symlink(&worktree_personal_path, main_personal_root)
         .with_context(|| {
-            format!(
-                "Failed to prepare linked worktree wt personal storage: {} -> {}",
-                worktree_personal_path.display(),
-                main_personal_root.display()
-            )
-        })?;
+        format!(
+            "Failed to prepare linked worktree wt personal storage: {} -> {}",
+            worktree_personal_path.display(),
+            main_personal_root.display()
+        )
+    })?;
 
     Ok(())
 }

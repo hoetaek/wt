@@ -1,4 +1,0 @@
-interface:
-  display_name: "WT Setup"
-  short_description: "Configure and improve wt repo config"
-  default_prompt: "Use $wt-setup to initialize or improve wt config, recommend ownership/prompts/workspace/policy changes, clean noisy config, and validate with `wt config` and `wt doctor`."

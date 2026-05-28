@@ -70,6 +70,13 @@ fn git_init(path: &Path) {
     assert!(status.success());
 }
 
+fn wt_init_yes(path: &Path) {
+    wt_command()
+        .args(["-C", path.to_str().unwrap(), "init", "--yes"])
+        .assert()
+        .success();
+}
+
 fn git_commit(path: &Path) {
     std::fs::write(path.join("README.md"), "sample\n").unwrap();
     let status = git_command()
@@ -1102,6 +1109,7 @@ fn shell_init_rejects_unsupported_shell_with_supported_list() {
 fn run_branch_without_args_requires_branch_text() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
+    wt_init_yes(temp.path());
 
     wt_command()
         .args(["-C", temp.path().to_str().unwrap(), "run", "branch"])
@@ -3614,6 +3622,7 @@ fn msg_uses_git_common_runtime_inbox_from_linked_worktree() {
 fn run_workflow_requires_coordinator_session_when_agent_env_unset() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
+    wt_init_yes(temp.path());
 
     wt_command()
         .args([
@@ -3635,6 +3644,7 @@ fn run_workflow_requires_coordinator_session_when_agent_env_unset() {
 fn run_workflow_requires_coordinator_session_when_agent_env_empty() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
+    wt_init_yes(temp.path());
 
     wt_command()
         .args([
@@ -3657,6 +3667,7 @@ fn run_workflow_requires_coordinator_session_when_agent_env_empty() {
 fn run_workflow_with_agent_env_reaches_workflow_resolution() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
+    wt_init_yes(temp.path());
 
     wt_command()
         .args([
@@ -4537,21 +4548,16 @@ fn setup_and_remove_are_idempotent() {
 
 #[cfg(unix)]
 #[test]
-fn setup_prepares_personal_storage_in_main_repo() {
+fn init_prepares_personal_storage_in_main_repo() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
-    let home = temp.path().join("home");
-    let codex_home = temp.path().join("codex-home");
 
     wt_command()
-        .env("HOME", &home)
-        .env("CODEX_HOME", &codex_home)
         .env("SHELL", "/bin/fish")
-        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .args(["-C", temp.path().to_str().unwrap(), "init", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Personal storage: install"))
-        .stdout(predicate::str::contains("add `/.wt` to info/exclude"));
+        .stdout(predicate::str::contains("설정 생성됨"));
 
     assert!(temp.path().join(".wt").is_dir());
     let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
@@ -4571,15 +4577,16 @@ fn setup_prepares_personal_storage_in_main_repo() {
     assert!(String::from_utf8_lossy(&ignored.stdout).contains(".git/info/exclude"));
 
     wt_command()
-        .env("HOME", &home)
-        .env("CODEX_HOME", &codex_home)
         .env("SHELL", "/bin/fish")
-        .args(["-C", temp.path().to_str().unwrap(), "setup", "--yes"])
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "init",
+            "--yes",
+            "--force",
+        ])
         .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "Personal storage: none - info/exclude already excludes .wt; .wt/ directory ready",
-        ));
+        .success();
 
     let exclude = std::fs::read_to_string(temp.path().join(".git/info/exclude")).unwrap();
     assert_eq!(exclude.lines().filter(|line| *line == "/.wt").count(), 1);
@@ -4587,7 +4594,7 @@ fn setup_prepares_personal_storage_in_main_repo() {
 
 #[cfg(unix)]
 #[test]
-fn setup_prepares_personal_storage_symlink_in_linked_worktree() {
+fn init_from_linked_worktree_prepares_main_storage_without_link_symlink() {
     let temp = TempDir::new().unwrap();
     let repo = temp.path().join("repo");
     let linked = temp.path().join("linked");
@@ -4607,38 +4614,18 @@ fn setup_prepares_personal_storage_symlink_in_linked_worktree() {
         .status()
         .unwrap();
     assert!(status.success());
-    let home = temp.path().join("home");
-    let codex_home = temp.path().join("codex-home");
 
     wt_command()
-        .env("HOME", &home)
-        .env("CODEX_HOME", &codex_home)
         .env("SHELL", "/bin/fish")
-        .args(["-C", linked.to_str().unwrap(), "setup", "--yes"])
+        .args(["-C", linked.to_str().unwrap(), "init", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Personal storage: install"))
-        .stdout(predicate::str::contains("symlink to"));
+        .stdout(predicate::str::contains("설정 생성됨"));
 
     let main_storage = repo.join(".wt");
     let linked_storage = linked.join(".wt");
     assert!(main_storage.is_dir());
-    assert!(
-        std::fs::symlink_metadata(&linked_storage)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    let link_target = std::fs::read_link(&linked_storage).unwrap();
-    let absolute_target = if link_target.is_absolute() {
-        link_target
-    } else {
-        linked.join(link_target)
-    };
-    assert_eq!(
-        std::fs::canonicalize(absolute_target).unwrap(),
-        std::fs::canonicalize(&main_storage).unwrap()
-    );
+    assert!(!linked_storage.exists());
 
     let ignored = git_command()
         .args(["check-ignore", "-v", ".wt"])
@@ -4662,18 +4649,31 @@ fn setup_prepares_personal_storage_symlink_in_linked_worktree() {
         .unwrap();
     assert!(status.status.success());
     assert!(!String::from_utf8_lossy(&status.stdout).contains(".wt"));
+}
+
+#[test]
+fn run_task_rejects_missing_repo_bootstrap_before_task_selection() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
 
     wt_command()
-        .env("HOME", &home)
-        .env("CODEX_HOME", &codex_home)
-        .env("SHELL", "/bin/fish")
-        .args(["-C", linked.to_str().unwrap(), "setup", "--yes"])
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "run",
+            "task",
+            "missing-task",
+        ])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Personal storage: none"))
-        .stdout(predicate::str::contains(
-            "linked worktree .wt symlink verified",
-        ));
+        .failure()
+        .stderr(predicate::str::contains("wt repo bootstrap is not ready"))
+        .stderr(predicate::str::contains(
+            "Run `wt init` once before `wt run ...`",
+        ))
+        .stderr(predicate::str::contains(
+            "is not a directory or symlink to a directory",
+        ))
+        .stderr(predicate::str::contains("is missing exact line `/.wt`"));
 }
 
 #[cfg(unix)]
