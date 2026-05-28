@@ -490,22 +490,21 @@ Small private agent config can stay inline:
 
 ```toml
 [profile.agent]
-# Agent CLI used by this inline profile.
+# Inline profile agent CLI.
 cli = "codex"
-# Extra args passed whenever this agent is launched.
+# Extra CLI args for this agent.
 args = ["--model", "gpt-5.5"]
 
 [profile.agent.prompt]
-# `common` is prepended to issue, branch, and pr prompts.
+# Appended after the built-in `wt run` prompt.
+# `common` applies to every run; the others match their run mode.
 common = ["Before editing, identify the intended outcome, the smallest coherent change, and the checks that should prove it."]
-# `issue` applies to `wt run issue`.
 issue = ["Use the linked issue as the contract: extract the user-visible problem, acceptance criteria, constraints, and comments that change scope before coding."]
-# `branch` applies to `wt run branch`.
 branch = ["Use the current branch and local task context as the contract: inspect recent commits and existing diff, then continue only the requested line of work."]
-# `pr` applies to `wt run pr`.
 pr = ["Use review comments, CI failures, and the PR diff as the contract: fix correctness and regressions first, and explain any non-code decisions."]
 
 [workspace]
+# Personal helper tabs; `wt init` recommends these only for local config.
 tabs = ["lazygit", "nvim"]
 colors = { task = "blue", issue = "blue", branch = "green", pr = "magenta" }
 ```

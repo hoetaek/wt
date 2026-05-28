@@ -1108,8 +1108,9 @@ Preview는 `저장 대상`, `안내`, `경고`, `생성될 TOML`처럼 사람이
 나눠 보여준다. TOML block과 설명 block은 빈 줄과 경계선으로 분리해서 안내 문장이 config 내용처럼
 보이지 않게 한다.
 `cmux`가 감지되지 않으면 workspace tabs, `post_deps_tabs`, workspace browser 같은 cmux workspace
-자동화를 추천 config에 넣지 않는다. `lazygit`과 `nvim`은 `cmux`가 있고 해당 command도 있을 때만
-기본 workspace tab으로 추천한다. 자동화 없이 최소 설정은 `[workspace] tabs = []`만 저장한다.
+자동화를 추천 config에 넣지 않는다. `lazygit`과 `nvim`은 개인 local target에서만, `cmux`가 있고
+해당 command도 있을 때 기본 workspace tab으로 추천한다. shared `.wt.toml`에는 이런 개인 보조 탭을
+자동 추천하지 않는다. 자동화 없이 최소 설정은 `[workspace] tabs = []`만 저장한다.
 
 Public starter preset은 canonical surface가 아니다. `minimal`, `agent`, `issue`, `app` 같은
 bundle 이름을 고르게 하지 않는다. `--preset`과 `--minimal`은 primary help surface에 남기지

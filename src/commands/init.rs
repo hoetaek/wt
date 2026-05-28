@@ -1,6 +1,6 @@
 use crate::cli::{InitAgent, InitIssueProvider, InitSiteProvider};
 use crate::config::{
-    AgentCli, AgentConfig, Config, CopyAsEntry, ReadyMode, SubmitMode, WORKSPACE_DEFAULT_COLORS,
+    AgentCli, AgentConfig, Config, CopyAsEntry, WORKSPACE_DEFAULT_COLORS,
     WorkflowDefaultLandingPolicy, WorkflowDefaultPolicy, WorkflowDefaultPullRequestMode,
     WorkspaceBrowserMode,
 };
@@ -1240,13 +1240,16 @@ fn append_active_common_config(
 
     sections.push(InitSection::Workspace);
     s.push_str("[workspace]\n");
+    s.push_str("# cmux로 함께 열 보조 탭입니다. 없거나 불필요하면 []로 둡니다.\n");
     s.push_str(&format!("tabs = {}\n", toml_array(&common.workspace_tabs)));
     if !common.post_deps_tabs.is_empty() {
+        s.push_str("# setup.deps 뒤에 시작할 개발 서버 탭입니다.\n");
         s.push_str(&format!(
             "post_deps_tabs = {}\n",
             toml_array(&common.post_deps_tabs)
         ));
     }
+    s.push_str("# task/issue/branch/pr workspace 색상입니다.\n");
     s.push_str(&format!(
         "colors = {}\n",
         toml_inline_string_entries(&workspace_colors(common))
@@ -1291,10 +1294,12 @@ fn append_workflow_policy(
 ) {
     sections.push(InitSection::Workflow);
     s.push_str("[workflow]\n");
+    s.push_str("# workflow task의 PR 처리: none | draft | ready\n");
     s.push_str(&format!(
         "pull_request = {}\n",
         toml_quote(workflow_pull_request_name(policy.pull_request))
     ));
+    s.push_str("# review 통과 뒤 처리: manual은 대기, auto는 landing 진행\n");
     s.push_str(&format!(
         "landing = {}\n\n",
         toml_quote(workflow_landing_name(policy.landing))
@@ -1457,7 +1462,11 @@ fn detected_project_common_config(
             Vec::new()
         },
         test_commands: default_enabled_test_commands(detected),
-        workspace_tabs: recommended_workspace_tabs(ctx),
+        workspace_tabs: if local_target {
+            recommended_workspace_tabs(ctx)
+        } else {
+            Vec::new()
+        },
         workspace_browser: recommended_workspace_browser(ctx, target_kind, site_provider),
         ..InitCommonConfig::default()
     }
@@ -1495,7 +1504,7 @@ fn resolve_custom_common_config(
         config.worktree_copy.clear();
         config.worktree_link.clear();
     }
-    config.workspace_tabs = resolve_workspace_tabs(ctx, &config.workspace_tabs)?;
+    config.workspace_tabs = resolve_workspace_tabs(ctx, target_kind, &config.workspace_tabs)?;
 
     config.setup_deps = resolve_setup_deps(ctx, detected, &config.setup_deps)?;
 
@@ -1695,10 +1704,21 @@ fn resolve_worktree_link(
     Ok(split_list(&input))
 }
 
-fn resolve_workspace_tabs(ctx: &Ctx, default_tabs: &[String]) -> Result<Vec<String>> {
+fn resolve_workspace_tabs(
+    ctx: &Ctx,
+    target_kind: InitTargetKind,
+    default_tabs: &[String],
+) -> Result<Vec<String>> {
     let default = default_tabs.join(", ");
-    ctx.ui
-        .print_dim("worktree를 열 때 cmux 안에 같이 띄울 명령입니다. 예: lazygit, nvim");
+    if target_kind == InitTargetKind::Local {
+        ctx.ui.print_dim(
+            "worktree를 열 때 cmux 안에 같이 띄울 개인 보조 명령입니다. 없으면 비워둡니다.",
+        );
+    } else {
+        ctx.ui.print_dim(
+            "팀에 공유할 cmux 보조 탭입니다. 개인 도구는 local 설정에 두는 편이 안전합니다.",
+        );
+    }
     let input = ctx.ui.input(
         "worktree 열 때 같이 띄울 명령",
         Some(if default_tabs.is_empty() {
@@ -2361,27 +2381,31 @@ fn resolve_agent_args(
         .map(|agent| agent.args.clone())
         .unwrap_or_default();
     let default_args_input = (!default_args.is_empty()).then(|| default_args.join(" "));
-    let mut items = Vec::new();
-    if let Some(default) = default_args_input.as_deref() {
-        items.push(format!("기존 args 유지: {default}"));
+    if default_args.is_empty() {
+        if !ctx.ui.confirm("agent 실행 args를 추가할까요?", false)? {
+            return Ok(Vec::new());
+        }
+        return input_agent_args(ctx, None);
     }
-    items.push("추가 args 없음".into());
-    items.push("args 직접 입력".into());
+
+    let mut items = Vec::new();
+    let default = default_args_input.as_deref().unwrap_or_default();
+    items.push(format!("기존 args 유지: {default}"));
+    items.push("새 args 입력".into());
+    items.push("args 비우기".into());
 
     let selection = ctx
         .ui
         .select_nested_without_filter("agent 실행 args", &items)?;
-    if !default_args.is_empty() && selection == 0 {
-        return Ok(default_args);
+    match selection {
+        0 => Ok(default_args),
+        1 => input_agent_args(ctx, default_args_input.as_deref()),
+        _ => Ok(Vec::new()),
     }
-    let custom_index = items.len() - 1;
-    if selection != custom_index {
-        return Ok(Vec::new());
-    }
+}
 
-    let input = ctx
-        .ui
-        .input("agent args 직접 입력", default_args_input.as_deref())?;
+fn input_agent_args(ctx: &Ctx, default: Option<&str>) -> Result<Vec<String>> {
+    let input = ctx.ui.input("agent args 직접 입력", default)?;
     Ok(input
         .split_whitespace()
         .map(str::to_string)
@@ -2582,24 +2606,47 @@ fn build_profile(
     command: Option<String>,
     defaults: &InitDefaults,
 ) -> Option<InitProfile> {
-    let prompt = matching_default_agent(defaults, agent)
+    let default_agent = matching_default_agent(defaults, agent);
+    let prompt = default_agent
         .map(|agent| agent.prompt.clone())
         .filter(|prompt| !prompt.is_empty())
         .unwrap_or_else(default_agent_prompts);
 
-    (*agent != InitAgent::None).then(|| InitProfile {
-        agent: AgentConfig {
+    (*agent != InitAgent::None).then(|| {
+        let mut config = AgentConfig {
             cli: init_agent_cli(agent),
             args,
             command,
-            ready: ReadyMode::Auto,
-            submit: SubmitMode::Auto,
-            timeout: 30,
-            send_after: 2,
             prompt,
             ..AgentConfig::default()
-        },
+        };
+        config.presence.cli = true;
+        config.presence.args = !config.args.is_empty();
+        config.presence.command = config.command.is_some();
+        if let Some(default_agent) = default_agent {
+            inherit_runtime_field_presence(&mut config, default_agent);
+        }
+        InitProfile { agent: config }
     })
+}
+
+fn inherit_runtime_field_presence(config: &mut AgentConfig, default_agent: &AgentConfig) {
+    if default_agent.presence.ready {
+        config.ready = default_agent.ready.clone();
+        config.presence.ready = true;
+    }
+    if default_agent.presence.submit {
+        config.submit = default_agent.submit.clone();
+        config.presence.submit = true;
+    }
+    if default_agent.presence.timeout {
+        config.timeout = default_agent.timeout;
+        config.presence.timeout = true;
+    }
+    if default_agent.presence.send_after {
+        config.send_after = default_agent.send_after;
+        config.presence.send_after = true;
+    }
 }
 
 fn append_profile_selection(s: &mut String, profile: &InitProfile) {
@@ -2622,14 +2669,20 @@ fn append_inline_agent_section(s: &mut String, agent: &AgentConfig, include_prom
         s.push_str("# cli 이름만으로 부족할 때 사용할 전체 실행 command입니다.\n");
         s.push_str(&format!("command = {}\n", toml_quote(command)));
     }
-    s.push_str("# timeout은 agent 준비 신호를 기다릴 최대 시간(초)입니다.\n");
-    s.push_str(&format!("timeout = {}\n", agent.timeout));
-    s.push_str("# send_after는 prompt를 보낸 뒤 submit하기 전 대기 시간(초)입니다.\n");
-    s.push_str(&format!("send_after = {}\n", agent.send_after));
+    let schema_defaults = AgentConfig::default();
+    if agent.presence.timeout && agent.timeout != schema_defaults.timeout {
+        s.push_str("# agent 준비 신호 대기 최대 초입니다.\n");
+        s.push_str(&format!("timeout = {}\n", agent.timeout));
+    }
+    if agent.presence.send_after && agent.send_after != schema_defaults.send_after {
+        s.push_str("# ready marker가 없을 때 prompt 전 대기 초입니다.\n");
+        s.push_str(&format!("send_after = {}\n", agent.send_after));
+    }
     if include_prompt && !agent.prompt.is_empty() {
         s.push('\n');
         s.push_str("[profile.agent.prompt]\n");
-        s.push_str("# wt가 기본 launch prompt 뒤에 덧붙이는 profile prompt입니다.\n");
+        s.push_str("# wt run 기본 prompt 뒤에 붙는 추가 지침입니다.\n");
+        s.push_str("# common은 모든 run, 나머지는 같은 이름의 run 모드에 붙습니다.\n");
         append_agent_prompts(s, &agent.prompt);
     }
 }
@@ -2643,40 +2696,11 @@ fn append_agent_prompts(s: &mut String, prompts: &std::collections::HashMap<Stri
 }
 
 fn append_prompt_array(s: &mut String, mode: &str, prompt_blocks: &[String]) {
-    if let Some(comment) = prompt_mode_comment(mode) {
-        s.push_str(comment);
-    }
     s.push_str(&format!("{mode} = [\n"));
     for block in prompt_blocks {
         s.push_str(&format!("    {},\n", toml_quote(block)));
     }
     s.push_str("]\n");
-}
-
-fn prompt_mode_comment(mode: &str) -> Option<&'static str> {
-    match mode {
-        "common" => Some(
-            "# common은 issue/branch/pr prompt 앞에 공통으로 붙습니다.\n\
-             # 모든 작업에 반복되는 보고 방식, 검증 기준, 범위 제한을 넣기 좋습니다.\n",
-        ),
-        "issue" => Some(
-            "# issue는 provider issue에서 시작하는 `wt run issue` 작업에 붙습니다.\n\
-             # GitHub/Linear issue의 문제, 수용 기준, 댓글 맥락을 우선 확인하게 할 때 씁니다.\n",
-        ),
-        "branch" => Some(
-            "# branch는 branch-name text로 시작하는 `wt run branch` 작업에 붙습니다.\n\
-             # 현재 branch 이름, task context, 기존 diff에서 작업 범위를 추론하게 할 때 씁니다.\n",
-        ),
-        "pr" => Some(
-            "# pr은 pull request branch를 여는 `wt run pr` 작업에 붙습니다.\n\
-             # review comment, 실패한 check, PR diff를 우선순위로 다루게 할 때 씁니다.\n",
-        ),
-        "workflow" => Some(
-            "# workflow는 `wt run workflow`로 시작한 workflow task에만 붙습니다.\n\
-             # issue/branch setup prompt와 함께 추가되는 workflow 전용 지침입니다.\n",
-        ),
-        _ => None,
-    }
 }
 
 fn prompt_mode_order(mode: &str) -> (usize, &str) {
@@ -2843,10 +2867,8 @@ fn toml_array(values: &[String]) -> String {
 mod tests {
     use super::*;
     use crate::config::{AgentCli, IssueProviderType, SiteProvider, WorkspaceBrowserMode};
-    use crate::context::UserInterface;
     use crate::context::mock::{MockRunner, MockUi};
-    use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     fn local_target(dir: &tempfile::TempDir) -> InitTarget {
         InitTarget {
@@ -3167,21 +3189,30 @@ mod tests {
         );
         assert!(
             plan.content
-                .contains("# common은 issue/branch/pr prompt 앞에 공통으로 붙습니다.")
+                .contains("# wt run 기본 prompt 뒤에 붙는 추가 지침입니다.")
         );
         assert!(
             plan.content
-                .contains("# issue는 provider issue에서 시작하는 `wt run issue` 작업에 붙습니다.")
+                .contains("# common은 모든 run, 나머지는 같은 이름의 run 모드에 붙습니다.")
         );
         assert!(
-            plan.content.contains(
-                "# branch는 branch-name text로 시작하는 `wt run branch` 작업에 붙습니다."
-            )
+            !plan
+                .content
+                .contains("# 모든 run 모드에 공통으로 추가됩니다.")
         );
         assert!(
-            plan.content
-                .contains("# pr은 pull request branch를 여는 `wt run pr` 작업에 붙습니다.")
+            !plan
+                .content
+                .contains("# provider issue 기반 작업에 추가됩니다.")
         );
+        assert!(
+            !plan
+                .content
+                .contains("# branch/task 기반 작업에 추가됩니다.")
+        );
+        assert!(!plan.content.contains("# PR review/fix 작업에 추가됩니다."));
+        assert!(!plan.content.contains("timeout ="));
+        assert!(!plan.content.contains("send_after ="));
         assert!(!plan.content.contains("Read AGENTS.md"));
         assert!(!plan.content.contains("[issues]"));
     }
@@ -3444,7 +3475,7 @@ mod tests {
             r#"{"require":{"laravel/framework":"^13.0"}}"#,
         )
         .unwrap();
-        let ctx = ctx_for_dir_with_commands(&dir, &["cmux"]);
+        let ctx = ctx_for_dir_with_commands(&dir, &["cmux", "lazygit", "nvim"]);
 
         let plan = build_plan(
             &ctx,
@@ -3463,7 +3494,11 @@ mod tests {
         assert!(config.worktree.copy.is_empty());
         assert!(config.worktree.link.is_empty());
         assert!(config.worktree.naming.is_none());
-        assert!(config.workspace.unwrap().browser.is_none());
+        let workspace = config.workspace.unwrap();
+        assert!(workspace.tabs.is_empty());
+        assert!(workspace.browser.is_none());
+        assert!(!plan.content.contains("lazygit"));
+        assert!(!plan.content.contains("nvim"));
         assert_eq!(config.issues.unwrap().provider, IssueProviderType::Linear);
         assert_eq!(config.site.unwrap().provider, SiteProvider::Herd);
     }
@@ -4014,6 +4049,12 @@ mod tests {
         assert!(!content.contains("[agent]"));
         assert!(agent.args.is_empty());
         assert!(!content.contains("args ="));
+        assert!(!content.contains("timeout ="));
+        assert!(!content.contains("send_after ="));
+        assert!(content.contains("# workflow task의 PR 처리: none | draft | ready"));
+        assert!(content.contains("# review 통과 뒤 처리: manual은 대기, auto는 landing 진행"));
+        assert!(content.contains("# cmux로 함께 열 보조 탭입니다. 없거나 불필요하면 []로 둡니다."));
+        assert!(content.contains("# task/issue/branch/pr workspace 색상입니다."));
         assert!(
             !dir.path()
                 .join(".wt/config/profiles/codex/profile.toml")
@@ -4118,7 +4159,7 @@ mod tests {
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // use Chrome DevTools browser
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
         let ctx = Ctx::new(
@@ -4188,7 +4229,7 @@ mod tests {
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // use Chrome DevTools browser
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
         let ctx = Ctx::new(
@@ -4236,7 +4277,7 @@ mod tests {
         let mut ui = MockUi::new();
         ui.add_select(1); // shared .wt.toml
         ui.add_select(0); // use project recommendation
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
 
@@ -4282,7 +4323,7 @@ mod tests {
         ui.add_select(0); // private repo config
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
         let ui = Arc::new(ui);
@@ -4362,7 +4403,7 @@ mod tests {
                 "select: 저장 위치".to_string(),
                 "select: 개발 환경 설정을 어떻게 만들까요?".to_string(),
                 "select: 설정 editor command".to_string(),
-                "select: agent 실행 args".to_string(),
+                "confirm: agent 실행 args를 추가할까요?".to_string(),
                 "confirm: 설정을 생성할까요?".to_string(),
                 "confirm: Claude가 .wt/**에 Edit/Write할 수 있도록 .claude/settings.local.json에 허용 규칙을 추가할까요?".to_string(),
             ]
@@ -4376,17 +4417,18 @@ mod tests {
         ui.add_select(0); // .wt/config/local.toml
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
-        ui.add_select(1); // enter agent args
+        ui.add_confirm(true); // enter agent args
         ui.add_input("--model gpt-5.5");
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
+        let ui = Arc::new(ui);
 
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
             Config::default(),
             Box::new(MockRunner::new()),
-            Box::new(ui),
+            Box::new(Arc::clone(&ui)),
         );
 
         run(
@@ -4412,6 +4454,9 @@ mod tests {
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
         assert_eq!(agent.args, vec!["--model", "gpt-5.5"]);
+        let prompts = ui.prompts.lock().unwrap().clone();
+        assert!(prompts.contains(&"confirm: agent 실행 args를 추가할까요?".to_string()));
+        assert!(prompts.contains(&"input: agent args 직접 입력".to_string()));
     }
 
     #[test]
@@ -4422,7 +4467,7 @@ mod tests {
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // Codex agent
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
         let ui = Arc::new(ui);
@@ -4463,6 +4508,11 @@ mod tests {
         let agent = config.profile.unwrap().agent.unwrap();
         assert_eq!(agent.cli, AgentCli::Codex);
         assert!(content.contains("[profile.agent.prompt]"));
+        assert!(content.contains("# wt run 기본 prompt 뒤에 붙는 추가 지침입니다."));
+        assert!(content.contains("# common은 모든 run, 나머지는 같은 이름의 run 모드에 붙습니다."));
+        assert!(!content.contains("# 모든 run 모드에 공통으로 추가됩니다."));
+        assert!(!content.contains("# provider issue 기반 작업에 추가됩니다."));
+        assert!(!content.contains("현재 branch 이름, task context"));
         assert!(agent.prompt.contains_key("common"));
         assert!(agent.prompt.contains_key("issue"));
         assert!(agent.prompt.contains_key("branch"));
@@ -4702,63 +4752,22 @@ mod tests {
     }
 
     #[test]
-    fn init_interactive_agent_args_options_do_not_include_default() {
-        struct CapturingUi {
-            selects: Mutex<VecDeque<usize>>,
-            confirms: Mutex<VecDeque<bool>>,
-            agent_args_items: Arc<Mutex<Option<Vec<String>>>>,
-        }
-
-        impl UserInterface for CapturingUi {
-            fn select(&self, prompt: &str, items: &[String]) -> Result<usize> {
-                if prompt == "agent 실행 args" {
-                    *self.agent_args_items.lock().unwrap() = Some(items.to_vec());
-                }
-                self.selects
-                    .lock()
-                    .unwrap()
-                    .pop_front()
-                    .ok_or_else(|| anyhow::anyhow!("no select response"))
-            }
-
-            fn multi_select(&self, _prompt: &str, _items: &[String]) -> Result<Vec<usize>> {
-                unreachable!()
-            }
-
-            fn confirm(&self, _prompt: &str, _default: bool) -> Result<bool> {
-                self.confirms
-                    .lock()
-                    .unwrap()
-                    .pop_front()
-                    .ok_or_else(|| anyhow::anyhow!("no confirm response"))
-            }
-
-            fn input(&self, _prompt: &str, _default: Option<&str>) -> Result<String> {
-                unreachable!()
-            }
-
-            fn print_step(&self, _msg: &str) {}
-
-            fn print_dim(&self, _msg: &str) {}
-
-            fn print_warning(&self, _msg: &str) {}
-
-            fn print_error(&self, _msg: &str) {}
-        }
-
+    fn init_interactive_agent_args_without_default_uses_confirm_flow() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_args_items = Arc::new(Mutex::new(None));
-        let ui = CapturingUi {
-            selects: Mutex::new(VecDeque::from([0, 0, 0, 0])),
-            confirms: Mutex::new(VecDeque::from([true, false])),
-            agent_args_items: Arc::clone(&agent_args_items),
-        };
+        let mut ui = MockUi::new();
+        ui.add_select(0); // .wt/config/local.toml
+        ui.add_select(0); // use project recommendation
+        ui.add_select(0); // use system editor
+        ui.add_confirm(false); // no agent args
+        ui.add_confirm(true); // create config
+        ui.add_confirm(false); // do not add Claude allow rules
+        let ui = Arc::new(ui);
         let ctx = Ctx::new(
             dir.path().to_path_buf(),
             dir.path().to_path_buf(),
             Config::default(),
             Box::new(MockRunner::new()),
-            Box::new(ui),
+            Box::new(Arc::clone(&ui)),
         );
 
         run(
@@ -4779,10 +4788,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            agent_args_items.lock().unwrap().as_ref().unwrap(),
-            &vec!["추가 args 없음".to_string(), "args 직접 입력".to_string()]
-        );
+        let prompts = ui.prompts.lock().unwrap().clone();
+        assert!(prompts.contains(&"confirm: agent 실행 args를 추가할까요?".to_string()));
+        assert!(!prompts.contains(&"select: agent 실행 args".to_string()));
     }
 
     #[test]
@@ -4792,7 +4800,7 @@ mod tests {
         ui.add_select(0); // .wt/config/local.toml
         ui.add_select(0); // use project recommendation
         ui.add_select(0); // use system editor
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(true); // create config
         ui.add_confirm(false); // do not add Claude allow rules
 
@@ -4986,7 +4994,7 @@ mod tests {
         ui.add_select(0); // project recommendation
         ui.add_select(0); // use system editor
         ui.add_select(0); // Codex agent
-        ui.add_select(0); // no agent args
+        ui.add_confirm(false); // no agent args
         ui.add_confirm(false); // do not create config
 
         let ctx = Ctx::new(
