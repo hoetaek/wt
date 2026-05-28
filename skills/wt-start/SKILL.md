@@ -10,7 +10,7 @@ is captured. Do not revise purpose, requirements, design, or task graph here;
 return to `wt-ready` if launch reveals the handoff is incomplete.
 
 Object model, planning-estimate requirement, and direct vs workflow-linked
-distinction: see `../wt-work/references/task-lifecycle.md`.
+distinction: see `../wt-lifecycle/references/task-lifecycle.md`.
 
 ## Current State
 

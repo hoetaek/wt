@@ -1,11 +1,11 @@
 ---
 name: wt-retrospect
-description: "Use after wt work has landed, been intentionally discarded, or stopped at a reusable blocked gate to capture keep/problem/try lessons, timing estimate accuracy, watch cadence, and action candidates. Triggers: 'retrospect', 'retrospective 작성', or end of a wt-work loop."
+description: "Use after wt work has landed, been intentionally discarded, or stopped at a reusable blocked gate to capture keep/problem/try lessons, timing estimate accuracy, watch cadence, and action candidates. Triggers: 'retrospect', 'retrospective 작성', or end of a wt-lifecycle loop."
 ---
 
 # WT Retrospect
 
-Use this skill to capture a closed work item, or a blocked `wt-work` lesson, as
+Use this skill to capture a closed work item, or a blocked `wt-lifecycle` lesson, as
 a structured retrospective that future planning, coordination, review, landing,
 or skill guidance can learn from. Do not use it to track in-flight state — that
 belongs in `<repo-root>/.wt/execution/tasks`,
@@ -19,7 +19,7 @@ loop stops at an earlier gate and the blocker itself is worth preserving.
 
 - After `wt-land` proves a branch landed and cleanup ran.
 - After an intentional discard with explicit user direction.
-- At the end of a `wt-work` loop, even when a phase blocked progress, if the
+- At the end of a `wt-lifecycle` loop, even when a phase blocked progress, if the
   blocker is a reusable lesson for the next cycle.
 - When the user explicitly says "retrospect" or "retrospective 작성".
 - When the user references `planning/specs/<slug>/11-retrospect.md` or
@@ -36,7 +36,7 @@ Choose the type before writing:
 - Closed retrospect: the work item is landed, explicitly discarded, or otherwise
   closed after `wt-land` proved integration/discard and cleanup safety. Record
   outcome, evidence, merge or discard proof, cleanup, and lessons.
-- Blocked lesson retrospect: the `wt-work` loop stopped at an earlier gate, such
+- Blocked lesson retrospect: the `wt-lifecycle` loop stopped at an earlier gate, such
   as missing execution handoff, failed launch, unresolved review evidence,
   landing conflict ownership, or unclear policy. Record the missing gate and the
   reusable lesson only. Do not turn the retrospective into TaskRun, Workflow, or
@@ -143,7 +143,7 @@ kind = "<direct-task | workflow-batch | workflow-stack | matrix | multi-pr-cycle
 target = "<task key, workflow id, PR number(s), or topic>"
 outcome = "<landed | discarded | partial | blocked>"
 commit = "<merge commit oid(s)>"
-skills = ["wt-work", "wt-ready", ...]   # skills actually used in this loop
+skills = ["wt-lifecycle", "wt-ready", ...]   # skills actually used in this loop
 tags = ["..."]                          # searchable topic tags
 
 # Optional when split into multiple files
@@ -193,7 +193,7 @@ items = [
 
 [[action_candidates]]
 summary = "<one-line action this retrospective recommends>"
-owner = "<wt | wt-work | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>>"
+owner = "<wt | wt-lifecycle | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>>"
 status = "candidate"               # or "addressed" / "promoted"
 promote_to = "<repo-root>/.wt/planning/ideas/"      # or a specific path when known
 done_when = "<observable criterion that closes this candidate>"
@@ -202,7 +202,7 @@ done_when = "<observable criterion that closes this candidate>"
 # One entry per lesson that warrants a permanent behavior change.
 # Skip this table entirely when no lesson rises to that bar.
 lesson = "<the mistake or friction this entry exists to prevent next time>"
-owner = "<wt | wt-work | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>>"
+owner = "<wt | wt-lifecycle | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>>"
 target_file = "<absolute or repo-relative path of the file that must change>"
 target_section = "<heading, anchor, or line range inside target_file>"
 change = "<what the edit should say or constrain, in one or two sentences>"
@@ -289,7 +289,7 @@ such that the agent never makes that mistake again.
   it. "Update CLAUDE.md somewhere" is not enough; "Add a bullet under
   `CLAUDE.md` > `## 문제 해결 원칙` after item 5" is.
 - Name the owner. Use the same vocabulary as `[[action_candidates]]`
-  (`wt | wt-work | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>`)
+  (`wt | wt-lifecycle | wt-idea | wt-ready | wt-start | wt-coordinate | wt-land | wt-retrospect | coordinator | <user>`)
   so the reader knows who is responsible for applying the change.
 - Record each such change as one `[[harness_tuning]]` entry in the TOML. If no
   lesson rises to that bar, omit the table entirely rather than padding it.
@@ -317,7 +317,7 @@ the wt-ready template").
    - Closed: confirm the work item is landed or explicitly discarded. If the
      branch is still active and can continue normally, stop and let the matching
      lifecycle skill finish first.
-   - Blocked lesson: confirm the `wt-work` loop is stopped at a named
+   - Blocked lesson: confirm the `wt-lifecycle` loop is stopped at a named
      LEAF gate and the blocker is a reusable lesson. Do not write one
      for ordinary waiting, active agent work, or a routine review round.
 2. Decide scope: one file or split + cross-link.

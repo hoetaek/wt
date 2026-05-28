@@ -14,7 +14,7 @@ approach is uncertain and worth comparing through multiple agent runs.
 `wt` state.
 
 Object model and TaskRun semantics: see
-`../wt-work/references/task-lifecycle.md`. Variants are represented as:
+`../wt-lifecycle/references/task-lifecycle.md`. Variants are represented as:
 
 - one shared local TaskDocument
 - one `mode = "matrix"` workflow

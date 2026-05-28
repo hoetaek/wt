@@ -1,0 +1,62 @@
+---
+name: wt-lifecycle
+description: |
+  Use to carry wt work through the full lifecycle: prepare unclear work with
+  wt-ready, launch and coordinate execution, land or discard safely, then
+  settle reusable lessons into wt-retrospect and harness updates.
+---
+
+# WT Lifecycle
+
+Use this skill when the user wants one wt work item carried from preparation
+through execution, landing or discard, and harness settlement.
+
+각 단계에서 per-feature 문서(idea / spec / task / workflow / retrospect)
+골격이 필요하면 `wt scaffold <slug> --<kind>` 로 시드한다.
+
+## Lifecycle Reference
+
+Before starting the loop, read `references/task-lifecycle.md` for
+TaskDocument/TaskRun/workflow object model, status boundaries, pass vs cleanup,
+and workflow-linked task boundaries. `wt-lifecycle` does not decide readiness
+gates itself; route unclear or unprepared work through `wt-ready`, which owns
+that preparation model.
+
+Apply these skills in order:
+
+1. Prepare the idea boundary with `wt-idea` when the user is still exploring
+   and should not commit to a task, spec, TaskDocument, or workflow yet.
+2. Prepare launchable work with `wt-ready` when the work is unclear or not
+   launch-ready. Let `wt-ready` settle purpose, requirements,
+   examples/wireframes, design, task graph, workflow policy, TaskDocuments, and
+   launch target.
+3. Execute with `wt-start` when prepared work is ready to launch: open the
+   prepared task or workflow and capture the
+   inspect target.
+4. Coordinate execution with `wt-coordinate` while work is running: monitor the
+   run, inspect agent state, review code, run checks, sync the living spec, and
+   send focused feedback until the work is acceptable.
+5. Land or discard with `wt-land` after review passes: respect workflow landing
+   policy, perform any applicable pass step, land branches in the right order,
+   prove ancestry, and clean up with `wt done`.
+6. Settle the harness with `wt-retrospect` after each closed work item: capture
+   keep/problem/try lessons, action candidates, harness-tuning records,
+   expected vs actual duration, and watch-cadence evidence. Write the timing
+   entry even when there was no broader lesson.
+
+Carry the user's original context through every lifecycle step. Stop only when
+that step's own guardrail blocks progress, such as unresolved HITL decisions,
+active agent work that still needs time, failed review, merge conflicts owned
+by the task agent, or unsafe cleanup conditions. When progress stops for a
+reusable reason, consider writing a retrospective to record why.
+
+When moving from one lifecycle skill to the next, load and follow that skill
+body instead of reimplementing its rules from memory. Keep boundaries explicit:
+preparation is not launch, TaskRun pass is not landing, cleanup happens only
+after landing or discard intent is proven, and the retrospective is written
+after the work item is closed (landed or explicitly discarded), not in the
+middle of in-flight state.
+
+Report the final lifecycle state: current skill/step, evidence checked, launch
+command and inspect target, review/check result, pass or merge proof, cleanup
+command, retrospective file path when written, and any remaining blocker.

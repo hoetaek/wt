@@ -13,7 +13,7 @@ review/sync and retrospect. It proves integration or discard, performs
 applicable workflow pass, and cleans only after that closure is safe.
 
 Object model, status boundaries, and pass vs cleanup commands: see
-`../wt-work/references/task-lifecycle.md`.
+`../wt-lifecycle/references/task-lifecycle.md`.
 
 ## Boundaries
 

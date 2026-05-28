@@ -6,7 +6,7 @@ description: "Use when coordinating running wt work: inspect status, send feedba
 # WT Coordinate
 
 Coordinate running wt work. Object model, status semantics, and pass vs
-cleanup boundaries: see `../wt-work/references/task-lifecycle.md`.
+cleanup boundaries: see `../wt-lifecycle/references/task-lifecycle.md`.
 
 Stay on these responsibilities; do not absorb later phases:
 

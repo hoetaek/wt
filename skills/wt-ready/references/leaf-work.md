@@ -368,7 +368,7 @@ Return here when:
 
 ## 11. Retrospect (Feedback)
 
-Owner: `wt-retrospect`, normally called by `wt-work` after landing or explicit
+Owner: `wt-retrospect`, normally called by `wt-lifecycle` after landing or explicit
 discard.
 
 Artifact: `planning/specs/<slug>/11-retrospect.md` for spec-backed work, or

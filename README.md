@@ -70,8 +70,9 @@ lifecycle. The pack contains:
 - `wt-start`
 - `wt-coordinate`
 - `wt-land`
+- `wt-retrospect`
 - `wt-config`
-- `wt-work`
+- `wt-lifecycle`
 
 For an interactive install, run one command and choose the skills, agent, and
 scope from the prompts:
@@ -92,8 +93,9 @@ npx --yes skills@latest add https://github.com/hoetaek/wt/tree/master/skills \
   --skill wt-start \
   --skill wt-coordinate \
   --skill wt-land \
+  --skill wt-retrospect \
   --skill wt-config \
-  --skill wt-work \
+  --skill wt-lifecycle \
   -g -a codex --copy -y
 ```
 
@@ -107,8 +109,9 @@ npx --yes skills@latest add . \
   --skill wt-start \
   --skill wt-coordinate \
   --skill wt-land \
+  --skill wt-retrospect \
   --skill wt-config \
-  --skill wt-work \
+  --skill wt-lifecycle \
   -g -a codex --copy -y
 ```
 
@@ -123,8 +126,9 @@ npx --yes skills@latest add /path/to/wt \
   --skill wt-start \
   --skill wt-coordinate \
   --skill wt-land \
+  --skill wt-retrospect \
   --skill wt-config \
-  --skill wt-work \
+  --skill wt-lifecycle \
   -a codex --copy -y
 ```
 
