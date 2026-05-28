@@ -173,6 +173,10 @@ impl<'a> CmuxService<'a> {
         self.runner.has_command("cmux")
     }
 
+    pub(crate) fn runner(&self) -> &dyn CommandRunner {
+        self.runner
+    }
+
     pub fn new_workspace(&self, cwd: &Path, name: &str, command: &str) -> Result<String> {
         let caller = self.caller_context();
         self.new_workspace_with_caller(cwd, name, command, caller.as_ref())

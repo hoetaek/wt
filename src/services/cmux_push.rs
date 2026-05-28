@@ -158,6 +158,15 @@ fn push_codex_prompt(
     workspace: Option<&str>,
     text: &str,
 ) -> Result<()> {
+    submit_codex_prompt(runner, surface_id, workspace, text)
+}
+
+pub(crate) fn submit_codex_prompt(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: Option<&str>,
+    text: &str,
+) -> Result<()> {
     let lines = codex_prompt_lines(text);
     for (i, line) in lines.iter().enumerate() {
         if !line.is_empty() {
@@ -180,6 +189,16 @@ fn push_codex_prompt(
 }
 
 fn push_pasted_prompt(
+    runner: &dyn CommandRunner,
+    surface_id: &str,
+    workspace: Option<&str>,
+    buffer_prefix: &str,
+    text: &str,
+) -> Result<()> {
+    submit_pasted_prompt_with_enter(runner, surface_id, workspace, buffer_prefix, text)
+}
+
+pub(crate) fn submit_pasted_prompt_with_enter(
     runner: &dyn CommandRunner,
     surface_id: &str,
     workspace: Option<&str>,
