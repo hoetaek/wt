@@ -40,9 +40,10 @@ pub(crate) fn send(ctx: &Ctx, to: &str, scope: Option<&str>, message: &[String])
     let store = runtime_message_store(ctx)?;
     let scope = scope.map(parse_scope_arg).transpose()?;
     let to = resolve_agent_arg(ctx, to).context("Invalid target agent id")?;
+    let from = resolve_send_sender(ctx)?;
     let sent = match scope {
-        Some(scope) => store.send_scoped(to.as_str(), scope, &text)?,
-        None => store.send(to.as_str(), &text)?,
+        Some(scope) => store.send_scoped_from(from.as_str(), to.as_str(), scope, &text)?,
+        None => store.send_from(from.as_str(), to.as_str(), &text)?,
     };
     let _wake_result = inbox_wake::wake_sent_message_recipient(ctx, &sent);
 
@@ -51,6 +52,18 @@ pub(crate) fn send(ctx: &Ctx, to: &str, scope: Option<&str>, message: &[String])
     }
 
     Ok(())
+}
+
+fn resolve_send_sender(ctx: &Ctx) -> Result<AgentId> {
+    if let Some(agent) = env_agent_id("WT_AGENT_ID")? {
+        return Ok(agent);
+    }
+
+    if let Some(anchor) = identity_locator::resolve_identity(ctx)? {
+        return AgentId::parse(&anchor.id).context("Invalid live identity anchor agent id");
+    }
+
+    AgentId::parse("agents/user")
 }
 
 fn parse_scope_arg(scope: &str) -> Result<MessageScope> {

@@ -467,6 +467,12 @@ fn message_path_with_summary(dir: &Path, summary: &str) -> PathBuf {
         .unwrap()
 }
 
+fn new_message_with_summary(root: &Path, agent_name: &str, summary: &str) -> toml::Value {
+    let inbox = root.join(format!(".wt/runtime/agents/{agent_name}/inbox/new"));
+    let path = message_path_with_summary(&inbox, summary);
+    toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
 fn claim_message_file(new_path: &Path, claimed_by: &str, lease_expires_at: &str) -> PathBuf {
     let mut message: toml::Value =
         toml::from_str(&std::fs::read_to_string(new_path).unwrap()).unwrap();
@@ -1822,6 +1828,87 @@ fn msg_send_writes_to_agent_inbox_and_normalizes_agent_id() {
 }
 
 #[test]
+fn msg_send_without_wt_agent_id_uses_current_identity_anchor_sender() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-send-anchor")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "anchor",
+            "sender",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-send-anchor")
+        .assert()
+        .success();
+
+    let message = new_message_with_summary(temp.path(), "codex", "anchor sender");
+    assert_eq!(
+        message["meta"]["from"].as_str(),
+        Some("agents/marker-coord")
+    );
+    assert_eq!(message["meta"]["to"].as_str(), Some("agents/codex"));
+}
+
+#[test]
+fn msg_send_prefers_wt_agent_id_over_identity_anchor_sender() {
+    let temp = TempDir::new().unwrap();
+    git_init(temp.path());
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "session",
+            "set",
+            "marker-coord",
+        ])
+        .env("CMUX_SURFACE_ID", "surface-send-precedence")
+        .assert()
+        .success();
+
+    wt_command()
+        .args([
+            "-C",
+            temp.path().to_str().unwrap(),
+            "msg",
+            "send",
+            "--to",
+            "agents/codex",
+            "env",
+            "sender",
+        ])
+        .env("WT_AGENT_ID", "agents/runtime-agent")
+        .env("CMUX_SURFACE_ID", "surface-send-precedence")
+        .assert()
+        .success();
+
+    let message = new_message_with_summary(temp.path(), "codex", "env sender");
+    assert_eq!(
+        message["meta"]["from"].as_str(),
+        Some("agents/runtime-agent")
+    );
+    assert_eq!(message["meta"]["to"].as_str(), Some("agents/codex"));
+}
+
+#[test]
 fn msg_send_to_bare_coordinator_writes_to_ordinary_coordinator_inbox() {
     let temp = TempDir::new().unwrap();
     git_init(temp.path());
@@ -1877,6 +1964,7 @@ fn msg_send_accepts_explicit_workflow_scope() {
             "workflow",
             "owned",
         ])
+        .env("WT_AGENT_ID", "agents/scope-sender")
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -1889,6 +1977,10 @@ fn msg_send_accepts_explicit_workflow_scope() {
 
     let content = std::fs::read_to_string(&files[0]).unwrap();
     let message: toml::Value = toml::from_str(&content).unwrap();
+    assert_eq!(
+        message["meta"]["from"].as_str(),
+        Some("agents/scope-sender")
+    );
     assert_eq!(message["meta"]["to"].as_str(), Some("agents/coord-a"));
     assert_eq!(message["scope"]["kind"].as_str(), Some("workflow"));
     assert_eq!(message["scope"]["id"].as_str(), Some("2026-05-20-001"));
