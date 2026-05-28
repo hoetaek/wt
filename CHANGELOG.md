@@ -8,6 +8,8 @@ minor version instead of moving to `x.0.0`.
 
 ## Unreleased
 
+## 0.43.0 - 2026-05-28
+
 - Changed remaining agent runtime state to live under the owning
   `<git-common-dir>/wt/runtime/agents/<agent>/` directory: wait observations now
   aggregate from per-agent `observations/wait-observations.jsonl` files,
@@ -19,6 +21,22 @@ minor version instead of moving to `x.0.0`.
   `<git-common-dir>/wt/runtime/agents/<agent>/inbox/<state>`. The old
   top-level `messages/` root is now reported as legacy state instead of being
   silently consumed.
+
+- Changed personal planning and execution state to the repo-owned `.wt`
+  layout, including `planning/ideas`, `planning/specs`, `execution/tasks`,
+  `execution/workflows`, `execution/task-runs`, and runtime migration handling.
+
+- Added `wt init`/`wt setup` responsibility separation, improved init config
+  scaffolding, and kept `.wt` setup idempotent for both real directories and
+  linked-worktree symlinks.
+
+- Added `wt welcome` and refreshed the wt skill pack around
+  Discover/Shape/Execute/Improve preparation, text-first wireframes, and
+  wireframe cold-reader checks before design.
+
+- Added wt Studio and UI authoring surfaces for local state, TaskDocument
+  editing, plan preview, profile/config inspection, workflow visualization, and
+  master-detail review flows.
 
 ## 0.42.0 - 2026-05-26
 
