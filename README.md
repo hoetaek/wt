@@ -64,6 +64,7 @@ used by another project.
 This repository also ships an installable Agent Skills pack for the `wt`
 lifecycle. The pack contains:
 
+- `wt-welcome`
 - `wt-idea`
 - `wt-ready`
 - `wt-start`
@@ -85,6 +86,7 @@ For a non-interactive Codex global install, pass explicit skill names:
 
 ```bash
 npx --yes skills@latest add https://github.com/hoetaek/wt/tree/develop/skills \
+  --skill wt-welcome \
   --skill wt-idea \
   --skill wt-ready \
   --skill wt-start \
@@ -99,6 +101,7 @@ From a local clone of this repository, use `.` as the source:
 
 ```bash
 npx --yes skills@latest add . \
+  --skill wt-welcome \
   --skill wt-idea \
   --skill wt-ready \
   --skill wt-start \
@@ -114,6 +117,7 @@ should receive the skills, point `add` at this repository clone, and omit `-g`:
 
 ```bash
 npx --yes skills@latest add /path/to/wt \
+  --skill wt-welcome \
   --skill wt-idea \
   --skill wt-ready \
   --skill wt-start \

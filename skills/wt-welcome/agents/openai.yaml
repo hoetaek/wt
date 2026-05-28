@@ -1,0 +1,4 @@
+interface:
+  display_name: "WT Welcome"
+  short_description: "Onboard users to wt's mental model"
+  default_prompt: "Use $wt-welcome to explain the wt mental model, per-machine setup, the wt skill family, common `wt run` starts, and when to continue with $wt-config or $wt-work."
