@@ -6,7 +6,9 @@ use crate::studio::resource::{
     FileFingerprint, ResourceError, ResourceErrorOrPrecondition, atomic_write, check_precondition,
     diff_text, empty_fingerprint, read_fingerprint,
 };
+use crate::studio::workflow::validate_workflow_id;
 use crate::task::{self, TaskDocument};
+use crate::workflow as workflow_model;
 use anyhow::{Context, Result, bail};
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, Query, State};
@@ -17,6 +19,7 @@ use axum::{Json, Router};
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
@@ -77,6 +80,10 @@ impl StudioState {
     fn api_authorized(&self, headers: &HeaderMap) -> bool {
         self.session.validate_api_headers(headers)
     }
+
+    fn read_api_authorized(&self, headers: &HeaderMap) -> bool {
+        self.session.validate_read_headers(headers)
+    }
 }
 
 pub async fn serve(ctx: &Ctx, options: ServerOptions) -> Result<()> {
@@ -135,6 +142,8 @@ pub fn app(state: StudioState) -> Router {
             "/api/profile-prompts/{name}/{mode}/apply",
             post(api_profile_prompt_apply),
         )
+        .route("/api/workflows", get(api_workflows))
+        .route("/api/workflows/{*id}", get(api_workflow))
         .route("/favicon.ico", get(favicon))
         .fallback(static_or_not_found)
         .with_state(state)
@@ -355,6 +364,34 @@ async fn api_profile_prompt_apply(
     }
 }
 
+async fn api_workflows(State(state): State<StudioState>, headers: HeaderMap) -> Response {
+    if !state.read_api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match workflow_inventory(&state) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("{err:#}")).into_response()
+        }
+    }
+}
+
+async fn api_workflow(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    if !state.read_api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match read_workflow_detail(&state, &id) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
 async fn favicon() -> StatusCode {
     StatusCode::NO_CONTENT
 }
@@ -402,6 +439,7 @@ fn content_type(path: &str) -> &'static str {
 }
 
 const TASK_DOCUMENT_PATH_PREFIX: &str = "<repo-root>/.wt/execution/tasks/";
+const WORKFLOW_PATH_PREFIX: &str = "<repo-root>/.wt/execution/workflows/";
 
 #[derive(Debug, Serialize)]
 struct TaskDocumentInventoryResponse {
@@ -422,6 +460,29 @@ struct TaskDocumentInventoryItem {
 struct InvalidTaskDocument {
     path: String,
     error: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowInventoryResponse {
+    items: Vec<WorkflowInventoryItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowInventoryItem {
+    id: String,
+    path: String,
+    title: Option<String>,
+    mode: &'static str,
+    color: Option<String>,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowDetailResponse {
+    id: String,
+    path: String,
+    #[serde(flatten)]
+    workflow: workflow_model::WorkflowMetadata,
 }
 
 #[derive(Debug, Deserialize)]
@@ -646,6 +707,73 @@ fn task_document_inventory(state: &StudioState) -> Result<TaskDocumentInventoryR
     }
 
     Ok(TaskDocumentInventoryResponse { items, invalid })
+}
+
+fn workflow_inventory(state: &StudioState) -> Result<WorkflowInventoryResponse> {
+    let workflows_dir = workflow_dir(state);
+    if !workflows_dir.exists() {
+        return Ok(WorkflowInventoryResponse { items: Vec::new() });
+    }
+
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&workflows_dir).with_context(|| {
+        format!(
+            "Failed to read workflow directory: {}",
+            state.storage_root.display_path(&workflows_dir)
+        )
+    })? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "toml") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let mut items = Vec::new();
+    for path in paths {
+        let id = workflow_model::id_from_path(&path)?;
+        let workflow = workflow_model::read(&path)?;
+        items.push(WorkflowInventoryItem {
+            id,
+            path: state.storage_root.display_path(&path),
+            title: workflow.title,
+            mode: workflow.mode.as_str(),
+            color: workflow.color,
+            updated_at: workflow.updated_at,
+        });
+    }
+
+    Ok(WorkflowInventoryResponse { items })
+}
+
+fn read_workflow_detail(
+    state: &StudioState,
+    id: &str,
+) -> std::result::Result<WorkflowDetailResponse, StudioApiError> {
+    validate_workflow_id(id)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, format!("{err:#}")))?;
+    let path = workflow_path(state, id);
+    if !path.exists() {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            format!("Workflow does not exist: {WORKFLOW_PATH_PREFIX}{id}.toml"),
+        ));
+    }
+    let workflow = workflow_model::read(&path)
+        .map_err(|err| api_error(StatusCode::UNPROCESSABLE_ENTITY, format!("{err:#}")))?;
+    Ok(WorkflowDetailResponse {
+        id: id.to_string(),
+        path: state.storage_root.display_path(&path),
+        workflow,
+    })
+}
+
+fn workflow_dir(state: &StudioState) -> PathBuf {
+    state.repo_root.join(".wt/execution/workflows")
+}
+
+fn workflow_path(state: &StudioState, id: &str) -> PathBuf {
+    workflow_dir(state).join(format!("{id}.toml"))
 }
 
 fn api_error_message(err: &StudioApiError) -> String {
@@ -2225,6 +2353,99 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn workflow_list_reads_workflow_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("2026-05-28-001.toml"),
+            sample_workflow("Workflow one", "single", "run-one"),
+        )
+        .unwrap();
+
+        let response = app(test_state(dir.path()))
+            .oneshot(authorized_get_request("/api/workflows"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+        assert_eq!(value["items"][0]["id"], "2026-05-28-001");
+        assert_eq!(value["items"][0]["title"], "Workflow one");
+        assert_eq!(value["items"][0]["mode"], "single");
+    }
+
+    #[tokio::test]
+    async fn workflow_list_accepts_cookie_only_same_origin_get() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("2026-05-28-004.toml"),
+            sample_workflow("Workflow four", "single", "run-four"),
+        )
+        .unwrap();
+
+        let response = app(test_state(dir.path()))
+            .oneshot(cookie_get_request("/api/workflows"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+        assert_eq!(value["items"][0]["id"], "2026-05-28-004");
+    }
+
+    #[tokio::test]
+    async fn workflow_detail_reads_valid_id_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("2026-05-28-002.toml"),
+            sample_workflow("Workflow two", "single", "run-two"),
+        )
+        .unwrap();
+
+        let response = app(test_state(dir.path()))
+            .oneshot(authorized_get_request("/api/workflows/2026-05-28-002"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+        assert_eq!(value["id"], "2026-05-28-002");
+        assert_eq!(value["title"], "Workflow two");
+        assert_eq!(value["tasks"][0]["run"], "run-two");
+    }
+
+    #[tokio::test]
+    async fn workflow_detail_rejects_traversal_and_missing_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = app(test_state(dir.path()));
+
+        let invalid = server
+            .clone()
+            .oneshot(authorized_get_request("/api/workflows/abc"))
+            .await
+            .unwrap();
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+        let traversal = server
+            .clone()
+            .oneshot(authorized_get_request("/api/workflows/abc%2F..%2Fetc"))
+            .await
+            .unwrap();
+        assert_eq!(traversal.status(), StatusCode::BAD_REQUEST);
+
+        let missing = server
+            .oneshot(authorized_get_request("/api/workflows/2026-05-28-003"))
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
     #[test]
     fn browser_open_is_skipped_in_quiet_mode() {
         let (ctx, ui) = test_ctx(true);
@@ -2276,6 +2497,19 @@ mod tests {
             .header(header::COOKIE, "wt_studio_session=secret")
             .body(Body::empty())
             .unwrap()
+    }
+
+    fn cookie_get_request(path: &str) -> Request<Body> {
+        Request::get(path)
+            .header(header::COOKIE, "wt_studio_session=secret")
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn sample_workflow(title: &str, mode: &str, run: &str) -> String {
+        format!(
+            "title = \"{title}\"\nmode = \"{mode}\"\nbase_mode = \"explicit\"\nbase = \"develop\"\ncolor = \"blue\"\ncreated_at = \"2026-05-28T00:00:00Z\"\nupdated_at = \"2026-05-28T00:00:00Z\"\n\n[policy]\npull_request = \"ready\"\nlanding = \"auto\"\n\n[[tasks]]\ntask = \"sample-task\"\nrun = \"{run}\"\n"
+        )
     }
 
     async fn json_body(response: Response) -> serde_json::Value {

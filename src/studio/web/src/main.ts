@@ -30,6 +30,7 @@ import {
   type ProfileDraft
 } from "./profile-form";
 import { PromptEditor, promptModes, type PromptMode } from "./prompt-editor";
+import { WorkflowView, type WorkflowDetail } from "./workflow-view";
 import "./style.css";
 
 type TaskOrigin = {
@@ -60,6 +61,19 @@ type TaskDocumentItem = {
 type Inventory = {
   items: TaskDocumentItem[];
   invalid: Array<{ path: string; error: string }>;
+};
+
+type WorkflowListItem = {
+  id: string;
+  path: string;
+  title?: string | null;
+  mode: string;
+  color?: string | null;
+  updated_at: string;
+};
+
+type WorkflowInventory = {
+  items: WorkflowListItem[];
 };
 
 type PlanResponse = {
@@ -103,7 +117,7 @@ type PreviewPlan = {
 };
 
 type Mode = "create" | "update";
-type SurfaceMode = "tasks" | "config" | "profiles" | "prompts";
+type SurfaceMode = "tasks" | "config" | "profiles" | "prompts" | "workflow";
 type PlanStatus = "idle" | "planning" | "stale";
 
 type EditorDraft = {
@@ -146,6 +160,10 @@ function App() {
   const initialPrompt = promptLocationFromHash();
   const [surface, setSurface] = useState<SurfaceMode>(() => surfaceFromHash());
   const [inventory, setInventory] = useState<Inventory>({ items: [], invalid: [] });
+  const [workflows, setWorkflows] = useState<WorkflowInventory>({ items: [] });
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
+  const [workflowDetail, setWorkflowDetail] = useState<WorkflowDetail | null>(null);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
   const [mode, setMode] = useState<Mode>("create");
   const [selectedPath, setSelectedPath] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(true);
@@ -246,6 +264,8 @@ function App() {
         ? configStatusDescriptor(profilePlanStatus, profilePlan)
       : surface === "config"
         ? configStatusDescriptor(configPlanStatus, configPlan)
+        : surface === "workflow"
+          ? workflowStatusDescriptor(workflowLoading, workflowDetail)
         : statusDescriptor(planStatus, plan);
   const displaySlug =
     surface === "prompts"
@@ -254,6 +274,8 @@ function App() {
         ? selectedProfileName || "profile"
       : surface === "config"
         ? "local.toml"
+        : surface === "workflow"
+          ? selectedWorkflowId || "workflow"
         : mode === "create"
           ? draft.slug.trim() || "new-task"
           : selected?.key || draft.slug;
@@ -264,6 +286,8 @@ function App() {
         ? profileDisplayPath(selectedProfileName)
       : surface === "config"
         ? "Personal config"
+        : surface === "workflow"
+          ? workflowDetail?.title || "Workflow"
         : draft.title.trim() || "제목 없는 TaskDocument";
   const detailMetrics = useMemo(
     () =>
@@ -273,6 +297,8 @@ function App() {
         ? buildProfileDetailMetrics(selectedProfileName, profileCandidate, profileDraft, profilePlan, profilePlanStatus)
         : surface === "config"
         ? buildConfigDetailMetrics(configCandidate, configDraft, configPlan, configPlanStatus)
+        : surface === "workflow"
+        ? buildWorkflowDetailMetrics(workflowDetail, workflows.items.length)
         : buildDetailMetrics(currentPath, draft, selected, plan, draftIssues, planStatus),
     [
       configCandidate,
@@ -295,12 +321,15 @@ function App() {
       promptProfile,
       selectedProfileName,
       selected,
-      surface
+      surface,
+      workflowDetail,
+      workflows.items.length
     ]
   );
 
   useEffect(() => {
     void loadInventory();
+    void loadWorkflows(workflowIdFromHash());
   }, []);
 
   useEffect(() => {
@@ -317,6 +346,13 @@ function App() {
         setSelectedProfileName(profileNameFromHash());
         setProfileLoadedName("");
         resetProfilePlanState();
+      }
+      if (nextSurface === "workflow") {
+        const id = workflowIdFromHash();
+        if (id) {
+          setSelectedWorkflowId(id);
+          void loadWorkflowDetail(id);
+        }
       }
     };
     window.addEventListener("hashchange", onHashChange);
@@ -366,6 +402,19 @@ function App() {
       void loadProfilePrompt();
     }
   }, [promptLoadedKey, promptResourceKey, surface]);
+
+  useEffect(() => {
+    if (surface !== "workflow") {
+      return;
+    }
+    const id = workflowIdFromHash() || selectedWorkflowId || workflows.items[0]?.id || "";
+    if (id && id !== selectedWorkflowId) {
+      setSelectedWorkflowId(id);
+      void loadWorkflowDetail(id);
+    } else if (id && !workflowDetail) {
+      void loadWorkflowDetail(id);
+    }
+  }, [selectedWorkflowId, surface, workflowDetail, workflows.items]);
 
   useEffect(() => {
     return () => {
@@ -651,6 +700,37 @@ function App() {
     }
   }
 
+  async function loadWorkflows(nextSelectedId?: string) {
+    setError("");
+    try {
+      const next = await api<WorkflowInventory>("/api/workflows", { method: "GET" });
+      setWorkflows(next);
+      const id = nextSelectedId || selectedWorkflowId || next.items[0]?.id || "";
+      if (id && next.items.some((item) => item.id === id)) {
+        setSelectedWorkflowId(id);
+        if (surface === "workflow" || window.location.hash.startsWith("#workflow/")) {
+          await loadWorkflowDetail(id);
+        }
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  async function loadWorkflowDetail(id: string) {
+    setWorkflowLoading(true);
+    setError("");
+    try {
+      const detail = await api<WorkflowDetail>(`/api/workflows/${encodeURIComponent(id)}`, { method: "GET" });
+      setWorkflowDetail(detail);
+    } catch (err) {
+      setWorkflowDetail(null);
+      setError(errorMessage(err));
+    } finally {
+      setWorkflowLoading(false);
+    }
+  }
+
   function switchSurface(next: SurfaceMode) {
     setSurface(next);
     setError("");
@@ -661,10 +741,24 @@ function App() {
       window.location.hash = name ? `profile/${encodeURIComponent(name)}` : "profile";
     } else if (next === "prompts") {
       window.location.hash = promptHash(promptProfile, promptMode);
+    } else if (next === "workflow") {
+      const id = selectedWorkflowId || workflows.items[0]?.id || "";
+      window.location.hash = id ? `workflow/${encodeURIComponent(id)}` : "workflow";
+      if (id) {
+        void loadWorkflowDetail(id);
+      }
     } else {
       const slug = mode === "update" && selected ? selected.key : draft.slug.trim() || "new-task";
       window.location.hash = `task/${encodeURIComponent(slug)}`;
     }
+  }
+
+  function selectWorkflow(id: string) {
+    setSurface("workflow");
+    setSelectedWorkflowId(id);
+    setError("");
+    window.location.hash = `workflow/${encodeURIComponent(id)}`;
+    void loadWorkflowDetail(id);
   }
 
   function selectCreate() {
@@ -1026,7 +1120,8 @@ function App() {
             h(SurfacePill, { label: "Tasks", active: surface === "tasks", onClick: () => switchSurface("tasks") }),
             h(SurfacePill, { label: "Personal config", active: surface === "config", onClick: () => switchSurface("config") }),
             h(SurfacePill, { label: "Profiles", active: surface === "profiles", onClick: () => switchSurface("profiles") }),
-            h(SurfacePill, { label: "Prompts", active: surface === "prompts", onClick: () => switchSurface("prompts") })
+            h(SurfacePill, { label: "Prompts", active: surface === "prompts", onClick: () => switchSurface("prompts") }),
+            h(SurfacePill, { label: "Workflows", active: surface === "workflow", onClick: () => switchSurface("workflow") })
           ])
         ]),
         h("div", { class: "flex items-center gap-2" }, [
@@ -1041,6 +1136,8 @@ function App() {
                   ? void loadProfiles()
                   : surface === "prompts"
                     ? void loadProfilePrompt()
+                    : surface === "workflow"
+                      ? void loadWorkflows(selectedWorkflowId)
                     : void loadInventory(),
             disabled: busy
           })
@@ -1060,6 +1157,8 @@ function App() {
                   ? "Profile config"
                   : surface === "prompts"
                     ? "Profile prompt"
+                    : surface === "workflow"
+                      ? "Workflow"
                     : mode === "create"
                       ? "새 초안"
                       : "선택됨"
@@ -1076,7 +1175,7 @@ function App() {
               h("p", { class: "mt-6 max-w-[34ch] text-base leading-7 text-neutral-500 dark:text-neutral-400" }, displayTitle)
             ]),
             h("div", { class: "flex flex-wrap gap-2" }, [
-              h(MetaPill, { label: surface === "config" ? "Config Plan" : mode === "create" ? "생성 Plan" : "수정 Plan" }),
+              h(MetaPill, { label: surface === "prompts" ? "Prompt Plan" : surface === "config" ? "Config Plan" : surface === "workflow" ? "Read-only" : mode === "create" ? "생성 Plan" : "수정 Plan" }),
               h(MetaPill, {
                 label:
                   surface === "prompts"
@@ -1085,9 +1184,13 @@ function App() {
                       ? configPlanSummaryLabel(profilePlanStatus, profilePlan)
                     : surface === "config"
                       ? configPlanSummaryLabel(configPlanStatus, configPlan)
+                      : surface === "workflow"
+                        ? workflowSummaryLabel(workflowLoading, workflowDetail)
                       : planSummaryLabel(planStatus, plan),
                 tone:
-                  activePlanStatus === "stale"
+                  surface === "workflow" && workflowDetail
+                    ? "blue"
+                    : activePlanStatus === "stale"
                     ? "amber"
                     : activePlanStatus === "planning" ||
                         (surface === "prompts"
@@ -1112,6 +1215,8 @@ function App() {
                 ? h(ProfileResourceList, { profiles, selectedName: selectedProfileName, onSelect: selectProfile })
                 : surface === "config"
                 ? h(ConfigResourceList, { selected: true })
+                : surface === "workflow"
+                ? h(WorkflowList, { workflows, selectedId: selectedWorkflowId, selectWorkflow })
                 : [
                     h("div", { class: "flex items-center justify-between gap-4" }, [
                       h("div", {}, [
@@ -1132,7 +1237,7 @@ function App() {
             ])
         ])
       ]),
-      h("section", { class: "grid gap-8 md:col-span-7", "aria-label": surface === "prompts" ? "Profile prompt editor" : surface === "profiles" ? "Profile config editor" : surface === "config" ? "Personal config editor" : "TaskDocument editor" }, [
+      h("section", { class: "grid gap-8 md:col-span-7", "aria-label": surface === "prompts" ? "Profile prompt editor" : surface === "profiles" ? "Profile config editor" : surface === "config" ? "Personal config editor" : surface === "workflow" ? "Workflow inspector" : "TaskDocument editor" }, [
         h(Bezel, {}, [
           h("div", { class: "flex flex-col gap-6 md:flex-row md:items-center md:justify-between" }, [
             h("div", {}, [
@@ -1140,14 +1245,16 @@ function App() {
               h(
                 "h2",
                 { class: "mt-4 text-3xl font-medium tracking-normal text-neutral-950 dark:text-neutral-50" },
-                surface === "prompts" ? "Prompt Markdown Plan" : surface === "profiles" ? "profile.toml Plan" : surface === "config" ? "local.toml Plan" : "Apply 전 Plan"
+                surface === "prompts" ? "Prompt Markdown Plan" : surface === "profiles" ? "profile.toml Plan" : surface === "config" ? "local.toml Plan" : surface === "workflow" ? "Workflow Inspector" : "Apply 전 Plan"
               )
             ]),
             h("span", { "aria-live": "polite", "aria-atomic": "true" }, [
               h("span", { class: statusClass(activeStatus.tone, activeStatus.pulse) }, activeStatus.label)
             ])
           ]),
-          surface === "prompts"
+          surface === "workflow"
+            ? h(WorkflowView, { workflow: workflowDetail, loading: workflowLoading, iconComponent: StudioFile })
+            : surface === "prompts"
             ? h(PromptEditor, {
                 profile: promptProfile,
                 mode: promptMode,
@@ -1218,25 +1325,28 @@ function App() {
                 ]),
                 draftIssues.length > 0 && h(ValidationList, { items: draftIssues })
               ],
-          h("div", { class: "flex flex-col gap-3 pt-2 sm:flex-row" }, [
-            h(ActionButton, {
-              label: "Apply",
-              iconComponent: StudioSave,
-              onClick: surface === "prompts" ? applyPromptPlan : surface === "profiles" ? applyProfilePlan : surface === "config" ? applyConfigPlan : applyPlan,
-              disabled:
-                surface === "prompts"
-                  ? busy || promptPlanStatus === "planning" || !promptPlan || promptPlan.validation_errors.length > 0 || promptPlan.baseline_stale
-                  : surface === "profiles"
-                  ? busy || profilePlanStatus === "planning" || !profilePlan || profilePlan.validation_errors.length > 0 || profilePlan.baseline_stale
-                  : surface === "config"
-                  ? busy || configPlanStatus === "planning" || !configPlan || configPlan.validation_errors.length > 0 || configPlan.baseline_stale
-                  : busy || planStatus === "planning" || !plan?.valid,
-              tone: "primary"
-            })
-          ])
+          surface !== "workflow" &&
+            h("div", { class: "flex flex-col gap-3 pt-2 sm:flex-row" }, [
+              h(ActionButton, {
+                label: "Apply",
+                iconComponent: StudioSave,
+                onClick: surface === "prompts" ? applyPromptPlan : surface === "profiles" ? applyProfilePlan : surface === "config" ? applyConfigPlan : applyPlan,
+                disabled:
+                  surface === "prompts"
+                    ? busy || promptPlanStatus === "planning" || !promptPlan || promptPlan.validation_errors.length > 0 || promptPlan.baseline_stale
+                    : surface === "profiles"
+                      ? busy || profilePlanStatus === "planning" || !profilePlan || profilePlan.validation_errors.length > 0 || profilePlan.baseline_stale
+                    : surface === "config"
+                    ? busy || configPlanStatus === "planning" || !configPlan || configPlan.validation_errors.length > 0 || configPlan.baseline_stale
+                    : busy || planStatus === "planning" || !plan?.valid,
+                tone: "primary"
+              })
+            ])
         ]),
         error && h(MessagePanel, { message: error, tone: "error" }),
-        surface === "prompts"
+        surface === "workflow"
+          ? null
+          : surface === "prompts"
           ? promptPlan && h(PlanPreview, { plan: profilePromptPreview(promptProfile, promptMode, promptPlan) })
           : surface === "profiles"
           ? profilePlan && h(PlanPreview, { plan: profileConfigPreview(selectedProfileName, profilePlan) })
@@ -1287,6 +1397,51 @@ function TaskList(props: {
           h("p", { key: item.path, class: "mt-2 [overflow-wrap:anywhere] text-xs leading-5" }, `${item.path}: ${item.error}`)
         )
       ])
+  ]);
+}
+
+function WorkflowList(props: {
+  workflows: WorkflowInventory;
+  selectedId: string;
+  selectWorkflow: (id: string) => void;
+}) {
+  if (props.workflows.items.length === 0) {
+    return h("p", { class: "mt-6 text-sm leading-6 text-neutral-500 dark:text-neutral-400" }, "디스크에 Workflow가 없습니다.");
+  }
+  return h("div", { class: "grid gap-5" }, [
+    h("div", {}, [
+      h("p", { class: eyebrow }, "디스크"),
+      h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, `${props.workflows.items.length} Workflows`)
+    ]),
+    h(
+      "div",
+      { class: "grid max-h-[24rem] gap-2 overflow-auto pr-1" },
+      props.workflows.items.map((item) => {
+        const selected = item.id === props.selectedId;
+        return h(
+          "button",
+          {
+            key: item.id,
+            type: "button",
+            onClick: () => props.selectWorkflow(item.id),
+            class: clsx(
+              "group grid w-full gap-1 rounded-[1.25rem] px-4 py-3 text-left ring-1 active:scale-[0.98]",
+              selected
+                ? "bg-studio-accent text-white ring-studio-accent"
+                : "bg-white/40 text-neutral-700 ring-black/5 hover:bg-white/80 dark:bg-white/[0.03] dark:text-neutral-200 dark:ring-white/10 dark:hover:bg-white/[0.06]",
+              transition
+            )
+          },
+          [
+            h("span", { class: "flex min-w-0 items-center gap-2" }, [
+              h("span", { class: "h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10 dark:ring-white/20", style: { backgroundColor: workflowSwatch(item.color) } }),
+              h("span", { class: "truncate font-mono text-sm" }, item.id)
+            ]),
+            h("span", { class: clsx("truncate text-xs", selected ? "text-white/70" : "text-neutral-500 dark:text-neutral-500") }, item.title || item.mode)
+          ]
+        );
+      })
+    )
   ]);
 }
 
@@ -1679,6 +1834,23 @@ function buildProfileDetailMetrics(
   ];
 }
 
+function buildWorkflowDetailMetrics(workflow: WorkflowDetail | null, total: number): DetailMetric[] {
+  if (!workflow) {
+    return [
+      { label: "대상", value: "<repo-root>/.wt/execution/workflows/<id>.toml" },
+      { label: "Workflows", value: `${total.toLocaleString("ko-KR")}개` },
+      { label: "상태", value: "선택 대기" }
+    ];
+  }
+  return [
+    { label: "대상", value: workflow.path },
+    { label: "Mode", value: workflow.mode },
+    { label: "Policy", value: `${workflow.policy.pull_request} / ${workflow.policy.landing}` },
+    { label: "Tasks", value: `${workflow.tasks.length.toLocaleString("ko-KR")}개` },
+    { label: "Updated", value: workflow.updated_at }
+  ];
+}
+
 function buildPromptDetailMetrics(
   profile: string,
   mode: PromptMode,
@@ -1769,6 +1941,13 @@ function planSummaryLabel(planStatus: PlanStatus, plan: PlanResponse | null) {
     return "Stale";
   }
   return plan?.valid ? "유효한 Diff" : "Plan 대기";
+}
+
+function workflowSummaryLabel(loading: boolean, workflow: WorkflowDetail | null) {
+  if (loading) {
+    return "읽는 중";
+  }
+  return workflow ? "Loaded" : "선택 대기";
 }
 
 function formatKoreanMtime(mtimeNs?: string | null) {
@@ -1945,6 +2124,16 @@ function promptStatusDescriptor(planStatus: PlanStatus, plan: ProfilePromptPlanR
   return { label: "미저장", tone: "neutral" as const };
 }
 
+function workflowStatusDescriptor(loading: boolean, workflow: WorkflowDetail | null) {
+  if (loading) {
+    return { label: "Workflow 읽는 중", tone: "blue" as const, pulse: true };
+  }
+  if (workflow) {
+    return { label: "읽기 전용", tone: "blue" as const };
+  }
+  return { label: "선택 대기", tone: "neutral" as const };
+}
+
 function statusClass(tone: "blue" | "amber" | "neutral", pulse?: boolean) {
   return clsx(
     "inline-flex w-fit rounded-full px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] ring-1",
@@ -1967,6 +2156,9 @@ function surfaceFromHash(): SurfaceMode {
   if (window.location.hash === "#profile" || window.location.hash.match(/^#profile\/[^/]+$/)) {
     return "profiles";
   }
+  if (window.location.hash.startsWith("#workflow")) {
+    return "workflow";
+  }
   return "tasks";
 }
 
@@ -1977,6 +2169,11 @@ function taskPathFromHash(items: TaskDocumentItem[]) {
   }
   const key = decodeURIComponent(match[1]);
   return items.find((item) => item.key === key || item.path.endsWith(`/${key}.toml`) || item.path.endsWith(`${key}.toml`))?.path || "";
+}
+
+function workflowIdFromHash() {
+  const match = window.location.hash.match(/^#workflow\/(.+)$/);
+  return match ? decodeURIComponent(match[1]) : "";
 }
 
 function promptLocationFromHash(): { profile: string; mode: PromptMode } {
@@ -2022,6 +2219,28 @@ function promptModeSummary(mode: PromptMode) {
     case "common":
       return "shared scope";
   }
+}
+
+function workflowSwatch(color?: string | null) {
+  const palette: Record<string, string> = {
+    red: "#ef4444",
+    crimson: "#dc143c",
+    orange: "#f97316",
+    amber: "#f59e0b",
+    olive: "#84cc16",
+    green: "#22c55e",
+    teal: "#14b8a6",
+    aqua: "#06b6d4",
+    blue: "#3b82f6",
+    navy: "#1d4ed8",
+    indigo: "#6366f1",
+    purple: "#a855f7",
+    magenta: "#d946ef",
+    rose: "#f43f5e",
+    brown: "#92400e",
+    charcoal: "#374151"
+  };
+  return color ? palette[color.toLowerCase()] || "#3b82f6" : "#3b82f6";
 }
 
 type ApiFailure = Error & {

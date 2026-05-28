@@ -1,7 +1,7 @@
 use crate::config::validate_profile_name;
 use crate::context::Ctx;
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,7 +15,7 @@ pub const WORKFLOW_COLOR_ROTATION: &[&str] = &[
     "indigo", "purple", "magenta", "rose", "brown", "charcoal",
 ];
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowMode {
     Single,
@@ -35,7 +35,7 @@ impl WorkflowMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowMetadata {
     #[serde(default)]
@@ -61,14 +61,14 @@ pub struct WorkflowMetadata {
     pub tasks: Vec<WorkflowTask>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowOrigin {
     pub provider: String,
     pub id: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowTask {
     pub task: String,
@@ -80,14 +80,14 @@ pub struct WorkflowTask {
     pub runs: Vec<WorkflowTaskRun>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowTaskRun {
     pub profile: String,
     pub run: String,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowPullRequestMode {
     None,
@@ -105,14 +105,14 @@ impl WorkflowPullRequestMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowPolicy {
     pub pull_request: WorkflowPullRequestMode,
     pub landing: WorkflowLandingPolicy,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowLandingPolicy {
     Manual,
