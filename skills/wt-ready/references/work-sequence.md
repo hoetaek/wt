@@ -7,33 +7,46 @@ different kind of uncertainty before the work becomes runnable.
 ## Summary
 
 ```text
-Raw intent
--> Unknown surfacing
--> Context / reference exploration
--> Purpose / success criteria
--> Requirements / principles
--> Output concept
--> Design
--> Task graph
--> Execution handoff
--> Review / sync
--> Retrospect
+Discover: 1 Raw intent
+       -> 2 Unknown surfacing
+       -> 3 Context / reference exploration
+
+Shape:    4 Purpose / success criteria
+       -> 5 Requirements / principles
+       -> 6 Wireframe with mock data
+
+Execute:  7 Design
+       -> 8 Task graph
+       -> 9 Execution handoff
+
+Improve: 10 Review / sync
+       -> 11 Retrospect
 ```
 
+For `wt-ready`, Discover is either inherited from `wt-idea` or reconstructed
+when the user enters prep directly. Shape and Execute-prep are the main
+ownership area: settle purpose, requirements, wireframe, design, task graph, and
+handoff. Improve is owned later by `wt-coordinate` and `wt-retrospect`, but
+`wt-ready` must leave artifacts that are easy to sync and learn from.
+
 Kiro's spec-driven workflow maps to
-`04+05+06-requirements.md -> 07-design.md -> 08-tasks.md`.
+`04+05-requirements.md -> 06-wireframe.md -> 07-design.md -> 08-tasks.md`.
+Existing scaffolded specs may collapse requirements and wireframe into
+`04+05+06-requirements.md` for tiny work.
 AI-DLC maps more broadly to `Inception -> Construction -> Operations`. For wt,
 the operational mapping is:
 
 ```text
 planning/ideas/<slug>.{md,toml}
--> planning/specs/<slug>/{01-intent.md,02-unknowns.md,03-context.md,04+05+06-requirements.md,07-design.md,08-tasks.md,09-execution.md?,10-review.md?,11-retrospect.md?}
+-> planning/specs/<slug>/{01-intent.md,02-unknowns.md,03-context.md,
+   04+05-requirements.md or 04+05+06-requirements.md,06-wireframe.md?,
+   07-design.md,08-tasks.md,09-execution.md?,10-review.md?,11-retrospect.md?}
 -> execution/tasks/<slug>.toml and/or execution/workflows/<id>.toml
 -> execution/task-runs/<id>.toml
 -> review, land, retrospect
 ```
 
-## 1. Raw intent
+## 1. Raw intent (Discover)
 
 Owner: `wt-idea`, or the first minutes of `wt-ready` when the user skips idea
 capture.
@@ -54,7 +67,7 @@ Return here when:
 - The request is only a symptom, preference, or implementation hunch.
 - Multiple unrelated ideas are mixed together.
 
-## 2. Unknown surfacing
+## 2. Unknown surfacing (Discover)
 
 Owner: `wt-idea`, or `wt-ready` when entered directly without prior idea capture.
 
@@ -83,7 +96,7 @@ Return here when:
 - Repeated unplanned research detours start interrupting drafting or
   implementation.
 
-## 3. Context / reference exploration
+## 3. Context / reference exploration (Discover)
 
 Owner: `wt-idea` for exploratory research, `wt-ready` when reference gathering
 is needed before committed prep.
@@ -113,12 +126,12 @@ Return here when:
 - The user needs examples before they can say what they want.
 - There are too many possible product/document/workflow shapes.
 
-## 4. Purpose / success criteria
+## 4. Purpose / success criteria (Shape)
 
 Owner: `wt-idea` for exploration, `wt-ready` for committed prep.
 
-Artifact: idea body, then `planning/specs/<slug>/04+05+06-requirements.md` user story
-and problem context.
+Artifact: idea body, then `planning/specs/<slug>/04+05-requirements.md`
+or collapsed `04+05+06-requirements.md` user story and problem context.
 
 Gate to next step:
 
@@ -132,11 +145,12 @@ Return here when:
 - The implementation is named but the benefit is unclear.
 - A task would need the agent to invent product intent.
 
-## 5. Requirements / principles
+## 5. Requirements / principles (Shape)
 
 Owner: `wt-ready`.
 
-Artifact: `planning/specs/<slug>/04+05+06-requirements.md`.
+Artifact: `planning/specs/<slug>/04+05-requirements.md` or collapsed
+`04+05+06-requirements.md`.
 
 Gate to next step:
 
@@ -147,6 +161,9 @@ Gate to next step:
 - Relevant non-functional constraints are named.
 - Principles and constraints are specific enough to reject unsuitable output
   forms or implementation shapes.
+- The output form is explicit: docs-only change, implementation PR, prototype,
+  spike, direct local edit, TaskDocument, saved Workflow, or mixed-lifecycle
+  handoff.
 - Open questions are either resolved, recorded as assumptions, or turned into a
   HITL/spike slice.
 
@@ -154,42 +171,69 @@ Return here when:
 
 - The agent would need to guess edge cases, compatibility, or preserved
   behavior.
+- The team is jumping to "make a task" before deciding whether a spec, spike,
+  prototype, docs change, or implementation PR is the right next artifact.
 - Acceptance checks cannot be stated.
 
-## 6. Output concept
+## 6. Wireframe with mock data (Shape)
 
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
-show that the chosen artifact shape is wrong.
+show that the validated structure was wrong.
 
-Artifact: `04+05+06-requirements.md`, `09-execution.md` rationale,
-TaskDocument body planning summary, or spec notes that state the output form.
+Artifact: `planning/specs/<slug>/06-wireframe.md` for one compact artifact,
+`06-wireframe/` for several screens/flows/examples, or collapsed
+`04+05+06-requirements.md` when the work is tiny and the structural sketch fits
+inside requirements. For non-UI work, use the same gate with the right low-fi
+shape: command transcript, generated TOML example, TaskDocument/workflow flow,
+outline with placeholder evidence, API request/response examples, or realistic
+state table.
 
-Purpose: choose what kind of artifact should be produced after requirements and
-principles are clear.
+Purpose: validate structure and workflow before design. The wireframe is not a
+visual polish step; it is a check that the unknowns/context gathered so far are
+sufficient to model the work with representative data and states.
+
+Entry condition:
+
+- Wireframe-relevant unknowns have been surfaced and either resolved,
+  explicitly deferred, or turned into HITL/spike work.
+- `03-context.md` has enough verified facts, representative examples, current
+  behavior, user/team material, constraints, and assumptions to build a
+  realistic low-fi artifact.
+- Mock data or representative examples exist. If they do not, return to Unknown
+  surfacing / Context exploration before drawing the structure.
 
 Gate to next step:
 
-- The output form is explicit: docs-only change, implementation PR, prototype,
-  spike, direct local edit, TaskDocument, saved Workflow, or mixed-lifecycle
-  handoff.
-- The output form fits the success criteria and requirements.
-- Deferred output forms are named when useful.
+- The wireframe uses realistic mock data or representative examples, not empty
+  placeholders that hide structure.
+- The operator/user can walk through the intended flow.
+- Empty, error, edge, loading, conflict, or migration states that affect
+  structure are represented or explicitly deferred.
+- The wireframe reveals whether the requirements are complete enough for
+  design.
+- The user confirms the structure fits before design starts.
 
 Return here when:
 
-- The team is jumping to "make a task" before deciding whether a spec, spike,
-  prototype, docs change, or implementation PR is the right next artifact.
-- A broad idea has several output forms that should not be bundled together.
+- Design is doing hidden structure discovery.
+- A missing example, state, workflow step, or constraint could change the
+  information architecture or command/config shape.
+- The user cannot walk through the flow with the current mock data.
 
-## 7. Design
+## 7. Design (Execute prep)
 
 Owner: `wt-ready`, with `wt-coordinate` updating it when execution findings
 invalidate assumptions.
 
 Artifact: `planning/specs/<slug>/07-design.md`.
 
+Purpose: turn the passed wireframe into a final design: component boundaries,
+state model, command/config shape, information architecture, visual language
+when relevant, and rejected alternatives.
+
 Gate to next step:
 
+- The wireframe was confirmed or intentionally collapsed for tiny work.
 - The design names affected components and boundaries.
 - At least one rejected alternative or simpler option is recorded when the
   choice is non-obvious.
@@ -202,8 +246,10 @@ Return here when:
   surface is not.
 - The task would create a new user-facing model term without checking
   canonical docs.
+- The design changes structure that the wireframe did not validate; return to
+  wireframe first.
 
-## 8. Task graph
+## 8. Task graph (Execute prep)
 
 Owner: `wt-ready`.
 
@@ -229,7 +275,7 @@ Return here when:
 - A slice is too large to review or too small to justify its own branch.
 - The proposed stack is only a packaging choice, not a dependency claim.
 
-## 9. Execution handoff
+## 9. Execution handoff (Execute prep)
 
 Owner: `wt-ready` prepares; `wt-start` launches.
 
@@ -248,7 +294,7 @@ Return here when:
 - The next command is ambiguous.
 - Required expected duration, policy, or acceptance checks are missing.
 
-## 10. Review / sync
+## 10. Review / sync (Improve)
 
 Owner: `wt-coordinate`.
 
@@ -271,7 +317,7 @@ Return here when:
 - Implementation reveals a requirement or design assumption was wrong.
 - The diff is too broad for the prepared task and needs re-slicing.
 
-## 11. Retrospect
+## 11. Retrospect (Improve)
 
 Owner: `wt-retrospect`, normally called by `wt-work` after landing or explicit
 discard.
@@ -307,9 +353,11 @@ the work is ready for the next one. Examples:
   internal unknowns before researching.
 - Missing examples or direction: use the unknowns list to run bounded
   discovery/reference benchmarking.
-- Missing observable behavior: write or grill `04+05+06-requirements.md`.
-- Missing output form: choose whether the next artifact is spec, prototype,
-  docs change, TaskDocument, workflow, or spike.
+- Missing observable behavior or output form: write or grill
+  `04+05-requirements.md` or collapsed `04+05+06-requirements.md`.
+- Missing mock data, workflow, states, or constraints for structure: return to
+  `02-unknowns.md` / `03-context.md`.
+- Missing structure validation: write or grill `06-wireframe.md` before design.
 - Missing ownership/boundary decision: write or grill `07-design.md`.
 - Missing dependency graph: write or grill `08-tasks.md` / `09-execution.md`.
 - Missing reviewable size: split the task graph.
