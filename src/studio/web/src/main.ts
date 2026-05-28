@@ -3,6 +3,7 @@ import {
   CheckCircle,
   FileText,
   FloppyDisk,
+  GearSix,
   List,
   Plus,
   WarningCircle
@@ -10,6 +11,15 @@ import {
 import clsx from "clsx";
 import { h, render, type ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import {
+  ConfigForm,
+  configDraftEqual,
+  configSummary,
+  draftFromToml,
+  emptyConfigDraft,
+  serializeConfigDraft,
+  type ConfigDraft
+} from "./config-form";
 import "./style.css";
 
 type TaskOrigin = {
@@ -53,7 +63,25 @@ type PlanResponse = {
   precondition: Fingerprint;
 };
 
+type PersonalConfigPlanResponse = {
+  before: string;
+  after: string;
+  diff: string;
+  validation_errors: string[];
+  fingerprint: Fingerprint;
+  baseline_stale: boolean;
+};
+
+type PreviewPlan = {
+  path: string;
+  operation: "create" | "update" | "config";
+  valid: boolean;
+  validation_errors: string[];
+  diff: string;
+};
+
 type Mode = "create" | "update";
+type SurfaceMode = "tasks" | "config";
 type PlanStatus = "idle" | "planning" | "stale";
 
 type EditorDraft = {
@@ -75,6 +103,7 @@ const StudioFile = FileText as unknown as IconComponent;
 const StudioSave = FloppyDisk as unknown as IconComponent;
 const StudioWarning = WarningCircle as unknown as IconComponent;
 const StudioCheck = CheckCircle as unknown as IconComponent;
+const StudioConfig = GearSix as unknown as IconComponent;
 const PLAN_DEBOUNCE_MS = 500;
 
 const emptyDraft: EditorDraft = {
@@ -92,6 +121,7 @@ const eyebrow =
   "inline-flex w-fit items-center rounded-full bg-black/[0.04] px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-500 ring-1 ring-black/5 dark:bg-white/[0.04] dark:text-neutral-400 dark:ring-white/10";
 
 function App() {
+  const [surface, setSurface] = useState<SurfaceMode>(() => surfaceFromHash());
   const [inventory, setInventory] = useState<Inventory>({ items: [], invalid: [] });
   const [mode, setMode] = useState<Mode>("create");
   const [selectedPath, setSelectedPath] = useState("");
@@ -100,6 +130,12 @@ function App() {
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [planStatus, setPlanStatus] = useState<PlanStatus>("idle");
   const [baselineStale, setBaselineStale] = useState(false);
+  const [configDraft, setConfigDraft] = useState<ConfigDraft>(() => emptyConfigDraft());
+  const [configBaselineDraft, setConfigBaselineDraft] = useState<ConfigDraft>(() => emptyConfigDraft());
+  const [configBaselineFingerprint, setConfigBaselineFingerprint] = useState<Fingerprint | null>(null);
+  const [configPlan, setConfigPlan] = useState<PersonalConfigPlanResponse | null>(null);
+  const [configPlanStatus, setConfigPlanStatus] = useState<PlanStatus>("idle");
+  const [configLoaded, setConfigLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -108,19 +144,33 @@ function App() {
     [inventory.items, selectedPath]
   );
   const draftIssues = useMemo(() => validateDraft(mode, draft), [draft, mode]);
-  const displaySlug = mode === "create" ? draft.slug.trim() || "new-task" : selected?.key || draft.slug;
-  const displayTitle = draft.title.trim() || "제목 없는 TaskDocument";
   const currentPath = mode === "update" && selected ? selected.path : targetPath(mode, draft, selected);
   const cleanUpdateDraft =
     mode === "update" && selected && !baselineStale ? draftsEqual(draft, draftFromItem(selected)) : false;
   const planSignature = useMemo(() => planRequestSignature(mode, currentPath, draft), [currentPath, draft, mode]);
   const latestPlanSignature = useRef(planSignature);
+  const configCandidate = useMemo(() => serializeConfigDraft(configDraft), [configDraft]);
+  const configClean = configLoaded && configDraftEqual(configDraft, configBaselineDraft);
+  const configPlanSignature = useMemo(
+    () => JSON.stringify({ candidate: configCandidate, baseline: configBaselineFingerprint }),
+    [configBaselineFingerprint, configCandidate]
+  );
+  const latestConfigPlanSignature = useRef(configPlanSignature);
   const recoveryPlanController = useRef<AbortController | null>(null);
+  const configPlanController = useRef<AbortController | null>(null);
   latestPlanSignature.current = planSignature;
-  const status = statusDescriptor(planStatus, plan);
+  latestConfigPlanSignature.current = configPlanSignature;
+  const activePlanStatus = surface === "config" ? configPlanStatus : planStatus;
+  const activeStatus = surface === "config" ? configStatusDescriptor(configPlanStatus, configPlan) : statusDescriptor(planStatus, plan);
+  const displaySlug =
+    surface === "config" ? "local.toml" : mode === "create" ? draft.slug.trim() || "new-task" : selected?.key || draft.slug;
+  const displayTitle = surface === "config" ? "Personal config" : draft.title.trim() || "제목 없는 TaskDocument";
   const detailMetrics = useMemo(
-    () => buildDetailMetrics(currentPath, draft, selected, plan, draftIssues, planStatus),
-    [currentPath, draft, selected, plan, draftIssues, planStatus]
+    () =>
+      surface === "config"
+        ? buildConfigDetailMetrics(configCandidate, configDraft, configPlan, configPlanStatus)
+        : buildDetailMetrics(currentPath, draft, selected, plan, draftIssues, planStatus),
+    [configCandidate, configDraft, configPlan, configPlanStatus, currentPath, draft, draftIssues, plan, planStatus, selected, surface]
   );
 
   useEffect(() => {
@@ -128,13 +178,40 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const onHashChange = () => setSurface(surfaceFromHash());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  useEffect(() => {
+    if (surface !== "tasks") {
+      return;
+    }
+    const hashPath = taskPathFromHash(inventory.items);
+    if (hashPath && hashPath !== selectedPath) {
+      selectUpdate(hashPath);
+    }
+  }, [inventory.items, selectedPath, surface]);
+
+  useEffect(() => {
+    if (surface === "config" && !configLoaded) {
+      void loadPersonalConfig();
+    }
+  }, [configLoaded, surface]);
+
+  useEffect(() => {
     return () => {
       recoveryPlanController.current?.abort();
       recoveryPlanController.current = null;
+      configPlanController.current?.abort();
+      configPlanController.current = null;
     };
   }, []);
 
   useEffect(() => {
+    if (surface !== "tasks") {
+      return;
+    }
     if (mode === "update" && !selected) {
       resetPlanState();
       return;
@@ -161,7 +238,35 @@ function App() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [cleanUpdateDraft, draftIssues.length, mode, planSignature, selected]);
+  }, [cleanUpdateDraft, draftIssues.length, mode, planSignature, selected, surface]);
+
+  useEffect(() => {
+    if (surface !== "config" || !configLoaded) {
+      return;
+    }
+    if (configClean) {
+      resetConfigPlanState();
+      return;
+    }
+
+    const controller = new AbortController();
+    const signature = configPlanSignature;
+    const timer = window.setTimeout(() => {
+      if (latestConfigPlanSignature.current !== signature) {
+        return;
+      }
+      configPlanController.current?.abort();
+      configPlanController.current = controller;
+      setConfigPlanStatus("planning");
+      setError("");
+      void planConfigDraft(controller.signal, signature);
+    }, PLAN_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [configClean, configLoaded, configPlanSignature, surface]);
 
   useEffect(() => {
     const nodes = Array.from(document.querySelectorAll<HTMLElement>("[data-reveal]"));
@@ -192,7 +297,8 @@ function App() {
       setInventory(next);
       setBaselineStale(false);
       const fallbackPath = next.items[0]?.path || "";
-      const resolvedPath = nextSelectedPath ?? selectedPath;
+      const hashPath = taskPathFromHash(next.items);
+      const resolvedPath = nextSelectedPath ?? (selectedPath || hashPath);
       const nextPath = next.items.some((item) => item.path === resolvedPath) ? resolvedPath : fallbackPath;
       setSelectedPath(nextPath);
       const loadMode = modeOverride ?? mode;
@@ -209,7 +315,45 @@ function App() {
     }
   }
 
+  async function loadPersonalConfig() {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await api<PersonalConfigPlanResponse>("/api/personal-config/plan", {
+        method: "POST",
+        body: JSON.stringify({
+          candidate: "",
+          baseline_fingerprint: null
+        })
+      });
+      const loadedDraft = draftFromToml(response.before);
+      setConfigDraft(loadedDraft);
+      setConfigBaselineDraft(loadedDraft);
+      setConfigBaselineFingerprint(response.fingerprint);
+      setConfigPlan(null);
+      setConfigPlanStatus("idle");
+      setConfigLoaded(true);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function switchSurface(next: SurfaceMode) {
+    setSurface(next);
+    setError("");
+    if (next === "config") {
+      window.location.hash = "config";
+    } else {
+      const slug = mode === "update" && selected ? selected.key : draft.slug.trim() || "new-task";
+      window.location.hash = `task/${encodeURIComponent(slug)}`;
+    }
+  }
+
   function selectCreate() {
+    setSurface("tasks");
+    window.location.hash = "task/new-task";
     setMode("create");
     setBaselineStale(false);
     resetPlanState();
@@ -220,6 +364,8 @@ function App() {
   function selectUpdate(path: string) {
     const item = inventory.items.find((candidate) => candidate.path === path);
     if (!item) return;
+    setSurface("tasks");
+    window.location.hash = `task/${encodeURIComponent(item.key)}`;
     setMode("update");
     setSelectedPath(path);
     setBaselineStale(false);
@@ -233,6 +379,13 @@ function App() {
     recoveryPlanController.current = null;
     setPlan(null);
     setPlanStatus("idle");
+  }
+
+  function resetConfigPlanState() {
+    configPlanController.current?.abort();
+    configPlanController.current = null;
+    setConfigPlan(null);
+    setConfigPlanStatus("idle");
   }
 
   function triggerConflictRecoveryPlan() {
@@ -279,6 +432,32 @@ function App() {
     }
   }
 
+  async function planConfigDraft(signal: AbortSignal, signature: string) {
+    try {
+      const response = await api<PersonalConfigPlanResponse>("/api/personal-config/plan", {
+        method: "POST",
+        signal,
+        body: JSON.stringify({
+          candidate: configCandidate,
+          baseline_fingerprint: configBaselineFingerprint
+        })
+      });
+      if (latestConfigPlanSignature.current !== signature) {
+        return;
+      }
+      setConfigPlan(response);
+      setError("");
+      setConfigPlanStatus(response.baseline_stale ? "stale" : "idle");
+    } catch (err) {
+      if (isAbortError(err) || latestConfigPlanSignature.current !== signature) {
+        return;
+      }
+      setError(errorMessage(err));
+      setConfigPlan(null);
+      setConfigPlanStatus("idle");
+    }
+  }
+
   async function applyPlan() {
     if (!plan || !plan.valid) return;
     setBusy(true);
@@ -305,6 +484,33 @@ function App() {
         setBaselineStale(true);
         setPlan(null);
         triggerConflictRecoveryPlan();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyConfigPlan() {
+    if (!configPlan || configPlan.validation_errors.length > 0 || configPlan.baseline_stale) return;
+    setBusy(true);
+    setError("");
+    try {
+      const applied = await api<{ committed_fingerprint: Fingerprint }>("/api/personal-config/apply", {
+        method: "POST",
+        body: JSON.stringify({
+          candidate: configCandidate,
+          precondition: configPlan.fingerprint
+        })
+      });
+      setConfigBaselineDraft(configDraft);
+      setConfigBaselineFingerprint(applied.committed_fingerprint);
+      setConfigPlan(null);
+      setConfigPlanStatus("idle");
+    } catch (err) {
+      const apiErr = err as ApiFailure;
+      setError(errorMessage(err));
+      if (apiErr.status === 409) {
+        setConfigPlanStatus("stale");
       }
     } finally {
       setBusy(false);
@@ -343,11 +549,19 @@ function App() {
         }, icon(StudioList, "h-5 w-5 group-hover:translate-x-1 group-hover:-translate-y-px " + transition)),
         h("div", { class: "text-center" }, [
           h("p", { class: "text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-500 dark:text-neutral-400" }, "wt studio"),
-          h("p", { class: "mt-1 text-sm font-medium text-neutral-800 dark:text-neutral-100" }, "TaskDocument 작성")
+          h("div", { class: "mt-1 inline-flex rounded-full bg-black/[0.04] p-1 ring-1 ring-black/5 dark:bg-white/[0.05] dark:ring-white/10" }, [
+            h(SurfacePill, { label: "Tasks", active: surface === "tasks", onClick: () => switchSurface("tasks") }),
+            h(SurfacePill, { label: "Personal config", active: surface === "config", onClick: () => switchSurface("config") })
+          ])
         ]),
         h("div", { class: "flex items-center gap-2" }, [
-          h(IconButton, { label: "새로 만들기", iconComponent: StudioPlus, onClick: selectCreate }),
-          h(IconButton, { label: "새로고침", iconComponent: StudioRefresh, onClick: () => void loadInventory(), disabled: busy })
+          surface === "tasks" && h(IconButton, { label: "새로 만들기", iconComponent: StudioPlus, onClick: selectCreate }),
+          h(IconButton, {
+            label: "새로고침",
+            iconComponent: StudioRefresh,
+            onClick: () => (surface === "config" ? void loadPersonalConfig() : void loadInventory()),
+            disabled: busy
+          })
         ])
       ]
     ),
@@ -355,7 +569,7 @@ function App() {
       h("aside", { class: "md:col-span-5" }, [
         h("div", { class: "flex min-h-[42rem] flex-col justify-between gap-12 py-4" }, [
           h("div", { class: "space-y-8" }, [
-            h("p", { class: eyebrow }, mode === "create" ? "새 초안" : "선택됨"),
+            h("p", { class: eyebrow }, surface === "config" ? "Personal config" : mode === "create" ? "새 초안" : "선택됨"),
             h("div", {}, [
               h(
                 "h1",
@@ -368,97 +582,122 @@ function App() {
               h("p", { class: "mt-6 max-w-[34ch] text-base leading-7 text-neutral-500 dark:text-neutral-400" }, displayTitle)
             ]),
             h("div", { class: "flex flex-wrap gap-2" }, [
-              h(MetaPill, { label: mode === "create" ? "생성 Plan" : "수정 Plan" }),
+              h(MetaPill, { label: surface === "config" ? "Config Plan" : mode === "create" ? "생성 Plan" : "수정 Plan" }),
               h(MetaPill, {
-                label: planSummaryLabel(planStatus, plan),
-                tone: planStatus === "stale" ? "amber" : planStatus === "planning" || plan?.valid ? "blue" : "neutral"
+                label: surface === "config" ? configPlanSummaryLabel(configPlanStatus, configPlan) : planSummaryLabel(planStatus, plan),
+                tone:
+                  activePlanStatus === "stale"
+                    ? "amber"
+                    : activePlanStatus === "planning" || (surface === "config" ? configPlan && configPlan.validation_errors.length === 0 : plan?.valid)
+                      ? "blue"
+                      : "neutral"
               }),
-              inventory.invalid.length > 0 && h(MetaPill, { label: `오류 ${inventory.invalid.length}개`, tone: "amber" })
+              surface === "tasks" && inventory.invalid.length > 0 && h(MetaPill, { label: `오류 ${inventory.invalid.length}개`, tone: "amber" })
             ]),
             h("dl", { class: "grid gap-4 text-sm text-neutral-500 dark:text-neutral-400" }, detailMetrics.map((item) => metric(item.label, item.value)))
           ]),
           drawerOpen &&
             h(Bezel, { className: "animate-[studio-spring_700ms_var(--ease-studio)_both]" }, [
-              h("div", { class: "flex items-center justify-between gap-4" }, [
-                h("div", {}, [
-                  h("p", { class: eyebrow }, "디스크"),
-                  h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, `${inventory.items.length} TaskDocuments`)
-                ]),
-                h("button", {
-                  type: "button",
-                  onClick: selectCreate,
-                  class: clsx(
-                    "group flex h-12 w-12 items-center justify-center rounded-full bg-studio-accent text-white active:scale-[0.98]",
-                    transition
-                  )
-                }, icon(StudioPlus, "h-5 w-5 group-hover:translate-x-1 group-hover:-translate-y-px " + transition))
-              ]),
-              h(TaskList, { inventory, mode, selectedPath, selectUpdate })
+              surface === "config"
+                ? h(ConfigResourceList, { selected: true })
+                : [
+                    h("div", { class: "flex items-center justify-between gap-4" }, [
+                      h("div", {}, [
+                        h("p", { class: eyebrow }, "디스크"),
+                        h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, `${inventory.items.length} TaskDocuments`)
+                      ]),
+                      h("button", {
+                        type: "button",
+                        onClick: selectCreate,
+                        class: clsx(
+                          "group flex h-12 w-12 items-center justify-center rounded-full bg-studio-accent text-white active:scale-[0.98]",
+                          transition
+                        )
+                      }, icon(StudioPlus, "h-5 w-5 group-hover:translate-x-1 group-hover:-translate-y-px " + transition))
+                    ]),
+                    h(TaskList, { inventory, mode, selectedPath, selectUpdate })
+                  ]
             ])
         ])
       ]),
-      h("section", { class: "grid gap-8 md:col-span-7", "aria-label": "TaskDocument editor" }, [
+      h("section", { class: "grid gap-8 md:col-span-7", "aria-label": surface === "config" ? "Personal config editor" : "TaskDocument editor" }, [
         h(Bezel, {}, [
           h("div", { class: "flex flex-col gap-6 md:flex-row md:items-center md:justify-between" }, [
             h("div", {}, [
               h("p", { class: eyebrow }, "편집기"),
-              h("h2", { class: "mt-4 text-3xl font-medium tracking-normal text-neutral-950 dark:text-neutral-50" }, "Apply 전 Plan")
+              h("h2", { class: "mt-4 text-3xl font-medium tracking-normal text-neutral-950 dark:text-neutral-50" }, surface === "config" ? "local.toml Plan" : "Apply 전 Plan")
             ]),
             h("span", { "aria-live": "polite", "aria-atomic": "true" }, [
-              h("span", { class: statusClass(status.tone, status.pulse) }, status.label)
+              h("span", { class: statusClass(activeStatus.tone, activeStatus.pulse) }, activeStatus.label)
             ])
           ]),
-          h("div", { class: "grid gap-4 md:grid-cols-2" }, [
-            h(Field, {
-              name: "slug",
-              label: "Slug",
-              value: draft.slug,
-              onInput: (value: string) => updateDraft("slug", value),
-              disabled: mode === "update"
-            }),
-            h(Field, { name: "title", label: "Title", value: draft.title, onInput: (value: string) => updateDraft("title", value) }),
-            h(Field, { name: "branch", label: "Branch", value: draft.branch, onInput: (value: string) => updateDraft("branch", value) }),
-            h(Field, {
-              name: "origin-provider",
-              label: "Origin provider",
-              value: draft.originProvider,
-              onInput: (value: string) => updateDraft("originProvider", value)
-            }),
-            h(Field, {
-              name: "origin-id",
-              label: "Origin id",
-              value: draft.originId,
-              onInput: (value: string) => updateDraft("originId", value),
-              className: "md:col-span-2"
-            })
-          ]),
-          h("label", { class: "grid gap-2 text-sm font-medium text-neutral-600 dark:text-neutral-300" }, [
-            h("span", {}, "Body"),
-            h("textarea", {
-              id: "task-document-body",
-              name: "body",
-              value: draft.body,
-              onInput: (event: Event) => updateDraft("body", formValue(event)),
-              rows: 13,
-              class: clsx(
-                "min-h-[22rem] rounded-[1.5rem] bg-white/70 px-5 py-4 font-mono text-sm leading-6 text-neutral-950 shadow-[inset_0_1px_1px_rgba(255,255,255,0.75)] ring-1 ring-black/5 placeholder:text-neutral-400 focus:ring-2 focus:ring-studio-accent/50 dark:bg-neutral-900/70 dark:text-neutral-50 dark:ring-white/10",
-                transition
-              )
-            })
-          ]),
-          draftIssues.length > 0 && h(ValidationList, { items: draftIssues }),
+          surface === "config"
+            ? h(ConfigForm, {
+                draft: configDraft,
+                iconComponent: StudioConfig,
+                onChange: (nextDraft: ConfigDraft) => {
+                  setConfigDraft(nextDraft);
+                  resetConfigPlanState();
+                }
+              })
+            : [
+                h("div", { class: "grid gap-4 md:grid-cols-2" }, [
+                  h(Field, {
+                    name: "slug",
+                    label: "Slug",
+                    value: draft.slug,
+                    onInput: (value: string) => updateDraft("slug", value),
+                    disabled: mode === "update"
+                  }),
+                  h(Field, { name: "title", label: "Title", value: draft.title, onInput: (value: string) => updateDraft("title", value) }),
+                  h(Field, { name: "branch", label: "Branch", value: draft.branch, onInput: (value: string) => updateDraft("branch", value) }),
+                  h(Field, {
+                    name: "origin-provider",
+                    label: "Origin provider",
+                    value: draft.originProvider,
+                    onInput: (value: string) => updateDraft("originProvider", value)
+                  }),
+                  h(Field, {
+                    name: "origin-id",
+                    label: "Origin id",
+                    value: draft.originId,
+                    onInput: (value: string) => updateDraft("originId", value),
+                    className: "md:col-span-2"
+                  })
+                ]),
+                h("label", { class: "grid gap-2 text-sm font-medium text-neutral-600 dark:text-neutral-300" }, [
+                  h("span", {}, "Body"),
+                  h("textarea", {
+                    id: "task-document-body",
+                    name: "body",
+                    value: draft.body,
+                    onInput: (event: Event) => updateDraft("body", formValue(event)),
+                    rows: 13,
+                    class: clsx(
+                      "min-h-[22rem] rounded-[1.5rem] bg-white/70 px-5 py-4 font-mono text-sm leading-6 text-neutral-950 shadow-[inset_0_1px_1px_rgba(255,255,255,0.75)] ring-1 ring-black/5 placeholder:text-neutral-400 focus:ring-2 focus:ring-studio-accent/50 dark:bg-neutral-900/70 dark:text-neutral-50 dark:ring-white/10",
+                      transition
+                    )
+                  })
+                ]),
+                draftIssues.length > 0 && h(ValidationList, { items: draftIssues })
+              ],
           h("div", { class: "flex flex-col gap-3 pt-2 sm:flex-row" }, [
             h(ActionButton, {
               label: "Apply",
               iconComponent: StudioSave,
-              onClick: applyPlan,
-              disabled: busy || planStatus === "planning" || !plan?.valid,
+              onClick: surface === "config" ? applyConfigPlan : applyPlan,
+              disabled:
+                surface === "config"
+                  ? busy || configPlanStatus === "planning" || !configPlan || configPlan.validation_errors.length > 0 || configPlan.baseline_stale
+                  : busy || planStatus === "planning" || !plan?.valid,
               tone: "primary"
             })
           ])
         ]),
         error && h(MessagePanel, { message: error, tone: "error" }),
-        plan && h(PlanPreview, { plan })
+        surface === "config"
+          ? configPlan && h(PlanPreview, { plan: personalConfigPreview(configPlan) })
+          : plan && h(PlanPreview, { plan: taskPreview(plan) })
       ])
     ])
   ]);
@@ -526,6 +765,50 @@ function Bezel(props: { children?: ComponentChildren; className?: string; innerC
       props.children
     )
   );
+}
+
+function SurfacePill(props: { label: string; active: boolean; onClick: () => void }) {
+  return h(
+    "button",
+    {
+      type: "button",
+      onClick: props.onClick,
+      class: clsx(
+        "rounded-full px-3 py-1.5 text-xs font-medium ring-1 active:scale-[0.98]",
+        props.active
+          ? "bg-neutral-950 text-white ring-neutral-950 dark:bg-white dark:text-neutral-950 dark:ring-white"
+          : "bg-transparent text-neutral-500 ring-transparent hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100",
+        transition
+      )
+    },
+    props.label
+  );
+}
+
+function ConfigResourceList(props: { selected: boolean }) {
+  return h("div", { class: "grid gap-5" }, [
+    h("div", {}, [
+      h("p", { class: eyebrow }, "디스크"),
+      h("p", { class: "mt-3 text-2xl font-medium text-neutral-950 dark:text-neutral-50" }, "Personal config")
+    ]),
+    h(
+      "button",
+      {
+        type: "button",
+        class: clsx(
+          "group grid w-full gap-1 rounded-[1.25rem] px-4 py-3 text-left ring-1 active:scale-[0.98]",
+          props.selected
+            ? "bg-studio-accent text-white ring-studio-accent"
+            : "bg-white/40 text-neutral-700 ring-black/5 dark:bg-white/[0.03] dark:text-neutral-200 dark:ring-white/10",
+          transition
+        )
+      },
+      [
+        h("span", { class: "truncate text-sm font-medium" }, "local.toml"),
+        h("span", { class: "truncate text-xs text-white/70" }, "<repo-root>/.wt/config/local.toml")
+      ]
+    )
+  ]);
 }
 
 function IconButton(props: {
@@ -644,7 +927,7 @@ function MessagePanel(props: { message: string; tone: "error" }) {
   );
 }
 
-function PlanPreview(props: { plan: PlanResponse }) {
+function PlanPreview(props: { plan: PreviewPlan }) {
   const lines = (props.plan.diff || "변경 사항 없음").split("\n");
   return h(Bezel, { className: "animate-[studio-spring_700ms_var(--ease-studio)_both]" }, [
     h("div", { class: "flex flex-col gap-4 md:flex-row md:items-center md:justify-between" }, [
@@ -719,10 +1002,38 @@ function buildDetailMetrics(
   return metrics;
 }
 
+function buildConfigDetailMetrics(
+  candidate: string,
+  draft: ConfigDraft,
+  plan: PersonalConfigPlanResponse | null,
+  planStatus: PlanStatus
+): DetailMetric[] {
+  return [
+    { label: "대상", value: "<repo-root>/.wt/config/local.toml" },
+    { label: "Sections", value: configSummary(draft) },
+    { label: "Candidate", value: bodySummary(candidate) },
+    { label: "검증", value: configValidationSummary(plan, planStatus) },
+    { label: "Hash", value: plan?.fingerprint.hash.slice(0, 12) || "baseline" }
+  ];
+}
+
 function bodySummary(body: string) {
   const chars = body.length;
   const lines = body.length === 0 ? 0 : body.split(/\r\n|\r|\n/).length;
   return `${chars.toLocaleString("ko-KR")}자 / ${lines.toLocaleString("ko-KR")}줄`;
+}
+
+function configValidationSummary(plan: PersonalConfigPlanResponse | null, planStatus: PlanStatus) {
+  if (planStatus === "planning") {
+    return "Plan 갱신 중";
+  }
+  if (planStatus === "stale" || plan?.baseline_stale) {
+    return "Stale";
+  }
+  if (!plan) {
+    return "Plan 대기";
+  }
+  return plan.validation_errors.length === 0 ? "검증 통과" : `검증 오류 ${plan.validation_errors.length}개`;
 }
 
 function validationSummary(plan: PlanResponse | null, draftIssues: string[], planStatus: PlanStatus) {
@@ -739,6 +1050,16 @@ function validationSummary(plan: PlanResponse | null, draftIssues: string[], pla
     return "Plan 대기";
   }
   return plan.valid ? "검증 통과" : `검증 오류 ${plan.validation_errors.length}개`;
+}
+
+function configPlanSummaryLabel(planStatus: PlanStatus, plan: PersonalConfigPlanResponse | null) {
+  if (planStatus === "planning") {
+    return "Plan 갱신 중";
+  }
+  if (planStatus === "stale" || plan?.baseline_stale) {
+    return "Stale";
+  }
+  return plan && plan.validation_errors.length === 0 ? "유효한 Diff" : "Plan 대기";
 }
 
 function planSummaryLabel(planStatus: PlanStatus, plan: PlanResponse | null) {
@@ -768,8 +1089,31 @@ function formatKoreanMtime(mtimeNs?: string | null) {
   }
 }
 
-function operationLabel(operation: PlanResponse["operation"]) {
+function operationLabel(operation: PreviewPlan["operation"]) {
+  if (operation === "config") {
+    return "config";
+  }
   return operation === "create" ? "생성" : "수정";
+}
+
+function taskPreview(plan: PlanResponse): PreviewPlan {
+  return {
+    path: plan.path,
+    operation: plan.operation,
+    valid: plan.valid,
+    validation_errors: plan.validation_errors,
+    diff: plan.diff
+  };
+}
+
+function personalConfigPreview(plan: PersonalConfigPlanResponse): PreviewPlan {
+  return {
+    path: "<repo-root>/.wt/config/local.toml",
+    operation: "config",
+    valid: plan.validation_errors.length === 0 && !plan.baseline_stale,
+    validation_errors: plan.validation_errors,
+    diff: plan.diff
+  };
 }
 
 function icon(IconComponent: IconComponent, className: string) {
@@ -853,6 +1197,19 @@ function statusDescriptor(planStatus: PlanStatus, plan: PlanResponse | null) {
   return { label: "미저장", tone: "neutral" as const };
 }
 
+function configStatusDescriptor(planStatus: PlanStatus, plan: PersonalConfigPlanResponse | null) {
+  if (planStatus === "stale" || plan?.baseline_stale) {
+    return { label: "Stale (재plan 필요)", tone: "amber" as const };
+  }
+  if (planStatus === "planning") {
+    return { label: "Plan 갱신 중", tone: "blue" as const, pulse: true };
+  }
+  if (plan && plan.validation_errors.length === 0) {
+    return { label: "적용 가능", tone: "blue" as const };
+  }
+  return { label: "미저장", tone: "neutral" as const };
+}
+
 function statusClass(tone: "blue" | "amber" | "neutral", pulse?: boolean) {
   return clsx(
     "inline-flex w-fit rounded-full px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] ring-1",
@@ -863,6 +1220,19 @@ function statusClass(tone: "blue" | "amber" | "neutral", pulse?: boolean) {
         ? "bg-studio-accent/10 text-studio-accent ring-studio-accent/20"
         : "bg-black/[0.04] text-neutral-500 ring-black/5 dark:bg-white/[0.04] dark:text-neutral-400 dark:ring-white/10"
   );
+}
+
+function surfaceFromHash(): SurfaceMode {
+  return window.location.hash === "#config" ? "config" : "tasks";
+}
+
+function taskPathFromHash(items: TaskDocumentItem[]) {
+  const match = window.location.hash.match(/^#task\/(.+)$/);
+  if (!match) {
+    return "";
+  }
+  const key = decodeURIComponent(match[1]);
+  return items.find((item) => item.key === key || item.path.endsWith(`/${key}.toml`) || item.path.endsWith(`${key}.toml`))?.path || "";
 }
 
 type ApiFailure = Error & {

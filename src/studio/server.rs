@@ -1,6 +1,11 @@
+use crate::config::Config;
 use crate::context::Ctx;
 use crate::storage::StorageRoot;
 use crate::studio::auth::{COOKIE_NAME, StudioSession, mint_session_token};
+use crate::studio::resource::{
+    FileFingerprint, ResourceError, ResourceErrorOrPrecondition, atomic_write, check_precondition,
+    diff_text, empty_fingerprint, read_fingerprint,
+};
 use crate::task::{self, TaskDocument};
 use anyhow::{Context, Result, bail};
 use axum::body::Body;
@@ -11,12 +16,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fmt::Display;
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::UNIX_EPOCH;
 use tokio::net::TcpListener;
 
 static WEB_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/studio/web/dist");
@@ -33,6 +35,7 @@ pub struct StudioState {
     repo_root: Arc<PathBuf>,
     storage_root: StorageRoot,
     task_document_apply_lock: Arc<Mutex<()>>,
+    personal_config_apply_lock: Arc<Mutex<()>>,
 }
 
 impl StudioState {
@@ -42,6 +45,7 @@ impl StudioState {
             repo_root: Arc::new(ctx.repo_root.clone()),
             storage_root: ctx.storage_root.clone(),
             task_document_apply_lock: Arc::new(Mutex::new(())),
+            personal_config_apply_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -52,6 +56,7 @@ impl StudioState {
             repo_root: Arc::new(repo_root.to_path_buf()),
             storage_root: StorageRoot::from_git_common_dir(repo_root.join(".git")),
             task_document_apply_lock: Arc::new(Mutex::new(())),
+            personal_config_apply_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -108,6 +113,11 @@ pub fn app(state: StudioState) -> Router {
         )
         .route("/api/task-documents/plan", post(api_task_document_plan))
         .route("/api/task-documents/apply", post(api_task_document_apply))
+        .route("/api/personal-config/plan", post(api_personal_config_plan))
+        .route(
+            "/api/personal-config/apply",
+            post(api_personal_config_apply),
+        )
         .route("/favicon.ico", get(favicon))
         .fallback(static_or_not_found)
         .with_state(state)
@@ -218,6 +228,36 @@ async fn api_task_document_apply(
     }
 
     match apply_task_document_edit(&state, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_personal_config_plan(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    Json(request): Json<PersonalConfigPlanRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match plan_personal_config_edit(&state, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_personal_config_apply(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    Json(request): Json<PersonalConfigApplyRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match apply_personal_config_edit(&state, request) {
         Ok(response) => Json(response).into_response(),
         Err(err) => err.into_response(),
     }
@@ -345,10 +385,33 @@ struct TaskDocumentApplyResponse {
     fingerprint: FileFingerprint,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-struct FileFingerprint {
-    mtime_ns: Option<String>,
-    hash: String,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersonalConfigPlanRequest {
+    candidate: String,
+    baseline_fingerprint: Option<FileFingerprint>,
+}
+
+#[derive(Debug, Serialize)]
+struct PersonalConfigPlanResponse {
+    before: String,
+    after: String,
+    diff: String,
+    validation_errors: Vec<String>,
+    fingerprint: FileFingerprint,
+    baseline_stale: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersonalConfigApplyRequest {
+    candidate: String,
+    precondition: FileFingerprint,
+}
+
+#[derive(Debug, Serialize)]
+struct PersonalConfigApplyResponse {
+    committed_fingerprint: FileFingerprint,
 }
 
 #[derive(Debug)]
@@ -382,6 +445,10 @@ fn api_error(status: StatusCode, message: impl Into<String>) -> StudioApiError {
         status,
         body: serde_json::json!({ "error": message.into() }),
     }
+}
+
+fn resource_error(err: ResourceError) -> StudioApiError {
+    api_error(err.status, err.message)
 }
 
 fn task_document_inventory(state: &StudioState) -> Result<TaskDocumentInventoryResponse> {
@@ -462,7 +529,7 @@ fn plan_task_document_edit(
     };
 
     let validation_errors = validate_task_document_content(&after);
-    let diff = unified_diff(&resolved.display_path, &before_disk.content, &after);
+    let diff = diff_text(&resolved.display_path, &before_disk.content, &after);
 
     Ok(TaskDocumentPlanResponse {
         path: resolved.display_path,
@@ -507,7 +574,7 @@ fn apply_task_document_edit(
                 "path": resolved.display_path,
                 "current": current.content,
                 "current_fingerprint": current.fingerprint,
-                "diff": unified_diff(&resolved.display_path, &request.before, &current.content),
+                "diff": diff_text(&resolved.display_path, &request.before, &current.content),
             }),
         });
     }
@@ -525,6 +592,95 @@ fn apply_task_document_edit(
         path: resolved.display_path,
         fingerprint: written.fingerprint,
     })
+}
+
+fn plan_personal_config_edit(
+    state: &StudioState,
+    request: PersonalConfigPlanRequest,
+) -> std::result::Result<PersonalConfigPlanResponse, StudioApiError> {
+    let path = personal_config_path(state);
+    let display_path = personal_config_display_path(state);
+    let before = read_fingerprint(&path, "personal config").map_err(resource_error)?;
+    let validation_errors = validate_personal_config_content(&request.candidate);
+    let baseline_stale = request
+        .baseline_fingerprint
+        .as_ref()
+        .is_some_and(|baseline| baseline != &before.fingerprint);
+
+    let (after, diff) = if validation_errors.is_empty() {
+        let diff = diff_text(&display_path, &before.content, &request.candidate);
+        (request.candidate, diff)
+    } else {
+        (String::new(), String::new())
+    };
+
+    Ok(PersonalConfigPlanResponse {
+        before: before.content,
+        after,
+        diff,
+        validation_errors,
+        fingerprint: before.fingerprint,
+        baseline_stale,
+    })
+}
+
+fn apply_personal_config_edit(
+    state: &StudioState,
+    request: PersonalConfigApplyRequest,
+) -> std::result::Result<PersonalConfigApplyResponse, StudioApiError> {
+    let validation_errors = validate_personal_config_content(&request.candidate);
+    if !validation_errors.is_empty() {
+        return Err(StudioApiError {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body: serde_json::json!({
+                "error": "Personal config validation failed",
+                "validation_errors": validation_errors,
+            }),
+        });
+    }
+
+    let _apply_guard = state.personal_config_apply_lock.lock().map_err(|_| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Personal config apply lock is poisoned",
+        )
+    })?;
+    let path = personal_config_path(state);
+    match check_precondition(&path, &request.precondition, "personal config") {
+        Ok(_) => {}
+        Err(ResourceErrorOrPrecondition::Error(err)) => return Err(resource_error(err)),
+        Err(ResourceErrorOrPrecondition::Precondition(stale)) => {
+            return Err(StudioApiError {
+                status: StatusCode::CONFLICT,
+                body: serde_json::json!({
+                    "error": "Personal config precondition failed",
+                    "current_fingerprint": stale.current.fingerprint,
+                }),
+            });
+        }
+    }
+
+    let committed_fingerprint =
+        atomic_write(&path, &request.candidate, "personal config").map_err(resource_error)?;
+    Ok(PersonalConfigApplyResponse {
+        committed_fingerprint,
+    })
+}
+
+fn personal_config_path(state: &StudioState) -> PathBuf {
+    state.repo_root.join(".wt/config/local.toml")
+}
+
+fn personal_config_display_path(state: &StudioState) -> String {
+    state
+        .storage_root
+        .display_path(&personal_config_path(state))
+}
+
+fn validate_personal_config_content(content: &str) -> Vec<String> {
+    toml::from_str::<Config>(content)
+        .map(|_| Vec::new())
+        .unwrap_or_else(|err| vec![err.to_string()])
 }
 
 fn resolve_task_document_path(
@@ -619,174 +775,23 @@ fn validate_task_document_content(content: &str) -> Vec<String> {
 }
 
 fn read_disk_task_document(path: &Path) -> std::result::Result<DiskTaskDocument, StudioApiError> {
-    match fs::read(path) {
-        Ok(bytes) => {
-            let content = String::from_utf8(bytes).map_err(|err| {
-                api_error(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    format!("TaskDocument is not UTF-8: {err}"),
-                )
-            })?;
-            let metadata = fs::metadata(path).map_err(|err| {
-                api_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to stat TaskDocument: {err}"),
-                )
-            })?;
-            Ok(DiskTaskDocument {
-                fingerprint: fingerprint(&content, Some(&metadata)),
-                content,
-                exists: true,
-            })
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(DiskTaskDocument {
-            content: String::new(),
-            fingerprint: empty_fingerprint(),
-            exists: false,
-        }),
-        Err(err) => Err(api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read TaskDocument: {err}"),
-        )),
-    }
-}
-
-fn empty_fingerprint() -> FileFingerprint {
-    fingerprint("", None)
-}
-
-fn fingerprint(content: &str, metadata: Option<&fs::Metadata>) -> FileFingerprint {
-    FileFingerprint {
-        mtime_ns: metadata.and_then(mtime_ns),
-        hash: sha256_hex(content.as_bytes()),
-    }
-}
-
-fn mtime_ns(metadata: &fs::Metadata) -> Option<String> {
-    let modified = metadata.modified().ok()?;
-    let elapsed = modified.duration_since(UNIX_EPOCH).ok()?;
-    let nanos = u64::from(elapsed.subsec_nanos());
-    elapsed
-        .as_secs()
-        .checked_mul(1_000_000_000)
-        .and_then(|secs| secs.checked_add(nanos))
-        .map(|mtime| mtime.to_string())
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
-}
-
-fn unified_diff(path: &str, before: &str, after: &str) -> String {
-    if before == after {
-        return String::new();
-    }
-
-    let old_lines = split_lines(before);
-    let new_lines = split_lines(after);
-    let ops = diff_ops(&old_lines, &new_lines);
-    let old_start = if old_lines.is_empty() { 0 } else { 1 };
-    let new_start = if new_lines.is_empty() { 0 } else { 1 };
-    let mut diff = format!(
-        "--- a/{path}\n+++ b/{path}\n@@ -{old_start},{} +{new_start},{} @@\n",
-        old_lines.len(),
-        new_lines.len()
-    );
-    for op in ops {
-        match op {
-            DiffOp::Equal(line) => push_diff_line(&mut diff, ' ', line),
-            DiffOp::Delete(line) => push_diff_line(&mut diff, '-', line),
-            DiffOp::Insert(line) => push_diff_line(&mut diff, '+', line),
-        }
-    }
-    diff
-}
-
-fn split_lines(content: &str) -> Vec<&str> {
-    if content.is_empty() {
-        Vec::new()
-    } else {
-        content.split_inclusive('\n').collect()
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum DiffOp<'a> {
-    Equal(&'a str),
-    Delete(&'a str),
-    Insert(&'a str),
-}
-
-fn diff_ops<'a>(old_lines: &[&'a str], new_lines: &[&'a str]) -> Vec<DiffOp<'a>> {
-    let old_len = old_lines.len();
-    let new_len = new_lines.len();
-    let mut lcs = vec![0usize; (old_len + 1) * (new_len + 1)];
-    for old_idx in (0..old_len).rev() {
-        for new_idx in (0..new_len).rev() {
-            let idx = lcs_index(new_idx, new_len, old_idx);
-            lcs[idx] = if old_lines[old_idx] == new_lines[new_idx] {
-                lcs[lcs_index(new_idx + 1, new_len, old_idx + 1)] + 1
-            } else {
-                lcs[lcs_index(new_idx, new_len, old_idx + 1)]
-                    .max(lcs[lcs_index(new_idx + 1, new_len, old_idx)])
-            };
-        }
-    }
-
-    let mut ops = Vec::new();
-    let mut old_idx = 0;
-    let mut new_idx = 0;
-    while old_idx < old_len && new_idx < new_len {
-        if old_lines[old_idx] == new_lines[new_idx] {
-            ops.push(DiffOp::Equal(old_lines[old_idx]));
-            old_idx += 1;
-            new_idx += 1;
-        } else if lcs[lcs_index(new_idx, new_len, old_idx + 1)]
-            >= lcs[lcs_index(new_idx + 1, new_len, old_idx)]
-        {
-            ops.push(DiffOp::Delete(old_lines[old_idx]));
-            old_idx += 1;
-        } else {
-            ops.push(DiffOp::Insert(new_lines[new_idx]));
-            new_idx += 1;
-        }
-    }
-    while old_idx < old_len {
-        ops.push(DiffOp::Delete(old_lines[old_idx]));
-        old_idx += 1;
-    }
-    while new_idx < new_len {
-        ops.push(DiffOp::Insert(new_lines[new_idx]));
-        new_idx += 1;
-    }
-    ops
-}
-
-fn lcs_index(new_idx: usize, new_len: usize, old_idx: usize) -> usize {
-    old_idx * (new_len + 1) + new_idx
-}
-
-fn push_diff_line(diff: &mut String, prefix: char, line: &str) {
-    diff.push(prefix);
-    diff.push_str(line);
-    if !line.ends_with('\n') {
-        diff.push('\n');
-    }
+    read_fingerprint(path, "TaskDocument")
+        .map(|snapshot| DiskTaskDocument {
+            content: snapshot.content,
+            fingerprint: snapshot.fingerprint,
+            exists: snapshot.exists,
+        })
+        .map_err(resource_error)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
     use crate::context::mock::{MockRunner, MockUi};
     use crate::context::{CtxOptions, OutputMode};
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
+    use std::fs;
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -1130,6 +1135,232 @@ mod tests {
                 .join(".wt/execution/tasks/bad-schema.toml")
                 .exists()
         );
+    }
+
+    #[tokio::test]
+    async fn personal_config_plan_reads_hardcoded_local_toml_and_reports_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".wt/config");
+        fs::create_dir_all(&config_dir).unwrap();
+        let before = "[workflow]\npull_request = \"draft\"\n";
+        fs::write(config_dir.join("local.toml"), before).unwrap();
+
+        let response = app(test_state(dir.path()))
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\npull_request = \"ready\"\nlanding = \"auto\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = json_body(response).await;
+        assert_eq!(value["before"], before);
+        assert_eq!(
+            value["after"],
+            "[workflow]\npull_request = \"ready\"\nlanding = \"auto\"\n"
+        );
+        assert_eq!(value["baseline_stale"], false);
+        assert!(value["fingerprint"]["mtime_ns"].is_string());
+        assert!(
+            value["diff"]
+                .as_str()
+                .unwrap()
+                .contains("+landing = \"auto\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn personal_config_apply_writes_only_local_toml_with_matching_precondition() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".wt/config");
+        fs::create_dir_all(config_dir.join("profiles")).unwrap();
+        fs::write(
+            config_dir.join("local.toml"),
+            "[workflow]\nlanding = \"manual\"\n",
+        )
+        .unwrap();
+        fs::write(
+            config_dir.join("profiles/dev.toml"),
+            "[agent]\ncli = \"codex\"\n",
+        )
+        .unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"auto\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/personal-config/apply",
+                serde_json::json!({
+                    "candidate": plan["after"],
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::OK);
+        let applied = json_body(apply_response).await;
+        assert!(applied["committed_fingerprint"]["mtime_ns"].is_string());
+        assert_eq!(
+            fs::read_to_string(config_dir.join("local.toml")).unwrap(),
+            "[workflow]\nlanding = \"auto\"\n"
+        );
+        assert_eq!(
+            fs::read_to_string(config_dir.join("profiles/dev.toml")).unwrap(),
+            "[agent]\ncli = \"codex\"\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn personal_config_apply_rejects_stale_precondition() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".wt/config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("local.toml"),
+            "[workflow]\nlanding = \"manual\"\n",
+        )
+        .unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"auto\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+        fs::write(
+            config_dir.join("local.toml"),
+            "[workflow]\npull_request = \"ready\"\n",
+        )
+        .unwrap();
+
+        let response = server
+            .oneshot(authorized_json_request(
+                "/api/personal-config/apply",
+                serde_json::json!({
+                    "candidate": plan["after"],
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let value = json_body(response).await;
+        assert_eq!(value["error"], "Personal config precondition failed");
+        assert!(value["current_fingerprint"]["mtime_ns"].is_string());
+        assert_eq!(
+            fs::read_to_string(config_dir.join("local.toml")).unwrap(),
+            "[workflow]\npull_request = \"ready\"\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn personal_config_validation_errors_do_not_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"after_review\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(plan_response.status(), StatusCode::OK);
+        let plan = json_body(plan_response).await;
+        assert_eq!(plan["after"], "");
+        assert_eq!(plan["diff"], "");
+        assert!(
+            plan["validation_errors"][0]
+                .as_str()
+                .unwrap()
+                .contains("manual")
+        );
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/personal-config/apply",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"after_review\"\n",
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!dir.path().join(".wt/config/local.toml").exists());
+    }
+
+    #[tokio::test]
+    async fn personal_config_plan_marks_baseline_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".wt/config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("local.toml"),
+            "[workflow]\nlanding = \"manual\"\n",
+        )
+        .unwrap();
+        let server = app(test_state(dir.path()));
+        let first_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"auto\"\n",
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let first = json_body(first_response).await;
+        fs::write(
+            config_dir.join("local.toml"),
+            "[workflow]\npull_request = \"ready\"\n",
+        )
+        .unwrap();
+
+        let stale_response = server
+            .oneshot(authorized_json_request(
+                "/api/personal-config/plan",
+                serde_json::json!({
+                    "candidate": "[workflow]\nlanding = \"auto\"\n",
+                    "baseline_fingerprint": first["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(stale_response.status(), StatusCode::OK);
+        let stale = json_body(stale_response).await;
+        assert_eq!(stale["baseline_stale"], true);
     }
 
     #[test]
