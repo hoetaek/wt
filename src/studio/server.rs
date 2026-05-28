@@ -6,7 +6,7 @@ use crate::studio::resource::{
     FileFingerprint, ResourceError, ResourceErrorOrPrecondition, atomic_write, check_precondition,
     diff_text, empty_fingerprint, read_fingerprint,
 };
-use crate::studio::workflow::validate_workflow_id;
+use crate::studio::workflow::{validate_workflow_candidate, validate_workflow_id};
 use crate::task::{self, TaskDocument};
 use crate::workflow as workflow_model;
 use anyhow::{Context, Result, bail};
@@ -41,6 +41,7 @@ pub struct StudioState {
     personal_config_apply_lock: Arc<Mutex<()>>,
     profile_config_apply_lock: Arc<Mutex<()>>,
     profile_prompt_apply_lock: Arc<Mutex<()>>,
+    workflow_apply_lock: Arc<Mutex<()>>,
 }
 
 impl StudioState {
@@ -53,6 +54,7 @@ impl StudioState {
             personal_config_apply_lock: Arc::new(Mutex::new(())),
             profile_config_apply_lock: Arc::new(Mutex::new(())),
             profile_prompt_apply_lock: Arc::new(Mutex::new(())),
+            workflow_apply_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -66,6 +68,7 @@ impl StudioState {
             personal_config_apply_lock: Arc::new(Mutex::new(())),
             profile_config_apply_lock: Arc::new(Mutex::new(())),
             profile_prompt_apply_lock: Arc::new(Mutex::new(())),
+            workflow_apply_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -143,7 +146,9 @@ pub fn app(state: StudioState) -> Router {
             post(api_profile_prompt_apply),
         )
         .route("/api/workflows", get(api_workflows))
-        .route("/api/workflows/{*id}", get(api_workflow))
+        .route("/api/workflows/{id}", get(api_workflow))
+        .route("/api/workflows/{id}/plan", post(api_workflow_plan))
+        .route("/api/workflows/{id}/apply", post(api_workflow_apply))
         .route("/favicon.ico", get(favicon))
         .fallback(static_or_not_found)
         .with_state(state)
@@ -392,6 +397,38 @@ async fn api_workflow(
     }
 }
 
+async fn api_workflow_plan(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<WorkflowPlanRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match plan_workflow_edit(&state, &id, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn api_workflow_apply(
+    State(state): State<StudioState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<WorkflowApplyRequest>,
+) -> Response {
+    if !state.api_authorized(&headers) {
+        return unauthorized();
+    }
+
+    match apply_workflow_edit(&state, &id, request) {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
 async fn favicon() -> StatusCode {
     StatusCode::NO_CONTENT
 }
@@ -483,6 +520,35 @@ struct WorkflowDetailResponse {
     path: String,
     #[serde(flatten)]
     workflow: workflow_model::WorkflowMetadata,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowPlanRequest {
+    candidate: String,
+    baseline_fingerprint: Option<FileFingerprint>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowPlanResponse {
+    before: String,
+    after: String,
+    diff: String,
+    validation_errors: Vec<String>,
+    fingerprint: FileFingerprint,
+    baseline_stale: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowApplyRequest {
+    candidate: String,
+    precondition: FileFingerprint,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowApplyResponse {
+    committed_fingerprint: FileFingerprint,
 }
 
 #[derive(Debug, Deserialize)]
@@ -766,6 +832,111 @@ fn read_workflow_detail(
         path: state.storage_root.display_path(&path),
         workflow,
     })
+}
+
+fn plan_workflow_edit(
+    state: &StudioState,
+    id: &str,
+    request: WorkflowPlanRequest,
+) -> std::result::Result<WorkflowPlanResponse, StudioApiError> {
+    let path = existing_workflow_path(state, id)?;
+    let display_path = state.storage_root.display_path(&path);
+    let before = read_fingerprint(&path, "workflow").map_err(resource_error)?;
+    let disk = parse_workflow_metadata(&before.content)?;
+    let validation = validate_workflow_candidate(&disk, &request.candidate);
+    let baseline_stale = request
+        .baseline_fingerprint
+        .as_ref()
+        .is_some_and(|baseline| baseline != &before.fingerprint);
+
+    let (after, diff, validation_errors) = match validation {
+        Ok(mut candidate) => {
+            workflow_model::touch(&mut candidate);
+            let after = workflow_model::render_workflow_metadata(&candidate);
+            let diff = diff_text(&display_path, &before.content, &after);
+            (after, diff, Vec::new())
+        }
+        Err(errors) => (String::new(), String::new(), errors),
+    };
+
+    Ok(WorkflowPlanResponse {
+        before: before.content,
+        after,
+        diff,
+        validation_errors,
+        fingerprint: before.fingerprint,
+        baseline_stale,
+    })
+}
+
+fn apply_workflow_edit(
+    state: &StudioState,
+    id: &str,
+    request: WorkflowApplyRequest,
+) -> std::result::Result<WorkflowApplyResponse, StudioApiError> {
+    let path = existing_workflow_path(state, id)?;
+    let _apply_guard = state.workflow_apply_lock.lock().map_err(|_| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Workflow apply lock is poisoned",
+        )
+    })?;
+
+    let current = match check_precondition(&path, &request.precondition, "workflow") {
+        Ok(current) => current,
+        Err(ResourceErrorOrPrecondition::Error(err)) => return Err(resource_error(err)),
+        Err(ResourceErrorOrPrecondition::Precondition(stale)) => {
+            return Err(StudioApiError {
+                status: StatusCode::CONFLICT,
+                body: serde_json::json!({
+                    "error": "Workflow precondition failed",
+                    "current_fingerprint": stale.current.fingerprint,
+                }),
+            });
+        }
+    };
+
+    let disk = parse_workflow_metadata(&current.content)?;
+    let mut candidate =
+        validate_workflow_candidate(&disk, &request.candidate).map_err(|errors| {
+            StudioApiError {
+                status: StatusCode::UNPROCESSABLE_ENTITY,
+                body: serde_json::json!({
+                    "error": "Workflow validation failed",
+                    "validation_errors": errors,
+                }),
+            }
+        })?;
+    workflow_model::touch(&mut candidate);
+    let after = workflow_model::render_workflow_metadata(&candidate);
+    let committed_fingerprint = atomic_write(&path, &after, "workflow").map_err(resource_error)?;
+
+    Ok(WorkflowApplyResponse {
+        committed_fingerprint,
+    })
+}
+
+fn existing_workflow_path(
+    state: &StudioState,
+    id: &str,
+) -> std::result::Result<PathBuf, StudioApiError> {
+    validate_workflow_id(id)
+        .map_err(|err| api_error(StatusCode::BAD_REQUEST, format!("{err:#}")))?;
+    let path = workflow_path(state, id);
+    if !path.exists() {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            format!("Workflow does not exist: {WORKFLOW_PATH_PREFIX}{id}.toml"),
+        ));
+    }
+    Ok(path)
+}
+
+fn parse_workflow_metadata(
+    content: &str,
+) -> std::result::Result<workflow_model::WorkflowMetadata, StudioApiError> {
+    toml::from_str::<workflow_model::WorkflowMetadata>(content)
+        .map_err(|err| api_error(StatusCode::UNPROCESSABLE_ENTITY, err.to_string()))
 }
 
 fn workflow_dir(state: &StudioState) -> PathBuf {
@@ -2444,6 +2615,261 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn workflow_plan_and_apply_update_hot_fields_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let path = workflows_dir.join("2026-05-28-005.toml");
+        let before = sample_workflow("Workflow five", "single", "run-five");
+        fs::write(&path, &before).unwrap();
+        let candidate = before
+            .replace("title = \"Workflow five\"", "title = \"Workflow edited\"")
+            .replace("color = \"blue\"", "color = \"green\"")
+            .replace("pull_request = \"ready\"", "pull_request = \"draft\"")
+            .replace("landing = \"auto\"", "landing = \"manual\"");
+        let server = app(test_state(dir.path()));
+
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-005/plan",
+                serde_json::json!({
+                    "candidate": candidate,
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(plan_response.status(), StatusCode::OK);
+        let plan = json_body(plan_response).await;
+        assert_eq!(plan["before"], before);
+        assert_eq!(plan["validation_errors"].as_array().unwrap().len(), 0);
+        assert_eq!(plan["baseline_stale"], false);
+        assert!(
+            plan["diff"]
+                .as_str()
+                .unwrap()
+                .contains("+title = \"Workflow edited\"")
+        );
+        assert!(
+            plan["diff"]
+                .as_str()
+                .unwrap()
+                .contains("-updated_at = \"2026-05-28T00:00:00Z\"")
+        );
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-005/apply",
+                serde_json::json!({
+                    "candidate": candidate,
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::OK);
+        let applied = json_body(apply_response).await;
+        assert!(applied["committed_fingerprint"]["mtime_ns"].is_string());
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.contains("title = \"Workflow edited\""));
+        assert!(written.contains("color = \"green\""));
+        assert!(written.contains("pull_request = \"draft\""));
+        assert!(written.contains("landing = \"manual\""));
+        assert!(!written.contains("updated_at = \"2026-05-28T00:00:00Z\""));
+        let workflow = workflow_model::read(&path).unwrap();
+        assert_eq!(workflow.tasks[0].run, "run-five");
+    }
+
+    #[tokio::test]
+    async fn workflow_apply_rejects_stale_precondition() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let path = workflows_dir.join("2026-05-28-006.toml");
+        let before = sample_workflow("Workflow six", "single", "run-six");
+        fs::write(&path, &before).unwrap();
+        let candidate = before.replace("title = \"Workflow six\"", "title = \"Workflow stale\"");
+        let server = app(test_state(dir.path()));
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-006/plan",
+                serde_json::json!({
+                    "candidate": candidate,
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+        let plan = json_body(plan_response).await;
+        fs::write(
+            &path,
+            sample_workflow("Workflow external", "single", "run-six"),
+        )
+        .unwrap();
+
+        let response = server
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-006/apply",
+                serde_json::json!({
+                    "candidate": candidate,
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let value = json_body(response).await;
+        assert_eq!(value["error"], "Workflow precondition failed");
+        assert!(value["current_fingerprint"]["mtime_ns"].is_string());
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("Workflow external")
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_plan_rejects_read_only_field_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let before = sample_workflow("Workflow seven", "single", "run-seven");
+        fs::write(workflows_dir.join("2026-05-28-007.toml"), &before).unwrap();
+        let server = app(test_state(dir.path()));
+        let cases = [
+            (
+                "created_at",
+                before.replace(
+                    "created_at = \"2026-05-28T00:00:00Z\"",
+                    "created_at = \"2026-05-28T00:00:01Z\"",
+                ),
+            ),
+            (
+                "updated_at",
+                before.replace(
+                    "updated_at = \"2026-05-28T00:00:00Z\"",
+                    "updated_at = \"2026-05-28T00:00:01Z\"",
+                ),
+            ),
+            (
+                "mode",
+                before.replace("mode = \"single\"", "mode = \"batch\""),
+            ),
+            (
+                "base_mode",
+                before.replace("base_mode = \"explicit\"", "base_mode = \"default\""),
+            ),
+            (
+                "base",
+                before.replace("base = \"develop\"", "base = \"main\""),
+            ),
+            (
+                "profile",
+                before.replace(
+                    "mode = \"single\"\n",
+                    "mode = \"single\"\nprofile = \"codex\"\n",
+                ),
+            ),
+            (
+                "profiles",
+                before.replace(
+                    "mode = \"single\"\n",
+                    "mode = \"single\"\nprofiles = [\"codex\"]\n",
+                ),
+            ),
+            (
+                "tasks",
+                before.replace("run = \"run-seven\"", "run = \"run-other\""),
+            ),
+            (
+                "origin",
+                before.replace(
+                    "\n[policy]\n",
+                    "\n[origin]\nprovider = \"github\"\nid = \"1\"\n\n[policy]\n",
+                ),
+            ),
+        ];
+
+        for (field, candidate) in cases {
+            let response = server
+                .clone()
+                .oneshot(authorized_json_request(
+                    "/api/workflows/2026-05-28-007/plan",
+                    serde_json::json!({
+                        "candidate": candidate,
+                        "baseline_fingerprint": null
+                    }),
+                ))
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let value = json_body(response).await;
+            assert!(
+                value["validation_errors"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|error| error == &format!("field '{field}' is read-only in studio")),
+                "{field} should be rejected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn workflow_apply_rejects_read_only_and_invalid_color_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflows_dir = dir.path().join(".wt/execution/workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        let before = sample_workflow("Workflow eight", "single", "run-eight");
+        fs::write(workflows_dir.join("2026-05-28-008.toml"), &before).unwrap();
+        let server = app(test_state(dir.path()));
+        let invalid_color = before.replace("color = \"blue\"", "color = \"ultraviolet\"");
+
+        let plan_response = server
+            .clone()
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-008/plan",
+                serde_json::json!({
+                    "candidate": invalid_color,
+                    "baseline_fingerprint": null
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(plan_response.status(), StatusCode::OK);
+        let plan = json_body(plan_response).await;
+        assert_eq!(plan["validation_errors"][0], "invalid color: ultraviolet");
+        assert_eq!(plan["after"], "");
+        assert_eq!(plan["diff"], "");
+
+        let apply_response = server
+            .oneshot(authorized_json_request(
+                "/api/workflows/2026-05-28-008/apply",
+                serde_json::json!({
+                    "candidate": before.replace("mode = \"single\"", "mode = \"batch\""),
+                    "precondition": plan["fingerprint"]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(apply_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let value = json_body(apply_response).await;
+        assert_eq!(value["error"], "Workflow validation failed");
+        assert_eq!(
+            value["validation_errors"][0],
+            "field 'mode' is read-only in studio"
+        );
     }
 
     #[test]

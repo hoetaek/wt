@@ -30,7 +30,14 @@ import {
   type ProfileDraft
 } from "./profile-form";
 import { PromptEditor, promptModes, type PromptMode } from "./prompt-editor";
-import { WorkflowView, type WorkflowDetail } from "./workflow-view";
+import {
+  WorkflowForm,
+  draftFromWorkflow,
+  serializeWorkflowDraft,
+  workflowDraftEqual,
+  type WorkflowDraft
+} from "./workflow-form";
+import type { WorkflowDetail } from "./workflow-view";
 import "./style.css";
 
 type TaskOrigin = {
@@ -97,6 +104,7 @@ type PersonalConfigPlanResponse = {
 };
 
 type ProfilePromptPlanResponse = PersonalConfigPlanResponse;
+type WorkflowPlanResponse = PersonalConfigPlanResponse;
 
 type ProfileItem = {
   name: string;
@@ -164,6 +172,11 @@ function App() {
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
   const [workflowDetail, setWorkflowDetail] = useState<WorkflowDetail | null>(null);
   const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraft | null>(null);
+  const [workflowBaselineDraft, setWorkflowBaselineDraft] = useState<WorkflowDraft | null>(null);
+  const [workflowBaselineFingerprint, setWorkflowBaselineFingerprint] = useState<Fingerprint | null>(null);
+  const [workflowPlan, setWorkflowPlan] = useState<WorkflowPlanResponse | null>(null);
+  const [workflowPlanStatus, setWorkflowPlanStatus] = useState<PlanStatus>("idle");
   const [mode, setMode] = useState<Mode>("create");
   const [selectedPath, setSelectedPath] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(true);
@@ -238,17 +251,38 @@ function App() {
       }),
     [promptBaselineFingerprint, promptCandidate, promptResourceKey]
   );
+  const workflowCandidate = useMemo(
+    () => (workflowDetail && workflowDraft ? serializeWorkflowDraft(workflowDetail, workflowDraft) : ""),
+    [workflowDetail, workflowDraft]
+  );
+  const workflowClean =
+    Boolean(workflowDetail) &&
+    Boolean(workflowDraft) &&
+    Boolean(workflowBaselineDraft) &&
+    workflowDraftEqual(workflowDraft as WorkflowDraft, workflowBaselineDraft as WorkflowDraft);
+  const workflowPlanSignature = useMemo(
+    () =>
+      JSON.stringify({
+        workflow: selectedWorkflowId,
+        candidate: workflowCandidate,
+        baseline: workflowBaselineFingerprint
+      }),
+    [selectedWorkflowId, workflowBaselineFingerprint, workflowCandidate]
+  );
   const latestConfigPlanSignature = useRef(configPlanSignature);
   const latestProfilePlanSignature = useRef(profilePlanSignature);
   const latestPromptPlanSignature = useRef(promptPlanSignature);
+  const latestWorkflowPlanSignature = useRef(workflowPlanSignature);
   const recoveryPlanController = useRef<AbortController | null>(null);
   const configPlanController = useRef<AbortController | null>(null);
   const profilePlanController = useRef<AbortController | null>(null);
   const promptPlanController = useRef<AbortController | null>(null);
+  const workflowPlanController = useRef<AbortController | null>(null);
   latestPlanSignature.current = planSignature;
   latestConfigPlanSignature.current = configPlanSignature;
   latestProfilePlanSignature.current = profilePlanSignature;
   latestPromptPlanSignature.current = promptPlanSignature;
+  latestWorkflowPlanSignature.current = workflowPlanSignature;
   const activePlanStatus =
     surface === "prompts"
       ? promptPlanStatus
@@ -256,6 +290,8 @@ function App() {
         ? profilePlanStatus
         : surface === "config"
           ? configPlanStatus
+          : surface === "workflow"
+            ? workflowPlanStatus
           : planStatus;
   const activeStatus =
     surface === "prompts"
@@ -265,7 +301,7 @@ function App() {
       : surface === "config"
         ? configStatusDescriptor(configPlanStatus, configPlan)
         : surface === "workflow"
-          ? workflowStatusDescriptor(workflowLoading, workflowDetail)
+          ? workflowEditStatusDescriptor(workflowLoading, workflowPlanStatus, workflowPlan)
         : statusDescriptor(planStatus, plan);
   const displaySlug =
     surface === "prompts"
@@ -298,7 +334,7 @@ function App() {
         : surface === "config"
         ? buildConfigDetailMetrics(configCandidate, configDraft, configPlan, configPlanStatus)
         : surface === "workflow"
-        ? buildWorkflowDetailMetrics(workflowDetail, workflows.items.length)
+        ? buildWorkflowDetailMetrics(workflowDetail, workflows.items.length, workflowPlan, workflowPlanStatus)
         : buildDetailMetrics(currentPath, draft, selected, plan, draftIssues, planStatus),
     [
       configCandidate,
@@ -323,6 +359,8 @@ function App() {
       selected,
       surface,
       workflowDetail,
+      workflowPlan,
+      workflowPlanStatus,
       workflows.items.length
     ]
   );
@@ -426,6 +464,8 @@ function App() {
       profilePlanController.current = null;
       promptPlanController.current?.abort();
       promptPlanController.current = null;
+      workflowPlanController.current?.abort();
+      workflowPlanController.current = null;
     };
   }, []);
 
@@ -544,6 +584,34 @@ function App() {
       controller.abort();
     };
   }, [promptClean, promptLoadedKey, promptPlanSignature, promptResourceKey, surface]);
+
+  useEffect(() => {
+    if (surface !== "workflow" || !workflowDetail || !workflowDraft) {
+      return;
+    }
+    if (workflowClean) {
+      resetWorkflowPlanState();
+      return;
+    }
+
+    const controller = new AbortController();
+    const signature = workflowPlanSignature;
+    const timer = window.setTimeout(() => {
+      if (latestWorkflowPlanSignature.current !== signature) {
+        return;
+      }
+      workflowPlanController.current?.abort();
+      workflowPlanController.current = controller;
+      setWorkflowPlanStatus("planning");
+      setError("");
+      void planWorkflowDraft(controller.signal, signature);
+    }, PLAN_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [surface, workflowClean, workflowDetail, workflowDraft, workflowPlanSignature]);
 
   useEffect(() => {
     const nodes = Array.from(document.querySelectorAll<HTMLElement>("[data-reveal]"));
@@ -722,9 +790,20 @@ function App() {
     setError("");
     try {
       const detail = await api<WorkflowDetail>(`/api/workflows/${encodeURIComponent(id)}`, { method: "GET" });
+      const loadedDraft = draftFromWorkflow(detail);
       setWorkflowDetail(detail);
+      setWorkflowDraft(loadedDraft);
+      setWorkflowBaselineDraft(loadedDraft);
+      setWorkflowBaselineFingerprint(null);
+      setWorkflowPlan(null);
+      setWorkflowPlanStatus("idle");
     } catch (err) {
       setWorkflowDetail(null);
+      setWorkflowDraft(null);
+      setWorkflowBaselineDraft(null);
+      setWorkflowBaselineFingerprint(null);
+      setWorkflowPlan(null);
+      setWorkflowPlanStatus("idle");
       setError(errorMessage(err));
     } finally {
       setWorkflowLoading(false);
@@ -812,6 +891,13 @@ function App() {
     setPromptPlanStatus("idle");
   }
 
+  function resetWorkflowPlanState() {
+    workflowPlanController.current?.abort();
+    workflowPlanController.current = null;
+    setWorkflowPlan(null);
+    setWorkflowPlanStatus("idle");
+  }
+
   function triggerConflictRecoveryPlan() {
     recoveryPlanController.current?.abort();
     const controller = new AbortController();
@@ -821,6 +907,19 @@ function App() {
     void planDraft(controller.signal, signature, { failureStatus: "stale" }).finally(() => {
       if (recoveryPlanController.current === controller) {
         recoveryPlanController.current = null;
+      }
+    });
+  }
+
+  function triggerWorkflowConflictRecoveryPlan() {
+    workflowPlanController.current?.abort();
+    const controller = new AbortController();
+    workflowPlanController.current = controller;
+    const signature = latestWorkflowPlanSignature.current;
+    setWorkflowPlanStatus("planning");
+    void planWorkflowDraft(controller.signal, signature, { failureStatus: "stale" }).finally(() => {
+      if (workflowPlanController.current === controller) {
+        workflowPlanController.current = null;
       }
     });
   }
@@ -931,6 +1030,40 @@ function App() {
       setError(errorMessage(err));
       setPromptPlan(null);
       setPromptPlanStatus("idle");
+    }
+  }
+
+  async function planWorkflowDraft(
+    signal: AbortSignal,
+    signature: string,
+    options: { failureStatus?: PlanStatus } = {}
+  ) {
+    if (!selectedWorkflowId || !workflowDetail || !workflowDraft) {
+      return;
+    }
+    try {
+      const response = await api<WorkflowPlanResponse>(workflowApiPath(selectedWorkflowId, "plan"), {
+        method: "POST",
+        signal,
+        body: JSON.stringify({
+          candidate: workflowCandidate,
+          baseline_fingerprint: workflowBaselineFingerprint
+        })
+      });
+      if (latestWorkflowPlanSignature.current !== signature) {
+        return;
+      }
+      setWorkflowBaselineFingerprint(response.fingerprint);
+      setWorkflowPlan(response);
+      setError("");
+      setWorkflowPlanStatus(response.baseline_stale ? "stale" : "idle");
+    } catch (err) {
+      if (isAbortError(err) || latestWorkflowPlanSignature.current !== signature) {
+        return;
+      }
+      setError(errorMessage(err));
+      setWorkflowPlan(null);
+      setWorkflowPlanStatus(options.failureStatus ?? "idle");
     }
   }
 
@@ -1048,6 +1181,36 @@ function App() {
     }
   }
 
+  async function applyWorkflowPlan() {
+    if (!selectedWorkflowId || !workflowPlan || workflowPlan.validation_errors.length > 0 || workflowPlan.baseline_stale) return;
+    setBusy(true);
+    setError("");
+    try {
+      const applied = await api<{ committed_fingerprint: Fingerprint }>(workflowApiPath(selectedWorkflowId, "apply"), {
+        method: "POST",
+        body: JSON.stringify({
+          candidate: workflowCandidate,
+          precondition: workflowPlan.fingerprint
+        })
+      });
+      setWorkflowBaselineFingerprint(applied.committed_fingerprint);
+      setWorkflowPlan(null);
+      setWorkflowPlanStatus("idle");
+      await loadWorkflows(selectedWorkflowId);
+      await loadWorkflowDetail(selectedWorkflowId);
+    } catch (err) {
+      const apiErr = err as ApiFailure;
+      setError(errorMessage(err));
+      if (apiErr.status === 409) {
+        setWorkflowPlanStatus("stale");
+        setWorkflowPlan(null);
+        triggerWorkflowConflictRecoveryPlan();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function updateDraft(key: keyof EditorDraft, value: string) {
     setDraft((current) => {
       const next = { ...current, [key]: value };
@@ -1093,6 +1256,10 @@ function App() {
 
   function profileConfigApiPath(name: string, action: "plan" | "apply") {
     return `/api/profiles/${encodeURIComponent(name)}/${action}`;
+  }
+
+  function workflowApiPath(id: string, action: "plan" | "apply") {
+    return `/api/workflows/${encodeURIComponent(id)}/${action}`;
   }
 
   return h("main", { class: "relative min-h-[100dvh] overflow-hidden px-4 py-12 text-neutral-950 dark:text-neutral-50 sm:py-16" }, [
@@ -1175,7 +1342,7 @@ function App() {
               h("p", { class: "mt-6 max-w-[34ch] text-base leading-7 text-neutral-500 dark:text-neutral-400" }, displayTitle)
             ]),
             h("div", { class: "flex flex-wrap gap-2" }, [
-              h(MetaPill, { label: surface === "prompts" ? "Prompt Plan" : surface === "config" ? "Config Plan" : surface === "workflow" ? "Read-only" : mode === "create" ? "생성 Plan" : "수정 Plan" }),
+              h(MetaPill, { label: surface === "prompts" ? "Prompt Plan" : surface === "config" ? "Config Plan" : surface === "workflow" ? "Workflow Plan" : mode === "create" ? "생성 Plan" : "수정 Plan" }),
               h(MetaPill, {
                 label:
                   surface === "prompts"
@@ -1185,12 +1352,10 @@ function App() {
                     : surface === "config"
                       ? configPlanSummaryLabel(configPlanStatus, configPlan)
                       : surface === "workflow"
-                        ? workflowSummaryLabel(workflowLoading, workflowDetail)
+                        ? workflowPlanSummaryLabel(workflowLoading, workflowPlanStatus, workflowPlan)
                       : planSummaryLabel(planStatus, plan),
                 tone:
-                  surface === "workflow" && workflowDetail
-                    ? "blue"
-                    : activePlanStatus === "stale"
+                  activePlanStatus === "stale"
                     ? "amber"
                     : activePlanStatus === "planning" ||
                         (surface === "prompts"
@@ -1199,6 +1364,8 @@ function App() {
                             ? profilePlan && profilePlan.validation_errors.length === 0
                           : surface === "config"
                             ? configPlan && configPlan.validation_errors.length === 0
+                          : surface === "workflow"
+                            ? workflowPlan && workflowPlan.validation_errors.length === 0
                             : plan?.valid)
                       ? "blue"
                       : "neutral"
@@ -1245,7 +1412,7 @@ function App() {
               h(
                 "h2",
                 { class: "mt-4 text-3xl font-medium tracking-normal text-neutral-950 dark:text-neutral-50" },
-                surface === "prompts" ? "Prompt Markdown Plan" : surface === "profiles" ? "profile.toml Plan" : surface === "config" ? "local.toml Plan" : surface === "workflow" ? "Workflow Inspector" : "Apply 전 Plan"
+                surface === "prompts" ? "Prompt Markdown Plan" : surface === "profiles" ? "profile.toml Plan" : surface === "config" ? "local.toml Plan" : surface === "workflow" ? "Workflow Plan" : "Apply 전 Plan"
               )
             ]),
             h("span", { "aria-live": "polite", "aria-atomic": "true" }, [
@@ -1253,7 +1420,16 @@ function App() {
             ])
           ]),
           surface === "workflow"
-            ? h(WorkflowView, { workflow: workflowDetail, loading: workflowLoading, iconComponent: StudioFile })
+            ? h(WorkflowForm, {
+                workflow: workflowDetail,
+                draft: workflowDraft,
+                loading: workflowLoading,
+                iconComponent: StudioFile,
+                onChange: (nextDraft: WorkflowDraft) => {
+                  setWorkflowDraft(nextDraft);
+                  resetWorkflowPlanState();
+                }
+              })
             : surface === "prompts"
             ? h(PromptEditor, {
                 profile: promptProfile,
@@ -1325,27 +1501,28 @@ function App() {
                 ]),
                 draftIssues.length > 0 && h(ValidationList, { items: draftIssues })
               ],
-          surface !== "workflow" &&
-            h("div", { class: "flex flex-col gap-3 pt-2 sm:flex-row" }, [
-              h(ActionButton, {
-                label: "Apply",
-                iconComponent: StudioSave,
-                onClick: surface === "prompts" ? applyPromptPlan : surface === "profiles" ? applyProfilePlan : surface === "config" ? applyConfigPlan : applyPlan,
-                disabled:
-                  surface === "prompts"
+          h("div", { class: "flex flex-col gap-3 pt-2 sm:flex-row" }, [
+            h(ActionButton, {
+              label: "Apply",
+              iconComponent: StudioSave,
+              onClick: surface === "workflow" ? applyWorkflowPlan : surface === "prompts" ? applyPromptPlan : surface === "profiles" ? applyProfilePlan : surface === "config" ? applyConfigPlan : applyPlan,
+              disabled:
+                surface === "workflow"
+                  ? busy || workflowPlanStatus === "planning" || !workflowPlan || workflowPlan.validation_errors.length > 0 || workflowPlan.baseline_stale
+                  : surface === "prompts"
                     ? busy || promptPlanStatus === "planning" || !promptPlan || promptPlan.validation_errors.length > 0 || promptPlan.baseline_stale
-                    : surface === "profiles"
-                      ? busy || profilePlanStatus === "planning" || !profilePlan || profilePlan.validation_errors.length > 0 || profilePlan.baseline_stale
-                    : surface === "config"
-                    ? busy || configPlanStatus === "planning" || !configPlan || configPlan.validation_errors.length > 0 || configPlan.baseline_stale
-                    : busy || planStatus === "planning" || !plan?.valid,
-                tone: "primary"
-              })
-            ])
+                  : surface === "profiles"
+                    ? busy || profilePlanStatus === "planning" || !profilePlan || profilePlan.validation_errors.length > 0 || profilePlan.baseline_stale
+                  : surface === "config"
+                  ? busy || configPlanStatus === "planning" || !configPlan || configPlan.validation_errors.length > 0 || configPlan.baseline_stale
+                  : busy || planStatus === "planning" || !plan?.valid,
+              tone: "primary"
+            })
+          ])
         ]),
         error && h(MessagePanel, { message: error, tone: "error" }),
         surface === "workflow"
-          ? null
+          ? workflowPlan && h(PlanPreview, { plan: workflowPreview(selectedWorkflowId, workflowPlan) })
           : surface === "prompts"
           ? promptPlan && h(PlanPreview, { plan: profilePromptPreview(promptProfile, promptMode, promptPlan) })
           : surface === "profiles"
@@ -1834,7 +2011,12 @@ function buildProfileDetailMetrics(
   ];
 }
 
-function buildWorkflowDetailMetrics(workflow: WorkflowDetail | null, total: number): DetailMetric[] {
+function buildWorkflowDetailMetrics(
+  workflow: WorkflowDetail | null,
+  total: number,
+  plan: WorkflowPlanResponse | null,
+  planStatus: PlanStatus
+): DetailMetric[] {
   if (!workflow) {
     return [
       { label: "대상", value: "<repo-root>/.wt/execution/workflows/<id>.toml" },
@@ -1847,7 +2029,8 @@ function buildWorkflowDetailMetrics(workflow: WorkflowDetail | null, total: numb
     { label: "Mode", value: workflow.mode },
     { label: "Policy", value: `${workflow.policy.pull_request} / ${workflow.policy.landing}` },
     { label: "Tasks", value: `${workflow.tasks.length.toLocaleString("ko-KR")}개` },
-    { label: "Updated", value: workflow.updated_at }
+    { label: "Updated", value: workflow.updated_at },
+    { label: "검증", value: configValidationSummary(plan, planStatus) }
   ];
 }
 
@@ -1933,6 +2116,13 @@ function promptPlanSummaryLabel(planStatus: PlanStatus, plan: ProfilePromptPlanR
   return plan ? "유효한 Diff" : "Plan 대기";
 }
 
+function workflowPlanSummaryLabel(loading: boolean, planStatus: PlanStatus, plan: WorkflowPlanResponse | null) {
+  if (loading) {
+    return "읽는 중";
+  }
+  return configPlanSummaryLabel(planStatus, plan);
+}
+
 function planSummaryLabel(planStatus: PlanStatus, plan: PlanResponse | null) {
   if (planStatus === "planning") {
     return "Plan 갱신 중";
@@ -2011,6 +2201,16 @@ function profilePromptPreview(profile: string, mode: PromptMode, plan: ProfilePr
   return {
     path: promptDisplayPath(profile, mode),
     operation: "prompt",
+    valid: plan.validation_errors.length === 0 && !plan.baseline_stale,
+    validation_errors: plan.validation_errors,
+    diff: plan.diff
+  };
+}
+
+function workflowPreview(id: string, plan: WorkflowPlanResponse): PreviewPlan {
+  return {
+    path: `<repo-root>/.wt/execution/workflows/${id || "<id>"}.toml`,
+    operation: "config",
     valid: plan.validation_errors.length === 0 && !plan.baseline_stale,
     validation_errors: plan.validation_errors,
     diff: plan.diff
@@ -2124,14 +2324,24 @@ function promptStatusDescriptor(planStatus: PlanStatus, plan: ProfilePromptPlanR
   return { label: "미저장", tone: "neutral" as const };
 }
 
-function workflowStatusDescriptor(loading: boolean, workflow: WorkflowDetail | null) {
+function workflowEditStatusDescriptor(
+  loading: boolean,
+  planStatus: PlanStatus,
+  plan: WorkflowPlanResponse | null
+) {
   if (loading) {
     return { label: "Workflow 읽는 중", tone: "blue" as const, pulse: true };
   }
-  if (workflow) {
-    return { label: "읽기 전용", tone: "blue" as const };
+  if (planStatus === "stale" || plan?.baseline_stale) {
+    return { label: "Stale (재plan 필요)", tone: "amber" as const };
   }
-  return { label: "선택 대기", tone: "neutral" as const };
+  if (planStatus === "planning") {
+    return { label: "Plan 갱신 중", tone: "blue" as const, pulse: true };
+  }
+  if (plan && plan.validation_errors.length === 0) {
+    return { label: "적용 가능", tone: "blue" as const };
+  }
+  return { label: "미저장", tone: "neutral" as const };
 }
 
 function statusClass(tone: "blue" | "amber" | "neutral", pulse?: boolean) {
