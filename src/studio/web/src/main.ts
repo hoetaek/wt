@@ -1262,34 +1262,34 @@ function App() {
     return `/api/workflows/${encodeURIComponent(id)}/${action}`;
   }
 
-  return h("main", { class: "relative min-h-[100dvh] overflow-hidden px-4 py-12 text-neutral-950 dark:text-neutral-50 sm:py-16" }, [
+  return h("main", { class: "relative min-h-[100dvh] overflow-hidden px-4 pt-4 pb-12 text-neutral-950 dark:text-neutral-50 sm:pb-16" }, [
     h("div", { class: "studio-noise", "aria-hidden": "true" }),
     h(
       "header",
       {
         class:
-          "sticky top-4 z-20 mx-auto mb-12 flex w-full max-w-7xl items-center justify-between rounded-full bg-white/70 px-3 py-3 shadow-[0_20px_50px_-28px_rgba(0,0,0,0.28)] ring-1 ring-black/5 backdrop-blur-xl dark:bg-neutral-950/70 dark:ring-white/10 md:mb-16",
+          "sticky top-4 z-20 mx-auto mb-12 flex w-full max-w-7xl items-center justify-between gap-4 rounded-full bg-white/70 px-3 py-3 shadow-[0_20px_50px_-28px_rgba(0,0,0,0.28)] ring-1 ring-black/5 backdrop-blur-xl dark:bg-neutral-950/70 dark:ring-white/10 md:mb-16",
         "data-reveal": ""
       },
       [
-        h("button", {
-          type: "button",
-          "aria-label": drawerOpen ? "TaskDocument 목록 숨기기" : "TaskDocument 목록 보이기",
-          onClick: () => setDrawerOpen((open) => !open),
-          class: clsx(
-            "group flex h-12 w-12 items-center justify-center rounded-full bg-black/[0.04] text-neutral-700 ring-1 ring-black/5 active:scale-[0.98] dark:bg-white/[0.08] dark:text-neutral-200 dark:ring-white/10",
-            transition
-          )
-        }, icon(StudioList, "h-5 w-5 group-hover:translate-x-1 group-hover:-translate-y-px " + transition)),
-        h("div", { class: "text-center" }, [
-          h("p", { class: "text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-500 dark:text-neutral-400" }, "wt studio"),
-          h("div", { class: "mt-1 inline-flex rounded-full bg-black/[0.04] p-1 ring-1 ring-black/5 dark:bg-white/[0.05] dark:ring-white/10" }, [
-            h(SurfacePill, { label: "Tasks", active: surface === "tasks", onClick: () => switchSurface("tasks") }),
-            h(SurfacePill, { label: "Personal config", active: surface === "config", onClick: () => switchSurface("config") }),
-            h(SurfacePill, { label: "Profiles", active: surface === "profiles", onClick: () => switchSurface("profiles") }),
-            h(SurfacePill, { label: "Prompts", active: surface === "prompts", onClick: () => switchSurface("prompts") }),
-            h(SurfacePill, { label: "Workflows", active: surface === "workflow", onClick: () => switchSurface("workflow") })
-          ])
+        h("div", { class: "flex items-center gap-3" }, [
+          h("button", {
+            type: "button",
+            "aria-label": drawerOpen ? "TaskDocument 목록 숨기기" : "TaskDocument 목록 보이기",
+            onClick: () => setDrawerOpen((open) => !open),
+            class: clsx(
+              "group flex h-12 w-12 items-center justify-center rounded-full bg-black/[0.04] text-neutral-700 ring-1 ring-black/5 active:scale-[0.98] dark:bg-white/[0.08] dark:text-neutral-200 dark:ring-white/10",
+              transition
+            )
+          }, icon(StudioList, "h-5 w-5 group-hover:translate-x-1 group-hover:-translate-y-px " + transition)),
+          h("p", { class: "hidden text-[11px] font-medium uppercase tracking-[0.2em] text-neutral-500 dark:text-neutral-400 md:block" }, "wt studio")
+        ]),
+        h("div", { class: "inline-flex rounded-full bg-black/[0.04] p-1 ring-1 ring-black/5 dark:bg-white/[0.05] dark:ring-white/10" }, [
+          h(SurfacePill, { label: "Tasks", active: surface === "tasks", onClick: () => switchSurface("tasks") }),
+          h(SurfacePill, { label: "Personal config", active: surface === "config", onClick: () => switchSurface("config") }),
+          h(SurfacePill, { label: "Profiles", active: surface === "profiles", onClick: () => switchSurface("profiles") }),
+          h(SurfacePill, { label: "Prompts", active: surface === "prompts", onClick: () => switchSurface("prompts") }),
+          h(SurfacePill, { label: "Workflows", active: surface === "workflow", onClick: () => switchSurface("workflow") })
         ]),
         h("div", { class: "flex items-center gap-2" }, [
           surface === "tasks" && h(IconButton, { label: "새로 만들기", iconComponent: StudioPlus, onClick: selectCreate }),
@@ -1341,8 +1341,15 @@ function App() {
               ),
               h("p", { class: "mt-6 max-w-[34ch] text-base leading-7 text-neutral-500 dark:text-neutral-400" }, displayTitle)
             ]),
-            h("div", { class: "flex flex-wrap gap-2" }, [
-              h(MetaPill, { label: surface === "prompts" ? "Prompt Plan" : surface === "config" ? "Config Plan" : surface === "workflow" ? "Workflow Plan" : mode === "create" ? "생성 Plan" : "수정 Plan" }),
+            h("div", { class: "flex flex-wrap items-center gap-3" }, [
+              h(
+                "span",
+                {
+                  class:
+                    "text-[10px] font-medium uppercase tracking-[0.2em] text-neutral-400 dark:text-neutral-500"
+                },
+                surface === "prompts" ? "Prompt Plan" : surface === "config" ? "Config Plan" : surface === "workflow" ? "Workflow Plan" : mode === "create" ? "생성 Plan" : "수정 Plan"
+              ),
               h(MetaPill, {
                 label:
                   surface === "prompts"
@@ -1464,29 +1471,29 @@ function App() {
                 h("div", { class: "grid gap-4 md:grid-cols-2" }, [
                   h(Field, {
                     name: "slug",
-                    label: "Slug",
+                    label: "슬러그",
                     value: draft.slug,
                     onInput: (value: string) => updateDraft("slug", value),
                     disabled: mode === "update"
                   }),
-                  h(Field, { name: "title", label: "Title", value: draft.title, onInput: (value: string) => updateDraft("title", value) }),
-                  h(Field, { name: "branch", label: "Branch", value: draft.branch, onInput: (value: string) => updateDraft("branch", value) }),
+                  h(Field, { name: "title", label: "제목", value: draft.title, onInput: (value: string) => updateDraft("title", value) }),
+                  h(Field, { name: "branch", label: "브랜치", value: draft.branch, onInput: (value: string) => updateDraft("branch", value) }),
                   h(Field, {
                     name: "origin-provider",
-                    label: "Origin provider",
+                    label: "출처 제공자",
                     value: draft.originProvider,
                     onInput: (value: string) => updateDraft("originProvider", value)
                   }),
                   h(Field, {
                     name: "origin-id",
-                    label: "Origin id",
+                    label: "출처 ID",
                     value: draft.originId,
                     onInput: (value: string) => updateDraft("originId", value),
                     className: "md:col-span-2"
                   })
                 ]),
                 h("label", { class: "grid gap-2 text-sm font-medium text-neutral-600 dark:text-neutral-300" }, [
-                  h("span", {}, "Body"),
+                  h("span", {}, "본문"),
                   h("textarea", {
                     id: "task-document-body",
                     name: "body",
@@ -1963,19 +1970,19 @@ function buildDetailMetrics(
   const origin = selected?.document.origin || documentFromDraft(draft).origin;
   const metrics: DetailMetric[] = [
     { label: "대상", value: currentPath },
-    { label: "Branch", value: draft.branch.trim() || draft.slug.trim() || "task" },
-    { label: "Body", value: bodySummary(draft.body) },
+    { label: "브랜치", value: draft.branch.trim() || draft.slug.trim() || "task" },
+    { label: "본문", value: bodySummary(draft.body) },
     { label: "검증", value: validationSummary(plan, draftIssues, planStatus) }
   ];
 
   if (origin?.provider || origin?.id) {
-    metrics.push({ label: "Origin provider", value: origin.provider || "없음" });
-    metrics.push({ label: "Origin id", value: origin.id || "없음" });
+    metrics.push({ label: "출처 제공자", value: origin.provider || "없음" });
+    metrics.push({ label: "출처 ID", value: origin.id || "없음" });
     return metrics;
   }
 
-  metrics.push({ label: "Modified", value: formatKoreanMtime(selected?.fingerprint.mtime_ns) });
-  metrics.push({ label: "Hash", value: selected?.fingerprint.hash.slice(0, 12) || "새 파일" });
+  metrics.push({ label: "수정", value: formatKoreanMtime(selected?.fingerprint.mtime_ns) });
+  metrics.push({ label: "해시", value: selected?.fingerprint.hash.slice(0, 12) || "새 파일" });
   return metrics;
 }
 
@@ -1990,7 +1997,7 @@ function buildConfigDetailMetrics(
     { label: "Sections", value: configSummary(draft) },
     { label: "Candidate", value: bodySummary(candidate) },
     { label: "검증", value: configValidationSummary(plan, planStatus) },
-    { label: "Hash", value: plan?.fingerprint.hash.slice(0, 12) || "baseline" }
+    { label: "해시", value: plan?.fingerprint.hash.slice(0, 12) || "baseline" }
   ];
 }
 
@@ -2007,7 +2014,7 @@ function buildProfileDetailMetrics(
     { label: "Sections", value: profileSummary(draft) },
     { label: "Candidate", value: bodySummary(candidate) },
     { label: "검증", value: configValidationSummary(plan, planStatus) },
-    { label: "Hash", value: plan?.fingerprint.hash.slice(0, 12) || "baseline" }
+    { label: "해시", value: plan?.fingerprint.hash.slice(0, 12) || "baseline" }
   ];
 }
 
@@ -2047,7 +2054,7 @@ function buildPromptDetailMetrics(
     { label: "Mode", value: mode },
     { label: "Markdown", value: bodySummary(candidate) },
     { label: "검증", value: promptValidationSummary(plan, planStatus) },
-    { label: "Hash", value: plan?.fingerprint.hash.slice(0, 12) || "baseline" }
+    { label: "해시", value: plan?.fingerprint.hash.slice(0, 12) || "baseline" }
   ];
 }
 
