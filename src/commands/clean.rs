@@ -32,8 +32,7 @@ pub fn run_with_targets(ctx: &Ctx, targets: &[String]) -> Result<()> {
 
     let selected = if targets.is_empty() {
         let items: Vec<String> = additional.iter().map(|e| e.branch.clone()).collect();
-        ctx.ui
-            .multi_select("Select worktrees to remove (Space to select)", &items)?
+        ctx.ui.multi_select("Select worktrees to remove", &items)?
     } else {
         resolve_targets(ctx, &additional, targets)?
     };

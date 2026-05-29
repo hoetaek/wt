@@ -376,7 +376,7 @@ impl SelectorState {
         }
     }
 
-    fn submit(&self) -> SelectorTransition {
+    fn submit(&mut self) -> SelectorTransition {
         match self.mode {
             SelectorMode::Single => self
                 .active_option()
@@ -384,10 +384,30 @@ impl SelectorState {
                     SelectorTransition::Submitted(SelectorSubmission::Single(option.index))
                 })
                 .unwrap_or(SelectorTransition::Continue),
-            SelectorMode::Multi => {
-                SelectorTransition::Submitted(SelectorSubmission::Multi(self.selected_indices()))
-            }
+            SelectorMode::Multi => SelectorTransition::Submitted(SelectorSubmission::Multi(
+                self.selected_indices_or_active(),
+            )),
         }
+    }
+
+    fn selected_indices_or_active(&mut self) -> Vec<usize> {
+        let selected = self.selected_indices();
+        if !selected.is_empty() {
+            return selected;
+        }
+
+        let Some(active_row) = self.active_row else {
+            return selected;
+        };
+        let Some(SelectorRow::Option(option)) = self.rows.get_mut(active_row) else {
+            return selected;
+        };
+        if option.disabled {
+            return selected;
+        }
+
+        option.selected = true;
+        vec![option.index]
     }
 
     fn reset_active_after_filter(&mut self) {
@@ -959,7 +979,7 @@ fn render_filter_line(query: &str, decorated: bool) -> String {
 fn key_hint(mode: SelectorMode) -> &'static str {
     match mode {
         SelectorMode::Single => "↑↓ move, enter select, esc cancel",
-        SelectorMode::Multi => "↑↓ move, space toggle, enter submit, esc cancel",
+        SelectorMode::Multi => "↑↓ move, space toggle, enter select/submit, esc cancel",
     }
 }
 
@@ -1504,6 +1524,37 @@ mod tests {
     }
 
     #[test]
+    fn empty_multiselect_enter_selects_active_option_before_submit() {
+        let mut state = SelectorState::multi(vec![
+            SelectorRow::section("Tasks"),
+            SelectorRow::option(0, "Fix editor"),
+            SelectorRow::option(1, "Local cleanup"),
+        ]);
+        state.apply_input(SelectorInput::Down);
+
+        assert_eq!(
+            state.apply_input(SelectorInput::Enter),
+            SelectorTransition::Submitted(SelectorSubmission::Multi(vec![1]))
+        );
+        assert_eq!(state.selected_indices(), vec![1]);
+    }
+
+    #[test]
+    fn multiselect_enter_preserves_existing_selection() {
+        let mut state = SelectorState::multi(vec![
+            SelectorRow::Option(SelectorOption::new(0, "Fix editor").selected(true)),
+            SelectorRow::option(1, "Local cleanup"),
+        ]);
+        state.apply_input(SelectorInput::Down);
+
+        assert_eq!(
+            state.apply_input(SelectorInput::Enter),
+            SelectorTransition::Submitted(SelectorSubmission::Multi(vec![0]))
+        );
+        assert_eq!(state.selected_indices(), vec![0]);
+    }
+
+    #[test]
     fn render_grouped_multiselect_without_fake_selectable_headers() {
         let mut state = SelectorState::multi(vec![
             SelectorRow::section("GitHub"),
@@ -1522,7 +1573,7 @@ mod tests {
             "\
 ◆ Tasks to start
 │ Filter: type to search
-│ ↑↓ move, space toggle, enter submit, esc cancel
+│ ↑↓ move, space toggle, enter select/submit, esc cancel
 │
 │ GitHub
 │ ❯ ●  Fix            GitHub #73
@@ -1896,6 +1947,30 @@ mod tests {
             "\
 ◇ Pick many
 └ Selected: One, Two +2 more
+"
+        );
+    }
+
+    #[test]
+    fn submitted_multiselect_summary_uses_enter_selected_active_option() {
+        let mut state = SelectorState::multi(vec![
+            SelectorRow::option(0, "Fix editor"),
+            SelectorRow::option(1, "Local cleanup"),
+        ]);
+
+        assert_eq!(
+            state.apply_input(SelectorInput::Enter),
+            SelectorTransition::Submitted(SelectorSubmission::Multi(vec![0]))
+        );
+        assert_eq!(
+            render_final_plain(
+                &state,
+                selector_options("Pick many"),
+                SelectorRenderFrame::Submitted
+            ),
+            "\
+◇ Pick many
+└ Selected: Fix editor
 "
         );
     }

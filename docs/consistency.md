@@ -1023,8 +1023,10 @@ Keyboard behavior는 prompt마다 다시 해석하지 않는다.
   skip section rows. They stop at the first/last selectable option unless a future selector contract
   explicitly adds wrapping.
 - Space toggles the active option only for multiselect prompts. It never toggles a section header.
-- Enter submits the active option for single-select, or the current selected set for multiselect.
-  Whether an empty multiselect is valid is command-specific and must be documented at that command.
+- Enter submits the active option for single-select. For multiselect, Enter submits the current
+  selected set; when that set is empty and an active selectable option exists, Enter first selects
+  that active option and submits it as a one-item selection. If no active option exists, whether an
+  empty multiselect is valid is command-specific and must be documented at that command.
 - Escape and ctrl-c cancel cleanly, restore terminal state, and surface the same cancelled prompt
   error shape as other wt prompt cancellation.
 - Backspace edits the filter text and must not alter selection state.
