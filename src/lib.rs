@@ -336,7 +336,11 @@ pub fn dispatch(ctx: &Ctx, command: &Commands) -> Result<()> {
         }
         Commands::As { agent, command } => commands::agent_runtime::run_as(ctx, agent, command),
         Commands::Ui { port } => commands::ui::run(ctx, *port),
-        Commands::Studio { port } => commands::studio::run(ctx, *port),
+        Commands::Studio {
+            port,
+            dev,
+            dev_origin,
+        } => commands::studio::run(ctx, *port, *dev, dev_origin.clone()),
         Commands::Msg { command } => match command {
             MsgCommand::Send { to, scope, message } => {
                 commands::msg::send(ctx, to, scope.as_deref(), message)

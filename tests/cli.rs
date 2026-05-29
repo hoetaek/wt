@@ -5877,11 +5877,13 @@ fn studio_help_explains_authoring_server_contract() {
         .stdout(predicate::str::contains("127.0.0.1"))
         .stdout(predicate::str::contains("--port <PORT>"))
         .stdout(predicate::str::contains("0 selects an available port"))
-        .stdout(predicate::str::contains("Vite-built Preact frontend"))
+        .stdout(predicate::str::contains("embedded Vite production bundle"))
+        .stdout(predicate::str::contains("--dev"))
+        .stdout(predicate::str::contains("HMR assets"))
+        .stdout(predicate::str::contains("--dev-origin <ORIGIN>"))
         .stdout(predicate::str::contains("session cookie"))
-        .stdout(predicate::str::contains("matching Origin header"))
-        .stdout(predicate::str::contains("GET /api/ping"))
-        .stdout(predicate::str::contains("does not add mutation routes"));
+        .stdout(predicate::str::contains("browser Origin header"))
+        .stdout(predicate::str::contains("Vite dev-server assets"));
 }
 
 #[test]

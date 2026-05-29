@@ -30,6 +30,7 @@ static WEB_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/studio/web/dist
 pub struct ServerOptions {
     pub host: String,
     pub port: u16,
+    pub dev_asset_origin: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -42,12 +43,18 @@ pub struct StudioState {
     profile_config_apply_lock: Arc<Mutex<()>>,
     profile_prompt_apply_lock: Arc<Mutex<()>>,
     workflow_apply_lock: Arc<Mutex<()>>,
+    dev_asset_origin: Option<String>,
 }
 
 impl StudioState {
-    fn new(ctx: &Ctx, origin: String, token: String) -> Self {
+    fn new(
+        ctx: &Ctx,
+        browser_origin: String,
+        token: String,
+        dev_asset_origin: Option<String>,
+    ) -> Self {
         Self {
-            session: Arc::new(StudioSession::new(origin, token)),
+            session: Arc::new(StudioSession::new(browser_origin, token)),
             repo_root: Arc::new(ctx.repo_root.clone()),
             storage_root: ctx.storage_root.clone(),
             task_document_apply_lock: Arc::new(Mutex::new(())),
@@ -55,13 +62,19 @@ impl StudioState {
             profile_config_apply_lock: Arc::new(Mutex::new(())),
             profile_prompt_apply_lock: Arc::new(Mutex::new(())),
             workflow_apply_lock: Arc::new(Mutex::new(())),
+            dev_asset_origin,
         }
     }
 
     #[cfg(test)]
-    fn for_tests(origin: &str, token: &str, repo_root: &Path) -> Self {
+    fn for_tests(
+        browser_origin: &str,
+        token: &str,
+        repo_root: &Path,
+        dev_asset_origin: Option<String>,
+    ) -> Self {
         Self {
-            session: Arc::new(StudioSession::new(origin.into(), token.into())),
+            session: Arc::new(StudioSession::new(browser_origin.into(), token.into())),
             repo_root: Arc::new(repo_root.to_path_buf()),
             storage_root: StorageRoot::from_git_common_dir(repo_root.join(".git")),
             task_document_apply_lock: Arc::new(Mutex::new(())),
@@ -69,6 +82,7 @@ impl StudioState {
             profile_config_apply_lock: Arc::new(Mutex::new(())),
             profile_prompt_apply_lock: Arc::new(Mutex::new(())),
             workflow_apply_lock: Arc::new(Mutex::new(())),
+            dev_asset_origin,
         }
     }
 
@@ -87,10 +101,35 @@ impl StudioState {
     fn read_api_authorized(&self, headers: &HeaderMap) -> bool {
         self.session.validate_read_headers(headers)
     }
+
+    fn dev_asset_origin(&self) -> Option<&str> {
+        self.dev_asset_origin.as_deref()
+    }
+
+    fn dev_asset_auth_url(&self) -> Option<String> {
+        self.dev_asset_origin()
+            .map(|origin| format!("{origin}/auth?token={}", self.token()))
+    }
+
+    fn dev_asset_url(&self, path: &str) -> Option<String> {
+        self.dev_asset_origin().map(|origin| {
+            let path = if path.starts_with('/') {
+                path.to_string()
+            } else {
+                format!("/{path}")
+            };
+            format!("{origin}{path}")
+        })
+    }
 }
 
 pub async fn serve(ctx: &Ctx, options: ServerOptions) -> Result<()> {
     validate_loopback_host(&options.host)?;
+    let dev_asset_origin = options
+        .dev_asset_origin
+        .as_deref()
+        .map(validate_dev_asset_origin)
+        .transpose()?;
     let listener = TcpListener::bind((options.host.as_str(), options.port))
         .await
         .with_context(|| {
@@ -100,22 +139,42 @@ pub async fn serve(ctx: &Ctx, options: ServerOptions) -> Result<()> {
             )
         })?;
     let addr = listener.local_addr()?;
-    let origin = format!("http://{addr}");
+    let api_origin = format!("http://{addr}");
+    let browser_origin = dev_asset_origin
+        .clone()
+        .unwrap_or_else(|| api_origin.clone());
     let token = mint_session_token()?;
-    let auth_url = format!("{origin}/auth?token={token}");
+    let auth_url = format!("{browser_origin}/auth?token={token}");
 
     if ctx.quiet {
         println!("{auth_url}");
     } else {
         ctx.ui.print_step(&format!("wt studio: {auth_url}"));
+        if let Some(dev_asset_origin) = &dev_asset_origin {
+            ctx.ui
+                .print_dim(&format!("Serving wt studio API at {api_origin}."));
+            ctx.ui
+                .print_dim(&format!("Using Vite dev assets from {dev_asset_origin}."));
+            ctx.ui.print_dim(&format!(
+                "Start assets with: cd src/studio/web && WT_STUDIO_API_TARGET={api_origin} npm run dev"
+            ));
+        }
         ctx.ui.print_dim("Serving wt studio. Press Ctrl-C to stop.");
     }
 
     maybe_open_browser(ctx, &auth_url, |url| opener::open_browser(url));
 
-    axum::serve(listener, app(StudioState::new(ctx, origin, token)))
-        .await
-        .context("wt studio server failed")
+    axum::serve(
+        listener,
+        app(StudioState::new(
+            ctx,
+            browser_origin,
+            token,
+            dev_asset_origin,
+        )),
+    )
+    .await
+    .context("wt studio server failed")
 }
 
 pub fn app(state: StudioState) -> Router {
@@ -162,6 +221,32 @@ fn validate_loopback_host(host: &str) -> Result<()> {
     }
 }
 
+fn validate_dev_asset_origin(origin: &str) -> Result<String> {
+    let uri: Uri = origin
+        .parse()
+        .with_context(|| format!("invalid --dev-origin `{origin}`"))?;
+    if uri.scheme_str() != Some("http") {
+        bail!("--dev-origin must use http on loopback; got `{origin}`");
+    }
+    if uri
+        .path_and_query()
+        .is_some_and(|path| path.as_str() != "/")
+    {
+        bail!("--dev-origin must be an origin without a path; got `{origin}`");
+    }
+    let Some(authority) = uri.authority() else {
+        bail!("--dev-origin must include a host and port; got `{origin}`");
+    };
+    let host = authority.host();
+    if host != "127.0.0.1" && host != "localhost" {
+        bail!("--dev-origin only supports loopback hosts; got `{origin}`");
+    }
+    let Some(port) = authority.port_u16() else {
+        bail!("--dev-origin must include an explicit port; got `{origin}`");
+    };
+    Ok(format!("http://{host}:{port}"))
+}
+
 fn maybe_open_browser<F, E>(ctx: &Ctx, url: &str, open: F)
 where
     F: FnOnce(&str) -> std::result::Result<(), E>,
@@ -177,7 +262,10 @@ where
     }
 }
 
-async fn index() -> Response {
+async fn index(State(state): State<StudioState>) -> Response {
+    if let Some(auth_url) = state.dev_asset_auth_url() {
+        return redirect_response(&auth_url);
+    }
     embedded_file_response("index.html")
 }
 
@@ -444,6 +532,9 @@ async fn static_or_not_found(
         }
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
+    if let Some(location) = state.dev_asset_url(uri.path()) {
+        return redirect_response(&location);
+    }
 
     let path = uri.path().trim_start_matches('/');
     embedded_file_response(path)
@@ -461,6 +552,14 @@ fn embedded_file_response(path: &str) -> Response {
 
 fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
+}
+
+fn redirect_response(location: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::TEMPORARY_REDIRECT)
+        .header(header::LOCATION, location)
+        .body(Body::empty())
+        .expect("redirect response should be valid")
 }
 
 fn content_type(path: &str) -> &'static str {
@@ -1511,6 +1610,30 @@ mod tests {
         assert!(format!("{err:#}").contains("only binds to 127.0.0.1"));
     }
 
+    #[test]
+    fn validates_dev_asset_origin_as_loopback_http_origin() {
+        assert_eq!(
+            validate_dev_asset_origin("http://127.0.0.1:5173").unwrap(),
+            "http://127.0.0.1:5173"
+        );
+        assert_eq!(
+            validate_dev_asset_origin("http://localhost:5173/").unwrap(),
+            "http://localhost:5173"
+        );
+
+        for origin in [
+            "https://127.0.0.1:5173",
+            "http://0.0.0.0:5173",
+            "http://127.0.0.1",
+            "http://127.0.0.1:5173/studio",
+        ] {
+            assert!(
+                validate_dev_asset_origin(origin).is_err(),
+                "{origin} should be rejected"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn app_serves_studio_page() {
         let dir = tempfile::tempdir().unwrap();
@@ -1522,6 +1645,38 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(String::from_utf8_lossy(&body).contains("TaskDocument authoring"));
+    }
+
+    #[tokio::test]
+    async fn dev_asset_mode_redirects_shell_to_vite_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let response = app(test_dev_state(dir.path()))
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            response.headers()[header::LOCATION],
+            "http://127.0.0.1:5173/auth?token=secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn dev_asset_mode_authorizes_vite_origin_for_api() {
+        let dir = tempfile::tempdir().unwrap();
+        let response = app(test_dev_state(dir.path()))
+            .oneshot(
+                Request::get("/api/ping")
+                    .header(header::ORIGIN, "http://127.0.0.1:5173")
+                    .header(header::COOKIE, "wt_studio_session=secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -2905,7 +3060,16 @@ mod tests {
     }
 
     fn test_state(repo_root: &Path) -> StudioState {
-        StudioState::for_tests("http://127.0.0.1:8424", "secret", repo_root)
+        StudioState::for_tests("http://127.0.0.1:8424", "secret", repo_root, None)
+    }
+
+    fn test_dev_state(repo_root: &Path) -> StudioState {
+        StudioState::for_tests(
+            "http://127.0.0.1:5173",
+            "secret",
+            repo_root,
+            Some("http://127.0.0.1:5173".into()),
+        )
     }
 
     fn authorized_json_request(path: &str, value: serde_json::Value) -> Request<Body> {

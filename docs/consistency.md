@@ -1616,11 +1616,18 @@ own TaskRun mutation.
 both that session cookie and an `Origin` header matching the bound `http://127.0.0.1:<port>` origin;
 failed auth returns 401 and must not touch files.
 
+`wt studio --dev` is the canonical frontend development mode. It keeps the write-capable API on the
+same loopback Studio server, but treats the Vite dev-server origin as the browser origin so HMR can
+serve `src/studio/web` directly. The default dev origin is `http://127.0.0.1:5173`; `--dev-origin`
+may override it only with an explicit loopback `http://host:port` origin. In dev mode, `/auth` and
+`/api` traffic must be proxied from Vite back to the printed Studio API origin with cookies and the
+browser `Origin` preserved.
+
 Unlike `wt ui`, Studio may use a frontend build pipeline. The canonical Studio frontend location is
 `src/studio/web/` with Vite, Preact, and TypeScript. `cargo build` runs `npm ci && npm run build`
 when the frontend inputs are stale, fails clearly if `node` or `npm` is unavailable, and embeds the
 resulting `src/studio/web/dist/` assets in the `wt` binary with `include_dir!`. Runtime use of
-`wt studio` must not depend on Node.
+normal `wt studio` must not depend on Node; only explicit `wt studio --dev` development mode does.
 
 The Studio bootstrap layer exposes non-mutating routes such as the embedded page, `/auth`, and
 authenticated `GET /api/ping`; mutation routes are added only with an operation-specific contract.

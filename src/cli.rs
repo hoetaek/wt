@@ -308,12 +308,18 @@ pub enum Commands {
     },
     /// Start the write-capable authoring web surface
     #[command(
-        long_about = "Start the write-capable wt studio authoring surface. The server binds only to 127.0.0.1, prints a one-time /auth URL, and opens it in the default browser unless --quiet is set. Studio serves a Vite-built Preact frontend embedded in the wt binary. API routes require the session cookie and a matching Origin header; this first skeleton exposes only GET /api/ping and does not add mutation routes."
+        long_about = "Start the write-capable wt studio authoring surface. The server binds only to 127.0.0.1, prints a one-time /auth URL, and opens it in the default browser unless --quiet is set. By default Studio serves the embedded Vite production bundle from the wt binary. Pass --dev while running the Vite dev server from src/studio/web to use HMR assets instead; /auth and /api requests should be proxied back to this Studio server. API routes require the session cookie and a matching browser Origin header."
     )]
     Studio {
         /// Port to bind on 127.0.0.1; 0 selects an available port
         #[arg(long, default_value_t = 0, value_name = "PORT")]
         port: u16,
+        /// Use Vite dev-server assets instead of the embedded production bundle
+        #[arg(long)]
+        dev: bool,
+        /// Browser origin for --dev; defaults to Vite's loopback dev origin
+        #[arg(long, value_name = "ORIGIN", requires = "dev")]
+        dev_origin: Option<String>,
     },
     /// Send, deliver, and inspect file-based agent inbox messages
     #[command(
